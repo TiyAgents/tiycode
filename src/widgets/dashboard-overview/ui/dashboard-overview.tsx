@@ -599,6 +599,8 @@ function WorkbenchTopBar({
   onToggleDrawer: () => void;
   onToggleTerminal: () => void;
 }) {
+  const panelToggleButtonClass = "relative size-7 text-zinc-400 transition-[color,background-color] duration-200 hover:bg-white/6 hover:text-zinc-100";
+
   const handleTitleBarMouseDown = async (event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0) {
       return;
@@ -618,19 +620,8 @@ function WorkbenchTopBar({
 
   return (
     <header className="fixed inset-x-0 top-0 z-30 h-9 border-b border-white/6 bg-[#0b0d12]/95 backdrop-blur-xl">
-      <div className="grid h-full grid-cols-[auto_1fr_auto] items-center gap-2 px-3">
-        <div className={cn("relative z-10 flex items-center gap-2", isMacOS ? "pl-[74px]" : "") }>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-7 text-zinc-300 hover:bg-white/6 hover:text-zinc-100"
-            aria-label={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
-            title={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
-            onClick={onToggleSidebar}
-          >
-            {isSidebarOpen ? <PanelLeftClose className="size-3.5" /> : <PanelLeftOpen className="size-3.5" />}
-          </Button>
-        </div>
+      <div className="grid h-full grid-cols-[auto_1fr_auto] items-center gap-2 px-2.5">
+        <div className={cn("relative z-10 shrink-0", isMacOS ? "w-[98px]" : "w-[96px]")} />
 
         <div
           className="relative z-10 flex h-full items-center justify-center"
@@ -640,14 +631,21 @@ function WorkbenchTopBar({
           <span className="select-none text-[13px] font-semibold tracking-[0.02em] text-zinc-100" data-tauri-drag-region="">Tiy Agent</span>
         </div>
 
-        <div className="relative z-10 flex items-center justify-end gap-2">
+        <div className="relative z-10 flex items-center justify-end gap-0.5">
           <Button
             size="icon"
             variant="ghost"
-            className={cn(
-              "size-7 text-zinc-300 hover:bg-white/6 hover:text-zinc-100",
-              !isTerminalCollapsed && "bg-white/6 text-zinc-100",
-            )}
+            className={cn(panelToggleButtonClass, isSidebarOpen && "text-zinc-100 after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-white/45")}
+            aria-label={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
+            title={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
+            onClick={onToggleSidebar}
+          >
+            {isSidebarOpen ? <PanelLeftClose className="size-3.5" /> : <PanelLeftOpen className="size-3.5" />}
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className={cn(panelToggleButtonClass, !isTerminalCollapsed && "text-zinc-100 after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-white/45")}
             aria-label={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
             title={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
             onClick={onToggleTerminal}
@@ -657,7 +655,7 @@ function WorkbenchTopBar({
           <Button
             size="icon"
             variant="ghost"
-            className="size-7 text-zinc-300 hover:bg-white/6 hover:text-zinc-100"
+            className={cn(panelToggleButtonClass, isDrawerOpen && "text-zinc-100 after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-white/45")}
             aria-label={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
             title={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
             onClick={onToggleDrawer}
