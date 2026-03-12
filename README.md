@@ -36,6 +36,13 @@ src-tauri/
 - 内置主题系统（跟随系统 / 明亮 / 暗黑）与运行时切换
 - Rust 端示例命令 \`get_system_metadata\`
 
+## Visual System
+
+当前项目的视觉规范已整理到 `docs/design-spec.md`。
+
+- 该文档是工作台布局、主题 token、组件语气、动效状态和实施约定的主要维护位置。
+- README 仅保留项目概览，避免出现两份重复规范。
+
 ## 常用脚本
 
 ```bash
