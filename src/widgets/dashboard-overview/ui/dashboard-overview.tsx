@@ -8,6 +8,7 @@ import {
   ALargeSmall,
   ArrowUp,
   Check,
+  CircleUserRound,
   ChevronDown,
   Folder,
   FolderKanban,
@@ -16,6 +17,9 @@ import {
   GitBranch,
   FolderPlus,
   Languages,
+  LoaderCircle,
+  LogIn,
+  LogOut,
   MessageSquarePlus,
   MoreHorizontal,
   Monitor,
@@ -179,6 +183,47 @@ const SETTINGS_TRIGGER_CLASS =
   "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-app-surface-hover";
 const SETTINGS_OPTION_CLASS =
   "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors";
+const MAC_USER_MENU_OFFSET = "ml-[74px]";
+const MAC_USER_MENU_POPOVER_OFFSET = "left-[74px]";
+const AUTH_STORAGE_KEY = "tiy-agent-auth-session";
+const UPDATE_STATUS_DURATION = 2200;
+
+type MockUserSession = {
+  name: string;
+  avatar: string;
+};
+
+const MOCK_USER_SESSION: MockUserSession = {
+  name: "Jorben Zhu",
+  avatar: "JZ",
+};
+
+function getStoredUserSession(): MockUserSession | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const rawValue = window.localStorage.getItem(AUTH_STORAGE_KEY);
+
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as Partial<MockUserSession>;
+
+    if (typeof parsed.name === "string" && typeof parsed.avatar === "string") {
+      return {
+        name: parsed.name,
+        avatar: parsed.avatar,
+      };
+    }
+  } catch {
+    // ignore malformed cached session
+  }
+
+  return null;
+}
 
 export function DashboardOverview() {
   const { data, error, isLoading, refetch } = useSystemMetadata();
@@ -192,9 +237,14 @@ export function DashboardOverview() {
   const [composerValue, setComposerValue] = useState("");
   const [isSettingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [openSettingsSection, setOpenSettingsSection] = useState<"theme" | "language" | null>(null);
+  const [isUserMenuOpen, setUserMenuOpen] = useState(false);
+  const [userSession, setUserSession] = useState<MockUserSession | null>(() => getStoredUserSession());
+  const [isCheckingUpdates, setCheckingUpdates] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(() => Object.fromEntries(WORKSPACE_ITEMS.map((workspace) => [workspace.id, workspace.defaultOpen])));
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const settingsMenuRef = useRef<HTMLDivElement | null>(null);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   const getMaxTerminalHeight = () => {
     if (typeof window === "undefined") {
@@ -273,7 +323,7 @@ export function DashboardOverview() {
   }, [composerValue]);
 
   useEffect(() => {
-    if (!isSettingsMenuOpen || typeof window === "undefined") {
+    if ((!isSettingsMenuOpen && !isUserMenuOpen) || typeof window === "undefined") {
       return;
     }
 
@@ -284,13 +334,43 @@ export function DashboardOverview() {
         return;
       }
 
+      if (target && userMenuRef.current?.contains(target)) {
+        return;
+      }
+
       setSettingsMenuOpen(false);
       setOpenSettingsSection(null);
+      setUserMenuOpen(false);
     };
 
     window.addEventListener("mousedown", handlePointerDown);
     return () => window.removeEventListener("mousedown", handlePointerDown);
-  }, [isSettingsMenuOpen]);
+  }, [isSettingsMenuOpen, isUserMenuOpen]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (userSession) {
+      window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(userSession));
+      return;
+    }
+
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  }, [userSession]);
+
+  useEffect(() => {
+    if (!updateStatus || typeof window === "undefined") {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setUpdateStatus(null);
+    }, UPDATE_STATUS_DURATION);
+
+    return () => window.clearTimeout(timeout);
+  }, [updateStatus]);
 
   const handleWorkspaceToggle = (workspaceId: string) => {
     setOpenWorkspaces((current) => ({
@@ -303,6 +383,7 @@ export function DashboardOverview() {
     const nextOpen = !isSettingsMenuOpen;
     setSettingsMenuOpen(nextOpen);
     setOpenSettingsSection(null);
+    setUserMenuOpen(false);
   };
 
   const handleThemeSelect = (nextTheme: ThemePreference) => {
@@ -313,6 +394,42 @@ export function DashboardOverview() {
   const handleLanguageSelect = (nextLanguage: LanguagePreference) => {
     setLanguage(nextLanguage);
     setOpenSettingsSection("language");
+  };
+
+  const handleUserMenuToggle = () => {
+    setUserMenuOpen((current) => {
+      const nextOpen = !current;
+
+      if (nextOpen) {
+        setSettingsMenuOpen(false);
+        setOpenSettingsSection(null);
+      }
+
+      return nextOpen;
+    });
+  };
+
+  const handleLogin = () => {
+    setUserSession(MOCK_USER_SESSION);
+    setUserMenuOpen(true);
+  };
+
+  const handleLogout = () => {
+    setUserSession(null);
+    setUserMenuOpen(false);
+  };
+
+  const handleCheckUpdates = () => {
+    if (isCheckingUpdates) {
+      return;
+    }
+
+    setCheckingUpdates(true);
+
+    window.setTimeout(() => {
+      setCheckingUpdates(false);
+      setUpdateStatus(`当前已是最新版本 v${data?.version ?? "0.1.0"}`);
+    }, 900);
   };
 
   const isMacOS = data?.platform === "macos" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Mac"));
@@ -327,6 +444,16 @@ export function DashboardOverview() {
         isSidebarOpen={isSidebarOpen}
         isDrawerOpen={isDrawerOpen}
         isTerminalCollapsed={isTerminalCollapsed}
+        isUserMenuOpen={isUserMenuOpen}
+        isLoggedIn={Boolean(userSession)}
+        userSession={userSession}
+        isCheckingUpdates={isCheckingUpdates}
+        updateStatus={updateStatus}
+        userMenuRef={userMenuRef}
+        onToggleUserMenu={handleUserMenuToggle}
+        onLogin={handleLogin}
+        onLogout={handleLogout}
+        onCheckUpdates={handleCheckUpdates}
         onToggleSidebar={() => setSidebarOpen((current) => !current)}
         onToggleDrawer={() => setDrawerOpen((current) => !current)}
         onToggleTerminal={() => setTerminalCollapsed((current) => !current)}
@@ -758,6 +885,16 @@ function WorkbenchTopBar({
   isSidebarOpen,
   isDrawerOpen,
   isTerminalCollapsed,
+  isUserMenuOpen,
+  isLoggedIn,
+  userSession,
+  isCheckingUpdates,
+  updateStatus,
+  userMenuRef,
+  onToggleUserMenu,
+  onLogin,
+  onLogout,
+  onCheckUpdates,
   onToggleSidebar,
   onToggleDrawer,
   onToggleTerminal,
@@ -766,6 +903,16 @@ function WorkbenchTopBar({
   isSidebarOpen: boolean;
   isDrawerOpen: boolean;
   isTerminalCollapsed: boolean;
+  isUserMenuOpen: boolean;
+  isLoggedIn: boolean;
+  userSession: MockUserSession | null;
+  isCheckingUpdates: boolean;
+  updateStatus: string | null;
+  userMenuRef: { current: HTMLDivElement | null };
+  onToggleUserMenu: () => void;
+  onLogin: () => void;
+  onLogout: () => void;
+  onCheckUpdates: () => void;
   onToggleSidebar: () => void;
   onToggleDrawer: () => void;
   onToggleTerminal: () => void;
@@ -793,7 +940,81 @@ function WorkbenchTopBar({
   return (
     <header className="fixed inset-x-0 top-0 z-30 h-9 border-b border-app-border bg-app-chrome backdrop-blur-xl">
       <div className="grid h-full grid-cols-[auto_1fr_auto] items-center gap-2 px-2.5">
-        <div className={cn("relative z-10 shrink-0", isMacOS ? "w-[98px]" : "w-[96px]")} />
+        <div className={cn("relative z-10 flex h-full shrink-0 items-center", isMacOS ? "w-[150px]" : "w-[132px]")} ref={userMenuRef}>
+          <Button
+            size="icon"
+            variant="ghost"
+            className={cn(
+              "size-7 rounded-full text-app-subtle transition-[color,background-color,border-color] duration-200 hover:bg-app-surface-hover hover:text-app-foreground",
+              isMacOS ? MAC_USER_MENU_OFFSET : "ml-2",
+              isUserMenuOpen && "bg-app-surface-hover text-app-foreground",
+            )}
+            aria-label={isLoggedIn ? "打开用户菜单" : "打开登录菜单"}
+            title={isLoggedIn ? "打开用户菜单" : "打开登录菜单"}
+            aria-expanded={isUserMenuOpen}
+            aria-haspopup="menu"
+            onClick={onToggleUserMenu}
+          >
+            <CircleUserRound className="size-4" />
+          </Button>
+
+          {isUserMenuOpen ? (
+            <div className={cn("absolute left-0 top-full z-30 mt-2 w-[248px] rounded-2xl border border-app-border bg-app-menu p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] dark:shadow-[0_20px_48px_rgba(0,0,0,0.42)]", isMacOS ? MAC_USER_MENU_POPOVER_OFFSET : "left-2")}>
+              {userSession ? (
+                <div className="mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-app-surface-active text-sm font-semibold text-app-foreground">
+                    {userSession.avatar}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-app-foreground">{userSession.name}</p>
+                    <p className="text-xs text-app-subtle">已登录</p>
+                  </div>
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                className={cn(
+                  SETTINGS_OPTION_CLASS,
+                  "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                  isCheckingUpdates && "cursor-wait",
+                )}
+                onClick={onCheckUpdates}
+              >
+                {isCheckingUpdates ? (
+                  <LoaderCircle className="size-4 shrink-0 animate-spin text-app-subtle" />
+                ) : (
+                  <RefreshCw className="size-4 shrink-0 text-app-subtle" />
+                )}
+                <span className="flex-1 truncate text-left">检查更新</span>
+              </button>
+
+              {userSession ? (
+                <button
+                  type="button"
+                  className={cn(SETTINGS_OPTION_CLASS, "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground")}
+                  onClick={onLogout}
+                >
+                  <LogOut className="size-4 shrink-0 text-app-subtle" />
+                  <span className="flex-1 truncate text-left">退出登录</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={cn(SETTINGS_OPTION_CLASS, "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground")}
+                  onClick={onLogin}
+                >
+                  <LogIn className="size-4 shrink-0 text-app-subtle" />
+                  <span className="flex-1 truncate text-left">登录</span>
+                </button>
+              )}
+
+              {updateStatus ? (
+                <div className="px-3 pb-1 pt-2 text-xs text-app-subtle">{updateStatus}</div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
 
         <div
           className="relative z-10 flex h-full items-center justify-center"
