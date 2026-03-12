@@ -1,13 +1,25 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
+import {
+  ALargeSmall,
   ArrowUp,
+  Check,
   ChevronDown,
   Folder,
   FolderKanban,
   FolderOpen,
+  Globe,
   GitBranch,
   FolderPlus,
+  Languages,
   MoreHorizontal,
+  Monitor,
+  Moon,
+  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -17,9 +29,12 @@ import {
   RefreshCw,
   Settings,
   Sparkles,
+  Sun,
   TerminalSquare,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useLanguage, type LanguagePreference } from "@/app/providers/language-provider";
+import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
 import { Button } from "@/shared/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/ui/card";
 import { cn } from "@/shared/lib/utils";
@@ -143,16 +158,44 @@ const MIN_TERMINAL_HEIGHT = 180;
 const MIN_WORKBENCH_HEIGHT = 240;
 const TOPBAR_HEIGHT = 36;
 
+const THEME_OPTIONS: Array<{
+  label: string;
+  value: ThemePreference;
+  icon: typeof Monitor;
+}> = [
+  { label: "跟随系统", value: "system", icon: Monitor },
+  { label: "明亮", value: "light", icon: Sun },
+  { label: "暗黑", value: "dark", icon: Moon },
+];
+const LANGUAGE_OPTIONS: Array<{
+  label: string;
+  value: LanguagePreference;
+  icon: typeof Languages;
+}> = [
+  { label: "English", value: "en", icon: ALargeSmall },
+  { label: "简体中文", value: "zh-CN", icon: Languages },
+];
+
+const SETTINGS_TRIGGER_CLASS =
+  "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-app-surface-hover";
+const SETTINGS_OPTION_CLASS =
+  "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors";
+
 export function DashboardOverview() {
   const { data, error, isLoading, refetch } = useSystemMetadata();
+  const { theme, setTheme } = useTheme();
+  const { language, setLanguage } = useLanguage();
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [isDrawerOpen, setDrawerOpen] = useState(true);
   const [isTerminalCollapsed, setTerminalCollapsed] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const [terminalResize, setTerminalResize] = useState<{ startY: number; startHeight: number } | null>(null);
   const [composerValue, setComposerValue] = useState("");
+  const [isSettingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [openSettingsSection, setOpenSettingsSection] = useState<"theme" | "language" | null>(null);
   const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(() => Object.fromEntries(WORKSPACE_ITEMS.map((workspace) => [workspace.id, workspace.defaultOpen])));
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
 
   const getMaxTerminalHeight = () => {
     if (typeof window === "undefined") {
@@ -230,6 +273,26 @@ export function DashboardOverview() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 176)}px`;
   }, [composerValue]);
 
+  useEffect(() => {
+    if (!isSettingsMenuOpen || typeof window === "undefined") {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+
+      if (target && settingsMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setSettingsMenuOpen(false);
+      setOpenSettingsSection(null);
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => window.removeEventListener("mousedown", handlePointerDown);
+  }, [isSettingsMenuOpen]);
+
   const handleWorkspaceToggle = (workspaceId: string) => {
     setOpenWorkspaces((current) => ({
       ...current,
@@ -237,10 +300,29 @@ export function DashboardOverview() {
     }));
   };
 
+  const handleSettingsMenuToggle = () => {
+    const nextOpen = !isSettingsMenuOpen;
+    setSettingsMenuOpen(nextOpen);
+    setOpenSettingsSection(null);
+  };
+
+  const handleThemeSelect = (nextTheme: ThemePreference) => {
+    setTheme(nextTheme);
+    setOpenSettingsSection("theme");
+  };
+
+  const handleLanguageSelect = (nextLanguage: LanguagePreference) => {
+    setLanguage(nextLanguage);
+    setOpenSettingsSection("language");
+  };
+
   const isMacOS = data?.platform === "macos" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Mac"));
+  const selectedThemeOption = THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[0];
+  const selectedThemeSummary = theme === "system" ? "跟随系统" : selectedThemeOption.label;
+  const selectedLanguageOption = LANGUAGE_OPTIONS.find((option) => option.value === language) ?? LANGUAGE_OPTIONS[1];
 
   return (
-    <main className="h-screen overflow-hidden bg-[#0b0d12] text-zinc-100">
+    <main className="h-screen overflow-hidden bg-app-canvas text-app-foreground">
       <WorkbenchTopBar
         isMacOS={isMacOS}
         isSidebarOpen={isSidebarOpen}
@@ -254,9 +336,9 @@ export function DashboardOverview() {
       <div className="flex h-full min-h-0 pt-9">
         <aside
           className={cn(
-            "overflow-hidden bg-[#101319] transition-[width,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            "overflow-hidden bg-app-sidebar transition-[width,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
             isSidebarOpen
-              ? "w-[320px] border-r border-white/6 opacity-100 translate-x-0"
+              ? "w-[320px] border-r border-app-border opacity-100 translate-x-0"
               : "w-0 border-r-0 opacity-0 -translate-x-2 pointer-events-none",
           )}
         >
@@ -264,19 +346,20 @@ export function DashboardOverview() {
             <div>
               <button
                 type="button"
-                className="group flex w-full items-center gap-2.5 rounded-xl border border-transparent bg-transparent px-3 py-2.5 text-left text-zinc-300 transition-[transform,box-shadow,background-color,border-color,color] duration-200 hover:border-white/10 hover:bg-white/[0.07] hover:text-zinc-100 hover:shadow-[0_4px_14px_rgba(0,0,0,0.10)] active:scale-[0.99]"
+                className="group flex w-full items-center gap-2.5 rounded-xl border border-transparent bg-transparent px-3 py-2.5 text-left text-app-muted transition-[transform,box-shadow,background-color,border-color,color] duration-200 hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)] active:scale-[0.99]"
               >
-                <Pencil className="size-4 shrink-0 text-zinc-400 transition-colors duration-200 group-hover:text-zinc-200" />
+                <Pencil className="size-4 shrink-0 text-app-subtle transition-colors duration-200 group-hover:text-app-foreground" />
                 <span className="truncate text-sm font-medium">New thread</span>
               </button>
             </div>
 
             <div className="mt-6 flex items-center justify-between px-3">
-              <span className="text-xs uppercase tracking-[0.14em] text-zinc-500">Threads</span>
-              <FolderPlus className="size-3.5 text-zinc-500" />
+              <span className="text-xs uppercase tracking-[0.14em] text-app-subtle">Threads</span>
+              <FolderPlus className="size-3.5 text-app-subtle" />
             </div>
 
             <div className="mt-3 min-h-0 flex-1 overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div className="mx-1 mb-3 h-px bg-app-border" />
               <div className="space-y-2">
                 {WORKSPACE_ITEMS.map((workspace) => {
                   const isOpen = openWorkspaces[workspace.id];
@@ -285,21 +368,20 @@ export function DashboardOverview() {
                   return (
                     <div key={workspace.id} className="space-y-1">
                       <div className="group px-1">
-                        <div className="mx-auto mb-2 h-px w-[98%] bg-white/5" />
                         <div className="relative">
                           <button
                             type="button"
-                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 pr-11 text-left text-zinc-300 transition-colors hover:bg-white/6"
+                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 pr-11 text-left text-app-muted transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
                             onClick={() => handleWorkspaceToggle(workspace.id)}
                           >
-                            <FolderIcon className="size-4 shrink-0 text-zinc-300" />
+                            <FolderIcon className="size-4 shrink-0 text-app-muted" />
                             <span className="truncate text-sm">{workspace.name}</span>
                           </button>
                           <button
                             type="button"
                             aria-label="更多操作"
                             title="更多操作"
-                            className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-lg text-zinc-500 opacity-0 transition-all duration-200 hover:bg-white/6 hover:text-zinc-200 group-hover:opacity-100"
+                            className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-lg text-app-subtle opacity-0 transition-all duration-200 hover:bg-app-surface-hover hover:text-app-foreground group-hover:opacity-100"
                           >
                             <MoreHorizontal className="size-4" />
                           </button>
@@ -315,16 +397,16 @@ export function DashboardOverview() {
                                 className={cn(
                                   "w-full rounded-xl border px-3 py-2.5 pr-12 text-left transition-colors",
                                   thread.active
-                                    ? "border-white/8 bg-white/[0.05] text-zinc-100"
-                                    : "border-transparent bg-transparent text-zinc-300 hover:bg-white/6",
+                                    ? "border-app-border-strong bg-app-surface-active text-app-foreground"
+                                    : "border-transparent bg-transparent text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                                 )}
                               >
                                 <p className="truncate text-sm leading-5">{thread.name}</p>
                               </button>
                               <span
                                 className={cn(
-                                  "pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-zinc-500 transition-opacity duration-200 group-hover:opacity-0",
-                                  thread.active && "text-zinc-500",
+                                  "pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-app-subtle transition-opacity duration-200 group-hover:opacity-0",
+                                  thread.active && "text-app-subtle",
                                 )}
                               >
                                 {thread.time}
@@ -334,8 +416,8 @@ export function DashboardOverview() {
                                 aria-label="更多操作"
                                 title="更多操作"
                                 className={cn(
-                                  "absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-lg text-zinc-500 opacity-0 transition-all duration-200 hover:bg-white/6 hover:text-zinc-200 group-hover:opacity-100",
-                                  thread.active && "text-zinc-500",
+                                  "absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-lg text-app-subtle opacity-0 transition-all duration-200 hover:bg-app-surface-hover hover:text-app-foreground group-hover:opacity-100",
+                                  thread.active && "text-app-subtle",
                                 )}
                               >
                                 <MoreHorizontal className="size-4" />
@@ -350,29 +432,119 @@ export function DashboardOverview() {
               </div>
             </div>
 
-            <button
-              type="button"
-              className="mt-3 flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-zinc-300 transition-colors hover:bg-white/6"
-            >
-              <Settings className="size-4 shrink-0" />
-              <span className="truncate text-sm">Settings</span>
-            </button>
+            <div ref={settingsMenuRef} className="relative mt-3">
+              {isSettingsMenuOpen ? (
+                <div className="absolute bottom-full left-0 z-20 mb-2 w-[240px] rounded-2xl border border-app-border bg-app-menu p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] dark:shadow-[0_20px_48px_rgba(0,0,0,0.42)]">
+                  <button
+                    type="button"
+                    className={cn(SETTINGS_TRIGGER_CLASS, "text-app-foreground")}
+                    aria-expanded={openSettingsSection === "theme"}
+                    onClick={() => setOpenSettingsSection((current) => (current === "theme" ? null : "theme"))}
+                  >
+                    <Palette className="size-4 shrink-0 text-app-subtle" />
+                    <span className="min-w-0 flex-1 truncate text-sm">主题</span>
+                    <span className="shrink-0 text-xs text-app-subtle">{selectedThemeSummary}</span>
+                  </button>
+
+                  {openSettingsSection === "theme" ? (
+                    <div className="mt-1 space-y-1">
+                      {THEME_OPTIONS.map((option) => {
+                        const OptionIcon = option.icon;
+                        const isSelected = theme === option.value;
+
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={cn(
+                              SETTINGS_OPTION_CLASS,
+                              isSelected ? "bg-app-surface-active text-app-foreground" : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                            )}
+                            onClick={() => handleThemeSelect(option.value)}
+                          >
+                            <OptionIcon className="size-4 shrink-0 text-app-subtle" />
+                            <span className="flex-1 truncate">{option.label}</span>
+                            {isSelected ? <Check className="size-4 shrink-0 text-app-foreground" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    className={cn(SETTINGS_TRIGGER_CLASS, "mt-1 text-app-foreground")}
+                    aria-expanded={openSettingsSection === "language"}
+                    onClick={() => setOpenSettingsSection((current) => (current === "language" ? null : "language"))}
+                  >
+                    <Globe className="size-4 shrink-0 text-app-subtle" />
+                    <span className="min-w-0 flex-1 truncate text-sm">语言</span>
+                    <span className="shrink-0 text-xs text-app-subtle">{selectedLanguageOption.label}</span>
+                  </button>
+
+                  {openSettingsSection === "language" ? (
+                    <div className="mt-1 space-y-1">
+                      {LANGUAGE_OPTIONS.map((option) => {
+                        const isSelected = language === option.value;
+                        const OptionIcon = option.icon;
+
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={cn(
+                              SETTINGS_OPTION_CLASS,
+                              isSelected ? "bg-app-surface-active text-app-foreground" : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                            )}
+                            onClick={() => handleLanguageSelect(option.value)}
+                          >
+                            <OptionIcon className="size-4 shrink-0 text-app-subtle" />
+                            <span className="flex-1 truncate">{option.label}</span>
+                            {isSelected ? <Check className="size-4 shrink-0 text-app-foreground" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    className={cn(SETTINGS_TRIGGER_CLASS, "mt-1 text-app-foreground")}
+                  >
+                    <MoreHorizontal className="size-4 shrink-0 text-app-subtle" />
+                    <span className="min-w-0 flex-1 truncate text-sm">更多设置</span>
+                  </button>
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                className={cn(SETTINGS_TRIGGER_CLASS, "text-app-muted hover:text-app-foreground")}
+                aria-expanded={isSettingsMenuOpen}
+                aria-haspopup="menu"
+                onClick={handleSettingsMenuToggle}
+              >
+                <Settings className="size-4 shrink-0" />
+                <span className="truncate text-sm">Settings</span>
+                <ChevronDown className={cn("ml-auto size-4 shrink-0 text-app-subtle transition-transform duration-200", isSettingsMenuOpen && "rotate-180")} />
+              </button>
+            </div>
           </div>
         </aside>
 
         <section className="min-w-0 flex-1 min-h-0">
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex min-h-0 flex-1 overflow-hidden">
-              <section className="min-w-0 flex-1 min-h-0 bg-[#0b0d12]">
+              <section className="min-w-0 flex-1 min-h-0 bg-app-canvas">
                 <div className="flex h-full min-h-0 flex-col">
-                  <div className="flex h-14 items-center gap-4 border-b border-white/6 px-5">
+                  <div className="flex h-14 items-center gap-4 border-b border-app-border px-5">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-zinc-100">创建 Tauri 2 React+TS+shadcn/ui 模块化脚手架</p>
-                      <p className="mt-0.5 text-xs text-zinc-500">当前工作区 · tiy-desktop</p>
+                      <p className="truncate text-sm font-semibold text-app-foreground">创建 Tauri 2 React+TS+shadcn/ui 模块化脚手架</p>
+                      <p className="mt-0.5 text-xs text-app-subtle">当前工作区 · tiy-desktop</p>
                     </div>
                     <button
                       type="button"
-                      className="ml-auto inline-flex items-center gap-1.5 text-xs text-zinc-500 transition-colors hover:text-zinc-300"
+                      className="ml-auto inline-flex items-center gap-1.5 text-xs text-app-subtle transition-colors hover:text-app-foreground"
                     >
                       <GitBranch className="size-3.5" />
                       <span>main</span>
@@ -383,25 +555,25 @@ export function DashboardOverview() {
                   <div className="relative min-h-0 flex-1">
                     <div className="h-full overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                       <div className="mx-auto flex max-w-4xl flex-col gap-6 px-6 pb-28 pt-6">
-                      <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
-                        <div className="flex items-center gap-2 text-zinc-300">
-                          <Sparkles className="size-4 text-emerald-400" />
+                      <div className="rounded-2xl border border-app-border bg-app-surface p-5">
+                        <div className="flex items-center gap-2 text-app-muted">
+                          <Sparkles className="size-4 text-app-success" />
                           <span className="text-sm font-medium">Jorben，这版布局已经收敛到更接近 Codex app 的工作台结构。</span>
                         </div>
-                        <p className="mt-3 text-sm leading-7 text-zinc-400">
+                        <p className="mt-3 text-sm leading-7 text-app-muted">
                           左右侧边栏现在都是真正隐藏而不是缩窄；顶部仅保留应用名，且中部区域继续承担拖动窗口的能力。
                         </p>
                       </div>
 
                       <div className="space-y-5 pb-6">
                         {MESSAGE_SECTIONS.map((section) => (
-                          <div key={section.title} className="rounded-2xl border border-white/6 bg-white/[0.02] p-5">
-                            <h3 className="text-sm font-semibold text-zinc-100">{section.title}</h3>
-                            <ul className="mt-4 space-y-3 text-sm text-zinc-300">
+                          <div key={section.title} className="rounded-2xl border border-app-border bg-app-surface-muted p-5">
+                            <h3 className="text-sm font-semibold text-app-foreground">{section.title}</h3>
+                            <ul className="mt-4 space-y-3 text-sm text-app-muted">
                               {section.bullets.map((bullet) => (
                                 <li key={bullet} className="flex items-start gap-3">
-                                  <span className="mt-2 size-1.5 shrink-0 rounded-full bg-zinc-500" />
-                                  <code className="rounded bg-black/30 px-2 py-1 text-[13px] text-zinc-200">{bullet}</code>
+                                  <span className="mt-2 size-1.5 shrink-0 rounded-full bg-app-subtle" />
+                                  <code className="rounded bg-app-code px-2 py-1 text-[13px] text-app-foreground">{bullet}</code>
                                 </li>
                               ))}
                             </ul>
@@ -409,10 +581,10 @@ export function DashboardOverview() {
                         ))}
                       </div>
 
-                      <Card className="border-white/8 bg-white/[0.03] text-zinc-100 shadow-none">
+                      <Card className="border-app-border bg-app-surface text-app-foreground shadow-none">
                         <CardHeader>
                           <CardTitle className="text-base">Runtime Probe</CardTitle>
-                          <CardDescription className="text-zinc-400">确认桌面端命令桥接与应用元信息已经接通。</CardDescription>
+                          <CardDescription className="text-app-muted">确认桌面端命令桥接与应用元信息已经接通。</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-3 text-sm">
                           <div className="flex gap-3">
@@ -421,8 +593,8 @@ export function DashboardOverview() {
                               Refresh runtime info
                             </Button>
                           </div>
-                          {isLoading ? <p className="text-zinc-500">正在读取运行时信息...</p> : null}
-                          {error ? <p className="text-red-400">{error}</p> : null}
+                          {isLoading ? <p className="text-app-subtle">正在读取运行时信息...</p> : null}
+                          {error ? <p className="text-app-danger">{error}</p> : null}
                           {data ? (
                             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                               <InspectorItem label="应用名" value={data.appName} />
@@ -437,26 +609,26 @@ export function DashboardOverview() {
                     </div>
                     </div>
 
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-b from-transparent via-[#0b0d12]/72 via-55% to-[#0b0d12]" />
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-b from-transparent via-app-overlay via-55% to-app-canvas" />
                   </div>
 
                   <div className="shrink-0 px-6 pb-5 pt-3">
-                    <div className="mx-auto max-w-4xl rounded-2xl border border-white/8 bg-[#11141b] px-4 pb-3 pt-3 text-zinc-400 transition-colors focus-within:border-white/12">
+                    <div className="mx-auto max-w-4xl rounded-2xl border border-app-border bg-app-surface px-4 pb-3 pt-3 text-app-muted transition-colors focus-within:border-app-border-strong">
                       <textarea
                         ref={composerRef}
                         value={composerValue}
                         onChange={(event) => setComposerValue(event.target.value)}
                         rows={1}
                         placeholder="Ask for follow-up changes"
-                        className="max-h-44 min-h-6 w-full resize-none overflow-y-auto bg-transparent text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-500 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                        className="max-h-44 min-h-6 w-full resize-none overflow-y-auto bg-transparent text-sm leading-6 text-app-foreground outline-none placeholder:text-app-subtle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                       />
                       <div className="mt-3 flex items-end justify-between">
-                        <button type="button" className="-ml-1 mt-1 rounded-lg p-2 text-zinc-500 transition-colors hover:bg-white/6 hover:text-zinc-100">
+                        <button type="button" className="-ml-1 mt-1 rounded-lg p-2 text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground">
                           <Plus className="size-4" />
                         </button>
                         <button
                           type="button"
-                          className="flex size-8 items-center justify-center rounded-full bg-white/95 text-black shadow-[0_1px_2px_rgba(0,0,0,0.14)] transition-[transform,box-shadow,background-color] duration-200 hover:scale-[1.02] hover:bg-white hover:shadow-[0_4px_10px_rgba(0,0,0,0.12)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100 disabled:hover:shadow-[0_1px_2px_rgba(0,0,0,0.14)]"
+                          className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[0_1px_2px_rgba(15,23,42,0.18)] transition-[transform,box-shadow,background-color] duration-200 hover:scale-[1.02] hover:bg-primary/90 hover:shadow-[0_4px_10px_rgba(15,23,42,0.18)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100 disabled:hover:shadow-[0_1px_2px_rgba(15,23,42,0.18)]"
                           disabled={!composerValue.trim()}
                         >
                           <ArrowUp className="size-3.5" />
@@ -469,53 +641,53 @@ export function DashboardOverview() {
 
               <aside
                 className={cn(
-                  "min-h-0 shrink-0 overflow-hidden bg-[#0d1015] transition-[width,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                  "min-h-0 shrink-0 overflow-hidden bg-app-drawer transition-[width,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
                   isDrawerOpen
-                    ? "w-[360px] border-l border-white/6 opacity-100 translate-x-0"
+                    ? "w-[360px] border-l border-app-border opacity-100 translate-x-0"
                     : "w-0 border-l-0 opacity-0 translate-x-2 pointer-events-none",
                 )}
               >
                 <div className="flex h-full min-h-0 flex-col">
-                  <div className="sticky top-0 z-10 flex h-14 items-center border-b border-white/6 px-4">
+                  <div className="sticky top-0 z-10 flex h-14 items-center border-b border-app-border px-4">
                     <div>
-                      <p className="text-sm font-semibold text-zinc-100">Unstaged</p>
-                      <p className="text-xs text-zinc-500">56 changes</p>
+                      <p className="text-sm font-semibold text-app-foreground">Unstaged</p>
+                      <p className="text-xs text-app-subtle">56 changes</p>
                     </div>
                   </div>
 
                   <div className="min-h-0 flex-1 overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     <div className="space-y-4 p-4">
-                      <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-                        <p className="text-sm font-medium text-zinc-100">Large diff detected — showing one file at a time.</p>
+                      <div className="rounded-2xl border border-app-border bg-app-surface p-4">
+                        <p className="text-sm font-medium text-app-foreground">Large diff detected — showing one file at a time.</p>
                       </div>
 
                       {PANEL_FILES.map((file) => (
-                        <div key={file.path} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                        <div key={file.path} className="rounded-2xl border border-app-border bg-app-surface p-4">
                           <div className="flex items-start gap-3">
-                            <div className="mt-1 flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/6 text-zinc-300">
+                            <div className="mt-1 flex size-9 shrink-0 items-center justify-center rounded-xl bg-app-surface-hover text-app-muted">
                               <FolderKanban className="size-4" />
                             </div>
                             <div className="min-w-0">
-                              <p className="truncate text-sm text-zinc-100">{file.path}</p>
+                              <p className="truncate text-sm text-app-foreground">{file.path}</p>
                               <div className="mt-2 flex items-center gap-2 text-xs">
-                                <span className="text-emerald-400">+{file.add}</span>
-                                <span className="text-rose-400">-{file.remove}</span>
-                                <span className="size-1.5 rounded-full bg-sky-400" />
+                                <span className="text-app-success">+{file.add}</span>
+                                <span className="text-app-danger">-{file.remove}</span>
+                                <span className="size-1.5 rounded-full bg-app-info" />
                               </div>
                             </div>
                           </div>
                         </div>
                       ))}
 
-                      <Card className="border-white/8 bg-white/[0.03] text-zinc-100 shadow-none">
+                      <Card className="border-app-border bg-app-surface text-app-foreground shadow-none">
                         <CardHeader>
                           <CardTitle className="text-base">Tasks</CardTitle>
-                          <CardDescription className="text-zinc-400">0 out of 4 tasks completed</CardDescription>
+                          <CardDescription className="text-app-muted">0 out of 4 tasks completed</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-3">
                           {TASK_ITEMS.map((task, index) => (
-                            <div key={task} className="flex items-start gap-3 text-sm text-zinc-300">
-                              <span className="mt-1 size-3 rounded-full border border-zinc-500" />
+                            <div key={task} className="flex items-start gap-3 text-sm text-app-muted">
+                              <span className="mt-1 size-3 rounded-full border border-app-subtle" />
                               <span>{index + 1}. {task}</span>
                             </div>
                           ))}
@@ -528,8 +700,8 @@ export function DashboardOverview() {
             </div>
             <section
               className={cn(
-                "relative shrink-0 overflow-hidden bg-[#090b10] transition-[height,opacity,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                isTerminalCollapsed ? "border-t border-transparent opacity-0 pointer-events-none" : "border-t border-white/6 opacity-100",
+                "relative shrink-0 overflow-hidden bg-app-terminal transition-[height,opacity,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                isTerminalCollapsed ? "border-t border-transparent opacity-0 pointer-events-none" : "border-t border-app-border opacity-100",
               )}
               style={{ height: isTerminalCollapsed ? 0 : terminalHeight }}
             >
@@ -541,7 +713,7 @@ export function DashboardOverview() {
                 role="presentation"
                 onMouseDown={handleTerminalResizeStart}
               >
-                <div className="mt-1.5 h-[2px] w-9 rounded-full bg-white/7 opacity-50 transition-all duration-200 ease-out group-hover:w-14 group-hover:bg-white/20 group-hover:opacity-100" />
+                <div className="mt-1.5 h-[2px] w-9 rounded-full bg-app-border opacity-50 transition-all duration-200 ease-out group-hover:w-14 group-hover:bg-app-border-strong group-hover:opacity-100" />
               </div>
               <div
                 className={cn(
@@ -549,7 +721,7 @@ export function DashboardOverview() {
                   isTerminalCollapsed ? "opacity-0" : "opacity-100 delay-75",
                 )}
               >
-                <div className="flex h-[38px] shrink-0 items-center justify-between px-4 text-xs text-zinc-400">
+                <div className="flex h-[38px] shrink-0 items-center justify-between px-4 text-xs text-app-muted">
                   <div className="flex items-center gap-2">
                     <TerminalSquare className="size-3.5" />
                     <span>Terminal</span>
@@ -557,7 +729,7 @@ export function DashboardOverview() {
                   <Button
                     size="icon"
                     variant="ghost"
-                    className="size-7 text-zinc-400 hover:bg-white/6 hover:text-zinc-100"
+                    className="size-7 text-app-subtle hover:bg-app-surface-hover hover:text-app-foreground"
                     aria-label="收起 terminal"
                     title="收起 terminal"
                     onClick={() => setTerminalCollapsed(true)}
@@ -565,10 +737,10 @@ export function DashboardOverview() {
                     <ChevronDown className="size-4" />
                   </Button>
                 </div>
-                <div className="min-h-0 flex-1 overflow-auto overscroll-contain px-4 py-3 font-mono text-[12px] leading-6 text-zinc-300 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <div className="min-h-0 flex-1 overflow-auto overscroll-contain px-4 py-3 font-mono text-[12px] leading-6 text-app-muted [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {TERMINAL_LINES.map((line, index) => (
                     <div key={line} className="flex gap-3">
-                      <span className={cn("text-zinc-500", index === 0 ? "text-sky-400" : "")}>›</span>
+                      <span className={cn("text-app-subtle", index === 0 ? "text-app-info" : "")}>›</span>
                       <span>{line}</span>
                     </div>
                   ))}
@@ -599,7 +771,8 @@ function WorkbenchTopBar({
   onToggleDrawer: () => void;
   onToggleTerminal: () => void;
 }) {
-  const panelToggleButtonClass = "relative size-7 text-zinc-400 transition-[color,background-color] duration-200 hover:bg-white/6 hover:text-zinc-100";
+  const panelToggleButtonClass =
+    "relative size-7 text-app-subtle transition-[color,background-color] duration-200 hover:bg-app-surface-hover hover:text-app-foreground";
 
   const handleTitleBarMouseDown = async (event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0) {
@@ -619,7 +792,7 @@ function WorkbenchTopBar({
   };
 
   return (
-    <header className="fixed inset-x-0 top-0 z-30 h-9 border-b border-white/6 bg-[#0b0d12]/95 backdrop-blur-xl">
+    <header className="fixed inset-x-0 top-0 z-30 h-9 border-b border-app-border bg-app-chrome backdrop-blur-xl">
       <div className="grid h-full grid-cols-[auto_1fr_auto] items-center gap-2 px-2.5">
         <div className={cn("relative z-10 shrink-0", isMacOS ? "w-[98px]" : "w-[96px]")} />
 
@@ -628,14 +801,14 @@ function WorkbenchTopBar({
           data-tauri-drag-region=""
           onMouseDown={handleTitleBarMouseDown}
         >
-          <span className="select-none text-[13px] font-semibold tracking-[0.02em] text-zinc-100" data-tauri-drag-region="">Tiy Agent</span>
+          <span className="select-none text-[13px] font-semibold tracking-[0.02em] text-app-foreground" data-tauri-drag-region="">Tiy Agent</span>
         </div>
 
         <div className="relative z-10 flex items-center justify-end gap-0.5">
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, isSidebarOpen && "text-zinc-100 after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-white/45")}
+            className={cn(panelToggleButtonClass, isSidebarOpen && "text-app-foreground after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-app-border-strong")}
             aria-label={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
             title={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
             onClick={onToggleSidebar}
@@ -645,7 +818,7 @@ function WorkbenchTopBar({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, !isTerminalCollapsed && "text-zinc-100 after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-white/45")}
+            className={cn(panelToggleButtonClass, !isTerminalCollapsed && "text-app-foreground after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-app-border-strong")}
             aria-label={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
             title={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
             onClick={onToggleTerminal}
@@ -655,7 +828,7 @@ function WorkbenchTopBar({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, isDrawerOpen && "text-zinc-100 after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-white/45")}
+            className={cn(panelToggleButtonClass, isDrawerOpen && "text-app-foreground after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-app-border-strong")}
             aria-label={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
             title={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
             onClick={onToggleDrawer}
@@ -670,9 +843,9 @@ function WorkbenchTopBar({
 
 function InspectorItem({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-white/8 bg-black/20 p-3">
-      <p className="text-xs uppercase tracking-[0.14em] text-zinc-500">{label}</p>
-      <p className="mt-2 text-sm text-zinc-100">{value}</p>
+    <div className="rounded-xl border border-app-border bg-app-surface-muted p-3">
+      <p className="text-xs uppercase tracking-[0.14em] text-app-subtle">{label}</p>
+      <p className="mt-2 text-sm text-app-foreground">{value}</p>
     </div>
   );
 }

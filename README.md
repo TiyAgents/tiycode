@@ -33,6 +33,7 @@ src-tauri/
 - React Hash Router
 - Tailwind CSS v4
 - shadcn/ui 基础配置与通用组件
+- 内置主题系统（跟随系统 / 明亮 / 暗黑）与运行时切换
 - Rust 端示例命令 \`get_system_metadata\`
 
 ## 常用脚本

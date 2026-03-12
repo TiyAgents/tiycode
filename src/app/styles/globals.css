@@ -37,6 +37,26 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  --app-canvas: oklch(0.97 0.01 255);
+  --app-sidebar: oklch(0.94 0.012 255);
+  --app-drawer: oklch(0.945 0.01 255);
+  --app-chrome: oklch(0.96 0.008 255 / 95%);
+  --app-terminal: oklch(0.925 0.012 255);
+  --app-menu: oklch(0.97 0.006 255 / 96%);
+  --app-surface: oklch(0.995 0.004 255 / 82%);
+  --app-surface-muted: oklch(0.985 0.006 255 / 68%);
+  --app-surface-hover: oklch(0.91 0.014 255 / 62%);
+  --app-surface-active: oklch(0.88 0.018 255 / 78%);
+  --app-border: oklch(0.8 0.01 255 / 45%);
+  --app-border-strong: oklch(0.72 0.012 255 / 60%);
+  --app-foreground: oklch(0.24 0.015 255);
+  --app-muted: oklch(0.47 0.014 255);
+  --app-subtle: oklch(0.6 0.012 255);
+  --app-code: oklch(0.93 0.01 255 / 90%);
+  --app-overlay: oklch(0.97 0.01 255 / 78%);
+  --app-success: oklch(0.62 0.17 155);
+  --app-danger: oklch(0.58 0.22 26);
+  --app-info: oklch(0.63 0.13 240);
 }
 
 .dark {
@@ -72,6 +92,26 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --app-canvas: oklch(0.145 0.006 260);
+  --app-sidebar: oklch(0.185 0.008 260);
+  --app-drawer: oklch(0.17 0.007 260);
+  --app-chrome: oklch(0.16 0.006 260 / 95%);
+  --app-terminal: oklch(0.11 0.006 260);
+  --app-menu: oklch(0.2 0.008 260 / 96%);
+  --app-surface: oklch(0.23 0.008 260 / 86%);
+  --app-surface-muted: oklch(0.2 0.008 260 / 66%);
+  --app-surface-hover: oklch(0.29 0.01 260 / 78%);
+  --app-surface-active: oklch(0.33 0.01 260 / 84%);
+  --app-border: oklch(1 0 0 / 10%);
+  --app-border-strong: oklch(1 0 0 / 16%);
+  --app-foreground: oklch(0.97 0 0);
+  --app-muted: oklch(0.78 0.006 260);
+  --app-subtle: oklch(0.63 0.006 260);
+  --app-code: oklch(0.16 0.006 260 / 88%);
+  --app-overlay: oklch(0.145 0.006 260 / 78%);
+  --app-success: oklch(0.76 0.18 155);
+  --app-danger: oklch(0.7 0.19 24);
+  --app-info: oklch(0.74 0.13 240);
 }
 
 @theme inline {
@@ -107,6 +147,26 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-app-canvas: var(--app-canvas);
+  --color-app-sidebar: var(--app-sidebar);
+  --color-app-drawer: var(--app-drawer);
+  --color-app-chrome: var(--app-chrome);
+  --color-app-terminal: var(--app-terminal);
+  --color-app-menu: var(--app-menu);
+  --color-app-surface: var(--app-surface);
+  --color-app-surface-muted: var(--app-surface-muted);
+  --color-app-surface-hover: var(--app-surface-hover);
+  --color-app-surface-active: var(--app-surface-active);
+  --color-app-border: var(--app-border);
+  --color-app-border-strong: var(--app-border-strong);
+  --color-app-foreground: var(--app-foreground);
+  --color-app-muted: var(--app-muted);
+  --color-app-subtle: var(--app-subtle);
+  --color-app-code: var(--app-code);
+  --color-app-overlay: var(--app-overlay);
+  --color-app-success: var(--app-success);
+  --color-app-danger: var(--app-danger);
+  --color-app-info: var(--app-info);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
