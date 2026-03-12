@@ -8,6 +8,7 @@ import {
   ALargeSmall,
   ArrowUp,
   Check,
+  CircleX,
   CircleUserRound,
   ChevronDown,
   Folder,
@@ -20,6 +21,7 @@ import {
   LoaderCircle,
   LogIn,
   LogOut,
+  MessageCircleMore,
   MessageSquarePlus,
   MoreHorizontal,
   Monitor,
@@ -42,12 +44,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/sha
 import { cn } from "@/shared/lib/utils";
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 
+type ThreadStatus = "running" | "completed" | "needs-reply" | "failed";
+
+type ThreadItem = {
+  name: string;
+  time: string;
+  active: boolean;
+  status: ThreadStatus;
+};
+
 const THREAD_ITEMS = [
-  { name: "创建 Tauri 2 React+TS+shadcn/ui 模块化脚手架", time: "59m", active: true },
-  { name: "设计 Codex 风格工作台布局", time: "12m", active: false },
-  { name: "配置打包与签名信息", time: "24h", active: false },
-  { name: "实现 Agent 会话与任务抽屉", time: "2d", active: false },
-] as const;
+  { name: "创建 Tauri 2 React+TS+shadcn/ui 模块化脚手架", time: "59m", active: true, status: "running" },
+  { name: "设计 Codex 风格工作台布局", time: "12m", active: false, status: "needs-reply" },
+  { name: "配置打包与签名信息", time: "24h", active: false, status: "failed" },
+  { name: "实现 Agent 会话与任务抽屉", time: "2d", active: false, status: "completed" },
+] satisfies ReadonlyArray<ThreadItem>;
 
 const WORKSPACE_ITEMS = [
   {
@@ -61,10 +72,10 @@ const WORKSPACE_ITEMS = [
     name: "agent-runtime",
     defaultOpen: true,
     threads: [
-      { name: "梳理命令执行链路与窗口通信", time: "7m", active: false },
-      { name: "对齐 macOS 标题栏与红绿灯细节", time: "2h", active: false },
-      { name: "补充命令失败后的 toast 反馈", time: "6h", active: false },
-      { name: "整理窗口生命周期与能力清单", time: "3d", active: false },
+      { name: "梳理命令执行链路与窗口通信", time: "7m", active: false, status: "running" },
+      { name: "对齐 macOS 标题栏与红绿灯细节", time: "2h", active: false, status: "completed" },
+      { name: "补充命令失败后的 toast 反馈", time: "6h", active: false, status: "needs-reply" },
+      { name: "整理窗口生命周期与能力清单", time: "3d", active: false, status: "completed" },
     ],
   },
   {
@@ -72,9 +83,9 @@ const WORKSPACE_ITEMS = [
     name: "design-notes",
     defaultOpen: false,
     threads: [
-      { name: "整理 Codex app 布局参考截图", time: "9d", active: false },
-      { name: "对比 VS Code 三栏工作台细节", time: "14d", active: false },
-      { name: "收敛 sidebar 的 hover 与选中态", time: "21d", active: false },
+      { name: "整理 Codex app 布局参考截图", time: "9d", active: false, status: "completed" },
+      { name: "对比 VS Code 三栏工作台细节", time: "14d", active: false, status: "completed" },
+      { name: "收敛 sidebar 的 hover 与选中态", time: "21d", active: false, status: "needs-reply" },
     ],
   },
   {
@@ -88,11 +99,11 @@ const WORKSPACE_ITEMS = [
     name: "openai-integration",
     defaultOpen: true,
     threads: [
-      { name: "验证流式响应在桌面端的渲染节奏", time: "18m", active: false },
-      { name: "统一模型选择入口与会话状态存储", time: "4h", active: false },
-      { name: "梳理 API 错误码映射与重试策略", time: "8h", active: false },
-      { name: "增加 tool call 执行中的状态提示", time: "11h", active: false },
-      { name: "整理 token 用量与计费展示草图", time: "4d", active: false },
+      { name: "验证流式响应在桌面端的渲染节奏", time: "18m", active: false, status: "running" },
+      { name: "统一模型选择入口与会话状态存储", time: "4h", active: false, status: "needs-reply" },
+      { name: "梳理 API 错误码映射与重试策略", time: "8h", active: false, status: "failed" },
+      { name: "增加 tool call 执行中的状态提示", time: "11h", active: false, status: "running" },
+      { name: "整理 token 用量与计费展示草图", time: "4d", active: false, status: "completed" },
     ],
   },
   {
@@ -100,8 +111,8 @@ const WORKSPACE_ITEMS = [
     name: "release-prep",
     defaultOpen: false,
     threads: [
-      { name: "补齐图标资源与打包元信息", time: "5d", active: false },
-      { name: "核对 macOS 签名与 notarization 流程", time: "12d", active: false },
+      { name: "补齐图标资源与打包元信息", time: "5d", active: false, status: "running" },
+      { name: "核对 macOS 签名与 notarization 流程", time: "12d", active: false, status: "needs-reply" },
     ],
   },
   {
@@ -109,9 +120,9 @@ const WORKSPACE_ITEMS = [
     name: "research-lab",
     defaultOpen: false,
     threads: [
-      { name: "测试多 Agent 视图与分屏信息密度", time: "16d", active: false },
-      { name: "探索 prompt 历史版本回溯交互", time: "27d", active: false },
-      { name: "记录 terminal 与右侧面板联动方案", time: "32d", active: false },
+      { name: "测试多 Agent 视图与分屏信息密度", time: "16d", active: false, status: "completed" },
+      { name: "探索 prompt 历史版本回溯交互", time: "27d", active: false, status: "needs-reply" },
+      { name: "记录 terminal 与右侧面板联动方案", time: "32d", active: false, status: "failed" },
     ],
   },
 ] as const;
@@ -199,6 +210,43 @@ const MOCK_USER_SESSION: MockUserSession = {
   email: "jorbenzhu@gmail.com",
 };
 
+const THREAD_STATUS_META: Record<
+  ThreadStatus,
+  {
+    icon: typeof LoaderCircle;
+    iconClassName: string;
+    containerClassName: string;
+    label: string;
+    spin?: boolean;
+  }
+> = {
+  running: {
+    icon: LoaderCircle,
+    iconClassName: "text-[oklch(0.57_0.02_260)] dark:text-[oklch(0.72_0.02_260)]",
+    containerClassName: "bg-[oklch(0.57_0.02_260_/_0.12)] dark:bg-[oklch(0.72_0.02_260_/_0.14)]",
+    label: "进行中",
+    spin: true,
+  },
+  completed: {
+    icon: Check,
+    iconClassName: "text-[oklch(0.57_0.02_260)] dark:text-[oklch(0.72_0.02_260)]",
+    containerClassName: "bg-[oklch(0.57_0.02_260_/_0.12)] dark:bg-[oklch(0.72_0.02_260_/_0.14)]",
+    label: "已完成",
+  },
+  "needs-reply": {
+    icon: MessageCircleMore,
+    iconClassName: "text-[oklch(0.57_0.02_260)] dark:text-[oklch(0.72_0.02_260)]",
+    containerClassName: "bg-[oklch(0.57_0.02_260_/_0.12)] dark:bg-[oklch(0.72_0.02_260_/_0.14)]",
+    label: "待回应",
+  },
+  failed: {
+    icon: CircleX,
+    iconClassName: "text-[oklch(0.57_0.02_260)] dark:text-[oklch(0.72_0.02_260)]",
+    containerClassName: "bg-[oklch(0.57_0.02_260_/_0.12)] dark:bg-[oklch(0.72_0.02_260_/_0.14)]",
+    label: "错误或失败",
+  },
+};
+
 function getStoredUserSession(): MockUserSession | null {
   if (typeof window === "undefined") {
     return null;
@@ -229,6 +277,24 @@ function getStoredUserSession(): MockUserSession | null {
   }
 
   return null;
+}
+
+function ThreadStatusIndicator({ status }: { status: ThreadStatus }) {
+  const meta = THREAD_STATUS_META[status];
+  const Icon = meta.icon;
+
+  return (
+    <span
+      className={cn(
+        "flex size-[1.15rem] shrink-0 items-center justify-center rounded-md",
+        meta.containerClassName,
+      )}
+      title={meta.label}
+      aria-label={meta.label}
+    >
+      <Icon className={cn("size-3.5", meta.iconClassName, meta.spin && "animate-spin")} />
+    </span>
+  );
 }
 
 export function DashboardOverview() {
@@ -520,13 +586,16 @@ export function DashboardOverview() {
                               <button
                                 type="button"
                                 className={cn(
-                                  "w-full rounded-xl border px-3 py-2.5 pr-12 text-left transition-colors",
+                                  "w-full rounded-xl border px-3 py-1.5 pr-12 text-left transition-colors",
                                   thread.active
                                     ? "border-app-border-strong bg-app-surface-active text-app-foreground"
                                     : "border-transparent bg-transparent text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                                 )}
                               >
-                                <p className="truncate text-sm leading-5">{thread.name}</p>
+                                <div className="flex items-center gap-2.5">
+                                  <ThreadStatusIndicator status={thread.status} />
+                                  <p className="min-w-0 flex-1 truncate text-[13px] leading-[1.15rem]">{thread.name}</p>
+                                </div>
                               </button>
                               <span
                                 className={cn(
