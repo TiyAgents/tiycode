@@ -1487,7 +1487,7 @@ function ProjectPanel() {
         </div>
 
         <div className="relative mt-3 pl-7 pr-1 pb-3">
-          <div className="absolute -bottom-3 left-[8px] -top-3 w-px bg-app-border" />
+          <div className="absolute bottom-0 left-[8px] top-0 w-px bg-app-border" />
           <Input
             value={filterValue}
             onChange={(event) => setFilterValue(event.target.value)}
@@ -1500,7 +1500,7 @@ function ProjectPanel() {
 
       <div className="min-h-0 flex-1 overflow-auto overscroll-none pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="relative pl-7">
-          <div className="absolute bottom-0 left-[8px] -top-3 w-px bg-app-border" />
+          <div className="absolute bottom-0 left-[8px] top-0 w-px bg-app-border" />
           <div className="space-y-1">
             {visibleItems.map((item) => (
               <button
