@@ -43,6 +43,10 @@ import {
   Sun,
   TerminalSquare,
   Undo2,
+  Minus,
+  Square,
+  Copy,
+  X,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useLanguage, type LanguagePreference } from "@/app/providers/language-provider";
@@ -1164,6 +1168,7 @@ export function DashboardOverview() {
   };
 
   const isMacOS = data?.platform === "macos" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Mac"));
+  const isWindows = data?.platform === "windows" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Windows"));
   const selectedThemeOption = THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[0];
   const selectedThemeSummary = theme === "system" ? "跟随系统" : selectedThemeOption.label;
   const selectedLanguageOption = LANGUAGE_OPTIONS.find((option) => option.value === language) ?? LANGUAGE_OPTIONS[1];
@@ -1172,6 +1177,7 @@ export function DashboardOverview() {
     <main className="h-screen overflow-hidden bg-app-canvas text-app-foreground">
       <WorkbenchTopBar
         isMacOS={isMacOS}
+        isWindows={isWindows}
         isSidebarOpen={isSidebarOpen}
         isDrawerOpen={isDrawerOpen}
         isTerminalCollapsed={isTerminalCollapsed}
@@ -2111,6 +2117,7 @@ function GitDiffPreviewPanel({
 
 function WorkbenchTopBar({
   isMacOS,
+  isWindows,
   isSidebarOpen,
   isDrawerOpen,
   isTerminalCollapsed,
@@ -2137,6 +2144,7 @@ function WorkbenchTopBar({
   onToggleTerminal,
 }: {
   isMacOS: boolean;
+  isWindows: boolean;
   isSidebarOpen: boolean;
   isDrawerOpen: boolean;
   isTerminalCollapsed: boolean;
@@ -2162,6 +2170,26 @@ function WorkbenchTopBar({
   onToggleDrawer: () => void;
   onToggleTerminal: () => void;
 }) {
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    if (!isWindows) return;
+    const appWindow = getCurrentWindow();
+    let unlisten: (() => void) | undefined;
+    const setup = async () => {
+      setIsMaximized(await appWindow.isMaximized());
+      unlisten = await appWindow.onResized(async () => {
+        setIsMaximized(await appWindow.isMaximized());
+      });
+    };
+    setup();
+    return () => unlisten?.();
+  }, [isWindows]);
+
+  const handleWindowMinimize = () => getCurrentWindow().minimize();
+  const handleWindowToggleMaximize = () => getCurrentWindow().toggleMaximize();
+  const handleWindowClose = () => getCurrentWindow().close();
+
   const panelToggleButtonClass =
     "relative size-7 text-app-subtle transition-[color,background-color] duration-200 hover:bg-app-surface-hover hover:text-app-foreground";
 
@@ -2184,7 +2212,7 @@ function WorkbenchTopBar({
 
   return (
     <header className="fixed inset-x-0 top-0 z-30 h-9 border-b border-app-border bg-app-chrome backdrop-blur-xl">
-      <div className="grid h-full grid-cols-[auto_1fr_auto] items-center gap-2 px-2.5">
+      <div className={cn("grid h-full grid-cols-[auto_1fr_auto] items-center gap-2 px-2.5", isWindows && "pr-0")}>
         <div className={cn("relative z-10 flex h-full shrink-0 items-center", isMacOS ? "w-[150px]" : "w-[132px]")} ref={userMenuRef}>
           <Button
             size="icon"
@@ -2352,6 +2380,7 @@ function WorkbenchTopBar({
           data-tauri-drag-region=""
           onMouseDown={handleTitleBarMouseDown}
         >
+          <img src="/app-icon.png" alt="" className="mr-1.5 size-4 shrink-0 select-none" draggable={false} data-tauri-drag-region="" />
           <span className="select-none text-[13px] font-semibold tracking-[0.02em] text-app-foreground" data-tauri-drag-region="">Tiy Agent</span>
         </div>
 
@@ -2386,6 +2415,39 @@ function WorkbenchTopBar({
           >
             <PanelRight className="size-4" />
           </Button>
+
+          {isWindows && (
+            <>
+              <div className="mx-1 h-4 w-px bg-app-border" />
+              <button
+                type="button"
+                className="flex size-7 items-center justify-center text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                aria-label="最小化"
+                title="最小化"
+                onClick={handleWindowMinimize}
+              >
+                <Minus className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                className="flex size-7 items-center justify-center text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                aria-label={isMaximized ? "还原" : "最大化"}
+                title={isMaximized ? "还原" : "最大化"}
+                onClick={handleWindowToggleMaximize}
+              >
+                {isMaximized ? <Copy className="size-3" /> : <Square className="size-3" />}
+              </button>
+              <button
+                type="button"
+                className="flex size-7 items-center justify-center text-app-subtle transition-colors hover:bg-red-500/90 hover:text-white"
+                aria-label="关闭"
+                title="关闭"
+                onClick={handleWindowClose}
+              >
+                <X className="size-3.5" />
+              </button>
+            </>
+          )}
         </div>
       </div>
     </header>
