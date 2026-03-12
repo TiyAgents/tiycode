@@ -849,9 +849,15 @@ const LANGUAGE_OPTIONS: Array<{
 ];
 
 const MENU_TRIGGER_CLASS =
-  "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-app-surface-hover";
-const MENU_OPTION_CLASS =
-  "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors";
+  "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors hover:bg-app-surface-hover";
+const MENU_TRIGGER_ICON_CLASS = "size-4 shrink-0 text-app-subtle";
+const MENU_TRIGGER_LABEL_CLASS = "min-w-0 flex-1 truncate text-left text-sm";
+const MENU_SUBMENU_GROUP_CLASS =
+  "ml-6 mt-1 border-l border-app-border/70 pl-3";
+const MENU_SUBMENU_OPTION_CLASS =
+  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors";
+const MENU_SUBMENU_ICON_CLASS = "size-3.5 shrink-0 text-app-subtle/90";
+const MENU_SUBMENU_LABEL_CLASS = "flex-1 truncate";
 const MAC_USER_MENU_OFFSET = "ml-[74px]";
 const MAC_USER_MENU_POPOVER_OFFSET = "left-[74px]";
 const AUTH_STORAGE_KEY = "tiy-agent-auth-session";
@@ -2817,13 +2823,14 @@ function WorkbenchTopBar({
                 aria-expanded={openSettingsSection === "theme"}
                 onClick={() => onToggleSettingsSection((current) => (current === "theme" ? null : "theme"))}
               >
-                <Palette className="size-4 shrink-0 text-app-subtle" />
-                <span className="min-w-0 flex-1 truncate text-left text-sm">主题</span>
+                <Palette className={MENU_TRIGGER_ICON_CLASS} />
+                <span className={MENU_TRIGGER_LABEL_CLASS}>主题</span>
                 <span className="shrink-0 text-xs text-app-subtle">{selectedThemeSummary}</span>
               </button>
 
               {openSettingsSection === "theme" ? (
-                <div className="mt-1 space-y-1">
+                <div className={MENU_SUBMENU_GROUP_CLASS}>
+                  <div className="space-y-0.5">
                   {THEME_OPTIONS.map((option) => {
                     const OptionIcon = option.icon;
                     const isSelected = theme === option.value;
@@ -2833,17 +2840,20 @@ function WorkbenchTopBar({
                         key={option.value}
                         type="button"
                         className={cn(
-                          MENU_OPTION_CLASS,
-                          isSelected ? "bg-app-surface-active text-app-foreground" : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                          MENU_SUBMENU_OPTION_CLASS,
+                          isSelected
+                            ? "bg-app-surface-hover/80 text-app-foreground"
+                            : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                         )}
                         onClick={() => onSelectTheme(option.value)}
                       >
-                        <OptionIcon className="size-4 shrink-0 text-app-subtle" />
-                        <span className="flex-1 truncate">{option.label}</span>
-                        {isSelected ? <Check className="size-4 shrink-0 text-app-foreground" /> : null}
+                        <OptionIcon className={MENU_SUBMENU_ICON_CLASS} />
+                        <span className={MENU_SUBMENU_LABEL_CLASS}>{option.label}</span>
+                        {isSelected ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
                       </button>
                     );
                   })}
+                  </div>
                 </div>
               ) : null}
 
@@ -2856,13 +2866,14 @@ function WorkbenchTopBar({
                 aria-expanded={openSettingsSection === "language"}
                 onClick={() => onToggleSettingsSection((current) => (current === "language" ? null : "language"))}
               >
-                <Globe className="size-4 shrink-0 text-app-subtle" />
-                <span className="min-w-0 flex-1 truncate text-left text-sm">语言</span>
+                <Globe className={MENU_TRIGGER_ICON_CLASS} />
+                <span className={MENU_TRIGGER_LABEL_CLASS}>语言</span>
                 <span className="shrink-0 text-xs text-app-subtle">{selectedLanguageLabel}</span>
               </button>
 
               {openSettingsSection === "language" ? (
-                <div className="mt-1 space-y-1">
+                <div className={MENU_SUBMENU_GROUP_CLASS}>
+                  <div className="space-y-0.5">
                   {LANGUAGE_OPTIONS.map((option) => {
                     const isSelected = language === option.value;
                     const OptionIcon = option.icon;
@@ -2872,17 +2883,20 @@ function WorkbenchTopBar({
                         key={option.value}
                         type="button"
                         className={cn(
-                          MENU_OPTION_CLASS,
-                          isSelected ? "bg-app-surface-active text-app-foreground" : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                          MENU_SUBMENU_OPTION_CLASS,
+                          isSelected
+                            ? "bg-app-surface-hover/80 text-app-foreground"
+                            : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                         )}
                         onClick={() => onSelectLanguage(option.value)}
                       >
-                        <OptionIcon className="size-4 shrink-0 text-app-subtle" />
-                        <span className="flex-1 truncate">{option.label}</span>
-                        {isSelected ? <Check className="size-4 shrink-0 text-app-foreground" /> : null}
+                        <OptionIcon className={MENU_SUBMENU_ICON_CLASS} />
+                        <span className={MENU_SUBMENU_LABEL_CLASS}>{option.label}</span>
+                        {isSelected ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
                       </button>
                     );
                   })}
+                  </div>
                 </div>
               ) : null}
 
@@ -2896,19 +2910,19 @@ function WorkbenchTopBar({
                 onClick={onCheckUpdates}
               >
                 {isCheckingUpdates ? (
-                  <LoaderCircle className="size-4 shrink-0 animate-spin text-app-subtle" />
+                  <LoaderCircle className={cn(MENU_TRIGGER_ICON_CLASS, "animate-spin")} />
                 ) : (
-                  <RefreshCw className="size-4 shrink-0 text-app-subtle" />
+                  <RefreshCw className={MENU_TRIGGER_ICON_CLASS} />
                 )}
-                <span className="flex-1 truncate text-left">检查更新</span>
+                <span className={MENU_TRIGGER_LABEL_CLASS}>检查更新</span>
               </button>
 
               <button
                 type="button"
                 className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")}
               >
-                <MoreHorizontal className="size-4 shrink-0 text-app-subtle" />
-                <span className="flex-1 truncate text-left">更多设置</span>
+                <MoreHorizontal className={MENU_TRIGGER_ICON_CLASS} />
+                <span className={MENU_TRIGGER_LABEL_CLASS}>更多设置</span>
               </button>
 
               {userSession ? (
@@ -2917,8 +2931,8 @@ function WorkbenchTopBar({
                   className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")}
                   onClick={onLogout}
                 >
-                  <LogOut className="size-4 shrink-0 text-app-subtle" />
-                  <span className="flex-1 truncate text-left">退出登录</span>
+                  <LogOut className={MENU_TRIGGER_ICON_CLASS} />
+                  <span className={MENU_TRIGGER_LABEL_CLASS}>退出登录</span>
                 </button>
               ) : (
                 <button
@@ -2926,8 +2940,8 @@ function WorkbenchTopBar({
                   className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")}
                   onClick={onLogin}
                 >
-                  <LogIn className="size-4 shrink-0 text-app-subtle" />
-                  <span className="flex-1 truncate text-left">登录</span>
+                  <LogIn className={MENU_TRIGGER_ICON_CLASS} />
+                  <span className={MENU_TRIGGER_LABEL_CLASS}>登录</span>
                 </button>
               )}
 
