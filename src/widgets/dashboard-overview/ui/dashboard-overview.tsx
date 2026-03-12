@@ -898,35 +898,25 @@ const THREAD_STATUS_META: Record<
   ThreadStatus,
   {
     icon: typeof LoaderCircle;
-    iconClassName: string;
-    containerClassName: string;
     label: string;
     spin?: boolean;
   }
 > = {
   running: {
     icon: LoaderCircle,
-    iconClassName: "text-[oklch(0.57_0.02_260)] dark:text-[oklch(0.72_0.02_260)]",
-    containerClassName: "bg-[oklch(0.57_0.02_260_/_0.12)] dark:bg-[oklch(0.72_0.02_260_/_0.14)]",
     label: "进行中",
     spin: true,
   },
   completed: {
     icon: Check,
-    iconClassName: "text-[oklch(0.57_0.02_260)] dark:text-[oklch(0.72_0.02_260)]",
-    containerClassName: "bg-[oklch(0.57_0.02_260_/_0.12)] dark:bg-[oklch(0.72_0.02_260_/_0.14)]",
     label: "已完成",
   },
   "needs-reply": {
     icon: MessageCircleMore,
-    iconClassName: "text-[oklch(0.57_0.02_260)] dark:text-[oklch(0.72_0.02_260)]",
-    containerClassName: "bg-[oklch(0.57_0.02_260_/_0.12)] dark:bg-[oklch(0.72_0.02_260_/_0.14)]",
     label: "待回应",
   },
   failed: {
     icon: CircleX,
-    iconClassName: "text-[oklch(0.57_0.02_260)] dark:text-[oklch(0.72_0.02_260)]",
-    containerClassName: "bg-[oklch(0.57_0.02_260_/_0.12)] dark:bg-[oklch(0.72_0.02_260_/_0.14)]",
     label: "错误或失败",
   },
 };
@@ -1085,20 +1075,45 @@ function buildProjectOptionFromPath(path: string | null): ProjectOption | null {
   };
 }
 
-function ThreadStatusIndicator({ status }: { status: ThreadStatus }) {
+function formatProjectPathLabel(path: string) {
+  const normalizedPath = path.replace(/\\/g, "/").replace(/\/+$/g, "");
+  const segments = normalizedPath.split("/").filter(Boolean);
+
+  if (segments.length <= 4) {
+    return normalizedPath;
+  }
+
+  return `.../${segments.slice(-4).join("/")}`;
+}
+
+function ThreadStatusIndicator({
+  status,
+  emphasis = "default",
+}: {
+  status: ThreadStatus;
+  emphasis?: "default" | "subtle";
+}) {
   const meta = THREAD_STATUS_META[status];
   const Icon = meta.icon;
+  const isSubtle = emphasis === "subtle";
+  const containerClassName = cn(
+    "flex size-[1.15rem] shrink-0 items-center justify-center rounded-md border",
+    status === "failed"
+      ? isSubtle
+        ? "border-app-danger/10 bg-app-danger/8 text-app-danger/80 dark:border-app-danger/16 dark:bg-app-danger/12 dark:text-app-danger/82"
+        : "border-app-danger/15 bg-app-danger/12 text-app-danger dark:border-app-danger/20 dark:bg-app-danger/16"
+      : isSubtle
+        ? "border-app-border/70 bg-app-surface-muted/65 text-app-subtle dark:border-app-border dark:bg-app-surface-muted/55 dark:text-app-muted"
+        : status === "running"
+          ? "border-app-info/15 bg-app-info/12 text-app-info dark:border-app-info/20 dark:bg-app-info/16"
+          : status === "completed"
+            ? "border-app-success/15 bg-app-success/12 text-app-success dark:border-app-success/20 dark:bg-app-success/16"
+            : "border-app-warning/20 bg-app-warning/14 text-app-warning dark:border-app-warning/22 dark:bg-app-warning/18",
+  );
 
   return (
-    <span
-      className={cn(
-        "flex size-[1.15rem] shrink-0 items-center justify-center rounded-md",
-        meta.containerClassName,
-      )}
-      title={meta.label}
-      aria-label={meta.label}
-    >
-      <Icon className={cn("size-3.5", meta.iconClassName, meta.spin && "animate-spin")} />
+    <span className={containerClassName} title={meta.label} aria-label={meta.label}>
+      <Icon className={cn("size-3.5", meta.spin && "animate-spin")} />
     </span>
   );
 }
@@ -1566,7 +1581,10 @@ export function DashboardOverview() {
                                 onClick={() => handleThreadSelect(thread.id)}
                               >
                                 <div className="flex items-center gap-2">
-                                  <ThreadStatusIndicator status={thread.status} />
+                                  <ThreadStatusIndicator
+                                    status={thread.status}
+                                    emphasis={thread.active ? "default" : "subtle"}
+                                  />
                                   <p className={DRAWER_LIST_LABEL_CLASS}>{thread.name}</p>
                                 </div>
                               </button>
@@ -1932,36 +1950,65 @@ function NewThreadEmptyState({
   };
 
   return (
-    <div className="flex w-full max-w-md flex-col items-center justify-center gap-3">
-      <div className="flex size-10 items-center justify-center text-app-foreground">
+    <div className="flex w-full max-w-[28rem] flex-col items-center justify-center gap-4">
+      <div className="flex size-11 items-center justify-center rounded-2xl border border-app-border bg-app-surface text-app-foreground shadow-[0_10px_28px_rgba(15,23,42,0.08)] dark:shadow-[0_14px_30px_rgba(0,0,0,0.24)]">
         <img src="/app-icon.png" alt="Tiy Agent logo" className="size-7 object-contain opacity-90" />
       </div>
 
-      <div className="flex flex-col items-center gap-0.5 text-center">
-        <h1 className="whitespace-nowrap text-[1.45rem] font-medium tracking-[-0.035em] text-app-foreground">
+      <div className="flex flex-col items-center gap-1 text-center">
+        <h1 className="text-balance text-[1.45rem] font-medium tracking-[-0.035em] text-app-foreground">
           Anything you need, through conversation.
         </h1>
+        <p className="max-w-[30rem] text-sm leading-6 text-app-muted">
+          Pick a local workspace first so the next thread can stay grounded in files, commands, and runtime context.
+        </p>
       </div>
 
-      <div ref={projectMenuRef} className="relative w-full max-w-[20rem]">
+      <div ref={projectMenuRef} className="relative w-full max-w-[24rem]">
         <button
           type="button"
-          className="inline-flex w-full items-center justify-center gap-2 px-2 py-1 text-left transition-colors hover:text-app-foreground"
+          aria-haspopup="menu"
+          aria-expanded={isMenuOpen}
+          className="inline-flex w-full items-center gap-3 rounded-2xl border border-app-border bg-app-surface/85 px-3.5 py-3 text-left shadow-[0_10px_24px_rgba(15,23,42,0.06)] transition-[border-color,background-color,box-shadow,color] duration-200 hover:border-app-border-strong hover:bg-app-surface hover:text-app-foreground hover:shadow-[0_16px_36px_rgba(15,23,42,0.1)] dark:shadow-[0_14px_32px_rgba(0,0,0,0.22)]"
           onClick={() => setMenuOpen((current) => !current)}
         >
-          <div className="flex min-w-0 items-center gap-2">
-            <Folder className="size-3.5 shrink-0 text-app-subtle" />
-            <span className="min-w-0 truncate text-[1.05rem] font-medium tracking-[-0.02em] text-app-muted">
-              {activeProject?.name ?? "Choose project"}
-            </span>
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border bg-app-surface-muted text-app-subtle">
+            <Folder className="size-4 shrink-0" />
           </div>
-          <ChevronDown className={cn("mt-0.5 size-3.5 shrink-0 text-app-subtle transition-transform duration-200", isMenuOpen && "rotate-180")} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-[1rem] font-medium tracking-[-0.02em] text-app-foreground">
+                {activeProject?.name ?? "Choose project"}
+              </span>
+              {activeProject ? (
+                <span className="shrink-0 rounded-full bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium text-app-subtle">
+                  {activeProject.lastOpenedLabel}
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-0.5 truncate text-[12px] text-app-subtle" title={activeProject?.path}>
+              {activeProject ? formatProjectPathLabel(activeProject.path) : "Select a folder to start a workspace-backed thread"}
+            </p>
+          </div>
+          <ChevronDown
+            className={cn(
+              "size-4 shrink-0 text-app-subtle transition-transform duration-200",
+              isMenuOpen && "rotate-180",
+            )}
+          />
         </button>
 
         {isMenuOpen ? (
-          <div className="absolute inset-x-0 top-[calc(100%+0.45rem)] z-20 max-h-[13rem] overflow-hidden rounded-[0.95rem] border border-app-border bg-app-menu/98 p-1.5 shadow-[0_16px_36px_-28px_rgba(15,23,42,0.45)] backdrop-blur-xl dark:bg-app-menu/94">
-            <div className="flex max-h-[calc(13rem-0.75rem)] flex-col">
-              <div className="px-2.5 pb-1.5 pt-0.5 text-[11px] font-medium text-app-subtle">Switch project</div>
+          <div className="absolute inset-x-0 top-[calc(100%+0.55rem)] z-20 max-h-[15rem] overflow-hidden rounded-[1.1rem] border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
+            <div className="flex max-h-[calc(15rem-0.75rem)] flex-col">
+              <div className="flex items-center justify-between gap-3 px-2.5 pb-1.5 pt-0.5">
+                <span className="text-[11px] font-medium text-app-subtle">Recent projects</span>
+                {activeProject ? (
+                  <span className="rounded-full bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium text-app-subtle">
+                    Current
+                  </span>
+                ) : null}
+              </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 <div className="space-y-0.5">
@@ -1973,9 +2020,9 @@ function NewThreadEmptyState({
                         key={`${project.id}-${project.path}`}
                         type="button"
                         className={cn(
-                          "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors",
+                          "flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors",
                           isSelected
-                            ? "bg-app-surface/70 text-app-foreground"
+                            ? "bg-app-surface/75 text-app-foreground"
                             : "text-app-muted hover:bg-app-surface-hover/70 hover:text-app-foreground",
                         )}
                         onClick={() => {
@@ -1983,9 +2030,19 @@ function NewThreadEmptyState({
                           setMenuOpen(false);
                         }}
                       >
-                        <Folder className="size-4 shrink-0 text-app-subtle" />
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium">{project.name}</span>
-                        {isSelected ? <Check className="size-4 shrink-0 text-app-foreground" /> : null}
+                        <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-subtle">
+                          <Folder className="size-4 shrink-0" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium">{project.name}</span>
+                            <span className="shrink-0 text-[10px] font-medium text-app-subtle">{project.lastOpenedLabel}</span>
+                          </div>
+                          <p className="mt-0.5 truncate text-[11px] leading-5 text-app-subtle" title={project.path}>
+                            {formatProjectPathLabel(project.path)}
+                          </p>
+                        </div>
+                        {isSelected ? <Check className="mt-0.5 size-4 shrink-0 text-app-foreground" /> : null}
                       </button>
                     );
                   })}
@@ -1996,11 +2053,16 @@ function NewThreadEmptyState({
 
               <button
                 type="button"
-                className="flex w-full shrink-0 items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-app-foreground transition-colors hover:bg-app-surface-hover/70"
+                className="flex w-full shrink-0 items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-app-foreground transition-colors hover:bg-app-surface-hover/70"
                 onClick={() => void handleChooseFolder()}
               >
-                <FolderPlus className="size-4 shrink-0 text-app-subtle" />
-                <span className="text-sm font-medium">Choose new folder</span>
+                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-subtle">
+                  <FolderPlus className="size-4 shrink-0" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium">Choose new folder</div>
+                  <p className="mt-0.5 text-[11px] leading-5 text-app-subtle">Browse a local workspace that is not in the recent list</p>
+                </div>
               </button>
             </div>
           </div>

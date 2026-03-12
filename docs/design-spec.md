@@ -1,212 +1,385 @@
-# Tiy Agent Design Spec
+# Tiy Agent 视觉规范
 
-## Overview
+## 1. 文档目的
 
-Tiy Agent's current UI baseline is a desktop workbench rather than a flowing marketing page. The system prioritizes fixed viewport composition, multi-panel collaboration, high information density, low-saturation neutrals, and stable interaction feedback.
+本规范用于沉淀 Tiy Agent 当前桌面工作台的视觉语言、设计约束和实现边界。它不是一份抽象品牌手册，而是一份直接指导界面实现的工程规范。
 
-This document captures the visual rules already established in the codebase and should be treated as the primary design reference for future UI work.
+当前阶段的核心目标只有一个：
 
-## Reference Sources
+- 让桌面工作台在高信息密度下仍然保持清晰、克制、稳定和可扩展。
+
+## 2. 适用范围
+
+本规范覆盖以下内容：
+
+- 主工作台布局
+- 主题与设计 token
+- 侧边栏、抽屉、终端、菜单、卡片、输入框等核心容器
+- 线程状态、项目选择器等高频交互模块
+- 动效、状态反馈和可访问性基线
+
+本规范当前基于以下实现整理：
 
 - `src/app/styles/globals.css`
+- `src/app/providers/theme-provider.tsx`
 - `src/widgets/dashboard-overview/ui/dashboard-overview.tsx`
 - `src/shared/ui/button.tsx`
 - `src/shared/ui/card.tsx`
 - `src/shared/ui/input.tsx`
-- `src/app/providers/theme-provider.tsx`
 
-## Layout System
+## 3. 视觉基调
 
-### Workbench Shell
+### 3.1 产品气质
 
-- The app uses a fixed desktop shell with a thin top chrome bar, side panels, a central content area, and an optional bottom terminal.
-- The top bar height is `36px`.
-- The main workbench is a three-column layout:
-  - left sidebar: `320px`
-  - main content: fluid
-  - right drawer: `360px`
-- The bottom terminal defaults to `260px`, with a minimum height of `180px`, and supports drag resize.
+Tiy Agent 的界面不是营销页，也不是移动端卡片流，而是桌面型 AI 工作台。
 
-### Scrolling Model
+视觉上应保持以下特征：
 
-- Global page scrolling is disabled.
-- `html`, `body`, and `#root` remain full height with `overflow: hidden`.
-- Scrolling is delegated to panel-local containers only.
-- This behavior is part of the product language and should be preserved for new workbench screens.
+- 冷静而克制，不依赖高饱和品牌色制造存在感
+- 高密度但不拥挤，信息层次靠结构和对比建立
+- 更像专业工具，而不是娱乐型聊天应用
+- 反馈明确，但不过度表演
 
-### Content Width and Grid
+### 3.2 风格关键词
 
-- The product does not use a standard 12-column marketing grid.
-- The dominant pattern is:
-  - workbench shell composed with `flex`
-  - content stacks composed with vertical spacing
-  - information clusters composed with local `grid`
-- Main reading content is constrained to `max-w-4xl` and centered.
-- Compact information cards expand from single column to `md` two-column and `xl` three-column layouts.
+- Desktop workbench
+- Cool neutral
+- Dense but breathable
+- Quiet hierarchy
+- Soft glass, not heavy skeuomorphism
 
-## Theme and Color Tokens
+## 4. 已收敛的设计问题
 
-### Theme Model
+本次梳理重点修正了两类不合理设计：
 
-- Color is defined with OKLCH tokens.
-- Supported theme preferences are `system`, `light`, and `dark`.
-- The resolved theme is applied at runtime through:
-  - `html.dark`
-  - `data-theme`
-  - `color-scheme`
+### 4.1 线程状态缺少语义区分
 
-### Token Layers
+之前 `running / completed / needs-reply / failed` 的图标色几乎一致，用户需要依赖图标形状才能识别状态，语义反馈偏弱。
 
-The system currently has two token tiers:
+现在的规范要求：
 
-- semantic UI tokens:
-  - `background`
-  - `foreground`
-  - `card`
-  - `primary`
-  - `border`
-  - `muted`
-- workbench-specific tokens:
-  - `app-canvas`
-  - `app-sidebar`
-  - `app-drawer`
-  - `app-chrome`
-  - `app-terminal`
-  - `app-surface`
-  - `app-surface-muted`
-  - `app-surface-hover`
-  - `app-surface-active`
-  - `app-border`
-  - `app-border-strong`
-  - `app-foreground`
-  - `app-muted`
-  - `app-subtle`
-  - `app-code`
-  - `app-overlay`
-  - `app-success`
-  - `app-danger`
-  - `app-info`
+- 高显著场景中，`running / completed / needs-reply / failed` 可分别映射到 `app-info / app-success / app-warning / app-danger`
+- 在 sidebar 这类高密度列表中，状态图标默认应降为低彩中性表达
+- 只有当前项、关键反馈项或失败项才允许适度提权颜色
 
-### Color Behavior
+状态色只能用于语义提示，不能反向污染大面积布局层级，也不能让列表出现“彩色糖豆”堆积感。
 
-- The primary action style is intentionally restrained.
-- In light mode, `primary` behaves like a near-black button with light foreground text.
-- In dark mode, `primary` flips to a near-light button with dark foreground text.
-- The main workbench hierarchy is expressed through cool blue-gray neutrals, not through saturated brand accents.
-- Semantic accent colors are used sparingly for state cues only:
-  - success
-  - danger
-  - informational status
-- Surface and overlay colors often include alpha, creating a soft frosted or layered feel without heavy contrast.
+### 4.2 新线程页项目选择器信息层级不足
 
-## Spacing, Radius, and Typography
+之前项目切换只显示项目名，缺少路径与最近打开信息，项目来源感不足，难以快速判断当前线程将绑定哪个工作区。
 
-### Radius
+现在的规范要求：
 
-- The radius base token is `--radius: 0.75rem`.
-- The interface commonly uses `rounded-xl` and `rounded-2xl`.
-- The result should feel soft and modern, but not overly card-heavy or playful.
+- 触发器必须同时展示项目名与路径摘要
+- 最近项目列表必须展示：
+  - 项目名
+  - 路径摘要
+  - 最近打开时间
+  - 当前选中状态
+- “选择新文件夹”属于和“最近项目”平级但语义不同的入口，需要独立分组
 
-### Sizing and Density
+## 5. 布局系统
 
-- Standard controls such as buttons and inputs use a height around `36px` (`h-9`).
-- Toolbar icon buttons are often compressed to around `28px`.
-- Spacing is compact and tuned for dense desktop workflows rather than mobile-first breathing room.
+### 5.1 工作台骨架
 
-### Type
+应用采用固定视口工作台，不允许页面级滚动。
 
-- Primary UI font: `Inter`
-- System fallbacks remain enabled for platform consistency.
-- Typical text sizes cluster around:
-  - `12px` for metadata and supporting labels
-  - `13px` for code-like and compact utility text
-  - `14px` for primary body and panel titles
-- Main section headings often use `14px` with `semibold`.
-- Terminal output uses a monospace face.
-- Metadata labels frequently use uppercase plus expanded tracking to communicate "system" or "panel" semantics.
+- 顶部系统栏高度：`36px`
+- 左侧 sidebar：`320px`
+- 右侧 drawer：`360px`
+- 底部 terminal 默认高度：`260px`
+- terminal 最小高度：`180px`
 
-## Component Rules
+实现原则：
 
-### Buttons
+- `html`、`body`、`#root` 必须保持全高
+- 全局 `overflow` 必须禁用
+- 只允许局部容器滚动
+- 面板收起/展开应通过局部过渡完成，不得引入页面抖动
 
-- Base button behavior comes from the shared shadcn-style primitive.
-- Buttons must preserve:
-  - hover feedback
-  - focus ring visibility
-  - disabled state clarity
-- Workbench views commonly override buttons toward lighter-weight variants:
-  - ghost
-  - icon
-  - panel toggle
+### 5.2 内容组织
 
-### Cards
+主工作台不采用营销网站常见的 12 栏栅格，而采用更实用的局部结构：
 
-- `Card` is the default information container.
-- In the workbench, cards should usually avoid strong elevation.
-- Prefer:
-  - `bg-app-surface`
-  - `border-app-border`
-  - minimal or removed shadow
+- 大框架用 `flex`
+- 垂直内容组织用 `space-y-*`
+- 信息卡片或 inspector 区块用局部 `grid`
 
-### Inputs and Composer Fields
+主阅读区基线：
 
-- Inputs and textareas should visually merge into the workbench shell.
-- Preferred behavior:
-  - transparent or near-transparent background
-  - light border
-  - strong focus ring
-  - subtle placeholder text
+- 中心阅读列使用 `max-w-4xl`
+- 单列为默认
+- 在 `md` 扩展为两列
+- 在 `xl` 扩展为三列
 
-## Interaction and Motion
+## 6. 主题与 Token 体系
 
-### Motion
+### 6.1 主题模型
 
-- Panel transitions use `width`, `opacity`, and `transform`.
-- Standard duration is `300ms`.
-- Standard easing is `cubic-bezier(0.22,1,0.36,1)`.
-- Motion should feel deliberate and desktop-like, not bouncy or promotional.
+主题偏好支持：
 
-### State Hierarchy
+- `system`
+- `light`
+- `dark`
 
-- Hover feedback is more important than click theatrics.
-- Preferred hover language:
-  - slightly brighter surface
-  - stronger foreground contrast
-  - subtle shadow
-  - fine underline or bottom indicator where appropriate
-- Active and current states should be expressed primarily through:
-  - stronger borders
-  - deeper surface fills
-  - thin active indicators
+运行时通过以下方式同步主题：
 
-### Accessibility
+- `html.dark`
+- `data-theme`
+- `color-scheme`
 
-- Shared primitives already provide focus ring support and disabled handling.
-- Custom workbench controls should continue to expose clear keyboard focus visibility.
-- New UI should preserve readable contrast between:
-  - canvas and surface
-  - surface and border
-  - foreground and muted text
+### 6.2 Token 分层
 
-## Implementation Guidance
+当前 token 分为两层：
 
-- Reuse `app-*` tokens before introducing hard-coded colors.
-- Prefer extending the existing workbench shell rather than inventing isolated page-level layout systems.
-- If a new token is required, decide whether it belongs to:
-  - the shared semantic token layer
-  - the workbench-specific `app-*` layer
-- Avoid page-local token naming unless there is a strong reason.
-- Keep README as a lightweight entry point and keep the full design baseline in this file.
+#### 通用语义层
 
-## Validation Checklist
+- `background`
+- `foreground`
+- `card`
+- `primary`
+- `border`
+- `muted`
+- `destructive`
 
-- Verify light, dark, and system theme modes preserve the canvas, surface, border, and foreground hierarchy.
-- Verify sidebar, drawer, and terminal open and close without layout jank or body scrolling.
-- Verify hover, active, disabled, and focus-visible states remain consistent across buttons, thread items, menus, and inputs.
-- Verify the centered content column remains readable on narrow widths and that local grids expand cleanly from one to two to three columns.
+#### 工作台语义层
 
-## Current Scope Notes
+- `app-canvas`
+- `app-sidebar`
+- `app-drawer`
+- `app-chrome`
+- `app-terminal`
+- `app-menu`
+- `app-surface`
+- `app-surface-muted`
+- `app-surface-hover`
+- `app-surface-active`
+- `app-border`
+- `app-border-strong`
+- `app-foreground`
+- `app-muted`
+- `app-subtle`
+- `app-code`
+- `app-overlay`
+- `app-success`
+- `app-warning`
+- `app-danger`
+- `app-info`
 
-- This spec is based on the current single primary workbench screen in the repository.
-- It documents the most stable visual patterns already present, not a fully abstracted enterprise design system.
-- If the product later introduces multiple major surfaces such as settings, onboarding, or marketing pages, this spec should be extended with page-type-specific rules rather than replacing the workbench baseline.
+### 6.3 色彩原则
+
+- 主层级由冷灰蓝中性色构成，不靠品牌色分层
+- `primary` 只用于高权重操作，不应用于大面积装饰
+- 功能状态色仅用于反馈，不参与主布局分区
+- 所有新颜色优先进入 token，禁止在业务组件中继续扩散硬编码 OKLCH
+
+### 6.4 层级关系
+
+容器层次从外到内应保持以下关系：
+
+1. `app-canvas`：整体工作台背景
+2. `app-sidebar` / `app-drawer` / `app-terminal`：结构层
+3. `app-surface`：主要内容块
+4. `app-surface-muted`：次级承载面
+5. `app-menu`：浮层和菜单
+6. `app-overlay`：遮罩与底部渐隐
+
+原则：
+
+- 同一层级内不要同时使用过多边框、阴影和高亮
+- 通过“底色差 + 边框强度 + 文字对比”来区分，而不是堆叠特效
+
+## 7. 字体、密度与圆角
+
+### 7.1 字体
+
+当前实现使用的运行时字体栈为：
+
+`Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
+
+规范解释：
+
+- 视觉上以现代无衬线桌面工具字体为目标
+- 如果运行环境没有加载 `Inter`，允许系统字体自然兜底
+- 后续新页面不要假设严格的 Inter 字宽；布局应对系统字体回退有弹性
+
+### 7.2 字号层级
+
+当前工作台最稳定的字号区间如下：
+
+- `11px`：元信息、标签、辅助说明
+- `12px`：终端、路径、二级补充文本
+- `13px`：树节点、列表、工具型文本
+- `14px`：正文、标题、常规操作文本
+- `15px+`：局部强调标题，不可滥用
+
+### 7.3 密度原则
+
+这是桌面工具，不是移动端内容卡片。
+
+因此：
+
+- 常规控件高度以 `h-8` 到 `h-9` 为主
+- 图标按钮以 `size-6`、`size-7`、`size-8` 为主
+- 默认优先选择“紧凑但可点”的方案
+- 空白要服务分组，不要为了“轻盈感”无节制放大
+
+### 7.4 圆角
+
+圆角基线：
+
+- 根 token：`--radius: 0.75rem`
+- 常用圆角：`rounded-lg`、`rounded-xl`、`rounded-2xl`
+
+规则：
+
+- 列表项通常使用 `rounded-lg`
+- 承载性卡片、菜单和模块容器通常使用 `rounded-xl` 或 `rounded-2xl`
+- 避免在同一区域同时出现过多不相关的大圆角，防止界面“糯化”
+
+## 8. 组件规范
+
+### 8.1 Button
+
+共享 Button 保持 shadcn 风格基础能力，但工作台使用时需偏向工具界面语气。
+
+要求：
+
+- 默认保留 hover、focus-visible、disabled 三类状态
+- 在工作台中优先使用 `ghost`、`outline` 或轻量定制样式
+- 强主按钮只出现在真正的提交、发送、确认动作上
+
+不推荐：
+
+- 对普通工具按钮使用高饱和实底
+- 在次级操作上加入过强阴影
+
+### 8.2 Card
+
+Card 是主要信息承载容器，但不应该产生“营销卡片感”。
+
+要求：
+
+- 默认组合：`bg-app-surface + border-app-border`
+- 阴影可无，或只保留极弱阴影
+- 内边距需要服务信息密度，不得盲目放大
+
+### 8.3 Input / Textarea / Composer
+
+输入类组件应与工作台背景自然融合。
+
+要求：
+
+- 使用透明或半透明背景
+- 保留明确但不过度夸张的 focus 状态
+- placeholder 必须弱于正文
+- 输入区应优先呈现“嵌入式工具感”，而不是“浮在页面上的表单”
+
+### 8.4 Menu / Popover
+
+浮层菜单必须是当前工作台视觉体系的一部分，而不是浏览器原生感的漂浮块。
+
+要求：
+
+- 使用 `app-menu`
+- 允许使用轻微 `backdrop-blur`
+- 菜单内部必须有清晰的区块分隔
+- 每个列表项应具备主信息和必要的次信息层级
+
+项目选择器属于标准范式：
+
+- 触发器：主标题 + 次级路径摘要 + 当前状态
+- 列表项：图标容器 + 项目名 + 路径 + 最近打开时间
+- 当前项：使用轻量背景高亮，不使用强品牌色填充
+
+### 8.5 状态指示器
+
+线程状态指示器必须同时满足：
+
+- 语义明确，但不抢夺列表层级
+- 面积小，不喧宾夺主
+- 在亮色和暗色主题下都清晰
+
+推荐样式：
+
+- 图标放入小尺寸圆角容器
+- 容器使用低透明背景
+- 高密度列表默认使用低彩中性色
+- 当前项与失败项可以适度提高对比
+- 图标颜色高于容器背景，但低于主按钮
+
+## 9. 交互与动效
+
+### 9.1 动效基线
+
+标准过渡参数：
+
+- duration：`300ms`
+- easing：`cubic-bezier(0.22, 1, 0.36, 1)`
+
+适用对象：
+
+- sidebar / drawer 宽度切换
+- terminal 高度变化
+- 菜单展开
+- hover 与选中态颜色切换
+
+### 9.2 动效原则
+
+- 更强调稳定和可读，而不是弹跳和表演
+- hover 比 click 动画更重要
+- 不允许在高频列表中引入抢注意力的位移动画
+
+### 9.3 状态层级
+
+交互优先级应按以下顺序表达：
+
+1. hover：轻微提亮、边框增强、文字变清晰
+2. active/current：更实的背景或边框
+3. focus-visible：清晰、连续、不被遮挡
+4. disabled：降低对比，但仍可辨识
+
+## 10. 可访问性基线
+
+必须满足：
+
+- 键盘可见焦点
+- 列表项和图标按钮具有足够点击面积
+- 文字与背景保持稳定对比
+- 仅靠颜色无法完成状态识别时，必须辅以图标或文案
+
+对于菜单、线程状态、项目选择器这类组件，颜色只能强化语义，不能独立承担语义。
+
+## 11. 禁止项
+
+后续 UI 不应再引入以下问题：
+
+- 在组件内直接写新的硬编码色值而不进入 token
+- 用高饱和渐变承担主布局视觉
+- 列表项只有一层信息，导致用户需要 hover 后才理解对象含义
+- 过强阴影与大圆角同时泛滥，破坏工具界面的克制感
+- 页面级滚动回流破坏工作台固定骨架
+- 把营销页式留白和桌面工具密度混在一起
+
+## 12. 设计评审检查表
+
+每次新增或调整工作台 UI，至少检查以下项目：
+
+- 亮色、暗色、跟随系统三种主题是否都成立
+- `canvas / panel / surface / menu` 四层关系是否仍然清晰
+- 是否复用了既有 `app-*` token，而不是新增临时颜色
+- hover、active、focus-visible、disabled 是否完整
+- 列表是否具备主次信息层级
+- 状态色是否只用于语义反馈
+- 局部滚动是否正常，是否出现 body 滚动
+- 字体回退到系统字体时，布局是否仍然稳定
+
+## 13. 后续扩展原则
+
+如果后续新增设置页、 onboarding、营销页等新表面，不应直接复用工作台的全部约束，而应：
+
+1. 保留 token 体系和主题模型
+2. 单独定义页面类型的布局与密度规则
+3. 明确哪些模式属于“工作台语法”，哪些属于“页面语法”
+
+本文件在当前阶段应优先保护工作台语法的连续性。

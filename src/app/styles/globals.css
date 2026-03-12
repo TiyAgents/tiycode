@@ -55,6 +55,7 @@
   --app-code: oklch(0.93 0.01 255 / 90%);
   --app-overlay: oklch(0.97 0.01 255 / 78%);
   --app-success: oklch(0.62 0.17 155);
+  --app-warning: oklch(0.74 0.15 82);
   --app-danger: oklch(0.58 0.22 26);
   --app-info: oklch(0.63 0.13 240);
 }
@@ -110,6 +111,7 @@
   --app-code: oklch(0.16 0.006 260 / 88%);
   --app-overlay: oklch(0.145 0.006 260 / 78%);
   --app-success: oklch(0.76 0.18 155);
+  --app-warning: oklch(0.82 0.14 85);
   --app-danger: oklch(0.7 0.19 24);
   --app-info: oklch(0.74 0.13 240);
 }
@@ -165,6 +167,7 @@
   --color-app-code: var(--app-code);
   --color-app-overlay: var(--app-overlay);
   --color-app-success: var(--app-success);
+  --color-app-warning: var(--app-warning);
   --color-app-danger: var(--app-danger);
   --color-app-info: var(--app-info);
   --radius-sm: calc(var(--radius) - 4px);
