@@ -55,6 +55,10 @@
     "category": "Productivity",
     "shortDescription": "Cross-platform desktop AI agent built with Tauri.",
     "longDescription": "Tiy Agent is a cross-platform desktop AI agent application built with Tauri, React and TypeScript.",
-    "copyright": "© 2026 Tiy AI"
-  }
+    "copyright": "© 2026 Tiy AI",
+    "macOS": {
+      "infoPlist": "Info.plist"
+    }
+  },
+  "mainBinaryName": "Tiy-Agent"
 }

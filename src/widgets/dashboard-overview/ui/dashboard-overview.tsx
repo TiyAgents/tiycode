@@ -49,6 +49,7 @@ import {
   X,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useLanguage, type LanguagePreference } from "@/app/providers/language-provider";
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
 import { Button } from "@/shared/ui/button";
@@ -64,6 +65,25 @@ type ThreadItem = {
   time: string;
   active: boolean;
   status: ThreadStatus;
+};
+
+type WorkspaceThreadItem = ThreadItem & {
+  id: string;
+};
+
+type WorkspaceItem = {
+  id: string;
+  name: string;
+  defaultOpen: boolean;
+  threads: Array<WorkspaceThreadItem>;
+  path?: string;
+};
+
+type ProjectOption = {
+  id: string;
+  name: string;
+  path: string;
+  lastOpenedLabel: string;
 };
 
 type DrawerPanel = "project" | "git";
@@ -113,6 +133,16 @@ type GitSplitDiffRow = {
   leftText: string;
   rightText: string;
 };
+
+const DRAWER_LIST_STACK_CLASS = "space-y-1";
+const DRAWER_LIST_ROW_CLASS = "w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] leading-5 transition-colors";
+const DRAWER_LIST_LABEL_CLASS = "min-w-0 flex-1 truncate text-[13px] leading-5";
+const DRAWER_LIST_META_CLASS = "shrink-0 text-[11px] text-app-subtle";
+const DRAWER_ICON_ACTION_CLASS =
+  "flex size-6 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground";
+const DRAWER_OVERFLOW_ACTION_CLASS =
+  "absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-app-subtle opacity-0 transition-all duration-200 hover:bg-app-surface-hover hover:text-app-foreground group-hover:opacity-100";
+const DRAWER_SECTION_HEADER_CLASS = "flex items-center justify-between gap-3 px-1.5";
 
 const THREAD_ITEMS = [
   { name: "创建 Tauri 2 React+TS+shadcn/ui 模块化脚手架", time: "59m", active: true, status: "running" },
@@ -185,6 +215,75 @@ const WORKSPACE_ITEMS = [
       { name: "探索 prompt 历史版本回溯交互", time: "27d", active: false, status: "needs-reply" },
       { name: "记录 terminal 与右侧面板联动方案", time: "32d", active: false, status: "failed" },
     ],
+  },
+] as const;
+
+const RECENT_PROJECTS: ReadonlyArray<ProjectOption> = [
+  {
+    id: "tiy-desktop",
+    name: "tiy-desktop",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/tiy-desktop",
+    lastOpenedLabel: "刚刚",
+  },
+  {
+    id: "agent-runtime",
+    name: "agent-runtime",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/agent-runtime",
+    lastOpenedLabel: "12 分钟前",
+  },
+  {
+    id: "openai-integration",
+    name: "openai-integration",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/openai-integration",
+    lastOpenedLabel: "今天",
+  },
+  {
+    id: "design-system-lab",
+    name: "design-system-lab",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/design-system-lab",
+    lastOpenedLabel: "昨天",
+  },
+  {
+    id: "prompt-evals",
+    name: "prompt-evals",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/prompt-evals",
+    lastOpenedLabel: "昨天",
+  },
+  {
+    id: "internal-docs",
+    name: "internal-docs",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/internal-docs",
+    lastOpenedLabel: "2 天前",
+  },
+  {
+    id: "billing-portal",
+    name: "billing-portal",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/billing-portal",
+    lastOpenedLabel: "2 天前",
+  },
+  {
+    id: "desktop-shell",
+    name: "desktop-shell",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/desktop-shell",
+    lastOpenedLabel: "3 天前",
+  },
+  {
+    id: "thread-orchestrator",
+    name: "thread-orchestrator",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/thread-orchestrator",
+    lastOpenedLabel: "4 天前",
+  },
+  {
+    id: "markdown-export",
+    name: "markdown-export",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/markdown-export",
+    lastOpenedLabel: "上周",
+  },
+  {
+    id: "release-checklist",
+    name: "release-checklist",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/release-checklist",
+    lastOpenedLabel: "上周",
   },
 ] as const;
 
@@ -899,8 +998,29 @@ function getStoredPanelVisibilityState(): PanelVisibilityState {
   return DEFAULT_PANEL_VISIBILITY_STATE;
 }
 
-function getActiveThread(): ThreadItem | null {
-  for (const workspace of WORKSPACE_ITEMS) {
+function buildInitialWorkspaces(): Array<WorkspaceItem> {
+  return WORKSPACE_ITEMS.map((workspace) => ({
+    ...workspace,
+    threads: workspace.threads.map((thread, index) => ({
+      ...thread,
+      id: `${workspace.id}-thread-${index + 1}`,
+      active: false,
+    })),
+  }));
+}
+
+function clearActiveThreads(workspaces: ReadonlyArray<WorkspaceItem>): Array<WorkspaceItem> {
+  return workspaces.map((workspace) => ({
+    ...workspace,
+    threads: workspace.threads.map((thread) => ({
+      ...thread,
+      active: false,
+    })),
+  }));
+}
+
+function getActiveThread(workspaces: ReadonlyArray<WorkspaceItem>): WorkspaceThreadItem | null {
+  for (const workspace of workspaces) {
     const activeThread = workspace.threads.find((thread) => thread.active);
 
     if (activeThread) {
@@ -909,6 +1029,60 @@ function getActiveThread(): ThreadItem | null {
   }
 
   return null;
+}
+
+function activateThread(workspaces: ReadonlyArray<WorkspaceItem>, threadId: string): Array<WorkspaceItem> {
+  return workspaces.map((workspace) => ({
+    ...workspace,
+    threads: workspace.threads.map((thread) => ({
+      ...thread,
+      active: thread.id === threadId,
+    })),
+  }));
+}
+
+function buildThreadTitle(prompt: string) {
+  const compactPrompt = prompt.trim().replace(/\s+/g, " ");
+
+  if (compactPrompt.length <= 30) {
+    return compactPrompt;
+  }
+
+  return `${compactPrompt.slice(0, 30)}...`;
+}
+
+function mergeRecentProjects(
+  currentProjects: ReadonlyArray<ProjectOption>,
+  nextProject: ProjectOption,
+): Array<ProjectOption> {
+  return [
+    nextProject,
+    ...currentProjects.filter(
+      (project) =>
+        !(project.id === nextProject.id || (project.name === nextProject.name && project.path === nextProject.path)),
+    ),
+  ].slice(0, 6);
+}
+
+function buildProjectOptionFromPath(path: string | null): ProjectOption | null {
+  if (!path) {
+    return null;
+  }
+
+  const normalizedPath = path.replace(/\\/g, "/").replace(/\/+$/g, "");
+  const segments = normalizedPath.split("/");
+  const folderName = segments[segments.length - 1] || "new-project";
+  const normalizedId = `${folderName}-${normalizedPath}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return {
+    id: normalizedId || `project-${Date.now()}`,
+    name: folderName,
+    path: normalizedPath,
+    lastOpenedLabel: "刚刚",
+  };
 }
 
 function ThreadStatusIndicator({ status }: { status: ThreadStatus }) {
@@ -933,6 +1107,10 @@ export function DashboardOverview() {
   const { data, error, isLoading, refetch } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
   const { language, setLanguage } = useLanguage();
+  const [workspaces, setWorkspaces] = useState<Array<WorkspaceItem>>(() => buildInitialWorkspaces());
+  const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(() => [...RECENT_PROJECTS]);
+  const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(() => RECENT_PROJECTS[0] ?? null);
+  const [isNewThreadMode, setNewThreadMode] = useState(true);
   const [panelVisibilityState, setPanelVisibilityState] = useState<PanelVisibilityState>(() => getStoredPanelVisibilityState());
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const [terminalResize, setTerminalResize] = useState<{ startY: number; startHeight: number } | null>(null);
@@ -948,7 +1126,7 @@ export function DashboardOverview() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const selectedDiffFile = GIT_TRACKED_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
-  const activeThread = getActiveThread();
+  const activeThread = getActiveThread(workspaces);
   const { isSidebarOpen, isDrawerOpen, isTerminalCollapsed } = panelVisibilityState;
 
   const setSidebarOpen = (nextState: boolean | ((current: boolean) => boolean)) => {
@@ -1123,6 +1301,97 @@ export function DashboardOverview() {
     }));
   };
 
+  const handleEnterNewThreadMode = () => {
+    setNewThreadMode(true);
+    setWorkspaces((current) => clearActiveThreads(current));
+  };
+
+  const handleThreadSelect = (threadId: string) => {
+    setNewThreadMode(false);
+    setWorkspaces((current) => activateThread(current, threadId));
+  };
+
+  const handleProjectSelect = (project: ProjectOption) => {
+    const nextProject = {
+      ...project,
+      lastOpenedLabel: "刚刚",
+    };
+
+    setSelectedProject(nextProject);
+    setRecentProjects((current) => mergeRecentProjects(current, nextProject));
+  };
+
+  const handleComposerSubmit = () => {
+    const trimmedValue = composerValue.trim();
+
+    if (!trimmedValue) {
+      return;
+    }
+
+    if (isNewThreadMode) {
+      if (!selectedProject) {
+        return;
+      }
+
+      const project = {
+        ...selectedProject,
+        lastOpenedLabel: "刚刚",
+      };
+      const existingWorkspace = workspaces.find(
+        (workspace) =>
+          workspace.id === project.id ||
+          workspace.name === project.name ||
+          (workspace.path && workspace.path === project.path),
+      );
+      const nextThread: WorkspaceThreadItem = {
+        id: `${project.id}-thread-${Date.now()}`,
+        name: buildThreadTitle(trimmedValue),
+        time: "刚刚",
+        active: true,
+        status: "running",
+      };
+
+      setSelectedProject(project);
+      setRecentProjects((current) => mergeRecentProjects(current, project));
+      setWorkspaces((current) => {
+        const cleared = clearActiveThreads(current);
+
+        if (existingWorkspace) {
+          return cleared.map((workspace) =>
+            workspace.id === existingWorkspace.id
+              ? {
+                  ...workspace,
+                  name: project.name,
+                  path: project.path,
+                  threads: [nextThread, ...workspace.threads],
+                }
+              : workspace,
+          );
+        }
+
+        return [
+          {
+            id: project.id,
+            name: project.name,
+            defaultOpen: true,
+            path: project.path,
+            threads: [nextThread],
+          },
+          ...cleared,
+        ];
+      });
+      setOpenWorkspaces((current) => ({
+        ...current,
+        [existingWorkspace?.id ?? project.id]: true,
+      }));
+      setNewThreadMode(false);
+      setComposerValue("");
+      return;
+    }
+
+    setComposerValue("");
+  };
+
   const handleThemeSelect = (nextTheme: ThemePreference) => {
     setTheme(nextTheme);
     setOpenSettingsSection("theme");
@@ -1217,9 +1486,20 @@ export function DashboardOverview() {
             <div className="space-y-1">
               <button
                 type="button"
-                className="group flex w-full items-center gap-2.5 rounded-xl border border-transparent bg-transparent px-3 py-2.5 text-left text-app-muted transition-[transform,box-shadow,background-color,border-color,color] duration-200 hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)] active:scale-[0.99]"
+                className={cn(
+                  "group flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-[transform,box-shadow,background-color,border-color,color] duration-200 active:scale-[0.99]",
+                  isNewThreadMode
+                    ? "border-app-border-strong bg-app-surface-active text-app-foreground shadow-[0_4px_14px_rgba(15,23,42,0.08)]"
+                    : "border-transparent bg-transparent text-app-muted hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)]",
+                )}
+                onClick={handleEnterNewThreadMode}
               >
-                <MessageSquarePlus className="size-4 shrink-0 text-app-subtle transition-colors duration-200 group-hover:text-app-foreground" />
+                <MessageSquarePlus
+                  className={cn(
+                    "size-4 shrink-0 transition-colors duration-200",
+                    isNewThreadMode ? "text-app-foreground" : "text-app-subtle group-hover:text-app-foreground",
+                  )}
+                />
                 <span className="truncate text-sm font-medium">New thread</span>
               </button>
 
@@ -1240,9 +1520,9 @@ export function DashboardOverview() {
             <div className="mx-1 mt-3 h-px shrink-0 bg-app-border" />
 
             <div className="mt-3 min-h-0 flex-1 overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <div className="space-y-2">
-                {WORKSPACE_ITEMS.map((workspace) => {
-                  const isOpen = openWorkspaces[workspace.id];
+              <div className="space-y-1.5">
+                {workspaces.map((workspace) => {
+                  const isOpen = openWorkspaces[workspace.id] ?? workspace.defaultOpen;
                   const FolderIcon = isOpen ? FolderOpen : Folder;
 
                   return (
@@ -1251,17 +1531,20 @@ export function DashboardOverview() {
                         <div className="relative">
                           <button
                             type="button"
-                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 pr-11 text-left text-app-muted transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                            className={cn(
+                              "flex items-center gap-2 pr-10 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                              DRAWER_LIST_ROW_CLASS,
+                            )}
                             onClick={() => handleWorkspaceToggle(workspace.id)}
                           >
                             <FolderIcon className="size-4 shrink-0 text-app-muted" />
-                            <span className="truncate text-sm">{workspace.name}</span>
+                            <span className={DRAWER_LIST_LABEL_CLASS}>{workspace.name}</span>
                           </button>
                           <button
                             type="button"
                             aria-label="更多操作"
                             title="更多操作"
-                            className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-lg text-app-subtle opacity-0 transition-all duration-200 hover:bg-app-surface-hover hover:text-app-foreground group-hover:opacity-100"
+                            className={DRAWER_OVERFLOW_ACTION_CLASS}
                           >
                             <MoreHorizontal className="size-4" />
                           </button>
@@ -1269,26 +1552,27 @@ export function DashboardOverview() {
                       </div>
 
                       {isOpen && workspace.threads.length > 0 ? (
-                        <div className="space-y-1 pl-3">
+                        <div className={cn(DRAWER_LIST_STACK_CLASS, "pl-2.5")}>
                           {workspace.threads.map((thread) => (
-                            <div key={`${workspace.id}-${thread.name}`} className="group relative">
+                            <div key={thread.id} className="group relative">
                               <button
                                 type="button"
                                 className={cn(
-                                  "w-full rounded-xl border px-3 py-1.5 pr-12 text-left transition-colors",
+                                  `${DRAWER_LIST_ROW_CLASS} border pr-11`,
                                   thread.active
                                     ? "border-app-border-strong bg-app-surface-active text-app-foreground"
                                     : "border-transparent bg-transparent text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                                 )}
+                                onClick={() => handleThreadSelect(thread.id)}
                               >
-                                <div className="flex items-center gap-2.5">
+                                <div className="flex items-center gap-2">
                                   <ThreadStatusIndicator status={thread.status} />
-                                  <p className="min-w-0 flex-1 truncate text-[13px] leading-[1.15rem]">{thread.name}</p>
+                                  <p className={DRAWER_LIST_LABEL_CLASS}>{thread.name}</p>
                                 </div>
                               </button>
                               <span
                                 className={cn(
-                                  "pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-app-subtle transition-opacity duration-200 group-hover:opacity-0",
+                                  "pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-app-subtle transition-opacity duration-200 group-hover:opacity-0",
                                   thread.active && "text-app-subtle",
                                 )}
                               >
@@ -1299,7 +1583,7 @@ export function DashboardOverview() {
                                 aria-label="更多操作"
                                 title="更多操作"
                                 className={cn(
-                                  "absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-lg text-app-subtle opacity-0 transition-all duration-200 hover:bg-app-surface-hover hover:text-app-foreground group-hover:opacity-100",
+                                  DRAWER_OVERFLOW_ACTION_CLASS,
                                   thread.active && "text-app-subtle",
                                 )}
                               >
@@ -1322,112 +1606,127 @@ export function DashboardOverview() {
             <div className="flex min-h-0 flex-1 overflow-hidden">
               <section className="min-w-0 flex-1 min-h-0 bg-app-canvas">
                 <div className="flex h-full min-h-0 flex-col">
-                  <div className="flex h-12 items-center gap-3 border-b border-app-border px-5">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-center gap-2">
-                        {activeThread ? <ThreadStatusIndicator status={activeThread.status} /> : null}
-                        <p className="truncate text-sm font-semibold text-app-foreground">
-                          {activeThread?.name ?? "创建 Tauri 2 React+TS+shadcn/ui 模块化脚手架"}
-                        </p>
+                  {isNewThreadMode ? (
+                    <div className="relative min-h-0 flex-1">
+                      <div className="flex h-full items-center justify-center px-6 pb-8 pt-6">
+                        <NewThreadEmptyState
+                          recentProjects={recentProjects}
+                          selectedProject={selectedProject}
+                          onSelectProject={handleProjectSelect}
+                        />
                       </div>
+                      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-b from-transparent via-app-overlay via-55% to-app-canvas" />
                     </div>
-                    <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                      <div className="group/context-window relative shrink-0">
-                        <span
-                          tabIndex={0}
-                          className="relative inline-flex overflow-hidden rounded-full border border-app-border bg-app-surface-muted text-[11px] text-app-muted outline-none"
-                        >
-                          <span
-                            className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-primary/12"
-                            style={{ width: `${CONTEXT_WINDOW_INFO.usageRatio * 100}%` }}
-                          />
-                          <span className="relative inline-flex items-center gap-1.5 px-2 py-0.5">
-                            <span className="text-app-subtle">{CONTEXT_WINDOW_INFO.label}</span>
-                            <span className="font-semibold text-app-foreground">
-                              {CONTEXT_WINDOW_INFO.used} / {CONTEXT_WINDOW_INFO.total}
+                  ) : (
+                    <>
+                      <div className="flex h-12 items-center gap-3 border-b border-app-border px-5">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex min-w-0 items-center gap-2">
+                            {activeThread ? <ThreadStatusIndicator status={activeThread.status} /> : null}
+                            <p className="truncate text-sm font-semibold text-app-foreground">
+                              {activeThread?.name ?? "创建 Tauri 2 React+TS+shadcn/ui 模块化脚手架"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                          <div className="group/context-window relative shrink-0">
+                            <span
+                              tabIndex={0}
+                              className="relative inline-flex overflow-hidden rounded-full border border-app-border bg-app-surface-muted text-[11px] text-app-muted outline-none"
+                            >
+                              <span
+                                className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-primary/12"
+                                style={{ width: `${CONTEXT_WINDOW_INFO.usageRatio * 100}%` }}
+                              />
+                              <span className="relative inline-flex items-center gap-1.5 px-2 py-0.5">
+                                <span className="text-app-subtle">{CONTEXT_WINDOW_INFO.label}</span>
+                                <span className="font-semibold text-app-foreground">
+                                  {CONTEXT_WINDOW_INFO.used} / {CONTEXT_WINDOW_INFO.total}
+                                </span>
+                              </span>
                             </span>
-                          </span>
-                        </span>
-                        <div className="pointer-events-none absolute left-1/2 top-[calc(100%+0.5rem)] z-20 w-max min-w-[190px] -translate-x-1/2 translate-y-1 rounded-xl border border-app-border bg-app-menu px-3 py-2 text-center opacity-0 shadow-[0_14px_32px_rgba(15,23,42,0.14)] transition-[opacity,transform] duration-150 group-hover/context-window:translate-y-0 group-hover/context-window:opacity-100 group-focus-within/context-window:translate-y-0 group-focus-within/context-window:opacity-100 dark:shadow-[0_16px_36px_rgba(0,0,0,0.38)]">
-                          <p className="whitespace-nowrap text-[11px] font-semibold text-app-foreground">
-                            {CONTEXT_WINDOW_USAGE_DETAIL.usedPercent}% used
-                            <span className="font-normal text-app-subtle"> ({CONTEXT_WINDOW_USAGE_DETAIL.leftPercent}% left)</span>
-                          </p>
-                          <p className="mt-1 whitespace-nowrap text-[11px] text-app-muted">
-                            {CONTEXT_WINDOW_INFO.used} / {CONTEXT_WINDOW_INFO.total} tokens used
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1.5 text-xs text-app-subtle transition-colors hover:text-app-foreground"
-                      >
-                        <GitBranch className="size-3.5" />
-                        <span>main</span>
-                        <ChevronDown className="size-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="relative min-h-0 flex-1">
-                    <div className="h-full overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                      <div className="mx-auto flex max-w-4xl flex-col gap-6 px-6 pb-28 pt-6">
-                      <div className="rounded-2xl border border-app-border bg-app-surface p-5">
-                        <div className="flex items-center gap-2 text-app-muted">
-                          <Sparkles className="size-4 text-app-success" />
-                          <span className="text-sm font-medium">Jorben，这版布局已经收敛到更接近 Codex app 的工作台结构。</span>
-                        </div>
-                        <p className="mt-3 text-sm leading-7 text-app-muted">
-                          左右侧边栏现在都是真正隐藏而不是缩窄；顶部仅保留应用名，且中部区域继续承担拖动窗口的能力。
-                        </p>
-                      </div>
-
-                      <div className="space-y-5 pb-6">
-                        {MESSAGE_SECTIONS.map((section) => (
-                          <div key={section.title} className="rounded-2xl border border-app-border bg-app-surface-muted p-5">
-                            <h3 className="text-sm font-semibold text-app-foreground">{section.title}</h3>
-                            <ul className="mt-4 space-y-3 text-sm text-app-muted">
-                              {section.bullets.map((bullet) => (
-                                <li key={bullet} className="flex items-start gap-3">
-                                  <span className="mt-2 size-1.5 shrink-0 rounded-full bg-app-subtle" />
-                                  <code className="rounded bg-app-code px-2 py-1 text-[13px] text-app-foreground">{bullet}</code>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ))}
-                      </div>
-
-                      <Card className="border-app-border bg-app-surface text-app-foreground shadow-none">
-                        <CardHeader>
-                          <CardTitle className="text-base">Runtime Probe</CardTitle>
-                          <CardDescription className="text-app-muted">确认桌面端命令桥接与应用元信息已经接通。</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3 text-sm">
-                          <div className="flex gap-3">
-                            <Button className="gap-2" onClick={() => void refetch()}>
-                              <RefreshCw className="size-4" />
-                              Refresh runtime info
-                            </Button>
-                          </div>
-                          {isLoading ? <p className="text-app-subtle">正在读取运行时信息...</p> : null}
-                          {error ? <p className="text-app-danger">{error}</p> : null}
-                          {data ? (
-                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                              <InspectorItem label="应用名" value={data.appName} />
-                              <InspectorItem label="版本" value={data.version} />
-                              <InspectorItem label="平台" value={data.platform} />
-                              <InspectorItem label="架构" value={data.arch} />
-                              <InspectorItem label="运行时" value={data.runtime} />
+                            <div className="pointer-events-none absolute left-1/2 top-[calc(100%+0.5rem)] z-20 w-max min-w-[190px] -translate-x-1/2 translate-y-1 rounded-xl border border-app-border bg-app-menu px-3 py-2 text-center opacity-0 shadow-[0_14px_32px_rgba(15,23,42,0.14)] transition-[opacity,transform] duration-150 group-hover/context-window:translate-y-0 group-hover/context-window:opacity-100 group-focus-within/context-window:translate-y-0 group-focus-within/context-window:opacity-100 dark:shadow-[0_16px_36px_rgba(0,0,0,0.38)]">
+                              <p className="whitespace-nowrap text-[11px] font-semibold text-app-foreground">
+                                {CONTEXT_WINDOW_USAGE_DETAIL.usedPercent}% used
+                                <span className="font-normal text-app-subtle"> ({CONTEXT_WINDOW_USAGE_DETAIL.leftPercent}% left)</span>
+                              </p>
+                              <p className="mt-1 whitespace-nowrap text-[11px] text-app-muted">
+                                {CONTEXT_WINDOW_INFO.used} / {CONTEXT_WINDOW_INFO.total} tokens used
+                              </p>
                             </div>
-                          ) : null}
-                        </CardContent>
-                      </Card>
-                    </div>
-                    </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1.5 text-xs text-app-subtle transition-colors hover:text-app-foreground"
+                          >
+                            <GitBranch className="size-3.5" />
+                            <span>main</span>
+                            <ChevronDown className="size-3.5" />
+                          </button>
+                        </div>
+                      </div>
 
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-b from-transparent via-app-overlay via-55% to-app-canvas" />
-                  </div>
+                      <div className="relative min-h-0 flex-1">
+                        <div className="h-full overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                          <div className="mx-auto flex max-w-4xl flex-col gap-6 px-6 pb-28 pt-6">
+                            <div className="rounded-2xl border border-app-border bg-app-surface p-5">
+                              <div className="flex items-center gap-2 text-app-muted">
+                                <Sparkles className="size-4 text-app-success" />
+                                <span className="text-sm font-medium">Jorben，这版布局已经收敛到更接近 Codex app 的工作台结构。</span>
+                              </div>
+                              <p className="mt-3 text-sm leading-7 text-app-muted">
+                                左右侧边栏现在都是真正隐藏而不是缩窄；顶部仅保留应用名，且中部区域继续承担拖动窗口的能力。
+                              </p>
+                            </div>
+
+                            <div className="space-y-5 pb-6">
+                              {MESSAGE_SECTIONS.map((section) => (
+                                <div key={section.title} className="rounded-2xl border border-app-border bg-app-surface-muted p-5">
+                                  <h3 className="text-sm font-semibold text-app-foreground">{section.title}</h3>
+                                  <ul className="mt-4 space-y-3 text-sm text-app-muted">
+                                    {section.bullets.map((bullet) => (
+                                      <li key={bullet} className="flex items-start gap-3">
+                                        <span className="mt-2 size-1.5 shrink-0 rounded-full bg-app-subtle" />
+                                        <code className="rounded bg-app-code px-2 py-1 text-[13px] text-app-foreground">{bullet}</code>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ))}
+                            </div>
+
+                            <Card className="border-app-border bg-app-surface text-app-foreground shadow-none">
+                              <CardHeader>
+                                <CardTitle className="text-base">Runtime Probe</CardTitle>
+                                <CardDescription className="text-app-muted">确认桌面端命令桥接与应用元信息已经接通。</CardDescription>
+                              </CardHeader>
+                              <CardContent className="space-y-3 text-sm">
+                                <div className="flex gap-3">
+                                  <Button className="gap-2" onClick={() => void refetch()}>
+                                    <RefreshCw className="size-4" />
+                                    Refresh runtime info
+                                  </Button>
+                                </div>
+                                {isLoading ? <p className="text-app-subtle">正在读取运行时信息...</p> : null}
+                                {error ? <p className="text-app-danger">{error}</p> : null}
+                                {data ? (
+                                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                                    <InspectorItem label="应用名" value={data.appName} />
+                                    <InspectorItem label="版本" value={data.version} />
+                                    <InspectorItem label="平台" value={data.platform} />
+                                    <InspectorItem label="架构" value={data.arch} />
+                                    <InspectorItem label="运行时" value={data.runtime} />
+                                  </div>
+                                ) : null}
+                              </CardContent>
+                            </Card>
+                          </div>
+                        </div>
+
+                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-b from-transparent via-app-overlay via-55% to-app-canvas" />
+                      </div>
+                    </>
+                  )}
 
                   <div className="shrink-0 px-6 pb-5 pt-3">
                     <div className="mx-auto max-w-4xl rounded-2xl border border-app-border bg-app-surface px-4 pb-3 pt-3 text-app-muted transition-colors focus-within:border-app-border-strong">
@@ -1436,7 +1735,11 @@ export function DashboardOverview() {
                         value={composerValue}
                         onChange={(event) => setComposerValue(event.target.value)}
                         rows={1}
-                        placeholder="Ask for follow-up changes"
+                        placeholder={
+                          isNewThreadMode
+                            ? "Ask Tiy anything, @ to add files, / for commands, $ for skills"
+                            : "Ask for follow-up changes"
+                        }
                         className="max-h-44 min-h-6 w-full resize-none overflow-y-auto bg-transparent text-sm leading-6 text-app-foreground outline-none placeholder:text-app-subtle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                       />
                       <div className="mt-3 flex items-end justify-between">
@@ -1445,6 +1748,7 @@ export function DashboardOverview() {
                         </button>
                         <button
                           type="button"
+                          onClick={handleComposerSubmit}
                           className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[0_1px_2px_rgba(15,23,42,0.18)] transition-[transform,box-shadow,background-color] duration-200 hover:scale-[1.02] hover:bg-primary/90 hover:shadow-[0_4px_10px_rgba(15,23,42,0.18)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100 disabled:hover:shadow-[0_1px_2px_rgba(15,23,42,0.18)]"
                           disabled={!composerValue.trim()}
                         >
@@ -1574,6 +1878,138 @@ export function DashboardOverview() {
   );
 }
 
+function NewThreadEmptyState({
+  recentProjects,
+  selectedProject,
+  onSelectProject,
+}: {
+  recentProjects: ReadonlyArray<ProjectOption>;
+  selectedProject: ProjectOption | null;
+  onSelectProject: (project: ProjectOption) => void;
+}) {
+  const [isMenuOpen, setMenuOpen] = useState(false);
+  const projectMenuRef = useRef<HTMLDivElement | null>(null);
+  const activeProject = selectedProject ?? recentProjects[0] ?? null;
+
+  useEffect(() => {
+    if (!isMenuOpen || typeof window === "undefined") {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+
+      if (target && projectMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setMenuOpen(false);
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => window.removeEventListener("mousedown", handlePointerDown);
+  }, [isMenuOpen]);
+
+  const handleChooseFolder = async () => {
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose project folder",
+    });
+
+    if (typeof selectedPath !== "string") {
+      return;
+    }
+
+    const nextProject = buildProjectOptionFromPath(selectedPath);
+
+    if (!nextProject) {
+      return;
+    }
+
+    onSelectProject(nextProject);
+    setMenuOpen(false);
+  };
+
+  return (
+    <div className="flex w-full max-w-md flex-col items-center justify-center gap-3">
+      <div className="flex size-10 items-center justify-center text-app-foreground">
+        <img src="/app-icon.png" alt="Tiy Agent logo" className="size-7 object-contain opacity-90" />
+      </div>
+
+      <div className="flex flex-col items-center gap-0.5 text-center">
+        <h1 className="whitespace-nowrap text-[1.45rem] font-medium tracking-[-0.035em] text-app-foreground">
+          Anything you need, through conversation.
+        </h1>
+      </div>
+
+      <div ref={projectMenuRef} className="relative w-full max-w-[20rem]">
+        <button
+          type="button"
+          className="inline-flex w-full items-center justify-center gap-2 px-2 py-1 text-left transition-colors hover:text-app-foreground"
+          onClick={() => setMenuOpen((current) => !current)}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <Folder className="size-3.5 shrink-0 text-app-subtle" />
+            <span className="min-w-0 truncate text-[1.05rem] font-medium tracking-[-0.02em] text-app-muted">
+              {activeProject?.name ?? "Choose project"}
+            </span>
+          </div>
+          <ChevronDown className={cn("mt-0.5 size-3.5 shrink-0 text-app-subtle transition-transform duration-200", isMenuOpen && "rotate-180")} />
+        </button>
+
+        {isMenuOpen ? (
+          <div className="absolute inset-x-0 top-[calc(100%+0.45rem)] z-20 max-h-[13rem] overflow-hidden rounded-[0.95rem] border border-app-border bg-app-menu/98 p-1.5 shadow-[0_16px_36px_-28px_rgba(15,23,42,0.45)] backdrop-blur-xl dark:bg-app-menu/94">
+            <div className="flex max-h-[calc(13rem-0.75rem)] flex-col">
+              <div className="px-2.5 pb-1.5 pt-0.5 text-[11px] font-medium text-app-subtle">Switch project</div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <div className="space-y-0.5">
+                  {recentProjects.map((project) => {
+                    const isSelected = activeProject?.id === project.id;
+
+                    return (
+                      <button
+                        key={`${project.id}-${project.path}`}
+                        type="button"
+                        className={cn(
+                          "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors",
+                          isSelected
+                            ? "bg-app-surface/70 text-app-foreground"
+                            : "text-app-muted hover:bg-app-surface-hover/70 hover:text-app-foreground",
+                        )}
+                        onClick={() => {
+                          onSelectProject(project);
+                          setMenuOpen(false);
+                        }}
+                      >
+                        <Folder className="size-4 shrink-0 text-app-subtle" />
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium">{project.name}</span>
+                        {isSelected ? <Check className="size-4 shrink-0 text-app-foreground" /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mx-2 my-1.5 h-px shrink-0 bg-app-border" />
+
+              <button
+                type="button"
+                className="flex w-full shrink-0 items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-app-foreground transition-colors hover:bg-app-surface-hover/70"
+                onClick={() => void handleChooseFolder()}
+              >
+                <FolderPlus className="size-4 shrink-0 text-app-subtle" />
+                <span className="text-sm font-medium">Choose new folder</span>
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function ProjectPanel() {
   const [filterValue, setFilterValue] = useState("");
   const [isRefreshing, setRefreshing] = useState(false);
@@ -1625,8 +2061,8 @@ function ProjectPanel() {
           </button>
         </div>
 
-        <div className="relative mt-3 pl-7 pr-1 pb-3">
-          <div className="absolute bottom-0 left-[8px] top-0 w-px bg-app-border" />
+        <div className="relative mt-2.5 pl-5 pr-1 pb-2.5">
+          <div className="absolute bottom-0 left-[6px] top-0 w-px bg-app-border" />
           <Input
             value={filterValue}
             onChange={(event) => setFilterValue(event.target.value)}
@@ -1638,27 +2074,27 @@ function ProjectPanel() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto overscroll-none pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div className="relative pl-7">
-          <div className="absolute bottom-0 left-[8px] top-0 w-px bg-app-border" />
-          <div className="space-y-1">
+        <div className="relative pl-5">
+          <div className="absolute bottom-0 left-[6px] top-0 w-px bg-app-border" />
+          <div className={DRAWER_LIST_STACK_CLASS}>
             {visibleItems.map((item) => (
               <button
                 key={item.id}
                 type="button"
                 className={cn(
-                  "relative flex w-full items-center gap-3 rounded-lg py-1.5 text-left text-[13px] transition-colors",
+                  `${DRAWER_LIST_ROW_CLASS} relative flex items-center gap-2`,
                   item.ignored
-                    ? "text-app-subtle/70 hover:text-app-muted"
-                    : "text-app-muted hover:text-app-foreground",
+                    ? "text-app-subtle/70 hover:bg-app-surface-hover/60 hover:text-app-muted"
+                    : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                 )}
               >
                 <ProjectTreeIcon icon={item.icon} muted={Boolean(item.ignored)} />
-                <span className="truncate">{item.name}</span>
+                <span className={DRAWER_LIST_LABEL_CLASS}>{item.name}</span>
               </button>
             ))}
 
             {visibleItems.length === 0 ? (
-              <div className="py-2 text-[13px] text-app-subtle">No matching files</div>
+              <div className="px-2.5 py-2 text-[13px] text-app-subtle">No matching files</div>
             ) : null}
           </div>
         </div>
@@ -1802,7 +2238,7 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
         </div>
 
         <section className="mt-4 flex min-h-0 flex-1 flex-col">
-          <div className="flex shrink-0 items-center justify-between gap-3 px-1">
+          <div className={DRAWER_SECTION_HEADER_CLASS}>
             <div className="flex items-center gap-2">
               <p className="text-sm font-semibold text-app-foreground">Tracked</p>
               <span className="rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-subtle">
@@ -1814,7 +2250,7 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
                 type="button"
                 aria-label="全部取消"
                 title="全部取消"
-                className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                className={DRAWER_ICON_ACTION_CLASS}
                 onClick={handleUnstageAll}
               >
                 <Undo2 className="size-4" />
@@ -1823,7 +2259,7 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
                 type="button"
                 aria-label="全部加入"
                 title="全部加入"
-                className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                className={DRAWER_ICON_ACTION_CLASS}
                 onClick={handleStageAll}
               >
                 <Plus className="size-4" />
@@ -1832,7 +2268,7 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
           </div>
 
           <div className="mt-2 min-h-0 flex-1 overflow-auto overscroll-contain pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <div className="space-y-1">
+            <div className={DRAWER_LIST_STACK_CLASS}>
               {GIT_TRACKED_FILES.map((file) => {
                 const isStaged = Boolean(stagedFiles[file.id]);
 
@@ -1842,7 +2278,10 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
                     role="button"
                     tabIndex={0}
                     title={file.path}
-                    className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-app-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong"
+                    className={cn(
+                      "flex cursor-pointer items-center gap-2 hover:bg-app-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
+                      DRAWER_LIST_ROW_CLASS,
+                    )}
                     onClick={() => onOpenDiffPreview(file.id, isStaged)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
@@ -1863,8 +2302,8 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
                     >
                       {file.status}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[13px] text-app-muted">{file.path.split("/").pop()}</span>
-                    <span className="shrink-0 text-[11px] text-app-subtle">{file.summary}</span>
+                    <span className={cn(DRAWER_LIST_LABEL_CLASS, "text-app-muted")}>{file.path.split("/").pop()}</span>
+                    <span className={DRAWER_LIST_META_CLASS}>{file.summary}</span>
                     <button
                       type="button"
                       role="checkbox"
@@ -1893,14 +2332,14 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
       </div>
 
       <section className="mt-3 flex h-[208px] shrink-0 flex-col">
-        <div className="flex items-center justify-between gap-3 px-1">
+        <div className={DRAWER_SECTION_HEADER_CLASS}>
           <p className="text-sm font-semibold text-app-foreground">Network</p>
           <div className="flex items-center gap-1">
             <button
               type="button"
               aria-label="Fetch"
               title="Fetch"
-              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              className={DRAWER_ICON_ACTION_CLASS}
               onClick={() => handleHistoryAction("fetch")}
             >
               <Download className={cn("size-4", activeHistoryAction === "fetch" && "animate-pulse")} />
@@ -1909,7 +2348,7 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
               type="button"
               aria-label="Pull"
               title="Pull"
-              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              className={DRAWER_ICON_ACTION_CLASS}
               onClick={() => handleHistoryAction("pull")}
             >
               <ArrowDownToLine className={cn("size-4", activeHistoryAction === "pull" && "animate-pulse")} />
@@ -1918,7 +2357,7 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
               type="button"
               aria-label="Push"
               title="Push"
-              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              className={DRAWER_ICON_ACTION_CLASS}
               onClick={() => handleHistoryAction("push")}
             >
               <ArrowUpFromLine className={cn("size-4", activeHistoryAction === "push" && "animate-pulse")} />
@@ -1927,7 +2366,7 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
               type="button"
               aria-label="刷新历史"
               title="刷新历史"
-              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              className={DRAWER_ICON_ACTION_CLASS}
               onClick={() => handleHistoryAction("refresh")}
             >
               <RefreshCw className={cn("size-4", activeHistoryAction === "refresh" && "animate-spin")} />
@@ -1936,45 +2375,45 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
         </div>
 
         <div className="mt-2.5 min-h-0 flex-1 overflow-auto overscroll-contain pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="space-y-1.5">
-          {GIT_HISTORY_ITEMS.map((item, index) => (
-            <div key={item.id} className="relative pl-5">
-              {item.refs?.includes("HEAD") ? (
-                <span className="absolute inset-y-0 -left-2 rounded-xl bg-primary/8" />
-              ) : null}
-              {index < GIT_HISTORY_ITEMS.length - 1 ? (
-                <span className="absolute left-[5px] top-5 h-[calc(100%+0.4rem)] w-px bg-app-border" />
-              ) : null}
-              <span
-                className={cn(
-                  "absolute left-0 top-1/2 size-3 -translate-y-1/2 rounded-full border",
-                  item.refs?.includes("HEAD")
-                    ? "border-primary/30 bg-primary/72 shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
-                    : "border-app-border bg-app-drawer",
-                )}
-              />
-              <div className="relative flex items-center justify-between gap-3 rounded-xl px-2 py-0.5">
-                <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-app-foreground">{item.subject}</p>
-                {item.refs?.length ? (
-                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                    {item.refs.map((ref) => (
-                      <span
-                        key={ref}
-                        className={cn(
-                          "rounded-full px-2 py-1 text-[10px] transition-[background-color,color,box-shadow] duration-200",
-                          ref === "HEAD"
-                            ? "bg-primary/88 text-primary-foreground shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
-                            : "bg-app-surface-muted text-app-muted",
-                        )}
-                      >
-                        {ref}
-                      </span>
-                    ))}
-                  </div>
+          <div className={DRAWER_LIST_STACK_CLASS}>
+            {GIT_HISTORY_ITEMS.map((item, index) => (
+              <div key={item.id} className="relative pl-4">
+                {item.refs?.includes("HEAD") ? (
+                  <span className="absolute inset-y-0 -left-1.5 rounded-lg bg-primary/8" />
                 ) : null}
+                {index < GIT_HISTORY_ITEMS.length - 1 ? (
+                  <span className="absolute left-[4px] top-[18px] h-[calc(100%+0.25rem)] w-px bg-app-border" />
+                ) : null}
+                <span
+                  className={cn(
+                    "absolute left-0 top-1/2 size-2.5 -translate-y-1/2 rounded-full border",
+                    item.refs?.includes("HEAD")
+                      ? "border-primary/30 bg-primary/72 shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
+                      : "border-app-border bg-app-drawer",
+                  )}
+                />
+                <div className="relative flex items-center justify-between gap-3 rounded-lg px-2.5 py-1.5">
+                  <p className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-app-foreground">{item.subject}</p>
+                  {item.refs?.length ? (
+                    <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                      {item.refs.map((ref) => (
+                        <span
+                          key={ref}
+                          className={cn(
+                            "rounded-full px-2 py-1 text-[10px] transition-[background-color,color,box-shadow] duration-200",
+                            ref === "HEAD"
+                              ? "bg-primary/88 text-primary-foreground shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
+                              : "bg-app-surface-muted text-app-muted",
+                          )}
+                        >
+                          {ref}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
           </div>
         </div>
       </section>
