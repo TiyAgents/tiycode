@@ -1733,9 +1733,9 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
                       aria-label={isStaged ? `取消暂存 ${file.path}` : `暂存 ${file.path}`}
                       title={isStaged ? "Unstage" : "Stage"}
                       className={cn(
-                        "flex size-4 shrink-0 items-center justify-center rounded border transition-colors",
+                        "flex size-4 shrink-0 items-center justify-center rounded border shadow-[0_1px_2px_rgba(15,23,42,0.12)] transition-[background-color,border-color,color,box-shadow,transform] duration-200",
                         isStaged
-                          ? "border-app-border-strong bg-app-foreground text-app-drawer"
+                          ? "border-primary/20 bg-primary/88 text-primary-foreground hover:bg-primary/82 hover:shadow-[0_4px_10px_rgba(15,23,42,0.14)]"
                           : "border-app-border bg-transparent text-transparent hover:border-app-border-strong",
                       )}
                       onClick={(event) => {
@@ -1801,7 +1801,7 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
           {GIT_HISTORY_ITEMS.map((item, index) => (
             <div key={item.id} className="relative pl-5">
               {item.refs?.includes("HEAD") ? (
-                <span className="absolute inset-y-0 -left-2 rounded-xl bg-app-surface-hover" />
+                <span className="absolute inset-y-0 -left-2 rounded-xl bg-primary/8" />
               ) : null}
               {index < GIT_HISTORY_ITEMS.length - 1 ? (
                 <span className="absolute left-[5px] top-5 h-[calc(100%+0.4rem)] w-px bg-app-border" />
@@ -1810,7 +1810,7 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
                 className={cn(
                   "absolute left-0 top-1/2 size-3 -translate-y-1/2 rounded-full border",
                   item.refs?.includes("HEAD")
-                    ? "border-app-foreground bg-app-foreground"
+                    ? "border-primary/30 bg-primary/72 shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
                     : "border-app-border bg-app-drawer",
                 )}
               />
@@ -1822,9 +1822,9 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
                       <span
                         key={ref}
                         className={cn(
-                          "rounded-full px-2 py-1 text-[10px]",
+                          "rounded-full px-2 py-1 text-[10px] transition-[background-color,color,box-shadow] duration-200",
                           ref === "HEAD"
-                            ? "bg-app-foreground text-app-drawer"
+                            ? "bg-primary/88 text-primary-foreground shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
                             : "bg-app-surface-muted text-app-muted",
                         )}
                       >
