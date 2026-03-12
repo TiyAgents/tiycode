@@ -20,10 +20,9 @@ import {
   Monitor,
   Moon,
   Palette,
-  PanelLeftClose,
-  PanelLeftOpen,
-  PanelRightClose,
-  PanelRightOpen,
+  PanelBottom,
+  PanelLeft,
+  PanelRight,
   Pencil,
   Plus,
   RefreshCw,
@@ -808,32 +807,32 @@ function WorkbenchTopBar({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, isSidebarOpen && "text-app-foreground after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-app-border-strong")}
+            className={cn(panelToggleButtonClass, isSidebarOpen && "text-app-foreground")}
             aria-label={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
             title={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
             onClick={onToggleSidebar}
           >
-            {isSidebarOpen ? <PanelLeftClose className="size-3.5" /> : <PanelLeftOpen className="size-3.5" />}
+            <PanelLeft className="size-4" />
           </Button>
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, !isTerminalCollapsed && "text-app-foreground after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-app-border-strong")}
+            className={cn(panelToggleButtonClass, !isTerminalCollapsed && "text-app-foreground")}
             aria-label={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
             title={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
             onClick={onToggleTerminal}
           >
-            <TerminalSquare className="size-3.5" />
+            <PanelBottom className="size-4" />
           </Button>
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, isDrawerOpen && "text-app-foreground after:absolute after:bottom-0.5 after:left-1.5 after:right-1.5 after:h-px after:rounded-full after:bg-app-border-strong")}
+            className={cn(panelToggleButtonClass, isDrawerOpen && "text-app-foreground")}
             aria-label={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
             title={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
             onClick={onToggleDrawer}
           >
-            {isDrawerOpen ? <PanelRightClose className="size-3.5" /> : <PanelRightOpen className="size-3.5" />}
+            <PanelRight className="size-4" />
           </Button>
         </div>
       </div>
