@@ -779,6 +779,18 @@ const DEFAULT_PANEL_VISIBILITY_STATE: PanelVisibilityState = {
   isTerminalCollapsed: true,
 };
 
+const CONTEXT_WINDOW_INFO = {
+  label: "Context Window",
+  used: "12K",
+  total: "128K",
+  usageRatio: 12 / 128,
+};
+
+const CONTEXT_WINDOW_USAGE_DETAIL = {
+  usedPercent: Math.round(CONTEXT_WINDOW_INFO.usageRatio * 100),
+  leftPercent: 100 - Math.round(CONTEXT_WINDOW_INFO.usageRatio * 100),
+};
+
 const THREAD_STATUS_META: Record<
   ThreadStatus,
   {
@@ -883,6 +895,18 @@ function getStoredPanelVisibilityState(): PanelVisibilityState {
   return DEFAULT_PANEL_VISIBILITY_STATE;
 }
 
+function getActiveThread(): ThreadItem | null {
+  for (const workspace of WORKSPACE_ITEMS) {
+    const activeThread = workspace.threads.find((thread) => thread.active);
+
+    if (activeThread) {
+      return activeThread;
+    }
+  }
+
+  return null;
+}
+
 function ThreadStatusIndicator({ status }: { status: ThreadStatus }) {
   const meta = THREAD_STATUS_META[status];
   const Icon = meta.icon;
@@ -920,6 +944,7 @@ export function DashboardOverview() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const selectedDiffFile = GIT_TRACKED_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
+  const activeThread = getActiveThread();
   const { isSidebarOpen, isDrawerOpen, isTerminalCollapsed } = panelVisibilityState;
 
   const setSidebarOpen = (nextState: boolean | ((current: boolean) => boolean)) => {
@@ -1291,19 +1316,51 @@ export function DashboardOverview() {
             <div className="flex min-h-0 flex-1 overflow-hidden">
               <section className="min-w-0 flex-1 min-h-0 bg-app-canvas">
                 <div className="flex h-full min-h-0 flex-col">
-                  <div className="flex h-14 items-center gap-4 border-b border-app-border px-5">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-app-foreground">创建 Tauri 2 React+TS+shadcn/ui 模块化脚手架</p>
-                      <p className="mt-0.5 text-xs text-app-subtle">当前工作区 · tiy-desktop</p>
+                  <div className="flex h-12 items-center gap-3 border-b border-app-border px-5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        {activeThread ? <ThreadStatusIndicator status={activeThread.status} /> : null}
+                        <p className="truncate text-sm font-semibold text-app-foreground">
+                          {activeThread?.name ?? "创建 Tauri 2 React+TS+shadcn/ui 模块化脚手架"}
+                        </p>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      className="ml-auto inline-flex items-center gap-1.5 text-xs text-app-subtle transition-colors hover:text-app-foreground"
-                    >
-                      <GitBranch className="size-3.5" />
-                      <span>main</span>
-                      <ChevronDown className="size-3.5" />
-                    </button>
+                    <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                      <div className="group/context-window relative shrink-0">
+                        <span
+                          tabIndex={0}
+                          className="relative inline-flex overflow-hidden rounded-full border border-app-border bg-app-surface-muted text-[11px] text-app-muted outline-none"
+                        >
+                          <span
+                            className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-primary/12"
+                            style={{ width: `${CONTEXT_WINDOW_INFO.usageRatio * 100}%` }}
+                          />
+                          <span className="relative inline-flex items-center gap-1.5 px-2 py-0.5">
+                            <span className="text-app-subtle">{CONTEXT_WINDOW_INFO.label}</span>
+                            <span className="font-semibold text-app-foreground">
+                              {CONTEXT_WINDOW_INFO.used} / {CONTEXT_WINDOW_INFO.total}
+                            </span>
+                          </span>
+                        </span>
+                        <div className="pointer-events-none absolute left-1/2 top-[calc(100%+0.5rem)] z-20 w-max min-w-[190px] -translate-x-1/2 translate-y-1 rounded-xl border border-app-border bg-app-menu px-3 py-2 text-center opacity-0 shadow-[0_14px_32px_rgba(15,23,42,0.14)] transition-[opacity,transform] duration-150 group-hover/context-window:translate-y-0 group-hover/context-window:opacity-100 group-focus-within/context-window:translate-y-0 group-focus-within/context-window:opacity-100 dark:shadow-[0_16px_36px_rgba(0,0,0,0.38)]">
+                          <p className="whitespace-nowrap text-[11px] font-semibold text-app-foreground">
+                            {CONTEXT_WINDOW_USAGE_DETAIL.usedPercent}% used
+                            <span className="font-normal text-app-subtle"> ({CONTEXT_WINDOW_USAGE_DETAIL.leftPercent}% left)</span>
+                          </p>
+                          <p className="mt-1 whitespace-nowrap text-[11px] text-app-muted">
+                            {CONTEXT_WINDOW_INFO.used} / {CONTEXT_WINDOW_INFO.total} tokens used
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 text-xs text-app-subtle transition-colors hover:text-app-foreground"
+                      >
+                        <GitBranch className="size-3.5" />
+                        <span>main</span>
+                        <ChevronDown className="size-3.5" />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="relative min-h-0 flex-1">
