@@ -1009,6 +1009,30 @@ function clearActiveThreads(workspaces: ReadonlyArray<WorkspaceItem>): Array<Wor
   }));
 }
 
+function isEditableSelectionTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true'], [contenteditable='plaintext-only']"));
+}
+
+function isNodeInsideContainer(container: HTMLElement | null, node: Node | null) {
+  return Boolean(container && node && container.contains(node));
+}
+
+function selectContainerContents(container: HTMLElement) {
+  const selection = window.getSelection();
+  if (!selection) {
+    return;
+  }
+
+  const range = document.createRange();
+  range.selectNodeContents(container);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 function getActiveThread(workspaces: ReadonlyArray<WorkspaceItem>): WorkspaceThreadItem | null {
   for (const workspace of workspaces) {
     const activeThread = workspace.threads.find((thread) => thread.active);
@@ -1139,6 +1163,7 @@ export function DashboardOverview() {
   const [activeDrawerPanel, setActiveDrawerPanel] = useState<DrawerPanel>("project");
   const [selectedDiffFilePreview, setSelectedDiffFilePreview] = useState<{ fileId: string; isStaged: boolean } | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const mainContentRef = useRef<HTMLElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const selectedDiffFile = GIT_CHANGE_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
   const activeThread = getActiveThread(workspaces);
@@ -1309,6 +1334,43 @@ export function DashboardOverview() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedDiffFile]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLowerCase() !== "a") {
+        return;
+      }
+
+      if (isEditableSelectionTarget(event.target)) {
+        return;
+      }
+
+      const selection = window.getSelection();
+      const selectionInsideMainContent =
+        isNodeInsideContainer(mainContentRef.current, selection?.anchorNode ?? null) ||
+        isNodeInsideContainer(mainContentRef.current, selection?.focusNode ?? null);
+      const targetInsideMainContent = isNodeInsideContainer(
+        mainContentRef.current,
+        event.target instanceof Node ? event.target : null,
+      );
+
+      if (mainContentRef.current && (targetInsideMainContent || selectionInsideMainContent)) {
+        event.preventDefault();
+        selectContainerContents(mainContentRef.current);
+        return;
+      }
+
+      event.preventDefault();
+      selection?.removeAllRanges();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   const handleWorkspaceToggle = (workspaceId: string) => {
     setOpenWorkspaces((current) => ({
       ...current,
@@ -1458,7 +1520,7 @@ export function DashboardOverview() {
   const selectedLanguageOption = LANGUAGE_OPTIONS.find((option) => option.value === language) ?? LANGUAGE_OPTIONS[1];
 
   return (
-    <main className="h-screen overflow-hidden bg-app-canvas text-app-foreground">
+    <main className="h-screen overflow-hidden select-none bg-app-canvas text-app-foreground">
       <WorkbenchTopBar
         isMacOS={isMacOS}
         isWindows={isWindows}
@@ -1622,7 +1684,7 @@ export function DashboardOverview() {
         <section className="min-w-0 flex-1 min-h-0">
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex min-h-0 flex-1 overflow-hidden">
-              <section className="min-w-0 flex-1 min-h-0 bg-app-canvas">
+              <section ref={mainContentRef} className="min-w-0 flex-1 min-h-0 select-text bg-app-canvas">
                 <div className="flex h-full min-h-0 flex-col">
                   {isNewThreadMode ? (
                     <div className="relative min-h-0 flex-1">
@@ -1758,7 +1820,7 @@ export function DashboardOverview() {
                             ? "Ask Tiy anything, @ to add files, / for commands, $ for skills"
                             : "Ask for follow-up changes"
                         }
-                        className="max-h-44 min-h-6 w-full resize-none overflow-y-auto bg-transparent text-sm leading-6 text-app-foreground outline-none placeholder:text-app-subtle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                        className="max-h-44 min-h-6 w-full resize-none select-text overflow-y-auto bg-transparent text-sm leading-6 text-app-foreground outline-none placeholder:text-app-subtle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                       />
                       <div className="mt-3 flex items-end justify-between">
                         <button type="button" className="-ml-1 mt-1 rounded-lg p-2 text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground">
