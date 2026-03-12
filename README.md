@@ -34,6 +34,7 @@ src-tauri/
 - Tailwind CSS v4
 - shadcn/ui 基础配置与通用组件
 - 内置主题系统（跟随系统 / 明亮 / 暗黑）与运行时切换
+- 内置工作台设置中心，包含 `Account / General / Prompts / Approval Policy` 两栏设置页与本地持久化
 - Rust 端示例命令 \`get_system_metadata\`
 
 ## Visual System

@@ -50,12 +50,20 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
+import {
+  WorkbenchSettingsOverlay,
+} from "@/features/settings/ui/workbench-settings-overlay";
+import {
+  type SettingsCategory,
+  useWorkbenchSettings,
+} from "@/features/settings/model/use-workbench-settings";
 import { useLanguage, type LanguagePreference } from "@/app/providers/language-provider";
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
 import { Button } from "@/shared/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
 import { cn } from "@/shared/lib/utils";
+import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 
 type ThreadStatus = "running" | "completed" | "needs-reply" | "failed";
@@ -1152,10 +1160,13 @@ export function DashboardOverview() {
   const { data, error, isLoading, refetch } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
   const { language, setLanguage } = useLanguage();
+  const { prompts, approvalPolicy, updatePromptSetting, updateApprovalPolicySetting } = useWorkbenchSettings();
   const [workspaces, setWorkspaces] = useState<Array<WorkspaceItem>>(() => buildInitialWorkspaces());
   const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(() => [...RECENT_PROJECTS]);
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(() => RECENT_PROJECTS[0] ?? null);
   const [isNewThreadMode, setNewThreadMode] = useState(true);
+  const [isSettingsOpen, setSettingsOpen] = useState(false);
+  const [activeSettingsCategory, setActiveSettingsCategory] = useState<SettingsCategory>("general");
   const [panelVisibilityState, setPanelVisibilityState] = useState<PanelVisibilityState>(() => getStoredPanelVisibilityState());
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const [terminalResize, setTerminalResize] = useState<{ startY: number; startHeight: number } | null>(null);
@@ -1170,6 +1181,7 @@ export function DashboardOverview() {
   const [selectedDiffFilePreview, setSelectedDiffFilePreview] = useState<{ fileId: string; isStaged: boolean } | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
+  const settingsContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const selectedDiffFile = GIT_CHANGE_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
   const activeThread = getActiveThread(workspaces);
@@ -1341,6 +1353,21 @@ export function DashboardOverview() {
   }, [selectedDiffFile]);
 
   useEffect(() => {
+    if (!isSettingsOpen || typeof window === "undefined") {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSettingsOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isSettingsOpen]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -1355,6 +1382,13 @@ export function DashboardOverview() {
       }
 
       const selection = window.getSelection();
+      const selectionInsideSettingsContent =
+        isNodeInsideContainer(settingsContentRef.current, selection?.anchorNode ?? null) ||
+        isNodeInsideContainer(settingsContentRef.current, selection?.focusNode ?? null);
+      const targetInsideSettingsContent = isNodeInsideContainer(
+        settingsContentRef.current,
+        event.target instanceof Node ? event.target : null,
+      );
       const selectionInsideMainContent =
         isNodeInsideContainer(mainContentRef.current, selection?.anchorNode ?? null) ||
         isNodeInsideContainer(mainContentRef.current, selection?.focusNode ?? null);
@@ -1362,6 +1396,12 @@ export function DashboardOverview() {
         mainContentRef.current,
         event.target instanceof Node ? event.target : null,
       );
+
+      if (settingsContentRef.current && (targetInsideSettingsContent || selectionInsideSettingsContent)) {
+        event.preventDefault();
+        selectContainerContents(settingsContentRef.current);
+        return;
+      }
 
       if (mainContentRef.current && (targetInsideMainContent || selectionInsideMainContent)) {
         event.preventDefault();
@@ -1485,6 +1525,17 @@ export function DashboardOverview() {
     setOpenSettingsSection("language");
   };
 
+  const handleOpenSettings = (category: SettingsCategory = "general") => {
+    setActiveSettingsCategory(category);
+    setSettingsOpen(true);
+    setUserMenuOpen(false);
+    setOpenSettingsSection(null);
+  };
+
+  const handleCloseSettings = () => {
+    setSettingsOpen(false);
+  };
+
   const handleUserMenuToggle = () => {
     setUserMenuOpen((current) => {
       const nextOpen = !current;
@@ -1497,7 +1548,7 @@ export function DashboardOverview() {
   const handleLogin = () => {
     setUserSession(MOCK_USER_SESSION);
     setOpenSettingsSection(null);
-    setUserMenuOpen(true);
+    setUserMenuOpen(!isSettingsOpen);
   };
 
   const handleLogout = () => {
@@ -1534,6 +1585,7 @@ export function DashboardOverview() {
         isDrawerOpen={isDrawerOpen}
         isTerminalCollapsed={isTerminalCollapsed}
         isUserMenuOpen={isUserMenuOpen}
+        isSettingsOpen={isSettingsOpen}
         isLoggedIn={Boolean(userSession)}
         userSession={userSession}
         isCheckingUpdates={isCheckingUpdates}
@@ -1548,6 +1600,7 @@ export function DashboardOverview() {
         onLogin={handleLogin}
         onLogout={handleLogout}
         onCheckUpdates={handleCheckUpdates}
+        onOpenSettings={() => handleOpenSettings("general")}
         onSelectLanguage={handleLanguageSelect}
         onSelectTheme={handleThemeSelect}
         onToggleSettingsSection={setOpenSettingsSection}
@@ -1857,36 +1910,25 @@ export function DashboardOverview() {
                 <div className="flex h-full min-h-0 flex-col">
                   <div className="sticky top-0 z-10 bg-app-drawer/95 px-3 py-2 backdrop-blur-xl">
                     <div className="flex items-center">
-                      <div className="flex w-full min-w-0 items-center gap-1 rounded-xl border border-app-border bg-app-surface-muted p-0.5">
-                        <button
-                          type="button"
-                          aria-label="文件树"
-                          title="文件树 · Project Panel"
-                          className={cn(
-                            "flex h-8 flex-1 items-center justify-center rounded-lg transition-colors",
-                            activeDrawerPanel === "project"
-                              ? "bg-app-surface text-app-foreground shadow-[0_1px_2px_rgba(15,23,42,0.08)]"
-                              : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                          )}
-                          onClick={() => setActiveDrawerPanel("project")}
-                        >
-                          <FolderOpen className="size-4" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label="版本控制"
-                          title="版本控制 · Git Panel"
-                          className={cn(
-                            "flex h-8 flex-1 items-center justify-center rounded-lg transition-colors",
-                            activeDrawerPanel === "git"
-                              ? "bg-app-surface text-app-foreground shadow-[0_1px_2px_rgba(15,23,42,0.08)]"
-                              : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                          )}
-                          onClick={() => setActiveDrawerPanel("git")}
-                        >
-                          <GitBranch className="size-4" />
-                        </button>
-                      </div>
+                      <WorkbenchSegmentedControl
+                        value={activeDrawerPanel}
+                        className="w-full min-w-0"
+                        options={[
+                          {
+                            value: "project",
+                            label: "文件树",
+                            title: "文件树 · Project Panel",
+                            content: <FolderOpen className="size-4" />,
+                          },
+                          {
+                            value: "git",
+                            label: "版本控制",
+                            title: "版本控制 · Git Panel",
+                            content: <GitBranch className="size-4" />,
+                          },
+                        ]}
+                        onValueChange={(panel) => setActiveDrawerPanel(panel)}
+                      />
                     </div>
                   </div>
 
@@ -1958,6 +2000,32 @@ export function DashboardOverview() {
           file={selectedDiffFile}
           isStaged={Boolean(selectedDiffFilePreview?.isStaged)}
           onClose={() => setSelectedDiffFilePreview(null)}
+        />
+      ) : null}
+
+      {isSettingsOpen ? (
+        <WorkbenchSettingsOverlay
+          activeCategory={activeSettingsCategory}
+          approvalPolicy={approvalPolicy}
+          contentRef={settingsContentRef}
+          isCheckingUpdates={isCheckingUpdates}
+          language={language}
+          prompts={prompts}
+          selectedLanguageLabel={selectedLanguageOption.label}
+          selectedThemeSummary={selectedThemeSummary}
+          systemMetadata={data}
+          theme={theme}
+          updateStatus={updateStatus}
+          userSession={userSession}
+          onCheckUpdates={handleCheckUpdates}
+          onClose={handleCloseSettings}
+          onLogin={handleLogin}
+          onLogout={handleLogout}
+          onSelectCategory={setActiveSettingsCategory}
+          onSelectLanguage={handleLanguageSelect}
+          onSelectTheme={handleThemeSelect}
+          onUpdateApprovalPolicySetting={updateApprovalPolicySetting}
+          onUpdatePromptSetting={updatePromptSetting}
         />
       ) : null}
     </main>
@@ -2691,6 +2759,7 @@ function WorkbenchTopBar({
   isDrawerOpen,
   isTerminalCollapsed,
   isUserMenuOpen,
+  isSettingsOpen,
   isLoggedIn,
   userSession,
   isCheckingUpdates,
@@ -2705,6 +2774,7 @@ function WorkbenchTopBar({
   onLogin,
   onLogout,
   onCheckUpdates,
+  onOpenSettings,
   onSelectLanguage,
   onSelectTheme,
   onToggleSettingsSection,
@@ -2718,6 +2788,7 @@ function WorkbenchTopBar({
   isDrawerOpen: boolean;
   isTerminalCollapsed: boolean;
   isUserMenuOpen: boolean;
+  isSettingsOpen: boolean;
   isLoggedIn: boolean;
   userSession: MockUserSession | null;
   isCheckingUpdates: boolean;
@@ -2732,6 +2803,7 @@ function WorkbenchTopBar({
   onLogin: () => void;
   onLogout: () => void;
   onCheckUpdates: () => void;
+  onOpenSettings: () => void;
   onSelectLanguage: (language: LanguagePreference) => void;
   onSelectTheme: (theme: ThemePreference) => void;
   onToggleSettingsSection: React.Dispatch<React.SetStateAction<"theme" | "language" | null>>;
@@ -2789,6 +2861,7 @@ function WorkbenchTopBar({
             className={cn(
               "size-7 rounded-full text-app-subtle transition-[color,background-color,border-color] duration-200 hover:bg-app-surface-hover hover:text-app-foreground",
               isMacOS ? MAC_USER_MENU_OFFSET : "ml-2",
+              isSettingsOpen && "pointer-events-none invisible",
               isUserMenuOpen && "bg-app-surface-hover text-app-foreground",
             )}
             aria-label={isLoggedIn ? "打开用户菜单" : "打开登录菜单"}
@@ -2919,7 +2992,12 @@ function WorkbenchTopBar({
 
               <button
                 type="button"
-                className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")}
+                className={cn(
+                  MENU_TRIGGER_CLASS,
+                  "mt-1 text-app-foreground",
+                  isSettingsOpen && "bg-app-surface-hover",
+                )}
+                onClick={onOpenSettings}
               >
                 <MoreHorizontal className={MENU_TRIGGER_ICON_CLASS} />
                 <span className={MENU_TRIGGER_LABEL_CLASS}>更多设置</span>
@@ -2965,7 +3043,7 @@ function WorkbenchTopBar({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, isSidebarOpen && "text-app-foreground")}
+            className={cn(panelToggleButtonClass, isSidebarOpen && "text-app-foreground", isSettingsOpen && "pointer-events-none invisible")}
             aria-label={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
             title={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
             onClick={onToggleSidebar}
@@ -2975,7 +3053,7 @@ function WorkbenchTopBar({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, !isTerminalCollapsed && "text-app-foreground")}
+            className={cn(panelToggleButtonClass, !isTerminalCollapsed && "text-app-foreground", isSettingsOpen && "pointer-events-none invisible")}
             aria-label={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
             title={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
             onClick={onToggleTerminal}
@@ -2985,7 +3063,7 @@ function WorkbenchTopBar({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, isDrawerOpen && "text-app-foreground")}
+            className={cn(panelToggleButtonClass, isDrawerOpen && "text-app-foreground", isSettingsOpen && "pointer-events-none invisible")}
             aria-label={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
             title={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
             onClick={onToggleDrawer}
