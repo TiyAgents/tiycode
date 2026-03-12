@@ -16,6 +16,7 @@ import {
   GitBranch,
   FolderPlus,
   Languages,
+  MessageSquarePlus,
   MoreHorizontal,
   Monitor,
   Moon,
@@ -23,7 +24,6 @@ import {
   PanelBottom,
   PanelLeft,
   PanelRight,
-  Pencil,
   Plus,
   RefreshCw,
   Settings,
@@ -347,7 +347,7 @@ export function DashboardOverview() {
                 type="button"
                 className="group flex w-full items-center gap-2.5 rounded-xl border border-transparent bg-transparent px-3 py-2.5 text-left text-app-muted transition-[transform,box-shadow,background-color,border-color,color] duration-200 hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)] active:scale-[0.99]"
               >
-                <Pencil className="size-4 shrink-0 text-app-subtle transition-colors duration-200 group-hover:text-app-foreground" />
+                <MessageSquarePlus className="size-4 shrink-0 text-app-subtle transition-colors duration-200 group-hover:text-app-foreground" />
                 <span className="truncate text-sm font-medium">New thread</span>
               </button>
             </div>
