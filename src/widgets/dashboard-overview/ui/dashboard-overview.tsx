@@ -1,4 +1,5 @@
 import {
+  useDeferredValue,
   useEffect,
   useRef,
   useState,
@@ -6,13 +7,19 @@ import {
 } from "react";
 import {
   ALargeSmall,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   ArrowUp,
+  BookOpen,
+  Boxes,
+  Braces,
   Check,
   CircleX,
   CircleUserRound,
   ChevronDown,
+  Code2,
+  Download,
   Folder,
-  FolderKanban,
   FolderOpen,
   Globe,
   GitBranch,
@@ -35,12 +42,14 @@ import {
   Sparkles,
   Sun,
   TerminalSquare,
+  Undo2,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useLanguage, type LanguagePreference } from "@/app/providers/language-provider";
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
 import { Button } from "@/shared/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/ui/card";
+import { Input } from "@/shared/ui/input";
 import { cn } from "@/shared/lib/utils";
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 
@@ -51,6 +60,54 @@ type ThreadItem = {
   time: string;
   active: boolean;
   status: ThreadStatus;
+};
+
+type DrawerPanel = "project" | "git";
+
+type ProjectTreeItem = {
+  id: string;
+  name: string;
+  kind: "folder" | "file";
+  icon: "folder" | "git" | "json" | "html" | "css" | "license" | "readme" | "ts";
+  ignored?: boolean;
+};
+
+type GitTrackedFile = {
+  id: string;
+  path: string;
+  status: "M" | "A" | "D";
+  icon: ProjectTreeItem["icon"];
+  summary: string;
+  initialStaged: boolean;
+};
+
+type GitHistoryItem = {
+  id: string;
+  subject: string;
+  hash: string;
+  relativeTime: string;
+  author: string;
+  refs?: ReadonlyArray<string>;
+};
+
+type GitDiffLine = {
+  kind: "context" | "add" | "remove";
+  oldNumber: number | null;
+  newNumber: number | null;
+  text: string;
+};
+
+type GitDiffPreview = {
+  meta: ReadonlyArray<string>;
+  lines: ReadonlyArray<GitDiffLine>;
+};
+
+type GitSplitDiffRow = {
+  kind: "context" | "modified" | "add" | "remove";
+  leftNumber: number | null;
+  rightNumber: number | null;
+  leftText: string;
+  rightText: string;
 };
 
 const THREAD_ITEMS = [
@@ -144,19 +201,6 @@ const MESSAGE_SECTIONS = [
   },
 ] as const;
 
-const TASK_ITEMS = [
-  "Fix sidebar hide/show behavior",
-  "Simplify top bar and drag region",
-  "Remove gradient and duplicate actions",
-  "Validate build and summarize",
-] as const;
-
-const PANEL_FILES = [
-  { path: "src/widgets/dashboard-overview/ui/dashboard-overview.tsx", add: 128, remove: 74 },
-  { path: "src-tauri/tauri.conf.json", add: 3, remove: 0 },
-  { path: "src/app/providers/app-providers.tsx", add: 1, remove: 0 },
-] as const;
-
 const TERMINAL_LINES = [
   "1:20:15 AM [vite] client hmr update /src/widgets/dashboard-overview/ui/dashboard-overview.tsx",
   "Info File src-tauri/tauri.conf.json changed. Rebuilding application...",
@@ -165,6 +209,518 @@ const TERMINAL_LINES = [
   "Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.27s",
   "Running `target/debug/tiy-agent`",
 ] as const;
+
+const PROJECT_TREE_ITEMS: ReadonlyArray<ProjectTreeItem> = [
+  { id: "dist", name: "dist", kind: "folder", icon: "folder", ignored: true },
+  { id: "docs", name: "docs", kind: "folder", icon: "folder" },
+  { id: "node-modules", name: "node_modules", kind: "folder", icon: "folder", ignored: true },
+  { id: "public", name: "public", kind: "folder", icon: "folder" },
+  { id: "src", name: "src", kind: "folder", icon: "folder" },
+  { id: "src-tauri", name: "src-tauri", kind: "folder", icon: "folder" },
+  { id: "gitignore", name: ".gitignore", kind: "file", icon: "git" },
+  { id: "components-json", name: "components.json", kind: "file", icon: "json" },
+  { id: "index-html", name: "index.html", kind: "file", icon: "html" },
+  { id: "license", name: "LICENSE", kind: "file", icon: "license" },
+  { id: "package-json", name: "package.json", kind: "file", icon: "json" },
+  { id: "package-lock-json", name: "package-lock.json", kind: "file", icon: "json" },
+  { id: "readme-md", name: "README.md", kind: "file", icon: "readme" },
+  { id: "tsconfig-json", name: "tsconfig.json", kind: "file", icon: "json" },
+  { id: "tsconfig-node-json", name: "tsconfig.node.json", kind: "file", icon: "json" },
+  { id: "vite-config-ts", name: "vite.config.ts", kind: "file", icon: "ts" },
+];
+
+const GIT_TRACKED_FILES: ReadonlyArray<GitTrackedFile> = [
+  {
+    id: "dashboard-overview",
+    path: "src/widgets/dashboard-overview/ui/dashboard-overview.tsx",
+    status: "M",
+    icon: "ts",
+    summary: "+182 -94",
+    initialStaged: true,
+  },
+  {
+    id: "globals",
+    path: "src/app/styles/globals.css",
+    status: "M",
+    icon: "css",
+    summary: "+12 -4",
+    initialStaged: false,
+  },
+  {
+    id: "tauri-conf",
+    path: "src-tauri/tauri.conf.json",
+    status: "M",
+    icon: "json",
+    summary: "+3 -0",
+    initialStaged: true,
+  },
+  {
+    id: "providers",
+    path: "src/app/providers/app-providers.tsx",
+    status: "A",
+    icon: "ts",
+    summary: "+18 -0",
+    initialStaged: false,
+  },
+  {
+    id: "composer",
+    path: "src/features/chat-input/ui/composer.tsx",
+    status: "M",
+    icon: "ts",
+    summary: "+42 -19",
+    initialStaged: true,
+  },
+  {
+    id: "git-panel-styles",
+    path: "src/widgets/dashboard-overview/ui/git-panel.css",
+    status: "A",
+    icon: "css",
+    summary: "+64 -0",
+    initialStaged: false,
+  },
+  {
+    id: "tree-utils",
+    path: "src/features/project-tree/lib/tree-utils.ts",
+    status: "M",
+    icon: "ts",
+    summary: "+27 -8",
+    initialStaged: false,
+  },
+  {
+    id: "right-drawer-hook",
+    path: "src/widgets/dashboard-overview/model/use-right-drawer-state.ts",
+    status: "A",
+    icon: "ts",
+    summary: "+33 -0",
+    initialStaged: true,
+  },
+  {
+    id: "legacy-inspector",
+    path: "src/widgets/inspector/ui/legacy-panel.tsx",
+    status: "D",
+    icon: "ts",
+    summary: "+0 -118",
+    initialStaged: false,
+  },
+  {
+    id: "terminal-view",
+    path: "src/features/terminal/ui/terminal-view.tsx",
+    status: "M",
+    icon: "ts",
+    summary: "+16 -11",
+    initialStaged: true,
+  },
+  {
+    id: "readme-workbench",
+    path: "README.md",
+    status: "M",
+    icon: "readme",
+    summary: "+9 -3",
+    initialStaged: false,
+  },
+  {
+    id: "workspace-types",
+    path: "src/entities/workspace/model/types.ts",
+    status: "A",
+    icon: "ts",
+    summary: "+21 -0",
+    initialStaged: false,
+  },
+  {
+    id: "old-mock-data",
+    path: "src/shared/mock/legacy-source-control.json",
+    status: "D",
+    icon: "json",
+    summary: "+0 -57",
+    initialStaged: true,
+  },
+  {
+    id: "theme-tokens",
+    path: "src/app/styles/theme-tokens.css",
+    status: "M",
+    icon: "css",
+    summary: "+14 -6",
+    initialStaged: false,
+  },
+] as const;
+
+const GIT_HISTORY_ITEMS: ReadonlyArray<GitHistoryItem> = [
+  {
+    id: "history-1",
+    subject: "refactor(git-panel): align source control layout with VS Code",
+    hash: "a81c2d4",
+    relativeTime: "2m ago",
+    author: "Jorben Zhu",
+    refs: ["HEAD", "main"],
+  },
+  {
+    id: "history-2",
+    subject: "feat(project-panel): add sticky root and filter controls",
+    hash: "7f92ac1",
+    relativeTime: "17m ago",
+    author: "Jorben Zhu",
+    refs: ["origin/main"],
+  },
+  {
+    id: "history-3",
+    subject: "style(workbench): simplify right drawer icon bar",
+    hash: "d42b083",
+    relativeTime: "39m ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-4",
+    subject: "chore(layout): tighten panel spacing and terminal split",
+    hash: "3bc0ad8",
+    relativeTime: "1h ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-5",
+    subject: "feat(treeview): add file filter and sticky root header",
+    hash: "28ae114",
+    relativeTime: "2h ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-6",
+    subject: "style(project-panel): mute ignored files and folders",
+    hash: "91fd55c",
+    relativeTime: "3h ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-7",
+    subject: "refactor(drawer): split project and git tabs into icon bar",
+    hash: "5f17ab2",
+    relativeTime: "4h ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-8",
+    subject: "feat(source-control): add compact tracked file staging list",
+    hash: "bc3401d",
+    relativeTime: "5h ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-9",
+    subject: "style(network): tighten commit node spacing in history list",
+    hash: "ec8a9f0",
+    relativeTime: "7h ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-10",
+    subject: "fix(layout): pin network panel to bottom of right drawer",
+    hash: "4db926f",
+    relativeTime: "9h ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-11",
+    subject: "feat(workbench): simplify inspector drawer interactions",
+    hash: "8c3e3aa",
+    relativeTime: "12h ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-12",
+    subject: "refactor(sidebar): rebalance panel heights and overflow behavior",
+    hash: "e71bf42",
+    relativeTime: "15h ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-13",
+    subject: "chore(ui): polish icon actions across project and git panels",
+    hash: "1af24de",
+    relativeTime: "18h ago",
+    author: "Jorben Zhu",
+  },
+  {
+    id: "history-14",
+    subject: "feat(shell): add terminal collapse state persistence",
+    hash: "0d5bc7a",
+    relativeTime: "1d ago",
+    author: "Jorben Zhu",
+    refs: ["origin/main"],
+  },
+  {
+    id: "history-15",
+    subject: "style(theme): refine surface contrast for light workspace mode",
+    hash: "6a20c18",
+    relativeTime: "1d ago",
+    author: "Jorben Zhu",
+  },
+] as const;
+
+function getDiffTemplate(file: GitTrackedFile) {
+  const fileName = file.path.split("/").pop() ?? file.path;
+
+  if (file.path.endsWith(".tsx") || file.path.endsWith(".ts")) {
+    return {
+      before: [
+        'const panelDensity = "comfortable";',
+        "const enablePreview = false;",
+        `return <section data-file="${fileName}">{panelDensity}</section>;`,
+      ],
+      after: [
+        'const panelDensity = "compact";',
+        "const enablePreview = true;",
+        'const previewMode = "diff";',
+        `return <section data-file="${fileName}" data-preview="diff">{panelDensity}</section>;`,
+      ],
+    };
+  }
+
+  if (file.path.endsWith(".css")) {
+    return {
+      before: [
+        ".tracked-row {",
+        "  gap: 10px;",
+        "  padding: 8px 10px;",
+        "}",
+      ],
+      after: [
+        ".tracked-row {",
+        "  gap: 8px;",
+        "  padding: 6px 8px;",
+        "}",
+        ".tracked-row:hover { background: var(--app-surface-hover); }",
+      ],
+    };
+  }
+
+  if (file.path.endsWith(".json")) {
+    return {
+      before: [
+        "{",
+        '  "beforeDevCommand": "npm run dev:web",',
+        '  "beforeBuildCommand": "npm run build:web"',
+        "}",
+      ],
+      after: [
+        "{",
+        '  "beforeDevCommand": "npm run dev:web",',
+        '  "beforeBuildCommand": "npm run build:web",',
+        '  "sourceControlPreview": true',
+        "}",
+      ],
+    };
+  }
+
+  if (file.path.endsWith(".md")) {
+    return {
+      before: [
+        "# Tiy Desktop",
+        "",
+        "- Project Panel",
+        "- Git Panel",
+      ],
+      after: [
+        "# Tiy Desktop",
+        "",
+        "- Project Panel",
+        "- Git Panel",
+        "- Diff preview overlay",
+      ],
+    };
+  }
+
+  return {
+    before: [
+      `// ${fileName}`,
+      "export const panelState = {",
+      '  density: "comfortable",',
+      "};",
+    ],
+    after: [
+      `// ${fileName}`,
+      "export const panelState = {",
+      '  density: "compact",',
+      '  preview: "diff",',
+      "};",
+    ],
+  };
+}
+
+function buildGitDiffPreview(file: GitTrackedFile): GitDiffPreview {
+  const template = getDiffTemplate(file);
+  const startLine = 18;
+
+  if (file.status === "A") {
+    return {
+      meta: [
+        `diff --git a/${file.path} b/${file.path}`,
+        "new file mode 100644",
+        "--- /dev/null",
+        `+++ b/${file.path}`,
+        `@@ -0,0 +1,${template.after.length} @@`,
+      ],
+      lines: template.after.map((text, index) => ({
+        kind: "add",
+        oldNumber: null,
+        newNumber: index + 1,
+        text,
+      })),
+    };
+  }
+
+  if (file.status === "D") {
+    return {
+      meta: [
+        `diff --git a/${file.path} b/${file.path}`,
+        "deleted file mode 100644",
+        `--- a/${file.path}`,
+        "+++ /dev/null",
+        `@@ -1,${template.before.length} +0,0 @@`,
+      ],
+      lines: template.before.map((text, index) => ({
+        kind: "remove",
+        oldNumber: index + 1,
+        newNumber: null,
+        text,
+      })),
+    };
+  }
+
+  const lines: GitDiffLine[] = [];
+  let oldLine = startLine;
+  let newLine = startLine;
+  const maxLength = Math.max(template.before.length, template.after.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const previous = template.before[index];
+    const next = template.after[index];
+
+    if (previous !== undefined && next !== undefined && previous === next) {
+      lines.push({
+        kind: "context",
+        oldNumber: oldLine,
+        newNumber: newLine,
+        text: previous,
+      });
+      oldLine += 1;
+      newLine += 1;
+      continue;
+    }
+
+    if (previous !== undefined) {
+      lines.push({
+        kind: "remove",
+        oldNumber: oldLine,
+        newNumber: null,
+        text: previous,
+      });
+      oldLine += 1;
+    }
+
+    if (next !== undefined) {
+      lines.push({
+        kind: "add",
+        oldNumber: null,
+        newNumber: newLine,
+        text: next,
+      });
+      newLine += 1;
+    }
+  }
+
+  return {
+    meta: [
+      `diff --git a/${file.path} b/${file.path}`,
+      `--- a/${file.path}`,
+      `+++ b/${file.path}`,
+      `@@ -${startLine},${template.before.length} +${startLine},${template.after.length} @@`,
+    ],
+    lines,
+  };
+}
+
+function buildGitSplitDiffRows(file: GitTrackedFile): ReadonlyArray<GitSplitDiffRow> {
+  const template = getDiffTemplate(file);
+
+  if (file.status === "A") {
+    return template.after.map((text, index) => ({
+      kind: "add",
+      leftNumber: null,
+      rightNumber: index + 1,
+      leftText: "",
+      rightText: text,
+    }));
+  }
+
+  if (file.status === "D") {
+    return template.before.map((text, index) => ({
+      kind: "remove",
+      leftNumber: index + 1,
+      rightNumber: null,
+      leftText: text,
+      rightText: "",
+    }));
+  }
+
+  const rows: GitSplitDiffRow[] = [];
+  let leftNumber = 18;
+  let rightNumber = 18;
+  const maxLength = Math.max(template.before.length, template.after.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const previous = template.before[index];
+    const next = template.after[index];
+
+    if (previous !== undefined && next !== undefined && previous === next) {
+      rows.push({
+        kind: "context",
+        leftNumber,
+        rightNumber,
+        leftText: previous,
+        rightText: next,
+      });
+      leftNumber += 1;
+      rightNumber += 1;
+      continue;
+    }
+
+    if (previous !== undefined && next !== undefined) {
+      rows.push({
+        kind: "modified",
+        leftNumber,
+        rightNumber,
+        leftText: previous,
+        rightText: next,
+      });
+      leftNumber += 1;
+      rightNumber += 1;
+      continue;
+    }
+
+    if (previous !== undefined) {
+      rows.push({
+        kind: "remove",
+        leftNumber,
+        rightNumber: null,
+        leftText: previous,
+        rightText: "",
+      });
+      leftNumber += 1;
+    }
+
+    if (next !== undefined) {
+      rows.push({
+        kind: "add",
+        leftNumber: null,
+        rightNumber,
+        leftText: "",
+        rightText: next,
+      });
+      rightNumber += 1;
+    }
+  }
+
+  return rows;
+}
 
 const DEFAULT_TERMINAL_HEIGHT = 260;
 const MIN_TERMINAL_HEIGHT = 180;
@@ -313,8 +869,11 @@ export function DashboardOverview() {
   const [isCheckingUpdates, setCheckingUpdates] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(() => Object.fromEntries(WORKSPACE_ITEMS.map((workspace) => [workspace.id, workspace.defaultOpen])));
+  const [activeDrawerPanel, setActiveDrawerPanel] = useState<DrawerPanel>("project");
+  const [selectedDiffFilePreview, setSelectedDiffFilePreview] = useState<{ fileId: string; isStaged: boolean } | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
+  const selectedDiffFile = GIT_TRACKED_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
 
   const getMaxTerminalHeight = () => {
     if (typeof window === "undefined") {
@@ -437,6 +996,21 @@ export function DashboardOverview() {
     return () => window.clearTimeout(timeout);
   }, [updateStatus]);
 
+  useEffect(() => {
+    if (!selectedDiffFile || typeof window === "undefined") {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectedDiffFilePreview(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedDiffFile]);
+
   const handleWorkspaceToggle = (workspaceId: string) => {
     setOpenWorkspaces((current) => ({
       ...current,
@@ -533,13 +1107,21 @@ export function DashboardOverview() {
           )}
         >
           <div className="flex h-full min-h-0 flex-col px-3 pb-3 pt-4">
-            <div>
+            <div className="space-y-1">
               <button
                 type="button"
                 className="group flex w-full items-center gap-2.5 rounded-xl border border-transparent bg-transparent px-3 py-2.5 text-left text-app-muted transition-[transform,box-shadow,background-color,border-color,color] duration-200 hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)] active:scale-[0.99]"
               >
                 <MessageSquarePlus className="size-4 shrink-0 text-app-subtle transition-colors duration-200 group-hover:text-app-foreground" />
                 <span className="truncate text-sm font-medium">New thread</span>
+              </button>
+
+              <button
+                type="button"
+                className="group flex w-full items-center gap-2.5 rounded-xl border border-transparent bg-transparent px-3 py-2.5 text-left text-app-muted transition-[transform,box-shadow,background-color,border-color,color] duration-200 hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)] active:scale-[0.99]"
+              >
+                <Boxes className="size-4 shrink-0 text-app-subtle transition-colors duration-200 group-hover:text-app-foreground" />
+                <span className="truncate text-sm font-medium">Marketplace</span>
               </button>
             </div>
 
@@ -744,52 +1326,47 @@ export function DashboardOverview() {
                 )}
               >
                 <div className="flex h-full min-h-0 flex-col">
-                  <div className="sticky top-0 z-10 flex h-14 items-center border-b border-app-border px-4">
-                    <div>
-                      <p className="text-sm font-semibold text-app-foreground">Unstaged</p>
-                      <p className="text-xs text-app-subtle">56 changes</p>
+                  <div className="sticky top-0 z-10 bg-app-drawer/95 px-3 py-2 backdrop-blur-xl">
+                    <div className="flex items-center">
+                      <div className="flex w-full min-w-0 items-center gap-1 rounded-xl border border-app-border bg-app-surface-muted p-0.5">
+                        <button
+                          type="button"
+                          aria-label="文件树"
+                          title="文件树 · Project Panel"
+                          className={cn(
+                            "flex h-8 flex-1 items-center justify-center rounded-lg transition-colors",
+                            activeDrawerPanel === "project"
+                              ? "bg-app-surface text-app-foreground shadow-[0_1px_2px_rgba(15,23,42,0.08)]"
+                              : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                          )}
+                          onClick={() => setActiveDrawerPanel("project")}
+                        >
+                          <FolderOpen className="size-4" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="版本控制"
+                          title="版本控制 · Git Panel"
+                          className={cn(
+                            "flex h-8 flex-1 items-center justify-center rounded-lg transition-colors",
+                            activeDrawerPanel === "git"
+                              ? "bg-app-surface text-app-foreground shadow-[0_1px_2px_rgba(15,23,42,0.08)]"
+                              : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                          )}
+                          onClick={() => setActiveDrawerPanel("git")}
+                        >
+                          <GitBranch className="size-4" />
+                        </button>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="min-h-0 flex-1 overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                    <div className="space-y-4 p-4">
-                      <div className="rounded-2xl border border-app-border bg-app-surface p-4">
-                        <p className="text-sm font-medium text-app-foreground">Large diff detected — showing one file at a time.</p>
-                      </div>
-
-                      {PANEL_FILES.map((file) => (
-                        <div key={file.path} className="rounded-2xl border border-app-border bg-app-surface p-4">
-                          <div className="flex items-start gap-3">
-                            <div className="mt-1 flex size-9 shrink-0 items-center justify-center rounded-xl bg-app-surface-hover text-app-muted">
-                              <FolderKanban className="size-4" />
-                            </div>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm text-app-foreground">{file.path}</p>
-                              <div className="mt-2 flex items-center gap-2 text-xs">
-                                <span className="text-app-success">+{file.add}</span>
-                                <span className="text-app-danger">-{file.remove}</span>
-                                <span className="size-1.5 rounded-full bg-app-info" />
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-
-                      <Card className="border-app-border bg-app-surface text-app-foreground shadow-none">
-                        <CardHeader>
-                          <CardTitle className="text-base">Tasks</CardTitle>
-                          <CardDescription className="text-app-muted">0 out of 4 tasks completed</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                          {TASK_ITEMS.map((task, index) => (
-                            <div key={task} className="flex items-start gap-3 text-sm text-app-muted">
-                              <span className="mt-1 size-3 rounded-full border border-app-subtle" />
-                              <span>{index + 1}. {task}</span>
-                            </div>
-                          ))}
-                        </CardContent>
-                      </Card>
-                    </div>
+                  <div className="min-h-0 flex-1 overscroll-none">
+                    {activeDrawerPanel === "project" ? (
+                      <ProjectPanel />
+                    ) : (
+                      <GitPanel onOpenDiffPreview={(fileId, isStaged) => setSelectedDiffFilePreview({ fileId, isStaged })} />
+                    )}
                   </div>
                 </div>
               </aside>
@@ -846,7 +1423,556 @@ export function DashboardOverview() {
           </div>
         </section>
       </div>
+
+      {selectedDiffFile ? (
+        <GitDiffPreviewPanel
+          file={selectedDiffFile}
+          isStaged={Boolean(selectedDiffFilePreview?.isStaged)}
+          onClose={() => setSelectedDiffFilePreview(null)}
+        />
+      ) : null}
     </main>
+  );
+}
+
+function ProjectPanel() {
+  const [filterValue, setFilterValue] = useState("");
+  const [isRefreshing, setRefreshing] = useState(false);
+  const deferredFilterValue = useDeferredValue(filterValue);
+  const refreshTimeoutRef = useRef<number | null>(null);
+  const normalizedFilter = deferredFilterValue.trim().toLowerCase();
+  const visibleItems = normalizedFilter
+    ? PROJECT_TREE_ITEMS.filter((item) => item.name.toLowerCase().includes(normalizedFilter))
+    : PROJECT_TREE_ITEMS;
+
+  useEffect(() => {
+    return () => {
+      if (refreshTimeoutRef.current) {
+        window.clearTimeout(refreshTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleRefresh = () => {
+    setFilterValue("");
+    setRefreshing(true);
+
+    if (refreshTimeoutRef.current) {
+      window.clearTimeout(refreshTimeoutRef.current);
+    }
+
+    refreshTimeoutRef.current = window.setTimeout(() => {
+      setRefreshing(false);
+      refreshTimeoutRef.current = null;
+    }, 700);
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col px-4 pb-5 pt-2">
+      <div className="shrink-0 bg-app-drawer">
+        <div className="flex items-center justify-between gap-3 px-1 pr-1 text-[15px] font-medium">
+          <div className="flex min-w-0 items-center gap-3">
+            <FolderOpen className="size-4 shrink-0 text-app-subtle" />
+            <span className="truncate text-app-foreground">tiy-desktop</span>
+          </div>
+          <button
+            type="button"
+            aria-label="刷新文件树"
+            title="刷新文件树"
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+            onClick={handleRefresh}
+          >
+            <RefreshCw className={cn("size-3.5", isRefreshing && "animate-spin")} />
+          </button>
+        </div>
+
+        <div className="relative mt-3 pl-7 pr-1 pb-3">
+          <div className="absolute -bottom-3 left-[8px] -top-3 w-px bg-app-border" />
+          <Input
+            value={filterValue}
+            onChange={(event) => setFilterValue(event.target.value)}
+            placeholder="Filter files"
+            aria-label="Filter files"
+            className="h-8 rounded-lg border-app-border bg-app-surface-muted px-2.5 text-[13px] text-app-foreground placeholder:text-app-subtle focus-visible:border-app-border-strong focus-visible:ring-0"
+          />
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto overscroll-none pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="relative pl-7">
+          <div className="absolute bottom-0 left-[8px] -top-3 w-px bg-app-border" />
+          <div className="space-y-1">
+            {visibleItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={cn(
+                  "relative flex w-full items-center gap-3 rounded-lg py-1.5 text-left text-[13px] transition-colors",
+                  item.ignored
+                    ? "text-app-subtle/70 hover:text-app-muted"
+                    : "text-app-muted hover:text-app-foreground",
+                )}
+              >
+                <ProjectTreeIcon icon={item.icon} muted={Boolean(item.ignored)} />
+                <span className="truncate">{item.name}</span>
+              </button>
+            ))}
+
+            {visibleItems.length === 0 ? (
+              <div className="py-2 text-[13px] text-app-subtle">No matching files</div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectTreeIcon({
+  icon,
+  muted = false,
+}: {
+  icon: ProjectTreeItem["icon"];
+  muted?: boolean;
+}) {
+  const iconClassName = muted ? "size-4 shrink-0 text-app-subtle/70" : "size-4 shrink-0 text-app-subtle";
+
+  if (icon === "folder") {
+    return <Folder className={iconClassName} />;
+  }
+
+  if (icon === "git") {
+    return <GitBranch className={iconClassName} />;
+  }
+
+  if (icon === "json") {
+    return <Braces className={iconClassName} />;
+  }
+
+  if (icon === "html") {
+    return <Code2 className={iconClassName} />;
+  }
+
+  if (icon === "css") {
+    return <Code2 className={iconClassName} />;
+  }
+
+  if (icon === "readme") {
+    return <BookOpen className={iconClassName} />;
+  }
+
+  if (icon === "license") {
+    return <span className={cn("text-base leading-none", muted ? "text-app-subtle/70" : "text-app-subtle")}>=</span>;
+  }
+
+  return (
+    <span
+      className={cn(
+        "flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] px-1 text-[9px] font-semibold uppercase tracking-[0.02em]",
+        muted ? "bg-app-surface-muted/60 text-app-subtle/70" : "bg-app-surface-muted text-app-subtle",
+      )}
+    >
+      TS
+    </span>
+  );
+}
+
+function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, isStaged: boolean) => void }) {
+  const [commitMessage, setCommitMessage] = useState("");
+  const [stagedFiles, setStagedFiles] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(GIT_TRACKED_FILES.map((file) => [file.id, file.initialStaged])),
+  );
+  const [activeHistoryAction, setActiveHistoryAction] = useState<"fetch" | "pull" | "push" | "refresh" | null>(null);
+  const historyActionTimeoutRef = useRef<number | null>(null);
+  const stagedCount = GIT_TRACKED_FILES.filter((file) => stagedFiles[file.id]).length;
+
+  useEffect(() => {
+    return () => {
+      if (historyActionTimeoutRef.current) {
+        window.clearTimeout(historyActionTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleToggleStage = (fileId: string) => {
+    setStagedFiles((current) => ({
+      ...current,
+      [fileId]: !current[fileId],
+    }));
+  };
+
+  const handleStageAll = () => {
+    setStagedFiles(Object.fromEntries(GIT_TRACKED_FILES.map((file) => [file.id, true])));
+  };
+
+  const handleUnstageAll = () => {
+    setStagedFiles(Object.fromEntries(GIT_TRACKED_FILES.map((file) => [file.id, false])));
+  };
+
+  const handleGenerateCommitMessage = () => {
+    setCommitMessage(
+      stagedCount >= 2
+        ? "feat(git-panel): align source control workflow with VS Code"
+        : "chore(git-panel): update tracked changes and history panel",
+    );
+  };
+
+  const handleHistoryAction = (action: "fetch" | "pull" | "push" | "refresh") => {
+    setActiveHistoryAction(action);
+
+    if (historyActionTimeoutRef.current) {
+      window.clearTimeout(historyActionTimeoutRef.current);
+    }
+
+    historyActionTimeoutRef.current = window.setTimeout(() => {
+      setActiveHistoryAction(null);
+      historyActionTimeoutRef.current = null;
+    }, 800);
+  };
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-col px-4 pb-4 pt-3">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-center gap-2">
+          <div className="relative min-w-0 flex-1">
+            <Input
+              value={commitMessage}
+              onChange={(event) => setCommitMessage(event.target.value)}
+              placeholder="Commit Message"
+              aria-label="Commit Message"
+              className="h-9 rounded-xl border-app-border bg-transparent px-3 pr-10 text-[13px] font-medium text-app-foreground placeholder:text-app-subtle focus-visible:border-app-border-strong focus-visible:ring-0"
+            />
+            <button
+              type="button"
+              aria-label="智能生成 Commit Message"
+              title="智能生成 Commit Message"
+              className="absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              onClick={handleGenerateCommitMessage}
+            >
+              <Sparkles className="size-3.5" />
+            </button>
+          </div>
+          <button
+            type="button"
+            aria-label="Commit"
+            title="Commit"
+            className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+          >
+            <Check className="size-4" />
+          </button>
+        </div>
+
+        <section className="mt-4 flex min-h-0 flex-1 flex-col">
+          <div className="flex shrink-0 items-center justify-between gap-3 px-1">
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold text-app-foreground">Tracked</p>
+              <span className="rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-subtle">
+                {GIT_TRACKED_FILES.length}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="全部取消"
+                title="全部取消"
+                className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                onClick={handleUnstageAll}
+              >
+                <Undo2 className="size-4" />
+              </button>
+              <button
+                type="button"
+                aria-label="全部加入"
+                title="全部加入"
+                className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                onClick={handleStageAll}
+              >
+                <Plus className="size-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-2 min-h-0 flex-1 overflow-auto overscroll-contain pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="space-y-1">
+              {GIT_TRACKED_FILES.map((file) => {
+                const isStaged = Boolean(stagedFiles[file.id]);
+
+                return (
+                  <div
+                    key={file.id}
+                    role="button"
+                    tabIndex={0}
+                    title={file.path}
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-app-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong"
+                    onClick={() => onOpenDiffPreview(file.id, isStaged)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onOpenDiffPreview(file.id, isStaged);
+                      }
+                    }}
+                  >
+                    <span
+                      className={cn(
+                        "inline-flex min-w-5 shrink-0 items-center justify-center rounded px-1 text-[10px] font-semibold",
+                        file.status === "A"
+                          ? "text-app-success"
+                          : file.status === "D"
+                            ? "text-app-danger"
+                            : "text-app-subtle",
+                      )}
+                    >
+                      {file.status}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[13px] text-app-muted">{file.path.split("/").pop()}</span>
+                    <span className="shrink-0 text-[11px] text-app-subtle">{file.summary}</span>
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={isStaged}
+                      aria-label={isStaged ? `取消暂存 ${file.path}` : `暂存 ${file.path}`}
+                      title={isStaged ? "Unstage" : "Stage"}
+                      className={cn(
+                        "flex size-4 shrink-0 items-center justify-center rounded border transition-colors",
+                        isStaged
+                          ? "border-app-border-strong bg-app-foreground text-app-drawer"
+                          : "border-app-border bg-transparent text-transparent hover:border-app-border-strong",
+                      )}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleToggleStage(file.id);
+                      }}
+                    >
+                      <Check className="size-2.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section className="mt-3 flex h-[208px] shrink-0 flex-col">
+        <div className="flex items-center justify-between gap-3 px-1">
+          <p className="text-sm font-semibold text-app-foreground">Network</p>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="Fetch"
+              title="Fetch"
+              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              onClick={() => handleHistoryAction("fetch")}
+            >
+              <Download className={cn("size-4", activeHistoryAction === "fetch" && "animate-pulse")} />
+            </button>
+            <button
+              type="button"
+              aria-label="Pull"
+              title="Pull"
+              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              onClick={() => handleHistoryAction("pull")}
+            >
+              <ArrowDownToLine className={cn("size-4", activeHistoryAction === "pull" && "animate-pulse")} />
+            </button>
+            <button
+              type="button"
+              aria-label="Push"
+              title="Push"
+              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              onClick={() => handleHistoryAction("push")}
+            >
+              <ArrowUpFromLine className={cn("size-4", activeHistoryAction === "push" && "animate-pulse")} />
+            </button>
+            <button
+              type="button"
+              aria-label="刷新历史"
+              title="刷新历史"
+              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              onClick={() => handleHistoryAction("refresh")}
+            >
+              <RefreshCw className={cn("size-4", activeHistoryAction === "refresh" && "animate-spin")} />
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-2.5 min-h-0 flex-1 overflow-auto overscroll-contain pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="space-y-1.5">
+          {GIT_HISTORY_ITEMS.map((item, index) => (
+            <div key={item.id} className="relative pl-5">
+              {item.refs?.includes("HEAD") ? (
+                <span className="absolute inset-y-0 -left-2 rounded-xl bg-app-surface-hover" />
+              ) : null}
+              {index < GIT_HISTORY_ITEMS.length - 1 ? (
+                <span className="absolute left-[5px] top-5 h-[calc(100%+0.4rem)] w-px bg-app-border" />
+              ) : null}
+              <span
+                className={cn(
+                  "absolute left-0 top-1/2 size-3 -translate-y-1/2 rounded-full border",
+                  item.refs?.includes("HEAD")
+                    ? "border-app-foreground bg-app-foreground"
+                    : "border-app-border bg-app-drawer",
+                )}
+              />
+              <div className="relative flex items-center justify-between gap-3 rounded-xl px-2 py-0.5">
+                <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-app-foreground">{item.subject}</p>
+                {item.refs?.length ? (
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    {item.refs.map((ref) => (
+                      <span
+                        key={ref}
+                        className={cn(
+                          "rounded-full px-2 py-1 text-[10px]",
+                          ref === "HEAD"
+                            ? "bg-app-foreground text-app-drawer"
+                            : "bg-app-surface-muted text-app-muted",
+                        )}
+                      >
+                        {ref}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ))}
+          </div>
+        </div>
+      </section>
+
+    </div>
+  );
+}
+
+function GitDiffPreviewPanel({
+  file,
+  isStaged,
+  onClose,
+}: {
+  file: GitTrackedFile;
+  isStaged: boolean;
+  onClose: () => void;
+}) {
+  const [isMetaExpanded, setMetaExpanded] = useState(false);
+  const preview = buildGitDiffPreview(file);
+  const splitRows = buildGitSplitDiffRows(file);
+  const fileName = file.path.split("/").pop() ?? file.path;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-app-chrome/50 px-6 py-12 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-[min(82vh,860px)] w-full max-w-7xl flex-col overflow-hidden rounded-[24px] border border-app-border bg-app-surface shadow-[0_32px_96px_rgba(15,23,42,0.28)] dark:shadow-[0_32px_96px_rgba(0,0,0,0.56)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-app-border px-5 py-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="shrink-0">
+                <ProjectTreeIcon icon={file.icon} />
+              </span>
+              <p className="truncate text-sm font-semibold text-app-foreground">{fileName}</p>
+              <span className="shrink-0 rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-subtle">
+                {file.summary}
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 rounded-md px-1.5 py-0.5 text-[11px]",
+                  isStaged ? "bg-app-foreground text-app-drawer" : "bg-app-surface-muted text-app-subtle",
+                )}
+              >
+                {isStaged ? "Staged" : "Unstaged"}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center gap-1">
+              <p className="truncate text-[12px] text-app-subtle">{file.path}</p>
+              <button
+                type="button"
+                aria-label={isMetaExpanded ? "折叠 diff 指令信息" : "展开 diff 指令信息"}
+                title={isMetaExpanded ? "折叠 diff 指令信息" : "展开 diff 指令信息"}
+                className="flex size-5 shrink-0 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                onClick={() => setMetaExpanded((current) => !current)}
+              >
+                <ChevronDown className={cn("size-3.5 transition-transform", !isMetaExpanded && "-rotate-90")} />
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            aria-label="关闭 Diff 预览"
+            title="关闭 Diff 预览"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+            onClick={onClose}
+          >
+            <CircleX className="size-4" />
+          </button>
+        </div>
+
+        {isMetaExpanded ? (
+          <div className="shrink-0 border-b border-app-border bg-app-surface-muted/70 px-5 py-3 font-mono text-[11px] text-app-subtle">
+            {preview.meta.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="grid shrink-0 grid-cols-2 border-b border-app-border bg-app-surface-muted/50 text-[11px] uppercase tracking-[0.12em] text-app-subtle">
+          <div className="border-r border-app-border px-4 py-2">Old</div>
+          <div className="px-4 py-2">New</div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto overscroll-contain bg-app-drawer font-mono text-[12px] leading-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {splitRows.map((row, index) => (
+            <div key={`${row.kind}-${index}-${row.leftText}-${row.rightText}`} className="grid grid-cols-2 border-b border-app-border/60">
+              <div
+                className={cn(
+                  "grid min-w-0 grid-cols-[56px_1fr] items-start border-r border-app-border/70",
+                  row.kind === "remove" || row.kind === "modified"
+                    ? "bg-app-danger/10"
+                    : "bg-transparent",
+                )}
+              >
+                <span className="select-none border-r border-app-border/60 px-3 text-right text-app-subtle">
+                  {row.leftNumber ?? ""}
+                </span>
+                <span
+                  className={cn(
+                    "overflow-x-auto px-3 whitespace-pre [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                    row.kind === "remove" || row.kind === "modified" ? "text-app-danger" : "text-app-foreground",
+                  )}
+                >
+                  {row.leftText}
+                </span>
+              </div>
+
+              <div
+                className={cn(
+                  "grid min-w-0 grid-cols-[56px_1fr] items-start",
+                  row.kind === "add" || row.kind === "modified"
+                    ? "bg-app-success/10"
+                    : "bg-transparent",
+                )}
+              >
+                <span className="select-none border-r border-app-border/60 px-3 text-right text-app-subtle">
+                  {row.rightNumber ?? ""}
+                </span>
+                <span
+                  className={cn(
+                    "overflow-x-auto px-3 whitespace-pre [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                    row.kind === "add" || row.kind === "modified" ? "text-app-success" : "text-app-foreground",
+                  )}
+                >
+                  {row.rightText}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
