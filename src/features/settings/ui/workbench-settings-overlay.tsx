@@ -514,7 +514,6 @@ function PromptSettingsPanel({
               checked={prompts.includeProjectContext}
               size="sm"
               aria-label="Toggle project context inclusion"
-              className="border-app-border shadow-none data-[state=checked]:bg-app-surface-active data-[state=unchecked]:bg-app-surface-muted"
               onCheckedChange={(checked) => onUpdatePromptSetting("includeProjectContext", checked)}
             />
           }
@@ -662,7 +661,7 @@ function TextAreaSection({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           className={cn(
-            "mt-3 rounded-lg border-app-border bg-app-surface-muted px-3 py-2 text-[13px] leading-6 text-app-foreground placeholder:text-app-subtle focus-visible:border-app-border-strong focus-visible:ring-0",
+            "mt-3",
             minHeightClassName,
           )}
         />
@@ -719,5 +718,5 @@ function SettingValue({ value }: { value: string }) {
 }
 
 function SectionDivider() {
-  return <Separator className="bg-app-border" />;
+  return <Separator />;
 }
