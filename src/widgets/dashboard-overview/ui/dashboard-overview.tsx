@@ -30,7 +30,6 @@ import {
   PanelRight,
   Plus,
   RefreshCw,
-  Settings,
   Sparkles,
   Sun,
   TerminalSquare,
@@ -179,9 +178,9 @@ const LANGUAGE_OPTIONS: Array<{
   { label: "简体中文", value: "zh-CN", icon: Languages },
 ];
 
-const SETTINGS_TRIGGER_CLASS =
+const MENU_TRIGGER_CLASS =
   "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-app-surface-hover";
-const SETTINGS_OPTION_CLASS =
+const MENU_OPTION_CLASS =
   "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors";
 const MAC_USER_MENU_OFFSET = "ml-[74px]";
 const MAC_USER_MENU_POPOVER_OFFSET = "left-[74px]";
@@ -191,11 +190,13 @@ const UPDATE_STATUS_DURATION = 2200;
 type MockUserSession = {
   name: string;
   avatar: string;
+  email: string;
 };
 
 const MOCK_USER_SESSION: MockUserSession = {
   name: "Jorben Zhu",
   avatar: "JZ",
+  email: "jorbenzhu@gmail.com",
 };
 
 function getStoredUserSession(): MockUserSession | null {
@@ -212,10 +213,15 @@ function getStoredUserSession(): MockUserSession | null {
   try {
     const parsed = JSON.parse(rawValue) as Partial<MockUserSession>;
 
-    if (typeof parsed.name === "string" && typeof parsed.avatar === "string") {
+    if (
+      typeof parsed.name === "string" &&
+      typeof parsed.avatar === "string" &&
+      typeof parsed.email === "string"
+    ) {
       return {
         name: parsed.name,
         avatar: parsed.avatar,
+        email: parsed.email,
       };
     }
   } catch {
@@ -235,7 +241,6 @@ export function DashboardOverview() {
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const [terminalResize, setTerminalResize] = useState<{ startY: number; startHeight: number } | null>(null);
   const [composerValue, setComposerValue] = useState("");
-  const [isSettingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [openSettingsSection, setOpenSettingsSection] = useState<"theme" | "language" | null>(null);
   const [isUserMenuOpen, setUserMenuOpen] = useState(false);
   const [userSession, setUserSession] = useState<MockUserSession | null>(() => getStoredUserSession());
@@ -243,7 +248,6 @@ export function DashboardOverview() {
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(() => Object.fromEntries(WORKSPACE_ITEMS.map((workspace) => [workspace.id, workspace.defaultOpen])));
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   const getMaxTerminalHeight = () => {
@@ -323,29 +327,24 @@ export function DashboardOverview() {
   }, [composerValue]);
 
   useEffect(() => {
-    if ((!isSettingsMenuOpen && !isUserMenuOpen) || typeof window === "undefined") {
+    if (!isUserMenuOpen || typeof window === "undefined") {
       return;
     }
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node | null;
 
-      if (target && settingsMenuRef.current?.contains(target)) {
-        return;
-      }
-
       if (target && userMenuRef.current?.contains(target)) {
         return;
       }
 
-      setSettingsMenuOpen(false);
-      setOpenSettingsSection(null);
       setUserMenuOpen(false);
+      setOpenSettingsSection(null);
     };
 
     window.addEventListener("mousedown", handlePointerDown);
     return () => window.removeEventListener("mousedown", handlePointerDown);
-  }, [isSettingsMenuOpen, isUserMenuOpen]);
+  }, [isUserMenuOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -379,13 +378,6 @@ export function DashboardOverview() {
     }));
   };
 
-  const handleSettingsMenuToggle = () => {
-    const nextOpen = !isSettingsMenuOpen;
-    setSettingsMenuOpen(nextOpen);
-    setOpenSettingsSection(null);
-    setUserMenuOpen(false);
-  };
-
   const handleThemeSelect = (nextTheme: ThemePreference) => {
     setTheme(nextTheme);
     setOpenSettingsSection("theme");
@@ -399,11 +391,7 @@ export function DashboardOverview() {
   const handleUserMenuToggle = () => {
     setUserMenuOpen((current) => {
       const nextOpen = !current;
-
-      if (nextOpen) {
-        setSettingsMenuOpen(false);
-        setOpenSettingsSection(null);
-      }
+      setOpenSettingsSection(null);
 
       return nextOpen;
     });
@@ -411,11 +399,13 @@ export function DashboardOverview() {
 
   const handleLogin = () => {
     setUserSession(MOCK_USER_SESSION);
+    setOpenSettingsSection(null);
     setUserMenuOpen(true);
   };
 
   const handleLogout = () => {
     setUserSession(null);
+    setOpenSettingsSection(null);
     setUserMenuOpen(false);
   };
 
@@ -449,11 +439,19 @@ export function DashboardOverview() {
         userSession={userSession}
         isCheckingUpdates={isCheckingUpdates}
         updateStatus={updateStatus}
+        openSettingsSection={openSettingsSection}
         userMenuRef={userMenuRef}
+        selectedLanguageLabel={selectedLanguageOption.label}
+        selectedThemeSummary={selectedThemeSummary}
+        language={language}
+        theme={theme}
         onToggleUserMenu={handleUserMenuToggle}
         onLogin={handleLogin}
         onLogout={handleLogout}
         onCheckUpdates={handleCheckUpdates}
+        onSelectLanguage={handleLanguageSelect}
+        onSelectTheme={handleThemeSelect}
+        onToggleSettingsSection={setOpenSettingsSection}
         onToggleSidebar={() => setSidebarOpen((current) => !current)}
         onToggleDrawer={() => setDrawerOpen((current) => !current)}
         onToggleTerminal={() => setTerminalCollapsed((current) => !current)}
@@ -484,8 +482,9 @@ export function DashboardOverview() {
               <FolderPlus className="size-3.5 text-app-subtle" />
             </div>
 
+            <div className="mx-1 mt-3 h-px shrink-0 bg-app-border" />
+
             <div className="mt-3 min-h-0 flex-1 overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <div className="mx-1 mb-3 h-px bg-app-border" />
               <div className="space-y-2">
                 {WORKSPACE_ITEMS.map((workspace) => {
                   const isOpen = openWorkspaces[workspace.id];
@@ -556,104 +555,6 @@ export function DashboardOverview() {
                   );
                 })}
               </div>
-            </div>
-
-            <div ref={settingsMenuRef} className="relative mt-3">
-              {isSettingsMenuOpen ? (
-                <div className="absolute bottom-full left-0 z-20 mb-2 w-[240px] rounded-2xl border border-app-border bg-app-menu p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] dark:shadow-[0_20px_48px_rgba(0,0,0,0.42)]">
-                  <button
-                    type="button"
-                    className={cn(SETTINGS_TRIGGER_CLASS, "text-app-foreground")}
-                    aria-expanded={openSettingsSection === "theme"}
-                    onClick={() => setOpenSettingsSection((current) => (current === "theme" ? null : "theme"))}
-                  >
-                    <Palette className="size-4 shrink-0 text-app-subtle" />
-                    <span className="min-w-0 flex-1 truncate text-sm">主题</span>
-                    <span className="shrink-0 text-xs text-app-subtle">{selectedThemeSummary}</span>
-                  </button>
-
-                  {openSettingsSection === "theme" ? (
-                    <div className="mt-1 space-y-1">
-                      {THEME_OPTIONS.map((option) => {
-                        const OptionIcon = option.icon;
-                        const isSelected = theme === option.value;
-
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            className={cn(
-                              SETTINGS_OPTION_CLASS,
-                              isSelected ? "bg-app-surface-active text-app-foreground" : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                            )}
-                            onClick={() => handleThemeSelect(option.value)}
-                          >
-                            <OptionIcon className="size-4 shrink-0 text-app-subtle" />
-                            <span className="flex-1 truncate">{option.label}</span>
-                            {isSelected ? <Check className="size-4 shrink-0 text-app-foreground" /> : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-
-                  <button
-                    type="button"
-                    className={cn(SETTINGS_TRIGGER_CLASS, "mt-1 text-app-foreground")}
-                    aria-expanded={openSettingsSection === "language"}
-                    onClick={() => setOpenSettingsSection((current) => (current === "language" ? null : "language"))}
-                  >
-                    <Globe className="size-4 shrink-0 text-app-subtle" />
-                    <span className="min-w-0 flex-1 truncate text-sm">语言</span>
-                    <span className="shrink-0 text-xs text-app-subtle">{selectedLanguageOption.label}</span>
-                  </button>
-
-                  {openSettingsSection === "language" ? (
-                    <div className="mt-1 space-y-1">
-                      {LANGUAGE_OPTIONS.map((option) => {
-                        const isSelected = language === option.value;
-                        const OptionIcon = option.icon;
-
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            className={cn(
-                              SETTINGS_OPTION_CLASS,
-                              isSelected ? "bg-app-surface-active text-app-foreground" : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                            )}
-                            onClick={() => handleLanguageSelect(option.value)}
-                          >
-                            <OptionIcon className="size-4 shrink-0 text-app-subtle" />
-                            <span className="flex-1 truncate">{option.label}</span>
-                            {isSelected ? <Check className="size-4 shrink-0 text-app-foreground" /> : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-
-                  <button
-                    type="button"
-                    className={cn(SETTINGS_TRIGGER_CLASS, "mt-1 text-app-foreground")}
-                  >
-                    <MoreHorizontal className="size-4 shrink-0 text-app-subtle" />
-                    <span className="min-w-0 flex-1 truncate text-sm">更多设置</span>
-                  </button>
-                </div>
-              ) : null}
-
-              <button
-                type="button"
-                className={cn(SETTINGS_TRIGGER_CLASS, "text-app-muted hover:text-app-foreground")}
-                aria-expanded={isSettingsMenuOpen}
-                aria-haspopup="menu"
-                onClick={handleSettingsMenuToggle}
-              >
-                <Settings className="size-4 shrink-0" />
-                <span className="truncate text-sm">Settings</span>
-                <ChevronDown className={cn("ml-auto size-4 shrink-0 text-app-subtle transition-transform duration-200", isSettingsMenuOpen && "rotate-180")} />
-              </button>
             </div>
           </div>
         </aside>
@@ -890,11 +791,19 @@ function WorkbenchTopBar({
   userSession,
   isCheckingUpdates,
   updateStatus,
+  openSettingsSection,
   userMenuRef,
+  selectedLanguageLabel,
+  selectedThemeSummary,
+  language,
+  theme,
   onToggleUserMenu,
   onLogin,
   onLogout,
   onCheckUpdates,
+  onSelectLanguage,
+  onSelectTheme,
+  onToggleSettingsSection,
   onToggleSidebar,
   onToggleDrawer,
   onToggleTerminal,
@@ -908,11 +817,19 @@ function WorkbenchTopBar({
   userSession: MockUserSession | null;
   isCheckingUpdates: boolean;
   updateStatus: string | null;
+  openSettingsSection: "theme" | "language" | null;
   userMenuRef: { current: HTMLDivElement | null };
+  selectedLanguageLabel: string;
+  selectedThemeSummary: string;
+  language: LanguagePreference;
+  theme: ThemePreference;
   onToggleUserMenu: () => void;
   onLogin: () => void;
   onLogout: () => void;
   onCheckUpdates: () => void;
+  onSelectLanguage: (language: LanguagePreference) => void;
+  onSelectTheme: (theme: ThemePreference) => void;
+  onToggleSettingsSection: React.Dispatch<React.SetStateAction<"theme" | "language" | null>>;
   onToggleSidebar: () => void;
   onToggleDrawer: () => void;
   onToggleTerminal: () => void;
@@ -967,7 +884,7 @@ function WorkbenchTopBar({
                   </div>
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-app-foreground">{userSession.name}</p>
-                    <p className="text-xs text-app-subtle">已登录</p>
+                    <p className="truncate text-xs text-app-subtle">{userSession.email}</p>
                   </div>
                 </div>
               ) : null}
@@ -975,8 +892,86 @@ function WorkbenchTopBar({
               <button
                 type="button"
                 className={cn(
-                  SETTINGS_OPTION_CLASS,
-                  "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                  MENU_TRIGGER_CLASS,
+                  "text-app-foreground",
+                )}
+                aria-expanded={openSettingsSection === "theme"}
+                onClick={() => onToggleSettingsSection((current) => (current === "theme" ? null : "theme"))}
+              >
+                <Palette className="size-4 shrink-0 text-app-subtle" />
+                <span className="min-w-0 flex-1 truncate text-left text-sm">主题</span>
+                <span className="shrink-0 text-xs text-app-subtle">{selectedThemeSummary}</span>
+              </button>
+
+              {openSettingsSection === "theme" ? (
+                <div className="mt-1 space-y-1">
+                  {THEME_OPTIONS.map((option) => {
+                    const OptionIcon = option.icon;
+                    const isSelected = theme === option.value;
+
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={cn(
+                          MENU_OPTION_CLASS,
+                          isSelected ? "bg-app-surface-active text-app-foreground" : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                        )}
+                        onClick={() => onSelectTheme(option.value)}
+                      >
+                        <OptionIcon className="size-4 shrink-0 text-app-subtle" />
+                        <span className="flex-1 truncate">{option.label}</span>
+                        {isSelected ? <Check className="size-4 shrink-0 text-app-foreground" /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                className={cn(
+                  MENU_TRIGGER_CLASS,
+                  "mt-1 text-app-foreground",
+                )}
+                aria-expanded={openSettingsSection === "language"}
+                onClick={() => onToggleSettingsSection((current) => (current === "language" ? null : "language"))}
+              >
+                <Globe className="size-4 shrink-0 text-app-subtle" />
+                <span className="min-w-0 flex-1 truncate text-left text-sm">语言</span>
+                <span className="shrink-0 text-xs text-app-subtle">{selectedLanguageLabel}</span>
+              </button>
+
+              {openSettingsSection === "language" ? (
+                <div className="mt-1 space-y-1">
+                  {LANGUAGE_OPTIONS.map((option) => {
+                    const isSelected = language === option.value;
+                    const OptionIcon = option.icon;
+
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={cn(
+                          MENU_OPTION_CLASS,
+                          isSelected ? "bg-app-surface-active text-app-foreground" : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                        )}
+                        onClick={() => onSelectLanguage(option.value)}
+                      >
+                        <OptionIcon className="size-4 shrink-0 text-app-subtle" />
+                        <span className="flex-1 truncate">{option.label}</span>
+                        {isSelected ? <Check className="size-4 shrink-0 text-app-foreground" /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                className={cn(
+                  MENU_TRIGGER_CLASS,
+                  "mt-1 text-app-foreground",
                   isCheckingUpdates && "cursor-wait",
                 )}
                 onClick={onCheckUpdates}
@@ -989,10 +984,18 @@ function WorkbenchTopBar({
                 <span className="flex-1 truncate text-left">检查更新</span>
               </button>
 
+              <button
+                type="button"
+                className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")}
+              >
+                <MoreHorizontal className="size-4 shrink-0 text-app-subtle" />
+                <span className="flex-1 truncate text-left">更多设置</span>
+              </button>
+
               {userSession ? (
                 <button
                   type="button"
-                  className={cn(SETTINGS_OPTION_CLASS, "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground")}
+                  className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")}
                   onClick={onLogout}
                 >
                   <LogOut className="size-4 shrink-0 text-app-subtle" />
@@ -1001,7 +1004,7 @@ function WorkbenchTopBar({
               ) : (
                 <button
                   type="button"
-                  className={cn(SETTINGS_OPTION_CLASS, "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground")}
+                  className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")}
                   onClick={onLogin}
                 >
                   <LogIn className="size-4 shrink-0 text-app-subtle" />
