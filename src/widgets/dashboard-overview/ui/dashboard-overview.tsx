@@ -96,7 +96,7 @@ type ProjectTreeItem = {
   ignored?: boolean;
 };
 
-type GitTrackedFile = {
+type GitChangeFile = {
   id: string;
   path: string;
   status: "M" | "A" | "D";
@@ -332,7 +332,7 @@ const PROJECT_TREE_ITEMS: ReadonlyArray<ProjectTreeItem> = [
   { id: "vite-config-ts", name: "vite.config.ts", kind: "file", icon: "ts" },
 ];
 
-const GIT_TRACKED_FILES: ReadonlyArray<GitTrackedFile> = [
+const GIT_CHANGE_FILES: ReadonlyArray<GitChangeFile> = [
   {
     id: "dashboard-overview",
     path: "src/widgets/dashboard-overview/ui/dashboard-overview.tsx",
@@ -558,7 +558,7 @@ const GIT_HISTORY_ITEMS: ReadonlyArray<GitHistoryItem> = [
   },
 ] as const;
 
-function getDiffTemplate(file: GitTrackedFile) {
+function getDiffTemplate(file: GitChangeFile) {
   const fileName = file.path.split("/").pop() ?? file.path;
 
   if (file.path.endsWith(".tsx") || file.path.endsWith(".ts")) {
@@ -648,7 +648,7 @@ function getDiffTemplate(file: GitTrackedFile) {
   };
 }
 
-function buildGitDiffPreview(file: GitTrackedFile): GitDiffPreview {
+function buildGitDiffPreview(file: GitChangeFile): GitDiffPreview {
   const template = getDiffTemplate(file);
   const startLine = 18;
 
@@ -741,7 +741,7 @@ function buildGitDiffPreview(file: GitTrackedFile): GitDiffPreview {
   };
 }
 
-function buildGitSplitDiffRows(file: GitTrackedFile): ReadonlyArray<GitSplitDiffRow> {
+function buildGitSplitDiffRows(file: GitChangeFile): ReadonlyArray<GitSplitDiffRow> {
   const template = getDiffTemplate(file);
 
   if (file.status === "A") {
@@ -1140,7 +1140,7 @@ export function DashboardOverview() {
   const [selectedDiffFilePreview, setSelectedDiffFilePreview] = useState<{ fileId: string; isStaged: boolean } | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
-  const selectedDiffFile = GIT_TRACKED_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
+  const selectedDiffFile = GIT_CHANGE_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
   const activeThread = getActiveThread(workspaces);
   const { isSidebarOpen, isDrawerOpen, isTerminalCollapsed } = panelVisibilityState;
 
@@ -2217,11 +2217,11 @@ function ProjectTreeIcon({
 function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, isStaged: boolean) => void }) {
   const [commitMessage, setCommitMessage] = useState("");
   const [stagedFiles, setStagedFiles] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(GIT_TRACKED_FILES.map((file) => [file.id, file.initialStaged])),
+    Object.fromEntries(GIT_CHANGE_FILES.map((file) => [file.id, file.initialStaged])),
   );
   const [activeHistoryAction, setActiveHistoryAction] = useState<"fetch" | "pull" | "push" | "refresh" | null>(null);
   const historyActionTimeoutRef = useRef<number | null>(null);
-  const stagedCount = GIT_TRACKED_FILES.filter((file) => stagedFiles[file.id]).length;
+  const stagedCount = GIT_CHANGE_FILES.filter((file) => stagedFiles[file.id]).length;
 
   useEffect(() => {
     return () => {
@@ -2239,11 +2239,11 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
   };
 
   const handleStageAll = () => {
-    setStagedFiles(Object.fromEntries(GIT_TRACKED_FILES.map((file) => [file.id, true])));
+    setStagedFiles(Object.fromEntries(GIT_CHANGE_FILES.map((file) => [file.id, true])));
   };
 
   const handleUnstageAll = () => {
-    setStagedFiles(Object.fromEntries(GIT_TRACKED_FILES.map((file) => [file.id, false])));
+    setStagedFiles(Object.fromEntries(GIT_CHANGE_FILES.map((file) => [file.id, false])));
   };
 
   const handleGenerateCommitMessage = () => {
@@ -2302,9 +2302,9 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
         <section className="mt-4 flex min-h-0 flex-1 flex-col">
           <div className={DRAWER_SECTION_HEADER_CLASS}>
             <div className="flex items-center gap-2">
-              <p className="text-sm font-semibold text-app-foreground">Tracked</p>
+              <p className="text-sm font-semibold text-app-foreground">Changes</p>
               <span className="rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-subtle">
-                {GIT_TRACKED_FILES.length}
+                {GIT_CHANGE_FILES.length}
               </span>
             </div>
             <div className="flex items-center gap-1">
@@ -2331,7 +2331,7 @@ function GitPanel({ onOpenDiffPreview }: { onOpenDiffPreview: (fileId: string, i
 
           <div className="mt-2 min-h-0 flex-1 overflow-auto overscroll-contain pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <div className={DRAWER_LIST_STACK_CLASS}>
-              {GIT_TRACKED_FILES.map((file) => {
+              {GIT_CHANGE_FILES.map((file) => {
                 const isStaged = Boolean(stagedFiles[file.id]);
 
                 return (
@@ -2489,7 +2489,7 @@ function GitDiffPreviewPanel({
   isStaged,
   onClose,
 }: {
-  file: GitTrackedFile;
+  file: GitChangeFile;
   isStaged: boolean;
   onClose: () => void;
 }) {
