@@ -752,6 +752,7 @@ const MENU_OPTION_CLASS =
 const MAC_USER_MENU_OFFSET = "ml-[74px]";
 const MAC_USER_MENU_POPOVER_OFFSET = "left-[74px]";
 const AUTH_STORAGE_KEY = "tiy-agent-auth-session";
+const PANEL_VISIBILITY_STORAGE_KEY = "tiy-agent-panel-visibility";
 const UPDATE_STATUS_DURATION = 2200;
 
 type MockUserSession = {
@@ -760,10 +761,22 @@ type MockUserSession = {
   email: string;
 };
 
+type PanelVisibilityState = {
+  isSidebarOpen: boolean;
+  isDrawerOpen: boolean;
+  isTerminalCollapsed: boolean;
+};
+
 const MOCK_USER_SESSION: MockUserSession = {
   name: "Jorben Zhu",
   avatar: "JZ",
   email: "jorbenzhu@gmail.com",
+};
+
+const DEFAULT_PANEL_VISIBILITY_STATE: PanelVisibilityState = {
+  isSidebarOpen: true,
+  isDrawerOpen: false,
+  isTerminalCollapsed: true,
 };
 
 const THREAD_STATUS_META: Record<
@@ -835,6 +848,41 @@ function getStoredUserSession(): MockUserSession | null {
   return null;
 }
 
+function getStoredPanelVisibilityState(): PanelVisibilityState {
+  if (typeof window === "undefined") {
+    return DEFAULT_PANEL_VISIBILITY_STATE;
+  }
+
+  const rawValue = window.localStorage.getItem(PANEL_VISIBILITY_STORAGE_KEY);
+
+  if (!rawValue) {
+    return DEFAULT_PANEL_VISIBILITY_STATE;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as Partial<PanelVisibilityState>;
+
+    return {
+      isSidebarOpen:
+        typeof parsed.isSidebarOpen === "boolean"
+          ? parsed.isSidebarOpen
+          : DEFAULT_PANEL_VISIBILITY_STATE.isSidebarOpen,
+      isDrawerOpen:
+        typeof parsed.isDrawerOpen === "boolean"
+          ? parsed.isDrawerOpen
+          : DEFAULT_PANEL_VISIBILITY_STATE.isDrawerOpen,
+      isTerminalCollapsed:
+        typeof parsed.isTerminalCollapsed === "boolean"
+          ? parsed.isTerminalCollapsed
+          : DEFAULT_PANEL_VISIBILITY_STATE.isTerminalCollapsed,
+    };
+  } catch {
+    // ignore malformed cached panel visibility state
+  }
+
+  return DEFAULT_PANEL_VISIBILITY_STATE;
+}
+
 function ThreadStatusIndicator({ status }: { status: ThreadStatus }) {
   const meta = THREAD_STATUS_META[status];
   const Icon = meta.icon;
@@ -857,9 +905,7 @@ export function DashboardOverview() {
   const { data, error, isLoading, refetch } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
   const { language, setLanguage } = useLanguage();
-  const [isSidebarOpen, setSidebarOpen] = useState(true);
-  const [isDrawerOpen, setDrawerOpen] = useState(true);
-  const [isTerminalCollapsed, setTerminalCollapsed] = useState(false);
+  const [panelVisibilityState, setPanelVisibilityState] = useState<PanelVisibilityState>(() => getStoredPanelVisibilityState());
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const [terminalResize, setTerminalResize] = useState<{ startY: number; startHeight: number } | null>(null);
   const [composerValue, setComposerValue] = useState("");
@@ -874,6 +920,28 @@ export function DashboardOverview() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const selectedDiffFile = GIT_TRACKED_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
+  const { isSidebarOpen, isDrawerOpen, isTerminalCollapsed } = panelVisibilityState;
+
+  const setSidebarOpen = (nextState: boolean | ((current: boolean) => boolean)) => {
+    setPanelVisibilityState((current) => ({
+      ...current,
+      isSidebarOpen: typeof nextState === "function" ? nextState(current.isSidebarOpen) : nextState,
+    }));
+  };
+
+  const setDrawerOpen = (nextState: boolean | ((current: boolean) => boolean)) => {
+    setPanelVisibilityState((current) => ({
+      ...current,
+      isDrawerOpen: typeof nextState === "function" ? nextState(current.isDrawerOpen) : nextState,
+    }));
+  };
+
+  const setTerminalCollapsed = (nextState: boolean | ((current: boolean) => boolean)) => {
+    setPanelVisibilityState((current) => ({
+      ...current,
+      isTerminalCollapsed: typeof nextState === "function" ? nextState(current.isTerminalCollapsed) : nextState,
+    }));
+  };
 
   const getMaxTerminalHeight = () => {
     if (typeof window === "undefined") {
@@ -983,6 +1051,14 @@ export function DashboardOverview() {
 
     window.localStorage.removeItem(AUTH_STORAGE_KEY);
   }, [userSession]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(PANEL_VISIBILITY_STORAGE_KEY, JSON.stringify(panelVisibilityState));
+  }, [panelVisibilityState]);
 
   useEffect(() => {
     if (!updateStatus || typeof window === "undefined") {
