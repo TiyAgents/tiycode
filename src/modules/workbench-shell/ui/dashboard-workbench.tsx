@@ -714,7 +714,7 @@ export function DashboardWorkbench() {
               <section ref={mainContentRef} className="min-h-0 min-w-0 flex-1 select-text bg-app-canvas">
                 <div className="flex h-full min-h-0 flex-col">
                   {isNewThreadMode ? (
-                    <div className="relative min-h-0 flex-1">
+                    <div className="relative min-h-0 flex-1 overflow-hidden">
                       <div className="flex h-full items-center justify-center px-6 pb-8 pt-6">
                         <NewThreadEmptyState
                           recentProjects={recentProjects}
@@ -835,7 +835,7 @@ export function DashboardWorkbench() {
                     </>
                   )}
 
-                  <div className="shrink-0 px-6 pb-5 pt-3">
+                  <div className={cn("shrink-0 px-6 pb-5", isNewThreadMode ? "relative z-30 pt-0" : "pt-3")}>
                     <div className="mx-auto max-w-4xl rounded-2xl border border-app-border bg-app-surface px-4 pb-3 pt-3 text-app-muted transition-colors focus-within:border-app-border-strong">
                       <textarea
                         ref={composerRef}
