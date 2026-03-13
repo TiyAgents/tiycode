@@ -2213,14 +2213,6 @@ function NewThreadEmptyState({
 
   return (
     <div className="relative isolate flex h-full min-h-0 w-full self-stretch items-center justify-center px-4 py-8">
-      <div className="pointer-events-none absolute -inset-x-24 -inset-y-10 overflow-hidden">
-        <div className="absolute left-[10%] top-[8%] h-64 w-64 rounded-full bg-emerald-400/10 blur-[110px] dark:bg-emerald-400/12" />
-        <div className="absolute right-[12%] top-[6%] h-72 w-72 rounded-full bg-sky-400/12 blur-[120px] dark:bg-sky-400/14" />
-        <div className="absolute bottom-[8%] left-[24%] h-60 w-60 rounded-full bg-lime-300/10 blur-[110px] dark:bg-lime-300/12" />
-        <div className="absolute bottom-[16%] right-[22%] h-52 w-52 rounded-full bg-sky-300/8 blur-[105px] dark:bg-sky-300/10" />
-        <div className="absolute inset-x-[24%] top-[12%] h-20 rounded-full bg-white/16 blur-[90px] dark:bg-white/5" />
-      </div>
-
       <div className="relative flex w-full max-w-[28rem] flex-col items-center justify-center gap-4">
         <div className="flex size-11 items-center justify-center rounded-2xl border border-app-border bg-app-surface text-app-foreground shadow-[0_10px_28px_rgba(15,23,42,0.08)] dark:shadow-[0_14px_30px_rgba(0,0,0,0.24)]">
           <img src="/app-icon.png" alt="Tiy Agent logo" className="size-7 object-contain opacity-90" />

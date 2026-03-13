@@ -26,7 +26,7 @@
           "y": 20
         },
         "decorations": true,
-        "transparent": true,
+        "transparent": false,
         "windowEffects": {
           "effects": [
             "titlebar"
