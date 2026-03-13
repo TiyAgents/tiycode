@@ -524,24 +524,71 @@ function UsageStatCard({
   );
 }
 
+function formatHeatmapDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseHeatmapDate(date: string): Date {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function hashHeatmapDate(date: string): number {
+  return date.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+}
+
+function getHeatmapCount(date: Date, today: Date): number {
+  const dayMs = 1000 * 60 * 60 * 24;
+  const daysAgo = Math.floor((today.getTime() - date.getTime()) / dayMs);
+  const dateKey = formatHeatmapDate(date);
+  const hash = hashHeatmapDate(dateKey);
+  const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+  const isRecentWindow = daysAgo <= 60;
+
+  if (isRecentWindow) {
+    const boosted = 2 + (hash % 3);
+    return Math.max(1, boosted - (isWeekend ? 1 : 0));
+  }
+
+  if (daysAgo <= 120) {
+    return hash % 5 === 0 ? 0 : 1 + (hash % 3);
+  }
+
+  if (daysAgo <= 240) {
+    return hash % 4 === 0 ? 0 : 1 + (hash % 2);
+  }
+
+  return hash % 6 === 0 ? 1 : 0;
+}
+
 function generateHeatmapData(): Array<{ date: string; count: number }> {
   const data: Array<{ date: string; count: number }> = [];
   const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
   const startDate = new Date(today);
   startDate.setFullYear(startDate.getFullYear() - 1);
   startDate.setDate(startDate.getDate() - startDate.getDay());
 
-  for (let d = new Date(startDate); d <= today; d.setDate(d.getDate() + 1)) {
-    const dateStr = d.toISOString().split("T")[0];
-    const isRecent = (today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24) < 14;
-    const count = isRecent ? Math.floor(Math.random() * 5) : Math.floor(Math.random() * 2);
-    data.push({ date: dateStr, count });
+  for (const d = new Date(startDate); d <= today; d.setDate(d.getDate() + 1)) {
+    const currentDate = new Date(d);
+    currentDate.setHours(0, 0, 0, 0);
+    data.push({
+      date: formatHeatmapDate(currentDate),
+      count: getHeatmapCount(currentDate, today),
+    });
   }
+
   return data;
 }
 
+const HEATMAP_EMPTY_COLOR = "bg-emerald-100/70 dark:bg-emerald-950/55";
+
 const HEATMAP_COLORS = [
-  "bg-app-surface-muted",
+  HEATMAP_EMPTY_COLOR,
   "bg-emerald-200 dark:bg-emerald-900",
   "bg-emerald-300 dark:bg-emerald-700",
   "bg-emerald-500 dark:bg-emerald-500",
@@ -556,7 +603,7 @@ function ActivityHeatmap() {
     let currentWeek: Array<{ date: string; count: number } | null> = [];
 
     if (heatmapData.length > 0) {
-      const firstDay = new Date(heatmapData[0].date).getDay();
+      const firstDay = parseHeatmapDate(heatmapData[0].date).getDay();
       for (let i = 0; i < firstDay; i++) {
         currentWeek.push(null);
       }
@@ -575,6 +622,8 @@ function ActivityHeatmap() {
     }
     return result;
   }, [heatmapData]);
+  const columnCount = Math.max(weeks.length, 1);
+  const minGridWidth = Math.max(columnCount * 12, 720);
 
   const months = useMemo(() => {
     const labels: Array<{ label: string; col: number }> = [];
@@ -584,7 +633,7 @@ function ActivityHeatmap() {
     for (let w = 0; w < weeks.length; w++) {
       const firstEntry = weeks[w].find((d) => d !== null);
       if (firstEntry) {
-        const month = new Date(firstEntry.date).getMonth();
+        const month = parseHeatmapDate(firstEntry.date).getMonth();
         if (month !== lastMonth) {
           labels.push({ label: monthNames[month], col: w });
           lastMonth = month;
@@ -601,33 +650,34 @@ function ActivityHeatmap() {
         <p className="mt-0.5 text-[12px] text-app-muted">Your chat activity over the past year</p>
       </div>
       <div className="overflow-x-auto px-4 pb-4">
-        <div className="min-w-[680px]">
-          <div className="mb-1 flex" style={{ paddingLeft: "0px" }}>
+        <div className="w-full" style={{ minWidth: `${minGridWidth}px` }}>
+          <div className="relative mb-2 h-4 w-full">
             {months.map((m) => (
               <span
                 key={`${m.label}-${m.col}`}
-                className="text-[10px] text-app-subtle"
+                className="absolute text-[10px] text-app-subtle"
                 style={{
-                  position: "relative",
-                  left: `${m.col * 13}px`,
-                  marginRight: "-8px",
+                  left: `${(m.col / columnCount) * 100}%`,
                 }}
               >
                 {m.label}
               </span>
             ))}
           </div>
-          <div className="flex gap-[3px]">
+          <div
+            className="grid w-full gap-[4px]"
+            style={{
+              gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))`,
+            }}
+          >
             {weeks.map((week, wi) => (
-              <div key={wi} className="flex flex-col gap-[3px]">
+              <div key={wi} className="grid min-w-0 grid-rows-7 gap-[4px]">
                 {week.map((day, di) => (
                   <div
                     key={day?.date ?? `empty-${wi}-${di}`}
                     className={cn(
-                      "size-[10px] rounded-[2px]",
-                      day === null
-                        ? "bg-transparent"
-                        : HEATMAP_COLORS[Math.min(day.count, 4)],
+                      "aspect-square w-full rounded-[3px]",
+                      day === null ? HEATMAP_EMPTY_COLOR : HEATMAP_COLORS[Math.min(day.count, 4)],
                     )}
                     title={day ? `${day.date}: ${day.count} messages` : undefined}
                   />
@@ -638,7 +688,7 @@ function ActivityHeatmap() {
           <div className="mt-2 flex items-center justify-end gap-1">
             <span className="mr-1 text-[10px] text-app-subtle">Less</span>
             {HEATMAP_COLORS.map((color, i) => (
-              <div key={i} className={cn("size-[10px] rounded-[2px]", color)} />
+              <div key={i} className={cn("size-[12px] rounded-[3px]", color)} />
             ))}
             <span className="ml-1 text-[10px] text-app-subtle">More</span>
           </div>
