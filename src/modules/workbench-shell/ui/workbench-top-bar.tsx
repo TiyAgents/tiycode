@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useState } from "react";
 import {
   Check,
   CircleUserRound,
@@ -120,23 +120,6 @@ export function WorkbenchTopBar({
 
   const panelToggleButtonClass =
     "relative size-7 text-app-subtle transition-[color,background-color] duration-200 hover:bg-app-surface-hover hover:text-app-foreground";
-
-  const handleTitleBarMouseDown = async (event: ReactMouseEvent<HTMLElement>) => {
-    if (event.button !== 0) {
-      return;
-    }
-
-    const target = event.target as HTMLElement | null;
-    if (target?.closest("button, a, input, textarea, select, [role='button']")) {
-      return;
-    }
-
-    try {
-      await getCurrentWindow().startDragging();
-    } catch {
-      // no-op
-    }
-  };
 
   return (
     <header className="fixed inset-x-0 top-0 z-30 h-9 border-b border-app-border bg-app-chrome backdrop-blur-xl">
@@ -298,7 +281,6 @@ export function WorkbenchTopBar({
         <div
           className="relative z-10 flex h-full items-center justify-center"
           data-tauri-drag-region=""
-          onMouseDown={handleTitleBarMouseDown}
         >
           <img src="/app-icon.png" alt="" className="mr-1.5 size-4 shrink-0 select-none" draggable={false} data-tauri-drag-region="" />
           <span className="select-none text-[13px] font-semibold tracking-[0.02em] text-app-foreground" data-tauri-drag-region="">Tiy Agent</span>
