@@ -10,6 +10,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   ArrowUp,
+  Bot,
   BookOpen,
   Boxes,
   Braces,
@@ -1166,7 +1167,7 @@ export function DashboardOverview() {
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(() => RECENT_PROJECTS[0] ?? null);
   const [isNewThreadMode, setNewThreadMode] = useState(true);
   const [isSettingsOpen, setSettingsOpen] = useState(false);
-  const [activeSettingsCategory, setActiveSettingsCategory] = useState<SettingsCategory>("general");
+  const [activeSettingsCategory, setActiveSettingsCategory] = useState<SettingsCategory>("account");
   const [panelVisibilityState, setPanelVisibilityState] = useState<PanelVisibilityState>(() => getStoredPanelVisibilityState());
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const [terminalResize, setTerminalResize] = useState<{ startY: number; startHeight: number } | null>(null);
@@ -1176,15 +1177,18 @@ export function DashboardOverview() {
   const [userSession, setUserSession] = useState<MockUserSession | null>(() => getStoredUserSession());
   const [isCheckingUpdates, setCheckingUpdates] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [isComposerProfileMenuOpen, setComposerProfileMenuOpen] = useState(false);
   const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(() => Object.fromEntries(WORKSPACE_ITEMS.map((workspace) => [workspace.id, workspace.defaultOpen])));
   const [activeDrawerPanel, setActiveDrawerPanel] = useState<DrawerPanel>("project");
   const [selectedDiffFilePreview, setSelectedDiffFilePreview] = useState<{ fileId: string; isStaged: boolean } | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerProfileMenuRef = useRef<HTMLDivElement | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
   const settingsContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const selectedDiffFile = GIT_CHANGE_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
   const activeThread = getActiveThread(workspaces);
+  const activeComposerProfile = agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0];
   const { isSidebarOpen, isDrawerOpen, isTerminalCollapsed } = panelVisibilityState;
 
   const setSidebarOpen = (nextState: boolean | ((current: boolean) => boolean)) => {
@@ -1303,6 +1307,36 @@ export function DashboardOverview() {
     window.addEventListener("mousedown", handlePointerDown);
     return () => window.removeEventListener("mousedown", handlePointerDown);
   }, [isUserMenuOpen]);
+
+  useEffect(() => {
+    if (!isComposerProfileMenuOpen || typeof window === "undefined") {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+
+      if (target && composerProfileMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setComposerProfileMenuOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setComposerProfileMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isComposerProfileMenuOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1525,7 +1559,7 @@ export function DashboardOverview() {
     setOpenSettingsSection("language");
   };
 
-  const handleOpenSettings = (category: SettingsCategory = "general") => {
+  const handleOpenSettings = (category: SettingsCategory = "account") => {
     setActiveSettingsCategory(category);
     setSettingsOpen(true);
     setUserMenuOpen(false);
@@ -1600,7 +1634,7 @@ export function DashboardOverview() {
         onLogin={handleLogin}
         onLogout={handleLogout}
         onCheckUpdates={handleCheckUpdates}
-        onOpenSettings={() => handleOpenSettings("general")}
+        onOpenSettings={() => handleOpenSettings("account")}
         onSelectLanguage={handleLanguageSelect}
         onSelectTheme={handleThemeSelect}
         onToggleSettingsSection={setOpenSettingsSection}
@@ -1873,18 +1907,83 @@ export function DashboardOverview() {
                         ref={composerRef}
                         value={composerValue}
                         onChange={(event) => setComposerValue(event.target.value)}
-                        rows={1}
+                        rows={3}
                         placeholder={
                           isNewThreadMode
                             ? "Ask Tiy anything, @ to add files, / for commands, $ for skills"
                             : "Ask for follow-up changes"
                         }
-                        className="max-h-44 min-h-6 w-full resize-none select-text overflow-y-auto bg-transparent text-sm leading-6 text-app-foreground outline-none placeholder:text-app-subtle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                        className="max-h-44 min-h-[72px] w-full resize-none select-text overflow-y-auto bg-transparent text-sm leading-6 text-app-foreground outline-none placeholder:text-app-subtle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                       />
-                      <div className="mt-3 flex items-end justify-between">
-                        <button type="button" className="-ml-1 mt-1 rounded-lg p-2 text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground">
-                          <Plus className="size-4" />
-                        </button>
+                      <div className="mt-3 flex items-end justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <button type="button" className="-ml-1 mt-1 rounded-lg p-2 text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground">
+                            <Plus className="size-4" />
+                          </button>
+
+                          {activeComposerProfile ? (
+                            <div ref={composerProfileMenuRef} className="relative">
+                              <button
+                                type="button"
+                                className={cn(
+                                  "group inline-flex h-9 max-w-[220px] items-center gap-2 rounded-xl border border-app-border/80 bg-app-canvas/55 px-2.5 text-[12px] font-medium text-app-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 hover:border-app-border-strong hover:bg-app-surface hover:shadow-[0_8px_18px_rgba(15,23,42,0.08)]",
+                                  isComposerProfileMenuOpen && "border-app-border-strong bg-app-surface shadow-[0_10px_24px_rgba(15,23,42,0.12)]",
+                                )}
+                                aria-haspopup="menu"
+                                aria-expanded={isComposerProfileMenuOpen}
+                                aria-label={`Active profile: ${activeComposerProfile.name}`}
+                                onClick={() => setComposerProfileMenuOpen((current) => !current)}
+                              >
+                                <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-app-surface text-app-subtle ring-1 ring-app-border/70 transition-colors group-hover:text-app-foreground">
+                                  <Bot className="size-3.5" />
+                                </span>
+                                <span className="truncate">{activeComposerProfile.name}</span>
+                                <ChevronDown
+                                  className={cn(
+                                    "ml-auto size-3.5 shrink-0 text-app-subtle transition-transform duration-200",
+                                    isComposerProfileMenuOpen && "rotate-180",
+                                  )}
+                                />
+                              </button>
+
+                              {isComposerProfileMenuOpen ? (
+                                <div className="absolute bottom-[calc(100%+10px)] left-0 z-30 min-w-[240px] overflow-hidden rounded-2xl border border-app-border/80 bg-app-surface/95 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.16)] backdrop-blur-xl">
+                                  <div className="px-2.5 pb-1.5 pt-1">
+                                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-app-subtle">Profiles</div>
+                                  </div>
+                                  <div className="space-y-1">
+                                    {agentProfiles.map((profile) => {
+                                      const isActive = profile.id === activeAgentProfileId;
+
+                                      return (
+                                        <button
+                                          key={profile.id}
+                                          type="button"
+                                          className={cn(
+                                            "flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors",
+                                            isActive
+                                              ? "bg-app-surface-hover text-app-foreground"
+                                              : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                                          )}
+                                          onClick={() => {
+                                            setActiveAgentProfile(profile.id);
+                                            setComposerProfileMenuOpen(false);
+                                          }}
+                                        >
+                                          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-app-canvas text-app-subtle ring-1 ring-app-border/70">
+                                            <Bot className="size-3.5" />
+                                          </span>
+                                          <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{profile.name}</span>
+                                          {isActive ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
                         <button
                           type="button"
                           onClick={handleComposerSubmit}
@@ -2015,8 +2114,6 @@ export function DashboardOverview() {
           policy={policy}
           commands={commands}
           providers={providers}
-          selectedLanguageLabel={selectedLanguageOption.label}
-          selectedThemeSummary={selectedThemeSummary}
           systemMetadata={data}
           theme={theme}
           updateStatus={updateStatus}
@@ -2115,123 +2212,133 @@ function NewThreadEmptyState({
   };
 
   return (
-    <div className="flex w-full max-w-[28rem] flex-col items-center justify-center gap-4">
-      <div className="flex size-11 items-center justify-center rounded-2xl border border-app-border bg-app-surface text-app-foreground shadow-[0_10px_28px_rgba(15,23,42,0.08)] dark:shadow-[0_14px_30px_rgba(0,0,0,0.24)]">
-        <img src="/app-icon.png" alt="Tiy Agent logo" className="size-7 object-contain opacity-90" />
+    <div className="relative isolate flex h-full min-h-0 w-full self-stretch items-center justify-center px-4 py-8">
+      <div className="pointer-events-none absolute -inset-x-24 -inset-y-10 overflow-hidden">
+        <div className="absolute left-[10%] top-[8%] h-64 w-64 rounded-full bg-emerald-400/10 blur-[110px] dark:bg-emerald-400/12" />
+        <div className="absolute right-[12%] top-[6%] h-72 w-72 rounded-full bg-sky-400/12 blur-[120px] dark:bg-sky-400/14" />
+        <div className="absolute bottom-[8%] left-[24%] h-60 w-60 rounded-full bg-lime-300/10 blur-[110px] dark:bg-lime-300/12" />
+        <div className="absolute bottom-[16%] right-[22%] h-52 w-52 rounded-full bg-sky-300/8 blur-[105px] dark:bg-sky-300/10" />
+        <div className="absolute inset-x-[24%] top-[12%] h-20 rounded-full bg-white/16 blur-[90px] dark:bg-white/5" />
       </div>
 
-      <div className="flex flex-col items-center gap-1 text-center">
-        <h1 className="text-balance text-[1.45rem] font-medium tracking-[-0.035em] text-app-foreground">
-          Anything you need, through conversation.
-        </h1>
-        <p className="max-w-[30rem] text-sm leading-6 text-app-muted">
-          Pick a local workspace first so the next thread can stay grounded in files, commands, and runtime context.
-        </p>
-      </div>
+      <div className="relative flex w-full max-w-[28rem] flex-col items-center justify-center gap-4">
+        <div className="flex size-11 items-center justify-center rounded-2xl border border-app-border bg-app-surface text-app-foreground shadow-[0_10px_28px_rgba(15,23,42,0.08)] dark:shadow-[0_14px_30px_rgba(0,0,0,0.24)]">
+          <img src="/app-icon.png" alt="Tiy Agent logo" className="size-7 object-contain opacity-90" />
+        </div>
 
-      <div ref={projectMenuRef} className="relative w-full max-w-[24rem]">
-        <button
-          type="button"
-          aria-haspopup="menu"
-          aria-expanded={isMenuOpen}
-          className="inline-flex w-full items-center gap-3 rounded-2xl border border-app-border bg-app-surface/85 px-3.5 py-3 text-left shadow-[0_10px_24px_rgba(15,23,42,0.06)] transition-[border-color,background-color,box-shadow,color] duration-200 hover:border-app-border-strong hover:bg-app-surface hover:text-app-foreground hover:shadow-[0_16px_36px_rgba(15,23,42,0.1)] dark:shadow-[0_14px_32px_rgba(0,0,0,0.22)]"
-          onClick={() => setMenuOpen((current) => !current)}
-        >
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border bg-app-surface-muted text-app-subtle">
-            <Folder className="size-4 shrink-0" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-[1rem] font-medium tracking-[-0.02em] text-app-foreground">
-                {activeProject?.name ?? "Choose project"}
-              </span>
-              {activeProject ? (
-                <span className="shrink-0 rounded-full bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium text-app-subtle">
-                  {activeProject.lastOpenedLabel}
-                </span>
-              ) : null}
+        <div className="flex flex-col items-center gap-1 text-center">
+          <h1 className="text-balance text-[1.45rem] font-medium tracking-[-0.035em] text-app-foreground">
+            Anything you need, through conversation.
+          </h1>
+          <p className="max-w-[30rem] text-sm leading-6 text-app-muted">
+            Pick a local workspace first so the next thread can stay grounded in files, commands, and runtime context.
+          </p>
+        </div>
+
+        <div ref={projectMenuRef} className="relative w-full max-w-[24rem]">
+          <button
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={isMenuOpen}
+            className="inline-flex w-full items-center gap-3 rounded-2xl border border-app-border bg-app-surface/85 px-3.5 py-3 text-left shadow-[0_10px_24px_rgba(15,23,42,0.06)] transition-[border-color,background-color,box-shadow,color] duration-200 hover:border-app-border-strong hover:bg-app-surface hover:text-app-foreground hover:shadow-[0_16px_36px_rgba(15,23,42,0.1)] dark:shadow-[0_14px_32px_rgba(0,0,0,0.22)]"
+            onClick={() => setMenuOpen((current) => !current)}
+          >
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border bg-app-surface-muted text-app-subtle">
+              <Folder className="size-4 shrink-0" />
             </div>
-            <p className="mt-0.5 truncate text-[12px] text-app-subtle" title={activeProject?.path}>
-              {activeProject ? formatProjectPathLabel(activeProject.path) : "Select a folder to start a workspace-backed thread"}
-            </p>
-          </div>
-          <ChevronDown
-            className={cn(
-              "size-4 shrink-0 text-app-subtle transition-transform duration-200",
-              isMenuOpen && "rotate-180",
-            )}
-          />
-        </button>
-
-        {isMenuOpen ? (
-          <div className="absolute inset-x-0 top-[calc(100%+0.55rem)] z-20 max-h-[15rem] overflow-hidden rounded-[1.1rem] border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
-            <div className="flex max-h-[calc(15rem-0.75rem)] flex-col">
-              <div className="flex items-center justify-between gap-3 px-2.5 pb-1.5 pt-0.5">
-                <span className="text-[11px] font-medium text-app-subtle">Recent projects</span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-[1rem] font-medium tracking-[-0.02em] text-app-foreground">
+                  {activeProject?.name ?? "Choose project"}
+                </span>
                 {activeProject ? (
-                  <span className="rounded-full bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium text-app-subtle">
-                    Current
+                  <span className="shrink-0 rounded-full bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium text-app-subtle">
+                    {activeProject.lastOpenedLabel}
                   </span>
                 ) : null}
               </div>
-
-              <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                <div className="space-y-0.5">
-                  {recentProjects.map((project) => {
-                    const isSelected = activeProject?.id === project.id;
-
-                    return (
-                      <button
-                        key={`${project.id}-${project.path}`}
-                        type="button"
-                        className={cn(
-                          "flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors",
-                          isSelected
-                            ? "bg-app-surface/75 text-app-foreground"
-                            : "text-app-muted hover:bg-app-surface-hover/70 hover:text-app-foreground",
-                        )}
-                        onClick={() => {
-                          onSelectProject(project);
-                          setMenuOpen(false);
-                        }}
-                      >
-                        <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-subtle">
-                          <Folder className="size-4 shrink-0" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="min-w-0 flex-1 truncate text-sm font-medium">{project.name}</span>
-                            <span className="shrink-0 text-[10px] font-medium text-app-subtle">{project.lastOpenedLabel}</span>
-                          </div>
-                          <p className="mt-0.5 truncate text-[11px] leading-5 text-app-subtle" title={project.path}>
-                            {formatProjectPathLabel(project.path)}
-                          </p>
-                        </div>
-                        {isSelected ? <Check className="mt-0.5 size-4 shrink-0 text-app-foreground" /> : null}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="mx-2 my-1.5 h-px shrink-0 bg-app-border" />
-
-              <button
-                type="button"
-                className="flex w-full shrink-0 items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-app-foreground transition-colors hover:bg-app-surface-hover/70"
-                onClick={() => void handleChooseFolder()}
-              >
-                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-subtle">
-                  <FolderPlus className="size-4 shrink-0" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium">Choose new folder</div>
-                  <p className="mt-0.5 text-[11px] leading-5 text-app-subtle">Browse a local workspace that is not in the recent list</p>
-                </div>
-              </button>
+              <p className="mt-0.5 truncate text-[12px] text-app-subtle" title={activeProject?.path}>
+                {activeProject ? formatProjectPathLabel(activeProject.path) : "Select a folder to start a workspace-backed thread"}
+              </p>
             </div>
-          </div>
-        ) : null}
+            <ChevronDown
+              className={cn(
+                "size-4 shrink-0 text-app-subtle transition-transform duration-200",
+                isMenuOpen && "rotate-180",
+              )}
+            />
+          </button>
+
+          {isMenuOpen ? (
+            <div className="absolute inset-x-0 top-[calc(100%+0.55rem)] z-20 max-h-[15rem] overflow-hidden rounded-[1.1rem] border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
+              <div className="flex max-h-[calc(15rem-0.75rem)] flex-col">
+                <div className="flex items-center justify-between gap-3 px-2.5 pb-1.5 pt-0.5">
+                  <span className="text-[11px] font-medium text-app-subtle">Recent projects</span>
+                  {activeProject ? (
+                    <span className="rounded-full bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium text-app-subtle">
+                      Current
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  <div className="space-y-0.5">
+                    {recentProjects.map((project) => {
+                      const isSelected = activeProject?.id === project.id;
+
+                      return (
+                        <button
+                          key={`${project.id}-${project.path}`}
+                          type="button"
+                          className={cn(
+                            "flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors",
+                            isSelected
+                              ? "bg-app-surface/75 text-app-foreground"
+                              : "text-app-muted hover:bg-app-surface-hover/70 hover:text-app-foreground",
+                          )}
+                          onClick={() => {
+                            onSelectProject(project);
+                            setMenuOpen(false);
+                          }}
+                        >
+                          <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-subtle">
+                            <Folder className="size-4 shrink-0" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="min-w-0 flex-1 truncate text-sm font-medium">{project.name}</span>
+                              <span className="shrink-0 text-[10px] font-medium text-app-subtle">{project.lastOpenedLabel}</span>
+                            </div>
+                            <p className="mt-0.5 truncate text-[11px] leading-5 text-app-subtle" title={project.path}>
+                              {formatProjectPathLabel(project.path)}
+                            </p>
+                          </div>
+                          {isSelected ? <Check className="mt-0.5 size-4 shrink-0 text-app-foreground" /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="mx-2 my-1.5 h-px shrink-0 bg-app-border" />
+
+                <button
+                  type="button"
+                  className="flex w-full shrink-0 items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-app-foreground transition-colors hover:bg-app-surface-hover/70"
+                  onClick={() => void handleChooseFolder()}
+                >
+                  <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-subtle">
+                    <FolderPlus className="size-4 shrink-0" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium">Choose new folder</div>
+                    <p className="mt-0.5 text-[11px] leading-5 text-app-subtle">Browse a local workspace that is not in the recent list</p>
+                  </div>
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );

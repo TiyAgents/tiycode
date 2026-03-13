@@ -1,14 +1,11 @@
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowDownToLine,
   ArrowLeft,
-  ArrowUpFromLine,
   Brain,
   Check,
   ChevronDown,
   CircleUserRound,
-  Coins,
   Copy,
   Database,
   Download,
@@ -19,7 +16,6 @@ import {
   GitBranch,
   Image,
   Info,
-  MessageSquare,
   Monitor,
   MousePointerClick,
   Pencil,
@@ -48,6 +44,7 @@ import OpenRouterIcon from "@lobehub/icons/es/OpenRouter";
 import QwenIcon from "@lobehub/icons/es/Qwen";
 import StepfunIcon from "@lobehub/icons/es/Stepfun";
 import ZenMuxIcon from "@lobehub/icons/es/ZenMux";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
 import type { SystemMetadata } from "@/shared/types/system";
@@ -95,8 +92,6 @@ type WorkbenchSettingsOverlayProps = {
   commands: CommandSettings;
   policy: PolicySettings;
   providers: Array<ProviderEntry>;
-  selectedLanguageLabel: string;
-  selectedThemeSummary: string;
   systemMetadata: SystemMetadata | null;
   theme: ThemePreference;
   updateStatus: string | null;
@@ -146,43 +141,43 @@ const CATEGORY_META: ReadonlyArray<{
   {
     key: "account",
     title: "Account",
-    description: "Identity, local session state, and desktop operator details.",
+    description: "Manage your local session, account identity, active plan, and available subscription tiers.",
     icon: CircleUserRound,
   },
   {
     key: "general",
     title: "General",
-    description: "Core app preferences for language and theme.",
+    description: "Set app preferences and default agent behavior, including theme, language, startup, models, and instructions.",
     icon: Monitor,
   },
   {
     key: "providers",
     title: "Providers",
-    description: "Configure AI model providers, API keys, and available models.",
+    description: "Configure model providers, API access, request settings, and the models available to your agent.",
     icon: Server,
   },
   {
     key: "commands",
     title: "Commands",
-    description: "Slash commands for common workflows.",
+    description: "Create reusable prompt shortcuts that appear when typing / in chat.",
     icon: Zap,
   },
   {
     key: "policy",
     title: "Permissions",
-    description: "Execution approval, tool access, and sandbox boundaries.",
+    description: "Control approval mode, allow and deny rules, sandbox access, network access, and writable paths.",
     icon: ShieldCheck,
   },
   {
     key: "workspace",
     title: "Workspace",
-    description: "Manage project workspaces. New conversations will use these directories instead of creating temporary ones.",
+    description: "Manage project directories and choose which workspace new conversations should start in.",
     icon: FolderOpen,
   },
   {
     key: "about",
     title: "About",
-    description: "Runtime platform, app version, and update checks.",
+    description: "View product details, jump to key project links, and check whether this desktop build is up to date.",
     icon: Info,
   },
 ] as const;
@@ -249,8 +244,6 @@ export function WorkbenchSettingsOverlay({
   commands,
   policy,
   providers,
-  selectedLanguageLabel,
-  selectedThemeSummary,
   systemMetadata,
   theme,
   updateStatus,
@@ -460,11 +453,8 @@ export function WorkbenchSettingsOverlay({
 
                 {activeCategory === "about" ? (
                   <AboutSettingsPanel
-                    description={activeMeta.description}
                     isCheckingUpdates={isCheckingUpdates}
                     runtime={systemMetadata}
-                    selectedLanguageLabel={selectedLanguageLabel}
-                    selectedThemeSummary={selectedThemeSummary}
                     updateStatus={updateStatus}
                     onCheckUpdates={onCheckUpdates}
                   />
@@ -480,268 +470,333 @@ export function WorkbenchSettingsOverlay({
   );
 }
 
-type UsagePeriod = "this-month" | "last-month" | "this-week" | "all-time";
+type PlanName = "Free" | "Lite" | "Pro" | "Max";
 
-const USAGE_PERIOD_OPTIONS: ReadonlyArray<{ label: string; value: UsagePeriod }> = [
-  { label: "This Month", value: "this-month" },
-  { label: "Last Month", value: "last-month" },
-  { label: "This Week", value: "this-week" },
-  { label: "All Time", value: "all-time" },
-];
-
-type UsageStats = {
-  totalCost: number;
-  messages: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheRead: number;
-  cacheWrite: number;
+type PlanDefinition = {
+  description: string;
+  monthlyCredits: number;
+  name: PlanName;
+  priceLabel: string;
+  summary: string;
 };
 
-function formatTokenCount(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
+type CurrentPlanSnapshot = {
+  creditsTotal: number;
+  creditsUsed: number;
+  name: PlanName;
+  nextResetAt: string;
+};
+
+type BillingHistoryEntry = {
+  amount: string;
+  id: string;
+  invoice: string;
+  paymentMethod: string;
+  time: string;
+};
+
+const PLAN_DEFINITIONS: ReadonlyArray<PlanDefinition> = [
+  {
+    name: "Free",
+    priceLabel: "",
+    summary: "A one-time trial with 1,000 credits for your first 31 days after signup.",
+    description: "Best for evaluating the core experience, testing a few real workflows, and deciding whether you need an ongoing plan.",
+    monthlyCredits: 1_000,
+  },
+  {
+    name: "Lite",
+    priceLabel: "$9.9/mo",
+    summary: "For occasional personal use, quick chats, and lightweight agent workflows.",
+    description: "Includes 2,000 credits each month for individuals who use the product regularly but do not need heavy daily volume.",
+    monthlyCredits: 2_000,
+  },
+  {
+    name: "Pro",
+    priceLabel: "$19.9/mo",
+    summary: "For consistent day-to-day work across coding, research, and repeated agent runs.",
+    description: "Includes 5,000 monthly credits and is the best fit for active individual users who want reliable room for deeper sessions.",
+    monthlyCredits: 5_000,
+  },
+  {
+    name: "Max",
+    priceLabel: "$199.9/mo",
+    summary: "For intensive usage, long sessions, and high-volume multi-step workflows.",
+    description: "Includes 80,000 monthly credits for advanced users who need substantial capacity for sustained, heavy workloads.",
+    monthlyCredits: 80_000,
+  },
+] as const;
+
+const CURRENT_PLAN_SNAPSHOT: CurrentPlanSnapshot = {
+  name: "Pro",
+  creditsUsed: 1_840,
+  creditsTotal: 5_000,
+  nextResetAt: "2026-04-01 00:00",
+};
+
+const BILLING_HISTORY_SNAPSHOT: ReadonlyArray<BillingHistoryEntry> = [
+  {
+    id: "billing-2026-03",
+    time: "Mar 01, 2026",
+    amount: "$19.90",
+    paymentMethod: "Visa •••• 2048",
+    invoice: "INV-2026-0301",
+  },
+  {
+    id: "billing-2026-02",
+    time: "Feb 01, 2026",
+    amount: "$19.90",
+    paymentMethod: "Visa •••• 2048",
+    invoice: "INV-2026-0201",
+  },
+  {
+    id: "billing-2026-01",
+    time: "Jan 01, 2026",
+    amount: "$19.90",
+    paymentMethod: "Visa •••• 2048",
+    invoice: "INV-2026-0101",
+  },
+] as const;
+
+const PLAN_VISUAL_STYLES: Partial<
+  Record<
+    PlanName,
+    {
+      activeClass: string;
+      cardClass: string;
+      chipClass: string;
+      currentBadgeClass: string;
+    }
+  >
+> = {
+  Lite: {
+    cardClass:
+      "border-emerald-400/25 bg-[radial-gradient(circle_at_top_left,rgba(52,211,153,0.16),transparent_42%),linear-gradient(180deg,rgba(255,255,255,0.82),rgba(255,255,255,0.52))] shadow-[0_18px_40px_-32px_rgba(16,185,129,0.55)] dark:border-emerald-400/18 dark:bg-[radial-gradient(circle_at_top_left,rgba(52,211,153,0.2),transparent_38%),linear-gradient(180deg,rgba(20,30,28,0.88),rgba(20,30,28,0.56))] dark:shadow-[0_18px_42px_-30px_rgba(16,185,129,0.38)]",
+    activeClass:
+      "border-emerald-500/35 shadow-[0_22px_48px_-30px_rgba(16,185,129,0.62)] dark:border-emerald-300/28 dark:shadow-[0_20px_46px_-28px_rgba(16,185,129,0.44)]",
+    chipClass:
+      "border-emerald-400/24 bg-white/72 text-emerald-700 dark:border-emerald-400/18 dark:bg-emerald-400/10 dark:text-emerald-100",
+    currentBadgeClass:
+      "border-emerald-500/18 bg-white/70 text-emerald-700 dark:border-emerald-400/18 dark:bg-emerald-400/10 dark:text-emerald-100",
+  },
+  Pro: {
+    cardClass:
+      "border-sky-400/28 bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.16),transparent_42%),linear-gradient(180deg,rgba(255,255,255,0.84),rgba(255,255,255,0.54))] shadow-[0_18px_40px_-32px_rgba(59,130,246,0.5)] dark:border-sky-400/18 dark:bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.2),transparent_38%),linear-gradient(180deg,rgba(18,24,34,0.88),rgba(18,24,34,0.56))] dark:shadow-[0_18px_42px_-30px_rgba(56,189,248,0.34)]",
+    activeClass:
+      "border-sky-500/38 shadow-[0_22px_48px_-30px_rgba(59,130,246,0.58)] dark:border-sky-300/28 dark:shadow-[0_20px_46px_-28px_rgba(56,189,248,0.42)]",
+    chipClass:
+      "border-sky-400/24 bg-white/72 text-sky-700 dark:border-sky-400/18 dark:bg-sky-400/10 dark:text-sky-100",
+    currentBadgeClass:
+      "border-sky-500/18 bg-white/70 text-sky-700 dark:border-sky-400/18 dark:bg-sky-400/10 dark:text-sky-100",
+  },
+  Max: {
+    cardClass:
+      "border-lime-400/25 bg-[radial-gradient(circle_at_top_center,rgba(163,230,53,0.16),transparent_42%),linear-gradient(180deg,rgba(255,255,255,0.84),rgba(255,255,255,0.54))] shadow-[0_18px_40px_-32px_rgba(132,204,22,0.45)] dark:border-lime-400/18 dark:bg-[radial-gradient(circle_at_top_center,rgba(163,230,53,0.22),transparent_38%),linear-gradient(180deg,rgba(30,32,20,0.88),rgba(30,32,20,0.56))] dark:shadow-[0_18px_42px_-30px_rgba(163,230,53,0.34)]",
+    activeClass:
+      "border-lime-500/34 shadow-[0_22px_48px_-30px_rgba(132,204,22,0.52)] dark:border-lime-300/24 dark:shadow-[0_20px_46px_-28px_rgba(163,230,53,0.4)]",
+    chipClass:
+      "border-lime-400/24 bg-white/72 text-lime-700 dark:border-lime-400/18 dark:bg-lime-400/10 dark:text-lime-100",
+    currentBadgeClass:
+      "border-lime-500/18 bg-white/70 text-lime-700 dark:border-lime-400/18 dark:bg-lime-400/10 dark:text-lime-100",
+  },
+};
+
+function formatCreditCount(count: number): string {
+  if (count >= 1_000_000) {
+    return `${(count / 1_000_000).toFixed(1)}M`;
+  }
+
+  if (count >= 1_000) {
+    return `${(count / 1_000).toFixed(count % 1_000 === 0 ? 0 : 1)}K`;
+  }
+
   return count.toString();
 }
 
-function UsageStatCard({
-  icon: Icon,
-  label,
-  value,
+function SessionIdentityCard({
+  userSession,
+  onLogin,
+  onLogout,
 }: {
-  icon: typeof Coins;
-  label: string;
-  value: string;
+  userSession: UserSession | null;
+  onLogin: () => void;
+  onLogout: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-app-border bg-app-surface px-4 py-3">
-      <div className="flex items-center gap-1.5 text-app-subtle">
-        <Icon className="size-3.5" />
-        <span className="text-[11px] font-medium">{label}</span>
-      </div>
-      <span className="text-[22px] font-semibold leading-tight text-app-foreground">{value}</span>
-    </div>
-  );
-}
-
-function formatHeatmapDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function parseHeatmapDate(date: string): Date {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year, month - 1, day);
-}
-
-function hashHeatmapDate(date: string): number {
-  return date.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-}
-
-function getHeatmapCount(date: Date, today: Date): number {
-  const dayMs = 1000 * 60 * 60 * 24;
-  const daysAgo = Math.floor((today.getTime() - date.getTime()) / dayMs);
-  const dateKey = formatHeatmapDate(date);
-  const hash = hashHeatmapDate(dateKey);
-  const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-  const isRecentWindow = daysAgo <= 60;
-
-  if (isRecentWindow) {
-    const boosted = 2 + (hash % 3);
-    return Math.max(1, boosted - (isWeekend ? 1 : 0));
-  }
-
-  if (daysAgo <= 120) {
-    return hash % 5 === 0 ? 0 : 1 + (hash % 3);
-  }
-
-  if (daysAgo <= 240) {
-    return hash % 4 === 0 ? 0 : 1 + (hash % 2);
-  }
-
-  return hash % 6 === 0 ? 1 : 0;
-}
-
-function generateHeatmapData(): Array<{ date: string; count: number }> {
-  const data: Array<{ date: string; count: number }> = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const startDate = new Date(today);
-  startDate.setFullYear(startDate.getFullYear() - 1);
-  startDate.setDate(startDate.getDate() - startDate.getDay());
-
-  for (const d = new Date(startDate); d <= today; d.setDate(d.getDate() + 1)) {
-    const currentDate = new Date(d);
-    currentDate.setHours(0, 0, 0, 0);
-    data.push({
-      date: formatHeatmapDate(currentDate),
-      count: getHeatmapCount(currentDate, today),
-    });
-  }
-
-  return data;
-}
-
-const HEATMAP_EMPTY_COLOR = "bg-emerald-100/70 dark:bg-emerald-950/55";
-
-const HEATMAP_COLORS = [
-  HEATMAP_EMPTY_COLOR,
-  "bg-emerald-200 dark:bg-emerald-900",
-  "bg-emerald-300 dark:bg-emerald-700",
-  "bg-emerald-500 dark:bg-emerald-500",
-  "bg-emerald-700 dark:bg-emerald-300",
-] as const;
-
-function ActivityHeatmap() {
-  const heatmapData = useMemo(() => generateHeatmapData(), []);
-
-  const weeks = useMemo(() => {
-    const result: Array<Array<{ date: string; count: number } | null>> = [];
-    let currentWeek: Array<{ date: string; count: number } | null> = [];
-
-    if (heatmapData.length > 0) {
-      const firstDay = parseHeatmapDate(heatmapData[0].date).getDay();
-      for (let i = 0; i < firstDay; i++) {
-        currentWeek.push(null);
-      }
-    }
-
-    for (const entry of heatmapData) {
-      currentWeek.push(entry);
-      if (currentWeek.length === 7) {
-        result.push(currentWeek);
-        currentWeek = [];
-      }
-    }
-    if (currentWeek.length > 0) {
-      while (currentWeek.length < 7) currentWeek.push(null);
-      result.push(currentWeek);
-    }
-    return result;
-  }, [heatmapData]);
-  const columnCount = Math.max(weeks.length, 1);
-  const minGridWidth = Math.max(columnCount * 12, 720);
-
-  const months = useMemo(() => {
-    const labels: Array<{ label: string; col: number }> = [];
-    let lastMonth = -1;
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-    for (let w = 0; w < weeks.length; w++) {
-      const firstEntry = weeks[w].find((d) => d !== null);
-      if (firstEntry) {
-        const month = parseHeatmapDate(firstEntry.date).getMonth();
-        if (month !== lastMonth) {
-          labels.push({ label: monthNames[month], col: w });
-          lastMonth = month;
-        }
-      }
-    }
-    return labels;
-  }, [weeks]);
-
-  return (
-    <div className="overflow-hidden rounded-2xl border border-app-border bg-app-surface">
-      <div className="px-4 py-3">
-        <p className="text-[13px] font-medium text-app-foreground">Activity Heatmap</p>
-        <p className="mt-0.5 text-[12px] text-app-muted">Your chat activity over the past year</p>
-      </div>
-      <div className="overflow-x-auto px-4 pb-4">
-        <div className="w-full" style={{ minWidth: `${minGridWidth}px` }}>
-          <div className="relative mb-2 h-4 w-full">
-            {months.map((m) => (
-              <span
-                key={`${m.label}-${m.col}`}
-                className="absolute text-[10px] text-app-subtle"
-                style={{
-                  left: `${(m.col / columnCount) * 100}%`,
-                }}
-              >
-                {m.label}
-              </span>
-            ))}
-          </div>
-          <div
-            className="grid w-full gap-[4px]"
-            style={{
-              gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))`,
-            }}
-          >
-            {weeks.map((week, wi) => (
-              <div key={wi} className="grid min-w-0 grid-rows-7 gap-[4px]">
-                {week.map((day, di) => (
-                  <div
-                    key={day?.date ?? `empty-${wi}-${di}`}
-                    className={cn(
-                      "aspect-square w-full rounded-[3px]",
-                      day === null ? HEATMAP_EMPTY_COLOR : HEATMAP_COLORS[Math.min(day.count, 4)],
-                    )}
-                    title={day ? `${day.date}: ${day.count} messages` : undefined}
-                  />
-                ))}
-              </div>
-            ))}
-          </div>
-          <div className="mt-2 flex items-center justify-end gap-1">
-            <span className="mr-1 text-[10px] text-app-subtle">Less</span>
-            {HEATMAP_COLORS.map((color, i) => (
-              <div key={i} className={cn("size-[12px] rounded-[3px]", color)} />
-            ))}
-            <span className="ml-1 text-[10px] text-app-subtle">More</span>
-          </div>
+    <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-app-border bg-app-surface-muted text-sm font-semibold text-app-foreground">
+          {userSession ? userSession.avatar : <CircleUserRound className="size-5 text-app-subtle" />}
+        </div>
+        <div className="min-w-0">
+          <p className="truncate text-[14px] font-semibold text-app-foreground">
+            {userSession?.name ?? "Guest"}
+          </p>
+          <p className="mt-1 truncate text-[12px] text-app-muted">
+            {userSession?.email ?? "Sign in to sync your account identity and plan usage."}
+          </p>
         </div>
       </div>
+
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="border-app-border bg-app-surface-muted text-app-foreground shadow-none hover:bg-app-surface-hover"
+        onClick={userSession ? onLogout : onLogin}
+      >
+        {userSession ? "Sign out" : "Sign in"}
+      </Button>
     </div>
   );
 }
 
-function UsagePeriodSelect({
-  value,
-  onChange,
-}: {
-  value: UsagePeriod;
-  onChange: (value: UsagePeriod) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const selectedLabel = USAGE_PERIOD_OPTIONS.find((o) => o.value === value)?.label ?? "This Month";
+function CurrentPlanCard({ plan }: { plan: CurrentPlanSnapshot }) {
+  const usageRatio = Math.min(plan.creditsUsed / plan.creditsTotal, 1);
+  const remainingCredits = Math.max(plan.creditsTotal - plan.creditsUsed, 0);
+  const planStyle = PLAN_VISUAL_STYLES[plan.name];
 
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-[12px] font-medium text-app-foreground shadow-none transition-colors hover:bg-app-surface-hover"
-      >
-        {selectedLabel}
-        <ChevronDown className="size-3.5 text-app-subtle" />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full z-50 mt-1 min-w-[140px] overflow-hidden rounded-lg border border-app-border bg-app-surface shadow-lg">
-            {USAGE_PERIOD_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => {
-                  onChange(option.value);
-                  setOpen(false);
-                }}
+    <div
+      className={cn(
+        "rounded-2xl border px-4 py-4",
+        planStyle?.cardClass ?? "border-app-border bg-app-surface-muted",
+        planStyle?.activeClass,
+      )}
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div
+            className={cn(
+              "inline-flex min-h-8 items-center rounded-full border bg-app-surface px-3 text-[12px] font-medium text-app-foreground",
+              planStyle?.chipClass ?? "border-app-border",
+            )}
+          >
+            {plan.name}
+          </div>
+        </div>
+
+        <div className="sm:text-right">
+          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Next Reset</p>
+          <p className="mt-2 text-[13px] font-medium text-app-foreground">{plan.nextResetAt}</p>
+        </div>
+      </div>
+
+      <div className="mt-5">
+        <div className="flex items-center justify-between gap-3 text-[12px]">
+          <span className="font-medium text-app-foreground">Credits</span>
+          <span className="text-app-muted">
+            {formatCreditCount(plan.creditsUsed)} / {formatCreditCount(plan.creditsTotal)}
+          </span>
+        </div>
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-app-surface">
+          <div
+            className="h-full rounded-full bg-app-foreground/70 transition-[width] duration-300 dark:bg-white/70"
+            style={{ width: `${usageRatio * 100}%` }}
+          />
+        </div>
+        <p className="mt-2 text-[12px] text-app-muted">
+          {formatCreditCount(remainingCredits)} credits remaining in the current cycle.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function PlanCatalogCard({
+  isActive,
+  plan,
+}: {
+  isActive: boolean;
+  plan: PlanDefinition;
+}) {
+  const planStyle = PLAN_VISUAL_STYLES[plan.name];
+
+  return (
+    <article
+      className={cn(
+        "rounded-2xl border px-4 py-4 transition-colors",
+        planStyle?.cardClass ?? "border-app-border bg-app-surface",
+        isActive
+          ? planStyle?.activeClass ?? "border-app-foreground/20 bg-app-surface-muted"
+          : null,
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-[15px] font-semibold text-app-foreground">{plan.name}</h3>
+            {isActive ? (
+              <span
                 className={cn(
-                  "flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] transition-colors hover:bg-app-surface-hover",
-                  option.value === value ? "font-medium text-app-foreground" : "text-app-muted",
+                  "inline-flex items-center rounded-full border bg-app-surface px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-app-foreground",
+                  planStyle?.currentBadgeClass ?? "border-app-foreground/15",
                 )}
               >
-                {option.value === value && <Check className="size-3" />}
-                <span className={option.value !== value ? "pl-5" : ""}>{option.label}</span>
-              </button>
-            ))}
+                Current
+              </span>
+            ) : null}
           </div>
-        </>
-      )}
+          <div className="mt-2 flex min-h-[20px] items-center">
+            {plan.priceLabel ? (
+              <p className="text-[20px] font-semibold leading-none text-app-foreground">{plan.priceLabel}</p>
+            ) : null}
+          </div>
+          <p className="mt-2 text-[12px] leading-5 text-app-muted">{plan.summary}</p>
+        </div>
+
+        <div
+          className={cn(
+            "inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full border bg-app-surface px-3 text-[12px] font-medium text-app-foreground",
+            planStyle?.chipClass ?? "border-app-border",
+          )}
+        >
+          <span>{formatCreditCount(plan.monthlyCredits)} credits</span>
+          {plan.name === "Free" ? (
+            <span className="inline-flex items-center rounded-full bg-app-surface-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-app-subtle">
+              Trial
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <p className="mt-4 text-[12px] leading-5 text-app-muted">{plan.description}</p>
+    </article>
+  );
+}
+
+function BillingHistoryTable({
+  entries,
+}: {
+  entries: ReadonlyArray<BillingHistoryEntry>;
+}) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-app-border bg-app-surface">
+      <div className="overflow-x-auto">
+        <table className="min-w-full border-collapse text-left">
+          <thead className="bg-app-surface-muted/80">
+            <tr>
+              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Time</th>
+              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Amount</th>
+              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Payment Method</th>
+              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Invoice</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((entry) => (
+              <tr key={entry.id} className="border-t border-app-border">
+                <td className="whitespace-nowrap px-4 py-3 text-[13px] text-app-foreground">{entry.time}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-[13px] font-medium text-app-foreground">{entry.amount}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-[13px] text-app-muted">{entry.paymentMethod}</td>
+                <td className="whitespace-nowrap px-4 py-3">
+                  <span className="inline-flex items-center rounded-md border border-app-border bg-app-surface-muted px-2 py-1 font-mono text-[11px] text-app-foreground">
+                    {entry.invoice}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -757,89 +812,62 @@ function AccountSettingsPanel({
   onLogin: () => void;
   onLogout: () => void;
 }) {
-  const [usagePeriod, setUsagePeriod] = useState<UsagePeriod>("this-month");
-
-  // Placeholder usage data — replace with real data source
-  const usageStats: UsageStats = useMemo(
-    () => ({
-      totalCost: 0.0,
-      messages: 3,
-      inputTokens: 30000,
-      outputTokens: 434,
-      cacheRead: 22400,
-      cacheWrite: 0,
-    }),
-    [],
-  );
+  const currentPlan = userSession ? CURRENT_PLAN_SNAPSHOT : null;
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeading title="Account" description={description} />
 
       <SettingsSection title="Session">
-        <SettingsRow
-          label="Status"
-          description={userSession ? "This desktop session is already signed in." : "Use a guest session or sign in for persistent identity."}
-          control={<SettingValue value={userSession ? "Authenticated" : "Guest"} />}
-        />
-        <SectionDivider />
-        <SettingsRow
-          label="Name"
-          description="The local operator profile used in the workbench."
-          control={<SettingValue value={userSession?.name ?? "Local desktop user"} />}
-        />
-        <SectionDivider />
-        <SettingsRow
-          label="Email"
-          description="Currently attached email for this desktop session."
-          control={<SettingValue value={userSession?.email ?? "Not connected"} />}
-        />
-        <SectionDivider />
-        <SettingsRow
-          label="Authentication"
-          description="Open or clear the current account session without leaving the app."
-          control={
-            userSession ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="border-app-border bg-app-surface-muted text-app-foreground shadow-none hover:bg-app-surface-hover"
-                onClick={onLogout}
-              >
-                Sign out
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="border-app-border bg-app-surface-muted text-app-foreground shadow-none hover:bg-app-surface-hover"
-                onClick={onLogin}
-              >
-                Sign in
-              </Button>
-            )
-          }
-        />
+        <SessionIdentityCard userSession={userSession} onLogin={onLogin} onLogout={onLogout} />
       </SettingsSection>
 
       <section>
         <div className="mb-2 flex items-center justify-between px-1">
-          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Usage</h2>
-          <UsagePeriodSelect value={usagePeriod} onChange={setUsagePeriod} />
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Current Plan</h2>
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          <UsageStatCard icon={Coins} label="Total Cost" value={`$${usageStats.totalCost.toFixed(4)}`} />
-          <UsageStatCard icon={ArrowDownToLine} label="Input Tokens" value={formatTokenCount(usageStats.inputTokens)} />
-          <UsageStatCard icon={ArrowUpFromLine} label="Output Tokens" value={formatTokenCount(usageStats.outputTokens)} />
-          <UsageStatCard icon={MessageSquare} label="Messages" value={usageStats.messages.toString()} />
-          <UsageStatCard icon={Database} label="Cache Read" value={formatTokenCount(usageStats.cacheRead)} />
-          <UsageStatCard icon={Database} label="Cache Write" value={formatTokenCount(usageStats.cacheWrite)} />
+        {currentPlan ? (
+          <CurrentPlanCard plan={currentPlan} />
+        ) : (
+          <div className="rounded-2xl border border-dashed border-app-border bg-app-surface-muted px-4 py-4">
+            <p className="text-[13px] font-medium text-app-foreground">Guest access</p>
+            <p className="mt-1 text-[12px] leading-5 text-app-muted">
+              Sign in to see your current plan, credit usage, and the exact reset time for the next billing cycle.
+            </p>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <div className="mb-2 flex items-center justify-between px-1">
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Plan Comparison</h2>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {PLAN_DEFINITIONS.map((plan) => (
+            <PlanCatalogCard
+              key={plan.name}
+              plan={plan}
+              isActive={currentPlan?.name === plan.name}
+            />
+          ))}
         </div>
       </section>
 
-      <ActivityHeatmap />
+      <section>
+        <div className="mb-2 flex items-center justify-between px-1">
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Billing History</h2>
+        </div>
+        {userSession ? (
+          <BillingHistoryTable entries={BILLING_HISTORY_SNAPSHOT} />
+        ) : (
+          <div className="rounded-2xl border border-dashed border-app-border bg-app-surface-muted px-4 py-4">
+            <p className="text-[13px] font-medium text-app-foreground">Billing records are available after sign-in</p>
+            <p className="mt-1 text-[12px] leading-5 text-app-muted">
+              Sign in to review charge history, payment methods, and invoice references for your account.
+            </p>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -1357,62 +1385,101 @@ function ModelSelectRow({
 }
 
 function AboutSettingsPanel({
-  description,
   isCheckingUpdates,
   runtime,
-  selectedLanguageLabel,
-  selectedThemeSummary,
   updateStatus,
   onCheckUpdates,
 }: {
-  description: string;
   isCheckingUpdates: boolean;
   runtime: SystemMetadata | null;
-  selectedLanguageLabel: string;
-  selectedThemeSummary: string;
   updateStatus: string | null;
   onCheckUpdates: () => void;
 }) {
-  return (
-    <div className="flex flex-col gap-6">
-      <PageHeading title="About" description={description} />
+  const version = runtime?.version ?? "0.1.0";
+  const appName = runtime?.appName ?? "Tiy Agent";
+  const platformSummary = runtime?.platform ?? "Unknown platform";
+  const architectureSummary = runtime?.arch ?? "Unknown architecture";
+  const aboutActions = [
+    { href: "https://tiy.ai", label: "Official Website" },
+    { href: "https://github.com/TiyAgents/tiy-desktop/blob/master/LICENSE", label: "License" },
+    { href: "https://github.com/TiyAgents/tiy-desktop/issues", label: "Feedback" },
+    { href: "mailto:contact@tiy.ai", label: "Contact Email" },
+  ] as const;
 
-      <SettingsSection title="Runtime">
-        <SettingsRow
-          label="Current summary"
-          description="Quick view of your active appearance and language settings."
-          control={<SettingValue value={`${selectedThemeSummary} • ${selectedLanguageLabel}`} />}
-        />
-        <SectionDivider />
-        <SettingsRow
-          label="Platform"
-          description="The active runtime platform reported by the desktop bridge."
-          control={<SettingValue value={runtime?.platform ?? "Unknown"} />}
-        />
-        <SectionDivider />
-        <SettingsRow
-          label="Version"
-          description="Current local application version."
-          control={<SettingValue value={runtime?.version ?? "0.1.0"} />}
-        />
-        <SectionDivider />
-        <SettingsRow
-          label="Updates"
-          description={updateStatus ?? "Check the current desktop build without leaving the active workspace."}
-          control={
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="border-app-border bg-app-surface-muted text-app-foreground shadow-none hover:bg-app-surface-hover"
-              onClick={onCheckUpdates}
-            >
-              <RefreshCw data-icon="inline-start" className={cn(isCheckingUpdates && "animate-spin")} />
-              {isCheckingUpdates ? "Checking..." : "Check"}
-            </Button>
-          }
-        />
-      </SettingsSection>
+  return (
+    <div className="pt-7">
+      <section className="overflow-hidden rounded-2xl border border-app-border bg-app-surface">
+        <div className="flex flex-col items-center gap-5 px-5 py-7 text-center">
+          <div className="flex size-20 items-center justify-center rounded-2xl border border-app-border bg-[linear-gradient(145deg,color-mix(in_srgb,var(--color-app-surface)_92%,white),color-mix(in_srgb,var(--color-app-surface-muted)_76%,white))] shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:bg-[linear-gradient(145deg,color-mix(in_srgb,var(--color-app-surface)_94%,white_4%),color-mix(in_srgb,var(--color-app-surface-muted)_82%,black_6%))] dark:shadow-[0_10px_24px_rgba(0,0,0,0.18)]">
+            <img src="/app-icon.png" alt={`${appName} logo`} className="size-12 object-contain" />
+          </div>
+
+          <div className="max-w-[560px] space-y-2">
+            <h2 className="text-[19px] font-semibold tracking-[-0.03em] text-app-foreground">{appName}</h2>
+            <p className="text-[13px] leading-6 text-app-muted">
+              A desktop coding partner grounded in your workspace, tools, models, and runtime context.
+            </p>
+            <p className="text-[12px] leading-5 text-app-subtle">{`Version v${version} • ${platformSummary} • ${architectureSummary}`}</p>
+          </div>
+
+          <div className="flex max-w-[560px] flex-wrap items-center justify-center gap-2">
+            {aboutActions.map((action) => (
+              <Button
+                key={action.label}
+                type="button"
+                variant="outline"
+                className="h-9 rounded-xl border-app-border bg-app-surface-muted px-4 text-[13px] font-medium text-app-foreground shadow-none hover:border-app-border-strong hover:bg-app-surface-hover"
+                onClick={() => {
+                  void openUrl(action.href);
+                }}
+              >
+                {action.label}
+              </Button>
+            ))}
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="h-9 rounded-xl border-app-border bg-app-surface-muted px-4 text-[13px] font-medium text-app-foreground shadow-none hover:border-app-border-strong hover:bg-app-surface-hover"
+            onClick={onCheckUpdates}
+          >
+            <RefreshCw data-icon="inline-start" className={cn("size-3.5", isCheckingUpdates && "animate-spin")} />
+            {isCheckingUpdates ? "Checking for Updates..." : "Check for Updates"}
+          </Button>
+
+          <div className="flex min-h-10 items-center justify-center">
+            <p className={cn("text-[12px] leading-5 text-app-subtle", !updateStatus && "invisible")} aria-live="polite">
+              {updateStatus ?? "Update status placeholder"}
+            </p>
+          </div>
+
+          <div className="flex w-full max-w-[560px] flex-col items-center gap-1.5 pt-1 text-[11px] leading-5 text-app-subtle">
+            <p className="text-center">Copyright © 2026 Tiy.Ai All Rights Reserved.</p>
+
+            <div className="flex items-center justify-center gap-3">
+              <button
+                type="button"
+                className="transition-colors hover:text-app-foreground"
+                onClick={() => {
+                  void openUrl("https://tiy.ai/terms");
+                }}
+              >
+                Terms of Service
+              </button>
+              <button
+                type="button"
+                className="transition-colors hover:text-app-foreground"
+                onClick={() => {
+                  void openUrl("https://tiy.ai/privacy");
+                }}
+              >
+                Privacy Policy
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1646,7 +1713,7 @@ function PolicySettingsPanel({
 }) {
   return (
     <div className="flex flex-col gap-6">
-      <PageHeading title="Policy" description={description} />
+      <PageHeading title="Permissions" description={description} />
 
       <SettingsSection title="Execution">
         <SettingsRow
@@ -2272,133 +2339,135 @@ function ProviderSettingsPanel({
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <PageHeading title="Providers" description={description} />
-        <button
-          type="button"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-[12px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
-          onClick={handleAddCustomProvider}
-        >
-          <Plus className="size-3.5" />
-          <span>Add Custom Provider</span>
-        </button>
-      </div>
+      <PageHeading title="Providers" description={description} />
 
-      <div className="flex min-h-[520px] gap-4" style={{ height: "calc(100vh - 220px)" }}>
-        {/* Provider sidebar list */}
-        <div className="flex w-[220px] shrink-0 flex-col overflow-hidden rounded-2xl border border-app-border bg-app-surface">
-          <div className="border-b border-app-border p-2">
-            <div className="flex items-center gap-2 rounded-lg bg-app-surface-muted px-2.5 py-1.5">
-              <Search className="size-3.5 shrink-0 text-app-subtle" />
-              <input
-                type="text"
-                placeholder="Search providers..."
-                value={providerSearch}
-                onChange={(event) => setProviderSearch(event.target.value)}
-                className="min-w-0 flex-1 bg-transparent text-[12px] text-app-foreground placeholder:text-app-subtle outline-none"
-              />
-            </div>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <div className="space-y-0.5">
-              {filteredProviders.map((provider) => {
-                const isSelected = provider.id === selectedProviderId;
-                return (
-                  <button
-                    key={provider.id}
-                    type="button"
-                    className={cn(
-                      "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors",
-                      isSelected
-                        ? "bg-app-surface-active text-app-foreground"
-                        : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                    )}
-                    onClick={() => {
-                      setSelectedProviderId(provider.id);
-                      setShowApiKey(false);
-                      setModelSearch("");
-                    }}
-                  >
-                    <ProviderIcon name={provider.name} className="size-5 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{provider.name}</span>
-                    {provider.isCustom ? (
-                      <span className="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-app-subtle">
-                        custom
-                      </span>
-                    ) : null}
-                    <div
-                      className={cn(
-                        "size-2 shrink-0 rounded-full",
-                        provider.enabled ? "bg-app-success" : "bg-app-border",
-                      )}
-                    />
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+      <section>
+        <div className="mb-2 flex items-center justify-between px-1">
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Providers</h2>
+          <button
+            type="button"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-[12px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
+            onClick={handleAddCustomProvider}
+          >
+            <Plus className="size-3.5" />
+            <span>Add Provider</span>
+          </button>
         </div>
-
-        {/* Provider detail */}
-        {selectedProvider ? (
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-app-border bg-app-surface">
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {/* Header */}
-              <div className="flex items-center justify-between border-b border-app-border px-5 py-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2.5">
-                    <h3 className="text-[15px] font-semibold text-app-foreground">{selectedProvider.name}</h3>
-                    {selectedProvider.isCustom ? (
-                      <span className="rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-app-muted">
-                        Custom
-                      </span>
-                    ) : null}
-                    {selectedProvider.enabled ? (
-                      <span className="rounded-md bg-app-success/15 px-1.5 py-0.5 text-[10px] font-medium text-app-success">
-                        Active
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="mt-0.5 truncate text-[12px] text-app-subtle">{selectedProvider.baseUrl}</p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {selectedProvider.isCustom ? (
+        <div className="flex min-h-[520px] gap-4" style={{ height: "calc(100vh - 220px)" }}>
+          {/* Provider sidebar list */}
+          <div className="flex w-[220px] shrink-0 flex-col overflow-hidden rounded-2xl border border-app-border bg-app-surface">
+            <div className="border-b border-app-border p-2">
+              <div className="flex items-center gap-2 rounded-lg bg-app-surface-muted px-2.5 py-1.5">
+                <Search className="size-3.5 shrink-0 text-app-subtle" />
+                <input
+                  type="text"
+                  placeholder="Search providers..."
+                  value={providerSearch}
+                  onChange={(event) => setProviderSearch(event.target.value)}
+                  className="min-w-0 flex-1 bg-transparent text-[12px] text-app-foreground placeholder:text-app-subtle outline-none"
+                />
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div className="space-y-0.5">
+                {filteredProviders.map((provider) => {
+                  const isSelected = provider.id === selectedProviderId;
+                  return (
                     <button
+                      key={provider.id}
                       type="button"
-                      title="Delete provider"
-                      aria-label="Delete provider"
-                      className="flex size-8 items-center justify-center rounded-lg border border-app-danger/30 text-app-danger transition-colors hover:bg-app-danger/10"
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors",
+                        isSelected
+                          ? "bg-app-surface-active text-app-foreground"
+                          : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                      )}
                       onClick={() => {
-                        onRemoveProvider(selectedProvider.id);
-                        setSelectedProviderId(providers.find((p) => p.id !== selectedProvider.id)?.id ?? null);
+                        setSelectedProviderId(provider.id);
+                        setShowApiKey(false);
+                        setModelSearch("");
                       }}
                     >
-                      <Trash2 className="size-3.5" />
+                      <ProviderIcon name={provider.name} className="size-5 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{provider.name}</span>
+                      {provider.isCustom ? (
+                        <span className="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-app-subtle">
+                          custom
+                        </span>
+                      ) : null}
+                      <div
+                        className={cn(
+                          "size-2 shrink-0 rounded-full",
+                          provider.enabled ? "bg-app-success" : "bg-app-border",
+                        )}
+                      />
                     </button>
-                  ) : null}
-                  <Switch
-                    checked={selectedProvider.enabled}
-                    aria-label="Toggle provider"
-                    onCheckedChange={(checked) => onUpdateProvider(selectedProvider.id, { enabled: checked })}
-                  />
-                </div>
+                  );
+                })}
               </div>
+            </div>
+          </div>
 
-              {/* Form fields */}
-              <div className="space-y-5 px-5 py-4">
-                <ProviderField label="Provider Name">
-                  <Input
-                    value={selectedProvider.name}
-                    onChange={(event) => onUpdateProvider(selectedProvider.id, { name: event.target.value })}
-                  />
-                </ProviderField>
+          {/* Provider detail */}
+          {selectedProvider ? (
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-app-border bg-app-surface">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-app-border px-5 py-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2.5">
+                      <h3 className="text-[15px] font-semibold text-app-foreground">{selectedProvider.name}</h3>
+                      {selectedProvider.isCustom ? (
+                        <span className="rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-app-muted">
+                          Custom
+                        </span>
+                      ) : null}
+                      {selectedProvider.enabled ? (
+                        <span className="rounded-md bg-app-success/15 px-1.5 py-0.5 text-[10px] font-medium text-app-success">
+                          Active
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 truncate text-[12px] text-app-subtle">{selectedProvider.baseUrl}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {selectedProvider.isCustom ? (
+                      <button
+                        type="button"
+                        title="Delete provider"
+                        aria-label="Delete provider"
+                        className="flex size-8 items-center justify-center rounded-lg border border-app-danger/30 text-app-danger transition-colors hover:bg-app-danger/10"
+                        onClick={() => {
+                          onRemoveProvider(selectedProvider.id);
+                          setSelectedProviderId(providers.find((p) => p.id !== selectedProvider.id)?.id ?? null);
+                        }}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    ) : null}
+                    <Switch
+                      checked={selectedProvider.enabled}
+                      aria-label="Toggle provider"
+                      onCheckedChange={(checked) => onUpdateProvider(selectedProvider.id, { enabled: checked })}
+                    />
+                  </div>
+                </div>
 
-                <ProviderField label="Base URL">
-                  <Input
-                    value={selectedProvider.baseUrl}
-                    onChange={(event) => onUpdateProvider(selectedProvider.id, { baseUrl: event.target.value })}
-                  />
-                </ProviderField>
+                {/* Form fields */}
+                <div className="space-y-5 px-5 py-4">
+                  <ProviderField label="Provider Name">
+                    <Input
+                      value={selectedProvider.name}
+                      onChange={(event) => onUpdateProvider(selectedProvider.id, { name: event.target.value })}
+                    />
+                  </ProviderField>
+
+                  <ProviderField label="Base URL">
+                    <Input
+                      value={selectedProvider.baseUrl}
+                      onChange={(event) => onUpdateProvider(selectedProvider.id, { baseUrl: event.target.value })}
+                    />
+                  </ProviderField>
 
                 <ProviderField label="API Key">
                   <div className="relative">
@@ -2562,15 +2631,16 @@ function ProviderSettingsPanel({
                       ))}
                   </div>
                 </div>
+                </div>
               </div>
             </div>
-          </div>
-        ) : (
-          <div className="flex min-w-0 flex-1 items-center justify-center rounded-2xl border border-app-border bg-app-surface">
-            <p className="text-[13px] text-app-subtle">Select a provider to configure</p>
-          </div>
-        )}
-      </div>
+          ) : (
+            <div className="flex min-w-0 flex-1 items-center justify-center rounded-2xl border border-app-border bg-app-surface">
+              <p className="text-[13px] text-app-subtle">Select a provider to configure</p>
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
@@ -3152,14 +3222,6 @@ function ChoiceGroup<TValue extends string>({
       className="w-full md:w-auto"
       onValueChange={onValueChange}
     />
-  );
-}
-
-function SettingValue({ value }: { value: string }) {
-  return (
-    <div className="inline-flex min-h-8 items-center rounded-lg border border-app-border bg-app-surface-muted px-3 text-[12px] text-app-foreground">
-      {value}
-    </div>
   );
 }
 
