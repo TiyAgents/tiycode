@@ -1,15 +1,21 @@
 import { type ReactNode, type RefObject, useMemo, useState } from "react";
 import {
+  ArrowDownToLine,
   ArrowLeft,
+  ArrowUpFromLine,
   Blocks,
+  Check,
   ChevronDown,
   CircleUserRound,
+  Coins,
+  Database,
   Download,
   Eye,
   EyeOff,
   FolderOpen,
   FolderPlus,
   GitBranch,
+  MessageSquare,
   Monitor,
   Pencil,
   Plus,
@@ -20,6 +26,8 @@ import {
   Sparkles,
   Star,
   Trash2,
+  X,
+  Zap,
 } from "lucide-react";
 import AnthropicIcon from "@lobehub/icons/es/Anthropic";
 import ClaudeIcon from "@lobehub/icons/es/Claude";
@@ -48,6 +56,7 @@ import type {
   AccessPolicy,
   ApiProtocol,
   ApprovalPolicySettings,
+  CommandEntry,
   CommandExecutionPolicy,
   PromptResponseStyle,
   PromptSettings,
@@ -98,6 +107,9 @@ type WorkbenchSettingsOverlayProps = {
   onUpdatePromptSetting: <Key extends keyof PromptSettings>(key: Key, value: PromptSettings[Key]) => void;
   onUpdateProvider: (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => void;
   onUpdateWorkspace: (id: string, patch: Partial<Omit<WorkspaceEntry, "id">>) => void;
+  onAddCommand: (entry: Omit<CommandEntry, "id">) => void;
+  onRemoveCommand: (id: string) => void;
+  onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
 };
 
 const CATEGORY_META: ReadonlyArray<{
@@ -127,7 +139,7 @@ const CATEGORY_META: ReadonlyArray<{
   {
     key: "prompts",
     title: "Prompts",
-    description: "Default response posture, standing instructions, and project notes.",
+    description: "Response defaults, custom instructions, and slash commands.",
     icon: Sparkles,
   },
   {
@@ -225,6 +237,9 @@ export function WorkbenchSettingsOverlay({
   onUpdatePromptSetting,
   onUpdateProvider,
   onUpdateWorkspace,
+  onAddCommand,
+  onRemoveCommand,
+  onUpdateCommand,
 }: WorkbenchSettingsOverlayProps) {
   const activeMeta = CATEGORY_META.find((category) => category.key === activeCategory) ?? CATEGORY_META[1];
 
@@ -319,7 +334,6 @@ export function WorkbenchSettingsOverlay({
               <div className="mx-auto flex max-w-4xl flex-col gap-6 px-6 pb-28 pt-6">
                 {activeCategory === "account" ? (
                   <AccountSettingsPanel
-                    appVersion={systemMetadata?.version ?? "0.1.0"}
                     description={activeMeta.description}
                     userSession={userSession}
                     onLogin={onLogin}
@@ -369,6 +383,9 @@ export function WorkbenchSettingsOverlay({
                     description={activeMeta.description}
                     prompts={prompts}
                     onUpdatePromptSetting={onUpdatePromptSetting}
+                    onAddCommand={onAddCommand}
+                    onRemoveCommand={onRemoveCommand}
+                    onUpdateCommand={onUpdateCommand}
                   />
                 ) : null}
 
@@ -390,19 +407,248 @@ export function WorkbenchSettingsOverlay({
   );
 }
 
+type UsagePeriod = "this-month" | "last-month" | "this-week" | "all-time";
+
+const USAGE_PERIOD_OPTIONS: ReadonlyArray<{ label: string; value: UsagePeriod }> = [
+  { label: "This Month", value: "this-month" },
+  { label: "Last Month", value: "last-month" },
+  { label: "This Week", value: "this-week" },
+  { label: "All Time", value: "all-time" },
+];
+
+type UsageStats = {
+  totalCost: number;
+  messages: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
+
+function formatTokenCount(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
+  return count.toString();
+}
+
+function UsageStatCard({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof Coins;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-app-border bg-app-surface px-4 py-3">
+      <div className="flex items-center gap-1.5 text-app-subtle">
+        <Icon className="size-3.5" />
+        <span className="text-[11px] font-medium">{label}</span>
+      </div>
+      <span className="text-[22px] font-semibold leading-tight text-app-foreground">{value}</span>
+    </div>
+  );
+}
+
+function generateHeatmapData(): Array<{ date: string; count: number }> {
+  const data: Array<{ date: string; count: number }> = [];
+  const today = new Date();
+  const startDate = new Date(today);
+  startDate.setFullYear(startDate.getFullYear() - 1);
+  startDate.setDate(startDate.getDate() - startDate.getDay());
+
+  for (let d = new Date(startDate); d <= today; d.setDate(d.getDate() + 1)) {
+    const dateStr = d.toISOString().split("T")[0];
+    const isRecent = (today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24) < 14;
+    const count = isRecent ? Math.floor(Math.random() * 5) : Math.floor(Math.random() * 2);
+    data.push({ date: dateStr, count });
+  }
+  return data;
+}
+
+const HEATMAP_COLORS = [
+  "bg-app-surface-muted",
+  "bg-emerald-200 dark:bg-emerald-900",
+  "bg-emerald-300 dark:bg-emerald-700",
+  "bg-emerald-500 dark:bg-emerald-500",
+  "bg-emerald-700 dark:bg-emerald-300",
+] as const;
+
+function ActivityHeatmap() {
+  const heatmapData = useMemo(() => generateHeatmapData(), []);
+
+  const weeks = useMemo(() => {
+    const result: Array<Array<{ date: string; count: number } | null>> = [];
+    let currentWeek: Array<{ date: string; count: number } | null> = [];
+
+    if (heatmapData.length > 0) {
+      const firstDay = new Date(heatmapData[0].date).getDay();
+      for (let i = 0; i < firstDay; i++) {
+        currentWeek.push(null);
+      }
+    }
+
+    for (const entry of heatmapData) {
+      currentWeek.push(entry);
+      if (currentWeek.length === 7) {
+        result.push(currentWeek);
+        currentWeek = [];
+      }
+    }
+    if (currentWeek.length > 0) {
+      while (currentWeek.length < 7) currentWeek.push(null);
+      result.push(currentWeek);
+    }
+    return result;
+  }, [heatmapData]);
+
+  const months = useMemo(() => {
+    const labels: Array<{ label: string; col: number }> = [];
+    let lastMonth = -1;
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    for (let w = 0; w < weeks.length; w++) {
+      const firstEntry = weeks[w].find((d) => d !== null);
+      if (firstEntry) {
+        const month = new Date(firstEntry.date).getMonth();
+        if (month !== lastMonth) {
+          labels.push({ label: monthNames[month], col: w });
+          lastMonth = month;
+        }
+      }
+    }
+    return labels;
+  }, [weeks]);
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-app-border bg-app-surface">
+      <div className="px-4 py-3">
+        <p className="text-[13px] font-medium text-app-foreground">Activity Heatmap</p>
+        <p className="mt-0.5 text-[12px] text-app-muted">Your chat activity over the past year</p>
+      </div>
+      <div className="overflow-x-auto px-4 pb-4">
+        <div className="min-w-[680px]">
+          <div className="mb-1 flex" style={{ paddingLeft: "0px" }}>
+            {months.map((m) => (
+              <span
+                key={`${m.label}-${m.col}`}
+                className="text-[10px] text-app-subtle"
+                style={{
+                  position: "relative",
+                  left: `${m.col * 13}px`,
+                  marginRight: "-8px",
+                }}
+              >
+                {m.label}
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-[3px]">
+            {weeks.map((week, wi) => (
+              <div key={wi} className="flex flex-col gap-[3px]">
+                {week.map((day, di) => (
+                  <div
+                    key={day?.date ?? `empty-${wi}-${di}`}
+                    className={cn(
+                      "size-[10px] rounded-[2px]",
+                      day === null
+                        ? "bg-transparent"
+                        : HEATMAP_COLORS[Math.min(day.count, 4)],
+                    )}
+                    title={day ? `${day.date}: ${day.count} messages` : undefined}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center justify-end gap-1">
+            <span className="mr-1 text-[10px] text-app-subtle">Less</span>
+            {HEATMAP_COLORS.map((color, i) => (
+              <div key={i} className={cn("size-[10px] rounded-[2px]", color)} />
+            ))}
+            <span className="ml-1 text-[10px] text-app-subtle">More</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UsagePeriodSelect({
+  value,
+  onChange,
+}: {
+  value: UsagePeriod;
+  onChange: (value: UsagePeriod) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedLabel = USAGE_PERIOD_OPTIONS.find((o) => o.value === value)?.label ?? "This Month";
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-[12px] font-medium text-app-foreground shadow-none transition-colors hover:bg-app-surface-hover"
+      >
+        {selectedLabel}
+        <ChevronDown className="size-3.5 text-app-subtle" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full z-50 mt-1 min-w-[140px] overflow-hidden rounded-lg border border-app-border bg-app-surface shadow-lg">
+            {USAGE_PERIOD_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] transition-colors hover:bg-app-surface-hover",
+                  option.value === value ? "font-medium text-app-foreground" : "text-app-muted",
+                )}
+              >
+                {option.value === value && <Check className="size-3" />}
+                <span className={option.value !== value ? "pl-5" : ""}>{option.label}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function AccountSettingsPanel({
-  appVersion,
   description,
   userSession,
   onLogin,
   onLogout,
 }: {
-  appVersion: string;
   description: string;
   userSession: UserSession | null;
   onLogin: () => void;
   onLogout: () => void;
 }) {
+  const [usagePeriod, setUsagePeriod] = useState<UsagePeriod>("this-month");
+
+  // Placeholder usage data — replace with real data source
+  const usageStats: UsageStats = useMemo(
+    () => ({
+      totalCost: 0.0,
+      messages: 3,
+      inputTokens: 30000,
+      outputTokens: 434,
+      cacheRead: 22400,
+      cacheWrite: 0,
+    }),
+    [],
+  );
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeading title="Account" description={description} />
@@ -455,13 +701,22 @@ function AccountSettingsPanel({
         />
       </SettingsSection>
 
-      <SettingsSection title="Desktop">
-        <SettingsRow
-          label="App version"
-          description="The current local build of Tiy Agent."
-          control={<SettingValue value={`v${appVersion}`} />}
-        />
-      </SettingsSection>
+      <section>
+        <div className="mb-2 flex items-center justify-between px-1">
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Usage</h2>
+          <UsagePeriodSelect value={usagePeriod} onChange={setUsagePeriod} />
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <UsageStatCard icon={Coins} label="Total Cost" value={`$${usageStats.totalCost.toFixed(4)}`} />
+          <UsageStatCard icon={ArrowDownToLine} label="Input Tokens" value={formatTokenCount(usageStats.inputTokens)} />
+          <UsageStatCard icon={ArrowUpFromLine} label="Output Tokens" value={formatTokenCount(usageStats.outputTokens)} />
+          <UsageStatCard icon={MessageSquare} label="Messages" value={usageStats.messages.toString()} />
+          <UsageStatCard icon={Database} label="Cache Read" value={formatTokenCount(usageStats.cacheRead)} />
+          <UsageStatCard icon={Database} label="Cache Write" value={formatTokenCount(usageStats.cacheWrite)} />
+        </div>
+      </section>
+
+      <ActivityHeatmap />
     </div>
   );
 }
@@ -565,10 +820,16 @@ function PromptSettingsPanel({
   description,
   prompts,
   onUpdatePromptSetting,
+  onAddCommand,
+  onRemoveCommand,
+  onUpdateCommand,
 }: {
   description: string;
   prompts: PromptSettings;
   onUpdatePromptSetting: <Key extends keyof PromptSettings>(key: Key, value: PromptSettings[Key]) => void;
+  onAddCommand: (entry: Omit<CommandEntry, "id">) => void;
+  onRemoveCommand: (id: string) => void;
+  onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
 }) {
   const selectedStyle = RESPONSE_STYLE_OPTIONS.find((option) => option.value === prompts.responseStyle) ?? RESPONSE_STYLE_OPTIONS[0];
 
@@ -590,34 +851,206 @@ function PromptSettingsPanel({
         />
         <SectionDivider />
         <SettingsRow
-          label="Project context"
-          description="Include workspace context by default when a new thread starts."
+          label="Response language"
+          description="The language used for agent responses."
           control={
-            <Switch
-              checked={prompts.includeProjectContext}
-              size="sm"
-              aria-label="Toggle project context inclusion"
-              onCheckedChange={(checked) => onUpdatePromptSetting("includeProjectContext", checked)}
+            <Input
+              value={prompts.responseLanguage}
+              onChange={(event) => onUpdatePromptSetting("responseLanguage", event.target.value)}
+              className="w-40 text-[13px]"
+              placeholder="English"
             />
           }
         />
       </SettingsSection>
 
       <TextAreaSection
-        title="System prompt"
-        description="Standing instruction applied before any project-specific context is injected."
-        value={prompts.systemPrompt}
+        title="Custom instructions"
+        description="Standing instruction applied to every thread. Use it to define the agent's personality, constraints, and default behavior."
+        value={prompts.customInstructions}
         minHeightClassName="min-h-36"
-        onChange={(value) => onUpdatePromptSetting("systemPrompt", value)}
+        onChange={(value) => onUpdatePromptSetting("customInstructions", value)}
       />
 
-      <TextAreaSection
-        title="Project notes"
-        description="Reusable notes about conventions, review posture, or collaboration habits."
-        value={prompts.promptNotes}
-        minHeightClassName="min-h-28"
-        onChange={(value) => onUpdatePromptSetting("promptNotes", value)}
+      <CommandsSection
+        commands={prompts.commands}
+        onAddCommand={onAddCommand}
+        onRemoveCommand={onRemoveCommand}
+        onUpdateCommand={onUpdateCommand}
       />
+    </div>
+  );
+}
+
+function CommandsSection({
+  commands,
+  onAddCommand,
+  onRemoveCommand,
+  onUpdateCommand,
+}: {
+  commands: Array<CommandEntry>;
+  onAddCommand: (entry: Omit<CommandEntry, "id">) => void;
+  onRemoveCommand: (id: string) => void;
+  onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const handleAddCommand = () => {
+    const newId = crypto.randomUUID();
+    onAddCommand({
+      name: "",
+      path: "",
+      argumentHint: "",
+      description: "",
+    });
+    // find the newly added command and set editing — we use a timeout so state has updated
+    setTimeout(() => {
+      setEditingId(newId);
+    }, 0);
+  };
+
+  return (
+    <SettingsSection
+      title="Commands"
+      action={
+        <button
+          type="button"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-[12px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
+          onClick={handleAddCommand}
+        >
+          <Plus className="size-3.5" />
+          <span>Add Prompt</span>
+        </button>
+      }
+    >
+      <div className="px-4 py-3">
+        <p className="text-[12px] leading-5 text-app-muted">
+          Create quick prompts that can be triggered by typing / in the chat
+        </p>
+      </div>
+      {commands.length > 0 ? (
+        <div className="flex flex-col">
+          {commands.map((command) => (
+            <CommandItem
+              key={command.id}
+              command={command}
+              isEditing={editingId === command.id}
+              onEdit={() => setEditingId(editingId === command.id ? null : command.id)}
+              onCancelEdit={() => setEditingId(null)}
+              onRemove={() => onRemoveCommand(command.id)}
+              onUpdate={(patch) => onUpdateCommand(command.id, patch)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </SettingsSection>
+  );
+}
+
+function CommandItem({
+  command,
+  isEditing,
+  onEdit,
+  onCancelEdit,
+  onRemove,
+  onUpdate,
+}: {
+  command: CommandEntry;
+  isEditing: boolean;
+  onEdit: () => void;
+  onCancelEdit: () => void;
+  onRemove: () => void;
+  onUpdate: (patch: Partial<Omit<CommandEntry, "id">>) => void;
+}) {
+  const commandPath = command.name ? `/prompts:${command.name}` : "/prompts:unnamed";
+
+  return (
+    <div className="border-t border-app-border">
+      <div className="flex items-center gap-3 px-4 py-3.5">
+        <div className="shrink-0 text-app-subtle">
+          <Zap className="size-4" />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-semibold text-app-foreground">{command.name || "Untitled"}</span>
+            <span className="text-[12px] text-app-subtle">{commandPath}</span>
+          </div>
+          <p className="mt-1 truncate text-[12px] leading-5 text-app-muted">
+            {command.description || <span className="italic">No description</span>}
+          </p>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1">
+          {isEditing ? (
+            <>
+              <button
+                type="button"
+                title="Save changes"
+                aria-label="Save changes"
+                className="flex size-7 items-center justify-center rounded-md text-green-500 transition-colors hover:bg-app-surface-hover hover:text-green-600"
+                onClick={onEdit}
+              >
+                <Check className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                title="Cancel editing"
+                aria-label="Cancel editing"
+                className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                onClick={onCancelEdit}
+              >
+                <X className="size-3.5" />
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                title="Edit command"
+                aria-label="Edit command"
+                className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                onClick={onEdit}
+              >
+                <Pencil className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                title="Remove command"
+                aria-label="Remove command"
+                className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-red-500"
+                onClick={onRemove}
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {isEditing ? (
+        <div className="border-t border-dashed border-app-border bg-app-surface-muted px-4 py-3">
+          <div>
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">Name</label>
+            <Input
+              value={command.name}
+              onChange={(event) => onUpdate({ name: event.target.value })}
+              placeholder="commit"
+              className="text-[13px]"
+            />
+            <p className="mt-1 text-[11px] text-app-subtle">Command path: {command.name ? `/prompts:${command.name}` : "/prompts:..."}</p>
+          </div>
+          <div className="mt-3">
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">Command prompt</label>
+            <Textarea
+              value={command.description}
+              onChange={(event) => onUpdate({ description: event.target.value })}
+              placeholder="Describe what this command does..."
+              className="min-h-24 text-[13px]"
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

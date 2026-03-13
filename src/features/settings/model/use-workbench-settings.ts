@@ -37,11 +37,19 @@ export type ProviderEntry = {
   models: Array<ProviderModel>;
 };
 
+export type CommandEntry = {
+  id: string;
+  name: string;
+  path: string;
+  argumentHint: string;
+  description: string;
+};
+
 export type PromptSettings = {
-  systemPrompt: string;
+  customInstructions: string;
   responseStyle: PromptResponseStyle;
-  includeProjectContext: boolean;
-  promptNotes: string;
+  responseLanguage: string;
+  commands: Array<CommandEntry>;
 };
 
 export type ApprovalPolicySettings = {
@@ -61,12 +69,26 @@ type WorkbenchSettingsState = {
 const STORAGE_KEY = "tiy-agent-workbench-settings";
 
 const DEFAULT_PROMPT_SETTINGS: PromptSettings = {
-  systemPrompt:
+  customInstructions:
     "You are Tiy Agent, a desktop coding partner. Keep answers crisp, grounded in the local workspace, and explicit about risks before taking action.",
   responseStyle: "balanced",
-  includeProjectContext: true,
-  promptNotes:
-    "Prefer existing project conventions, summarize tradeoffs before larger changes, and keep implementation notes useful for follow-up threads.",
+  responseLanguage: "English",
+  commands: [
+    {
+      id: "cmd-commit",
+      name: "commit",
+      path: "/prompts:commit",
+      argumentHint: "[--verify=yes|no] [--style=simple|full] [--type=feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert] [--language=english|chinese]",
+      description: "Create well-formatted commits with conventional commit messages",
+    },
+    {
+      id: "cmd-create-pr",
+      name: "create-pr",
+      path: "/prompts:create-pr",
+      argumentHint: "[--draft] [--base=main|master] [--style=simple|full] [--language=english|chinese]",
+      description: "Create pull requests via GitHub MCP tools with well-formatted PR title and description",
+    },
+  ],
 };
 
 const DEFAULT_WORKSPACES: Array<WorkspaceEntry> = [
@@ -258,19 +280,28 @@ function getStoredSettings(): WorkbenchSettingsState {
           }))
         : DEFAULT_PROVIDERS,
       prompts: {
-        systemPrompt:
-          typeof prompts.systemPrompt === "string"
-            ? prompts.systemPrompt
-            : DEFAULT_PROMPT_SETTINGS.systemPrompt,
+        customInstructions:
+          typeof prompts.customInstructions === "string"
+            ? prompts.customInstructions
+            : typeof prompts.systemPrompt === "string"
+              ? (prompts.systemPrompt as string)
+              : DEFAULT_PROMPT_SETTINGS.customInstructions,
         responseStyle: isPromptResponseStyle(prompts.responseStyle)
           ? prompts.responseStyle
           : DEFAULT_PROMPT_SETTINGS.responseStyle,
-        includeProjectContext:
-          typeof prompts.includeProjectContext === "boolean"
-            ? prompts.includeProjectContext
-            : DEFAULT_PROMPT_SETTINGS.includeProjectContext,
-        promptNotes:
-          typeof prompts.promptNotes === "string" ? prompts.promptNotes : DEFAULT_PROMPT_SETTINGS.promptNotes,
+        responseLanguage:
+          typeof prompts.responseLanguage === "string"
+            ? prompts.responseLanguage
+            : DEFAULT_PROMPT_SETTINGS.responseLanguage,
+        commands: Array.isArray(prompts.commands)
+          ? (prompts.commands as Array<unknown>).filter(isRecord).map((cmd) => ({
+              id: typeof cmd.id === "string" ? cmd.id : crypto.randomUUID(),
+              name: typeof cmd.name === "string" ? cmd.name : "",
+              path: typeof cmd.path === "string" ? cmd.path : "",
+              argumentHint: typeof cmd.argumentHint === "string" ? cmd.argumentHint : "",
+              description: typeof cmd.description === "string" ? cmd.description : "",
+            }))
+          : DEFAULT_PROMPT_SETTINGS.commands,
       },
       approvalPolicy: {
         commandExecution: isCommandExecutionPolicy(approvalPolicy.commandExecution)
@@ -385,6 +416,38 @@ export function useWorkbenchSettings() {
     }));
   };
 
+  const addCommand = (entry: Omit<CommandEntry, "id">) => {
+    setSettings((current) => ({
+      ...current,
+      prompts: {
+        ...current.prompts,
+        commands: [...current.prompts.commands, { ...entry, id: crypto.randomUUID() }],
+      },
+    }));
+  };
+
+  const removeCommand = (id: string) => {
+    setSettings((current) => ({
+      ...current,
+      prompts: {
+        ...current.prompts,
+        commands: current.prompts.commands.filter((cmd) => cmd.id !== id),
+      },
+    }));
+  };
+
+  const updateCommand = (id: string, patch: Partial<Omit<CommandEntry, "id">>) => {
+    setSettings((current) => ({
+      ...current,
+      prompts: {
+        ...current.prompts,
+        commands: current.prompts.commands.map((cmd) =>
+          cmd.id === id ? { ...cmd, ...patch } : cmd,
+        ),
+      },
+    }));
+  };
+
   return {
     workspaces: settings.workspaces,
     providers: settings.providers,
@@ -399,5 +462,8 @@ export function useWorkbenchSettings() {
     updateProvider,
     updatePromptSetting,
     updateApprovalPolicySetting,
+    addCommand,
+    removeCommand,
+    updateCommand,
   };
 }
