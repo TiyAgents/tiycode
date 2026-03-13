@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   ArrowUpFromLine,
   Brain,
-  Blocks,
   Check,
   ChevronDown,
   CircleUserRound,
@@ -22,13 +21,14 @@ import {
   Info,
   MessageSquare,
   Monitor,
+  MousePointerClick,
   Pencil,
   Plus,
   RefreshCw,
   Search,
+  Server,
   Settings2,
   ShieldCheck,
-  Sparkles,
   Star,
   Trash2,
   Wrench,
@@ -159,17 +159,17 @@ const CATEGORY_META: ReadonlyArray<{
     key: "providers",
     title: "Providers",
     description: "Configure AI model providers, API keys, and available models.",
-    icon: Blocks,
+    icon: Server,
   },
   {
     key: "commands",
     title: "Commands",
     description: "Slash commands for common workflows.",
-    icon: Sparkles,
+    icon: Zap,
   },
   {
     key: "policy",
-    title: "Policy",
+    title: "Permissions",
     description: "Execution approval, tool access, and sandbox boundaries.",
     icon: ShieldCheck,
   },
@@ -917,6 +917,7 @@ function ProfilePicker({
         className="flex h-6 items-center gap-1 rounded-md border border-app-border bg-app-surface px-2 text-[11px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
         onClick={() => setIsOpen((prev) => !prev)}
       >
+        <span className="shrink-0 text-app-subtle">Profile:</span>
         <span className="max-w-[120px] truncate">{activeProfile.name}</span>
         <ChevronDown className="size-3 text-app-subtle" />
       </button>
@@ -1151,7 +1152,7 @@ function GeneralSettingsPanel({
               onClick={handleAddProfile}
             >
               <Plus className="size-3" />
-              Add
+              Add Profile
             </button>
           </div>
         }
@@ -2480,15 +2481,8 @@ function ProviderSettingsPanel({
 
                 {/* Models section */}
                 <div>
-                  <div className="mb-3 flex items-center justify-between">
+                  <div className="mb-3">
                     <h4 className="text-[13px] font-medium text-app-foreground">Models</h4>
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-2.5 py-1 text-[12px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
-                    >
-                      <Download className="size-3" />
-                      <span>Fetch</span>
-                    </button>
                   </div>
 
                   {/* Add model row */}
@@ -2525,15 +2519,24 @@ function ProviderSettingsPanel({
                   </p>
 
                   {/* Model search */}
-                  <div className="mb-3 flex items-center gap-2 rounded-lg border border-app-border bg-app-surface-muted px-3 py-1.5">
-                    <Search className="size-3.5 shrink-0 text-app-subtle" />
-                    <input
-                      type="text"
-                      placeholder="Search models..."
-                      value={modelSearch}
-                      onChange={(event) => setModelSearch(event.target.value)}
-                      className="min-w-0 flex-1 bg-transparent text-[12px] text-app-foreground placeholder:text-app-subtle outline-none"
-                    />
+                  <div className="mb-3 flex items-center gap-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-app-border bg-app-surface-muted px-3 py-1.5">
+                      <Search className="size-3.5 shrink-0 text-app-subtle" />
+                      <input
+                        type="text"
+                        placeholder="Search models..."
+                        value={modelSearch}
+                        onChange={(event) => setModelSearch(event.target.value)}
+                        className="min-w-0 flex-1 bg-transparent text-[12px] text-app-foreground placeholder:text-app-subtle outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-2.5 py-1.5 text-[12px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
+                    >
+                      <Download className="size-3" />
+                      <span>Fetch</span>
+                    </button>
                   </div>
 
                   <p className="mb-2 text-[11px] text-app-subtle">
@@ -2676,6 +2679,14 @@ function ProviderModelRow({
           >
             <button
               type="button"
+              title="Test connection"
+              aria-label="Test model connection"
+              className="flex size-6 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface hover:text-app-foreground"
+            >
+              <MousePointerClick className="size-3" />
+            </button>
+            <button
+              type="button"
               title="Settings"
               aria-label="Model settings"
               aria-expanded={isExpanded}
@@ -2712,8 +2723,27 @@ function ProviderModelRow({
 
       {isExpanded ? (
         <div className="border-t border-app-border bg-app-surface px-4 py-4">
-          <div className="mb-3">
-            <h5 className="text-[16px] font-semibold text-app-foreground">Model Capabilities</h5>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-[13px] font-medium text-app-foreground">Model ID</label>
+              <Input
+                value={model.modelId}
+                onChange={(event) => onUpdate({ modelId: event.target.value })}
+                placeholder="gpt-4o"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[13px] font-medium text-app-foreground">Display Name</label>
+              <Input
+                value={model.displayName}
+                onChange={(event) => onUpdate({ displayName: event.target.value })}
+                placeholder="GPT-4o"
+              />
+            </div>
+          </div>
+
+          <div className="mb-3 mt-4">
+            <h5 className="text-[13px] font-medium text-app-foreground">Model Capabilities</h5>
             <p className="mt-1 text-[12px] text-app-muted">
               Override the auto-detected capabilities for this model.
             </p>
