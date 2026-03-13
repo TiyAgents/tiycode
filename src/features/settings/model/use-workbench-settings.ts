@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 
-export type SettingsCategory = "account" | "general" | "workspace" | "providers" | "prompts" | "approval-policy";
+export type SettingsCategory = "account" | "general" | "workspace" | "providers" | "prompts" | "policy";
 export type PromptResponseStyle = "balanced" | "concise" | "guide";
-export type CommandExecutionPolicy = "ask-every-time" | "auto-safe" | "full-auto";
-export type AccessPolicy = "ask-first" | "block" | "allow";
-export type RiskyCommandConfirmationPolicy = "always-confirm" | "block";
+export type ApprovalPolicy = "untrusted" | "on-request" | "never";
+export type SandboxPolicy = "read-only" | "workspace-write" | "full-access";
+export type NetworkAccessPolicy = "ask" | "block" | "allow";
+export type PatternEntry = { id: string; pattern: string };
+export type WritableRootEntry = { id: string; path: string };
 
 export type WorkspaceEntry = {
   id: string;
@@ -52,18 +54,20 @@ export type PromptSettings = {
   commands: Array<CommandEntry>;
 };
 
-export type ApprovalPolicySettings = {
-  commandExecution: CommandExecutionPolicy;
-  fileWriteOutsideWorkspace: AccessPolicy;
-  networkAccess: AccessPolicy;
-  riskyCommandConfirmation: RiskyCommandConfirmationPolicy;
+export type PolicySettings = {
+  approvalPolicy: ApprovalPolicy;
+  allowList: Array<PatternEntry>;
+  denyList: Array<PatternEntry>;
+  sandboxPolicy: SandboxPolicy;
+  networkAccess: NetworkAccessPolicy;
+  writableRoots: Array<WritableRootEntry>;
 };
 
 type WorkbenchSettingsState = {
   workspaces: Array<WorkspaceEntry>;
   providers: Array<ProviderEntry>;
   prompts: PromptSettings;
-  approvalPolicy: ApprovalPolicySettings;
+  policy: PolicySettings;
 };
 
 const STORAGE_KEY = "tiy-agent-workbench-settings";
@@ -188,18 +192,20 @@ const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
   },
 ];
 
-const DEFAULT_APPROVAL_POLICY_SETTINGS: ApprovalPolicySettings = {
-  commandExecution: "auto-safe",
-  fileWriteOutsideWorkspace: "ask-first",
-  networkAccess: "ask-first",
-  riskyCommandConfirmation: "always-confirm",
+const DEFAULT_POLICY_SETTINGS: PolicySettings = {
+  approvalPolicy: "on-request",
+  allowList: [],
+  denyList: [],
+  sandboxPolicy: "workspace-write",
+  networkAccess: "ask",
+  writableRoots: [],
 };
 
 const DEFAULT_SETTINGS: WorkbenchSettingsState = {
   workspaces: DEFAULT_WORKSPACES,
   providers: DEFAULT_PROVIDERS,
   prompts: DEFAULT_PROMPT_SETTINGS,
-  approvalPolicy: DEFAULT_APPROVAL_POLICY_SETTINGS,
+  policy: DEFAULT_POLICY_SETTINGS,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -210,16 +216,16 @@ function isPromptResponseStyle(value: unknown): value is PromptResponseStyle {
   return value === "balanced" || value === "concise" || value === "guide";
 }
 
-function isCommandExecutionPolicy(value: unknown): value is CommandExecutionPolicy {
-  return value === "ask-every-time" || value === "auto-safe" || value === "full-auto";
+function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
+  return value === "untrusted" || value === "on-request" || value === "never";
 }
 
-function isAccessPolicy(value: unknown): value is AccessPolicy {
-  return value === "ask-first" || value === "block" || value === "allow";
+function isSandboxPolicy(value: unknown): value is SandboxPolicy {
+  return value === "read-only" || value === "workspace-write" || value === "full-access";
 }
 
-function isRiskyCommandConfirmationPolicy(value: unknown): value is RiskyCommandConfirmationPolicy {
-  return value === "always-confirm" || value === "block";
+function isNetworkAccessPolicy(value: unknown): value is NetworkAccessPolicy {
+  return value === "ask" || value === "block" || value === "allow";
 }
 
 function getStoredSettings(): WorkbenchSettingsState {
@@ -243,7 +249,7 @@ function getStoredSettings(): WorkbenchSettingsState {
     const workspaces = Array.isArray(parsed.workspaces) ? parsed.workspaces : null;
     const providers = Array.isArray(parsed.providers) ? parsed.providers : null;
     const prompts = isRecord(parsed.prompts) ? parsed.prompts : {};
-    const approvalPolicy = isRecord(parsed.approvalPolicy) ? parsed.approvalPolicy : {};
+    const policyRaw = isRecord(parsed.policy) ? parsed.policy : isRecord(parsed.approvalPolicy) ? parsed.approvalPolicy : {};
 
     return {
       workspaces: workspaces
@@ -303,19 +309,34 @@ function getStoredSettings(): WorkbenchSettingsState {
             }))
           : DEFAULT_PROMPT_SETTINGS.commands,
       },
-      approvalPolicy: {
-        commandExecution: isCommandExecutionPolicy(approvalPolicy.commandExecution)
-          ? approvalPolicy.commandExecution
-          : DEFAULT_APPROVAL_POLICY_SETTINGS.commandExecution,
-        fileWriteOutsideWorkspace: isAccessPolicy(approvalPolicy.fileWriteOutsideWorkspace)
-          ? approvalPolicy.fileWriteOutsideWorkspace
-          : DEFAULT_APPROVAL_POLICY_SETTINGS.fileWriteOutsideWorkspace,
-        networkAccess: isAccessPolicy(approvalPolicy.networkAccess)
-          ? approvalPolicy.networkAccess
-          : DEFAULT_APPROVAL_POLICY_SETTINGS.networkAccess,
-        riskyCommandConfirmation: isRiskyCommandConfirmationPolicy(approvalPolicy.riskyCommandConfirmation)
-          ? approvalPolicy.riskyCommandConfirmation
-          : DEFAULT_APPROVAL_POLICY_SETTINGS.riskyCommandConfirmation,
+      policy: {
+        approvalPolicy: isApprovalPolicy(policyRaw.approvalPolicy)
+          ? policyRaw.approvalPolicy
+          : DEFAULT_POLICY_SETTINGS.approvalPolicy,
+        allowList: Array.isArray(policyRaw.allowList)
+          ? (policyRaw.allowList as Array<unknown>).filter(isRecord).map((entry) => ({
+              id: typeof entry.id === "string" ? entry.id : crypto.randomUUID(),
+              pattern: typeof entry.pattern === "string" ? entry.pattern : "",
+            }))
+          : DEFAULT_POLICY_SETTINGS.allowList,
+        denyList: Array.isArray(policyRaw.denyList)
+          ? (policyRaw.denyList as Array<unknown>).filter(isRecord).map((entry) => ({
+              id: typeof entry.id === "string" ? entry.id : crypto.randomUUID(),
+              pattern: typeof entry.pattern === "string" ? entry.pattern : "",
+            }))
+          : DEFAULT_POLICY_SETTINGS.denyList,
+        sandboxPolicy: isSandboxPolicy(policyRaw.sandboxPolicy)
+          ? policyRaw.sandboxPolicy
+          : DEFAULT_POLICY_SETTINGS.sandboxPolicy,
+        networkAccess: isNetworkAccessPolicy(policyRaw.networkAccess)
+          ? policyRaw.networkAccess
+          : DEFAULT_POLICY_SETTINGS.networkAccess,
+        writableRoots: Array.isArray(policyRaw.writableRoots)
+          ? (policyRaw.writableRoots as Array<unknown>).filter(isRecord).map((entry) => ({
+              id: typeof entry.id === "string" ? entry.id : crypto.randomUUID(),
+              path: typeof entry.path === "string" ? entry.path : "",
+            }))
+          : DEFAULT_POLICY_SETTINGS.writableRoots,
       },
     };
   } catch {
@@ -344,15 +365,108 @@ export function useWorkbenchSettings() {
     }));
   };
 
-  const updateApprovalPolicySetting = <Key extends keyof ApprovalPolicySettings>(
-    key: Key,
-    value: ApprovalPolicySettings[Key],
-  ) => {
+  const updatePolicySetting = <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => {
     setSettings((current) => ({
       ...current,
-      approvalPolicy: {
-        ...current.approvalPolicy,
+      policy: {
+        ...current.policy,
         [key]: value,
+      },
+    }));
+  };
+
+  const addAllowEntry = (entry: Omit<PatternEntry, "id">) => {
+    setSettings((current) => ({
+      ...current,
+      policy: {
+        ...current.policy,
+        allowList: [...current.policy.allowList, { ...entry, id: crypto.randomUUID() }],
+      },
+    }));
+  };
+
+  const removeAllowEntry = (id: string) => {
+    setSettings((current) => ({
+      ...current,
+      policy: {
+        ...current.policy,
+        allowList: current.policy.allowList.filter((entry) => entry.id !== id),
+      },
+    }));
+  };
+
+  const updateAllowEntry = (id: string, patch: Partial<Omit<PatternEntry, "id">>) => {
+    setSettings((current) => ({
+      ...current,
+      policy: {
+        ...current.policy,
+        allowList: current.policy.allowList.map((entry) =>
+          entry.id === id ? { ...entry, ...patch } : entry,
+        ),
+      },
+    }));
+  };
+
+  const addDenyEntry = (entry: Omit<PatternEntry, "id">) => {
+    setSettings((current) => ({
+      ...current,
+      policy: {
+        ...current.policy,
+        denyList: [...current.policy.denyList, { ...entry, id: crypto.randomUUID() }],
+      },
+    }));
+  };
+
+  const removeDenyEntry = (id: string) => {
+    setSettings((current) => ({
+      ...current,
+      policy: {
+        ...current.policy,
+        denyList: current.policy.denyList.filter((entry) => entry.id !== id),
+      },
+    }));
+  };
+
+  const updateDenyEntry = (id: string, patch: Partial<Omit<PatternEntry, "id">>) => {
+    setSettings((current) => ({
+      ...current,
+      policy: {
+        ...current.policy,
+        denyList: current.policy.denyList.map((entry) =>
+          entry.id === id ? { ...entry, ...patch } : entry,
+        ),
+      },
+    }));
+  };
+
+  const addWritableRoot = (entry: Omit<WritableRootEntry, "id">) => {
+    setSettings((current) => ({
+      ...current,
+      policy: {
+        ...current.policy,
+        writableRoots: [...current.policy.writableRoots, { ...entry, id: crypto.randomUUID() }],
+      },
+    }));
+  };
+
+  const removeWritableRoot = (id: string) => {
+    setSettings((current) => ({
+      ...current,
+      policy: {
+        ...current.policy,
+        writableRoots: current.policy.writableRoots.filter((entry) => entry.id !== id),
+      },
+    }));
+  };
+
+  const updateWritableRoot = (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => {
+    setSettings((current) => ({
+      ...current,
+      policy: {
+        ...current.policy,
+        writableRoots: current.policy.writableRoots.map((entry) =>
+          entry.id === id ? { ...entry, ...patch } : entry,
+        ),
       },
     }));
   };
@@ -452,7 +566,7 @@ export function useWorkbenchSettings() {
     workspaces: settings.workspaces,
     providers: settings.providers,
     prompts: settings.prompts,
-    approvalPolicy: settings.approvalPolicy,
+    policy: settings.policy,
     addWorkspace,
     removeWorkspace,
     updateWorkspace,
@@ -461,7 +575,16 @@ export function useWorkbenchSettings() {
     removeProvider,
     updateProvider,
     updatePromptSetting,
-    updateApprovalPolicySetting,
+    updatePolicySetting,
+    addAllowEntry,
+    removeAllowEntry,
+    updateAllowEntry,
+    addDenyEntry,
+    removeDenyEntry,
+    updateDenyEntry,
+    addWritableRoot,
+    removeWritableRoot,
+    updateWritableRoot,
     addCommand,
     removeCommand,
     updateCommand,

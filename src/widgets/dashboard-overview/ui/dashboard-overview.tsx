@@ -1160,7 +1160,7 @@ export function DashboardOverview() {
   const { data, error, isLoading, refetch } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
   const { language, setLanguage } = useLanguage();
-  const { workspaces: settingsWorkspaces, providers, prompts, approvalPolicy, addWorkspace, removeWorkspace, updateWorkspace, setDefaultWorkspace, addProvider, removeProvider, updateProvider, updatePromptSetting, updateApprovalPolicySetting, addCommand, removeCommand, updateCommand } = useWorkbenchSettings();
+  const { workspaces: settingsWorkspaces, providers, prompts, policy, addWorkspace, removeWorkspace, updateWorkspace, setDefaultWorkspace, addProvider, removeProvider, updateProvider, updatePromptSetting, updatePolicySetting, addAllowEntry, removeAllowEntry, updateAllowEntry, addDenyEntry, removeDenyEntry, updateDenyEntry, addWritableRoot, removeWritableRoot, updateWritableRoot, addCommand, removeCommand, updateCommand } = useWorkbenchSettings();
   const [workspaces, setWorkspaces] = useState<Array<WorkspaceItem>>(() => buildInitialWorkspaces());
   const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(() => [...RECENT_PROJECTS]);
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(() => RECENT_PROJECTS[0] ?? null);
@@ -2006,10 +2006,10 @@ export function DashboardOverview() {
       {isSettingsOpen ? (
         <WorkbenchSettingsOverlay
           activeCategory={activeSettingsCategory}
-          approvalPolicy={approvalPolicy}
           contentRef={settingsContentRef}
           isCheckingUpdates={isCheckingUpdates}
           language={language}
+          policy={policy}
           prompts={prompts}
           providers={providers}
           selectedLanguageLabel={selectedLanguageOption.label}
@@ -2019,25 +2019,34 @@ export function DashboardOverview() {
           updateStatus={updateStatus}
           userSession={userSession}
           workspaces={settingsWorkspaces}
+          onAddAllowEntry={addAllowEntry}
+          onAddCommand={addCommand}
+          onAddDenyEntry={addDenyEntry}
           onAddProvider={addProvider}
           onAddWorkspace={addWorkspace}
+          onAddWritableRoot={addWritableRoot}
           onCheckUpdates={handleCheckUpdates}
           onClose={handleCloseSettings}
           onLogin={handleLogin}
           onLogout={handleLogout}
+          onRemoveAllowEntry={removeAllowEntry}
+          onRemoveCommand={removeCommand}
+          onRemoveDenyEntry={removeDenyEntry}
           onRemoveProvider={removeProvider}
           onRemoveWorkspace={removeWorkspace}
+          onRemoveWritableRoot={removeWritableRoot}
           onSelectCategory={setActiveSettingsCategory}
           onSelectLanguage={handleLanguageSelect}
           onSelectTheme={handleThemeSelect}
           onSetDefaultWorkspace={setDefaultWorkspace}
-          onUpdateApprovalPolicySetting={updateApprovalPolicySetting}
+          onUpdateAllowEntry={updateAllowEntry}
+          onUpdateCommand={updateCommand}
+          onUpdateDenyEntry={updateDenyEntry}
+          onUpdatePolicySetting={updatePolicySetting}
           onUpdatePromptSetting={updatePromptSetting}
           onUpdateProvider={updateProvider}
           onUpdateWorkspace={updateWorkspace}
-          onAddCommand={addCommand}
-          onRemoveCommand={removeCommand}
-          onUpdateCommand={updateCommand}
+          onUpdateWritableRoot={updateWritableRoot}
         />
       ) : null}
     </main>

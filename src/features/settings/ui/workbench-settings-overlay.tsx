@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useMemo, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -53,18 +53,20 @@ import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import type {
-  AccessPolicy,
   ApiProtocol,
-  ApprovalPolicySettings,
+  ApprovalPolicy,
   CommandEntry,
-  CommandExecutionPolicy,
+  NetworkAccessPolicy,
+  PolicySettings,
   PromptResponseStyle,
   PromptSettings,
   ProviderEntry,
   ProviderModel,
-  RiskyCommandConfirmationPolicy,
+  SandboxPolicy,
   SettingsCategory,
+  PatternEntry,
   WorkspaceEntry,
+  WritableRootEntry,
 } from "@/features/settings/model/use-workbench-settings";
 
 type UserSession = {
@@ -75,10 +77,10 @@ type UserSession = {
 
 type WorkbenchSettingsOverlayProps = {
   activeCategory: SettingsCategory;
-  approvalPolicy: ApprovalPolicySettings;
   contentRef: RefObject<HTMLDivElement | null>;
   isCheckingUpdates: boolean;
   language: LanguagePreference;
+  policy: PolicySettings;
   prompts: PromptSettings;
   providers: Array<ProviderEntry>;
   selectedLanguageLabel: string;
@@ -88,28 +90,34 @@ type WorkbenchSettingsOverlayProps = {
   updateStatus: string | null;
   userSession: UserSession | null;
   workspaces: Array<WorkspaceEntry>;
+  onAddAllowEntry: (entry: Omit<PatternEntry, "id">) => void;
+  onAddCommand: (entry: Omit<CommandEntry, "id">) => void;
+  onAddDenyEntry: (entry: Omit<PatternEntry, "id">) => void;
   onAddProvider: (entry: Omit<ProviderEntry, "id">) => void;
   onAddWorkspace: (entry: Omit<WorkspaceEntry, "id">) => void;
+  onAddWritableRoot: (entry: Omit<WritableRootEntry, "id">) => void;
   onCheckUpdates: () => void;
   onClose: () => void;
   onLogin: () => void;
   onLogout: () => void;
+  onRemoveAllowEntry: (id: string) => void;
+  onRemoveCommand: (id: string) => void;
+  onRemoveDenyEntry: (id: string) => void;
   onRemoveProvider: (id: string) => void;
   onRemoveWorkspace: (id: string) => void;
+  onRemoveWritableRoot: (id: string) => void;
   onSelectCategory: (category: SettingsCategory) => void;
   onSelectLanguage: (language: LanguagePreference) => void;
   onSelectTheme: (theme: ThemePreference) => void;
   onSetDefaultWorkspace: (id: string) => void;
-  onUpdateApprovalPolicySetting: <Key extends keyof ApprovalPolicySettings>(
-    key: Key,
-    value: ApprovalPolicySettings[Key],
-  ) => void;
+  onUpdateAllowEntry: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
+  onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
+  onUpdateDenyEntry: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
+  onUpdatePolicySetting: <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => void;
   onUpdatePromptSetting: <Key extends keyof PromptSettings>(key: Key, value: PromptSettings[Key]) => void;
   onUpdateProvider: (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => void;
   onUpdateWorkspace: (id: string, patch: Partial<Omit<WorkspaceEntry, "id">>) => void;
-  onAddCommand: (entry: Omit<CommandEntry, "id">) => void;
-  onRemoveCommand: (id: string) => void;
-  onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
+  onUpdateWritableRoot: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
 };
 
 const CATEGORY_META: ReadonlyArray<{
@@ -143,9 +151,9 @@ const CATEGORY_META: ReadonlyArray<{
     icon: Sparkles,
   },
   {
-    key: "approval-policy",
-    title: "Approval Policy",
-    description: "How much the agent may act before it has to stop and ask.",
+    key: "policy",
+    title: "Policy",
+    description: "Execution approval, tool access, and sandbox boundaries.",
     icon: ShieldCheck,
   },
   {
@@ -177,41 +185,42 @@ const RESPONSE_STYLE_OPTIONS: ReadonlyArray<{
   { value: "guide", label: "Guided", description: "More explanation around tradeoffs and choices." },
 ] as const;
 
-const COMMAND_EXECUTION_OPTIONS: ReadonlyArray<{
+const APPROVAL_POLICY_OPTIONS: ReadonlyArray<{
   description: string;
   label: string;
-  value: CommandExecutionPolicy;
+  value: ApprovalPolicy;
 }> = [
-  { value: "ask-every-time", label: "Ask", description: "Confirm every command before it runs." },
-  { value: "auto-safe", label: "Safe Auto", description: "Run low-risk commands automatically." },
-  { value: "full-auto", label: "Full Auto", description: "Let the agent execute commands freely." },
+  { value: "untrusted", label: "Untrusted", description: "Approve every tool call and command individually." },
+  { value: "on-request", label: "On request", description: "Auto-approve safe actions, ask for risky ones." },
+  { value: "never", label: "Never", description: "Let the agent run without approval prompts." },
 ] as const;
 
-const ACCESS_POLICY_OPTIONS: ReadonlyArray<{
+const SANDBOX_POLICY_OPTIONS: ReadonlyArray<{
   description: string;
   label: string;
-  value: AccessPolicy;
+  value: SandboxPolicy;
 }> = [
-  { value: "ask-first", label: "Ask", description: "Require confirmation the first time." },
-  { value: "block", label: "Block", description: "Prevent this class of action." },
-  { value: "allow", label: "Allow", description: "Permit it without extra prompts." },
+  { value: "read-only", label: "Read only", description: "No file writes allowed anywhere." },
+  { value: "workspace-write", label: "Workspace write", description: "Write only inside the active workspace." },
+  { value: "full-access", label: "Full access", description: "Write anywhere on the filesystem." },
 ] as const;
 
-const RISKY_COMMAND_OPTIONS: ReadonlyArray<{
+const NETWORK_ACCESS_OPTIONS: ReadonlyArray<{
   description: string;
   label: string;
-  value: RiskyCommandConfirmationPolicy;
+  value: NetworkAccessPolicy;
 }> = [
-  { value: "always-confirm", label: "Always Confirm", description: "High-risk commands always require explicit approval." },
-  { value: "block", label: "Block", description: "Disallow dangerous commands outright." },
+  { value: "ask", label: "Ask", description: "Prompt before making network requests." },
+  { value: "block", label: "Block", description: "Block all outbound network access." },
+  { value: "allow", label: "Allow", description: "Allow network access without prompts." },
 ] as const;
 
 export function WorkbenchSettingsOverlay({
   activeCategory,
-  approvalPolicy,
   contentRef,
   isCheckingUpdates,
   language,
+  policy,
   prompts,
   providers,
   selectedLanguageLabel,
@@ -221,25 +230,34 @@ export function WorkbenchSettingsOverlay({
   updateStatus,
   userSession,
   workspaces,
+  onAddAllowEntry,
+  onAddCommand,
+  onAddDenyEntry,
   onAddProvider,
   onAddWorkspace,
+  onAddWritableRoot,
   onCheckUpdates,
   onClose,
   onLogin,
   onLogout,
+  onRemoveAllowEntry,
+  onRemoveCommand,
+  onRemoveDenyEntry,
   onRemoveProvider,
   onRemoveWorkspace,
+  onRemoveWritableRoot,
   onSelectCategory,
   onSelectLanguage,
   onSelectTheme,
   onSetDefaultWorkspace,
-  onUpdateApprovalPolicySetting,
+  onUpdateAllowEntry,
+  onUpdateCommand,
+  onUpdateDenyEntry,
+  onUpdatePolicySetting,
   onUpdatePromptSetting,
   onUpdateProvider,
   onUpdateWorkspace,
-  onAddCommand,
-  onRemoveCommand,
-  onUpdateCommand,
+  onUpdateWritableRoot,
 }: WorkbenchSettingsOverlayProps) {
   const activeMeta = CATEGORY_META.find((category) => category.key === activeCategory) ?? CATEGORY_META[1];
 
@@ -389,11 +407,20 @@ export function WorkbenchSettingsOverlay({
                   />
                 ) : null}
 
-                {activeCategory === "approval-policy" ? (
-                  <ApprovalSettingsPanel
-                    approvalPolicy={approvalPolicy}
+                {activeCategory === "policy" ? (
+                  <PolicySettingsPanel
                     description={activeMeta.description}
-                    onUpdateApprovalPolicySetting={onUpdateApprovalPolicySetting}
+                    policy={policy}
+                    onAddAllowEntry={onAddAllowEntry}
+                    onAddDenyEntry={onAddDenyEntry}
+                    onAddWritableRoot={onAddWritableRoot}
+                    onRemoveAllowEntry={onRemoveAllowEntry}
+                    onRemoveDenyEntry={onRemoveDenyEntry}
+                    onRemoveWritableRoot={onRemoveWritableRoot}
+                    onUpdateAllowEntry={onUpdateAllowEntry}
+                    onUpdateDenyEntry={onUpdateDenyEntry}
+                    onUpdatePolicySetting={onUpdatePolicySetting}
+                    onUpdateWritableRoot={onUpdateWritableRoot}
                   />
                 ) : null}
               </div>
@@ -1055,73 +1082,409 @@ function CommandItem({
   );
 }
 
-function ApprovalSettingsPanel({
-  approvalPolicy,
+function PolicySettingsPanel({
   description,
-  onUpdateApprovalPolicySetting,
+  policy,
+  onAddAllowEntry,
+  onAddDenyEntry,
+  onAddWritableRoot,
+  onRemoveAllowEntry,
+  onRemoveDenyEntry,
+  onRemoveWritableRoot,
+  onUpdateAllowEntry,
+  onUpdateDenyEntry,
+  onUpdatePolicySetting,
+  onUpdateWritableRoot,
 }: {
-  approvalPolicy: ApprovalPolicySettings;
   description: string;
-  onUpdateApprovalPolicySetting: <Key extends keyof ApprovalPolicySettings>(
-    key: Key,
-    value: ApprovalPolicySettings[Key],
-  ) => void;
+  policy: PolicySettings;
+  onAddAllowEntry: (entry: Omit<PatternEntry, "id">) => void;
+  onAddDenyEntry: (entry: Omit<PatternEntry, "id">) => void;
+  onAddWritableRoot: (entry: Omit<WritableRootEntry, "id">) => void;
+  onRemoveAllowEntry: (id: string) => void;
+  onRemoveDenyEntry: (id: string) => void;
+  onRemoveWritableRoot: (id: string) => void;
+  onUpdateAllowEntry: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
+  onUpdateDenyEntry: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
+  onUpdatePolicySetting: <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => void;
+  onUpdateWritableRoot: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
 }) {
   return (
     <div className="flex flex-col gap-6">
-      <PageHeading title="Approval Policy" description={description} />
+      <PageHeading title="Policy" description={description} />
 
       <SettingsSection title="Execution">
         <SettingsRow
-          label="Command execution"
-          description={COMMAND_EXECUTION_OPTIONS.find((option) => option.value === approvalPolicy.commandExecution)?.description ?? ""}
+          label="Approval policy"
+          description={APPROVAL_POLICY_OPTIONS.find((option) => option.value === policy.approvalPolicy)?.description ?? ""}
           control={
             <ChoiceGroup
-              options={COMMAND_EXECUTION_OPTIONS.map(({ label, value }) => ({ label, value }))}
-              value={approvalPolicy.commandExecution}
-              onValueChange={(value) => onUpdateApprovalPolicySetting("commandExecution", value as CommandExecutionPolicy)}
+              options={APPROVAL_POLICY_OPTIONS.map(({ label, value }) => ({ label, value }))}
+              value={policy.approvalPolicy}
+              onValueChange={(value) => onUpdatePolicySetting("approvalPolicy", value as ApprovalPolicy)}
             />
           }
         />
         <SectionDivider />
+        <PatternSubsection
+          title="Allowed"
+          description="Patterns the agent can use without approval."
+          entries={policy.allowList}
+          onAdd={onAddAllowEntry}
+          onRemove={onRemoveAllowEntry}
+          onUpdate={onUpdateAllowEntry}
+        />
+        <SectionDivider />
+        <PatternSubsection
+          title="Denied"
+          description="Patterns the agent must never use."
+          entries={policy.denyList}
+          onAdd={onAddDenyEntry}
+          onRemove={onRemoveDenyEntry}
+          onUpdate={onUpdateDenyEntry}
+        />
+      </SettingsSection>
+
+      <SettingsSection title="Sandbox">
         <SettingsRow
-          label="File writes outside workspace"
-          description={ACCESS_POLICY_OPTIONS.find((option) => option.value === approvalPolicy.fileWriteOutsideWorkspace)?.description ?? ""}
+          label="Sandbox policy"
+          description={SANDBOX_POLICY_OPTIONS.find((option) => option.value === policy.sandboxPolicy)?.description ?? ""}
           control={
             <ChoiceGroup
-              options={ACCESS_POLICY_OPTIONS.map(({ label, value }) => ({ label, value }))}
-              value={approvalPolicy.fileWriteOutsideWorkspace}
-              onValueChange={(value) => onUpdateApprovalPolicySetting("fileWriteOutsideWorkspace", value as AccessPolicy)}
+              options={SANDBOX_POLICY_OPTIONS.map(({ label, value }) => ({ label, value }))}
+              value={policy.sandboxPolicy}
+              onValueChange={(value) => onUpdatePolicySetting("sandboxPolicy", value as SandboxPolicy)}
             />
           }
         />
         <SectionDivider />
         <SettingsRow
           label="Network access"
-          description={ACCESS_POLICY_OPTIONS.find((option) => option.value === approvalPolicy.networkAccess)?.description ?? ""}
+          description={NETWORK_ACCESS_OPTIONS.find((option) => option.value === policy.networkAccess)?.description ?? ""}
           control={
             <ChoiceGroup
-              options={ACCESS_POLICY_OPTIONS.map(({ label, value }) => ({ label, value }))}
-              value={approvalPolicy.networkAccess}
-              onValueChange={(value) => onUpdateApprovalPolicySetting("networkAccess", value as AccessPolicy)}
+              options={NETWORK_ACCESS_OPTIONS.map(({ label, value }) => ({ label, value }))}
+              value={policy.networkAccess}
+              onValueChange={(value) => onUpdatePolicySetting("networkAccess", value as NetworkAccessPolicy)}
             />
           }
         />
         <SectionDivider />
-        <SettingsRow
-          label="Risky commands"
-          description={RISKY_COMMAND_OPTIONS.find((option) => option.value === approvalPolicy.riskyCommandConfirmation)?.description ?? ""}
-          control={
-            <ChoiceGroup
-              options={RISKY_COMMAND_OPTIONS.map(({ label, value }) => ({ label, value }))}
-              value={approvalPolicy.riskyCommandConfirmation}
-              onValueChange={(value) =>
-                onUpdateApprovalPolicySetting("riskyCommandConfirmation", value as RiskyCommandConfirmationPolicy)
-              }
-            />
-          }
+        <WritableRootsSubsection
+          entries={policy.writableRoots}
+          onAdd={onAddWritableRoot}
+          onRemove={onRemoveWritableRoot}
+          onUpdate={onUpdateWritableRoot}
         />
       </SettingsSection>
+    </div>
+  );
+}
+
+function PatternSubsection({
+  description,
+  entries,
+  onAdd,
+  onRemove,
+  onUpdate,
+  title,
+}: {
+  description: string;
+  entries: Array<PatternEntry>;
+  onAdd: (entry: Omit<PatternEntry, "id">) => void;
+  onRemove: (id: string) => void;
+  onUpdate: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
+  title: string;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const pendingAddRef = useRef(false);
+
+  useEffect(() => {
+    if (pendingAddRef.current && entries.length > 0) {
+      pendingAddRef.current = false;
+      setEditingId(entries[entries.length - 1].id);
+    }
+  }, [entries]);
+
+  const handleAdd = () => {
+    pendingAddRef.current = true;
+    onAdd({ pattern: "" });
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-[13px] font-medium text-app-foreground">{title}</p>
+          <p className="mt-1 text-[12px] leading-5 text-app-muted">{description}</p>
+        </div>
+        <button
+          type="button"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-[12px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
+          onClick={handleAdd}
+        >
+          <Plus className="size-3.5" />
+          <span>Add</span>
+        </button>
+      </div>
+      {entries.length > 0 ? (
+        <div className="mx-4 mb-3 mt-1 flex flex-col overflow-hidden rounded-lg border border-app-border bg-app-surface-muted">
+          {entries.map((entry, index) => (
+            <PatternItem
+              key={entry.id}
+              entry={entry}
+              isEditing={editingId === entry.id}
+              isFirst={index === 0}
+              onCancelEdit={() => setEditingId(null)}
+              onEdit={() => setEditingId(editingId === entry.id ? null : entry.id)}
+              onRemove={() => onRemove(entry.id)}
+              onUpdate={(patch) => onUpdate(entry.id, patch)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PatternItem({
+  entry,
+  isEditing,
+  isFirst,
+  onCancelEdit,
+  onEdit,
+  onRemove,
+  onUpdate,
+}: {
+  entry: PatternEntry;
+  isEditing: boolean;
+  isFirst: boolean;
+  onCancelEdit: () => void;
+  onEdit: () => void;
+  onRemove: () => void;
+  onUpdate: (patch: Partial<Omit<PatternEntry, "id">>) => void;
+}) {
+  return (
+    <div className={cn("flex items-center gap-3 px-3 py-2", !isFirst && "border-t border-dashed border-app-border")}>
+      <div className="min-w-0 flex-1">
+        {isEditing ? (
+          <Input
+            autoFocus
+            value={entry.pattern}
+            onChange={(event) => onUpdate({ pattern: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onEdit();
+              if (event.key === "Escape") onCancelEdit();
+            }}
+            placeholder="e.g. rm -rf, curl *, Read"
+            className="h-8 text-[13px]"
+          />
+        ) : (
+          <span className="text-[13px] font-medium text-app-foreground">
+            {entry.pattern || <span className="italic text-app-muted">Empty</span>}
+          </span>
+        )}
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1">
+        {isEditing ? (
+          <>
+            <button
+              type="button"
+              title="Confirm"
+              aria-label="Confirm"
+              className="flex size-7 items-center justify-center rounded-md text-green-500 transition-colors hover:bg-app-surface-hover hover:text-green-600"
+              onClick={onEdit}
+            >
+              <Check className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              title="Cancel"
+              aria-label="Cancel"
+              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              onClick={onCancelEdit}
+            >
+              <X className="size-3.5" />
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              title="Edit pattern"
+              aria-label="Edit pattern"
+              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              onClick={onEdit}
+            >
+              <Pencil className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              title="Remove pattern"
+              aria-label="Remove pattern"
+              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-red-500"
+              onClick={onRemove}
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WritableRootsSubsection({
+  entries,
+  onAdd,
+  onRemove,
+  onUpdate,
+}: {
+  entries: Array<WritableRootEntry>;
+  onAdd: (entry: Omit<WritableRootEntry, "id">) => void;
+  onRemove: (id: string) => void;
+  onUpdate: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const pendingAddRef = useRef(false);
+
+  useEffect(() => {
+    if (pendingAddRef.current && entries.length > 0) {
+      pendingAddRef.current = false;
+      setEditingId(entries[entries.length - 1].id);
+    }
+  }, [entries]);
+
+  const handleAdd = () => {
+    pendingAddRef.current = true;
+    onAdd({ path: "" });
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-[13px] font-medium text-app-foreground">Writable roots</p>
+          <p className="mt-1 text-[12px] leading-5 text-app-muted">Additional directories the sandbox is allowed to write to.</p>
+        </div>
+        <button
+          type="button"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-[12px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
+          onClick={handleAdd}
+        >
+          <Plus className="size-3.5" />
+          <span>Add</span>
+        </button>
+      </div>
+      {entries.length > 0 ? (
+        <div className="mx-4 mb-3 mt-1 flex flex-col overflow-hidden rounded-lg border border-app-border bg-app-surface-muted">
+          {entries.map((entry, index) => (
+            <WritableRootItem
+              key={entry.id}
+              entry={entry}
+              isEditing={editingId === entry.id}
+              isFirst={index === 0}
+              onCancelEdit={() => setEditingId(null)}
+              onEdit={() => setEditingId(editingId === entry.id ? null : entry.id)}
+              onRemove={() => onRemove(entry.id)}
+              onUpdate={(patch) => onUpdate(entry.id, patch)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WritableRootItem({
+  entry,
+  isEditing,
+  isFirst,
+  onCancelEdit,
+  onEdit,
+  onRemove,
+  onUpdate,
+}: {
+  entry: WritableRootEntry;
+  isEditing: boolean;
+  isFirst: boolean;
+  onCancelEdit: () => void;
+  onEdit: () => void;
+  onRemove: () => void;
+  onUpdate: (patch: Partial<Omit<WritableRootEntry, "id">>) => void;
+}) {
+  return (
+    <div className={cn("flex items-center gap-3 px-3 py-2", !isFirst && "border-t border-dashed border-app-border")}>
+      <div className="shrink-0 text-app-subtle">
+        <FolderOpen className="size-4" />
+      </div>
+
+      <div className="min-w-0 flex-1">
+        {isEditing ? (
+          <Input
+            autoFocus
+            value={entry.path}
+            onChange={(event) => onUpdate({ path: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onEdit();
+              if (event.key === "Escape") onCancelEdit();
+            }}
+            placeholder="/path/to/directory"
+            className="h-8 text-[13px]"
+          />
+        ) : (
+          <span className="text-[13px] font-medium text-app-foreground">
+            {entry.path || <span className="italic text-app-muted">Empty path</span>}
+          </span>
+        )}
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1">
+        {isEditing ? (
+          <>
+            <button
+              type="button"
+              title="Confirm"
+              aria-label="Confirm"
+              className="flex size-7 items-center justify-center rounded-md text-green-500 transition-colors hover:bg-app-surface-hover hover:text-green-600"
+              onClick={onEdit}
+            >
+              <Check className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              title="Cancel"
+              aria-label="Cancel"
+              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              onClick={onCancelEdit}
+            >
+              <X className="size-3.5" />
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              title="Edit path"
+              aria-label="Edit path"
+              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              onClick={onEdit}
+            >
+              <Pencil className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              title="Remove path"
+              aria-label="Remove path"
+              className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-red-500"
+              onClick={onRemove}
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
