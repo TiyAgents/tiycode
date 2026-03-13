@@ -1,4 +1,5 @@
-import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -8,6 +9,7 @@ import {
   ChevronDown,
   CircleUserRound,
   Coins,
+  Copy,
   Database,
   Download,
   Eye,
@@ -15,6 +17,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  Info,
   MessageSquare,
   Monitor,
   Pencil,
@@ -53,13 +56,15 @@ import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import type {
+  AgentProfile,
   ApiProtocol,
   ApprovalPolicy,
   CommandEntry,
+  CommandSettings,
+  GeneralPreferences,
   NetworkAccessPolicy,
   PolicySettings,
   PromptResponseStyle,
-  PromptSettings,
   ProviderEntry,
   ProviderModel,
   SandboxPolicy,
@@ -77,11 +82,14 @@ type UserSession = {
 
 type WorkbenchSettingsOverlayProps = {
   activeCategory: SettingsCategory;
+  agentProfiles: Array<AgentProfile>;
+  activeAgentProfileId: string;
   contentRef: RefObject<HTMLDivElement | null>;
+  generalPreferences: GeneralPreferences;
   isCheckingUpdates: boolean;
   language: LanguagePreference;
+  commands: CommandSettings;
   policy: PolicySettings;
-  prompts: PromptSettings;
   providers: Array<ProviderEntry>;
   selectedLanguageLabel: string;
   selectedThemeSummary: string;
@@ -90,6 +98,7 @@ type WorkbenchSettingsOverlayProps = {
   updateStatus: string | null;
   userSession: UserSession | null;
   workspaces: Array<WorkspaceEntry>;
+  onAddAgentProfile: (entry: Omit<AgentProfile, "id">) => void;
   onAddAllowEntry: (entry: Omit<PatternEntry, "id">) => void;
   onAddCommand: (entry: Omit<CommandEntry, "id">) => void;
   onAddDenyEntry: (entry: Omit<PatternEntry, "id">) => void;
@@ -98,8 +107,10 @@ type WorkbenchSettingsOverlayProps = {
   onAddWritableRoot: (entry: Omit<WritableRootEntry, "id">) => void;
   onCheckUpdates: () => void;
   onClose: () => void;
+  onDuplicateAgentProfile: (id: string) => void;
   onLogin: () => void;
   onLogout: () => void;
+  onRemoveAgentProfile: (id: string) => void;
   onRemoveAllowEntry: (id: string) => void;
   onRemoveCommand: (id: string) => void;
   onRemoveDenyEntry: (id: string) => void;
@@ -109,12 +120,14 @@ type WorkbenchSettingsOverlayProps = {
   onSelectCategory: (category: SettingsCategory) => void;
   onSelectLanguage: (language: LanguagePreference) => void;
   onSelectTheme: (theme: ThemePreference) => void;
+  onSetActiveAgentProfile: (id: string) => void;
   onSetDefaultWorkspace: (id: string) => void;
+  onUpdateAgentProfile: (id: string, patch: Partial<Omit<AgentProfile, "id">>) => void;
   onUpdateAllowEntry: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
   onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
   onUpdateDenyEntry: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
+  onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
   onUpdatePolicySetting: <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => void;
-  onUpdatePromptSetting: <Key extends keyof PromptSettings>(key: Key, value: PromptSettings[Key]) => void;
   onUpdateProvider: (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => void;
   onUpdateWorkspace: (id: string, patch: Partial<Omit<WorkspaceEntry, "id">>) => void;
   onUpdateWritableRoot: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
@@ -135,7 +148,7 @@ const CATEGORY_META: ReadonlyArray<{
   {
     key: "general",
     title: "General",
-    description: "Core app preferences for language, theme, and desktop runtime.",
+    description: "Core app preferences for language and theme.",
     icon: Monitor,
   },
   {
@@ -145,9 +158,9 @@ const CATEGORY_META: ReadonlyArray<{
     icon: Blocks,
   },
   {
-    key: "prompts",
-    title: "Prompts",
-    description: "Response defaults, custom instructions, and slash commands.",
+    key: "commands",
+    title: "Commands",
+    description: "Slash commands for common workflows.",
     icon: Sparkles,
   },
   {
@@ -161,6 +174,12 @@ const CATEGORY_META: ReadonlyArray<{
     title: "Workspace",
     description: "Manage project workspaces. New conversations will use these directories instead of creating temporary ones.",
     icon: FolderOpen,
+  },
+  {
+    key: "about",
+    title: "About",
+    description: "Runtime platform, app version, and update checks.",
+    icon: Info,
   },
 ] as const;
 
@@ -217,11 +236,14 @@ const NETWORK_ACCESS_OPTIONS: ReadonlyArray<{
 
 export function WorkbenchSettingsOverlay({
   activeCategory,
+  agentProfiles,
+  activeAgentProfileId,
   contentRef,
+  generalPreferences,
   isCheckingUpdates,
   language,
+  commands,
   policy,
-  prompts,
   providers,
   selectedLanguageLabel,
   selectedThemeSummary,
@@ -230,6 +252,7 @@ export function WorkbenchSettingsOverlay({
   updateStatus,
   userSession,
   workspaces,
+  onAddAgentProfile,
   onAddAllowEntry,
   onAddCommand,
   onAddDenyEntry,
@@ -238,8 +261,10 @@ export function WorkbenchSettingsOverlay({
   onAddWritableRoot,
   onCheckUpdates,
   onClose,
+  onDuplicateAgentProfile,
   onLogin,
   onLogout,
+  onRemoveAgentProfile,
   onRemoveAllowEntry,
   onRemoveCommand,
   onRemoveDenyEntry,
@@ -249,12 +274,14 @@ export function WorkbenchSettingsOverlay({
   onSelectCategory,
   onSelectLanguage,
   onSelectTheme,
+  onSetActiveAgentProfile,
   onSetDefaultWorkspace,
+  onUpdateAgentProfile,
   onUpdateAllowEntry,
   onUpdateCommand,
   onUpdateDenyEntry,
+  onUpdateGeneralPreference,
   onUpdatePolicySetting,
-  onUpdatePromptSetting,
   onUpdateProvider,
   onUpdateWorkspace,
   onUpdateWritableRoot,
@@ -361,17 +388,21 @@ export function WorkbenchSettingsOverlay({
 
                 {activeCategory === "general" ? (
                   <GeneralSettingsPanel
+                    agentProfiles={agentProfiles}
+                    activeAgentProfileId={activeAgentProfileId}
                     description={activeMeta.description}
-                    isCheckingUpdates={isCheckingUpdates}
+                    generalPreferences={generalPreferences}
                     language={language}
-                    runtime={systemMetadata}
-                    selectedLanguageLabel={selectedLanguageLabel}
-                    selectedThemeSummary={selectedThemeSummary}
+                    providers={providers}
                     theme={theme}
-                    updateStatus={updateStatus}
-                    onCheckUpdates={onCheckUpdates}
+                    onAddAgentProfile={onAddAgentProfile}
+                    onDuplicateAgentProfile={onDuplicateAgentProfile}
+                    onRemoveAgentProfile={onRemoveAgentProfile}
                     onSelectLanguage={onSelectLanguage}
                     onSelectTheme={onSelectTheme}
+                    onSetActiveAgentProfile={onSetActiveAgentProfile}
+                    onUpdateAgentProfile={onUpdateAgentProfile}
+                    onUpdateGeneralPreference={onUpdateGeneralPreference}
                   />
                 ) : null}
 
@@ -396,11 +427,10 @@ export function WorkbenchSettingsOverlay({
                   />
                 ) : null}
 
-                {activeCategory === "prompts" ? (
-                  <PromptSettingsPanel
+                {activeCategory === "commands" ? (
+                  <CommandSettingsPanel
                     description={activeMeta.description}
-                    prompts={prompts}
-                    onUpdatePromptSetting={onUpdatePromptSetting}
+                    commands={commands}
                     onAddCommand={onAddCommand}
                     onRemoveCommand={onRemoveCommand}
                     onUpdateCommand={onUpdateCommand}
@@ -421,6 +451,18 @@ export function WorkbenchSettingsOverlay({
                     onUpdateDenyEntry={onUpdateDenyEntry}
                     onUpdatePolicySetting={onUpdatePolicySetting}
                     onUpdateWritableRoot={onUpdateWritableRoot}
+                  />
+                ) : null}
+
+                {activeCategory === "about" ? (
+                  <AboutSettingsPanel
+                    description={activeMeta.description}
+                    isCheckingUpdates={isCheckingUpdates}
+                    runtime={systemMetadata}
+                    selectedLanguageLabel={selectedLanguageLabel}
+                    selectedThemeSummary={selectedThemeSummary}
+                    updateStatus={updateStatus}
+                    onCheckUpdates={onCheckUpdates}
                   />
                 ) : null}
               </div>
@@ -748,31 +790,241 @@ function AccountSettingsPanel({
   );
 }
 
+function ProfilePicker({
+  profiles,
+  activeProfileId,
+  onSelect,
+  onRename,
+  onDuplicate,
+  onDelete,
+}: {
+  profiles: Array<AgentProfile>;
+  activeProfileId: string;
+  onSelect: (id: string) => void;
+  onRename: (id: string, name: string) => void;
+  onDuplicate: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
+
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? profiles[0];
+
+  useLayoutEffect(() => {
+    if (!isOpen || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const dropdownMaxH = 300;
+    const spaceBelow = window.innerHeight - rect.bottom - 8;
+    const placeAbove = spaceBelow < dropdownMaxH && rect.top > spaceBelow;
+    setDropdownStyle({
+      position: "fixed",
+      right: window.innerWidth - rect.right,
+      minWidth: Math.max(rect.width, 240),
+      maxHeight: dropdownMaxH,
+      ...(placeAbove
+        ? { bottom: window.innerHeight - rect.top + 4 }
+        : { top: rect.bottom + 4 }),
+    });
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || dropdownRef.current?.contains(target)) return;
+      setIsOpen(false);
+      setEditingId(null);
+    };
+    document.addEventListener("pointerdown", handleClickOutside);
+    return () => document.removeEventListener("pointerdown", handleClickOutside);
+  }, [isOpen]);
+
+  const handleStartRename = (profile: AgentProfile) => {
+    setEditingId(profile.id);
+    setEditingName(profile.name);
+  };
+
+  const handleCommitRename = () => {
+    if (editingId && editingName.trim()) {
+      onRename(editingId, editingName.trim());
+    }
+    setEditingId(null);
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="flex h-6 items-center gap-1 rounded-md border border-app-border bg-app-surface px-2 text-[11px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
+        onClick={() => setIsOpen((prev) => !prev)}
+      >
+        <span className="max-w-[120px] truncate">{activeProfile.name}</span>
+        <ChevronDown className="size-3 text-app-subtle" />
+      </button>
+      {isOpen
+        ? createPortal(
+            <div
+              ref={dropdownRef}
+              style={dropdownStyle}
+              className="z-50 overflow-y-auto rounded-xl border border-app-border bg-app-surface p-1 shadow-lg"
+            >
+              {profiles.map((profile) => (
+                <div
+                  key={profile.id}
+                  className={cn(
+                    "group flex items-center gap-1.5 rounded-lg px-2 py-1.5 transition-colors",
+                    profile.id === activeProfileId ? "bg-app-surface-hover" : "hover:bg-app-surface-hover",
+                  )}
+                >
+                  {editingId === profile.id ? (
+                    <input
+                      autoFocus
+                      className="min-w-0 flex-1 rounded bg-transparent px-0.5 text-[13px] leading-5 text-app-foreground outline-none ring-1 ring-app-border focus:ring-app-accent"
+                      value={editingName}
+                      onChange={(e) => setEditingName(e.target.value)}
+                      onBlur={handleCommitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleCommitRename();
+                        if (e.key === "Escape") setEditingId(null);
+                      }}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 truncate text-left text-[13px] leading-5 text-app-foreground"
+                      onClick={() => {
+                        onSelect(profile.id);
+                        setIsOpen(false);
+                      }}
+                    >
+                      {profile.name}
+                    </button>
+                  )}
+                  {editingId !== profile.id ? (
+                    <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                      <button
+                        type="button"
+                        className="flex size-5 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground"
+                        title="Rename"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartRename(profile);
+                        }}
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                      <button
+                        type="button"
+                        className="flex size-5 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground"
+                        title="Duplicate"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDuplicate(profile.id);
+                          setIsOpen(false);
+                        }}
+                      >
+                        <Copy className="size-3" />
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(
+                          "flex size-5 items-center justify-center rounded",
+                          profiles.length <= 1
+                            ? "cursor-not-allowed text-app-subtle/40"
+                            : "text-app-subtle hover:bg-app-canvas hover:text-red-500",
+                        )}
+                        title="Delete"
+                        disabled={profiles.length <= 1}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (profiles.length > 1) {
+                            onDelete(profile.id);
+                          }
+                        }}
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
 function GeneralSettingsPanel({
+  agentProfiles,
+  activeAgentProfileId,
   description,
-  isCheckingUpdates,
+  generalPreferences,
   language,
-  runtime,
-  selectedLanguageLabel,
-  selectedThemeSummary,
+  providers,
   theme,
-  updateStatus,
-  onCheckUpdates,
+  onAddAgentProfile,
+  onDuplicateAgentProfile,
+  onRemoveAgentProfile,
   onSelectLanguage,
   onSelectTheme,
+  onSetActiveAgentProfile,
+  onUpdateAgentProfile,
+  onUpdateGeneralPreference,
 }: {
+  agentProfiles: Array<AgentProfile>;
+  activeAgentProfileId: string;
   description: string;
-  isCheckingUpdates: boolean;
+  generalPreferences: GeneralPreferences;
   language: LanguagePreference;
-  runtime: SystemMetadata | null;
-  selectedLanguageLabel: string;
-  selectedThemeSummary: string;
+  providers: Array<ProviderEntry>;
   theme: ThemePreference;
-  updateStatus: string | null;
-  onCheckUpdates: () => void;
+  onAddAgentProfile: (entry: Omit<AgentProfile, "id">) => void;
+  onDuplicateAgentProfile: (id: string) => void;
+  onRemoveAgentProfile: (id: string) => void;
   onSelectLanguage: (language: LanguagePreference) => void;
   onSelectTheme: (theme: ThemePreference) => void;
+  onSetActiveAgentProfile: (id: string) => void;
+  onUpdateAgentProfile: (id: string, patch: Partial<Omit<AgentProfile, "id">>) => void;
+  onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
 }) {
+  const availableModels = useMemo(() => {
+    const models: Array<{ modelId: string; displayName: string; providerName: string }> = [];
+    for (const provider of providers) {
+      if (!provider.enabled) continue;
+      for (const model of provider.models) {
+        if (!model.enabled) continue;
+        models.push({
+          modelId: `${provider.name}/${model.modelId}`,
+          displayName: model.displayName || model.modelId,
+          providerName: provider.name,
+        });
+      }
+    }
+    return models;
+  }, [providers]);
+
+  const activeProfile = agentProfiles.find((p) => p.id === activeAgentProfileId) ?? agentProfiles[0];
+  const selectedStyle = RESPONSE_STYLE_OPTIONS.find((option) => option.value === activeProfile.responseStyle) ?? RESPONSE_STYLE_OPTIONS[0];
+
+  const handleAddProfile = () => {
+    onAddAgentProfile({
+      name: "New Profile",
+      customInstructions: "",
+      responseStyle: "balanced",
+      responseLanguage: "English",
+      primaryModel: "",
+      assistantModel: "",
+      liteModel: "",
+    });
+  };
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeading title="General" description={description} />
@@ -801,7 +1053,274 @@ function GeneralSettingsPanel({
             />
           }
         />
+        <SectionDivider />
+        <SettingsRow
+          label="Startup"
+          description="Automatically launch the app when you log in."
+          control={
+            <Switch
+              size="sm"
+              checked={generalPreferences.launchAtLogin}
+              onCheckedChange={(checked) => onUpdateGeneralPreference("launchAtLogin", checked)}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label="Close to tray"
+          description="Minimize to system tray instead of quitting when the window is closed."
+          control={
+            <Switch
+              size="sm"
+              checked={generalPreferences.minimizeToTray}
+              onCheckedChange={(checked) => onUpdateGeneralPreference("minimizeToTray", checked)}
+            />
+          }
+        />
       </SettingsSection>
+
+      <SettingsSection
+        title="Agent Defaults"
+        action={
+          <div className="flex items-center gap-1.5">
+            <ProfilePicker
+              profiles={agentProfiles}
+              activeProfileId={activeProfile.id}
+              onSelect={onSetActiveAgentProfile}
+              onRename={(id, name) => onUpdateAgentProfile(id, { name })}
+              onDuplicate={onDuplicateAgentProfile}
+              onDelete={onRemoveAgentProfile}
+            />
+            <button
+              type="button"
+              className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              onClick={handleAddProfile}
+            >
+              <Plus className="size-3" />
+              Add
+            </button>
+          </div>
+        }
+      >
+        <SettingsRow
+          label="Response style"
+          description={selectedStyle.description}
+          control={
+            <ChoiceGroup
+              options={RESPONSE_STYLE_OPTIONS.map(({ label, value }) => ({ label, value }))}
+              value={activeProfile.responseStyle}
+              onValueChange={(value) => onUpdateAgentProfile(activeProfile.id, { responseStyle: value as PromptResponseStyle })}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label="Response language"
+          description="The language used for agent responses."
+          control={
+            <Input
+              value={activeProfile.responseLanguage}
+              onChange={(event) => onUpdateAgentProfile(activeProfile.id, { responseLanguage: event.target.value })}
+              className="w-40 text-[13px]"
+              placeholder="English"
+            />
+          }
+        />
+        <SectionDivider />
+        <ModelSelectRow
+          label="Primary model"
+          description="Handles main tasks including planning, building, and reasoning."
+          value={activeProfile.primaryModel}
+          availableModels={availableModels}
+          onValueChange={(value) => onUpdateAgentProfile(activeProfile.id, { primaryModel: value })}
+        />
+        <SectionDivider />
+        <ModelSelectRow
+          label="Assistant model"
+          description="Supports the primary model with sub-agent tasks and tool calls."
+          value={activeProfile.assistantModel}
+          availableModels={availableModels}
+          onValueChange={(value) => onUpdateAgentProfile(activeProfile.id, { assistantModel: value })}
+        />
+        <SectionDivider />
+        <ModelSelectRow
+          label="Lite model"
+          description="Lightweight model for title generation and quick summaries."
+          value={activeProfile.liteModel}
+          availableModels={availableModels}
+          onValueChange={(value) => onUpdateAgentProfile(activeProfile.id, { liteModel: value })}
+        />
+        <SectionDivider />
+        <div className="px-4 py-3">
+          <div className="mb-1 text-[13px] font-medium leading-5 text-app-foreground">Custom instructions</div>
+          <p className="mb-3 text-[12px] leading-5 text-app-muted">
+            Standing instruction applied to every thread. Use it to define the agent&apos;s personality, constraints, and default behavior.
+          </p>
+          <Textarea
+            value={activeProfile.customInstructions}
+            onChange={(event) => onUpdateAgentProfile(activeProfile.id, { customInstructions: event.target.value })}
+            className="min-h-36"
+          />
+        </div>
+      </SettingsSection>
+    </div>
+  );
+}
+
+function ModelSelectRow({
+  availableModels,
+  description,
+  label,
+  value,
+  onValueChange,
+}: {
+  availableModels: Array<{ modelId: string; displayName: string; providerName: string }>;
+  description: string;
+  label: string;
+  value: string;
+  onValueChange: (value: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
+
+  useLayoutEffect(() => {
+    if (!isOpen || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const dropdownMaxH = 256;
+    const spaceBelow = window.innerHeight - rect.bottom - 8;
+    const placeAbove = spaceBelow < dropdownMaxH && rect.top > spaceBelow;
+    setDropdownStyle({
+      position: "fixed",
+      right: window.innerWidth - rect.right,
+      minWidth: Math.max(rect.width, 280),
+      maxHeight: dropdownMaxH,
+      ...(placeAbove
+        ? { bottom: window.innerHeight - rect.top + 4 }
+        : { top: rect.bottom + 4 }),
+    });
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || dropdownRef.current?.contains(target)) return;
+      setIsOpen(false);
+    };
+    document.addEventListener("pointerdown", handleClickOutside);
+    return () => document.removeEventListener("pointerdown", handleClickOutside);
+  }, [isOpen]);
+
+  const selectedModel = availableModels.find((m) => m.modelId === value);
+  const displayValue = selectedModel
+    ? `${selectedModel.displayName}`
+    : value
+      ? value
+      : "Not set";
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, Array<{ modelId: string; displayName: string }>>();
+    for (const model of availableModels) {
+      const list = map.get(model.providerName) ?? [];
+      list.push(model);
+      map.set(model.providerName, list);
+    }
+    return map;
+  }, [availableModels]);
+
+  return (
+    <div className="grid gap-3 bg-app-surface px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+      <div className="min-w-0">
+        <p className="text-[13px] font-medium text-app-foreground">{label}</p>
+        <p className="mt-1 text-[12px] leading-5 text-app-muted">{description}</p>
+      </div>
+      <div className="min-w-0 md:justify-self-end">
+        <button
+          ref={triggerRef}
+          type="button"
+          className={cn(
+            "inline-flex min-h-8 w-full items-center justify-between gap-2 rounded-lg border border-app-border bg-app-surface-muted px-3 text-[12px] transition-colors hover:bg-app-surface-hover md:w-auto md:min-w-[200px]",
+            !selectedModel && !value && "text-app-muted",
+          )}
+          onClick={() => setIsOpen(!isOpen)}
+        >
+          <span className="truncate">{displayValue}</span>
+          <ChevronDown className={cn("size-3 shrink-0 text-app-subtle transition-transform", isOpen && "rotate-180")} />
+        </button>
+        {isOpen
+          ? createPortal(
+              <div
+                ref={dropdownRef}
+                style={dropdownStyle}
+                className="z-[100] overflow-y-auto rounded-lg border border-app-border bg-app-surface shadow-lg"
+              >
+                <button
+                  type="button"
+                  className={cn(
+                    "flex w-full items-center px-3 py-2 text-left text-[12px] transition-colors hover:bg-app-surface-hover",
+                    !value && "text-app-accent",
+                  )}
+                  onClick={() => { onValueChange(""); setIsOpen(false); }}
+                >
+                  <span className="italic text-app-muted">Not set</span>
+                </button>
+                {[...grouped.entries()].map(([providerName, models]) => (
+                  <div key={providerName}>
+                    <div className="sticky top-0 bg-app-surface px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-app-subtle">
+                      {providerName}
+                    </div>
+                    {models.map((model) => (
+                      <button
+                        key={model.modelId}
+                        type="button"
+                        className={cn(
+                          "flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] transition-colors hover:bg-app-surface-hover",
+                          value === model.modelId && "text-app-accent",
+                        )}
+                        onClick={() => { onValueChange(model.modelId); setIsOpen(false); }}
+                      >
+                        <span className="truncate">{model.displayName}</span>
+                        <span className="ml-auto shrink-0 truncate font-mono text-[10px] text-app-subtle">{model.modelId.split("/").pop()}</span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+                {availableModels.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-[12px] text-app-muted">
+                    No models available. Enable providers and models first.
+                  </div>
+                ) : null}
+              </div>,
+              document.body,
+            )
+          : null}
+      </div>
+    </div>
+  );
+}
+
+function AboutSettingsPanel({
+  description,
+  isCheckingUpdates,
+  runtime,
+  selectedLanguageLabel,
+  selectedThemeSummary,
+  updateStatus,
+  onCheckUpdates,
+}: {
+  description: string;
+  isCheckingUpdates: boolean;
+  runtime: SystemMetadata | null;
+  selectedLanguageLabel: string;
+  selectedThemeSummary: string;
+  updateStatus: string | null;
+  onCheckUpdates: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHeading title="About" description={description} />
 
       <SettingsSection title="Runtime">
         <SettingsRow
@@ -843,64 +1362,25 @@ function GeneralSettingsPanel({
   );
 }
 
-function PromptSettingsPanel({
+function CommandSettingsPanel({
   description,
-  prompts,
-  onUpdatePromptSetting,
+  commands,
   onAddCommand,
   onRemoveCommand,
   onUpdateCommand,
 }: {
   description: string;
-  prompts: PromptSettings;
-  onUpdatePromptSetting: <Key extends keyof PromptSettings>(key: Key, value: PromptSettings[Key]) => void;
+  commands: CommandSettings;
   onAddCommand: (entry: Omit<CommandEntry, "id">) => void;
   onRemoveCommand: (id: string) => void;
   onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
 }) {
-  const selectedStyle = RESPONSE_STYLE_OPTIONS.find((option) => option.value === prompts.responseStyle) ?? RESPONSE_STYLE_OPTIONS[0];
-
   return (
     <div className="flex flex-col gap-6">
-      <PageHeading title="Prompts" description={description} />
-
-      <SettingsSection title="Defaults">
-        <SettingsRow
-          label="Response style"
-          description={selectedStyle.description}
-          control={
-            <ChoiceGroup
-              options={RESPONSE_STYLE_OPTIONS.map(({ label, value }) => ({ label, value }))}
-              value={prompts.responseStyle}
-              onValueChange={(value) => onUpdatePromptSetting("responseStyle", value as PromptResponseStyle)}
-            />
-          }
-        />
-        <SectionDivider />
-        <SettingsRow
-          label="Response language"
-          description="The language used for agent responses."
-          control={
-            <Input
-              value={prompts.responseLanguage}
-              onChange={(event) => onUpdatePromptSetting("responseLanguage", event.target.value)}
-              className="w-40 text-[13px]"
-              placeholder="English"
-            />
-          }
-        />
-      </SettingsSection>
-
-      <TextAreaSection
-        title="Custom instructions"
-        description="Standing instruction applied to every thread. Use it to define the agent's personality, constraints, and default behavior."
-        value={prompts.customInstructions}
-        minHeightClassName="min-h-36"
-        onChange={(value) => onUpdatePromptSetting("customInstructions", value)}
-      />
+      <PageHeading title="Commands" description={description} />
 
       <CommandsSection
-        commands={prompts.commands}
+        commands={commands.commands}
         onAddCommand={onAddCommand}
         onRemoveCommand={onRemoveCommand}
         onUpdateCommand={onUpdateCommand}
@@ -2187,36 +2667,6 @@ function SettingsSection({
       </div>
       <div className="overflow-hidden rounded-2xl border border-app-border bg-app-surface">{children}</div>
     </section>
-  );
-}
-
-function TextAreaSection({
-  description,
-  minHeightClassName,
-  onChange,
-  title,
-  value,
-}: {
-  description: string;
-  minHeightClassName: string;
-  onChange: (value: string) => void;
-  title: string;
-  value: string;
-}) {
-  return (
-    <SettingsSection title={title}>
-      <div className="px-4 py-3">
-        <p className="text-[12px] leading-5 text-app-muted">{description}</p>
-        <Textarea
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className={cn(
-            "mt-3",
-            minHeightClassName,
-          )}
-        />
-      </div>
-    </SettingsSection>
   );
 }
 

@@ -1160,7 +1160,7 @@ export function DashboardOverview() {
   const { data, error, isLoading, refetch } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
   const { language, setLanguage } = useLanguage();
-  const { workspaces: settingsWorkspaces, providers, prompts, policy, addWorkspace, removeWorkspace, updateWorkspace, setDefaultWorkspace, addProvider, removeProvider, updateProvider, updatePromptSetting, updatePolicySetting, addAllowEntry, removeAllowEntry, updateAllowEntry, addDenyEntry, removeDenyEntry, updateDenyEntry, addWritableRoot, removeWritableRoot, updateWritableRoot, addCommand, removeCommand, updateCommand } = useWorkbenchSettings();
+  const { general: generalPreferences, workspaces: settingsWorkspaces, providers, commands, policy, updateGeneralPreference, addWorkspace, removeWorkspace, updateWorkspace, setDefaultWorkspace, addProvider, removeProvider, updateProvider, agentProfiles, activeAgentProfileId, addAgentProfile, removeAgentProfile, updateAgentProfile, setActiveAgentProfile, duplicateAgentProfile, updatePolicySetting, addAllowEntry, removeAllowEntry, updateAllowEntry, addDenyEntry, removeDenyEntry, updateDenyEntry, addWritableRoot, removeWritableRoot, updateWritableRoot, addCommand, removeCommand, updateCommand } = useWorkbenchSettings();
   const [workspaces, setWorkspaces] = useState<Array<WorkspaceItem>>(() => buildInitialWorkspaces());
   const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(() => [...RECENT_PROJECTS]);
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(() => RECENT_PROJECTS[0] ?? null);
@@ -2006,11 +2006,14 @@ export function DashboardOverview() {
       {isSettingsOpen ? (
         <WorkbenchSettingsOverlay
           activeCategory={activeSettingsCategory}
+          agentProfiles={agentProfiles}
+          activeAgentProfileId={activeAgentProfileId}
           contentRef={settingsContentRef}
+          generalPreferences={generalPreferences}
           isCheckingUpdates={isCheckingUpdates}
           language={language}
           policy={policy}
-          prompts={prompts}
+          commands={commands}
           providers={providers}
           selectedLanguageLabel={selectedLanguageOption.label}
           selectedThemeSummary={selectedThemeSummary}
@@ -2019,6 +2022,7 @@ export function DashboardOverview() {
           updateStatus={updateStatus}
           userSession={userSession}
           workspaces={settingsWorkspaces}
+          onAddAgentProfile={addAgentProfile}
           onAddAllowEntry={addAllowEntry}
           onAddCommand={addCommand}
           onAddDenyEntry={addDenyEntry}
@@ -2027,8 +2031,10 @@ export function DashboardOverview() {
           onAddWritableRoot={addWritableRoot}
           onCheckUpdates={handleCheckUpdates}
           onClose={handleCloseSettings}
+          onDuplicateAgentProfile={duplicateAgentProfile}
           onLogin={handleLogin}
           onLogout={handleLogout}
+          onRemoveAgentProfile={removeAgentProfile}
           onRemoveAllowEntry={removeAllowEntry}
           onRemoveCommand={removeCommand}
           onRemoveDenyEntry={removeDenyEntry}
@@ -2038,12 +2044,14 @@ export function DashboardOverview() {
           onSelectCategory={setActiveSettingsCategory}
           onSelectLanguage={handleLanguageSelect}
           onSelectTheme={handleThemeSelect}
+          onSetActiveAgentProfile={setActiveAgentProfile}
           onSetDefaultWorkspace={setDefaultWorkspace}
+          onUpdateAgentProfile={updateAgentProfile}
           onUpdateAllowEntry={updateAllowEntry}
           onUpdateCommand={updateCommand}
           onUpdateDenyEntry={updateDenyEntry}
+          onUpdateGeneralPreference={updateGeneralPreference}
           onUpdatePolicySetting={updatePolicySetting}
-          onUpdatePromptSetting={updatePromptSetting}
           onUpdateProvider={updateProvider}
           onUpdateWorkspace={updateWorkspace}
           onUpdateWritableRoot={updateWritableRoot}

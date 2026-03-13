@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export type SettingsCategory = "account" | "general" | "workspace" | "providers" | "prompts" | "policy";
+export type SettingsCategory = "account" | "general" | "workspace" | "providers" | "commands" | "policy" | "about";
 export type PromptResponseStyle = "balanced" | "concise" | "guide";
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";
 export type SandboxPolicy = "read-only" | "workspace-write" | "full-access";
@@ -47,11 +47,24 @@ export type CommandEntry = {
   description: string;
 };
 
-export type PromptSettings = {
+export type AgentProfile = {
+  id: string;
+  name: string;
   customInstructions: string;
   responseStyle: PromptResponseStyle;
   responseLanguage: string;
+  primaryModel: string;
+  assistantModel: string;
+  liteModel: string;
+};
+
+export type CommandSettings = {
   commands: Array<CommandEntry>;
+};
+
+export type GeneralPreferences = {
+  launchAtLogin: boolean;
+  minimizeToTray: boolean;
 };
 
 export type PolicySettings = {
@@ -64,19 +77,32 @@ export type PolicySettings = {
 };
 
 type WorkbenchSettingsState = {
+  general: GeneralPreferences;
   workspaces: Array<WorkspaceEntry>;
   providers: Array<ProviderEntry>;
-  prompts: PromptSettings;
+  commands: CommandSettings;
   policy: PolicySettings;
+  agentProfiles: Array<AgentProfile>;
+  activeAgentProfileId: string;
 };
 
 const STORAGE_KEY = "tiy-agent-workbench-settings";
 
-const DEFAULT_PROMPT_SETTINGS: PromptSettings = {
-  customInstructions:
-    "You are Tiy Agent, a desktop coding partner. Keep answers crisp, grounded in the local workspace, and explicit about risks before taking action.",
+const DEFAULT_CUSTOM_INSTRUCTIONS =
+  "You are Tiy Agent, a desktop coding partner. Keep answers crisp, grounded in the local workspace, and explicit about risks before taking action.";
+
+const DEFAULT_AGENT_PROFILES: Array<AgentProfile> = [{
+  id: "default-profile",
+  name: "Default",
+  customInstructions: DEFAULT_CUSTOM_INSTRUCTIONS,
   responseStyle: "balanced",
   responseLanguage: "English",
+  primaryModel: "",
+  assistantModel: "",
+  liteModel: "",
+}];
+
+const DEFAULT_COMMAND_SETTINGS: CommandSettings = {
   commands: [
     {
       id: "cmd-commit",
@@ -192,6 +218,11 @@ const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
   },
 ];
 
+const DEFAULT_GENERAL_PREFERENCES: GeneralPreferences = {
+  launchAtLogin: false,
+  minimizeToTray: false,
+};
+
 const DEFAULT_POLICY_SETTINGS: PolicySettings = {
   approvalPolicy: "on-request",
   allowList: [],
@@ -202,10 +233,13 @@ const DEFAULT_POLICY_SETTINGS: PolicySettings = {
 };
 
 const DEFAULT_SETTINGS: WorkbenchSettingsState = {
+  general: DEFAULT_GENERAL_PREFERENCES,
   workspaces: DEFAULT_WORKSPACES,
   providers: DEFAULT_PROVIDERS,
-  prompts: DEFAULT_PROMPT_SETTINGS,
+  commands: DEFAULT_COMMAND_SETTINGS,
   policy: DEFAULT_POLICY_SETTINGS,
+  agentProfiles: DEFAULT_AGENT_PROFILES,
+  activeAgentProfileId: "default-profile",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -228,6 +262,56 @@ function isNetworkAccessPolicy(value: unknown): value is NetworkAccessPolicy {
   return value === "ask" || value === "block" || value === "allow";
 }
 
+function parseAgentProfileEntry(raw: Record<string, unknown>): AgentProfile {
+  const defaultProfile = DEFAULT_AGENT_PROFILES[0];
+  return {
+    id: typeof raw.id === "string" ? raw.id : crypto.randomUUID(),
+    name: typeof raw.name === "string" ? raw.name : "Unnamed",
+    customInstructions: typeof raw.customInstructions === "string" ? raw.customInstructions : defaultProfile.customInstructions,
+    responseStyle: isPromptResponseStyle(raw.responseStyle) ? raw.responseStyle : defaultProfile.responseStyle,
+    responseLanguage: typeof raw.responseLanguage === "string" ? raw.responseLanguage : defaultProfile.responseLanguage,
+    primaryModel: typeof raw.primaryModel === "string" ? raw.primaryModel : defaultProfile.primaryModel,
+    assistantModel: typeof raw.assistantModel === "string" ? raw.assistantModel : defaultProfile.assistantModel,
+    liteModel: typeof raw.liteModel === "string" ? raw.liteModel : defaultProfile.liteModel,
+  };
+}
+
+function parseAgentProfiles(
+  parsed: Record<string, unknown>,
+  prompts: Record<string, unknown>,
+): { agentProfiles: Array<AgentProfile>; activeAgentProfileId: string } {
+  if (Array.isArray(parsed.agentProfiles) && parsed.agentProfiles.length > 0) {
+    const profiles = (parsed.agentProfiles as Array<unknown>).filter(isRecord).map(parseAgentProfileEntry);
+    const activeId = typeof parsed.activeAgentProfileId === "string" ? parsed.activeAgentProfileId : profiles[0]?.id ?? "default-profile";
+    return {
+      agentProfiles: profiles.length > 0 ? profiles : DEFAULT_AGENT_PROFILES,
+      activeAgentProfileId: profiles.some((p) => p.id === activeId) ? activeId : profiles[0]?.id ?? "default-profile",
+    };
+  }
+
+  // Migration from old format: prompts.customInstructions / prompts.responseStyle / prompts.responseLanguage / prompts.modelDefaults
+  const oldModelDefaults = isRecord(prompts.modelDefaults) ? prompts.modelDefaults : {};
+  const migratedProfile: AgentProfile = {
+    id: "default-profile",
+    name: "Default",
+    customInstructions: typeof prompts.customInstructions === "string"
+      ? prompts.customInstructions
+      : typeof prompts.systemPrompt === "string"
+        ? (prompts.systemPrompt as string)
+        : DEFAULT_AGENT_PROFILES[0].customInstructions,
+    responseStyle: isPromptResponseStyle(prompts.responseStyle) ? prompts.responseStyle : DEFAULT_AGENT_PROFILES[0].responseStyle,
+    responseLanguage: typeof prompts.responseLanguage === "string" ? prompts.responseLanguage : DEFAULT_AGENT_PROFILES[0].responseLanguage,
+    primaryModel: typeof oldModelDefaults.primaryModel === "string" ? oldModelDefaults.primaryModel : "",
+    assistantModel: typeof oldModelDefaults.assistantModel === "string" ? oldModelDefaults.assistantModel : "",
+    liteModel: typeof oldModelDefaults.liteModel === "string" ? oldModelDefaults.liteModel : "",
+  };
+
+  return {
+    agentProfiles: [migratedProfile],
+    activeAgentProfileId: "default-profile",
+  };
+}
+
 function getStoredSettings(): WorkbenchSettingsState {
   if (typeof window === "undefined") {
     return DEFAULT_SETTINGS;
@@ -246,12 +330,19 @@ function getStoredSettings(): WorkbenchSettingsState {
       return DEFAULT_SETTINGS;
     }
 
+    const generalRaw = isRecord(parsed.general) ? parsed.general : {};
     const workspaces = Array.isArray(parsed.workspaces) ? parsed.workspaces : null;
     const providers = Array.isArray(parsed.providers) ? parsed.providers : null;
-    const prompts = isRecord(parsed.prompts) ? parsed.prompts : {};
+    // Read from both old "prompts" key and new "commands" key for migration
+    const promptsRaw = isRecord(parsed.prompts) ? parsed.prompts : {};
+    const commandsRaw = isRecord(parsed.commands) ? parsed.commands : {};
     const policyRaw = isRecord(parsed.policy) ? parsed.policy : isRecord(parsed.approvalPolicy) ? parsed.approvalPolicy : {};
 
     return {
+      general: {
+        launchAtLogin: typeof generalRaw.launchAtLogin === "boolean" ? generalRaw.launchAtLogin : DEFAULT_GENERAL_PREFERENCES.launchAtLogin,
+        minimizeToTray: typeof generalRaw.minimizeToTray === "boolean" ? generalRaw.minimizeToTray : DEFAULT_GENERAL_PREFERENCES.minimizeToTray,
+      },
       workspaces: workspaces
         ? (workspaces as Array<unknown>).filter(isRecord).map((entry) => ({
             id: typeof entry.id === "string" ? entry.id : crypto.randomUUID(),
@@ -285,30 +376,22 @@ function getStoredSettings(): WorkbenchSettingsState {
               : [],
           }))
         : DEFAULT_PROVIDERS,
-      prompts: {
-        customInstructions:
-          typeof prompts.customInstructions === "string"
-            ? prompts.customInstructions
-            : typeof prompts.systemPrompt === "string"
-              ? (prompts.systemPrompt as string)
-              : DEFAULT_PROMPT_SETTINGS.customInstructions,
-        responseStyle: isPromptResponseStyle(prompts.responseStyle)
-          ? prompts.responseStyle
-          : DEFAULT_PROMPT_SETTINGS.responseStyle,
-        responseLanguage:
-          typeof prompts.responseLanguage === "string"
-            ? prompts.responseLanguage
-            : DEFAULT_PROMPT_SETTINGS.responseLanguage,
-        commands: Array.isArray(prompts.commands)
-          ? (prompts.commands as Array<unknown>).filter(isRecord).map((cmd) => ({
-              id: typeof cmd.id === "string" ? cmd.id : crypto.randomUUID(),
-              name: typeof cmd.name === "string" ? cmd.name : "",
-              path: typeof cmd.path === "string" ? cmd.path : "",
-              argumentHint: typeof cmd.argumentHint === "string" ? cmd.argumentHint : "",
-              description: typeof cmd.description === "string" ? cmd.description : "",
-            }))
-          : DEFAULT_PROMPT_SETTINGS.commands,
+      commands: {
+        commands: (() => {
+          // Try new "commands.commands" first, then fall back to old "prompts.commands"
+          const rawCommands = Array.isArray(commandsRaw.commands) ? commandsRaw.commands : Array.isArray(promptsRaw.commands) ? promptsRaw.commands : null;
+          return rawCommands
+            ? (rawCommands as Array<unknown>).filter(isRecord).map((cmd) => ({
+                id: typeof cmd.id === "string" ? cmd.id : crypto.randomUUID(),
+                name: typeof cmd.name === "string" ? cmd.name : "",
+                path: typeof cmd.path === "string" ? cmd.path : "",
+                argumentHint: typeof cmd.argumentHint === "string" ? cmd.argumentHint : "",
+                description: typeof cmd.description === "string" ? cmd.description : "",
+              }))
+            : DEFAULT_COMMAND_SETTINGS.commands;
+        })(),
       },
+      ...parseAgentProfiles(parsed, promptsRaw),
       policy: {
         approvalPolicy: isApprovalPolicy(policyRaw.approvalPolicy)
           ? policyRaw.approvalPolicy
@@ -355,14 +438,69 @@ export function useWorkbenchSettings() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
   }, [settings]);
 
-  const updatePromptSetting = <Key extends keyof PromptSettings>(key: Key, value: PromptSettings[Key]) => {
+  const updateGeneralPreference = <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => {
     setSettings((current) => ({
       ...current,
-      prompts: {
-        ...current.prompts,
+      general: {
+        ...current.general,
         [key]: value,
       },
     }));
+  };
+
+  const updateCommandSetting = <Key extends keyof CommandSettings>(key: Key, value: CommandSettings[Key]) => {
+    setSettings((current) => ({
+      ...current,
+      commands: {
+        ...current.commands,
+        [key]: value,
+      },
+    }));
+  };
+
+  const addAgentProfile = (entry: Omit<AgentProfile, "id">) => {
+    const id = crypto.randomUUID();
+    setSettings((current) => ({
+      ...current,
+      agentProfiles: [...current.agentProfiles, { ...entry, id }],
+      activeAgentProfileId: id,
+    }));
+  };
+
+  const removeAgentProfile = (id: string) => {
+    setSettings((current) => {
+      const remaining = current.agentProfiles.filter((p) => p.id !== id);
+      if (remaining.length === 0) return current;
+      const activeId = current.activeAgentProfileId === id ? remaining[0].id : current.activeAgentProfileId;
+      return { ...current, agentProfiles: remaining, activeAgentProfileId: activeId };
+    });
+  };
+
+  const updateAgentProfile = (id: string, patch: Partial<Omit<AgentProfile, "id">>) => {
+    setSettings((current) => ({
+      ...current,
+      agentProfiles: current.agentProfiles.map((p) =>
+        p.id === id ? { ...p, ...patch } : p,
+      ),
+    }));
+  };
+
+  const setActiveAgentProfile = (id: string) => {
+    setSettings((current) => ({ ...current, activeAgentProfileId: id }));
+  };
+
+  const duplicateAgentProfile = (id: string) => {
+    setSettings((current) => {
+      const source = current.agentProfiles.find((p) => p.id === id);
+      if (!source) return current;
+      const newId = crypto.randomUUID();
+      const copy: AgentProfile = { ...source, id: newId, name: `${source.name} Copy` };
+      return {
+        ...current,
+        agentProfiles: [...current.agentProfiles, copy],
+        activeAgentProfileId: newId,
+      };
+    });
   };
 
   const updatePolicySetting = <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => {
@@ -533,9 +671,9 @@ export function useWorkbenchSettings() {
   const addCommand = (entry: Omit<CommandEntry, "id">) => {
     setSettings((current) => ({
       ...current,
-      prompts: {
-        ...current.prompts,
-        commands: [...current.prompts.commands, { ...entry, id: crypto.randomUUID() }],
+      commands: {
+        ...current.commands,
+        commands: [...current.commands.commands, { ...entry, id: crypto.randomUUID() }],
       },
     }));
   };
@@ -543,9 +681,9 @@ export function useWorkbenchSettings() {
   const removeCommand = (id: string) => {
     setSettings((current) => ({
       ...current,
-      prompts: {
-        ...current.prompts,
-        commands: current.prompts.commands.filter((cmd) => cmd.id !== id),
+      commands: {
+        ...current.commands,
+        commands: current.commands.commands.filter((cmd) => cmd.id !== id),
       },
     }));
   };
@@ -553,9 +691,9 @@ export function useWorkbenchSettings() {
   const updateCommand = (id: string, patch: Partial<Omit<CommandEntry, "id">>) => {
     setSettings((current) => ({
       ...current,
-      prompts: {
-        ...current.prompts,
-        commands: current.prompts.commands.map((cmd) =>
+      commands: {
+        ...current.commands,
+        commands: current.commands.commands.map((cmd) =>
           cmd.id === id ? { ...cmd, ...patch } : cmd,
         ),
       },
@@ -563,10 +701,12 @@ export function useWorkbenchSettings() {
   };
 
   return {
+    general: settings.general,
     workspaces: settings.workspaces,
     providers: settings.providers,
-    prompts: settings.prompts,
+    commands: settings.commands,
     policy: settings.policy,
+    updateGeneralPreference,
     addWorkspace,
     removeWorkspace,
     updateWorkspace,
@@ -574,7 +714,14 @@ export function useWorkbenchSettings() {
     addProvider,
     removeProvider,
     updateProvider,
-    updatePromptSetting,
+    updateCommandSetting,
+    agentProfiles: settings.agentProfiles,
+    activeAgentProfileId: settings.activeAgentProfileId,
+    addAgentProfile,
+    removeAgentProfile,
+    updateAgentProfile,
+    setActiveAgentProfile,
+    duplicateAgentProfile,
     updatePolicySetting,
     addAllowEntry,
     removeAllowEntry,
