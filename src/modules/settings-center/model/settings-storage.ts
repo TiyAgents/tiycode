@@ -83,10 +83,7 @@ function parseAgentProfileEntry(raw: Record<string, unknown>): AgentProfile {
   };
 }
 
-function parseAgentProfiles(
-  parsed: Record<string, unknown>,
-  prompts: Record<string, unknown>,
-): { activeAgentProfileId: string; agentProfiles: Array<AgentProfile> } {
+function parseAgentProfiles(parsed: Record<string, unknown>): { activeAgentProfileId: string; agentProfiles: Array<AgentProfile> } {
   if (Array.isArray(parsed.agentProfiles) && parsed.agentProfiles.length > 0) {
     const profiles = (parsed.agentProfiles as Array<unknown>).filter(isRecord).map(parseAgentProfileEntry);
     const activeId = typeof parsed.activeAgentProfileId === "string" ? parsed.activeAgentProfileId : profiles[0]?.id ?? "default-profile";
@@ -97,25 +94,9 @@ function parseAgentProfiles(
     };
   }
 
-  const oldModelDefaults = isRecord(prompts.modelDefaults) ? prompts.modelDefaults : {};
-  const migratedProfile: AgentProfile = {
-    id: "default-profile",
-    name: "Default",
-    customInstructions: typeof prompts.customInstructions === "string"
-      ? prompts.customInstructions
-      : typeof prompts.systemPrompt === "string"
-        ? prompts.systemPrompt
-        : DEFAULT_AGENT_PROFILES[0].customInstructions,
-    responseStyle: isPromptResponseStyle(prompts.responseStyle) ? prompts.responseStyle : DEFAULT_AGENT_PROFILES[0].responseStyle,
-    responseLanguage: typeof prompts.responseLanguage === "string" ? prompts.responseLanguage : DEFAULT_AGENT_PROFILES[0].responseLanguage,
-    primaryModel: typeof oldModelDefaults.primaryModel === "string" ? oldModelDefaults.primaryModel : "",
-    assistantModel: typeof oldModelDefaults.assistantModel === "string" ? oldModelDefaults.assistantModel : "",
-    liteModel: typeof oldModelDefaults.liteModel === "string" ? oldModelDefaults.liteModel : "",
-  };
-
   return {
-    agentProfiles: [migratedProfile],
-    activeAgentProfileId: "default-profile",
+    agentProfiles: DEFAULT_AGENT_PROFILES,
+    activeAgentProfileId: DEFAULT_AGENT_PROFILES[0]?.id ?? "default-profile",
   };
 }
 
@@ -140,9 +121,8 @@ export function readStoredSettings(): SettingsState {
     const generalRaw = isRecord(parsed.general) ? parsed.general : {};
     const workspaces = Array.isArray(parsed.workspaces) ? parsed.workspaces : null;
     const providers = Array.isArray(parsed.providers) ? parsed.providers : null;
-    const promptsRaw = isRecord(parsed.prompts) ? parsed.prompts : {};
     const commandsRaw = isRecord(parsed.commands) ? parsed.commands : {};
-    const policyRaw = isRecord(parsed.policy) ? parsed.policy : isRecord(parsed.approvalPolicy) ? parsed.approvalPolicy : {};
+    const policyRaw = isRecord(parsed.policy) ? parsed.policy : {};
 
     return {
       general: {
@@ -188,7 +168,7 @@ export function readStoredSettings(): SettingsState {
         : DEFAULT_PROVIDERS,
       commands: {
         commands: (() => {
-          const rawCommands = Array.isArray(commandsRaw.commands) ? commandsRaw.commands : Array.isArray(promptsRaw.commands) ? promptsRaw.commands : null;
+          const rawCommands = Array.isArray(commandsRaw.commands) ? commandsRaw.commands : null;
 
           return rawCommands
             ? (rawCommands as Array<unknown>).filter(isRecord).map((command) => ({
@@ -201,7 +181,7 @@ export function readStoredSettings(): SettingsState {
             : DEFAULT_COMMAND_SETTINGS.commands;
         })(),
       },
-      ...parseAgentProfiles(parsed, promptsRaw),
+      ...parseAgentProfiles(parsed),
       policy: {
         approvalPolicy: isApprovalPolicy(policyRaw.approvalPolicy)
           ? policyRaw.approvalPolicy

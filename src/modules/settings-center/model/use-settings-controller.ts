@@ -15,7 +15,7 @@ import type {
 
 export * from "@/modules/settings-center/model/types";
 
-export function useWorkbenchSettings() {
+export function useSettingsController() {
   const [settings, setSettings] = useState<SettingsState>(() => readStoredSettings());
 
   useEffect(() => {
@@ -321,5 +321,3 @@ export function useWorkbenchSettings() {
     updateCommand,
   };
 }
-
-export const useSettingsController = useWorkbenchSettings;

@@ -1,5 +1,5 @@
-import { DashboardOverview } from "@/widgets/dashboard-overview/ui/dashboard-overview";
+import { DashboardWorkbench } from "@/modules/workbench-shell/ui/dashboard-workbench";
 
 export function HomePage() {
-  return <DashboardOverview />;
+  return <DashboardWorkbench />;
 }

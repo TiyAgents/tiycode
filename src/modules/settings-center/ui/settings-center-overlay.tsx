@@ -71,7 +71,7 @@ type UserSession = {
   email: string;
 };
 
-type WorkbenchSettingsOverlayProps = {
+type SettingsCenterOverlayProps = {
   activeCategory: SettingsCategory;
   agentProfiles: Array<AgentProfile>;
   activeAgentProfileId: string;
@@ -272,7 +272,7 @@ export function SettingsCenterOverlay({
   onUpdateProvider,
   onUpdateWorkspace,
   onUpdateWritableRoot,
-}: WorkbenchSettingsOverlayProps) {
+}: SettingsCenterOverlayProps) {
   const activeMeta = CATEGORY_META.find((category) => category.key === activeCategory) ?? CATEGORY_META[1];
 
   return (
