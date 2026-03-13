@@ -34,12 +34,13 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
-import { matchModelIcon, matchProviderIcon } from "@/shared/lib/llm-brand-matcher";
+import { matchProviderIcon } from "@/shared/lib/llm-brand-matcher";
 import type { SystemMetadata } from "@/shared/types/system";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { LocalLlmIcon } from "@/shared/ui/local-llm-icon";
+import { ModelBrandIcon } from "@/shared/ui/model-brand-icon";
 import { Separator } from "@/shared/ui/separator";
 import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
@@ -1067,13 +1068,14 @@ function GeneralSettingsPanel({
   onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
 }) {
   const availableModels = useMemo(() => {
-    const models: Array<{ modelId: string; displayName: string; providerName: string }> = [];
+    const models: Array<{ value: string; modelId: string; displayName: string; providerName: string }> = [];
     for (const provider of providers) {
       if (!provider.enabled) continue;
       for (const model of provider.models) {
         if (!model.enabled) continue;
         models.push({
-          modelId: `${provider.name}/${model.modelId}`,
+          value: `${provider.name}/${model.modelId}`,
+          modelId: model.modelId,
           displayName: model.displayName || model.modelId,
           providerName: provider.name,
         });
@@ -1246,7 +1248,7 @@ function ModelSelectRow({
   value,
   onValueChange,
 }: {
-  availableModels: Array<{ modelId: string; displayName: string; providerName: string }>;
+  availableModels: Array<{ value: string; modelId: string; displayName: string; providerName: string }>;
   description: string;
   label: string;
   value: string;
@@ -1285,7 +1287,7 @@ function ModelSelectRow({
     return () => document.removeEventListener("pointerdown", handleClickOutside);
   }, [isOpen]);
 
-  const selectedModel = availableModels.find((m) => m.modelId === value);
+  const selectedModel = availableModels.find((m) => m.value === value);
   const displayValue = selectedModel
     ? `${selectedModel.displayName}`
     : value
@@ -1293,7 +1295,7 @@ function ModelSelectRow({
       : "Not set";
 
   const grouped = useMemo(() => {
-    const map = new Map<string, Array<{ modelId: string; displayName: string }>>();
+    const map = new Map<string, Array<{ value: string; modelId: string; displayName: string }>>();
     for (const model of availableModels) {
       const list = map.get(model.providerName) ?? [];
       list.push(model);
@@ -1318,7 +1320,16 @@ function ModelSelectRow({
           )}
           onClick={() => setIsOpen(!isOpen)}
         >
-          <span className="truncate">{displayValue}</span>
+          <span className="flex min-w-0 items-center gap-2">
+            {value ? (
+              <ModelBrandIcon
+                className="size-4"
+                displayName={selectedModel?.displayName ?? value}
+                modelId={selectedModel?.modelId ?? value}
+              />
+            ) : null}
+            <span className="truncate">{displayValue}</span>
+          </span>
           <ChevronDown className={cn("size-3 shrink-0 text-app-subtle transition-transform", isOpen && "rotate-180")} />
         </button>
         {isOpen
@@ -1345,14 +1356,15 @@ function ModelSelectRow({
                     </div>
                     {models.map((model) => (
                       <button
-                        key={model.modelId}
+                        key={model.value}
                         type="button"
                         className={cn(
                           "flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] transition-colors hover:bg-app-surface-hover",
-                          value === model.modelId && "text-app-accent",
+                          value === model.value && "text-app-accent",
                         )}
-                        onClick={() => { onValueChange(model.modelId); setIsOpen(false); }}
+                        onClick={() => { onValueChange(model.value); setIsOpen(false); }}
                       >
+                        <ModelBrandIcon className="size-4" displayName={model.displayName} modelId={model.modelId} />
                         <span className="truncate">{model.displayName}</span>
                         <span className="ml-auto shrink-0 truncate font-mono text-[10px] text-app-subtle">{model.modelId.split("/").pop()}</span>
                       </button>
@@ -2687,7 +2699,7 @@ function ProviderModelRow({
     <div className="overflow-hidden rounded-xl border border-app-border bg-app-surface-muted">
       <div className="group/model flex items-center justify-between gap-3 px-3.5 py-2.5 transition-colors hover:bg-app-surface-hover/50">
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <ModelIcon modelId={model.modelId} displayName={model.displayName} className="size-5 text-[16px]" />
+          <ModelBrandIcon modelId={model.modelId} displayName={model.displayName} className="size-5 text-[16px]" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="font-mono text-[13px] font-medium text-app-foreground">
@@ -2908,24 +2920,6 @@ function ProviderIcon({ className, name }: { className?: string; name: string })
     <div
       className={cn(
         "flex items-center justify-center rounded-lg bg-app-surface-muted text-[11px] font-semibold text-app-muted",
-        className,
-      )}
-    >
-      {initial}
-    </div>
-  );
-}
-
-function ModelIcon({ className, displayName, modelId }: { className?: string; displayName?: string; modelId: string }) {
-  const slug = matchModelIcon(modelId, displayName);
-  if (slug) {
-    return <LocalLlmIcon className={cn("text-app-muted", className)} slug={slug} title={displayName || modelId} />;
-  }
-  const initial = getDisplayInitial(displayName) || getDisplayInitial(modelId);
-  return (
-    <div
-      className={cn(
-        "flex shrink-0 items-center justify-center rounded text-[10px] font-semibold text-app-muted",
         className,
       )}
     >
