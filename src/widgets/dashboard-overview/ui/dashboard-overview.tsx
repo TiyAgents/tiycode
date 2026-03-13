@@ -1160,7 +1160,7 @@ export function DashboardOverview() {
   const { data, error, isLoading, refetch } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
   const { language, setLanguage } = useLanguage();
-  const { prompts, approvalPolicy, updatePromptSetting, updateApprovalPolicySetting } = useWorkbenchSettings();
+  const { workspaces: settingsWorkspaces, providers, prompts, approvalPolicy, addWorkspace, removeWorkspace, updateWorkspace, setDefaultWorkspace, addProvider, removeProvider, updateProvider, updatePromptSetting, updateApprovalPolicySetting } = useWorkbenchSettings();
   const [workspaces, setWorkspaces] = useState<Array<WorkspaceItem>>(() => buildInitialWorkspaces());
   const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(() => [...RECENT_PROJECTS]);
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(() => RECENT_PROJECTS[0] ?? null);
@@ -2011,21 +2011,30 @@ export function DashboardOverview() {
           isCheckingUpdates={isCheckingUpdates}
           language={language}
           prompts={prompts}
+          providers={providers}
           selectedLanguageLabel={selectedLanguageOption.label}
           selectedThemeSummary={selectedThemeSummary}
           systemMetadata={data}
           theme={theme}
           updateStatus={updateStatus}
           userSession={userSession}
+          workspaces={settingsWorkspaces}
+          onAddProvider={addProvider}
+          onAddWorkspace={addWorkspace}
           onCheckUpdates={handleCheckUpdates}
           onClose={handleCloseSettings}
           onLogin={handleLogin}
           onLogout={handleLogout}
+          onRemoveProvider={removeProvider}
+          onRemoveWorkspace={removeWorkspace}
           onSelectCategory={setActiveSettingsCategory}
           onSelectLanguage={handleLanguageSelect}
           onSelectTheme={handleThemeSelect}
+          onSetDefaultWorkspace={setDefaultWorkspace}
           onUpdateApprovalPolicySetting={updateApprovalPolicySetting}
           onUpdatePromptSetting={updatePromptSetting}
+          onUpdateProvider={updateProvider}
+          onUpdateWorkspace={updateWorkspace}
         />
       ) : null}
     </main>
