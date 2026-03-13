@@ -4,6 +4,7 @@ import {
   ArrowDownToLine,
   ArrowLeft,
   ArrowUpFromLine,
+  Brain,
   Blocks,
   Check,
   ChevronDown,
@@ -17,6 +18,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  Image,
   Info,
   MessageSquare,
   Monitor,
@@ -29,6 +31,7 @@ import {
   Sparkles,
   Star,
   Trash2,
+  Wrench,
   X,
   Zap,
 } from "lucide-react";
@@ -66,6 +69,7 @@ import type {
   PolicySettings,
   PromptResponseStyle,
   ProviderEntry,
+  ProviderModelCapabilities,
   ProviderModel,
   SandboxPolicy,
   SettingsCategory,
@@ -1977,6 +1981,112 @@ const API_PROTOCOL_OPTIONS: ReadonlyArray<{ label: string; value: ApiProtocol }>
   { value: "ollama", label: "Ollama (/api/chat)" },
 ];
 
+const MODEL_CAPABILITY_META: ReadonlyArray<{
+  icon: React.ComponentType<{ className?: string }>;
+  key: keyof ProviderModelCapabilities;
+  label: string;
+}> = [
+  { key: "vision", label: "Vision", icon: Eye },
+  { key: "imageOutput", label: "Image Output", icon: Image },
+  { key: "toolCalling", label: "Tool Calling", icon: Wrench },
+  { key: "reasoning", label: "Reasoning", icon: Brain },
+  { key: "embedding", label: "Embedding", icon: Database },
+];
+
+function formatCustomHeaders(customHeaders: Record<string, string> | undefined) {
+  return JSON.stringify(customHeaders ?? {}, null, 2);
+}
+
+function parseCustomHeadersInput(value: string): { customHeaders: Record<string, string> | null; error: string | null } {
+  if (!value.trim()) {
+    return { customHeaders: {}, error: null };
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      return {
+        customHeaders: null,
+        error: "Custom HTTP Headers must be a JSON object.",
+      };
+    }
+
+    const invalidEntry = Object.entries(parsed).find(([, headerValue]) => typeof headerValue !== "string");
+    if (invalidEntry) {
+      return {
+        customHeaders: null,
+        error: `Header "${invalidEntry[0]}" must use a string value.`,
+      };
+    }
+
+    return {
+      customHeaders: parsed as Record<string, string>,
+      error: null,
+    };
+  } catch {
+    return {
+      customHeaders: null,
+      error: "Invalid JSON. Example: {\"HTTP-Referer\": \"https://example.com\"}",
+    };
+  }
+}
+
+function formatProviderOptions(providerOptions: Record<string, unknown> | undefined) {
+  return JSON.stringify(providerOptions ?? {}, null, 2);
+}
+
+function parseProviderOptionsInput(value: string): { error: string | null; providerOptions: Record<string, unknown> | null } {
+  if (!value.trim()) {
+    return { providerOptions: {}, error: null };
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      return {
+        providerOptions: null,
+        error: "Provider Options must be a JSON object.",
+      };
+    }
+
+    return {
+      providerOptions: parsed as Record<string, unknown>,
+      error: null,
+    };
+  } catch {
+    return {
+      providerOptions: null,
+      error: "Invalid JSON. Example: {\"thinking\": {\"type\": \"disabled\"}}",
+    };
+  }
+}
+
+function inferModelCapabilities(modelId: string): ProviderModelCapabilities {
+  const normalized = modelId.toLowerCase();
+  const embedding = /\bembed|embedding\b/.test(normalized);
+  const imageOutput = /\b(image|images|gpt-image|flux|sdxl|seedream|dall-e)\b/.test(normalized);
+  const vision = /\b(vision|vl|gpt-4o|gpt-4\.1|claude|gemini|pixtral|llava)\b/.test(normalized);
+  const reasoning = /\b(gpt-5|o1|o3|o4|r1|reason|thinking|claude-3\.7|gemini-2\.5|step-3)\b/.test(normalized);
+  const toolCalling = !embedding && !imageOutput && /\b(gpt|claude|gemini|deepseek|moonshot|qwen|llama|mistral|step|openai|anthropic|doubao)\b/.test(normalized);
+
+  return {
+    vision,
+    imageOutput,
+    toolCalling,
+    reasoning,
+    embedding,
+  };
+}
+
+function getEffectiveModelCapabilities(model: ProviderModel): ProviderModelCapabilities {
+  return {
+    ...inferModelCapabilities(model.modelId),
+    ...model.capabilityOverrides,
+  };
+}
+
 function ProviderSettingsPanel({
   description,
   providers,
@@ -1995,6 +2105,10 @@ function ProviderSettingsPanel({
   );
   const [providerSearch, setProviderSearch] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  const [customHeadersInput, setCustomHeadersInput] = useState("{}");
+  const [customHeadersError, setCustomHeadersError] = useState<string | null>(null);
+  const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
   const [modelSearch, setModelSearch] = useState("");
   const [newModelId, setNewModelId] = useState("");
   const [newModelDisplayName, setNewModelDisplayName] = useState("");
@@ -2018,12 +2132,33 @@ function ProviderSettingsPanel({
     );
   }, [selectedProvider, modelSearch]);
 
+  useEffect(() => {
+    if (!selectedProvider) {
+      setShowAdvancedSettings(false);
+      setCustomHeadersInput("{}");
+      setCustomHeadersError(null);
+      return;
+    }
+
+    const hasCustomHeaders = Object.keys(selectedProvider.customHeaders).length > 0;
+    setShowAdvancedSettings(hasCustomHeaders);
+    setCustomHeadersInput(formatCustomHeaders(selectedProvider.customHeaders));
+    setCustomHeadersError(null);
+  }, [selectedProvider?.id]);
+
+  useEffect(() => {
+    if (!selectedProvider?.models.some((model) => model.id === expandedModelId)) {
+      setExpandedModelId(null);
+    }
+  }, [expandedModelId, selectedProvider]);
+
   const handleAddCustomProvider = () => {
     const newProvider: Omit<ProviderEntry, "id"> = {
       name: "Custom Provider",
       baseUrl: "https://api.example.com/v1",
       apiKey: "",
       apiProtocol: "chat-completions",
+      customHeaders: {},
       enabled: false,
       isCustom: true,
       models: [],
@@ -2031,17 +2166,35 @@ function ProviderSettingsPanel({
     onAddProvider(newProvider);
   };
 
-  const handleToggleModel = (modelId: string, enabled: boolean) => {
+  const handleCustomHeadersChange = (value: string) => {
+    setCustomHeadersInput(value);
+    const { customHeaders, error } = parseCustomHeadersInput(value);
+    setCustomHeadersError(error);
+    if (!selectedProvider || !customHeaders) {
+      return;
+    }
+
+    onUpdateProvider(selectedProvider.id, { customHeaders });
+  };
+
+  const handleUpdateModel = (modelId: string, patch: Partial<ProviderModel>) => {
     if (!selectedProvider) return;
     onUpdateProvider(selectedProvider.id, {
       models: selectedProvider.models.map((model) =>
-        model.id === modelId ? { ...model, enabled } : model,
+        model.id === modelId ? { ...model, ...patch } : model,
       ),
     });
   };
 
+  const handleToggleModel = (modelId: string, enabled: boolean) => {
+    handleUpdateModel(modelId, { enabled });
+  };
+
   const handleRemoveModel = (modelId: string) => {
     if (!selectedProvider) return;
+    if (expandedModelId === modelId) {
+      setExpandedModelId(null);
+    }
     onUpdateProvider(selectedProvider.id, {
       models: selectedProvider.models.filter((model) => model.id !== modelId),
     });
@@ -2054,6 +2207,8 @@ function ProviderSettingsPanel({
       modelId: newModelId.trim(),
       displayName: newModelDisplayName.trim() || newModelId.trim(),
       enabled: true,
+      capabilityOverrides: {},
+      providerOptions: {},
       isManual: true,
     };
     onUpdateProvider(selectedProvider.id, {
@@ -2061,6 +2216,7 @@ function ProviderSettingsPanel({
     });
     setNewModelId("");
     setNewModelDisplayName("");
+    setExpandedModelId(newModel.id);
   };
 
   return (
@@ -2169,14 +2325,6 @@ function ProviderSettingsPanel({
                       <Trash2 className="size-3.5" />
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    title="Provider settings"
-                    aria-label="Provider settings"
-                    className="flex size-8 items-center justify-center rounded-lg border border-app-border text-app-muted transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
-                  >
-                    <Settings2 className="size-3.5" />
-                  </button>
                   <Switch
                     checked={selectedProvider.enabled}
                     aria-label="Toggle provider"
@@ -2220,7 +2368,26 @@ function ProviderSettingsPanel({
                   </div>
                 </ProviderField>
 
-                <ProviderField label="API Protocol">
+                <ProviderField
+                  label="API Protocol"
+                  action={(
+                    <button
+                      type="button"
+                      title="Provider settings"
+                      aria-label="Provider settings"
+                      aria-pressed={showAdvancedSettings}
+                      onClick={() => setShowAdvancedSettings((current) => !current)}
+                      className={cn(
+                        "flex size-8 items-center justify-center rounded-lg border transition-colors",
+                        showAdvancedSettings
+                          ? "border-app-border-strong bg-app-surface-hover text-app-foreground"
+                          : "border-app-border text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                      )}
+                    >
+                      <Settings2 className="size-3.5" />
+                    </button>
+                  )}
+                >
                   <div className="relative">
                     <select
                       value={selectedProvider.apiProtocol}
@@ -2240,6 +2407,25 @@ function ProviderSettingsPanel({
                   <p className="mt-1.5 text-[11px] text-app-subtle">
                     Choose the API protocol your provider uses
                   </p>
+                  {showAdvancedSettings ? (
+                    <div className="mt-3 rounded-xl border border-app-border bg-app-surface-muted/70 p-3">
+                      <div className="mb-1 text-[12px] font-medium text-app-foreground">Custom HTTP Headers</div>
+                      <p className="mb-3 text-[11px] leading-5 text-app-subtle">
+                        Use JSON object format. Header values must be strings.
+                      </p>
+                      <Textarea
+                        value={customHeadersInput}
+                        onChange={(event) => handleCustomHeadersChange(event.target.value)}
+                        aria-invalid={Boolean(customHeadersError)}
+                        className="min-h-28 bg-app-surface text-[12px] leading-5"
+                        placeholder={"{\n  \"HTTP-Referer\": \"https://example.com\",\n  \"X-Client\": \"tiy-desktop\"\n}"}
+                        spellCheck={false}
+                      />
+                      <p className={cn("mt-2 text-[11px]", customHeadersError ? "text-app-danger" : "text-app-subtle")}>
+                        {customHeadersError ?? "Saved automatically when the JSON is valid."}
+                      </p>
+                    </div>
+                  ) : null}
                 </ProviderField>
 
                 {/* Models section */}
@@ -2309,59 +2495,17 @@ function ProviderSettingsPanel({
                     {[...filteredModels]
                       .sort((a, b) => (a.enabled === b.enabled ? 0 : a.enabled ? -1 : 1))
                       .map((model) => (
-                        <div
+                        <ProviderModelRow
                           key={model.id}
-                          className="group flex items-center justify-between rounded-xl border border-app-border bg-app-surface-muted px-3.5 py-2.5 transition-colors"
-                        >
-                          <div className="flex min-w-0 flex-1 items-center gap-3">
-                            <ModelIcon modelId={model.modelId} className="size-5 text-[16px]" />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono text-[13px] font-medium text-app-foreground">
-                                  {model.displayName || model.modelId}
-                                </span>
-                                {model.isManual ? (
-                                  <span className="rounded px-1 py-0.5 text-[10px] font-semibold text-app-muted">
-                                    Manual
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div className="mt-0.5 flex items-center gap-2">
-                                {model.contextWindow ? (
-                                  <span className="text-[11px] text-app-subtle">{model.contextWindow}</span>
-                                ) : null}
-                                <span className="truncate font-mono text-[11px] text-app-subtle">
-                                  {model.modelId}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-2">
-                            <button
-                              type="button"
-                              title="Settings"
-                              aria-label="Model settings"
-                              className="flex size-6 items-center justify-center rounded-md text-app-subtle opacity-0 transition-all hover:bg-app-surface-hover hover:text-app-foreground group-hover:opacity-100"
-                            >
-                              <Settings2 className="size-3" />
-                            </button>
-                            <button
-                              type="button"
-                              title="Remove model"
-                              aria-label="Remove model"
-                              className="flex size-6 items-center justify-center rounded-md text-app-subtle opacity-0 transition-all hover:bg-app-surface-hover hover:text-app-danger group-hover:opacity-100"
-                              onClick={() => handleRemoveModel(model.id)}
-                            >
-                              <Trash2 className="size-3" />
-                            </button>
-                            <Switch
-                              size="sm"
-                              checked={model.enabled}
-                              aria-label={`Toggle ${model.displayName || model.modelId}`}
-                              onCheckedChange={(checked) => handleToggleModel(model.id, checked)}
-                            />
-                          </div>
-                        </div>
+                          model={model}
+                          isExpanded={expandedModelId === model.id}
+                          onToggleExpanded={() =>
+                            setExpandedModelId((current) => (current === model.id ? null : model.id))
+                          }
+                          onToggleEnabled={(checked) => handleToggleModel(model.id, checked)}
+                          onRemove={() => handleRemoveModel(model.id)}
+                          onUpdate={(patch) => handleUpdateModel(model.id, patch)}
+                        />
                       ))}
                   </div>
                 </div>
@@ -2378,16 +2522,238 @@ function ProviderSettingsPanel({
   );
 }
 
+function ProviderModelRow({
+  isExpanded,
+  model,
+  onRemove,
+  onToggleEnabled,
+  onToggleExpanded,
+  onUpdate,
+}: {
+  isExpanded: boolean;
+  model: ProviderModel;
+  onRemove: () => void;
+  onToggleEnabled: (checked: boolean) => void;
+  onToggleExpanded: () => void;
+  onUpdate: (patch: Partial<ProviderModel>) => void;
+}) {
+  const effectiveCapabilities = getEffectiveModelCapabilities(model);
+  const activeCapabilities = MODEL_CAPABILITY_META.filter((item) => effectiveCapabilities[item.key]);
+  const [providerOptionsInput, setProviderOptionsInput] = useState(() => formatProviderOptions(model.providerOptions));
+  const [providerOptionsError, setProviderOptionsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setProviderOptionsInput(formatProviderOptions(model.providerOptions));
+    setProviderOptionsError(null);
+  }, [model.id]);
+
+  const handleProviderOptionsChange = (value: string) => {
+    setProviderOptionsInput(value);
+    const { providerOptions, error } = parseProviderOptionsInput(value);
+    setProviderOptionsError(error);
+    if (!providerOptions) {
+      return;
+    }
+
+    onUpdate({ providerOptions });
+  };
+
+  const handleCapabilityToggle = (key: keyof ProviderModelCapabilities, checked: boolean) => {
+    const inferredCapabilities = inferModelCapabilities(model.modelId);
+    const nextOverrides = { ...model.capabilityOverrides };
+
+    if (checked === inferredCapabilities[key]) {
+      delete nextOverrides[key];
+    } else {
+      nextOverrides[key] = checked;
+    }
+
+    onUpdate({ capabilityOverrides: nextOverrides });
+  };
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-app-border bg-app-surface-muted">
+      <div className="group/model flex items-center justify-between gap-3 px-3.5 py-2.5 transition-colors hover:bg-app-surface-hover/50">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <ModelIcon modelId={model.modelId} className="size-5 text-[16px]" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[13px] font-medium text-app-foreground">
+                {model.displayName || model.modelId}
+              </span>
+              {model.isManual ? (
+                <span className="rounded px-1 py-0.5 text-[10px] font-semibold text-app-muted">
+                  Manual
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-1 flex min-w-0 items-center gap-2">
+              {activeCapabilities.length > 0 ? (
+                <div className="flex shrink-0 items-center gap-1">
+                  {activeCapabilities.map((capability) => {
+                    const Icon = capability.icon;
+                    return (
+                      <span
+                        key={capability.key}
+                        title={capability.label}
+                        className="flex size-5 items-center justify-center rounded-md border border-app-border bg-app-surface text-app-subtle"
+                      >
+                        <Icon className="size-3" />
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {model.contextWindow ? (
+                <span className="inline-flex shrink-0 items-center rounded-md border border-app-border bg-app-surface px-1.5 py-0.5 text-[10px] font-medium text-app-muted">
+                  {model.contextWindow}
+                </span>
+              ) : null}
+              <span className="truncate font-mono text-[11px] text-app-subtle">
+                {model.modelId}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <div
+            className={cn(
+              "flex items-center gap-1 transition-opacity",
+              isExpanded
+                ? "visible opacity-100"
+                : "pointer-events-none invisible opacity-0 group-hover/model:pointer-events-auto group-hover/model:visible group-hover/model:opacity-100 group-focus-within/model:pointer-events-auto group-focus-within/model:visible group-focus-within/model:opacity-100",
+            )}
+          >
+            <button
+              type="button"
+              title="Settings"
+              aria-label="Model settings"
+              aria-expanded={isExpanded}
+              onClick={onToggleExpanded}
+              className={cn(
+                "flex size-6 items-center justify-center rounded-md transition-colors",
+                isExpanded
+                  ? "bg-app-surface text-app-foreground"
+                  : "text-app-subtle hover:bg-app-surface hover:text-app-foreground",
+              )}
+            >
+              <Settings2 className="size-3" />
+            </button>
+            {model.isManual ? (
+              <button
+                type="button"
+                title="Remove model"
+                aria-label="Remove model"
+                className="flex size-6 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface hover:text-app-danger"
+                onClick={onRemove}
+              >
+                <Trash2 className="size-3" />
+              </button>
+            ) : null}
+          </div>
+          <Switch
+            size="sm"
+            checked={model.enabled}
+            aria-label={`Toggle ${model.displayName || model.modelId}`}
+            onCheckedChange={onToggleEnabled}
+          />
+        </div>
+      </div>
+
+      {isExpanded ? (
+        <div className="border-t border-app-border bg-app-surface px-4 py-4">
+          <div className="mb-3">
+            <h5 className="text-[16px] font-semibold text-app-foreground">Model Capabilities</h5>
+            <p className="mt-1 text-[12px] text-app-muted">
+              Override the auto-detected capabilities for this model.
+            </p>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {MODEL_CAPABILITY_META.map((capability) => {
+              const Icon = capability.icon;
+              const isAuto = model.capabilityOverrides[capability.key] === undefined;
+              return (
+                <div
+                  key={capability.key}
+                  className="flex items-center justify-between rounded-xl border border-app-border bg-app-surface-muted px-3.5 py-3"
+                >
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <span className="flex size-7 items-center justify-center rounded-lg bg-app-surface text-app-subtle">
+                      <Icon className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[13px] font-medium text-app-foreground">{capability.label}</span>
+                        {isAuto ? (
+                          <span className="text-[11px] font-medium text-app-subtle">(auto)</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={effectiveCapabilities[capability.key]}
+                    onCheckedChange={(checked) => handleCapabilityToggle(capability.key, checked)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-[13px] font-medium text-app-foreground">Context Window</label>
+              <Input
+                value={model.contextWindow ?? ""}
+                onChange={(event) => onUpdate({ contextWindow: event.target.value })}
+                placeholder="256000"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[13px] font-medium text-app-foreground">Max Output Tokens</label>
+              <Input
+                value={model.maxOutputTokens ?? ""}
+                onChange={(event) => onUpdate({ maxOutputTokens: event.target.value })}
+                placeholder="256000"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <label className="mb-1.5 block text-[13px] font-medium text-app-foreground">Model Options (JSON)</label>
+            <Textarea
+              value={providerOptionsInput}
+              onChange={(event) => handleProviderOptionsChange(event.target.value)}
+              aria-invalid={Boolean(providerOptionsError)}
+              className="min-h-40 bg-app-surface text-[12px] leading-6"
+              placeholder={"{\n  \"thinking\": {\n    \"type\": \"disabled\"\n  }\n}"}
+              spellCheck={false}
+            />
+            <p className={cn("mt-2 text-[11px] leading-5", providerOptionsError ? "text-app-danger" : "text-app-subtle")}>
+              {providerOptionsError ?? "Example: { \"thinking\": { \"type\": \"disabled\" } }"}
+            </p>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ProviderField({
+  action,
   children,
   label,
 }: {
+  action?: ReactNode;
   children: ReactNode;
   label: string;
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-[13px] font-medium text-app-foreground">{label}</label>
+      <div className="mb-1.5 flex items-center justify-between gap-3">
+        <label className="block text-[13px] font-medium text-app-foreground">{label}</label>
+        {action ? <div className="shrink-0">{action}</div> : null}
+      </div>
       {children}
     </div>
   );

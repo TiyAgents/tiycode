@@ -19,12 +19,23 @@ export type WorkspaceEntry = {
 
 export type ApiProtocol = "chat-completions" | "responses" | "anthropic" | "gemini" | "ollama";
 
+export type ProviderModelCapabilities = {
+  vision: boolean;
+  imageOutput: boolean;
+  toolCalling: boolean;
+  reasoning: boolean;
+  embedding: boolean;
+};
+
 export type ProviderModel = {
   id: string;
   modelId: string;
   displayName: string;
   enabled: boolean;
   contextWindow?: string;
+  maxOutputTokens?: string;
+  capabilityOverrides: Partial<ProviderModelCapabilities>;
+  providerOptions: Record<string, unknown>;
   isManual?: boolean;
 };
 
@@ -34,6 +45,7 @@ export type ProviderEntry = {
   baseUrl: string;
   apiKey: string;
   apiProtocol: ApiProtocol;
+  customHeaders: Record<string, string>;
   enabled: boolean;
   isCustom: boolean;
   models: Array<ProviderModel>;
@@ -147,13 +159,46 @@ const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
     baseUrl: "https://zenmux.ai/api/v1",
     apiKey: "sk-zenmux-xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     apiProtocol: "responses",
+    customHeaders: {},
     enabled: true,
     isCustom: true,
     models: [
-      { id: "m1", modelId: "openai/gpt-5.4", displayName: "GPT-5.4", enabled: true, isManual: true },
-      { id: "m2", modelId: "stepfun/step-3.5-flash", displayName: "stepfun/step-3.5-flash", enabled: true, contextWindow: "256K" },
-      { id: "m3", modelId: "anthropic/claude-3.5-haiku", displayName: "anthropic/claude-3.5-haiku", enabled: false, contextWindow: "200K" },
-      { id: "m4", modelId: "anthropic/claude-3.7-sonnet", displayName: "anthropic/claude-3.7-sonnet", enabled: false, contextWindow: "200K" },
+      {
+        id: "m1",
+        modelId: "openai/gpt-5.4",
+        displayName: "GPT-5.4",
+        enabled: true,
+        capabilityOverrides: {},
+        providerOptions: {},
+        isManual: true,
+      },
+      {
+        id: "m2",
+        modelId: "stepfun/step-3.5-flash",
+        displayName: "stepfun/step-3.5-flash",
+        enabled: true,
+        contextWindow: "256K",
+        capabilityOverrides: {},
+        providerOptions: {},
+      },
+      {
+        id: "m3",
+        modelId: "anthropic/claude-3.5-haiku",
+        displayName: "anthropic/claude-3.5-haiku",
+        enabled: false,
+        contextWindow: "200K",
+        capabilityOverrides: {},
+        providerOptions: {},
+      },
+      {
+        id: "m4",
+        modelId: "anthropic/claude-3.7-sonnet",
+        displayName: "anthropic/claude-3.7-sonnet",
+        enabled: false,
+        contextWindow: "200K",
+        capabilityOverrides: {},
+        providerOptions: {},
+      },
     ],
   },
   {
@@ -162,6 +207,7 @@ const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
     baseUrl: "https://api.openai.com/v1",
     apiKey: "",
     apiProtocol: "chat-completions",
+    customHeaders: {},
     enabled: false,
     isCustom: false,
     models: [],
@@ -172,6 +218,7 @@ const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
     baseUrl: "https://api.anthropic.com/v1",
     apiKey: "",
     apiProtocol: "chat-completions",
+    customHeaders: {},
     enabled: false,
     isCustom: false,
     models: [],
@@ -182,6 +229,7 @@ const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     apiKey: "",
     apiProtocol: "chat-completions",
+    customHeaders: {},
     enabled: false,
     isCustom: false,
     models: [],
@@ -192,6 +240,7 @@ const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
     baseUrl: "https://api.deepseek.com/v1",
     apiKey: "",
     apiProtocol: "chat-completions",
+    customHeaders: {},
     enabled: false,
     isCustom: false,
     models: [],
@@ -202,6 +251,7 @@ const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
     baseUrl: "https://api.moonshot.cn/v1",
     apiKey: "",
     apiProtocol: "chat-completions",
+    customHeaders: {},
     enabled: false,
     isCustom: false,
     models: [],
@@ -212,6 +262,7 @@ const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
     baseUrl: "https://openrouter.ai/api/v1",
     apiKey: "",
     apiProtocol: "chat-completions",
+    customHeaders: {},
     enabled: false,
     isCustom: false,
     models: [],
@@ -260,6 +311,33 @@ function isSandboxPolicy(value: unknown): value is SandboxPolicy {
 
 function isNetworkAccessPolicy(value: unknown): value is NetworkAccessPolicy {
   return value === "ask" || value === "block" || value === "allow";
+}
+
+function parseCustomHeaders(value: unknown): Record<string, string> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
+
+function parseProviderOptions(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function parseCapabilityOverrides(value: unknown): Partial<ProviderModelCapabilities> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const entries = Object.entries(value).filter(
+    (entry): entry is [keyof ProviderModelCapabilities, boolean] =>
+      ["vision", "imageOutput", "toolCalling", "reasoning", "embedding"].includes(entry[0]) && typeof entry[1] === "boolean",
+  );
+
+  return Object.fromEntries(entries);
 }
 
 function parseAgentProfileEntry(raw: Record<string, unknown>): AgentProfile {
@@ -362,6 +440,7 @@ function getStoredSettings(): WorkbenchSettingsState {
             apiProtocol: (["chat-completions", "responses", "anthropic", "gemini", "ollama"] as const).includes(entry.apiProtocol as ApiProtocol)
               ? (entry.apiProtocol as ApiProtocol)
               : "chat-completions" as const,
+            customHeaders: parseCustomHeaders(entry.customHeaders),
             enabled: typeof entry.enabled === "boolean" ? entry.enabled : false,
             isCustom: typeof entry.isCustom === "boolean" ? entry.isCustom : false,
             models: Array.isArray(entry.models)
@@ -371,6 +450,9 @@ function getStoredSettings(): WorkbenchSettingsState {
                   displayName: typeof model.displayName === "string" ? model.displayName : "",
                   enabled: typeof model.enabled === "boolean" ? model.enabled : false,
                   contextWindow: typeof model.contextWindow === "string" ? model.contextWindow : undefined,
+                  maxOutputTokens: typeof model.maxOutputTokens === "string" ? model.maxOutputTokens : undefined,
+                  capabilityOverrides: parseCapabilityOverrides(model.capabilityOverrides),
+                  providerOptions: parseProviderOptions(model.providerOptions),
                   isManual: typeof model.isManual === "boolean" ? model.isManual : undefined,
                 }))
               : [],
