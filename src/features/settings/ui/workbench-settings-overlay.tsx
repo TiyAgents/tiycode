@@ -31,26 +31,15 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import AnthropicIcon from "@lobehub/icons/es/Anthropic";
-import ClaudeIcon from "@lobehub/icons/es/Claude";
-import DeepSeekIcon from "@lobehub/icons/es/DeepSeek";
-import GeminiIcon from "@lobehub/icons/es/Gemini";
-import GoogleIcon from "@lobehub/icons/es/Google";
-import LlamaIcon from "@lobehub/icons/es/LlamaIndex";
-import MistralIcon from "@lobehub/icons/es/Mistral";
-import MoonshotIcon from "@lobehub/icons/es/Moonshot";
-import OpenAIIcon from "@lobehub/icons/es/OpenAI";
-import OpenRouterIcon from "@lobehub/icons/es/OpenRouter";
-import QwenIcon from "@lobehub/icons/es/Qwen";
-import StepfunIcon from "@lobehub/icons/es/Stepfun";
-import ZenMuxIcon from "@lobehub/icons/es/ZenMux";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
+import { matchModelIcon, matchProviderIcon } from "@/shared/lib/llm-brand-matcher";
 import type { SystemMetadata } from "@/shared/types/system";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
+import { LocalLlmIcon } from "@/shared/ui/local-llm-icon";
 import { Separator } from "@/shared/ui/separator";
 import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
@@ -2698,7 +2687,7 @@ function ProviderModelRow({
     <div className="overflow-hidden rounded-xl border border-app-border bg-app-surface-muted">
       <div className="group/model flex items-center justify-between gap-3 px-3.5 py-2.5 transition-colors hover:bg-app-surface-hover/50">
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <ModelIcon modelId={model.modelId} className="size-5 text-[16px]" />
+          <ModelIcon modelId={model.modelId} displayName={model.displayName} className="size-5 text-[16px]" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="font-mono text-[13px] font-medium text-app-foreground">
@@ -2909,26 +2898,12 @@ function ProviderField({
   );
 }
 
-const PROVIDER_ICON_MAP: ReadonlyArray<{ match: (name: string) => boolean; icon: React.ComponentType<{ size?: number | string; className?: string }> }> = [
-  { match: (n) => /\bopenai\b/i.test(n), icon: OpenAIIcon },
-  { match: (n) => /\banthropic\b/i.test(n), icon: AnthropicIcon },
-  { match: (n) => /\bgemini\b/i.test(n) || /\bgoogle\b/i.test(n), icon: GoogleIcon },
-  { match: (n) => /\bdeepseek\b/i.test(n), icon: DeepSeekIcon },
-  { match: (n) => /\bmoonshot\b/i.test(n), icon: MoonshotIcon },
-  { match: (n) => /\bopenrouter\b/i.test(n), icon: OpenRouterIcon },
-  { match: (n) => /\bzenmux\b/i.test(n), icon: ZenMuxIcon },
-  { match: (n) => /\bstepfun\b/i.test(n), icon: StepfunIcon },
-  { match: (n) => /\bmistral\b/i.test(n), icon: MistralIcon },
-  { match: (n) => /\bqwen\b/i.test(n), icon: QwenIcon },
-];
-
 function ProviderIcon({ className, name }: { className?: string; name: string }) {
-  const entry = PROVIDER_ICON_MAP.find((item) => item.match(name));
-  if (entry) {
-    const Icon = entry.icon;
-    return <Icon className={cn("shrink-0 text-app-muted", className)} size="1em" />;
+  const slug = matchProviderIcon(name);
+  if (slug) {
+    return <LocalLlmIcon className={cn("text-app-muted", className)} slug={slug} title={name} />;
   }
-  const initial = name.charAt(0).toUpperCase();
+  const initial = getDisplayInitial(name);
   return (
     <div
       className={cn(
@@ -2941,26 +2916,12 @@ function ProviderIcon({ className, name }: { className?: string; name: string })
   );
 }
 
-const MODEL_ICON_MAP: ReadonlyArray<{ match: (id: string) => boolean; icon: React.ComponentType<{ size?: number | string; className?: string }> }> = [
-  { match: (id) => /\bclaude\b/i.test(id), icon: ClaudeIcon },
-  { match: (id) => /\bgpt\b/i.test(id) || id.startsWith("openai/"), icon: OpenAIIcon },
-  { match: (id) => /\bgemini\b/i.test(id) || id.startsWith("google/"), icon: GeminiIcon },
-  { match: (id) => id.startsWith("deepseek/") || /\bdeepseek\b/i.test(id), icon: DeepSeekIcon },
-  { match: (id) => id.startsWith("anthropic/"), icon: AnthropicIcon },
-  { match: (id) => id.startsWith("stepfun/") || /\bstep-/i.test(id), icon: StepfunIcon },
-  { match: (id) => id.startsWith("moonshot/") || /\bmoonshot\b/i.test(id), icon: MoonshotIcon },
-  { match: (id) => /\bmistral\b/i.test(id), icon: MistralIcon },
-  { match: (id) => /\bqwen\b/i.test(id), icon: QwenIcon },
-  { match: (id) => /\bllama\b/i.test(id), icon: LlamaIcon },
-];
-
-function ModelIcon({ className, modelId }: { className?: string; modelId: string }) {
-  const entry = MODEL_ICON_MAP.find((item) => item.match(modelId));
-  if (entry) {
-    const Icon = entry.icon;
-    return <Icon className={cn("shrink-0 text-app-muted", className)} size="1em" />;
+function ModelIcon({ className, displayName, modelId }: { className?: string; displayName?: string; modelId: string }) {
+  const slug = matchModelIcon(modelId, displayName);
+  if (slug) {
+    return <LocalLlmIcon className={cn("text-app-muted", className)} slug={slug} title={displayName || modelId} />;
   }
-  const initial = modelId.charAt(0).toUpperCase();
+  const initial = getDisplayInitial(displayName) || getDisplayInitial(modelId);
   return (
     <div
       className={cn(
@@ -2971,6 +2932,11 @@ function ModelIcon({ className, modelId }: { className?: string; modelId: string
       {initial}
     </div>
   );
+}
+
+function getDisplayInitial(value?: string) {
+  const candidate = value?.trim();
+  return candidate ? candidate.charAt(0).toUpperCase() : "?";
 }
 
 function WorkspaceSettingsPanel({
