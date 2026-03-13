@@ -965,7 +965,7 @@ export function DashboardWorkbench() {
 
                   <div className="min-h-0 flex-1 overscroll-none">
                     {activeDrawerPanel === "project" ? (
-                      <ProjectPanel />
+                      <ProjectPanel currentProject={selectedProject} />
                     ) : (
                       <GitPanel onOpenDiffPreview={(fileId, isStaged) => setSelectedDiffFilePreview({ fileId, isStaged })} />
                     )}

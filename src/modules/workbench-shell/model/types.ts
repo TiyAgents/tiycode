@@ -26,6 +26,13 @@ export type ProjectOption = {
   lastOpenedLabel: string;
 };
 
+export type WorkspaceOpenApp = {
+  id: string;
+  name: string;
+  openWith: string | null;
+  iconDataUrl: string | null;
+};
+
 export type DrawerPanel = "project" | "git";
 
 export type ProjectTreeItem = {

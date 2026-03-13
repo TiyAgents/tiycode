@@ -22,7 +22,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
-            commands::system::get_system_metadata
+            commands::system::get_system_metadata,
+            commands::system::get_workspace_open_apps,
+            commands::system::open_workspace_in_app
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
