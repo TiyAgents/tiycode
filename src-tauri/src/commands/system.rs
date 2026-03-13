@@ -186,6 +186,7 @@ struct WindowsWorkspaceOpenAppSpec {
     name: &'static str,
     executable_name: Option<&'static str>,
     relative_paths: &'static [&'static str],
+    icon_relative_paths: &'static [&'static str],
 }
 
 #[cfg(target_os = "windows")]
@@ -195,6 +196,7 @@ const WINDOWS_WORKSPACE_OPEN_APP_SPECS: [WindowsWorkspaceOpenAppSpec; 5] = [
         name: "Explorer",
         executable_name: None,
         relative_paths: &[],
+        icon_relative_paths: &[],
     },
     WindowsWorkspaceOpenAppSpec {
         id: "vscode",
@@ -206,24 +208,33 @@ const WINDOWS_WORKSPACE_OPEN_APP_SPECS: [WindowsWorkspaceOpenAppSpec; 5] = [
             "Microsoft VS Code Insiders\\Code - Insiders.exe",
             "Programs\\Microsoft VS Code Insiders\\Code - Insiders.exe",
         ],
+        icon_relative_paths: &[
+            "Microsoft VS Code\\Code.exe",
+            "Programs\\Microsoft VS Code\\Code.exe",
+            "Microsoft VS Code Insiders\\Code - Insiders.exe",
+            "Programs\\Microsoft VS Code Insiders\\Code - Insiders.exe",
+        ],
     },
     WindowsWorkspaceOpenAppSpec {
         id: "cursor",
         name: "Cursor",
         executable_name: Some("Cursor.exe"),
         relative_paths: &["Cursor\\Cursor.exe", "Programs\\Cursor\\Cursor.exe"],
+        icon_relative_paths: &["Cursor\\Cursor.exe", "Programs\\Cursor\\Cursor.exe"],
     },
     WindowsWorkspaceOpenAppSpec {
         id: "windsurf",
         name: "Windsurf",
         executable_name: Some("Windsurf.exe"),
         relative_paths: &["Windsurf\\Windsurf.exe", "Programs\\Windsurf\\Windsurf.exe"],
+        icon_relative_paths: &["Windsurf\\Windsurf.exe", "Programs\\Windsurf\\Windsurf.exe"],
     },
     WindowsWorkspaceOpenAppSpec {
         id: "zed",
         name: "Zed",
         executable_name: Some("Zed.exe"),
         relative_paths: &["Zed\\Zed.exe", "Programs\\Zed\\Zed.exe"],
+        icon_relative_paths: &["Zed\\Zed.exe", "Programs\\Zed\\Zed.exe"],
     },
 ];
 
@@ -233,12 +244,14 @@ fn windows_workspace_open_apps() -> Vec<WorkspaceOpenApp> {
         .iter()
         .filter_map(|spec| {
             let open_with = find_windows_app_launcher(spec)?;
+            let icon_data_url = find_windows_icon_source(spec, open_with.as_deref())
+                .and_then(|path| build_windows_icon_data_url(&path, spec.id));
 
             Some(WorkspaceOpenApp {
                 id: spec.id.to_string(),
                 name: spec.name.to_string(),
                 open_with,
-                icon_data_url: None,
+                icon_data_url,
             })
         })
         .collect()
@@ -266,6 +279,37 @@ fn find_windows_app_launcher(spec: &WindowsWorkspaceOpenAppSpec) -> Option<Optio
 }
 
 #[cfg(target_os = "windows")]
+fn find_windows_icon_source(
+    spec: &WindowsWorkspaceOpenAppSpec,
+    open_with: Option<&str>,
+) -> Option<PathBuf> {
+    if spec.id == "explorer" {
+        return windows_system_root().map(|root| root.join("explorer.exe"));
+    }
+
+    if let Some(open_with) = open_with {
+        let candidate = PathBuf::from(open_with);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    let candidate_roots = windows_search_roots();
+
+    for root in candidate_roots {
+        for relative_path in spec.icon_relative_paths {
+            let candidate = root.join(relative_path);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    let executable_name = spec.executable_name?;
+    find_executable_on_path(executable_name).map(PathBuf::from)
+}
+
+#[cfg(target_os = "windows")]
 fn windows_search_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
@@ -276,6 +320,11 @@ fn windows_search_roots() -> Vec<PathBuf> {
     }
 
     roots
+}
+
+#[cfg(target_os = "windows")]
+fn windows_system_root() -> Option<PathBuf> {
+    std::env::var_os("WINDIR").map(PathBuf::from)
 }
 
 #[cfg(target_os = "windows")]
@@ -294,16 +343,85 @@ fn find_executable_on_path(executable_name: &str) -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn open_workspace_in_app_windows(target_path: &str, app_path: Option<&str>) -> Result<(), String> {
+    let normalized_target_path = normalize_windows_target_path(target_path);
     let mut command = if let Some(app_path) = app_path {
         Command::new(app_path)
     } else {
         Command::new("explorer.exe")
     };
 
-    command.arg(target_path);
+    command.arg(&normalized_target_path);
     command.spawn().map_err(|error| error.to_string())?;
 
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_windows_target_path(target_path: &str) -> String {
+    let normalized = PathBuf::from(target_path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(target_path));
+
+    let mut value = normalized.to_string_lossy().replace('/', "\\");
+
+    if let Some(stripped) = value.strip_prefix(r"\\?\") {
+        value = stripped.to_string();
+    }
+
+    value
+}
+
+#[cfg(target_os = "windows")]
+fn build_windows_icon_data_url(executable_path: &Path, app_id: &str) -> Option<String> {
+    let file_name = format!(
+        "tiy-workspace-open-app-{app_id}-{}.png",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_millis()
+    );
+    let output_path = std::env::temp_dir().join(file_name);
+    let escaped_input = powershell_single_quote(&executable_path.to_string_lossy());
+    let escaped_output = powershell_single_quote(&output_path.to_string_lossy());
+    let script = format!(
+        "$ErrorActionPreference='Stop'; \
+         Add-Type -AssemblyName System.Drawing; \
+         $icon=[System.Drawing.Icon]::ExtractAssociatedIcon('{escaped_input}'); \
+         if ($null -eq $icon) {{ throw 'No icon found.' }}; \
+         $bitmap=$icon.ToBitmap(); \
+         try {{ $bitmap.Save('{escaped_output}', [System.Drawing.Imaging.ImageFormat]::Png) }} \
+         finally {{ $bitmap.Dispose(); $icon.Dispose() }}"
+    );
+
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .status()
+        .ok()?;
+
+    if !status.success() {
+        let _ = fs::remove_file(&output_path);
+        return None;
+    }
+
+    let icon_bytes = fs::read(&output_path).ok()?;
+    let _ = fs::remove_file(&output_path);
+
+    Some(format!(
+        "data:image/png;base64,{}",
+        STANDARD.encode(icon_bytes)
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn powershell_single_quote(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 #[cfg(target_os = "macos")]
