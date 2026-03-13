@@ -719,6 +719,7 @@ export function DashboardWorkbench() {
                         <NewThreadEmptyState
                           recentProjects={recentProjects}
                           selectedProject={selectedProject}
+                          isOverlayOpen={isSettingsOpen}
                           onSelectProject={handleProjectSelect}
                         />
                       </div>
@@ -860,7 +861,7 @@ export function DashboardWorkbench() {
                               <button
                                 type="button"
                                 className={cn(
-                                  "group inline-flex h-9 max-w-[220px] items-center gap-2 rounded-xl border border-app-border/80 bg-app-canvas/55 px-2.5 text-[12px] font-medium text-app-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 hover:border-app-border-strong hover:bg-app-surface hover:shadow-[0_8px_18px_rgba(15,23,42,0.08)]",
+                                  "group inline-flex h-9 max-w-[220px] items-center gap-2 rounded-xl border border-app-border/80 bg-app-canvas/55 pl-1.5 pr-2.5 text-[12px] font-medium text-app-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 hover:border-app-border-strong hover:bg-app-surface hover:shadow-[0_8px_18px_rgba(15,23,42,0.08)]",
                                   isComposerProfileMenuOpen && "border-app-border-strong bg-app-surface shadow-[0_10px_24px_rgba(15,23,42,0.12)]",
                                 )}
                                 aria-haspopup="menu"

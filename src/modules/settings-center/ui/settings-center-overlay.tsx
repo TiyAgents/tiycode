@@ -274,9 +274,10 @@ export function SettingsCenterOverlay({
   onUpdateWritableRoot,
 }: SettingsCenterOverlayProps) {
   const activeMeta = CATEGORY_META.find((category) => category.key === activeCategory) ?? CATEGORY_META[1];
+  const isAboutCategory = activeCategory === "about";
 
   return (
-    <div className="fixed inset-x-0 bottom-0 top-9 z-20 bg-app-canvas text-app-foreground">
+    <div className="fixed inset-x-0 bottom-0 top-9 z-40 bg-app-canvas text-app-foreground">
       <div className="flex h-full min-h-0">
         <aside className="hidden w-[320px] shrink-0 overflow-hidden border-r border-app-border bg-app-sidebar md:flex md:flex-col">
           <div className="flex h-full min-h-0 flex-col px-3 pb-3 pt-4">
@@ -363,7 +364,14 @@ export function SettingsCenterOverlay({
             className="relative min-h-0 flex-1"
           >
             <div className="h-full overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <div className="mx-auto flex max-w-4xl flex-col gap-6 px-6 pb-28 pt-6">
+              <div
+                className={cn(
+                  "mx-auto px-6",
+                  isAboutCategory
+                    ? "flex min-h-full w-full max-w-4xl items-center justify-center py-8"
+                    : "flex max-w-4xl flex-col gap-6 pb-28 pt-6",
+                )}
+              >
                 {activeCategory === "account" ? (
                   <AccountSettingsPanel
                     description={activeMeta.description}
@@ -1408,8 +1416,8 @@ function AboutSettingsPanel({
   ] as const;
 
   return (
-    <div className="pt-7">
-      <section className="overflow-hidden rounded-2xl border border-app-border bg-app-surface">
+    <div className="flex w-full items-center justify-center">
+      <section className="flex w-full justify-center">
         <div className="flex flex-col items-center gap-5 px-5 py-7 text-center">
           <div className="flex size-20 items-center justify-center rounded-2xl border border-app-border bg-[linear-gradient(145deg,color-mix(in_srgb,var(--color-app-surface)_92%,white),color-mix(in_srgb,var(--color-app-surface-muted)_76%,white))] shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:bg-[linear-gradient(145deg,color-mix(in_srgb,var(--color-app-surface)_94%,white_4%),color-mix(in_srgb,var(--color-app-surface-muted)_82%,black_6%))] dark:shadow-[0_10px_24px_rgba(0,0,0,0.18)]">
             <img src="/app-icon.png" alt={`${appName} logo`} className="size-12 object-contain" />

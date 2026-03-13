@@ -8,15 +8,25 @@ import type { ProjectOption } from "@/modules/workbench-shell/model/types";
 export function NewThreadEmptyState({
   recentProjects,
   selectedProject,
+  isOverlayOpen,
   onSelectProject,
 }: {
   recentProjects: ReadonlyArray<ProjectOption>;
   selectedProject: ProjectOption | null;
+  isOverlayOpen: boolean;
   onSelectProject: (project: ProjectOption) => void;
 }) {
   const [isMenuOpen, setMenuOpen] = useState(false);
   const projectMenuRef = useRef<HTMLDivElement | null>(null);
   const activeProject = selectedProject ?? recentProjects[0] ?? null;
+
+  useEffect(() => {
+    if (!isOverlayOpen) {
+      return;
+    }
+
+    setMenuOpen(false);
+  }, [isOverlayOpen]);
 
   useEffect(() => {
     if (!isMenuOpen || typeof window === "undefined") {
