@@ -19,10 +19,19 @@ const APP_ICON_FALLBACKS: Record<
 > = {
   finder: { label: "F", className: "bg-linear-to-br from-sky-400 to-blue-500 text-white" },
   explorer: { label: "E", className: "bg-linear-to-br from-amber-300 to-yellow-500 text-slate-900" },
+  terminal: { label: "T", className: "bg-linear-to-br from-slate-700 to-slate-950 text-white" },
+  iterm2: { label: "IT", className: "bg-linear-to-br from-slate-600 to-slate-900 text-white" },
+  warp: { label: "WP", className: "bg-linear-to-br from-lime-300 to-emerald-500 text-slate-950" },
+  powershell: { label: "PS", className: "bg-linear-to-br from-sky-500 to-indigo-700 text-white" },
+  "git-bash": { label: "GB", className: "bg-linear-to-br from-emerald-400 to-teal-600 text-white" },
   vscode: { label: "VS", className: "bg-linear-to-br from-sky-500 to-blue-700 text-white" },
   cursor: { src: "/llm-icons/cursor.svg", label: "C", className: "bg-slate-900 text-white" },
   windsurf: { src: "/llm-icons/windsurf.svg", label: "W", className: "bg-cyan-500 text-white" },
   zed: { label: "Z", className: "bg-linear-to-br from-orange-500 to-rose-500 text-white" },
+  "intellij-idea": { label: "IJ", className: "bg-linear-to-br from-fuchsia-500 to-slate-950 text-white" },
+  pycharm: { label: "PY", className: "bg-linear-to-br from-lime-300 to-emerald-700 text-slate-950" },
+  goland: { label: "GO", className: "bg-linear-to-br from-cyan-300 to-blue-700 text-white" },
+  "android-studio": { label: "AS", className: "bg-linear-to-br from-emerald-300 to-green-600 text-slate-950" },
 };
 
 function WorkspaceAppIcon({
@@ -154,6 +163,7 @@ export function ProjectPanel({ currentProject }: { currentProject: ProjectOption
     try {
       await invoke("open_workspace_in_app", {
         targetPath: projectPath,
+        appId: app.id,
         appPath: app.openWith,
       });
       setPreferredOpenAppId(app.id);
