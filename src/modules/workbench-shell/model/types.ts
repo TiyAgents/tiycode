@@ -35,6 +35,8 @@ export type WorkspaceOpenApp = {
 
 export type DrawerPanel = "project" | "git";
 
+export type WorkbenchOverlay = "settings" | "marketplace" | null;
+
 export type ProjectTreeItem = {
   id: string;
   name: string;

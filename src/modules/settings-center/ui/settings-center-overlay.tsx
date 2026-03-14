@@ -277,7 +277,7 @@ export function SettingsCenterOverlay({
   const isAboutCategory = activeCategory === "about";
 
   return (
-    <div className="fixed inset-x-0 bottom-0 top-9 z-40 bg-app-canvas text-app-foreground">
+    <div className="fixed inset-x-0 bottom-0 top-9 z-[60] bg-app-canvas text-app-foreground">
       <div className="flex h-full min-h-0">
         <aside className="hidden w-[320px] shrink-0 overflow-hidden border-r border-app-border bg-app-sidebar md:flex md:flex-col">
           <div className="flex h-full min-h-0 flex-col px-3 pb-3 pt-4">

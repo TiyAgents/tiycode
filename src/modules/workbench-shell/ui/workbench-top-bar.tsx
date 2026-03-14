@@ -46,7 +46,7 @@ export function WorkbenchTopBar({
   isDrawerOpen,
   isTerminalCollapsed,
   isUserMenuOpen,
-  isSettingsOpen,
+  isOverlayOpen,
   isLoggedIn,
   userSession,
   isCheckingUpdates,
@@ -75,7 +75,7 @@ export function WorkbenchTopBar({
   isDrawerOpen: boolean;
   isTerminalCollapsed: boolean;
   isUserMenuOpen: boolean;
-  isSettingsOpen: boolean;
+  isOverlayOpen: boolean;
   isLoggedIn: boolean;
   userSession: MockUserSession | null;
   isCheckingUpdates: boolean;
@@ -131,7 +131,7 @@ export function WorkbenchTopBar({
             className={cn(
               "size-7 rounded-full text-app-subtle transition-[color,background-color,border-color] duration-200 hover:bg-app-surface-hover hover:text-app-foreground",
               isMacOS ? MAC_USER_MENU_OFFSET : "ml-2",
-              isSettingsOpen && "pointer-events-none invisible",
+              isOverlayOpen && "pointer-events-none invisible",
               isUserMenuOpen && "bg-app-surface-hover text-app-foreground",
             )}
             aria-label={isLoggedIn ? "打开用户菜单" : "打开登录菜单"}
@@ -252,7 +252,7 @@ export function WorkbenchTopBar({
 
               <button
                 type="button"
-                className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground", isSettingsOpen && "bg-app-surface-hover")}
+                className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground", isOverlayOpen && "bg-app-surface-hover")}
                 onClick={onOpenSettings}
               >
                 <MoreHorizontal className={MENU_TRIGGER_ICON_CLASS} />
@@ -290,7 +290,7 @@ export function WorkbenchTopBar({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, isSidebarOpen && "text-app-foreground", isSettingsOpen && "pointer-events-none invisible")}
+            className={cn(panelToggleButtonClass, isSidebarOpen && "text-app-foreground", isOverlayOpen && "pointer-events-none invisible")}
             aria-label={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
             title={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
             onClick={onToggleSidebar}
@@ -300,7 +300,7 @@ export function WorkbenchTopBar({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, !isTerminalCollapsed && "text-app-foreground", isSettingsOpen && "pointer-events-none invisible")}
+            className={cn(panelToggleButtonClass, !isTerminalCollapsed && "text-app-foreground", isOverlayOpen && "pointer-events-none invisible")}
             aria-label={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
             title={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
             onClick={onToggleTerminal}
@@ -310,7 +310,7 @@ export function WorkbenchTopBar({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(panelToggleButtonClass, isDrawerOpen && "text-app-foreground", isSettingsOpen && "pointer-events-none invisible")}
+            className={cn(panelToggleButtonClass, isDrawerOpen && "text-app-foreground", isOverlayOpen && "pointer-events-none invisible")}
             aria-label={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
             title={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
             onClick={onToggleDrawer}

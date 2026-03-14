@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Folder,
   FolderOpen,
+  FolderPlus,
   GitBranch,
   MessageSquarePlus,
   MoreHorizontal,
@@ -17,6 +18,8 @@ import {
 } from "lucide-react";
 import { useLanguage, type LanguagePreference } from "@/app/providers/language-provider";
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
+import { useMarketplaceController } from "@/modules/marketplace-center/model/use-marketplace-controller";
+import { MarketplaceOverlay } from "@/modules/marketplace-center/ui/marketplace-overlay";
 import { useSettingsController, type SettingsCategory } from "@/modules/settings-center/model/use-settings-controller";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
 import {
@@ -54,7 +57,13 @@ import {
   readStoredUserSession,
   selectContainerContents,
 } from "@/modules/workbench-shell/model/helpers";
-import type { DrawerPanel, PanelVisibilityState, ProjectOption, WorkspaceItem } from "@/modules/workbench-shell/model/types";
+import type {
+  DrawerPanel,
+  PanelVisibilityState,
+  ProjectOption,
+  WorkbenchOverlay,
+  WorkspaceItem,
+} from "@/modules/workbench-shell/model/types";
 import { InspectorItem } from "@/modules/workbench-shell/ui/inspector-item";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
@@ -71,6 +80,13 @@ export function DashboardWorkbench() {
   const { data, error, isLoading, refetch } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
   const { language, setLanguage } = useLanguage();
+  const {
+    itemStates: marketplaceItemStates,
+    installItem,
+    uninstallItem,
+    enableItem,
+    disableItem,
+  } = useMarketplaceController();
   const {
     general: generalPreferences,
     workspaces: settingsWorkspaces,
@@ -110,7 +126,7 @@ export function DashboardWorkbench() {
   const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(() => [...RECENT_PROJECTS]);
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(() => RECENT_PROJECTS[0] ?? null);
   const [isNewThreadMode, setNewThreadMode] = useState(true);
-  const [isSettingsOpen, setSettingsOpen] = useState(false);
+  const [activeOverlay, setActiveOverlay] = useState<WorkbenchOverlay>(null);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState<SettingsCategory>("account");
   const [panelVisibilityState, setPanelVisibilityState] = useState<PanelVisibilityState>(() => readPanelVisibilityState());
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
@@ -130,13 +146,16 @@ export function DashboardWorkbench() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const composerProfileMenuRef = useRef<HTMLDivElement | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
-  const settingsContentRef = useRef<HTMLDivElement | null>(null);
+  const overlayContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   const selectedDiffFile = GIT_CHANGE_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
   const activeThread = getActiveThread(workspaces);
   const activeComposerProfile = agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0];
   const { isSidebarOpen, isDrawerOpen, isTerminalCollapsed } = panelVisibilityState;
+  const isSettingsOpen = activeOverlay === "settings";
+  const isMarketplaceOpen = activeOverlay === "marketplace";
+  const isOverlayOpen = activeOverlay !== null;
 
   const setSidebarOpen = (nextState: boolean | ((current: boolean) => boolean)) => {
     setPanelVisibilityState((current) => ({
@@ -334,19 +353,23 @@ export function DashboardWorkbench() {
   }, [selectedDiffFile]);
 
   useEffect(() => {
-    if (!isSettingsOpen || typeof window === "undefined") {
+    if (!activeOverlay || typeof window === "undefined") {
       return;
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+
       if (event.key === "Escape") {
-        setSettingsOpen(false);
+        setActiveOverlay(null);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isSettingsOpen]);
+  }, [activeOverlay]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -363,11 +386,11 @@ export function DashboardWorkbench() {
       }
 
       const selection = window.getSelection();
-      const selectionInsideSettingsContent =
-        isNodeInsideContainer(settingsContentRef.current, selection?.anchorNode ?? null) ||
-        isNodeInsideContainer(settingsContentRef.current, selection?.focusNode ?? null);
-      const targetInsideSettingsContent = isNodeInsideContainer(
-        settingsContentRef.current,
+      const selectionInsideOverlayContent =
+        isNodeInsideContainer(overlayContentRef.current, selection?.anchorNode ?? null) ||
+        isNodeInsideContainer(overlayContentRef.current, selection?.focusNode ?? null);
+      const targetInsideOverlayContent = isNodeInsideContainer(
+        overlayContentRef.current,
         event.target instanceof Node ? event.target : null,
       );
       const selectionInsideMainContent =
@@ -378,9 +401,9 @@ export function DashboardWorkbench() {
         event.target instanceof Node ? event.target : null,
       );
 
-      if (settingsContentRef.current && (targetInsideSettingsContent || selectionInsideSettingsContent)) {
+      if (overlayContentRef.current && (targetInsideOverlayContent || selectionInsideOverlayContent)) {
         event.preventDefault();
-        selectContainerContents(settingsContentRef.current);
+        selectContainerContents(overlayContentRef.current);
         return;
       }
 
@@ -508,7 +531,13 @@ export function DashboardWorkbench() {
 
   const handleOpenSettings = (category: SettingsCategory = "account") => {
     setActiveSettingsCategory(category);
-    setSettingsOpen(true);
+    setActiveOverlay("settings");
+    setUserMenuOpen(false);
+    setOpenSettingsSection(null);
+  };
+
+  const handleOpenMarketplace = () => {
+    setActiveOverlay("marketplace");
     setUserMenuOpen(false);
     setOpenSettingsSection(null);
   };
@@ -524,7 +553,7 @@ export function DashboardWorkbench() {
   const handleLogin = () => {
     setUserSession(MOCK_USER_SESSION);
     setOpenSettingsSection(null);
-    setUserMenuOpen(!isSettingsOpen);
+    setUserMenuOpen(!isOverlayOpen);
   };
 
   const handleLogout = () => {
@@ -561,7 +590,7 @@ export function DashboardWorkbench() {
         isDrawerOpen={isDrawerOpen}
         isTerminalCollapsed={isTerminalCollapsed}
         isUserMenuOpen={isUserMenuOpen}
-        isSettingsOpen={isSettingsOpen}
+        isOverlayOpen={isOverlayOpen}
         isLoggedIn={Boolean(userSession)}
         userSession={userSession}
         isCheckingUpdates={isCheckingUpdates}
@@ -617,16 +646,27 @@ export function DashboardWorkbench() {
 
               <button
                 type="button"
-                className="group flex w-full items-center gap-2.5 rounded-xl border border-transparent bg-transparent px-3 py-2.5 text-left text-app-muted transition-[transform,box-shadow,background-color,border-color,color] duration-200 hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)] active:scale-[0.99]"
+                className={cn(
+                  "group flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-[transform,box-shadow,background-color,border-color,color] duration-200 active:scale-[0.99]",
+                  isMarketplaceOpen
+                    ? "border-app-border-strong bg-app-surface-active text-app-foreground shadow-[0_4px_14px_rgba(15,23,42,0.08)]"
+                    : "border-transparent bg-transparent text-app-muted hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)]",
+                )}
+                onClick={handleOpenMarketplace}
               >
-                <Boxes className="size-4 shrink-0 text-app-subtle transition-colors duration-200 group-hover:text-app-foreground" />
+                <Boxes
+                  className={cn(
+                    "size-4 shrink-0 transition-colors duration-200",
+                    isMarketplaceOpen ? "text-app-foreground" : "text-app-subtle group-hover:text-app-foreground",
+                  )}
+                />
                 <span className="truncate text-sm font-medium">Marketplace</span>
               </button>
             </div>
 
             <div className="mt-6 flex items-center justify-between px-3">
-              <span className="text-xs uppercase tracking-[0.14em] text-app-subtle">Threads</span>
-              <FolderOpen className="size-3.5 text-app-subtle" />
+              <span className="text-xs uppercase tracking-[0.14em] text-app-subtle">WORKSPACE</span>
+              <FolderPlus className="size-3.5 text-app-subtle" />
             </div>
 
             <div className="mx-1 mt-3 h-px shrink-0 bg-app-border" />
@@ -719,7 +759,7 @@ export function DashboardWorkbench() {
                         <NewThreadEmptyState
                           recentProjects={recentProjects}
                           selectedProject={selectedProject}
-                          isOverlayOpen={isSettingsOpen}
+                          isOverlayOpen={isOverlayOpen}
                           onSelectProject={handleProjectSelect}
                         />
                       </div>
@@ -1041,7 +1081,7 @@ export function DashboardWorkbench() {
           activeCategory={activeSettingsCategory}
           agentProfiles={agentProfiles}
           activeAgentProfileId={activeAgentProfileId}
-          contentRef={settingsContentRef}
+          contentRef={overlayContentRef}
           generalPreferences={generalPreferences}
           isCheckingUpdates={isCheckingUpdates}
           language={language}
@@ -1061,7 +1101,7 @@ export function DashboardWorkbench() {
           onAddWorkspace={addWorkspace}
           onAddWritableRoot={addWritableRoot}
           onCheckUpdates={handleCheckUpdates}
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => setActiveOverlay(null)}
           onDuplicateAgentProfile={duplicateAgentProfile}
           onLogin={handleLogin}
           onLogout={handleLogout}
@@ -1086,6 +1126,18 @@ export function DashboardWorkbench() {
           onUpdateProvider={updateProvider}
           onUpdateWorkspace={updateWorkspace}
           onUpdateWritableRoot={updateWritableRoot}
+        />
+      ) : null}
+
+      {isMarketplaceOpen ? (
+        <MarketplaceOverlay
+          contentRef={overlayContentRef}
+          itemStates={marketplaceItemStates}
+          onClose={() => setActiveOverlay(null)}
+          onDisableItem={disableItem}
+          onEnableItem={enableItem}
+          onInstallItem={installItem}
+          onUninstallItem={uninstallItem}
         />
       ) : null}
     </main>

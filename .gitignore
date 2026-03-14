@@ -13,6 +13,7 @@ dist-ssr
 *.local
 .npm-cache
 .tmp-tauri-scaffold
+.superpowers
 
 # Rust
 src-tauri/target

@@ -36,6 +36,7 @@ src-tauri/
 - shadcn/ui 基础配置与通用组件
 - 内置主题系统（跟随系统 / 明亮 / 暗黑）与运行时切换
 - 内置工作台设置中心，包含 `Account / General / Providers / Commands / Permissions / Workspace / About` 分类页与本地持久化
+- 内置 Marketplace 全屏浮层，支持 `Skills / MCPs / Plugins` tab、搜索、已安装/推荐列表，以及本地持久化的安装/启用/禁用/卸载交互
 - Rust 端示例命令 `get_system_metadata`
 
 ## Visual System
