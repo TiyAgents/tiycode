@@ -19,7 +19,7 @@ function isMarketplaceItemState(value: unknown): value is MarketplaceItemState {
 }
 
 function isMarketplaceTab(value: unknown): value is MarketplaceTab {
-  return value === "skills" || value === "mcps" || value === "plugins";
+  return value === "skills" || value === "mcps" || value === "plugins" || value === "automations";
 }
 
 export function readStoredMarketplaceState(): MarketplaceStoredState {

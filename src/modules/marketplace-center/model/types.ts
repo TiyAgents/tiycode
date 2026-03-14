@@ -1,4 +1,4 @@
-export type MarketplaceTab = "skills" | "mcps" | "plugins";
+export type MarketplaceTab = "skills" | "mcps" | "plugins" | "automations";
 
 export type MarketplaceItemIcon =
   | "bot"

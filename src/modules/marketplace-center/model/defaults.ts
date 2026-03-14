@@ -284,6 +284,62 @@ export const MARKETPLACE_CATALOG: ReadonlyArray<MarketplaceCatalogItem> = [
     icon: "sparkles",
     sourceLabel: "Experimental channel",
   },
+  {
+    id: "automation-ai-news-briefing",
+    tab: "automations",
+    name: "AI News Briefing",
+    summary: "Deliver a daily roundup of notable AI product, model, and tooling updates.",
+    description:
+      "Schedules a recurring digest that scans trusted sources, groups the most relevant updates, and formats them into a concise morning briefing. Designed for teams that want a dependable AI news pulse without manual curation every day.",
+    publisher: "Tiy Official",
+    version: "1.1.0",
+    tags: ["Scheduled", "Digest", "AI News"],
+    recommended: true,
+    icon: "sparkles",
+    sourceLabel: "Official catalog",
+  },
+  {
+    id: "automation-standup-digest",
+    tab: "automations",
+    name: "Standup Digest",
+    summary: "Compile yesterday's work into a timed team-ready standup summary.",
+    description:
+      "Collects issue activity, merged changes, and notable thread updates, then assembles a structured digest before the team standup. It reduces manual status gathering and keeps recurring updates consistent.",
+    publisher: "Open Tools Lab",
+    version: "0.9.4",
+    tags: ["Daily", "Standup", "Summary"],
+    recommended: true,
+    icon: "workflow",
+    sourceLabel: "Partner catalog",
+  },
+  {
+    id: "automation-pr-watch",
+    tab: "automations",
+    name: "PR Watch",
+    summary: "Monitor pull requests on a schedule and flag stalled or risky review queues.",
+    description:
+      "Runs on a recurring cadence to inspect open pull requests, identify inactivity, and surface branches that need attention. Useful for teams that want lightweight operational visibility without checking dashboards manually.",
+    publisher: "Tiy Official",
+    version: "0.8.2",
+    tags: ["Scheduled", "GitHub", "Reviews"],
+    recommended: false,
+    icon: "git-branch",
+    sourceLabel: "Official catalog",
+  },
+  {
+    id: "automation-market-scan",
+    tab: "automations",
+    name: "Market Scan",
+    summary: "Track selected competitors, releases, and category shifts on a recurring schedule.",
+    description:
+      "Fetches saved market-watch queries on a recurring interval and produces a concise change summary for product or strategy review. It is shaped for teams who need a lightweight external signal feed inside the workbench.",
+    publisher: "Knowledge Forge",
+    version: "0.6.3",
+    tags: ["Monitoring", "Competitive", "Scheduled"],
+    recommended: false,
+    icon: "globe",
+    sourceLabel: "Partner catalog",
+  },
 ];
 
 export const DEFAULT_MARKETPLACE_STATE: MarketplaceStoredState = {
@@ -296,4 +352,6 @@ export const DEFAULT_MARKETPLACE_STATE: MarketplaceStoredState = {
   "plugin-terminal-plus": { installed: true, enabled: true },
   "plugin-markdown-export": { installed: true, enabled: true },
   "plugin-release-notes": { installed: true, enabled: false },
+  "automation-ai-news-briefing": { installed: true, enabled: true },
+  "automation-standup-digest": { installed: true, enabled: false },
 };

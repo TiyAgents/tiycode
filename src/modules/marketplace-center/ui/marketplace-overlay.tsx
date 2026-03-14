@@ -73,6 +73,11 @@ const TAB_META: ReadonlyArray<{
     label: "Plugins",
     description: "Workbench add-ons that extend desktop surfaces and task-oriented utilities.",
   },
+  {
+    value: "automations",
+    label: "Automations",
+    description: "Scheduled tasks and recurring workflows that run with minimal manual work.",
+  },
 ];
 
 const EMPTY_STATE_COPY: Record<"installed" | "recommended", Record<MarketplaceTab, string>> = {
@@ -80,11 +85,13 @@ const EMPTY_STATE_COPY: Record<"installed" | "recommended", Record<MarketplaceTa
     skills: "No installed skills match this search yet.",
     mcps: "No installed MCP match this search yet.",
     plugins: "No installed plugins match this search yet.",
+    automations: "No installed automations match this search yet.",
   },
   recommended: {
     skills: "No recommended skills match the current search.",
     mcps: "No recommended MCP match the current search.",
     plugins: "No recommended plugins match the current search.",
+    automations: "No recommended automations match the current search.",
   },
 };
 
@@ -92,9 +99,10 @@ const SEARCH_PLACEHOLDER: Record<MarketplaceTab, string> = {
   skills: "Search skills, workflows, and prompt packs",
   mcps: "Search MCP, integrations, and tools",
   plugins: "Search plugins, add-ons, and desktop extensions",
+  automations: "Search automations, schedules, and recurring tasks",
 };
 
-const TOOLBAR_TAB_ORDER: ReadonlyArray<MarketplaceTab> = ["plugins", "skills", "mcps"];
+const TOOLBAR_TAB_ORDER: ReadonlyArray<MarketplaceTab> = ["plugins", "skills", "mcps", "automations"];
 
 function getItemState(itemStates: MarketplaceStoredState, itemId: string): MarketplaceItemState {
   return itemStates[itemId] ?? { installed: false, enabled: false };
@@ -612,6 +620,7 @@ export function MarketplaceOverlay({
     skills: "",
     mcps: "",
     plugins: "",
+    automations: "",
   });
   const [drawerTarget, setDrawerTarget] = useState<MarketplaceDrawerTarget | null>(null);
 
@@ -713,7 +722,7 @@ export function MarketplaceOverlay({
                     </span>
                   </div>
                   <p className="mt-1 text-[13px] leading-5 text-app-muted">
-                    Browse skills, MCP servers, and plugins with a quieter catalog view.
+                    Browse skills, MCP servers, plugins, and scheduled automations in one catalog view.
                   </p>
                 </div>
               </div>
