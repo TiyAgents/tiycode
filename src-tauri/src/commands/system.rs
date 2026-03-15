@@ -203,16 +203,26 @@ fn build_open_with(spec: &WorkspaceOpenAppSpec, app_path: &Path) -> Option<Strin
 }
 
 #[cfg(target_os = "macos")]
+fn find_workspace_open_app_spec(app_id: &str) -> Option<&'static WorkspaceOpenAppSpec> {
+    WORKSPACE_OPEN_APP_SPECS
+        .iter()
+        .find(|spec| spec.id == app_id)
+}
+
+#[cfg(target_os = "macos")]
 fn open_workspace_in_app_macos(
     target_path: &str,
     app_id: &str,
     app_path: Option<&str>,
 ) -> Result<(), String> {
+    let resolved_app_path = app_path
+        .map(PathBuf::from)
+        .or_else(|| find_workspace_open_app_spec(app_id).and_then(find_app_bundle))
+        .map(|path| path.to_string_lossy().into_owned());
+
     match app_id {
-        "terminal" => open_workspace_in_terminal_macos(target_path),
-        "iterm2" => open_workspace_in_iterm2_macos(target_path),
         "warp" => open_workspace_in_warp_macos(target_path),
-        _ => open_workspace_with_open_command_macos(target_path, app_path),
+        _ => open_workspace_with_open_command_macos(target_path, resolved_app_path.as_deref()),
     }
 }
 
@@ -250,57 +260,12 @@ fn open_workspace_with_open_command_macos(
 }
 
 #[cfg(target_os = "macos")]
-fn open_workspace_in_terminal_macos(target_path: &str) -> Result<(), String> {
-    run_osascript(&format!(
-        "tell application \"Terminal\"\nactivate\ndo script \"cd \" & quoted form of {}\nend tell",
-        apple_script_string_literal(target_path)
-    ))
-}
-
-#[cfg(target_os = "macos")]
-fn open_workspace_in_iterm2_macos(target_path: &str) -> Result<(), String> {
-    run_osascript(&format!(
-        "tell application \"iTerm2\"\nactivate\ncreate window with default profile command \"cd \" & quoted form of {}\nend tell",
-        apple_script_string_literal(target_path)
-    ))
-}
-
-#[cfg(target_os = "macos")]
 fn open_workspace_in_warp_macos(target_path: &str) -> Result<(), String> {
     let uri = format!(
         "warp://action/new_window?path={}",
         percent_encode_uri_component(target_path)
     );
     open_workspace_with_open_command_macos(&uri, None)
-}
-
-#[cfg(target_os = "macos")]
-fn run_osascript(script: &str) -> Result<(), String> {
-    let output = Command::new("osascript")
-        .args(["-e", script])
-        .output()
-        .map_err(|error| error.to_string())?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let message = if !stderr.is_empty() {
-            stderr
-        } else if !stdout.is_empty() {
-            stdout
-        } else {
-            format!("`osascript` exited with status {}.", output.status)
-        };
-
-        Err(message)
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn apple_script_string_literal(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 #[cfg(target_os = "windows")]
