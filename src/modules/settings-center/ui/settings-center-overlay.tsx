@@ -952,7 +952,7 @@ function ProfilePicker({
             <div
               ref={dropdownRef}
               style={dropdownStyle}
-              className="z-50 overflow-y-auto rounded-xl border border-app-border bg-app-surface p-1 shadow-lg"
+              className="z-[100] overflow-y-auto rounded-xl border border-app-border bg-app-surface p-1 shadow-lg"
             >
               {profiles.map((profile) => (
                 <div
