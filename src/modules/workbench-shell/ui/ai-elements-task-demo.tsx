@@ -741,7 +741,7 @@ export function AiElementsTaskDemo({
         </Conversation>
       </div>
 
-      <div className="shrink-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0))] px-6 pb-6 pt-4 backdrop-blur-sm">
+      <div className="shrink-0 px-6 pb-6 pt-4">
         <div className="mx-auto flex max-w-4xl flex-col gap-3">
           <Suggestions className="gap-2">
             {AI_ELEMENTS_SUGGESTIONS.map((suggestion) => (
