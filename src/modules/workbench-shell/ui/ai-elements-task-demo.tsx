@@ -1,7 +1,7 @@
 "use client";
 
-import type { ChatStatus, FileUIPart } from "ai";
-import { Bot, CheckIcon, FileIcon, ImageIcon, PaperclipIcon, SparklesIcon, XIcon } from "lucide-react";
+import type { ChatStatus } from "ai";
+import { SparklesIcon } from "lucide-react";
 import { nanoid } from "nanoid";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -32,16 +32,6 @@ import {
   MessageResponse,
 } from "@/components/ai-elements/message";
 import {
-  ModelSelector,
-  ModelSelectorContent,
-  ModelSelectorEmpty,
-  ModelSelectorGroup,
-  ModelSelectorInput,
-  ModelSelectorItem,
-  ModelSelectorList,
-  ModelSelectorTrigger,
-} from "@/components/ai-elements/model-selector";
-import {
   Plan,
   PlanContent,
   PlanDescription,
@@ -49,18 +39,6 @@ import {
   PlanTitle,
   PlanTrigger,
 } from "@/components/ai-elements/plan";
-import {
-  PromptInput,
-  PromptInputBody,
-  PromptInputButton,
-  PromptInputFooter,
-  PromptInputHeader,
-  type PromptInputMessage,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-  usePromptInputAttachments,
-} from "@/components/ai-elements/prompt-input";
 import {
   Queue,
   QueueItem,
@@ -79,7 +57,7 @@ import {
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
 import { Source, Sources, SourcesContent, SourcesTrigger } from "@/components/ai-elements/sources";
-import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
+import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import type { AgentProfile, ProviderEntry } from "@/modules/settings-center/model/types";
 import {
@@ -93,13 +71,14 @@ import {
   AI_ELEMENTS_TOOL_INPUT,
   AI_ELEMENTS_TOOL_SUCCESS_OUTPUT,
   buildProfileAwareFollowUp,
-  getProfilePrimaryModelId,
-  getProfilePrimaryModelLabel,
   type DemoQueueItem,
 } from "@/modules/workbench-shell/model/ai-elements-task-demo";
-import { cn } from "@/shared/lib/utils";
+import {
+  ComposerMessageAttachments,
+  mapComposerAttachments,
+  WorkbenchPromptComposer,
+} from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 import { Badge } from "@/shared/ui/badge";
-import { ModelBrandIcon } from "@/shared/ui/model-brand-icon";
 
 type DemoToolState =
   | "approval-requested"
@@ -121,11 +100,7 @@ type FollowUpEntry = {
   text: string;
 };
 
-type DemoAttachment = {
-  id: string;
-  mediaType?: string;
-  name: string;
-};
+type DemoAttachment = ReturnType<typeof mapComposerAttachments>[number];
 
 const TOOL_APPROVAL_ID = "ai-elements-install";
 const TOOL_RUN_DELAY_MS = 500;
@@ -210,211 +185,6 @@ function getExecutionSummary(toolState: DemoToolState) {
   return "官方 AI Elements primitives 已经准备到位，线程可以继续验证 profile-aware composer 与后续执行流。";
 }
 
-function mapDemoAttachments(files: Array<FileUIPart>) {
-  return files.map((file, index) => ({
-    id: nanoid(),
-    mediaType: file.mediaType,
-    name: file.filename?.trim() || `附件 ${index + 1}`,
-  }));
-}
-
-function getAttachmentGlyph(mediaType?: string) {
-  if (mediaType?.startsWith("image/")) {
-    return <ImageIcon className="size-3.5" />;
-  }
-
-  return <FileIcon className="size-3.5" />;
-}
-
-function AttachmentChip({
-  attachment,
-  onRemove,
-  tone = "message",
-}: {
-  attachment: DemoAttachment;
-  onRemove?: (id: string) => void;
-  tone?: "composer" | "message";
-}) {
-  return (
-    <div
-      className={cn(
-        "inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium",
-        tone === "composer"
-          ? "border-app-border/55 bg-app-surface-muted/80 text-app-foreground"
-          : "border-app-border/45 bg-app-surface/60 text-app-muted",
-      )}
-    >
-      <span className={cn("shrink-0", tone === "composer" ? "text-app-foreground" : "text-app-subtle")}>
-        {getAttachmentGlyph(attachment.mediaType)}
-      </span>
-      <span className="truncate">{attachment.name}</span>
-      {onRemove ? (
-        <button
-          aria-label={`移除附件 ${attachment.name}`}
-          className="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-app-subtle transition hover:bg-app-surface-hover hover:text-app-foreground"
-          onClick={(event) => {
-            event.preventDefault();
-            onRemove(attachment.id);
-          }}
-          type="button"
-        >
-          <XIcon className="size-3" />
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function ComposerAttachmentHeader() {
-  const attachments = usePromptInputAttachments();
-
-  if (attachments.files.length === 0) {
-    return null;
-  }
-
-  return (
-    <PromptInputHeader className="border-b border-app-border/45 bg-app-surface-muted/35 px-3 py-2">
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-        <Badge className="rounded-full px-2 py-0.5" variant="secondary">
-          <PaperclipIcon className="size-3" />
-          {attachments.files.length} 个附件
-        </Badge>
-        {attachments.files.map((attachment) => (
-          <AttachmentChip
-            attachment={{
-              id: attachment.id,
-              mediaType: attachment.mediaType,
-              name: attachment.filename?.trim() || "未命名附件",
-            }}
-            key={attachment.id}
-            onRemove={attachments.remove}
-            tone="composer"
-          />
-        ))}
-      </div>
-    </PromptInputHeader>
-  );
-}
-
-function ComposerAttachmentStateSync({
-  onHasAttachmentsChange,
-}: {
-  onHasAttachmentsChange: (hasAttachments: boolean) => void;
-}) {
-  const attachments = usePromptInputAttachments();
-
-  useEffect(() => {
-    onHasAttachmentsChange(attachments.files.length > 0);
-  }, [attachments.files.length, onHasAttachmentsChange]);
-
-  return null;
-}
-
-function ComposerAttachmentTrigger() {
-  const attachments = usePromptInputAttachments();
-
-  return (
-    <PromptInputButton
-      aria-label="上传文件或图片"
-      className="px-2.5"
-      onClick={(event) => {
-        event.preventDefault();
-        attachments.openFileDialog();
-      }}
-      type="button"
-    >
-      <PaperclipIcon className="size-4" />
-    </PromptInputButton>
-  );
-}
-
-function PromptInputSubmitButton({
-  activeProfile,
-  composerValue,
-  onStop,
-  status,
-}: {
-  activeProfile: AgentProfile | null;
-  composerValue: string;
-  onStop: () => void;
-  status: ChatStatus;
-}) {
-  const attachments = usePromptInputAttachments();
-  const canSubmit = Boolean(activeProfile) && (Boolean(composerValue.trim()) || attachments.files.length > 0);
-
-  return <PromptInputSubmit disabled={!canSubmit} onStop={onStop} status={status} />;
-}
-
-function ProfileInlineIdentity({
-  badge = true,
-  profile,
-  providers,
-  muted = false,
-  showModel = true,
-}: {
-  badge?: boolean;
-  muted?: boolean;
-  profile: AgentProfile;
-  providers: ReadonlyArray<ProviderEntry>;
-  showModel?: boolean;
-}) {
-  const modelId = getProfilePrimaryModelId(profile, providers) || profile.name;
-  const modelLabel = getProfilePrimaryModelLabel(profile, providers);
-
-  return (
-    <div className="flex min-w-0 items-center gap-2">
-      <span
-        className={cn(
-          "flex shrink-0 items-center justify-center",
-          badge ? "size-6 rounded-lg bg-app-surface-muted/75 ring-1 ring-app-border/45" : "size-4 rounded-none bg-transparent ring-0",
-          muted ? "text-app-muted" : "text-app-foreground",
-        )}
-      >
-        <Bot className="size-3.5" />
-      </span>
-      <span className={cn("shrink-0 text-sm font-medium", muted ? "text-app-foreground/88" : "text-app-foreground")}>
-        {profile.name}
-      </span>
-      {showModel ? (
-        <>
-          <span aria-hidden="true" className="shrink-0 text-app-subtle">
-            {" · "}
-          </span>
-          <ModelBrandIcon
-            className={cn("size-4 shrink-0", muted ? "text-app-muted" : "text-app-foreground")}
-            displayName={modelLabel}
-            modelId={modelId}
-          />
-          <span className={cn("min-w-0 truncate text-xs", muted ? "text-muted-foreground" : "text-app-muted")}>
-            {modelLabel}
-          </span>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-function ProfileSelectorItem({
-  isActive,
-  onSelect,
-  profile,
-  providers,
-}: {
-  isActive: boolean;
-  onSelect: () => void;
-  profile: AgentProfile;
-  providers: ReadonlyArray<ProviderEntry>;
-}) {
-  return (
-    <ModelSelectorItem onSelect={onSelect} value={profile.id}>
-      <div className="min-w-0 flex flex-1 items-center">
-        <ProfileInlineIdentity profile={profile} providers={providers} />
-      </div>
-      {isActive ? <CheckIcon className="ml-auto size-4" /> : <span className="ml-auto size-4" />}
-    </ModelSelectorItem>
-  );
-}
-
 export function AiElementsTaskDemo({
   activeAgentProfileId,
   agentProfiles,
@@ -429,7 +199,6 @@ export function AiElementsTaskDemo({
   const [composerValue, setComposerValue] = useState("");
   const [composerError, setComposerError] = useState<string | null>(null);
   const [followUpEntries, setFollowUpEntries] = useState<Array<FollowUpEntry>>([]);
-  const [isProfileSelectorOpen, setProfileSelectorOpen] = useState(false);
   const [queueItems, setQueueItems] = useState<Array<DemoQueueItem>>(() =>
     AI_ELEMENTS_INITIAL_QUEUE.map((item) => ({ ...item })),
   );
@@ -445,7 +214,6 @@ export function AiElementsTaskDemo({
     () => agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0] ?? null,
     [activeAgentProfileId, agentProfiles],
   );
-  const canSwitchProfiles = agentProfiles.length > 1 && Boolean(activeProfile);
 
   const clearToolTimers = useCallback(() => {
     toolTimerIdsRef.current.forEach((timerId) => window.clearTimeout(timerId));
@@ -508,7 +276,7 @@ export function AiElementsTaskDemo({
   const handleSubmit = useCallback(
     (message: PromptInputMessage) => {
       const nextText = message.text?.trim();
-      const nextAttachments = mapDemoAttachments(message.files);
+      const nextAttachments = mapComposerAttachments(message.files);
       const textForThread = nextText || (nextAttachments.length > 0 ? `请基于这 ${nextAttachments.length} 个附件继续细化 demo。` : "");
 
       if ((!textForThread && nextAttachments.length === 0) || !activeProfile) {
@@ -718,11 +486,7 @@ export function AiElementsTaskDemo({
                   }
                 >
                   {entry.attachments && entry.attachments.length > 0 ? (
-                    <div className="mb-3 flex flex-wrap gap-2">
-                      {entry.attachments.map((attachment) => (
-                        <AttachmentChip attachment={attachment} key={attachment.id} />
-                      ))}
-                    </div>
+                    <ComposerMessageAttachments attachments={entry.attachments} />
                   ) : null}
                   {entry.role === "assistant" && entry.label ? (
                     <div className="mb-2 flex items-center gap-2 text-xs text-app-subtle">
@@ -742,99 +506,21 @@ export function AiElementsTaskDemo({
       </div>
 
       <div className="shrink-0 px-6 pb-6 pt-4">
-        <div className="mx-auto flex max-w-4xl flex-col gap-3">
-          <Suggestions className="gap-2">
-            {AI_ELEMENTS_SUGGESTIONS.map((suggestion) => (
-              <Suggestion
-                key={suggestion}
-                onClick={(nextSuggestion) => setComposerValue(nextSuggestion)}
-                suggestion={suggestion}
-                variant="secondary"
-              />
-            ))}
-          </Suggestions>
-
-          <div className="rounded-[26px] border border-app-border/60 bg-app-surface/82 p-1.5 shadow-[0_22px_50px_-42px_rgba(15,23,42,0.38)] backdrop-blur-sm">
-            <PromptInput
-              accept="image/*,.pdf,.md,.txt,.json,.ts,.tsx"
-              className="[&_[data-slot=input-group]]:shadow-none [&_[data-slot=input-group]:focus-within]:!border-app-border/60 [&_[data-slot=input-group]:focus-within]:!ring-0"
-              maxFileSize={10 * 1024 * 1024}
-              maxFiles={4}
-              onError={(error) => setComposerError(error.message)}
-              onSubmit={handleSubmit}
-            >
-              <PromptInputBody>
-                <ComposerAttachmentStateSync
-                  onHasAttachmentsChange={(hasAttachments) => {
-                    if (hasAttachments) {
-                      setComposerError(null);
-                    }
-                  }}
-                />
-                <ComposerAttachmentHeader />
-                <PromptInputTextarea
-                  className="min-h-[88px]"
-                  onChange={(event) => setComposerValue(event.currentTarget.value)}
-                  placeholder="继续细化这条 AI Elements 任务流..."
-                  value={composerValue}
-                />
-              </PromptInputBody>
-              <PromptInputFooter>
-                <PromptInputTools>
-                  <ComposerAttachmentTrigger />
-
-                  {activeProfile ? (
-                    canSwitchProfiles ? (
-                      <ModelSelector onOpenChange={setProfileSelectorOpen} open={isProfileSelectorOpen}>
-                        <ModelSelectorTrigger asChild>
-                          <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" size="sm">
-                            <ProfileInlineIdentity badge={false} profile={activeProfile} providers={providers} showModel={false} />
-                          </PromptInputButton>
-                        </ModelSelectorTrigger>
-                        <ModelSelectorContent title="Profile Selector">
-                          <ModelSelectorInput placeholder="Search profiles..." />
-                          <ModelSelectorList>
-                            <ModelSelectorEmpty>未找到可用的 profile。</ModelSelectorEmpty>
-                            <ModelSelectorGroup heading="Agent Profiles">
-                              {agentProfiles.map((profile) => (
-                                <ProfileSelectorItem
-                                  isActive={profile.id === activeAgentProfileId}
-                                  key={profile.id}
-                                  onSelect={() => {
-                                    onSelectAgentProfile(profile.id);
-                                    setProfileSelectorOpen(false);
-                                  }}
-                                  profile={profile}
-                                  providers={providers}
-                                />
-                              ))}
-                            </ModelSelectorGroup>
-                          </ModelSelectorList>
-                        </ModelSelectorContent>
-                      </ModelSelector>
-                    ) : (
-                      <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" disabled size="sm">
-                        <ProfileInlineIdentity badge={false} muted profile={activeProfile} providers={providers} showModel={false} />
-                      </PromptInputButton>
-                    )
-                  ) : null}
-                </PromptInputTools>
-
-                <PromptInputSubmitButton
-                  activeProfile={activeProfile}
-                  composerValue={composerValue}
-                  onStop={handleStopFollowUp}
-                  status={status}
-                />
-              </PromptInputFooter>
-            </PromptInput>
-          </div>
-
-          {composerError ? <p className="text-xs text-app-danger">{composerError}</p> : null}
-          {!activeProfile ? (
-            <p className="text-xs text-app-danger">No active profile is available for the composer right now.</p>
-          ) : null}
-        </div>
+        <WorkbenchPromptComposer
+          activeAgentProfileId={activeAgentProfileId}
+          agentProfiles={agentProfiles}
+          error={composerError}
+          onErrorMessageChange={setComposerError}
+          onSelectAgentProfile={onSelectAgentProfile}
+          onStop={handleStopFollowUp}
+          onSubmit={handleSubmit}
+          placeholder="继续细化这条 AI Elements 任务流..."
+          providers={providers}
+          status={status}
+          suggestions={AI_ELEMENTS_SUGGESTIONS}
+          value={composerValue}
+          onValueChange={setComposerValue}
+        />
       </div>
     </div>
   );

@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
-  ArrowUp,
-  Bot,
   Boxes,
   ChevronDown,
   Folder,
@@ -11,9 +9,9 @@ import {
   MessageSquarePlus,
   MoreHorizontal,
   PanelBottom,
-  Plus,
   TerminalSquare,
 } from "lucide-react";
+import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { useLanguage, type LanguagePreference } from "@/app/providers/language-provider";
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
 import { useMarketplaceController } from "@/modules/marketplace-center/model/use-marketplace-controller";
@@ -67,6 +65,7 @@ import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-emp
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
 import { GitDiffPreviewPanel, GitPanel } from "@/modules/workbench-shell/ui/source-control-panels";
 import { ThreadStatusIndicator } from "@/modules/workbench-shell/ui/thread-status-indicator";
+import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 import { WorkbenchTopBar } from "@/modules/workbench-shell/ui/workbench-top-bar";
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 import { cn } from "@/shared/lib/utils";
@@ -129,26 +128,23 @@ export function DashboardWorkbench() {
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const [terminalResize, setTerminalResize] = useState<{ startY: number; startHeight: number } | null>(null);
   const [composerValue, setComposerValue] = useState("");
+  const [composerError, setComposerError] = useState<string | null>(null);
   const [openSettingsSection, setOpenSettingsSection] = useState<"theme" | "language" | null>(null);
   const [isUserMenuOpen, setUserMenuOpen] = useState(false);
   const [userSession, setUserSession] = useState(() => readStoredUserSession());
   const [isCheckingUpdates, setCheckingUpdates] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
-  const [isComposerProfileMenuOpen, setComposerProfileMenuOpen] = useState(false);
   const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(
     () => Object.fromEntries(WORKSPACE_ITEMS.map((workspace) => [workspace.id, workspace.defaultOpen])),
   );
   const [activeDrawerPanel, setActiveDrawerPanel] = useState<DrawerPanel>("project");
   const [selectedDiffFilePreview, setSelectedDiffFilePreview] = useState<{ fileId: string; isStaged: boolean } | null>(null);
-  const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const composerProfileMenuRef = useRef<HTMLDivElement | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
   const overlayContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   const selectedDiffFile = GIT_CHANGE_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
   const activeThread = getActiveThread(workspaces);
-  const activeComposerProfile = agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0];
   const { isSidebarOpen, isDrawerOpen, isTerminalCollapsed } = panelVisibilityState;
   const isSettingsOpen = activeOverlay === "settings";
   const isMarketplaceOpen = activeOverlay === "marketplace";
@@ -242,16 +238,6 @@ export function DashboardWorkbench() {
   };
 
   useEffect(() => {
-    const textarea = composerRef.current;
-    if (!textarea) {
-      return;
-    }
-
-    textarea.style.height = "0px";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 176)}px`;
-  }, [composerValue]);
-
-  useEffect(() => {
     if (!isUserMenuOpen || typeof window === "undefined") {
       return;
     }
@@ -270,36 +256,6 @@ export function DashboardWorkbench() {
     window.addEventListener("mousedown", handlePointerDown);
     return () => window.removeEventListener("mousedown", handlePointerDown);
   }, [isUserMenuOpen]);
-
-  useEffect(() => {
-    if (!isComposerProfileMenuOpen || typeof window === "undefined") {
-      return;
-    }
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-
-      if (target && composerProfileMenuRef.current?.contains(target)) {
-        return;
-      }
-
-      setComposerProfileMenuOpen(false);
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setComposerProfileMenuOpen(false);
-      }
-    };
-
-    window.addEventListener("mousedown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.removeEventListener("mousedown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isComposerProfileMenuOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -428,6 +384,7 @@ export function DashboardWorkbench() {
   const handleEnterNewThreadMode = () => {
     setNewThreadMode(true);
     setWorkspaces((current) => clearActiveThreads(current));
+    setComposerError(null);
   };
 
   const handleThreadSelect = (threadId: string) => {
@@ -445,8 +402,8 @@ export function DashboardWorkbench() {
     setRecentProjects((current) => mergeRecentProjects(current, nextProject));
   };
 
-  const handleComposerSubmit = () => {
-    const trimmedValue = composerValue.trim();
+  const handleComposerSubmit = (message: PromptInputMessage) => {
+    const trimmedValue = message.text?.trim() ?? "";
 
     if (!trimmedValue) {
       return;
@@ -510,10 +467,12 @@ export function DashboardWorkbench() {
       }));
       setNewThreadMode(false);
       setComposerValue("");
+      setComposerError(null);
       return;
     }
 
     setComposerValue("");
+    setComposerError(null);
   };
 
   const handleThemeSelect = (nextTheme: ThemePreference) => {
@@ -751,16 +710,36 @@ export function DashboardWorkbench() {
               <section ref={mainContentRef} className="min-h-0 min-w-0 flex-1 select-text bg-app-canvas">
                 <div className="flex h-full min-h-0 flex-col">
                   {isNewThreadMode ? (
-                    <div className="relative min-h-0 flex-1 overflow-hidden">
-                      <div className="flex h-full items-center justify-center px-6 pb-8 pt-6">
-                        <NewThreadEmptyState
-                          recentProjects={recentProjects}
-                          selectedProject={selectedProject}
-                          isOverlayOpen={isOverlayOpen}
-                          onSelectProject={handleProjectSelect}
-                        />
+                    <div className="relative min-h-0 flex-1 overflow-hidden bg-app-canvas">
+                      <div className="pointer-events-none absolute left-1/2 top-0 h-56 w-[72rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(120,180,255,0.11),transparent_68%)] blur-3xl" />
+                      <div className="relative flex h-full min-h-0 flex-col">
+                        <div className="flex min-h-0 flex-1 items-center justify-center px-6 pb-8 pt-6">
+                          <NewThreadEmptyState
+                            recentProjects={recentProjects}
+                            selectedProject={selectedProject}
+                            isOverlayOpen={isOverlayOpen}
+                            onSelectProject={handleProjectSelect}
+                          />
+                        </div>
+
+                        <div className="shrink-0 px-6 pb-6 pt-4">
+                          <WorkbenchPromptComposer
+                            activeAgentProfileId={activeAgentProfileId}
+                            agentProfiles={agentProfiles}
+                            canSubmitWhenAttachmentsOnly={false}
+                            error={composerError}
+                            onErrorMessageChange={setComposerError}
+                            onSelectAgentProfile={setActiveAgentProfile}
+                            onStop={() => undefined}
+                            onSubmit={handleComposerSubmit}
+                            placeholder="Ask Tiy anything, @ to add files, / for commands, $ for skills"
+                            providers={providers}
+                            status="ready"
+                            value={composerValue}
+                            onValueChange={setComposerValue}
+                          />
+                        </div>
                       </div>
-                      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-b from-transparent via-app-overlay via-55% to-app-canvas" />
                     </div>
                   ) : (
                     <>
@@ -819,99 +798,6 @@ export function DashboardWorkbench() {
                       />
                     </>
                   )}
-
-                  {isNewThreadMode ? (
-                    <div className="relative z-30 shrink-0 px-6 pb-5 pt-0">
-                      <div className="mx-auto max-w-4xl rounded-2xl border border-app-border bg-app-surface px-4 pb-3 pt-3 text-app-muted transition-colors focus-within:border-app-border-strong">
-                        <textarea
-                          ref={composerRef}
-                          value={composerValue}
-                          onChange={(event) => setComposerValue(event.target.value)}
-                          rows={3}
-                          placeholder="Ask Tiy anything, @ to add files, / for commands, $ for skills"
-                          className="max-h-44 min-h-[72px] w-full resize-none select-text overflow-y-auto bg-transparent text-sm leading-6 text-app-foreground outline-none placeholder:text-app-subtle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                        />
-                        <div className="mt-3 flex items-end justify-between gap-3">
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            <button type="button" className="-ml-1 mt-1 rounded-lg p-2 text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground">
-                              <Plus className="size-4" />
-                            </button>
-
-                            {activeComposerProfile ? (
-                              <div ref={composerProfileMenuRef} className="relative">
-                                <button
-                                  type="button"
-                                  className={cn(
-                                    "group inline-flex h-9 max-w-[220px] items-center gap-2 rounded-xl border border-app-border/80 bg-app-canvas/55 pl-1.5 pr-2.5 text-[12px] font-medium text-app-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 hover:border-app-border-strong hover:bg-app-surface hover:shadow-[0_8px_18px_rgba(15,23,42,0.08)]",
-                                    isComposerProfileMenuOpen && "border-app-border-strong bg-app-surface shadow-[0_10px_24px_rgba(15,23,42,0.12)]",
-                                  )}
-                                  aria-haspopup="menu"
-                                  aria-expanded={isComposerProfileMenuOpen}
-                                  aria-label={`Active profile: ${activeComposerProfile.name}`}
-                                  onClick={() => setComposerProfileMenuOpen((current) => !current)}
-                                >
-                                  <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-app-surface text-app-subtle ring-1 ring-app-border/70 transition-colors group-hover:text-app-foreground">
-                                    <Bot className="size-3.5" />
-                                  </span>
-                                  <span className="truncate">{activeComposerProfile.name}</span>
-                                  <ChevronDown
-                                    className={cn(
-                                      "ml-auto size-3.5 shrink-0 text-app-subtle transition-transform duration-200",
-                                      isComposerProfileMenuOpen && "rotate-180",
-                                    )}
-                                  />
-                                </button>
-
-                                {isComposerProfileMenuOpen ? (
-                                  <div className="absolute bottom-[calc(100%+10px)] left-0 z-30 min-w-[240px] overflow-hidden rounded-2xl border border-app-border/80 bg-app-surface/95 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.16)] backdrop-blur-xl">
-                                    <div className="px-2.5 pb-1.5 pt-1">
-                                      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-app-subtle">Profiles</div>
-                                    </div>
-                                    <div className="space-y-1">
-                                      {agentProfiles.map((profile) => {
-                                        const isActive = profile.id === activeAgentProfileId;
-
-                                        return (
-                                          <button
-                                            key={profile.id}
-                                            type="button"
-                                            className={cn(
-                                              "flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors",
-                                              isActive
-                                                ? "bg-app-surface-hover text-app-foreground"
-                                                : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                                            )}
-                                            onClick={() => {
-                                              setActiveAgentProfile(profile.id);
-                                              setComposerProfileMenuOpen(false);
-                                            }}
-                                          >
-                                            <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-app-canvas text-app-subtle ring-1 ring-app-border/70">
-                                              <Bot className="size-3.5" />
-                                            </span>
-                                            <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{profile.name}</span>
-                                            {isActive ? <span className="text-app-foreground">•</span> : null}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : null}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={handleComposerSubmit}
-                            className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[0_1px_2px_rgba(15,23,42,0.18)] transition-[transform,box-shadow,background-color] duration-200 hover:scale-[1.02] hover:bg-primary/90 hover:shadow-[0_4px_10px_rgba(15,23,42,0.18)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100 disabled:hover:shadow-[0_1px_2px_rgba(15,23,42,0.18)]"
-                            disabled={!composerValue.trim()}
-                          >
-                            <ArrowUp className="size-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
                 </div>
               </section>
 
