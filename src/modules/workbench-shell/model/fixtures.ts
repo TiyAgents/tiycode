@@ -9,6 +9,7 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
+import { AI_ELEMENTS_THREAD_TITLE } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
 import type {
@@ -40,7 +41,7 @@ export const DRAWER_OVERFLOW_ACTION_CLASS =
 export const DRAWER_SECTION_HEADER_CLASS = "flex items-center justify-between gap-3 px-1.5";
 
 const THREAD_ITEMS = [
-  { name: "创建 Tauri 2 React+TS+shadcn/ui 模块化脚手架", time: "59m", active: true, status: "running" },
+  { name: AI_ELEMENTS_THREAD_TITLE, time: "59m", active: true, status: "running" },
   { name: "设计 Codex 风格工作台布局", time: "12m", active: false, status: "needs-reply" },
   { name: "配置打包与签名信息", time: "24h", active: false, status: "failed" },
   { name: "实现 Agent 会话与任务抽屉", time: "2d", active: false, status: "completed" },

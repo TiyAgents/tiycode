@@ -24,6 +24,16 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
+function CardAction({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="card-action"
+      className={cn("ml-auto shrink-0", className)}
+      {...props}
+    />
+  );
+}
+
 function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -64,4 +74,4 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
-export { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle };
+export { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle };
