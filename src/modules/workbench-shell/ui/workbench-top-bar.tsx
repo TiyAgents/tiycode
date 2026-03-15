@@ -19,6 +19,7 @@ import {
   Sun,
   X,
 } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
@@ -99,24 +100,51 @@ export function WorkbenchTopBar({
   onToggleTerminal: () => void;
 }) {
   const [isMaximized, setIsMaximized] = useState(false);
+  const canUseDesktopWindowControls = isWindows && isTauri();
 
   useEffect(() => {
-    if (!isWindows) return;
+    if (!canUseDesktopWindowControls) {
+      setIsMaximized(false);
+      return;
+    }
+
     const appWindow = getCurrentWindow();
     let unlisten: (() => void) | undefined;
+
     const setup = async () => {
       setIsMaximized(await appWindow.isMaximized());
       unlisten = await appWindow.onResized(async () => {
         setIsMaximized(await appWindow.isMaximized());
       });
     };
+
     void setup();
     return () => unlisten?.();
-  }, [isWindows]);
+  }, [canUseDesktopWindowControls]);
 
-  const handleWindowMinimize = () => getCurrentWindow().minimize();
-  const handleWindowToggleMaximize = () => getCurrentWindow().toggleMaximize();
-  const handleWindowClose = () => getCurrentWindow().close();
+  const handleWindowMinimize = () => {
+    if (!canUseDesktopWindowControls) {
+      return;
+    }
+
+    void getCurrentWindow().minimize();
+  };
+
+  const handleWindowToggleMaximize = () => {
+    if (!canUseDesktopWindowControls) {
+      return;
+    }
+
+    void getCurrentWindow().toggleMaximize();
+  };
+
+  const handleWindowClose = () => {
+    if (!canUseDesktopWindowControls) {
+      return;
+    }
+
+    void getCurrentWindow().close();
+  };
 
   const panelToggleButtonClass =
     "relative size-7 text-app-subtle transition-[color,background-color] duration-200 hover:bg-app-surface-hover hover:text-app-foreground";
@@ -318,7 +346,7 @@ export function WorkbenchTopBar({
             <PanelRight className="size-4" />
           </Button>
 
-          {isWindows ? (
+          {canUseDesktopWindowControls ? (
             <>
               <div className="mx-1 h-4 w-px bg-app-border" />
               <button

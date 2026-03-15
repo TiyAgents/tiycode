@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import type { WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 
@@ -19,6 +19,11 @@ export function useWorkspaceOpenApps() {
 
   const refetch = useCallback(async () => {
     setState((current) => ({ ...current, error: null, isLoading: true }));
+
+    if (!isTauri()) {
+      setState({ data: [], error: null, isLoading: false });
+      return;
+    }
 
     try {
       const data = await invoke<Array<WorkspaceOpenApp>>("get_workspace_open_apps");
