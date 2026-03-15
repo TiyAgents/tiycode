@@ -4,6 +4,54 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        margin: 0;
+      }
+
+      html,
+      body,
+      #root {
+        background: #f5f7fb;
+      }
+
+      html.dark,
+      html.dark body,
+      html.dark #root {
+        background: #171b25;
+      }
+    </style>
+    <script>
+      (() => {
+        const storageKey = "tiy-agent-theme";
+        const darkBackground = "#171b25";
+        const lightBackground = "#f5f7fb";
+
+        let storedValue = "system";
+        try {
+          const candidate = window.localStorage.getItem(storageKey);
+          if (candidate === "light" || candidate === "dark" || candidate === "system") {
+            storedValue = candidate;
+          }
+        } catch {
+          storedValue = "system";
+        }
+
+        const prefersDark =
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const resolvedTheme = storedValue === "system" ? (prefersDark ? "dark" : "light") : storedValue;
+        const root = document.documentElement;
+
+        root.classList.toggle("dark", resolvedTheme === "dark");
+        root.dataset.theme = resolvedTheme;
+        root.style.colorScheme = resolvedTheme;
+        root.style.backgroundColor = resolvedTheme === "dark" ? darkBackground : lightBackground;
+      })();
+    </script>
     <title>Tauri + React + Typescript</title>
   </head>
 

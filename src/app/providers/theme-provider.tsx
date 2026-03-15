@@ -2,10 +2,14 @@ import {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   type PropsWithChildren,
 } from "react";
+import { setTheme as setAppTheme } from "@tauri-apps/api/app";
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type ThemePreference = "system" | "light" | "dark";
 type ResolvedTheme = "light" | "dark";
@@ -18,6 +22,14 @@ type ThemeContextValue = {
 
 const STORAGE_KEY = "tiy-agent-theme";
 const ThemeContext = createContext<ThemeContextValue | null>(null);
+const BOOT_BACKGROUND_COLORS: Record<ResolvedTheme, string> = {
+  light: "#f5f7fb",
+  dark: "#171b25",
+};
+const NATIVE_WINDOW_BACKGROUND_COLORS: Record<ResolvedTheme, [number, number, number, number]> = {
+  light: [245, 247, 251, 255],
+  dark: [23, 27, 37, 255],
+};
 
 function isThemePreference(value: string | null): value is ThemePreference {
   return value === "system" || value === "light" || value === "dark";
@@ -38,6 +50,37 @@ function getSystemThemePreference(): ResolvedTheme {
   }
 
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyResolvedTheme(resolvedTheme: ResolvedTheme) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const root = document.documentElement;
+  const backgroundColor = BOOT_BACKGROUND_COLORS[resolvedTheme];
+  root.classList.toggle("dark", resolvedTheme === "dark");
+  root.dataset.theme = resolvedTheme;
+  root.style.colorScheme = resolvedTheme;
+  root.style.backgroundColor = backgroundColor;
+
+  if (document.body) {
+    document.body.style.backgroundColor = backgroundColor;
+  }
+}
+
+async function syncNativeWindowTheme(theme: ThemePreference, resolvedTheme: ResolvedTheme) {
+  if (!isTauri()) {
+    return;
+  }
+
+  const nativeTheme = theme === "system" ? null : resolvedTheme;
+  const currentWindow = getCurrentWindow();
+
+  await Promise.allSettled([
+    setAppTheme(nativeTheme),
+    currentWindow.setBackgroundColor(NATIVE_WINDOW_BACKGROUND_COLORS[resolvedTheme]),
+  ]);
 }
 
 export function ThemeProvider({ children }: PropsWithChildren) {
@@ -66,16 +109,13 @@ export function ThemeProvider({ children }: PropsWithChildren) {
 
   const resolvedTheme = theme === "system" ? systemTheme : theme;
 
-  useEffect(() => {
-    if (typeof document === "undefined") {
-      return;
-    }
-
-    const root = document.documentElement;
-    root.classList.toggle("dark", resolvedTheme === "dark");
-    root.dataset.theme = resolvedTheme;
-    root.style.colorScheme = resolvedTheme;
+  useLayoutEffect(() => {
+    applyResolvedTheme(resolvedTheme);
   }, [resolvedTheme]);
+
+  useEffect(() => {
+    void syncNativeWindowTheme(theme, resolvedTheme);
+  }, [resolvedTheme, theme]);
 
   const setTheme = (nextTheme: ThemePreference) => {
     setThemeState(nextTheme);
