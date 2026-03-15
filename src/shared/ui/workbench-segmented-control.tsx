@@ -50,7 +50,7 @@ export function WorkbenchSegmentedControl<TValue extends string>({
           aria-label={option.label}
           title={option.title ?? option.label}
           className={cn(
-            "flex h-8 flex-1 items-center justify-center rounded-lg border-transparent bg-transparent px-3.5 text-[12px] text-app-muted shadow-none transition-colors hover:bg-app-surface-hover hover:text-app-foreground focus-visible:ring-0 data-[state=on]:bg-app-surface data-[state=on]:text-app-foreground data-[state=on]:shadow-[0_1px_2px_rgba(15,23,42,0.08)]",
+            "flex h-8 flex-1 items-center justify-center rounded-lg border border-transparent bg-transparent px-3.5 text-[12px] text-app-muted shadow-none transition-[background-color,border-color,color,box-shadow] duration-150 hover:bg-app-surface-hover hover:text-app-foreground focus-visible:ring-0 data-[state=on]:border-app-border-strong data-[state=on]:bg-app-surface-active data-[state=on]:text-app-foreground data-[state=on]:shadow-[inset_0_1px_0_rgba(255,255,255,0.42),0_5px_12px_rgba(15,23,42,0.08)] dark:data-[state=on]:shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_7px_16px_rgba(0,0,0,0.22)]",
             itemClassName,
           )}
         >
