@@ -88,6 +88,7 @@ Benefits:
 Trade-off:
 
 - requires robust session isolation and crash handling
+- requires explicit health measurement and restart policy
 
 ### `Agent Profile` Supplies a Role-Based Model Plan
 
@@ -198,6 +199,24 @@ agent-sidecar/
 3. Rust marks sidecar healthy
 4. runs are multiplexed through the same process
 5. if process exits unexpectedly, Rust restarts it and marks active runs interrupted
+
+### Health Contract
+
+Rust should treat sidecar health as an explicit protocol concern rather than inferring it only from process liveness.
+
+Recommended health signals:
+
+- `rss_bytes`
+- `event_loop_lag_ms`
+- `active_run_count`
+- `uptime_ms`
+
+Recovery rules:
+
+- stop admitting new runs before restart begins
+- mark active runs as `Interrupted` before tearing down the process
+- restart gracefully when thresholds are exceeded, not only after a hard crash
+- keep multi-sidecar support out of v1, but avoid protocol assumptions that make it impossible later
 
 ### Session Lifecycle
 

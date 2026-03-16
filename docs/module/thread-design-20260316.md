@@ -239,6 +239,27 @@ stateDiagram-v2
   Idle --> Archived: optional future archive
 ```
 
+### ThreadStatus Derivation
+
+`ThreadStatus` 必须由最新 run 状态和待处理 approval 明确推导，而不是留给前端自行猜测。
+
+推荐规则：
+
+| latest run state | pending approvals | derived `ThreadStatus` |
+|---|---|---|
+| no run | no | `Idle` |
+| `Created` / `Dispatching` / `Running` / `WaitingToolResult` / `Cancelling` | no | `Running` |
+| any non-terminal run | yes | `WaitingApproval` |
+| `Completed` / `Cancelled` / `Denied` | no | `Idle` |
+| `Failed` | no | `Failed` |
+| `Interrupted` | no | `Interrupted` |
+
+补充规则：
+
+- 若存在未解决 approval，线程状态优先显示为 `WaitingApproval`
+- `Failed` 和 `Interrupted` 在线程启动新 run 后自动回到 `Running`
+- 前端输入框是否聚焦不改变 `ThreadStatus`，那属于纯视图态
+
 ## Snapshot Construction
 
 When Rust builds a thread snapshot for either the frontend or the sidecar, it should assemble:
@@ -256,6 +277,28 @@ When Rust builds a thread snapshot for either the frontend or the sidecar, it sh
 - replace older spans with summary segments
 - preserve original message ids in summary metadata
 - always include unresolved approvals and recent tool outputs even if older than the default window
+
+### Compaction Pipeline
+
+Context compaction is a backend pipeline, not an ad hoc frontend truncation trick.
+
+Recommended v1 model:
+
+1. Rust checks history size after a run completes or when loading an oversized thread
+2. if thresholds are exceeded, Rust asks sidecar for a structured summary candidate using the lightweight model
+3. Rust validates summary shape, stores source message ranges, and rebuilds derived snapshot artifacts
+4. future snapshots inject the summary block plus recent window instead of replaying the whole history
+
+Required fallback:
+
+- if summarization fails, Rust still builds a safe reduced snapshot from:
+  - first user goal message
+  - latest `N` messages
+  - unresolved approvals
+  - tool digests for recent high-signal tool calls
+  - workspace metadata
+
+This preserves continuity without making compaction a hard dependency for run startup.
 
 This prevents large tool outputs or long reasoning chains from exploding prompt size and UI recovery cost.
 
@@ -287,10 +330,12 @@ This prevents large tool outputs or long reasoning chains from exploding prompt 
 
 ### Summary Refresh
 
-1. background summarizer detects history over threshold
-2. Rust builds summary candidate from older message ranges
-3. Rust stores the summary and source references
-4. future snapshots use the summary instead of replaying the entire range
+1. Rust detects that the thread exceeded message or token thresholds
+2. Rust selects older message spans that are no longer in the hot window
+3. sidecar generates a structured summary candidate for those spans
+4. Rust persists the summary plus source references transactionally
+5. future snapshots use the summary instead of replaying the entire range
+6. if the summary step fails, Rust falls back to deterministic truncation rules and records the degraded state
 
 ## Failure Modes
 
@@ -301,6 +346,7 @@ This prevents large tool outputs or long reasoning chains from exploding prompt 
 | oversized tool output | slow snapshot and prompt building | store digest in thread window, keep raw output outside hot path |
 | long thread history | slow UI recovery | summary + message pagination + window cache |
 | app crash during append | possible missing tail record | use transactional append for each event batch |
+| summary generation unavailable | snapshot cannot compact | deterministic fallback window with approvals + tool digests |
 
 ## ADR
 

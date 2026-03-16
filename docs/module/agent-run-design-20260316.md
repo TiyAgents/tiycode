@@ -382,6 +382,26 @@ Recommended contents:
 
 When the user chooses `clean_context_from_plan`, Rust should derive an `execution_seed` from this artifact and use that as the main input for the next `default` run.
 
+Recommended structure:
+
+```rust
+pub struct ExecutionSeed {
+    pub goal: String,
+    pub ordered_tasks: Vec<String>,
+    pub constraints: Vec<String>,
+    pub scope_hints: Vec<String>,
+    pub unresolved_risks: Vec<String>,
+    pub execution_brief: Option<String>,
+}
+```
+
+Rules:
+
+- `execution_seed` is a Rust-owned structured artifact, not a sidecar-only prompt string
+- sidecar may help synthesize the seed, but Rust must validate shape before persisting
+- if structured derivation fails, `clean_context_from_plan` must fall back to `continue_in_thread` or an explicit degraded truncation path
+- execution startup must never block indefinitely on summarization or plan post-processing
+
 ## Run Ownership Boundaries
 
 ### Frontend Owns

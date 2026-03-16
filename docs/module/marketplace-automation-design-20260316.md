@@ -2,14 +2,14 @@
 
 ## Summary
 
-This document defines the combined `MarketplaceHost` and `Automation Scheduler` design direction for Tiy Agent.
+This document defines the `MarketplaceHost` design direction for Tiy Agent and records how `Automation Scheduler` is deferred beyond v1.
 
 Marketplace is the product-facing extension management center. Automation is one extension category inside that ecosystem. The backend challenge is not just listing installable items. It is safely hosting, enabling, disabling, and observing extension-backed capabilities without breaking the app's permission boundary.
 
 This subsystem therefore has two linked responsibilities:
 
 - manage extension catalog state and local installation state
-- host the runtime lifecycle of installable capabilities such as Skills, MCPs, Plugins, and Automations
+- host the runtime lifecycle of installable capabilities such as Skills, MCPs, and Plugins
 
 ## Goals
 
@@ -17,7 +17,7 @@ This subsystem therefore has two linked responsibilities:
 - separate catalog items from running extension instances
 - support install, enable, disable, uninstall, and detail inspection flows
 - safely host MCP and plugin lifecycles in Rust
-- model automations as first-class marketplace items with scheduler-backed execution
+- model automations as first-class marketplace items in Marketplace state
 - expose enabled capabilities to agent tooling without weakening system boundaries
 
 ## Non-Goals
@@ -47,7 +47,7 @@ Examples:
 
 - an item may be installed but disabled
 - an item may be enabled but temporarily unhealthy
-- an automation may be installed and active but have no current run
+- an automation may be installed and enabled even though no scheduler exists yet
 - a plugin may be catalog-visible yet blocked from using privileged tools directly
 
 ## Requirements
@@ -61,15 +61,14 @@ Examples:
 - enable and disable supported item types
 - host runtime processes for MCP and plugins
 - register enabled capabilities with the agent tool surface
-- schedule and execute automation runs
-- surface health and last-run information where applicable
+- reserve automation runtime state for a later phase without blocking current Marketplace design
+- surface runtime health where applicable
 
 ### Non-Functional
 
 - extension runtime failure should not crash the main app
 - enable and disable actions should be observable and recoverable
 - hosted capabilities must preserve the global permission boundary
-- scheduler execution should remain auditable
 - item state should survive app restart
 
 ## Core Decisions
@@ -88,8 +87,7 @@ Runtime state describes what the host is currently doing:
 
 - process running or stopped
 - unhealthy or healthy
-- automation next run time
-- last run result
+- optional future scheduler metadata such as next run time or last result
 
 Keeping these distinct avoids a common failure mode where UI labels lie about real runtime health.
 
@@ -101,15 +99,14 @@ This applies especially to:
 
 - MCP servers
 - plugin processes
-- automation execution scheduling
 
-### Automations Are Marketplace Items with Scheduler Semantics
+### Automations Are Marketplace Items, but Scheduler Is Deferred to Phase 3
 
 Automation should not become a totally separate product line in v1. Instead:
 
 - installation and enablement live in Marketplace
-- runtime scheduling lives in Rust scheduler components
-- execution still flows through existing thread, tool, and policy systems as needed
+- scheduler tables and interfaces may be reserved
+- real runtime scheduling and execution stay out of Phase 1-2 scope
 
 ## High-Level Architecture
 
@@ -121,8 +118,6 @@ flowchart LR
   MH --> REG["Installed Item Registry"]
   MH --> MCP["MCP Host"]
   MH --> PLG["Plugin Host"]
-  MH --> SCH["Automation Scheduler"]
-  SCH --> TG["ToolGateway / PolicyEngine"]
   MH --> SC["Agent Sidecar capability view"]
 ```
 
@@ -152,6 +147,8 @@ automation_runs
   finished_at
   result_summary
 ```
+
+This table is reserved for Phase 3. V1 does not require the scheduler to populate it.
 
 ### Recommended Runtime Types
 
@@ -211,14 +208,14 @@ Catalog state drives user intent. Runtime state reflects actual host status.
 ### Automations
 
 - configured, installed, enabled, and displayed through Marketplace
-- scheduled and executed by Rust scheduler
-- execution results written to durable run history
+- no scheduler-backed execution in v1
+- runtime rows and execution history are reserved for a later phase
 
 ## Scheduler Model
 
-### Core Principle
+### Phase 3 Direction
 
-Automation execution should reuse the existing execution model wherever possible instead of inventing a separate command universe.
+When the scheduler is eventually introduced, automation execution should reuse the existing execution model wherever possible instead of inventing a separate command universe.
 
 That means an automation may:
 
@@ -267,11 +264,13 @@ But final execution authority still remains in Rust.
 
 ### Run Automation
 
-1. scheduler determines automation is due
-2. Rust creates automation run record
-3. execution opens thread or run context as defined
-4. tool and agent actions use normal policy and gateway paths
-5. result summary is persisted
+Deferred to Phase 3.
+
+V1 only requires:
+
+1. Marketplace 展示 automation 项
+2. install / enable / disable 状态持久化
+3. 为将来 scheduler 预留 schema 和 capability shape
 
 ### Disable or Uninstall Item
 
@@ -287,7 +286,6 @@ But final execution authority still remains in Rust.
 |---|---|---|
 | plugin crash | capability unavailable | isolate process, mark runtime failed, keep app alive |
 | enabled item unhealthy | UI says enabled but feature unusable | separate catalog state from runtime health |
-| automation overlaps with itself | duplicate work | per-automation concurrency lock |
 | extension tries to bypass system tools | security boundary erosion | all privileged execution still routed through ToolGateway |
 | uninstall with existing history | broken audit references | keep immutable history separate from install state |
 
@@ -305,7 +303,7 @@ The product needs an extensibility layer that feels user-manageable in Marketpla
 
 #### Decision
 
-Model Marketplace items as persisted catalog entries and host active MCP, plugin, and automation runtime behavior in Rust. Keep agent-facing capability exposure derived from enabled runtime state rather than direct catalog state.
+Model Marketplace items as persisted catalog entries and host active MCP and plugin runtime behavior in Rust. Treat automations as Marketplace catalog items in v1, while deferring scheduler execution to a later phase. Keep agent-facing capability exposure derived from enabled runtime state rather than direct catalog state.
 
 #### Consequences
 
@@ -314,11 +312,13 @@ Model Marketplace items as persisted catalog entries and host active MCP, plugin
 - clear distinction between install state and runtime health
 - safer extension lifecycle management
 - easier observability and recovery
+- avoids implementing unverifiable scheduler complexity too early
 
 ##### Negative
 
 - runtime host implementation is more involved than static metadata management
 - extension onboarding requires more explicit contracts
+- automation execution is intentionally incomplete until Phase 3
 
 ##### Alternatives Considered
 
@@ -330,6 +330,6 @@ Both were rejected because they fragment management and weaken safety.
 ## Implementation Notes
 
 - place host logic in `src-tauri/src/core/marketplace_host.rs`
-- place scheduling logic in `src-tauri/src/core/automation_scheduler.rs`
+- reserve `src-tauri/src/core/automation_scheduler.rs` for Phase 3
 - keep runtime health separate from install state in storage or derived memory
 - ensure extension-provided tools still enter through normal gateway and policy paths

@@ -10,18 +10,16 @@ In v1, the index focuses on practical local developer workflows:
 
 - file tree caching
 - text search
-- relevant file suggestion
-- recent-file weighting
+- rebuildable workspace metadata
 
 It is not yet a semantic vector platform. That can come later.
 
 ## Goals
 
 - provide fast workspace-scoped file discovery
-- support incremental indexing instead of repeated full scans
+- avoid overbuilding a custom indexing engine before product demand exists
 - support `search_repo` and related context retrieval tools
 - provide a cached project tree view for UI consumers
-- prioritize recent and relevant files for agent context building
 - leave a clean extension path for semantic retrieval later
 
 ## Non-Goals
@@ -46,16 +44,14 @@ This makes `IndexManager` a shared internal service for both product UI and agen
 ### Functional
 
 - build and update workspace-scoped file tree cache
-- build and update content index for text search
+- expose text search through a controlled `ripgrep`-style backend
 - expose `rg`-style search semantics for agent and UI flows
-- support recent-file weighting or activity-based ranking
-- provide related file suggestions where practical
 - emit indexing progress events for long-running scans
 
 ### Non-Functional
 
 - initial index bootstrapping should not block the whole workbench
-- incremental updates should be cheaper than full rescans
+- refresh behavior should stay simple and explainable in v1
 - indexing should tolerate large repositories reasonably
 - hot search queries should be low-latency
 - index rebuild should be possible from source of truth without data loss
@@ -76,14 +72,13 @@ This means:
 
 Index entries should be keyed by workspace. This keeps search results, project tree cache, and recent-file ranking aligned with the workspace boundary already used elsewhere in the product.
 
-### Favor Incremental Text Indexing First
+### Favor File Tree Cache Plus `ripgrep` Search in v1
 
 V1 should optimize for:
 
 - file tree cache
-- textual inverted index
 - path and filename search
-- recent-activity boosting
+- `ripgrep`-backed text search
 
 This is the lowest-risk path with the highest immediate product value.
 
@@ -116,13 +111,13 @@ Used by:
 - project drawer rendering
 - quick file lookup
 
-### Layer 2: Content Inverted Index
+### Layer 2: Text Search Backend
 
-Stores:
+Implementation direction:
 
-- token to file references
-- line or snippet metadata
-- modified timestamps for invalidation
+- invoke `ripgrep` with workspace scoping and ignore rules
+- normalize results into typed snippets for UI and tools
+- cache hot search metadata only where it measurably helps
 
 Used by:
 
@@ -131,16 +126,13 @@ Used by:
 
 ### Layer 3: Activity Signals
 
-Stores or derives:
+Deferred to v2.
+
+When introduced later, this layer may derive:
 
 - recently opened files
 - recently modified files
 - thread-referenced files
-
-Used by:
-
-- ranking
-- related file suggestion
 
 ## Recommended Types
 
@@ -174,9 +166,8 @@ pub enum IndexStatus {
 1. workspace becomes active or newly added
 2. Rust schedules scan
 3. directory walk builds tree cache
-4. eligible text files are tokenized into inverted index
-5. progress events stream to frontend if relevant
-6. index becomes `Ready`
+4. progress events stream to frontend if relevant
+5. index becomes `Ready`
 
 ### Incremental Update
 
@@ -187,7 +178,7 @@ Possible triggers:
 - file modification observation in future versions
 - Git or tool activity that indicates file changes
 
-V1 does not require a sophisticated watcher if simpler refresh triggers are enough to ship safely.
+V1 does not require a sophisticated watcher or a persistent content inverted index if simpler refresh triggers are enough to ship safely.
 
 ## Search Model
 
@@ -205,7 +196,6 @@ Ranking may combine:
 
 - textual match quality
 - filename/path relevance
-- recent activity weight
 - thread-local relevance heuristics later
 
 ### Project Tree Usage
@@ -216,8 +206,8 @@ The project drawer should prefer index-backed file tree data for responsiveness,
 
 The architecture already adopts SQLite. Index data may use:
 
-- dedicated index tables
-- FTS5 where appropriate
+- dedicated cache tables for tree metadata
+- FTS5 or custom indexing only when `ripgrep` proves insufficient
 - rebuildable caches keyed by `workspace_id`
 
 Important rule:
@@ -251,10 +241,10 @@ Important rule:
 
 | Failure | Impact | Mitigation |
 |---|---|---|
-| index stale after file changes | outdated search results | refresh triggers + staleness metadata |
+| tree cache stale after file changes | outdated project drawer | refresh triggers + staleness metadata |
 | huge repo scan too heavy | poor startup responsiveness | background scan + partial readiness |
-| binary or generated files pollute index | noisy results | file eligibility filters and ignore rules |
-| index corruption | broken search | rebuild from filesystem truth |
+| binary or generated files pollute search | noisy results | file eligibility filters and ignore rules |
+| `ripgrep` unavailable or fails | broken text search | surface structured error and keep file tree cache available |
 | search result points to removed file | dead link | validate file existence on open |
 
 ## ADR
@@ -271,7 +261,7 @@ The product needs faster project browsing and repository search than naive files
 
 #### Decision
 
-Implement `IndexManager` as a Rust-owned, workspace-scoped derived cache that provides file tree caching, inverted text search, and lightweight ranking. Keep semantic retrieval as a later extension.
+Implement `IndexManager` as a Rust-owned, workspace-scoped derived cache that provides file tree caching and `ripgrep`-backed text search in v1. Defer inverted indexing, activity signals, and semantic retrieval until product demand justifies the added complexity.
 
 #### Consequences
 
@@ -280,11 +270,13 @@ Implement `IndexManager` as a Rust-owned, workspace-scoped derived cache that pr
 - strong immediate value for UI and tools
 - low-risk v1 scope
 - clean future path to richer retrieval
+- lower implementation and maintenance complexity for v1
 
 ##### Negative
 
 - requires invalidation and rebuild logic
 - can serve stale results if refresh discipline is weak
+- `ripgrep` startup cost may need future optimization if usage becomes very frequent
 
 ##### Alternatives Considered
 
@@ -296,6 +288,6 @@ The first is too slow for repeated use. The second adds complexity before the pr
 ## Implementation Notes
 
 - place logic in `src-tauri/src/core/index_manager.rs`
-- keep file tree cache and content index conceptually separate
-- use SQLite FTS5 and rebuildable tables where appropriate
+- keep file tree cache and text search abstraction conceptually separate
+- start with a `ripgrep` wrapper and only add FTS5 or custom indexing when needed
 - keep index optional for correctness but preferred for performance

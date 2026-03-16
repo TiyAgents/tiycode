@@ -60,7 +60,7 @@ That means the Git subsystem must handle two very different workloads:
 
 - initial Git drawer open should feel fast on medium repositories
 - large diff payloads should avoid full eager materialization
-- refresh should prefer deltas over repeated full snapshots
+- refresh should prefer event-triggered snapshot recomputation over blind polling loops
 - remote actions must remain policy-gated and auditable
 - Git failures should be surfaced structurally, not as opaque shell text only
 
@@ -93,14 +93,15 @@ Mutating flows such as:
 
 should route through explicit policy handling and audit.
 
-### Snapshot + Delta Is Preferred Over Full Refresh Loops
+### Event-Triggered Snapshot Refresh Is Preferred Over Polling Loops
 
 The frontend should receive:
 
 - one initial Git snapshot
-- later typed delta updates where practical
+- later snapshot refreshes when Git-relevant actions occur
+- optional derived UI diff events where practical
 
-This avoids repeatedly rehydrating the entire Git panel for small file changes or staging updates.
+This keeps the backend honest about Git's real cost model while still allowing the UI to optimize rendering.
 
 ## High-Level Architecture
 
@@ -195,23 +196,23 @@ When the Git drawer opens:
 3. Rust loads status, staged groups, and recent history in parallel where possible
 4. Rust returns one typed snapshot
 
-### Incremental Refresh
+### Event-Triggered Refresh
 
 Later changes should emit:
 
 - `refresh_started`
-- `file_delta`
-- `history_delta`
+- `snapshot_updated`
 - `refresh_completed`
 
-This lets the frontend update only changed subsections.
+If needed later, Rust may also emit derived `file_delta` or `history_delta` events based on diffing old and new snapshots, but those are UI optimizations rather than Git-native incremental reads.
 
 ## Integration with Thread and Tool Systems
 
 ### User-Initiated Git Actions
 
-- actions from the Git drawer call Rust commands directly
-- risky actions still pass through policy-aware execution logic
+- read actions from the Git drawer may call `GitManager` commands directly
+- mutating actions should reuse the same policy primitives and audit schema that agent-initiated actions use
+- the UI entry path may differ, but the backend execution and audit model should stay aligned
 
 ### Agent-Initiated Git Actions
 
@@ -242,7 +243,7 @@ The UI should be able to render these without scraping raw CLI stderr.
 2. Rust validates workspace and repo availability
 3. Rust gathers status and history
 4. snapshot is returned
-5. follow-up refreshes arrive as stream deltas
+5. follow-up refreshes arrive as `snapshot_updated` events, with optional derived UI diffs
 
 ### View Single-File Diff
 
@@ -270,7 +271,7 @@ The UI should be able to render these without scraping raw CLI stderr.
 
 | Failure | Impact | Mitigation |
 |---|---|---|
-| large repository snapshot too slow | sluggish drawer open | parallel load + cached snapshot + delta refresh |
+| large repository snapshot too slow | sluggish drawer open | parallel load + cached snapshot + event-triggered refresh |
 | oversized diff payload | UI freeze risk | chunked diff loading |
 | repo state changes during action | stale snapshot | refresh after mutation and return structured warning |
 | remote blocked by policy | push/pull/fetch unavailable | explicit policy error surfaced to UI |
@@ -290,7 +291,7 @@ The product needs Git inspection to feel lightweight, but Git mutations and remo
 
 #### Decision
 
-Implement Git as a Rust-owned typed subsystem with fast snapshot reads and policy-gated mutations. Prefer snapshot plus delta updates over repeated full-panel refresh.
+Implement Git as a Rust-owned typed subsystem with fast snapshot reads and policy-gated mutations. Prefer event-triggered snapshot recomputation, with optional derived UI diffs, over pretending Git offers a cheap native delta stream.
 
 #### Consequences
 
@@ -303,7 +304,7 @@ Implement Git as a Rust-owned typed subsystem with fast snapshot reads and polic
 ##### Negative
 
 - more backend modeling effort than shelling out ad hoc
-- delta update logic needs careful state handling
+- snapshot diff derivation still needs careful state handling
 
 ##### Alternatives Considered
 

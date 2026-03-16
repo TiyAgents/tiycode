@@ -178,6 +178,15 @@ src/
 - `marketplace-store`
 - `terminal-view-store`
 
+补充约束：
+
+- store 之间只共享视图编排状态，不复制 Rust 真源数据
+- workspace 切换时，`thread-view-store` 必须重置当前线程选择和分页游标，`terminal-view-store` 必须解除旧线程 attach
+- 线程删除或归档时，终端元数据、Git 抽屉临时状态和未读标记需要联动清理
+- app 启动顺序建议为：`settings/workspaces` bootstrap -> workbench 基础骨架 -> 当前线程按需加载 -> Git / Terminal / Index 面板懒加载
+- 流式订阅与视图生命周期绑定：线程流跟随当前线程，终端流跟随当前附着 session，Git / Index 流只在对应面板打开时建立
+- 断线或 Rust 重连后，前端应重新拉取 snapshot，而不是假设自己持有完整事件历史
+
 ### AI Elements 使用原则
 
 AI Elements 仅用于线程体验表达层，负责：
@@ -300,6 +309,13 @@ agent-sidecar/
 - 所有线程运行通过单 sidecar 进程多路复用。
 - Sidecar 以 `thread_id + run_id` 作为会话隔离主键。
 
+健康治理要求：
+
+- Rust 需要周期性读取 sidecar 健康指标，至少包括 `rss_bytes`、`event_loop_lag_ms`、`active_run_count`
+- sidecar 对所有 provider 请求必须启用超时和 abort 机制，避免单个 hang 请求拖死整个事件循环
+- 当健康度超过阈值时，Rust 先停止接收新 run，再将活跃 run 标记为 `interrupted`，最后执行 graceful restart
+- 多 sidecar 实例不是 v1 范围，但协议和会话模型不能阻止后续横向扩展
+
 不采用每次请求临时拉起 sidecar 的方式，避免冷启动成本和上下文损耗。
 
 ## 7. 数据真源与持久化
@@ -418,9 +434,16 @@ agent-sidecar/
 - `finished_at`
 - `result_summary`
 
+说明：
+
+- 该表为 Phase 3 调度能力预留
+- Phase 1-2 不要求真正实现 scheduler，只需保证 schema 预留不会反向约束当前实现
+
 ## 7.3 摘要与历史压缩
 
-为避免线程上下文无限膨胀，Rust 维护：
+为避免线程上下文无限膨胀，采用“Rust 触发与持久化，sidecar 辅助生成摘要”的 compaction pipeline。
+
+Rust 维护：
 
 - `thread_summaries`
 - `message_window_cache`
@@ -429,8 +452,35 @@ agent-sidecar/
 策略：
 
 - 最近 N 条消息保留全文
-- 历史消息按阶段摘要
+- run 结束后或线程加载时若超过阈值，Rust 发起历史压缩检查
+- sidecar 使用 lightweight 模型生成结构化摘要，Rust 负责校验、持久化和回填引用区间
 - 大 tool output 存摘要 + 可追溯原文引用
+- unresolved approvals、最近 tool 结果摘要、首条用户目标消息始终保留
+
+降级策略：
+
+- 若摘要模型不可用或生成失败，退化为“首条用户消息 + 最近 N 条消息 + 所有待审批项 + tool digest”的裁剪窗口
+- `clean_context_from_plan` 只能基于结构化 `execution_seed` 构造精简上下文，不能仅依赖自由文本摘要
+
+## 7.4 统一错误模型
+
+所有跨模块可传播错误统一归一到 `AppError` 契约，避免前端针对 Git、Terminal、Tool、Sidecar 分别写特判。
+
+建议标准字段：
+
+- `errorCode`
+- `category`：`fatal | recoverable | informational`
+- `source`：`thread | tool | git | terminal | index | settings | sidecar`
+- `userMessage`
+- `detail`
+- `retryable`
+- `correlationId`
+
+展示原则：
+
+- 线程内可见错误通过 `ThreadStreamEvent` 进入线程流
+- 面板级错误通过对应面板状态或 toast 呈现
+- 所有结构化错误都应保留原始调试信息，但前端默认展示 `userMessage`
 
 ## 8. IPC 与通信协议
 
@@ -440,6 +490,13 @@ agent-sidecar/
 
 - 短请求：Tauri `invoke`
 - 长流：Tauri `channels`
+
+### Frontend / Rust 类型契约
+
+- Rust DTO 建议使用 `specta` 统一生成 TypeScript 类型，减少手写 interface 漂移
+- 所有对前端暴露的结构体统一使用 `#[serde(rename_all = "camelCase")]`
+- channel 事件一律使用带 `type` 字段的 discriminated union，而不是让前端靠字段猜测事件种类
+- DTO 需要显式 `schema_version` 或协议版本号，破坏性变更必须通过版本升级而不是静默修改字段
 
 ### 原则
 
@@ -482,11 +539,25 @@ agent-sidecar/
 - `subagent_completed`
 - `subagent_failed`
 - `tool_requested`
+- `approval_required`
+- `approval_resolved`
 - `tool_running`
 - `tool_completed`
 - `tool_failed`
 - `run_completed`
 - `run_failed`
+- `run_interrupted`
+
+前端通过一层 adapter 将事件映射到 AI Elements，而不是让组件直接消费底层协议事件。
+
+建议映射：
+
+- `plan_updated` -> `Plan`
+- `queue_updated` -> `Queue`
+- `reasoning_updated` -> `Reasoning` / `ChainOfThought`
+- `tool_*` -> `Tool`
+- `approval_required` -> `Confirmation`
+- `message_*` -> `Conversation`
 
 ### `TerminalStreamEvent`
 
@@ -499,9 +570,13 @@ agent-sidecar/
 ### `GitStreamEvent`
 
 - `refresh_started`
-- `file_delta`
-- `history_delta`
+- `snapshot_updated`
 - `refresh_completed`
+
+说明：
+
+- v1 的 Git 刷新真相是“事件触发的全量 snapshot 重新计算”
+- 若需要 `file_delta` / `history_delta`，它们应被视为 Rust 对比前后 snapshot 后生成的派生 UI 优化事件，而不是 Git 原生增量协议
 
 ### `IndexStreamEvent`
 
@@ -574,6 +649,18 @@ agent-sidecar/
 - `agent.run.completed`
 - `agent.run.failed`
 
+## 8.4 Settings 变更传播
+
+Settings 不是单一路径即时广播，而是按配置类别定义生效范围。
+
+| 配置类别 | 生效范围 | 传播方式 |
+|---|---|---|
+| Theme / Language | 仅前端 | 前端 store 直接更新 |
+| Agent Profile | 仅新 run | Rust 持久化；活跃 run 不热更新 |
+| Provider 配置 | 仅新 run | Rust 校验后通知 sidecar 刷新 provider registry |
+| Policy 规则 | 所有新 tool 请求与待执行审批 | Rust `PolicyEngine` 读取最新配置；pending approval 在执行前重新评估 |
+| Workspace 配置 | 立即影响相关 manager | Rust 重新校验 workspace、Git、Index、Terminal 边界 |
+
 ## 9. Tool 架构设计
 
 ## 9.1 基本原则
@@ -633,6 +720,18 @@ agent-sidecar/
 - `open_workspace_in_app`
 - `marketplace_install`
 - `mcp_call`
+
+### `run_command` 特殊约束
+
+`run_command` 在 v1 中定义为“非交互式、一次性命令执行”，与线程终端的交互式 PTY 会话严格区分。
+
+要求：
+
+- 默认 `require-approval`
+- 必须经过命令解析、allow/deny 规则匹配和 workspace 边界校验
+- 必须带有默认超时，建议 60s，可被策略收紧但不可无限执行
+- 必须限制输出大小，超出后截断并标记
+- 禁止将其实现为对现有终端 session 的隐式写入；交互式场景应使用 terminal 工具族
 
 ## 9.3 Tool Gateway
 
@@ -717,7 +816,7 @@ requested -> approved -> running -> failed
 
 关键要求：
 
-- 一线程一终端会话
+- 一个线程按需创建零或一个终端会话
 - 切线程不销毁后台 PTY
 - 终端状态在 Rust 保持，不依赖 React 生命周期
 
@@ -732,7 +831,7 @@ requested -> approved -> running -> failed
 
 关键要求：
 
-- Git 结果尽可能走增量刷新
+- v1 采用事件触发的全量 snapshot 刷新，必要时再派生 UI diff 事件
 - 大 diff 采用 chunk 或分页
 - 所有危险动作必须接入 `PolicyEngine`
 
@@ -740,18 +839,19 @@ requested -> approved -> running -> failed
 
 职责：
 
-- 构建工作区增量索引
-- 为 `search_repo`、上下文检索、相关文件推荐提供支持
+- 构建工作区文件树缓存
+- 为 `search_repo` 和项目抽屉提供本地检索能力
 
 首版建议能力：
 
 - 文件树缓存
-- 文件内容倒排索引
-- `rg` 风格文本检索
-- 最近活跃文件加权
+- 封装 `ripgrep` 风格文本检索
+- 冷热状态感知和可重建缓存
 
 二期可扩展：
 
+- 内容倒排索引
+- 最近活跃文件加权
 - embedding 索引
 - 语义召回
 
@@ -767,6 +867,7 @@ requested -> approved -> running -> failed
 
 - Marketplace Item 只是“目录项”
 - 真正运行中的 MCP / 插件由 Rust 宿主管理
+- Automation 在 v1 只要求目录展示和启停状态管理，调度器延后到 Phase 3
 
 ## 11. 关键业务流技术实现
 
@@ -802,7 +903,8 @@ requested -> approved -> running -> failed
 1. Frontend 打开 Git 抽屉并请求 snapshot
 2. Rust `GitManager` 并发获取 `status + staged + history`
 3. Rust 返回初始快照
-4. 刷新行为采用增量流事件更新
+4. 刷新行为采用事件触发的 snapshot 重算
+5. 若前后差异较小，可由 Rust 额外派生 UI diff 事件优化渲染
 
 ## 12. 性能设计
 
@@ -829,7 +931,7 @@ requested -> approved -> running -> failed
 
 - 异步 IO 全面采用 Tokio
 - Git、索引、终端、文件读取并发化
-- 对大结果做分页、chunk、snapshot + delta
+- 对大结果做分页、chunk、事件触发 snapshot 重算
 - 使用 channel 代替大块 event payload
 
 ### Sidecar 层
@@ -838,6 +940,8 @@ requested -> approved -> running -> failed
 - Provider client 复用
 - 工具结果摘要优先
 - 线程上下文窗口裁剪
+- provider 请求超时与 abort
+- 基于健康阈值的 graceful restart
 
 ### 数据层
 
@@ -931,7 +1035,7 @@ Rust `PolicyEngine` 是唯一真源。
 - TerminalManager
 - GitManager
 - WorkspaceManager
-- IndexManager
+- IndexManager（文件树缓存 + `ripgrep` 检索）
 
 ### Phase 3：扩展宿主与自动化
 
@@ -939,6 +1043,7 @@ Rust `PolicyEngine` 是唯一真源。
 - MCP 生命周期管理
 - 插件启停
 - Automation Scheduler
+- Index 深化能力（倒排索引、活动信号、语义召回）
 
 ## 16. 风险与应对
 
@@ -973,6 +1078,7 @@ Rust `PolicyEngine` 是唯一真源。
 - Rust 记录 run 状态
 - sidecar crash 自动重启
 - 未完成 run 标记为 interrupted 并允许 retry
+- 健康指标超过阈值时执行 graceful restart，而不是等到进程完全失效
 
 ## 17. 最终结论
 
@@ -1009,7 +1115,7 @@ Tiy Agent 的正式技术架构采用：
 | Tool Gateway + Policy | tool 请求入口、审批状态机、权限策略、审计与执行编排 | `docs/module/tool-gateway-policy-design-20260316.md` |
 | Terminal | PTY session、线程绑定、输入输出流、会话存续与恢复边界 | `docs/module/terminal-design-20260316.md` |
 | Git | 仓库状态快照、增量刷新、危险操作治理、diff/history 加载策略 | `docs/module/git-design-20260316.md` |
-| Index | 文件树缓存、倒排索引、检索接口、增量构建与召回策略 | `docs/module/index-design-20260316.md` |
+| Index | 文件树缓存、`ripgrep` 检索、重建策略与后续索引扩展边界 | `docs/module/index-design-20260316.md` |
 | Marketplace + Automation | Skills / MCP / Plugins / Automations 宿主、安装启停与生命周期管理 | `docs/module/marketplace-automation-design-20260316.md` |
 
 其中：

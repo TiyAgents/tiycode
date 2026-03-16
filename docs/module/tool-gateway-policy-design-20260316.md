@@ -86,6 +86,12 @@ It is responsible for:
 6. recording status transitions
 7. returning structured results to sidecar and frontend
 
+Clarification:
+
+- sidecar-initiated privileged actions must always enter through `ToolGateway`
+- user-initiated product mutations may enter via direct Rust commands for UX reasons, but they should still reuse the same policy primitives, normalized request model, and audit schema
+- raw user terminal typing is not modeled as a tool call and is governed by terminal session policy instead of per-command approval prompts
+
 ### `PolicyEngine` Is the Single Permission Source of Truth
 
 Policy inputs include:
@@ -168,6 +174,18 @@ Examples:
 
 These always go through `ToolGateway`.
 
+### `run_command` Is a Special System Tool
+
+`run_command` expands into arbitrary subprocess execution and therefore needs stricter handling than typed Git or filesystem tools.
+
+V1 rules:
+
+- treat it as non-interactive, one-shot command execution
+- do not use it as a proxy for writing to an existing terminal session
+- require normalized request fields such as `command`, `args`, `cwd`, `timeoutMs`, and output limits
+- default to `RequireApproval` unless a specific allow rule matches
+- run command-pattern deny checks before normal allow/deny matching completes
+
 ## Decision Pipeline
 
 ```text
@@ -187,10 +205,11 @@ tool request
 2. tool existence and schema validity
 3. run-mode restrictions
 4. workspace path normalization and sandbox checks
-5. explicit deny rules
-6. explicit allow rules
-7. approval policy decision
-8. executor dispatch
+5. command normalization and command-specific safety checks for `run_command`
+6. explicit deny rules
+7. explicit allow rules
+8. approval policy decision
+9. executor dispatch
 
 This order keeps the system predictable and easier to reason about.
 
@@ -315,6 +334,16 @@ Each executor should return:
 
 Large outputs should be summarized for hot paths and persisted in raw form only where necessary.
 
+### `run_command` Execution Contract
+
+The process executor should enforce extra guardrails for `run_command`:
+
+- enforce timeout and cancellation even if the child process hangs
+- cap stdout and stderr capture size
+- mark truncation explicitly in the result payload
+- record command, cwd, exit code, timeout, and truncation in audit metadata
+- return structured failures such as `policy_denied`, `timeout`, `spawn_failed`, and `non_zero_exit`
+
 ## Key Flows
 
 ### Auto-Allow Read Tool
@@ -377,6 +406,7 @@ Audit keys should include:
 | plan mode bypasses mutation guard | planning flow mutates local state unexpectedly | evaluate run-mode restrictions before dispatch |
 | stale approval | wrong execution after settings change | re-evaluate policy immediately before dispatch |
 | oversized output | UI and prompt bloat | output digest + pagination or chunking |
+| dangerous shell pattern hidden in `run_command` | unintended arbitrary execution | command normalization + deny matching before dispatch |
 | plugin attempts bypass | hidden privileged path | all extension tools routed through gateway |
 | executor crash | incomplete tool state | mark failed and return structured error |
 

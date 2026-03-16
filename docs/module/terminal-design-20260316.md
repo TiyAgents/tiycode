@@ -37,7 +37,7 @@ The original terminal direction remains correct, but the terminal subsystem now 
 
 ## Updated Design Decisions
 
-- use one PTY-backed shell session per thread
+- allow each thread to create zero or one PTY-backed shell session on demand in v1
 - keep PTY lifecycle in Rust Core, independent from React lifecycle and sidecar lifecycle
 - let the frontend own only terminal presentation and lightweight session metadata
 - do not route raw terminal output through the TS Agent Sidecar
@@ -70,7 +70,7 @@ That means terminal must be designed as a first-class Rust subsystem, not as a f
 ### Functional
 
 - create a terminal session on demand for a thread
-- keep one isolated terminal session per thread
+- keep at most one isolated terminal session per thread in v1
 - allow many thread terminals to run concurrently
 - keep hidden thread terminals alive when the user switches threads
 - support standard shell workflows and full-screen TUI tools
@@ -93,7 +93,7 @@ That means terminal must be designed as a first-class Rust subsystem, not as a f
 
 Use a direct PTY backend managed by Rust Core:
 
-- `1 thread = 1 terminal session = 1 PTY = 1 shell process`
+- `1 thread = 0..1 terminal session = 1 PTY = 1 shell process`
 - Rust Core owns PTY creation, IO, resize, exit tracking, replay buffer, and cleanup
 - React owns terminal presentation and panel interaction
 - the TS Agent Sidecar may request terminal-related actions, but only through Rust tools
