@@ -156,6 +156,13 @@ pub fn run() {
             commands::settings::profile_create,
             commands::settings::profile_update,
             commands::settings::profile_delete,
+            // Threads
+            commands::thread::thread_list,
+            commands::thread::thread_create,
+            commands::thread::thread_load,
+            commands::thread::thread_update_title,
+            commands::thread::thread_delete,
+            commands::thread::thread_add_message,
         ])
         .setup(move |app| {
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
@@ -170,9 +177,11 @@ pub fn run() {
             // 5. Construct and manage AppState
             let state = AppState::new(pool);
 
-            // 6. Validate existing workspaces on startup
+            // 6. Startup recovery: validate workspaces + interrupt dangling runs
             tauri::async_runtime::block_on(async {
-                state.workspace_manager.validate_all().await
+                state.workspace_manager.validate_all().await?;
+                state.thread_manager.recover_interrupted_runs().await?;
+                Ok::<(), crate::model::errors::AppError>(())
             })?;
 
             app.manage(state);
