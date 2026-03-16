@@ -1,3 +1,4 @@
+use chrono::Utc;
 use sqlx::SqlitePool;
 
 use crate::model::errors::AppError;
@@ -11,6 +12,64 @@ struct RunRow {
     status: String,
     model_id: Option<String>,
     started_at: String,
+}
+
+/// Full run record for insert.
+pub struct RunInsert {
+    pub id: String,
+    pub thread_id: String,
+    pub profile_id: Option<String>,
+    pub run_mode: String,
+    pub provider_id: Option<String>,
+    pub model_id: Option<String>,
+    pub effective_model_plan_json: Option<String>,
+    pub status: String,
+}
+
+pub async fn insert(pool: &SqlitePool, r: &RunInsert) -> Result<(), AppError> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO thread_runs (id, thread_id, profile_id, run_mode,
+                provider_id, model_id, effective_model_plan_json, status, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&r.id)
+    .bind(&r.thread_id)
+    .bind(&r.profile_id)
+    .bind(&r.run_mode)
+    .bind(&r.provider_id)
+    .bind(&r.model_id)
+    .bind(&r.effective_model_plan_json)
+    .bind(&r.status)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_status(pool: &SqlitePool, id: &str, status: &str) -> Result<(), AppError> {
+    let is_terminal = matches!(
+        status,
+        "completed" | "failed" | "denied" | "interrupted" | "cancelled"
+    );
+
+    if is_terminal {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE thread_runs SET status = ?, finished_at = ? WHERE id = ?")
+            .bind(status)
+            .bind(&now)
+            .bind(id)
+            .execute(pool)
+            .await?;
+    } else {
+        sqlx::query("UPDATE thread_runs SET status = ? WHERE id = ?")
+            .bind(status)
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
 }
 
 /// Find the currently active (non-terminal) run for a thread.

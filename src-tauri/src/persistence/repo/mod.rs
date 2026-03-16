@@ -4,4 +4,5 @@ pub mod provider_repo;
 pub mod run_repo;
 pub mod settings_repo;
 pub mod thread_repo;
+pub mod tool_call_repo;
 pub mod workspace_repo;

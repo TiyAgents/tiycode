@@ -1,5 +1,6 @@
 mod commands;
 mod core;
+mod ipc;
 mod model;
 mod persistence;
 
@@ -163,6 +164,11 @@ pub fn run() {
             commands::thread::thread_update_title,
             commands::thread::thread_delete,
             commands::thread::thread_add_message,
+            // Agent Run
+            commands::agent::thread_start_run,
+            commands::agent::thread_cancel_run,
+            commands::agent::tool_approval_respond,
+            commands::agent::sidecar_status,
         ])
         .setup(move |app| {
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
@@ -174,19 +180,30 @@ pub fn run() {
 
             tracing::info!(db = %db_path.display(), "database ready");
 
-            // 5. Construct and manage AppState
-            let state = AppState::new(pool);
+            // 5. Resolve sidecar path
+            // In dev, use a placeholder. Real sidecar will be resolved from
+            // app resources or config once the sidecar project is built.
+            let sidecar_path = std::env::var("TIY_SIDECAR_PATH")
+                .unwrap_or_else(|_| "tiy-agent-sidecar".to_string());
 
-            // 6. Startup recovery: validate workspaces + interrupt dangling runs
+            // 6. Construct and manage AppState
+            let state = AppState::new(pool, sidecar_path);
+
+            // 7. Startup recovery: validate workspaces + interrupt dangling runs
             tauri::async_runtime::block_on(async {
                 state.workspace_manager.validate_all().await?;
                 state.thread_manager.recover_interrupted_runs().await?;
                 Ok::<(), crate::model::errors::AppError>(())
             })?;
 
+            // 8. Start sidecar event processing loop
+            if let Some(event_rx) = state.sidecar_manager.take_event_receiver() {
+                state.agent_run_manager.spawn_event_loop(event_rx);
+            }
+
             app.manage(state);
 
-            // 7. Platform-specific window setup
+            // 9. Platform-specific window setup
             #[cfg(target_os = "windows")]
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 let _ = window.set_decorations(false);
