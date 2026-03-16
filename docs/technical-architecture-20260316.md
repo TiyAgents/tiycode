@@ -70,7 +70,128 @@ Rust 负责：
 
 ### 3.5 长任务流式化
 
-线程响应、Tool 执行、Git 刷新、终端输出、索引构建等高时延任务全部采用流式更新，不等待“全量结果完成”后一次性返回。
+线程响应、Tool 执行、Git 刷新、终端输出、索引构建等高时延任务全部采用流式更新，不等待”全量结果完成”后一次性返回。
+
+### 3.6 统一应用数据目录
+
+所有 Tiy Agent 的持久化数据统一存放在 `$HOME/.tiy/` 目录下，不使用 Tauri 默认的 `app_data_dir`（如 `~/Library/Application Support/`）。
+
+这样做的原因：
+
+- 开发者可以直接通过终端浏览和管理配置
+- 目录结构对用户透明，便于备份、迁移和调试
+- skills、prompts 等用户自定义内容需要方便手动编辑
+- 跨平台行为一致，不依赖各操作系统的隐藏目录约定
+
+#### 目录结构
+
+```text
+$HOME/.tiy/
+  config.json               -- 全局应用配置（启动行为、UI 偏好、MCP Server 注册等）
+  db/                       -- 数据库目录
+    tiy-agent.db            -- SQLite 主数据库（WAL 模式）
+    tiy-agent.db-wal        -- WAL 日志
+    tiy-agent.db-shm        -- WAL 共享内存
+    backups/                -- 数据库迁移前自动备份
+  skills/                   -- 用户自定义 Skills
+    <skill-name>/
+      manifest.json         -- skill 元数据
+      prompt.md             -- skill 提示词
+  prompts/                  -- 用户自定义 Prompt 模板与命令模板
+    <prompt-name>.md        -- 支持作为 `/` 命令使用
+  plugins/                  -- 已安装的插件
+    <plugin-name>/
+  automations/              -- 自动化任务配置（Phase 3）
+    <automation-name>/
+  cache/                    -- 可丢弃的缓存数据
+    index/                  -- 工作区文件树缓存
+    thumbnails/             -- UI 缩略图缓存
+```
+
+日志文件跟随操作系统惯例，不放在 `$HOME/.tiy/` 下：
+
+```text
+macOS:    ~/Library/Logs/TiyAgent/
+Windows:  %LOCALAPPDATA%/TiyAgent/logs/
+Linux:    ~/.local/state/tiy-agent/logs/
+```
+
+```text
+<log-dir>/
+  app.log                   -- Rust Core 结构化日志（当前文件）
+  app.log.1 ... app.log.5   -- 历史轮转文件
+  sidecar.log               -- TS Agent Sidecar JSON 日志
+  sidecar.log.1 ...         -- 历史轮转文件
+```
+
+#### 目录职责说明
+
+| 目录 / 文件 | 持久性 | 说明 |
+|---|---|---|
+| `config.json` | 持久 | 全局快捷配置，包含 UI 偏好、MCP Server 注册等；适合用户手动编辑 |
+| `db/` | 持久 | 数据库文件独立目录，包含主库和迁移备份 |
+| `<system-log-dir>/` | 自动轮转 | 应用日志，跟随系统惯例路径，自动轮转清理，用户无需手动管理 |
+| `skills/` | 持久 | 用户创建或从 Marketplace 安装的 Skills，manifest + prompt 文件 |
+| `prompts/` | 持久 | 用户自定义的 Prompt / Command 模板；文件名即命令名，可通过 `/` 触发 |
+| `plugins/` | 持久 | 已安装的插件资产，由 MarketplaceHost 管理 |
+| `automations/` | 持久 | 自动化任务定义（Phase 3） |
+| `cache/` | 可丢弃 | 可随时删除重建的缓存数据 |
+
+#### 日志轮转策略
+
+日志由 Rust `tracing` + `tracing-appender` 管理，自动轮转，用户无需手动清理。
+
+| 参数 | 值 | 说明 |
+|------|---|------|
+| 单文件大小上限 | 10 MB | 达到后自动轮转到 `.log.N` |
+| 保留历史文件数 | 5 | 最多 5 个历史文件（~50 MB 上限） |
+| 日志级别 | `info`（默认）| 可通过 `config.json` 的 `log_level` 调整为 `debug` / `trace` |
+| 格式 | 结构化 JSON | 便于 `jq` 等工具过滤查询 |
+
+Sidecar 日志同样按此策略轮转。总日志磁盘占用上限约 100 MB（app 50 MB + sidecar 50 MB），无需用户干预。
+
+#### MCP 配置
+
+MCP Server 注册信息统一存放在 `config.json` 中，不单独建目录。示例结构：
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "github": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": { "GITHUB_TOKEN": "..." }
+      }
+    }
+  }
+}
+```
+
+MCP Server 的运行时资产（如本地安装的 npm 包）由 Rust MarketplaceHost 管理，存放在 `plugins/` 或系统临时目录中。
+
+#### Prompts 即 Commands
+
+`prompts/` 目录同时承载 Prompt 模板和 `/` 命令模板，不再单独设立 `commands/` 目录。每个 `.md` 文件的文件名即为命令名：
+
+```text
+prompts/
+  review.md       -- 对应 /review 命令
+  test.md         -- 对应 /test 命令
+  explain.md      -- 对应 /explain 命令
+```
+
+文件内容为 Markdown 格式的提示词模板，支持变量占位符。数据库 `commands` 表存储命令的元数据（参数提示、描述等），`prompt_template` 字段可引用文件路径或内联模板。
+
+#### 实现约束
+
+- Rust Core 在 `setup` 阶段负责初始化 `$HOME/.tiy/` 目录及所有子目录，同时初始化系统日志目录
+- 若目录不存在，静默创建；若已存在，不修改现有内容
+- `config.json` 与数据库 `settings` 表的关系：`config.json` 作为用户可编辑的快捷入口，应用启动时合并到内存配置，数据库 `settings` 表为结构化设置的持久真源
+- 迁移脚本执行前，Rust 应自动备份当前数据库到 `db/backups/`
+- `cache/` 目录下的所有内容必须可以安全删除后由系统重建
+- 日志目录路径通过 `dirs` crate 获取系统惯例路径，不硬编码平台特定字符串
+- 文件权限：`db/` 目录及其内容设置为 `0700` / `0600`；`config.json` 设置为 `0600`；`skills/`、`prompts/` 设置为 `0700`
 
 ## 4. 技术选型与职责分配
 
