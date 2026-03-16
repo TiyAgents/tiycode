@@ -128,7 +128,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::system::get_system_metadata,
             commands::system::get_workspace_open_apps,
-            commands::system::open_workspace_in_app
+            commands::system::open_workspace_in_app,
+            commands::workspace::workspace_list,
+            commands::workspace::workspace_add,
+            commands::workspace::workspace_remove,
+            commands::workspace::workspace_set_default,
+            commands::workspace::workspace_validate,
         ])
         .setup(move |app| {
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
@@ -142,9 +147,15 @@ pub fn run() {
 
             // 5. Construct and manage AppState
             let state = AppState::new(pool);
+
+            // 6. Validate existing workspaces on startup
+            tauri::async_runtime::block_on(async {
+                state.workspace_manager.validate_all().await
+            })?;
+
             app.manage(state);
 
-            // 6. Platform-specific window setup
+            // 7. Platform-specific window setup
             #[cfg(target_os = "windows")]
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 let _ = window.set_decorations(false);

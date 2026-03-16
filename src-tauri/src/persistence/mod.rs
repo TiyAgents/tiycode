@@ -1,3 +1,4 @@
+pub mod repo;
 pub mod sqlite;
 
 use sqlx::SqlitePool;
