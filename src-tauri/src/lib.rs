@@ -1,11 +1,12 @@
 mod commands;
-mod core;
-mod ipc;
-mod model;
+pub mod core;
+pub mod ipc;
+pub mod model;
 mod persistence;
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
@@ -202,14 +203,23 @@ pub fn run() {
             // 8. Start sidecar process and event processing loop
             //    Sidecar start is best-effort — if the binary is not found,
             //    the app still launches but agent runs will fail gracefully.
-            tauri::async_runtime::block_on(async {
-                if let Err(e) = state.sidecar_manager.start().await {
-                    tracing::warn!(error = %e, "sidecar failed to start (agent runs will be unavailable)");
+            let sidecar_started = tauri::async_runtime::block_on(async {
+                match state.sidecar_manager.start().await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "sidecar failed to start (agent runs will be unavailable)");
+                        false
+                    }
                 }
             });
 
-            if let Some(event_rx) = state.sidecar_manager.take_event_receiver() {
-                state.agent_run_manager.spawn_event_loop(event_rx);
+            if sidecar_started {
+                if let Some(event_rx) = state.sidecar_manager.take_event_receiver() {
+                    let manager = Arc::clone(&state.agent_run_manager);
+                    tauri::async_runtime::spawn(async move {
+                        manager.spawn_event_loop(event_rx);
+                    });
+                }
             }
 
             app.manage(state);

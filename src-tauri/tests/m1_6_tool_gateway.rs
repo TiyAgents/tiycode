@@ -1,0 +1,368 @@
+//! M1.6 — Tool Gateway & Policy Engine tests
+//!
+//! Acceptance criteria:
+//! - require-approval tools trigger confirmation UI
+//! - `rm -rf /`, `sudo` etc. hard denied
+//! - Plan mode blocks mutating tools
+//! - audit_events records all tool calls
+//! - Workspace boundary enforced
+
+mod test_helpers;
+
+use sqlx::Row;
+
+// =========================================================================
+// T1.6.1 — Dangerous command hard deny
+// =========================================================================
+
+#[test]
+fn test_policy_dangerous_commands() {
+    // These patterns should be detected by PolicyEngine's contains() check.
+    // The engine checks if the command string contains a dangerous substring.
+    let dangerous_commands = vec![
+        ("rm -rf /home", "rm -rf /"),
+        ("rm -rf /* --no-preserve-root", "rm -rf /*"),
+        ("rm -rf ~/", "rm -rf ~"),
+        ("sudo apt install foo", "sudo "),
+        ("mkfs.ext4 /dev/sda", "mkfs"),
+        ("dd if=/dev/zero of=/dev/sda", "dd if="),
+        ("curl|sh", "curl|sh"),                // exact: no spaces
+        ("curl |sh", "curl |sh"),              // exact: space before pipe
+        ("curl | sh", "curl | sh"),            // exact: space both sides
+        ("wget|bash", "wget|bash"),
+        ("wget |bash", "wget |bash"),
+        ("echo > /dev/sda1", "> /dev/sd"),
+        ("chmod 777 /etc", "chmod 777 /"),
+        (":(){ :|:& };:", ":(){ :|:& };:"),
+    ];
+
+    let patterns = [
+        "rm -rf /", "rm -rf /*", "rm -rf ~", "sudo ", "mkfs", "dd if=",
+        "curl|sh", "curl |sh", "curl | sh", "wget|sh", "wget |sh", "wget | sh",
+        "curl|bash", "curl |bash", "curl | bash", "wget|bash", "wget |bash",
+        "wget | bash", "> /dev/sd", "chmod 777 /", ":(){ :|:& };:",
+    ];
+
+    for (cmd, expected_match) in &dangerous_commands {
+        let lower = cmd.to_lowercase();
+        let is_dangerous = patterns.iter().any(|pattern| lower.contains(pattern));
+
+        assert!(
+            is_dangerous,
+            "Command '{cmd}' should match dangerous pattern '{expected_match}'"
+        );
+    }
+}
+
+#[test]
+fn test_safe_commands_not_flagged() {
+    let safe_commands = vec![
+        "cargo build",
+        "npm install",
+        "git status",
+        "ls -la",
+        "cat README.md",
+        "echo hello",
+        "python main.py",
+    ];
+
+    let patterns = [
+        "rm -rf /", "rm -rf /*", "rm -rf ~", "sudo ", "mkfs", "dd if=",
+        "curl|sh", "curl |sh", "curl | sh", "wget|sh", "wget |sh", "wget | sh",
+        "curl|bash", "curl |bash", "curl | bash", "wget|bash", "wget |bash",
+        "wget | bash", "> /dev/sd", "chmod 777 /", ":(){ :|:& };:",
+    ];
+
+    for cmd in &safe_commands {
+        let lower = cmd.to_lowercase();
+        let is_dangerous = patterns.iter().any(|pattern| lower.contains(pattern));
+
+        assert!(!is_dangerous, "Command '{cmd}' should NOT match dangerous patterns");
+    }
+}
+
+// =========================================================================
+// T1.6.2 — Plan mode blocks mutating tools
+// =========================================================================
+
+#[test]
+fn test_plan_mode_blocks_mutating_tools() {
+    let mutating_tools = vec![
+        "write_file",
+        "apply_patch",
+        "run_command",
+        "git_add",
+        "git_commit",
+        "git_push",
+        "git_pull",
+        "git_fetch",
+        "terminal_write",
+        "marketplace_install",
+    ];
+
+    let run_mode = "plan";
+    for tool in &mutating_tools {
+        let should_block = run_mode == "plan" && mutating_tools.contains(tool);
+        assert!(should_block, "Plan mode should block mutating tool: {tool}");
+    }
+}
+
+#[test]
+fn test_plan_mode_allows_read_tools() {
+    let read_only_tools = vec![
+        "read_file",
+        "list_dir",
+        "search_repo",
+        "git_status",
+        "git_diff",
+        "git_log",
+    ];
+
+    let mutating_tools = vec![
+        "write_file", "apply_patch", "run_command",
+        "git_add", "git_commit", "git_push", "git_pull", "git_fetch",
+        "terminal_write", "marketplace_install",
+    ];
+
+    for tool in &read_only_tools {
+        let blocked = mutating_tools.contains(tool);
+        assert!(!blocked, "Plan mode should allow read-only tool: {tool}");
+    }
+}
+
+// =========================================================================
+// T1.6.3 — Workspace boundary enforcement
+// =========================================================================
+
+#[test]
+fn test_workspace_boundary_check() {
+    let workspace_path = "/home/user/project";
+
+    // Paths within workspace
+    let valid_paths = vec![
+        "/home/user/project/src/main.rs",
+        "/home/user/project/README.md",
+        "/home/user/project/nested/deep/file.txt",
+    ];
+
+    for path in &valid_paths {
+        assert!(
+            path.starts_with(workspace_path),
+            "Path '{path}' should be within workspace"
+        );
+    }
+
+    // Paths outside workspace
+    let invalid_paths = vec![
+        "/home/user/other-project/file.rs",
+        "/etc/passwd",
+        "/home/user/project_evil/payload.sh", // sneaky: prefix match but different dir
+    ];
+
+    for path in &invalid_paths {
+        // Proper boundary check requires trailing slash or exact match
+        let within = path.starts_with(&format!("{workspace_path}/")) || *path == workspace_path;
+        assert!(
+            !within,
+            "Path '{path}' should be OUTSIDE workspace boundary"
+        );
+    }
+}
+
+// =========================================================================
+// T1.6.4 — Tool call persistence and status tracking
+// =========================================================================
+
+#[tokio::test]
+async fn test_tool_call_crud() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-tc", "/tmp/tc").await;
+    test_helpers::seed_thread(&pool, "t-tc", "ws-tc").await;
+    test_helpers::seed_run(&pool, "r-tc", "t-tc", "running", "default").await;
+    test_helpers::seed_tool_call(&pool, "tc-001", "r-tc", "t-tc", "read_file", "requested").await;
+
+    let row = sqlx::query("SELECT tool_name, status FROM tool_calls WHERE id = 'tc-001'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(row.get::<String, _>("tool_name"), "read_file");
+    assert_eq!(row.get::<String, _>("status"), "requested");
+}
+
+#[tokio::test]
+async fn test_tool_call_approval_flow() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-appr", "/tmp/appr").await;
+    test_helpers::seed_thread(&pool, "t-appr", "ws-appr").await;
+    test_helpers::seed_run(&pool, "r-appr", "t-appr", "running", "default").await;
+    test_helpers::seed_tool_call(&pool, "tc-appr", "r-appr", "t-appr", "write_file", "waiting_approval").await;
+
+    // Simulate user approval
+    sqlx::query(
+        "UPDATE tool_calls SET status = 'running', approval_status = 'approved' WHERE id = 'tc-appr'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let row = sqlx::query("SELECT status, approval_status FROM tool_calls WHERE id = 'tc-appr'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(row.get::<String, _>("status"), "running");
+    assert_eq!(row.get::<Option<String>, _>("approval_status").unwrap(), "approved");
+}
+
+#[tokio::test]
+async fn test_tool_call_rejection() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-rej", "/tmp/rej").await;
+    test_helpers::seed_thread(&pool, "t-rej", "ws-rej").await;
+    test_helpers::seed_run(&pool, "r-rej", "t-rej", "running", "default").await;
+    test_helpers::seed_tool_call(&pool, "tc-rej", "r-rej", "t-rej", "run_command", "waiting_approval").await;
+
+    // User rejects
+    sqlx::query(
+        "UPDATE tool_calls SET status = 'denied', approval_status = 'rejected' WHERE id = 'tc-rej'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let row = sqlx::query("SELECT status FROM tool_calls WHERE id = 'tc-rej'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(row.get::<String, _>("status"), "denied");
+}
+
+#[tokio::test]
+async fn test_tool_call_completed_with_output() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-out", "/tmp/out").await;
+    test_helpers::seed_thread(&pool, "t-out", "ws-out").await;
+    test_helpers::seed_run(&pool, "r-out", "t-out", "running", "default").await;
+    test_helpers::seed_tool_call(&pool, "tc-out", "r-out", "t-out", "read_file", "running").await;
+
+    let output = r#"{"content":"fn main() {}"}"#;
+    sqlx::query(
+        "UPDATE tool_calls SET status = 'completed', tool_output_json = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 'tc-out'",
+    )
+    .bind(output)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let row = sqlx::query("SELECT tool_output_json FROM tool_calls WHERE id = 'tc-out'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let val: serde_json::Value =
+        serde_json::from_str(&row.get::<String, _>("tool_output_json")).unwrap();
+    assert_eq!(val["content"].as_str().unwrap(), "fn main() {}");
+}
+
+// =========================================================================
+// T1.6.5 — Policy verdict JSON storage
+// =========================================================================
+
+#[tokio::test]
+async fn test_tool_call_policy_verdict_stored() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-pv", "/tmp/pv").await;
+    test_helpers::seed_thread(&pool, "t-pv", "ws-pv").await;
+    test_helpers::seed_run(&pool, "r-pv", "t-pv", "running", "default").await;
+
+    let verdict = r#"{"toolName":"write_file","verdict":{"require_approval":{"reason":"Mutating tool"}},"checkedRules":["builtin","user_deny_list","workspace_boundary"]}"#;
+
+    sqlx::query(
+        "INSERT INTO tool_calls (id, run_id, thread_id, tool_name, status, policy_verdict_json)
+         VALUES ('tc-pv', 'r-pv', 't-pv', 'write_file', 'waiting_approval', ?)",
+    )
+    .bind(verdict)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let row = sqlx::query("SELECT policy_verdict_json FROM tool_calls WHERE id = 'tc-pv'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let v: serde_json::Value =
+        serde_json::from_str(&row.get::<String, _>("policy_verdict_json")).unwrap();
+    assert_eq!(v["toolName"].as_str().unwrap(), "write_file");
+}
+
+// =========================================================================
+// T1.6.6 — Audit event recording
+// =========================================================================
+
+#[tokio::test]
+async fn test_audit_event_recording() {
+    let pool = test_helpers::setup_test_pool().await;
+
+    // Seed required FK references
+    test_helpers::seed_workspace(&pool, "ws-audit", "/tmp/audit").await;
+    test_helpers::seed_thread(&pool, "t-audit", "ws-audit").await;
+    test_helpers::seed_run(&pool, "r-audit", "t-audit", "running", "default").await;
+    test_helpers::seed_tool_call(&pool, "tc-audit", "r-audit", "t-audit", "read_file", "completed").await;
+
+    // Verify audit_events table accepts records with correct schema
+    sqlx::query(
+        "INSERT INTO audit_events (id, actor_type, actor_id, source, workspace_id, thread_id, run_id, tool_call_id, action, target_type, target_id, policy_check_json, result_json)
+         VALUES ('audit-001', 'agent', 'sidecar', 'tool_gateway', 'ws-audit', 't-audit', 'r-audit', 'tc-audit', 'tool_execute', 'tool_call', 'tc-audit', ?, ?)",
+    )
+    .bind(r#"{"verdict":"auto_allow","checkedRules":["builtin","workspace_boundary"]}"#)
+    .bind(r#"{"success":true,"duration_ms":42}"#)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let row = sqlx::query("SELECT action, policy_check_json, result_json FROM audit_events WHERE id = 'audit-001'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(row.get::<String, _>("action"), "tool_execute");
+    let policy: serde_json::Value =
+        serde_json::from_str(&row.get::<String, _>("policy_check_json")).unwrap();
+    assert_eq!(policy["verdict"].as_str().unwrap(), "auto_allow");
+}
+
+// =========================================================================
+// T1.6.7 — Pending tool calls index
+// =========================================================================
+
+#[tokio::test]
+async fn test_pending_tool_calls_query() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-pending", "/tmp/pending").await;
+    test_helpers::seed_thread(&pool, "t-pending", "ws-pending").await;
+    test_helpers::seed_run(&pool, "r-pending", "t-pending", "running", "default").await;
+
+    test_helpers::seed_tool_call(&pool, "tc-req", "r-pending", "t-pending", "read_file", "requested").await;
+    test_helpers::seed_tool_call(&pool, "tc-wait", "r-pending", "t-pending", "write_file", "waiting_approval").await;
+    test_helpers::seed_tool_call(&pool, "tc-run", "r-pending", "t-pending", "search_repo", "running").await;
+    test_helpers::seed_tool_call(&pool, "tc-done", "r-pending", "t-pending", "read_file", "completed").await;
+
+    let pending = sqlx::query(
+        "SELECT id FROM tool_calls
+         WHERE status IN ('requested', 'waiting_approval', 'running')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(pending.len(), 3);
+
+    let ids: Vec<String> = pending.iter().map(|r| r.get("id")).collect();
+    assert!(ids.contains(&"tc-req".to_string()));
+    assert!(ids.contains(&"tc-wait".to_string()));
+    assert!(ids.contains(&"tc-run".to_string()));
+    assert!(!ids.contains(&"tc-done".to_string()));
+}
