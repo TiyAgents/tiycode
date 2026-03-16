@@ -186,6 +186,17 @@ V1 rules:
 - default to `RequireApproval` unless a specific allow rule matches
 - run command-pattern deny checks before normal allow/deny matching completes
 
+Dangerous-pattern handling in v1:
+
+- evaluate against normalized argv rather than raw shell text whenever possible
+- apply a built-in deny set for clearly dangerous patterns such as:
+  - destructive filesystem wipes like `rm -rf /`
+  - privilege escalation commands such as `sudo`
+  - disk formatting tools such as `mkfs`
+  - shell-pipe bootstrap patterns such as `curl ... | sh`, `curl ... | bash`, `wget ... | sh`
+- allow user policy to extend denial through `denyList`, but not weaken the built-in hard denials
+- user-configured pattern matching may use simple glob or regex semantics, but built-in denials should be implemented as explicit normalized predicates rather than fragile substring matching
+
 ## Decision Pipeline
 
 ```text
@@ -397,6 +408,15 @@ Audit keys should include:
 - `run_id`
 - `tool_call_id`
 - `workspace_id`
+
+### Shared Policy and Audit Primitives
+
+To avoid split behavior between agent-triggered and user-triggered mutations, backend subsystems should share two reusable primitives:
+
+- `PolicyCheck`: normalized policy evaluation input and verdict contract
+- `AuditRecord`: normalized mutation audit payload written to durable audit storage
+
+Managers such as Git or Marketplace may expose direct user-facing commands, but mutating actions should still build these shared primitives instead of inventing subsystem-specific policy or audit formats.
 
 ## Failure Modes
 

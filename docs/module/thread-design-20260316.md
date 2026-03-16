@@ -289,6 +289,14 @@ Recommended v1 model:
 3. Rust validates summary shape, stores source message ranges, and rebuilds derived snapshot artifacts
 4. future snapshots inject the summary block plus recent window instead of replaying the whole history
 
+Suggested initial thresholds for v1:
+
+- message count over `50`
+- or estimated prompt size over `32k` tokens
+- or any single tool result digest exceeding the normal hot window budget
+
+These are starting values rather than hard protocol constants and should be tuned after real usage data is available.
+
 Required fallback:
 
 - if summarization fails, Rust still builds a safe reduced snapshot from:

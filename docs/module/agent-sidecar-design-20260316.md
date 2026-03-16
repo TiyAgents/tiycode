@@ -336,7 +336,27 @@ The sidecar's job is to translate model-selected tool calls into structured requ
 - `agent.run.cancel`
 - `agent.tool.result`
 - `agent.thread.snapshot`
+- `agent.auxiliary.task`
 - `agent.settings.changed`
+
+`agent.auxiliary.task` is the generic helper-task entry point for Rust-initiated sidecar assistance that does not start or resume a normal run loop.
+
+Recommended v1 task types:
+
+- `summarize_thread_window`
+- `derive_execution_seed`
+
+This keeps the protocol compact while still covering:
+
+- thread compaction requests from Rust
+- plan-to-execution seed derivation from a persisted plan artifact
+
+Recommended payload shape:
+
+- `auxiliary_task_id`
+- `task_type`
+- `workspace_id`
+- task-specific structured payload
 
 ### Events to Rust
 

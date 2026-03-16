@@ -214,6 +214,10 @@ If needed later, Rust may also emit derived `file_delta` or `history_delta` even
 - mutating actions should reuse the same policy primitives and audit schema that agent-initiated actions use
 - the UI entry path may differ, but the backend execution and audit model should stay aligned
 
+Recommended implementation rule:
+
+- user-triggered mutations should emit a shared `AuditRecord` into durable audit storage even when they do not create a `tool_calls` row
+
 ### Agent-Initiated Git Actions
 
 - sidecar requests Git tool calls through `ToolGateway`
