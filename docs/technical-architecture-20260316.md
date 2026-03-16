@@ -239,25 +239,239 @@ prompts/
 
 ## 5. 总体架构
 
+### 5.1 系统全景
+
+三个进程、三层职责、两条 IPC 边界：
+
 ```mermaid
-flowchart LR
-  UI["React + TypeScript + AI Elements"] <-->|invoke + channels| RUST["Tauri 2 Rust Core"]
-  RUST <-->|stdio JSON-RPC| AGENT["TS Agent Sidecar\n(pi-agent-core + pi-ai)"]
-  AGENT <-->|HTTPS| LLM["OpenAI / Anthropic / Gemini / OpenRouter / Custom Providers"]
-  RUST <-->|native execution| SYS["Workspace / Git / PTY / SQLite / Index / MCP / Plugins"]
+flowchart TB
+  subgraph DESKTOP["Tauri 2 Desktop Shell"]
+    direction TB
+
+    subgraph FRONTEND["Frontend · WebView Process"]
+      direction LR
+      UI_WORK["Workbench Shell"]
+      UI_THREAD["Thread View\n+ AI Elements"]
+      UI_PANELS["Git · Terminal\n· Project Drawer"]
+      UI_OVERLAY["Settings\n· Marketplace"]
+    end
+
+    subgraph RUST["Rust Core · Main Process"]
+      direction TB
+
+      subgraph MANAGERS["Business Managers"]
+        direction LR
+        TM["Thread\nManager"]
+        ARM["AgentRun\nManager"]
+        WM["Workspace\nManager"]
+        SM["Settings\nManager"]
+      end
+
+      subgraph SYSTEM["System Services"]
+        direction LR
+        GIT["Git\nManager"]
+        TERM["Terminal\nManager"]
+        IDX["Index\nManager"]
+        MKT["Marketplace\nHost"]
+      end
+
+      subgraph INFRA["Infrastructure"]
+        direction LR
+        TG["Tool\nGateway"]
+        PE["Policy\nEngine"]
+        SC_MGR["Sidecar\nManager"]
+        DB[("SQLite\nWAL")]
+      end
+    end
+
+    subgraph SIDECAR["TS Agent Sidecar · Child Process"]
+      direction LR
+      AGENT["pi-agent\nAgent Loop"]
+      PROV["Provider\nRouter"]
+      TOOLS["Tool\nDescriptors"]
+    end
+  end
+
+  LLM["LLM Providers\nOpenAI · Anthropic · Gemini\nOpenRouter · Custom"]
+
+  %% Frontend ↔ Rust
+  FRONTEND <-->|"Tauri invoke\n+ channels"| RUST
+
+  %% Rust ↔ Sidecar
+  SC_MGR <-->|"stdio\nJSON-RPC\nNDJSON"| SIDECAR
+
+  %% Sidecar → LLM
+  PROV -->|HTTPS| LLM
+
+  %% Internal Rust wiring
+  ARM --> TM
+  ARM --> TG
+  TG --> PE
+  TG --> GIT
+  TG --> TERM
+  TG --> IDX
+  TG --> MKT
+  MANAGERS --> DB
+  SYSTEM --> DB
+
+  classDef frontend fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+  classDef rust fill:#fef3c7,stroke:#d97706,color:#78350f
+  classDef sidecar fill:#d1fae5,stroke:#059669,color:#064e3b
+  classDef external fill:#f3e8ff,stroke:#7c3aed,color:#4c1d95
+  classDef db fill:#fff,stroke:#6b7280,color:#374151
+
+  class UI_WORK,UI_THREAD,UI_PANELS,UI_OVERLAY frontend
+  class TM,ARM,WM,SM,GIT,TERM,IDX,MKT,TG,PE,SC_MGR rust
+  class AGENT,PROV,TOOLS sidecar
+  class LLM external
+  class DB db
 ```
 
-### 5.1 进程模型
+### 5.2 进程模型
 
-- 主进程：Tauri App（Rust）
-- 渲染进程：WebView（React）
-- Sidecar 进程：独立 TS Agent Runtime 可执行程序
+| 进程 | 技术 | 职责边界 |
+|------|------|----------|
+| 主进程 | Tauri App（Rust） | 系统真源、可信执行、权限治理、持久化 |
+| 渲染进程 | WebView（React） | UI 渲染、交互采集、流式数据消费 |
+| Sidecar 进程 | 独立 TS Runtime | Agent Loop、模型调用、工具选择 |
 
-### 5.2 运行边界
+### 5.3 运行边界
 
 - React 不直接访问本地系统能力。
 - Sidecar 不直接访问本地系统能力。
 - Rust Core 是唯一可信执行层。
+
+### 5.4 Rust Core 模块关系
+
+```mermaid
+flowchart TB
+  subgraph COMMANDS["Commands Layer · Tauri invoke 入口"]
+    direction LR
+    C_TH["thread_*"]
+    C_WS["workspace_*"]
+    C_SET["settings_*"]
+    C_GIT["git_*"]
+    C_TERM["terminal_*"]
+    C_MKT["marketplace_*"]
+    C_AGENT["agent_*"]
+  end
+
+  subgraph CORE["Core Layer · 业务逻辑"]
+    direction TB
+
+    subgraph THREAD_DOMAIN["Thread Domain"]
+      TM["ThreadManager"]
+      ARM["AgentRunManager"]
+    end
+
+    subgraph WORKSPACE_DOMAIN["Workspace Domain"]
+      WM["WorkspaceManager"]
+    end
+
+    subgraph TOOL_DOMAIN["Tool & Policy Domain"]
+      TG["ToolGateway"]
+      PE["PolicyEngine"]
+    end
+
+    subgraph LOCAL_DOMAIN["Local Capability Domain"]
+      GIT["GitManager"]
+      TERM["TerminalManager"]
+      IDX["IndexManager"]
+    end
+
+    subgraph EXT_DOMAIN["Extension Domain"]
+      MKT["MarketplaceHost"]
+      AUTO["AutomationScheduler\n(Phase 3)"]
+    end
+
+    SC["SidecarManager"]
+    SETTINGS["SettingsManager"]
+  end
+
+  subgraph PERSIST["Persistence Layer"]
+    direction LR
+    DB[("SQLite")]
+    REPOS["Repositories\nthread · message · run\ntool_call · audit\nworkspace · settings\nprofile · provider\nmarketplace"]
+  end
+
+  subgraph IPC["IPC Layer"]
+    direction LR
+    DTO["DTO + tauri-specta"]
+    CHANNELS["Frontend Channels\nThread · Terminal\nGit · Index"]
+    PROTO["Sidecar Protocol\nJSON-RPC / NDJSON"]
+  end
+
+  COMMANDS --> CORE
+  CORE --> PERSIST
+  CORE --> IPC
+
+  %% Key domain relationships
+  ARM -->|"dispatch run\nreceive events"| SC
+  ARM -->|"tool request"| TG
+  TG -->|"policy check"| PE
+  TG -->|"execute"| GIT
+  TG -->|"execute"| TERM
+  TG -->|"execute"| IDX
+  TG -->|"execute"| MKT
+  TM -->|"workspace context"| WM
+  GIT -->|"workspace boundary"| WM
+  TERM -->|"workspace cwd"| WM
+  IDX -->|"workspace scope"| WM
+  PE -->|"read policies"| SETTINGS
+
+  DB --- REPOS
+
+  classDef cmd fill:#e0e7ff,stroke:#4f46e5,color:#312e81
+  classDef core fill:#fef3c7,stroke:#d97706,color:#78350f
+  classDef persist fill:#f3f4f6,stroke:#6b7280,color:#374151
+  classDef ipc fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+
+  class C_TH,C_WS,C_SET,C_GIT,C_TERM,C_MKT,C_AGENT cmd
+  class TM,ARM,WM,TG,PE,GIT,TERM,IDX,MKT,AUTO,SC,SETTINGS core
+  class DB,REPOS persist
+  class DTO,CHANNELS,PROTO ipc
+```
+
+### 5.5 核心数据流
+
+线程运行时的端到端数据流：
+
+```mermaid
+sequenceDiagram
+  participant FE as Frontend
+  participant RS as Rust Core
+  participant SC as Sidecar
+  participant LLM as LLM Provider
+
+  FE->>RS: thread_start_run(prompt, run_mode)
+  RS->>RS: persist message + create run
+  RS->>SC: agent.run.start(snapshot, model_plan)
+  SC->>LLM: model request (streaming)
+
+  loop Agent Loop
+    LLM-->>SC: token stream
+    SC-->>RS: agent.message.delta
+    RS-->>FE: ThreadStreamEvent(message_delta)
+
+    opt Tool Call
+      SC->>RS: agent.tool.requested
+      RS->>RS: PolicyEngine evaluate
+      alt auto-allow
+        RS->>RS: execute tool
+      else require-approval
+        RS-->>FE: ThreadStreamEvent(approval_required)
+        FE->>RS: tool_approval_respond(approved)
+        RS->>RS: execute tool
+      end
+      RS->>SC: agent.tool.result
+      SC->>LLM: continue with result
+    end
+  end
+
+  SC->>RS: agent.run.completed
+  RS->>RS: persist final state
+  RS-->>FE: ThreadStreamEvent(run_completed)
+```
 
 ## 6. 逻辑分层设计
 
