@@ -194,6 +194,11 @@ AI Elements 仅用于线程体验表达层，负责：
 
 线程消息和工具状态的真源仍然来自 Rust 持久层与线程流。
 
+补充约束：
+
+- `Plan` 是一类真实的 Agent 运行模式，不只是 AI Elements 的展示组件。
+- 前端可以发起 `default` 或 `plan` 两类 run，但模式真源必须保存在 Rust `run` 记录中。
+
 ## 6.2 Rust Core 层
 
 ### 职责
@@ -258,7 +263,8 @@ src-tauri/src/
 ### 职责
 
 - 运行 `pi-agent` Agent Loop。
-- 管理 Provider 路由和模型请求。
+- 根据 `Agent Profile` 的主模型 / 辅助模型 / 轻量模型映射管理 Provider 路由和模型请求。
+- 在 sidecar 内编排 `SubAgent` 辅助任务，但不突破父 `run` 的生命周期边界。
 - 管理 Tool registry 的描述层。
 - 根据线程快照和上下文拼装 prompt / tool context。
 - 将模型输出和工具请求以结构化协议发回 Rust。
@@ -275,6 +281,7 @@ agent-sidecar/
     runtime/
       session-registry.ts
       agent-runner.ts
+      subagent-runner.ts
       thread-context-builder.ts
     providers/
       provider-registry.ts
@@ -352,11 +359,28 @@ agent-sidecar/
 - `id`
 - `thread_id`
 - `profile_id`
+- `run_mode`
+- `provider_id`
+- `model_id`
+- `effective_model_plan_json`
+- `status`
+- `started_at`
+- `finished_at`
+- `error_message`
+
+### `run_subtasks`
+
+- `id`
+- `run_id`
+- `thread_id`
+- `subtask_type`
+- `role`
 - `provider_id`
 - `model_id`
 - `status`
 - `started_at`
 - `finished_at`
+- `summary`
 - `error_message`
 
 ### `tool_calls`
@@ -426,7 +450,7 @@ agent-sidecar/
 
 - `thread_create`
 - `thread_load`
-- `thread_start_run`
+- `thread_start_run`（需携带 `run_mode`）
 - `thread_cancel_run`
 - `settings_get`
 - `settings_update`
@@ -436,6 +460,11 @@ agent-sidecar/
 - `terminal_create_or_attach`
 - `tool_approval_respond`
 - `marketplace_set_item_state`
+
+当 `run_mode = plan` 转入执行时，建议支持两类启动方式：
+
+- `continue_in_thread`：直接在当前线程开启新的 `default` 执行 run
+- `clean_context_from_plan`：保留线程历史，但基于已确认方案生成精简执行上下文后再开启新的 `default` 执行 run
 
 ## 8.2 Rust -> Frontend 流事件
 
@@ -449,6 +478,9 @@ agent-sidecar/
 - `plan_updated`
 - `queue_updated`
 - `reasoning_updated`
+- `subagent_started`
+- `subagent_completed`
+- `subagent_failed`
 - `tool_requested`
 - `tool_running`
 - `tool_completed`
@@ -535,6 +567,9 @@ agent-sidecar/
 - `agent.plan.updated`
 - `agent.reasoning.updated`
 - `agent.queue.updated`
+- `agent.subagent.started`
+- `agent.subagent.completed`
+- `agent.subagent.failed`
 - `agent.tool.requested`
 - `agent.run.completed`
 - `agent.run.failed`
@@ -659,15 +694,17 @@ requested -> approved -> running -> failed
 职责：
 
 - 创建和跟踪运行中的 `run`
+- 固化当前 `Agent Profile` 的有效模型方案并下发给 sidecar
 - 将线程快照发给 sidecar
 - 处理 sidecar 回传事件
-- 聚合消息流、工具流和状态流
+- 聚合消息流、`SubAgent` 子执行流、工具流和状态流
 
 关键要求：
 
 - 同一线程同一时刻最多一个 active run
 - 允许跨线程并发 run
 - run cancel 必须可中断
+- `SubAgent` 作为父 `run` 的子执行单元存在，不单独占用线程级 active run
 
 ## 10.4 TerminalManager
 
@@ -950,5 +987,36 @@ Tiy Agent 的正式技术架构采用：
 - AI Elements 是线程型体验表达层，不承担业务真源
 - Tools 采用“TS 定义、Rust 执行”的双层模式
 - 所有高吞吐数据链路采用流式协议而不是全量返回
+
+## 18. 重点模块专题设计拆分
+
+为方便后续进入模块级方案设计，建议将本架构中的重点模块拆分为独立专题文档。拆分标准如下：
+
+- 承担系统真源、执行真源或权限真源职责
+- 需要单独定义生命周期、状态机或跨层协议
+- 需要单独评估性能、持久化或安全边界
+- 后续实现阶段可作为相对独立的里程碑推进
+
+建议按以下模块继续展开详细设计：
+
+| 模块 | 主要覆盖范围 | 对应专题文档 |
+|---|---|---|
+| Workspace | 工作区边界、路径校验、上下文范围、可写根与外部打开能力 | `docs/module/workspace-design-20260316.md` |
+| Thread | 线程生命周期、消息模型、线程快照、摘要与恢复策略 | `docs/module/thread-design-20260316.md` |
+| Agent Run | run 生命周期、并发约束、取消机制、线程事件聚合 | `docs/module/agent-run-design-20260316.md` |
+| Agent Sidecar | sidecar 常驻模型、会话隔离、provider 路由、Rust 协议对接 | `docs/module/agent-sidecar-design-20260316.md` |
+| Agent Tools | 内置 Tool 分类、首版工具面、模式约束与子系统映射 | `docs/module/agent-tools-design-20260316.md` |
+| Tool Gateway + Policy | tool 请求入口、审批状态机、权限策略、审计与执行编排 | `docs/module/tool-gateway-policy-design-20260316.md` |
+| Terminal | PTY session、线程绑定、输入输出流、会话存续与恢复边界 | `docs/module/terminal-design-20260316.md` |
+| Git | 仓库状态快照、增量刷新、危险操作治理、diff/history 加载策略 | `docs/module/git-design-20260316.md` |
+| Index | 文件树缓存、倒排索引、检索接口、增量构建与召回策略 | `docs/module/index-design-20260316.md` |
+| Marketplace + Automation | Skills / MCP / Plugins / Automations 宿主、安装启停与生命周期管理 | `docs/module/marketplace-automation-design-20260316.md` |
+
+其中：
+
+- `Terminal` 专题文档已存在，可继续沿用并逐步补齐到正式设计深度。
+- `Thread`、`Agent Run`、`Agent Sidecar`、`Tool Gateway + Policy` 属于第一批优先细化模块。
+- `Workspace`、`Git`、`Index` 属于第二批本地能力模块。
+- `Marketplace + Automation` 属于第三批扩展宿主模块。
 
 这套方案既能最大化 Rust 的性能优势，又能保留 `pi-agent` 与 AI Elements 的工程复用价值，是当前产品阶段最适合的正式架构方案。
