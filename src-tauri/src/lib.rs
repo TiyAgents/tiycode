@@ -169,6 +169,9 @@ pub fn run() {
             commands::agent::thread_cancel_run,
             commands::agent::tool_approval_respond,
             commands::agent::sidecar_status,
+            // Index
+            commands::index::index_get_tree,
+            commands::index::index_search,
         ])
         .setup(move |app| {
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
