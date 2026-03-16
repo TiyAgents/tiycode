@@ -442,6 +442,7 @@ agent-sidecar/
 - `action`
 - `target_type`
 - `target_id`
+- `tool_call_id`
 - `policy_check_json`
 - `result_json`
 - `created_at`
@@ -450,7 +451,8 @@ agent-sidecar/
 
 - `audit_events` 统一记录用户操作与 Agent 操作的变更审计
 - `run_id` 在该表中允许为空，以覆盖非 Agent 来源的操作
-- `tool_calls` 与 `audit_events` 通过关联键建立引用，而不是混成同一生命周期表
+- `tool_call_id` 在该表中允许为空；当审计事件对应某个 Agent tool call 时写入该字段
+- `tool_calls` 与 `audit_events` 通过 `tool_call_id` 建立引用，而不是混成同一生命周期表
 
 ### `automation_runs`
 
@@ -695,6 +697,11 @@ v1 建议任务类型：
 
 - `summarize_thread_window`
 - `derive_execution_seed`
+
+响应语义：
+
+- `agent.auxiliary.task` 使用同一 `id` 的 request-response 语义返回结果
+- 不通过独立 event stream 发送辅助任务完成或失败事件
 
 ### Sidecar -> Rust 事件
 

@@ -358,6 +358,12 @@ Recommended payload shape:
 - `workspace_id`
 - task-specific structured payload
 
+Response semantics:
+
+- `agent.auxiliary.task` uses normal JSON-RPC request-response semantics on the same `id`
+- successful auxiliary-task results should return in the response payload rather than through the event stream
+- auxiliary-task failures should also return as structured response errors rather than emitting ad hoc failure events
+
 ### Events to Rust
 
 - `agent.run.started`
@@ -380,6 +386,7 @@ Recommended payload shape:
 - every child `SubAgent` event must also include child task identity
 - `agent.run.start` payload should include `run_mode`
 - `agent.run.start` payload should include execution-start strategy when launching from a plan
+- `agent.auxiliary.task` should resolve by response on the same request `id`, not by a separate event
 - sidecar must not emit undeclared event names
 - recoverable provider errors should surface as structured failures, not process exits
 
