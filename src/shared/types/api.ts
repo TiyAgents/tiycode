@@ -133,14 +133,41 @@ export interface ThreadSummaryDto {
   createdAt: string;
 }
 
+export type MessageType =
+  | "plain_message"
+  | "plan"
+  | "reasoning"
+  | "tool_request"
+  | "tool_result"
+  | "approval_prompt"
+  | "sources"
+  | "summary_marker";
+
+export type MessageStatus = "streaming" | "completed" | "failed";
+
+export type RunMode = "default" | "plan";
+
+export type RunStatus =
+  | "created"
+  | "dispatching"
+  | "running"
+  | "waiting_approval"
+  | "waiting_tool_result"
+  | "cancelling"
+  | "completed"
+  | "failed"
+  | "denied"
+  | "interrupted"
+  | "cancelled";
+
 export interface MessageDto {
   id: string;
   threadId: string;
   runId: string | null;
   role: "user" | "assistant" | "system";
   contentMarkdown: string;
-  messageType: string;
-  status: string;
+  messageType: MessageType;
+  status: MessageStatus;
   metadata: unknown | null;
   createdAt: string;
 }
@@ -148,8 +175,8 @@ export interface MessageDto {
 export interface RunSummaryDto {
   id: string;
   threadId: string;
-  runMode: string;
-  status: string;
+  runMode: RunMode;
+  status: RunStatus;
   modelId: string | null;
   startedAt: string;
 }
@@ -162,9 +189,9 @@ export interface ThreadSnapshotDto {
 }
 
 export interface AddMessageInput {
-  role: string;
+  role: "user" | "assistant" | "system";
   content: string;
-  messageType?: string;
+  messageType?: MessageType;
   metadata?: unknown;
 }
 

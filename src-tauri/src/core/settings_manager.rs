@@ -202,6 +202,11 @@ impl SettingsManager {
             updated_at: String::new(),
         };
 
+        // If this profile is default, clear other defaults first
+        if record.is_default {
+            profile_repo::set_default(&self.pool, &record.id).await.ok();
+        }
+
         profile_repo::insert(&self.pool, &record).await?;
         tracing::info!(profile_id = %record.id, name = %record.name, "profile created");
 
@@ -237,6 +242,11 @@ impl SettingsManager {
             created_at: existing.created_at,
             updated_at: String::new(),
         };
+
+        // If setting as default, clear other defaults first
+        if record.is_default && !existing.is_default {
+            profile_repo::set_default(&self.pool, id).await?;
+        }
 
         profile_repo::update(&self.pool, &record).await?;
         tracing::info!(profile_id = %id, "profile updated");

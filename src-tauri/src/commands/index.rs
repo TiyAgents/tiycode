@@ -3,18 +3,15 @@ use tauri::State;
 use crate::core::app_state::AppState;
 use crate::core::index_manager::{FileTreeNode, SearchResponse};
 use crate::model::errors::{AppError, ErrorSource};
+use crate::persistence::repo::workspace_repo;
 
 #[tauri::command]
 pub async fn index_get_tree(
     state: State<'_, AppState>,
     workspace_id: String,
 ) -> Result<FileTreeNode, AppError> {
-    let workspace = state
-        .workspace_manager
-        .list()
+    let workspace = workspace_repo::find_by_id(&state.pool, &workspace_id)
         .await?
-        .into_iter()
-        .find(|w| w.id == workspace_id)
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
     state
@@ -31,12 +28,8 @@ pub async fn index_search(
     file_pattern: Option<String>,
     max_results: Option<usize>,
 ) -> Result<SearchResponse, AppError> {
-    let workspace = state
-        .workspace_manager
-        .list()
+    let workspace = workspace_repo::find_by_id(&state.pool, &workspace_id)
         .await?
-        .into_iter()
-        .find(|w| w.id == workspace_id)
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
     state

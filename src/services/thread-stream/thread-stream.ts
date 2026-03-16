@@ -95,19 +95,31 @@ export class ThreadStream {
     prompt: string,
     runMode?: string,
   ): Promise<string> {
-    const runId = await threadStartRun(threadId, prompt, (event) => {
-      this.handleEvent(event);
-    }, runMode);
+    try {
+      const runId = await threadStartRun(threadId, prompt, (event) => {
+        this.handleEvent(event);
+      }, runMode);
 
-    this.currentRunId = runId;
-    return runId;
+      this.currentRunId = runId;
+      return runId;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.onError?.(message, "");
+      throw error;
+    }
   }
 
   /**
    * Cancel the currently active run.
    */
   async cancelRun(threadId: string): Promise<void> {
-    await threadCancelRun(threadId);
+    try {
+      await threadCancelRun(threadId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.onError?.(message, this.currentRunId ?? "");
+      throw error;
+    }
   }
 
   /**
@@ -118,7 +130,13 @@ export class ThreadStream {
     runId: string,
     approved: boolean,
   ): Promise<void> {
-    await toolApprovalRespond(toolCallId, runId, approved);
+    try {
+      await toolApprovalRespond(toolCallId, runId, approved);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.onError?.(message, runId);
+      throw error;
+    }
   }
 
   /**

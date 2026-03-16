@@ -1,7 +1,7 @@
-use std::sync::Arc;
 use tauri::{ipc::Channel, State};
 
 use crate::core::app_state::AppState;
+use crate::core::tool_gateway::ToolGatewayResult;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::AppError;
 
@@ -50,28 +50,46 @@ pub async fn tool_approval_respond(
     run_id: String,
     approved: bool,
 ) -> Result<(), AppError> {
-    if approved {
-        // For now, send a placeholder success result back to sidecar.
-        // M1.6 ToolGateway will handle real tool execution.
-        state
-            .agent_run_manager
-            .send_tool_result(
-                &tool_call_id,
-                &run_id,
-                serde_json::json!({"status": "approved", "note": "tool execution pending M1.6"}),
-                true,
-            )
-            .await?;
-    } else {
-        state
-            .agent_run_manager
-            .send_tool_result(
-                &tool_call_id,
-                &run_id,
-                serde_json::json!({"status": "denied"}),
-                false,
-            )
-            .await?;
+    let result = state
+        .tool_gateway
+        .resolve_approval(&tool_call_id, approved)
+        .await?;
+
+    match result {
+        Some(ToolGatewayResult::Executed { tool_call_id, output }) => {
+            // Tool executed successfully — send result back to sidecar
+            state
+                .agent_run_manager
+                .send_tool_result(&tool_call_id, &run_id, output.result, output.success)
+                .await?;
+        }
+        Some(ToolGatewayResult::Denied { tool_call_id, reason }) => {
+            // Denied — send denial back to sidecar
+            state
+                .agent_run_manager
+                .send_tool_result(
+                    &tool_call_id,
+                    &run_id,
+                    serde_json::json!({"denied": true, "reason": reason}),
+                    false,
+                )
+                .await?;
+        }
+        Some(ToolGatewayResult::ApprovalRequired { .. }) => {
+            // Should not happen after resolve_approval
+        }
+        None => {
+            // Approval not found — send error back
+            state
+                .agent_run_manager
+                .send_tool_result(
+                    &tool_call_id,
+                    &run_id,
+                    serde_json::json!({"error": "approval not found"}),
+                    false,
+                )
+                .await?;
+        }
     }
 
     Ok(())
@@ -85,9 +103,4 @@ pub async fn sidecar_status(
     Ok(serde_json::json!({
         "running": running,
     }))
-}
-
-/// Helper to get the Arc<SidecarManager> reference — used in AppState setup.
-pub fn get_sidecar_manager(state: &AppState) -> &Arc<crate::core::sidecar_manager::SidecarManager> {
-    &state.sidecar_manager
 }

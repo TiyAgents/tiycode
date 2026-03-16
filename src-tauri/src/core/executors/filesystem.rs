@@ -126,28 +126,57 @@ pub async fn list_dir(
     }
 }
 
-/// Resolve 'path' from input, making it absolute relative to workspace if needed.
+/// Resolve 'path' from input and enforce workspace boundary.
+/// Both absolute and relative paths are resolved, then checked against the workspace root.
 fn resolve_path(input: &serde_json::Value, workspace_path: &str) -> Result<String, AppError> {
     let raw = input["path"].as_str().ok_or_else(|| {
         AppError::recoverable(ErrorSource::Tool, "tool.input.missing", "Missing 'path' field")
     })?;
 
-    let p = Path::new(raw);
-    if p.is_absolute() {
-        Ok(raw.to_string())
+    let resolved = if Path::new(raw).is_absolute() {
+        raw.to_string()
     } else {
-        Ok(Path::new(workspace_path).join(raw).to_string_lossy().to_string())
+        Path::new(workspace_path).join(raw).to_string_lossy().to_string()
+    };
+
+    // Enforce workspace boundary — the resolved path must be within workspace
+    let resolved_canonical = Path::new(&resolved)
+        .canonicalize()
+        .unwrap_or_else(|_| Path::new(&resolved).to_path_buf());
+    let workspace_canonical = Path::new(workspace_path)
+        .canonicalize()
+        .unwrap_or_else(|_| Path::new(workspace_path).to_path_buf());
+
+    if !resolved_canonical.starts_with(&workspace_canonical) {
+        return Err(AppError::recoverable(
+            ErrorSource::Tool,
+            "tool.path.outside_workspace",
+            format!("Path '{}' is outside workspace boundary", raw),
+        ));
     }
+
+    Ok(resolved)
 }
 
 fn resolve_path_or_default(input: &serde_json::Value, workspace_path: &str) -> String {
     match input["path"].as_str() {
         Some(raw) => {
-            let p = Path::new(raw);
-            if p.is_absolute() {
+            let resolved = if Path::new(raw).is_absolute() {
                 raw.to_string()
             } else {
                 Path::new(workspace_path).join(raw).to_string_lossy().to_string()
+            };
+            // For list_dir, also enforce boundary — fall back to workspace if outside
+            let resolved_canonical = Path::new(&resolved)
+                .canonicalize()
+                .unwrap_or_else(|_| Path::new(&resolved).to_path_buf());
+            let workspace_canonical = Path::new(workspace_path)
+                .canonicalize()
+                .unwrap_or_else(|_| Path::new(workspace_path).to_path_buf());
+            if resolved_canonical.starts_with(&workspace_canonical) {
+                resolved
+            } else {
+                workspace_path.to_string()
             }
         }
         None => workspace_path.to_string(),

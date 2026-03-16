@@ -19,7 +19,7 @@ pub struct AppState {
     pub thread_manager: ThreadManager,
     pub sidecar_manager: Arc<SidecarManager>,
     pub agent_run_manager: Arc<AgentRunManager>,
-    pub tool_gateway: ToolGateway,
+    pub tool_gateway: Arc<ToolGateway>,
     pub index_manager: IndexManager,
 }
 
@@ -29,11 +29,12 @@ impl AppState {
         let settings_manager = SettingsManager::new(pool.clone());
         let thread_manager = ThreadManager::new(pool.clone());
         let sidecar_manager = Arc::new(SidecarManager::new(sidecar_path));
+        let tool_gateway = Arc::new(ToolGateway::new(pool.clone()));
         let agent_run_manager = Arc::new(AgentRunManager::new(
             pool.clone(),
             Arc::clone(&sidecar_manager),
+            Arc::clone(&tool_gateway),
         ));
-        let tool_gateway = ToolGateway::new(pool.clone());
         let index_manager = IndexManager::new();
 
         Self {

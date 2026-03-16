@@ -9,6 +9,10 @@ import type {
   AgentProfileInput,
 } from "@/shared/types/api";
 
+const requireTauri = (cmd: string) => {
+  if (!isTauri()) throw new Error(`${cmd} requires Tauri runtime`);
+};
+
 // ---------------------------------------------------------------------------
 // Settings KV
 // ---------------------------------------------------------------------------
@@ -23,10 +27,8 @@ export async function settingsGetAll(): Promise<SettingDto[]> {
   return invoke<SettingDto[]>("settings_get_all");
 }
 
-export async function settingsSet(
-  key: string,
-  value: string,
-): Promise<void> {
+export async function settingsSet(key: string, value: string): Promise<void> {
+  requireTauri("settings_set");
   return invoke("settings_set", { key, value });
 }
 
@@ -45,6 +47,7 @@ export async function policyGetAll(): Promise<SettingDto[]> {
 }
 
 export async function policySet(key: string, value: string): Promise<void> {
+  requireTauri("policy_set");
   return invoke("policy_set", { key, value });
 }
 
@@ -57,20 +60,18 @@ export async function providerList(): Promise<ProviderDto[]> {
   return invoke<ProviderDto[]>("provider_list");
 }
 
-export async function providerCreate(
-  input: ProviderInput,
-): Promise<ProviderDto> {
+export async function providerCreate(input: ProviderInput): Promise<ProviderDto> {
+  requireTauri("provider_create");
   return invoke<ProviderDto>("provider_create", { input });
 }
 
-export async function providerUpdate(
-  id: string,
-  input: ProviderInput,
-): Promise<ProviderDto> {
+export async function providerUpdate(id: string, input: ProviderInput): Promise<ProviderDto> {
+  requireTauri("provider_update");
   return invoke<ProviderDto>("provider_update", { id, input });
 }
 
 export async function providerDelete(id: string): Promise<void> {
+  requireTauri("provider_delete");
   return invoke("provider_delete", { id });
 }
 
@@ -78,9 +79,7 @@ export async function providerDelete(id: string): Promise<void> {
 // Provider Models
 // ---------------------------------------------------------------------------
 
-export async function providerModelList(
-  providerId: string,
-): Promise<ProviderModelDto[]> {
+export async function providerModelList(providerId: string): Promise<ProviderModelDto[]> {
   if (!isTauri()) return [];
   return invoke<ProviderModelDto[]>("provider_model_list", { providerId });
 }
@@ -89,10 +88,12 @@ export async function providerModelAdd(
   providerId: string,
   input: ProviderModelInput,
 ): Promise<ProviderModelDto> {
+  requireTauri("provider_model_add");
   return invoke<ProviderModelDto>("provider_model_add", { providerId, input });
 }
 
 export async function providerModelRemove(id: string): Promise<void> {
+  requireTauri("provider_model_remove");
   return invoke("provider_model_remove", { id });
 }
 
@@ -105,9 +106,8 @@ export async function profileList(): Promise<AgentProfileDto[]> {
   return invoke<AgentProfileDto[]>("profile_list");
 }
 
-export async function profileCreate(
-  input: AgentProfileInput,
-): Promise<AgentProfileDto> {
+export async function profileCreate(input: AgentProfileInput): Promise<AgentProfileDto> {
+  requireTauri("profile_create");
   return invoke<AgentProfileDto>("profile_create", { input });
 }
 
@@ -115,9 +115,11 @@ export async function profileUpdate(
   id: string,
   input: AgentProfileInput,
 ): Promise<AgentProfileDto> {
+  requireTauri("profile_update");
   return invoke<AgentProfileDto>("profile_update", { id, input });
 }
 
 export async function profileDelete(id: string): Promise<void> {
+  requireTauri("profile_delete");
   return invoke("profile_delete", { id });
 }

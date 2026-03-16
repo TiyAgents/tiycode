@@ -199,7 +199,15 @@ pub fn run() {
                 Ok::<(), crate::model::errors::AppError>(())
             })?;
 
-            // 8. Start sidecar event processing loop
+            // 8. Start sidecar process and event processing loop
+            //    Sidecar start is best-effort — if the binary is not found,
+            //    the app still launches but agent runs will fail gracefully.
+            tauri::async_runtime::block_on(async {
+                if let Err(e) = state.sidecar_manager.start().await {
+                    tracing::warn!(error = %e, "sidecar failed to start (agent runs will be unavailable)");
+                }
+            });
+
             if let Some(event_rx) = state.sidecar_manager.take_event_receiver() {
                 state.agent_run_manager.spawn_event_loop(event_rx);
             }

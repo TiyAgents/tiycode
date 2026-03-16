@@ -123,10 +123,40 @@ pub async fn touch_active(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
 }
 
 pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
-    // Delete messages first (FK constraint), then the thread.
+    // Cascade delete all related records in dependency order.
     let mut tx = pool.begin().await?;
 
+    sqlx::query("DELETE FROM audit_events WHERE thread_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM tool_calls WHERE thread_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM run_subtasks WHERE thread_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM thread_runs WHERE thread_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM thread_summaries WHERE thread_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
     sqlx::query("DELETE FROM messages WHERE thread_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM terminal_sessions WHERE thread_id = ?")
         .bind(id)
         .execute(&mut *tx)
         .await?;

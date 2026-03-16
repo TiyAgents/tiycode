@@ -1,6 +1,10 @@
 import { invoke, isTauri, Channel } from "@tauri-apps/api/core";
 import type { ThreadStreamEvent, SidecarStatusDto } from "@/shared/types/api";
 
+const requireTauri = (cmd: string) => {
+  if (!isTauri()) throw new Error(`${cmd} requires Tauri runtime`);
+};
+
 /**
  * Start a new agent run for a thread.
  *
@@ -13,6 +17,8 @@ export async function threadStartRun(
   onEvent: (event: ThreadStreamEvent) => void,
   runMode?: string,
 ): Promise<string> {
+  requireTauri("thread_start_run");
+
   const channel = new Channel<ThreadStreamEvent>();
   channel.onmessage = onEvent;
 
@@ -25,6 +31,7 @@ export async function threadStartRun(
 }
 
 export async function threadCancelRun(threadId: string): Promise<void> {
+  requireTauri("thread_cancel_run");
   return invoke("thread_cancel_run", { threadId });
 }
 
@@ -33,6 +40,7 @@ export async function toolApprovalRespond(
   runId: string,
   approved: boolean,
 ): Promise<void> {
+  requireTauri("tool_approval_respond");
   return invoke("tool_approval_respond", { toolCallId, runId, approved });
 }
 

@@ -13,17 +13,19 @@ use tokio::sync::{mpsc, Mutex};
 use sqlx::SqlitePool;
 
 use crate::core::sidecar_manager::SidecarManager;
+use crate::core::tool_gateway::{ToolGateway, ToolGatewayResult};
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::ipc::sidecar_protocol::{RunStartPayload, SidecarEvent, ToolResultPayload};
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::MessageRecord;
-use crate::persistence::repo::{message_repo, run_repo, thread_repo, tool_call_repo};
+use crate::persistence::repo::{message_repo, run_repo, thread_repo, tool_call_repo, workspace_repo};
 
 /// In-memory state for an active run.
 struct ActiveRun {
     run_id: String,
     thread_id: String,
     run_mode: String,
+    workspace_path: String,
     /// Sender to push events to the frontend for this thread.
     frontend_tx: mpsc::Sender<ThreadStreamEvent>,
     /// Current assistant message being streamed (if any).
@@ -33,15 +35,17 @@ struct ActiveRun {
 pub struct AgentRunManager {
     pool: SqlitePool,
     sidecar: Arc<SidecarManager>,
+    tool_gateway: Arc<ToolGateway>,
     /// Active runs indexed by run_id.
     active_runs: Arc<Mutex<HashMap<String, ActiveRun>>>,
 }
 
 impl AgentRunManager {
-    pub fn new(pool: SqlitePool, sidecar: Arc<SidecarManager>) -> Self {
+    pub fn new(pool: SqlitePool, sidecar: Arc<SidecarManager>, tool_gateway: Arc<ToolGateway>) -> Self {
         Self {
             pool,
             sidecar,
+            tool_gateway,
             active_runs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -56,9 +60,21 @@ impl AgentRunManager {
         run_mode: &str,
         model_plan: serde_json::Value,
     ) -> Result<(String, mpsc::Receiver<ThreadStreamEvent>), AppError> {
-        // 1. Check no active run exists for this thread
+        // 1. Look up thread's workspace to get canonical_path for tool boundary checks
+        let thread = thread_repo::find_by_id(&self.pool, thread_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
+
+        let workspace_path = workspace_repo::find_by_id(&self.pool, &thread.workspace_id)
+            .await?
+            .map(|w| w.canonical_path)
+            .unwrap_or_default();
+
+        // 2. Check no active run + register atomically (hold lock through insert)
+        let (frontend_tx, frontend_rx) = mpsc::channel::<ThreadStreamEvent>(128);
+        let run_id = uuid::Uuid::now_v7().to_string();
         {
-            let runs = self.active_runs.lock().await;
+            let mut runs = self.active_runs.lock().await;
             if runs.values().any(|r| r.thread_id == thread_id) {
                 return Err(AppError::recoverable(
                     ErrorSource::Thread,
@@ -66,9 +82,20 @@ impl AgentRunManager {
                     "A run is already active for this thread",
                 ));
             }
+            runs.insert(
+                run_id.clone(),
+                ActiveRun {
+                    run_id: run_id.clone(),
+                    thread_id: thread_id.to_string(),
+                    run_mode: run_mode.to_string(),
+                    workspace_path: workspace_path.clone(),
+                    frontend_tx: frontend_tx.clone(),
+                    streaming_message_id: None,
+                },
+            );
         }
 
-        // 2. Persist user message
+        // 3. Persist user message
         let user_msg = MessageRecord {
             id: uuid::Uuid::now_v7().to_string(),
             thread_id: thread_id.to_string(),
@@ -83,8 +110,7 @@ impl AgentRunManager {
         message_repo::insert(&self.pool, &user_msg).await?;
         thread_repo::touch_active(&self.pool, thread_id).await?;
 
-        // 3. Create run record
-        let run_id = uuid::Uuid::now_v7().to_string();
+        // 4. Create run record
         let run_insert = run_repo::RunInsert {
             id: run_id.clone(),
             thread_id: thread_id.to_string(),
@@ -97,31 +123,13 @@ impl AgentRunManager {
         };
         run_repo::insert(&self.pool, &run_insert).await?;
 
-        // 4. Update thread status to running
+        // 5. Update thread status to running
         thread_repo::update_status(
             &self.pool,
             thread_id,
             &crate::model::thread::ThreadStatus::Running,
         )
         .await?;
-
-        // 5. Create frontend event channel
-        let (frontend_tx, frontend_rx) = mpsc::channel::<ThreadStreamEvent>(128);
-
-        // 6. Register active run
-        {
-            let mut runs = self.active_runs.lock().await;
-            runs.insert(
-                run_id.clone(),
-                ActiveRun {
-                    run_id: run_id.clone(),
-                    thread_id: thread_id.to_string(),
-                    run_mode: run_mode.to_string(),
-                    frontend_tx: frontend_tx.clone(),
-                    streaming_message_id: None,
-                },
-            );
-        }
 
         // 7. Dispatch to sidecar
         run_repo::update_status(&self.pool, &run_id, "dispatching").await?;
@@ -331,12 +339,15 @@ impl AgentRunManager {
             } => {
                 // Persist tool call
                 let thread_id = self.get_thread_id(&run_id).await;
+                let workspace_path = self.get_workspace_path(&run_id).await;
+                let run_mode = self.get_run_mode(&run_id).await;
+
                 tool_call_repo::insert(
                     &self.pool,
                     &tool_call_repo::ToolCallInsert {
                         id: tool_call_id.clone(),
                         run_id: run_id.clone(),
-                        thread_id,
+                        thread_id: thread_id.clone(),
                         tool_name: tool_name.clone(),
                         tool_input_json: tool_input.to_string(),
                         status: "requested".to_string(),
@@ -346,15 +357,56 @@ impl AgentRunManager {
 
                 run_repo::update_status(&self.pool, &run_id, "waiting_tool_result").await?;
 
-                // For now, emit as tool_requested. M1.6 ToolGateway will
-                // intercept this and route through PolicyEngine.
-                self.emit(&run_id, ThreadStreamEvent::ToolRequested {
-                    run_id: run_id.clone(),
-                    tool_call_id,
-                    tool_name,
-                    tool_input,
-                })
-                .await;
+                // Route through ToolGateway for policy evaluation + execution
+                let gw_result = self
+                    .tool_gateway
+                    .handle_tool_request(
+                        &run_id,
+                        &thread_id,
+                        &tool_call_id,
+                        &tool_name,
+                        &tool_input,
+                        &workspace_path,
+                        &run_mode,
+                    )
+                    .await?;
+
+                match gw_result {
+                    ToolGatewayResult::Executed { tool_call_id, output } => {
+                        // Auto-allowed and executed — send result to sidecar
+                        self.emit(&run_id, ThreadStreamEvent::ToolCompleted {
+                            run_id: run_id.clone(),
+                            tool_call_id: tool_call_id.clone(),
+                            result: output.result.clone(),
+                        })
+                        .await;
+                        run_repo::update_status(&self.pool, &run_id, "running").await?;
+                        self.send_tool_result(&tool_call_id, &run_id, output.result, output.success)
+                            .await?;
+                    }
+                    ToolGatewayResult::ApprovalRequired { event } => {
+                        // Needs user approval — emit to frontend, wait for response
+                        run_repo::update_status(&self.pool, &run_id, "waiting_approval").await?;
+                        self.emit(&run_id, event).await;
+                    }
+                    ToolGatewayResult::Denied { tool_call_id, reason } => {
+                        // Denied by policy — send denial to sidecar
+                        self.emit(&run_id, ThreadStreamEvent::ToolFailed {
+                            run_id: run_id.clone(),
+                            tool_call_id: tool_call_id.clone(),
+                            error: reason.clone(),
+                        })
+                        .await;
+                        run_repo::update_status(&self.pool, &run_id, "running").await?;
+                        self.send_tool_result(
+                            &tool_call_id,
+                            &run_id,
+                            serde_json::json!({"denied": true, "reason": reason}),
+                            false,
+                        )
+                        .await?;
+                    }
+                }
             }
 
             SidecarEvent::RunCompleted { .. } => {
@@ -433,6 +485,13 @@ impl AgentRunManager {
         let runs = self.active_runs.lock().await;
         runs.get(run_id)
             .map(|r| r.thread_id.clone())
+            .unwrap_or_default()
+    }
+
+    async fn get_workspace_path(&self, run_id: &str) -> String {
+        let runs = self.active_runs.lock().await;
+        runs.get(run_id)
+            .map(|r| r.workspace_path.clone())
             .unwrap_or_default()
     }
 
