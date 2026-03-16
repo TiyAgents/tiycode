@@ -5,6 +5,7 @@ use crate::core::agent_run_manager::AgentRunManager;
 use crate::core::settings_manager::SettingsManager;
 use crate::core::sidecar_manager::SidecarManager;
 use crate::core::thread_manager::ThreadManager;
+use crate::core::tool_gateway::ToolGateway;
 use crate::core::workspace_manager::WorkspaceManager;
 
 /// Global application state shared across all Tauri commands.
@@ -17,6 +18,7 @@ pub struct AppState {
     pub thread_manager: ThreadManager,
     pub sidecar_manager: Arc<SidecarManager>,
     pub agent_run_manager: Arc<AgentRunManager>,
+    pub tool_gateway: ToolGateway,
 }
 
 impl AppState {
@@ -29,6 +31,7 @@ impl AppState {
             pool.clone(),
             Arc::clone(&sidecar_manager),
         ));
+        let tool_gateway = ToolGateway::new(pool.clone());
 
         Self {
             pool,
@@ -37,6 +40,7 @@ impl AppState {
             thread_manager,
             sidecar_manager,
             agent_run_manager,
+            tool_gateway,
         }
     }
 }

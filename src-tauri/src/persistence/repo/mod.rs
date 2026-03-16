@@ -1,3 +1,4 @@
+pub mod audit_repo;
 pub mod message_repo;
 pub mod profile_repo;
 pub mod provider_repo;
