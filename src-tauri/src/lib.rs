@@ -126,14 +126,36 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            // System
             commands::system::get_system_metadata,
             commands::system::get_workspace_open_apps,
             commands::system::open_workspace_in_app,
+            // Workspace
             commands::workspace::workspace_list,
             commands::workspace::workspace_add,
             commands::workspace::workspace_remove,
             commands::workspace::workspace_set_default,
             commands::workspace::workspace_validate,
+            // Settings & Policies
+            commands::settings::settings_get,
+            commands::settings::settings_get_all,
+            commands::settings::settings_set,
+            commands::settings::policy_get,
+            commands::settings::policy_get_all,
+            commands::settings::policy_set,
+            // Providers
+            commands::settings::provider_list,
+            commands::settings::provider_create,
+            commands::settings::provider_update,
+            commands::settings::provider_delete,
+            commands::settings::provider_model_list,
+            commands::settings::provider_model_add,
+            commands::settings::provider_model_remove,
+            // Agent Profiles
+            commands::settings::profile_list,
+            commands::settings::profile_create,
+            commands::settings::profile_update,
+            commands::settings::profile_delete,
         ])
         .setup(move |app| {
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
