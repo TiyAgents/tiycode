@@ -64,4 +64,3 @@ pub struct TerminalAttachDto {
     pub session: TerminalSessionDto,
     pub replay: String,
 }
-

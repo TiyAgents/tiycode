@@ -39,7 +39,9 @@ pub async fn execute(
                     )
                 })?;
 
-            let session = terminal_manager.write_input_or_create(thread_id, data).await?;
+            let session = terminal_manager
+                .write_input_or_create(thread_id, data)
+                .await?;
             Ok(ToolOutput {
                 success: true,
                 result: serde_json::to_value(session).unwrap_or_else(|_| serde_json::json!({})),
@@ -63,4 +65,3 @@ pub async fn execute(
         }),
     }
 }
-

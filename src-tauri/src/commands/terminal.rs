@@ -57,7 +57,10 @@ pub async fn terminal_restart(
     rows: Option<u16>,
     on_event: Channel<TerminalStreamEvent>,
 ) -> Result<TerminalAttachDto, AppError> {
-    let attachment = state.terminal_manager.restart(&thread_id, cols, rows).await?;
+    let attachment = state
+        .terminal_manager
+        .restart(&thread_id, cols, rows)
+        .await?;
 
     let mut event_rx = attachment.receiver;
     tokio::spawn(async move {
@@ -72,14 +75,13 @@ pub async fn terminal_restart(
 }
 
 #[tauri::command]
-pub async fn terminal_close(
-    state: State<'_, AppState>,
-    thread_id: String,
-) -> Result<(), AppError> {
+pub async fn terminal_close(state: State<'_, AppState>, thread_id: String) -> Result<(), AppError> {
     state.terminal_manager.close(&thread_id).await
 }
 
 #[tauri::command]
-pub async fn terminal_list(state: State<'_, AppState>) -> Result<Vec<TerminalSessionDto>, AppError> {
+pub async fn terminal_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<TerminalSessionDto>, AppError> {
     Ok(state.terminal_manager.list().await)
 }

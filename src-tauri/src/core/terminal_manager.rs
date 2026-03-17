@@ -186,7 +186,9 @@ impl TerminalManager {
             return Ok(TerminalAttachment { attach, receiver });
         }
 
-        if let Some(stale) = terminal_session_repo::find_active_by_thread(&self.pool, thread_id).await? {
+        if let Some(stale) =
+            terminal_session_repo::find_active_by_thread(&self.pool, thread_id).await?
+        {
             terminal_session_repo::update_exited(&self.pool, &stale.id, stale.exit_code).await?;
         }
 
@@ -414,14 +416,18 @@ impl TerminalManager {
 
         if let Some(meta) = session.finish(None) {
             terminal_session_repo::update_exited(&self.pool, &meta.session_id, None).await?;
-            let _ = session.broadcaster.send(TerminalStreamEvent::StatusChanged {
-                thread_id: thread_id.to_string(),
-                status: meta.status.clone(),
-            });
-            let _ = session.broadcaster.send(TerminalStreamEvent::SessionExited {
-                thread_id: thread_id.to_string(),
-                exit_code: None,
-            });
+            let _ = session
+                .broadcaster
+                .send(TerminalStreamEvent::StatusChanged {
+                    thread_id: thread_id.to_string(),
+                    status: meta.status.clone(),
+                });
+            let _ = session
+                .broadcaster
+                .send(TerminalStreamEvent::SessionExited {
+                    thread_id: thread_id.to_string(),
+                    exit_code: None,
+                });
         }
 
         let result = session
@@ -468,11 +474,7 @@ impl TerminalManager {
     }
 
     async fn get_session(&self, thread_id: &str) -> Option<Arc<TerminalSessionRuntime>> {
-        self.sessions_by_thread
-            .read()
-            .await
-            .get(thread_id)
-            .cloned()
+        self.sessions_by_thread.read().await.get(thread_id).cloned()
     }
 
     async fn resolve_context(
@@ -622,14 +624,18 @@ impl TerminalManager {
         terminal_session_repo::update_exited(&self.pool, session_id, exit_code).await?;
 
         let meta = runtime.current_meta();
-        let _ = runtime.broadcaster.send(TerminalStreamEvent::StatusChanged {
-            thread_id: thread_id.to_string(),
-            status: meta.status,
-        });
-        let _ = runtime.broadcaster.send(TerminalStreamEvent::SessionExited {
-            thread_id: thread_id.to_string(),
-            exit_code,
-        });
+        let _ = runtime
+            .broadcaster
+            .send(TerminalStreamEvent::StatusChanged {
+                thread_id: thread_id.to_string(),
+                status: meta.status,
+            });
+        let _ = runtime
+            .broadcaster
+            .send(TerminalStreamEvent::SessionExited {
+                thread_id: thread_id.to_string(),
+                exit_code,
+            });
 
         Ok(())
     }
@@ -657,7 +663,8 @@ fn decode_utf8_chunk(pending: &mut Vec<u8>, chunk: &[u8]) -> String {
                 match error.error_len() {
                     Some(error_len) => {
                         let invalid_end = valid_up_to + error_len;
-                        output.push_str(&String::from_utf8_lossy(&pending[valid_up_to..invalid_end]));
+                        output
+                            .push_str(&String::from_utf8_lossy(&pending[valid_up_to..invalid_end]));
                         pending.drain(..invalid_end);
                         if pending.is_empty() {
                             break;
@@ -738,7 +745,9 @@ fn resolve_shell() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_utf8_chunk, flush_utf8_tail, trim_replay_to_last_screen_reset, ReplayBuffer};
+    use super::{
+        decode_utf8_chunk, flush_utf8_tail, trim_replay_to_last_screen_reset, ReplayBuffer,
+    };
 
     #[test]
     fn decode_utf8_chunk_preserves_split_multibyte_sequences() {

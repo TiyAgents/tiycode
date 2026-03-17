@@ -74,11 +74,7 @@ pub async fn find_active_by_thread(
     Ok(row.map(|row| row.into_record()))
 }
 
-pub async fn update_running(
-    pool: &SqlitePool,
-    id: &str,
-    pid: Option<i64>,
-) -> Result<(), AppError> {
+pub async fn update_running(pool: &SqlitePool, id: &str, pid: Option<i64>) -> Result<(), AppError> {
     sqlx::query(
         "UPDATE terminal_sessions
          SET status = 'running', pid = ?, exit_code = NULL, exited_at = NULL
@@ -127,4 +123,3 @@ pub async fn mark_all_active_exited(pool: &SqlitePool) -> Result<u64, AppError> 
 
     Ok(result.rows_affected())
 }
-
