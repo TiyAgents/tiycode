@@ -201,7 +201,7 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
       <div
         ref={containerRef}
         aria-hidden={!isTerminalCanvasVisible}
-        className={`h-full min-h-0 px-2 pb-2 transition-opacity duration-150 [&_.xterm]:h-full [&_.xterm-viewport]:overscroll-contain ${
+        className={`h-full min-h-0 transition-opacity duration-150 [&_.xterm]:h-full [&_.xterm-viewport]:overscroll-contain ${
           isTerminalCanvasVisible ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
       />

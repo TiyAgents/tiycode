@@ -477,17 +477,29 @@ impl TerminalManager {
     ) {
         tokio::task::spawn_blocking(move || {
             let mut buffer = [0_u8; 8192];
+            let mut pending_utf8 = Vec::new();
 
             loop {
                 match reader.read(&mut buffer) {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        if let Some(chunk) = flush_utf8_tail(&mut pending_utf8) {
+                            session.push_output(&chunk);
+                            let _ = session.broadcaster.send(TerminalStreamEvent::StdoutChunk {
+                                thread_id: session.thread_id.clone(),
+                                data: chunk,
+                            });
+                        }
+                        break;
+                    }
                     Ok(size) => {
-                        let chunk = String::from_utf8_lossy(&buffer[..size]).to_string();
-                        session.push_output(&chunk);
-                        let _ = session.broadcaster.send(TerminalStreamEvent::StdoutChunk {
-                            thread_id: session.thread_id.clone(),
-                            data: chunk,
-                        });
+                        let chunk = decode_utf8_chunk(&mut pending_utf8, &buffer[..size]);
+                        if !chunk.is_empty() {
+                            session.push_output(&chunk);
+                            let _ = session.broadcaster.send(TerminalStreamEvent::StdoutChunk {
+                                thread_id: session.thread_id.clone(),
+                                data: chunk,
+                            });
+                        }
                     }
                     Err(error) => {
                         tracing::warn!(
@@ -598,6 +610,56 @@ impl TerminalManager {
     }
 }
 
+fn decode_utf8_chunk(pending: &mut Vec<u8>, chunk: &[u8]) -> String {
+    pending.extend_from_slice(chunk);
+    let mut output = String::new();
+
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(valid) => {
+                output.push_str(valid);
+                pending.clear();
+                break;
+            }
+            Err(error) => {
+                let valid_up_to = error.valid_up_to();
+                if valid_up_to > 0 {
+                    let valid = std::str::from_utf8(&pending[..valid_up_to])
+                        .expect("utf8 prefix should be valid");
+                    output.push_str(valid);
+                }
+
+                match error.error_len() {
+                    Some(error_len) => {
+                        let invalid_end = valid_up_to + error_len;
+                        output.push_str(&String::from_utf8_lossy(&pending[valid_up_to..invalid_end]));
+                        pending.drain(..invalid_end);
+                        if pending.is_empty() {
+                            break;
+                        }
+                    }
+                    None => {
+                        pending.drain(..valid_up_to);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    output
+}
+
+fn flush_utf8_tail(pending: &mut Vec<u8>) -> Option<String> {
+    if pending.is_empty() {
+        return None;
+    }
+
+    let chunk = String::from_utf8_lossy(pending).to_string();
+    pending.clear();
+    Some(chunk)
+}
+
 fn resolve_shell() -> String {
     std::env::var("SHELL")
         .ok()
@@ -612,4 +674,36 @@ fn resolve_shell() -> String {
                 "/bin/zsh".to_string()
             }
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_utf8_chunk, flush_utf8_tail};
+
+    #[test]
+    fn decode_utf8_chunk_preserves_split_multibyte_sequences() {
+        let mut pending = Vec::new();
+        let bytes = "├─ Claude Code".as_bytes();
+        let split_at = 2;
+
+        let first = decode_utf8_chunk(&mut pending, &bytes[..split_at]);
+        let second = decode_utf8_chunk(&mut pending, &bytes[split_at..]);
+        let tail = flush_utf8_tail(&mut pending);
+
+        assert_eq!(first, "");
+        assert_eq!(second, "├─ Claude Code");
+        assert_eq!(tail, None);
+    }
+
+    #[test]
+    fn decode_utf8_chunk_keeps_incomplete_suffix_until_next_read() {
+        let mut pending = Vec::new();
+        let bytes = "你A".as_bytes();
+
+        let first = decode_utf8_chunk(&mut pending, &bytes[..2]);
+        let second = decode_utf8_chunk(&mut pending, &bytes[2..]);
+
+        assert_eq!(first, "");
+        assert_eq!(second, "你A");
+    }
 }
