@@ -31,6 +31,7 @@ export function useThreadTerminal({
 }: UseThreadTerminalOptions) {
   const [error, setError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const attachGenerationRef = useRef(0);
   const onReplayRef = useRef(onReplay);
   const onStdoutRef = useRef(onStdout);
   const onStderrRef = useRef(onStderr);
@@ -44,6 +45,7 @@ export function useThreadTerminal({
   const session = useTerminalStore((current) =>
     threadId ? current.sessionsByThreadId[threadId] ?? null : null,
   );
+  const sessionId = session?.sessionId ?? null;
 
   useEffect(() => {
     terminalStore.setActiveThread(active ? threadId : null);
@@ -60,15 +62,24 @@ export function useThreadTerminal({
     }
 
     let cancelled = false;
+    const attachGeneration = attachGenerationRef.current + 1;
+    attachGenerationRef.current = attachGeneration;
     setIsConnecting(true);
     setError(null);
 
     const handleAttach = (payload: TerminalAttachDto) => {
+      if (attachGeneration !== attachGenerationRef.current) {
+        return;
+      }
       terminalStore.upsertSession(payload.session);
       onReplayRef.current?.(payload.replay);
     };
 
     const handleEvent = (event: TerminalStreamEvent) => {
+      if (attachGeneration !== attachGenerationRef.current) {
+        return;
+      }
+
       if (event.threadId !== threadId) {
         return;
       }
@@ -128,8 +139,23 @@ export function useThreadTerminal({
 
     return () => {
       cancelled = true;
+      if (attachGenerationRef.current === attachGeneration) {
+        attachGenerationRef.current += 1;
+      }
     };
-  }, [active, cols, rows, threadId]);
+  }, [active, threadId]);
+
+  useEffect(() => {
+    if (!active || !threadId || !sessionId || !isTauri()) {
+      return;
+    }
+
+    void terminalClient.resize(threadId, cols, rows).catch((resizeError) => {
+      const message =
+        resizeError instanceof Error ? resizeError.message : String(resizeError);
+      setError(message);
+    });
+  }, [active, cols, rows, sessionId, threadId]);
 
   const actions = useMemo(
     () => ({
@@ -206,4 +232,3 @@ export function useThreadTerminal({
     ...actions,
   };
 }
-

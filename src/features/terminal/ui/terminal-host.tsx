@@ -31,7 +31,11 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const geometryRef = useRef({ cols: 120, rows: 36 });
-  const [geometryVersion, setGeometryVersion] = useState(0);
+  const syncGeometryRef = useRef<(() => void) | null>(null);
+  const writeInputRef = useRef<(data: string) => Promise<void>>(async () => {});
+  const isReplayingRef = useRef(false);
+  const [geometry, setGeometry] = useState({ cols: 120, rows: 36 });
+  const [isTerminalReady, setTerminalReady] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current || terminalRef.current) {
@@ -57,15 +61,26 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
 
     terminal.loadAddon(fitAddon);
     terminal.open(containerRef.current);
-    fitAddon.fit();
-
-    geometryRef.current = { cols: terminal.cols, rows: terminal.rows };
-    setGeometryVersion((current) => current + 1);
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
+    syncGeometryRef.current = () => {
+      fitAddon.fit();
+      const next = { cols: terminal.cols, rows: terminal.rows };
+      geometryRef.current = next;
+      setGeometry((current) =>
+        current.cols === next.cols && current.rows === next.rows ? current : next,
+      );
+    };
+
+    const frameId = window.requestAnimationFrame(() => {
+      syncGeometryRef.current?.();
+      setTerminalReady(true);
+    });
 
     return () => {
+      window.cancelAnimationFrame(frameId);
+      syncGeometryRef.current = null;
       terminalRef.current = null;
       fitAddonRef.current = null;
       terminal.dispose();
@@ -74,19 +89,26 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
 
   const terminalApi = useThreadTerminal({
     threadId,
-    active,
-    cols: geometryRef.current.cols,
-    rows: geometryRef.current.rows,
+    active: active && isTerminalReady,
+    cols: geometry.cols,
+    rows: geometry.rows,
     onReplay: (replay) => {
       const terminal = terminalRef.current;
       if (!terminal) {
         return;
       }
 
+      isReplayingRef.current = true;
       terminal.reset();
       if (replay) {
-        terminal.write(replay);
+        terminal.write(replay, () => {
+          isReplayingRef.current = false;
+          syncGeometryRef.current?.();
+        });
+        return;
       }
+
+      isReplayingRef.current = false;
     },
     onStdout: (data) => {
       terminalRef.current?.write(data);
@@ -100,6 +122,7 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
       );
     },
   });
+  writeInputRef.current = (data: string) => terminalApi.writeInput(data);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -108,13 +131,16 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
     }
 
     const disposable = terminal.onData((data) => {
-      void terminalApi.writeInput(data).catch(() => {});
+      if (isReplayingRef.current) {
+        return;
+      }
+      void writeInputRef.current(data).catch(() => {});
     });
 
     return () => {
       disposable.dispose();
     };
-  }, [terminalApi]);
+  }, []);
 
   useEffect(() => {
     if (threadId) {
@@ -129,34 +155,15 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
       return;
     }
 
-    const syncGeometry = () => {
-      const terminal = terminalRef.current;
-      const fitAddon = fitAddonRef.current;
-      if (!terminal || !fitAddon) {
-        return;
-      }
-
-      fitAddon.fit();
-      const next = { cols: terminal.cols, rows: terminal.rows };
-      const changed =
-        next.cols !== geometryRef.current.cols || next.rows !== geometryRef.current.rows;
-
-      geometryRef.current = next;
-      if (changed) {
-        void terminalApi.resize(next.cols, next.rows).catch(() => {});
-        setGeometryVersion((current) => current + 1);
-      }
-    };
-
     const resizeObserver = new ResizeObserver(() => {
-      syncGeometry();
+      syncGeometryRef.current?.();
     });
 
     resizeObserver.observe(containerRef.current);
-    syncGeometry();
+    syncGeometryRef.current?.();
 
     return () => resizeObserver.disconnect();
-  }, [active, geometryVersion, terminalApi]);
+  }, [active, isTerminalReady]);
 
   const placeholder = useMemo(() => {
     if (bootstrapError) {
