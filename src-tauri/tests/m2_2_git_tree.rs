@@ -128,6 +128,46 @@ async fn test_git_overlay_bubbles_untracked_state_above_tracked_ancestors() {
     );
 }
 
+#[tokio::test]
+async fn test_git_overlay_marks_modified_files_and_ancestors() {
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let root = tmp.path();
+
+    std::fs::create_dir_all(root.join("src")).expect("should create src directory");
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("should write tracked file");
+
+    let repo = Repository::init(root).expect("should init repository");
+    commit_selected(&repo, &["src/main.rs"], "initial commit");
+
+    std::fs::write(
+        root.join("src/main.rs"),
+        "fn main() {\n    println!(\"changed\");\n}\n",
+    )
+    .expect("should update tracked file");
+
+    let mut tree = IndexManager::new()
+        .get_tree(&root.to_string_lossy())
+        .await
+        .expect("tree scan should succeed");
+    let overlay = GitManager::new()
+        .get_workspace_overlay(&root.to_string_lossy())
+        .await
+        .expect("overlay lookup should succeed");
+
+    tree.apply_git_overlay(&overlay.states);
+
+    assert_eq!(
+        find_git_state(&tree, "src/main.rs"),
+        Some(GitFileState::Modified),
+        "modified tracked file should be marked as modified"
+    );
+    assert_eq!(
+        find_git_state(&tree, "src"),
+        Some(GitFileState::Modified),
+        "ancestor directories should surface modified descendants"
+    );
+}
+
 fn commit_selected(repo: &Repository, paths: &[&str], message: &str) {
     let mut index = repo.index().expect("should get repository index");
 

@@ -128,6 +128,18 @@ fn map_status(status: Status) -> GitFileState {
         GitFileState::Ignored
     } else if status.is_wt_new() {
         GitFileState::Untracked
+    } else if status.intersects(
+        Status::WT_MODIFIED
+            | Status::WT_DELETED
+            | Status::WT_RENAMED
+            | Status::WT_TYPECHANGE
+            | Status::INDEX_MODIFIED
+            | Status::INDEX_NEW
+            | Status::INDEX_DELETED
+            | Status::INDEX_RENAMED
+            | Status::INDEX_TYPECHANGE,
+    ) {
+        GitFileState::Modified
     } else {
         GitFileState::Tracked
     }
@@ -163,6 +175,7 @@ fn state_priority(state: &GitFileState) -> u8 {
     match state {
         GitFileState::Ignored => 1,
         GitFileState::Tracked => 2,
-        GitFileState::Untracked => 3,
+        GitFileState::Modified => 3,
+        GitFileState::Untracked => 4,
     }
 }

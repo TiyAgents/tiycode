@@ -1,12 +1,14 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
-export type GitFileState = "tracked" | "untracked" | "ignored";
+export type GitFileState = "tracked" | "modified" | "untracked" | "ignored";
 
 export interface FileTreeNode {
   name: string;
   path: string;
   isDir: boolean;
   isExpandable: boolean;
+  childrenHasMore: boolean;
+  childrenNextOffset?: number;
   gitState?: GitFileState;
   children?: FileTreeNode[];
 }
@@ -26,6 +28,12 @@ export interface FileFilterResponse {
   query: string;
   results: FileFilterMatch[];
   count: number;
+}
+
+export interface DirectoryChildrenResponse {
+  children: FileTreeNode[];
+  hasMore: boolean;
+  nextOffset?: number;
 }
 
 export interface SearchResult {
@@ -51,10 +59,14 @@ export async function indexGetTree(
 export async function indexGetChildren(
   workspaceId: string,
   directoryPath: string,
-): Promise<FileTreeNode[]> {
-  return invoke<FileTreeNode[]>("index_get_children", {
+  offset?: number,
+  maxResults?: number,
+): Promise<DirectoryChildrenResponse> {
+  return invoke<DirectoryChildrenResponse>("index_get_children", {
     workspaceId,
     directoryPath,
+    offset: offset ?? null,
+    maxResults: maxResults ?? null,
   });
 }
 

@@ -179,6 +179,9 @@ Recommended strategy:
 - the first pass should try to cover top-level and second-level directories before spending budget on deeper branches
 - if the scan budget is exhausted, deeper directories should remain expandable placeholders rather than being represented as leaf nodes
 - expanding a directory should trigger on-demand child loading for that directory
+- large directories such as `node_modules`, `dist`, `build`, `.next`, and `target` should stay visible in TreeView rather than being filtered out
+- those large directories should skip eager child preloading and load direct children only when the user expands them
+- on-demand child loading should be paged or chunked so a single expand does not materialize thousands of entries into memory or the DOM at once
 
 This avoids the failure mode where depth-first scanning consumes the entire entry budget inside a few early branches and leaves later sibling directories looking empty or non-expandable.
 
@@ -186,7 +189,8 @@ Recommended node semantics:
 
 - `children: undefined` means not loaded yet
 - `children: []` means loaded and empty
-- `is_partially_loaded: true` means the node is known to have more descendants and should remain expandable
+- `children_has_more: true` means more direct children are available and the UI should offer `Load more`
+- `children_next_offset` or equivalent cursor tracks the next page boundary for incremental loading
 
 ### Filter Files Strategy
 
@@ -205,6 +209,11 @@ The file manifest should:
 - support substring or fuzzy matching over relative paths
 
 This ensures `Filter files` can find all relevant files even when large parts of the tree have not yet been expanded or loaded into memory.
+
+Important distinction:
+
+- TreeView may show heavy directories and let the user expand them lazily
+- `Filter files` may still exclude those heavy directories to protect query latency and avoid low-signal matches
 
 Recommended UX:
 

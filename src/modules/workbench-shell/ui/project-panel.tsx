@@ -2,6 +2,7 @@ import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Check, ChevronDown, ChevronRight, FolderOpen, LoaderCircle } from "lucide-react";
 import {
+  type DirectoryChildrenResponse,
   indexFilterFiles,
   indexGetChildren,
   indexGetTree,
@@ -57,9 +58,15 @@ type FilterState = {
 };
 
 type VisibleTreeRow = {
+  kind: "node";
   node: FileTreeNode;
   depth: number;
   isExpanded: boolean;
+  isLoading: boolean;
+} | {
+  kind: "load-more";
+  parentPath: string;
+  depth: number;
   isLoading: boolean;
 };
 
@@ -123,11 +130,13 @@ function buildMockTreeResponse(): FileTreeResponse {
       path: "",
       isDir: true,
       isExpandable: true,
+      childrenHasMore: false,
       children: PROJECT_TREE_ITEMS.map((item) => ({
         name: item.name,
         path: item.name,
         isDir: item.kind === "folder",
         isExpandable: false,
+        childrenHasMore: false,
         gitState: item.ignored ? "ignored" : "tracked",
       })),
     },
@@ -198,6 +207,7 @@ function flattenVisibleTree(
     const isLoading = loadingPaths.has(node.path);
 
     rows.push({
+      kind: "node",
       node,
       depth,
       isExpanded,
@@ -207,20 +217,54 @@ function flattenVisibleTree(
     if (node.children && node.children.length > 0 && isExpanded) {
       rows.push(...flattenVisibleTree(node.children, expandedPaths, loadingPaths, depth + 1));
     }
+
+    if (isExpanded && node.childrenHasMore) {
+      rows.push({
+        kind: "load-more",
+        parentPath: node.path,
+        depth: depth + 1,
+        isLoading,
+      });
+    }
   }
 
   return rows;
 }
 
+function mergeUniqueChildren(
+  existingChildren: ReadonlyArray<FileTreeNode>,
+  nextChildren: ReadonlyArray<FileTreeNode>,
+): FileTreeNode[] {
+  const merged = new Map<string, FileTreeNode>();
+
+  for (const child of existingChildren) {
+    merged.set(child.path, child);
+  }
+
+  for (const child of nextChildren) {
+    merged.set(child.path, child);
+  }
+
+  return Array.from(merged.values());
+}
+
 function replaceNodeChildren(
   node: FileTreeNode,
   targetPath: string,
-  children: FileTreeNode[],
+  response: DirectoryChildrenResponse,
+  mode: "replace" | "append",
 ): FileTreeNode {
   if (node.path === targetPath) {
+    const children =
+      mode === "append"
+        ? mergeUniqueChildren(node.children ?? [], response.children)
+        : response.children;
+
     return {
       ...node,
-      isExpandable: children.length > 0,
+      isExpandable: children.length > 0 || response.hasMore,
+      childrenHasMore: response.hasMore,
+      childrenNextOffset: response.nextOffset,
       children,
     };
   }
@@ -231,7 +275,7 @@ function replaceNodeChildren(
 
   return {
     ...node,
-    children: node.children.map((child) => replaceNodeChildren(child, targetPath, children)),
+    children: node.children.map((child) => replaceNodeChildren(child, targetPath, response, mode)),
   };
 }
 
@@ -263,6 +307,10 @@ function collectAncestorPaths(path: string): string[] {
   }
 
   return ancestors;
+}
+
+function hasLoadedChildPath(node: FileTreeNode, childPath: string): boolean {
+  return node.children?.some((child) => child.path === childPath) ?? false;
 }
 
 export function ProjectPanel({
@@ -532,20 +580,85 @@ export function ProjectPanel({
 
   const loadChildrenIntoTree = async (path: string, sourceTree: FileTreeNode) => {
     if (!workspaceId) {
-      return sourceTree;
+      return {
+        tree: sourceTree,
+        response: {
+          children: [],
+          hasMore: false,
+        } satisfies DirectoryChildrenResponse,
+      };
     }
 
     setLoadingPaths((current) => new Set(current).add(path));
 
     try {
-      const children = await indexGetChildren(workspaceId, path);
-      return replaceNodeChildren(sourceTree, path, children);
+      const response = await indexGetChildren(workspaceId, path, 0, 200);
+      return {
+        tree: replaceNodeChildren(sourceTree, path, response, "replace"),
+        response,
+      };
     } finally {
       setLoadingPaths((current) => {
         const next = new Set(current);
         next.delete(path);
         return next;
       });
+    }
+  };
+
+  const loadMoreChildrenIntoTree = async (path: string, sourceTree: FileTreeNode) => {
+    if (!workspaceId) {
+      return sourceTree;
+    }
+
+    const targetNode = findNodeByPath(sourceTree, path);
+    if (!targetNode || !targetNode.childrenHasMore) {
+      return sourceTree;
+    }
+
+    const offset = targetNode.childrenNextOffset ?? targetNode.children?.length ?? 0;
+    setLoadingPaths((current) => new Set(current).add(path));
+
+    try {
+      const response = await indexGetChildren(workspaceId, path, offset, 200);
+      return replaceNodeChildren(sourceTree, path, response, "append");
+    } finally {
+      setLoadingPaths((current) => {
+        const next = new Set(current);
+        next.delete(path);
+        return next;
+      });
+    }
+  };
+
+  const ensureChildPathLoaded = async (
+    sourceTree: FileTreeNode,
+    parentPath: string,
+    childPath: string,
+  ) => {
+    let nextTree = sourceTree;
+
+    while (true) {
+      const parentNode = findNodeByPath(nextTree, parentPath);
+      if (!parentNode || !parentNode.isDir) {
+        return nextTree;
+      }
+
+      if (parentNode.children === undefined) {
+        const loaded = await loadChildrenIntoTree(parentPath, nextTree);
+        nextTree = loaded.tree;
+        continue;
+      }
+
+      if (hasLoadedChildPath(parentNode, childPath)) {
+        return nextTree;
+      }
+
+      if (!parentNode.childrenHasMore) {
+        return nextTree;
+      }
+
+      nextTree = await loadMoreChildrenIntoTree(parentPath, nextTree);
     }
   };
 
@@ -570,7 +683,7 @@ export function ProjectPanel({
     }
 
     try {
-      const nextTree = await loadChildrenIntoTree(node.path, treeState.data.tree);
+      const { tree: nextTree } = await loadChildrenIntoTree(node.path, treeState.data.tree);
       setTreeState((current) => {
         if (!current.data) {
           return current;
@@ -593,6 +706,35 @@ export function ProjectPanel({
     }
   };
 
+  const handleLoadMore = async (parentPath: string) => {
+    if (!treeState.data || loadingPaths.has(parentPath)) {
+      return;
+    }
+
+    try {
+      const nextTree = await loadMoreChildrenIntoTree(parentPath, treeState.data.tree);
+      setTreeState((current) => {
+        if (!current.data) {
+          return current;
+        }
+
+        return {
+          ...current,
+          data: {
+            ...current.data,
+            tree: nextTree,
+          },
+        };
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "继续加载目录内容失败";
+      setTreeState((current) => ({
+        ...current,
+        error: message,
+      }));
+    }
+  };
+
   const handleRevealFilterResult = async (match: FileFilterMatch) => {
     if (!treeState.data) {
       return;
@@ -608,12 +750,23 @@ export function ProjectPanel({
       let nextTree = treeState.data.tree;
 
       for (const ancestorPath of collectAncestorPaths(match.path)) {
+        const parentPath = ancestorPath.split("/").slice(0, -1).join("/");
+
+        if (parentPath) {
+          nextTree = await ensureChildPathLoaded(nextTree, parentPath, ancestorPath);
+        }
+
         nextExpanded.add(ancestorPath);
 
         const ancestorNode = findNodeByPath(nextTree, ancestorPath);
         if (ancestorNode?.isDir && ancestorNode.isExpandable && ancestorNode.children === undefined) {
-          nextTree = await loadChildrenIntoTree(ancestorPath, nextTree);
+          const loaded = await loadChildrenIntoTree(ancestorPath, nextTree);
+          nextTree = loaded.tree;
         }
+      }
+
+      if (match.parentPath) {
+        nextTree = await ensureChildPathLoaded(nextTree, match.parentPath, match.path);
       }
 
       setTreeState((current) => {
@@ -809,9 +962,29 @@ export function ProjectPanel({
                     </button>
                   );
                 })
-              : visibleRows.map(({ node, depth, isExpanded, isLoading }) => {
+              : visibleRows.map((row) => {
+                  if (row.kind === "load-more") {
+                    return (
+                      <button
+                        key={`load-more:${row.parentPath}`}
+                        type="button"
+                        className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                        style={{ paddingLeft: `${10 + row.depth * 14}px` }}
+                        onClick={() => void handleLoadMore(row.parentPath)}
+                      >
+                        <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
+                          {row.isLoading ? <LoaderCircle className="size-3 animate-spin" /> : <ChevronRight className="size-3.5" />}
+                        </span>
+                        <span className={DRAWER_LIST_META_CLASS}>Load more…</span>
+                      </button>
+                    );
+                  }
+
+                  const { node, depth, isExpanded, isLoading } = row;
                   const isIgnored = node.gitState === "ignored";
+                  const isModified = node.gitState === "modified";
                   const isUntracked = node.gitState === "untracked";
+                  const badgeLabel = isUntracked ? "U" : isModified ? "M" : null;
                   const icon = inferIcon(node.name, node.isDir);
 
                   return (
@@ -822,7 +995,7 @@ export function ProjectPanel({
                         `${DRAWER_LIST_ROW_CLASS} relative flex items-center gap-2`,
                         isIgnored
                           ? "text-app-subtle/70 hover:bg-app-surface-hover/60 hover:text-app-muted"
-                          : isUntracked
+                          : isUntracked || isModified
                             ? "text-app-foreground hover:bg-app-surface-hover hover:text-app-foreground"
                             : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                       )}
@@ -838,9 +1011,9 @@ export function ProjectPanel({
                       </span>
                       <ProjectTreeIcon icon={icon} muted={isIgnored} />
                       <span className={DRAWER_LIST_LABEL_CLASS}>{node.name}</span>
-                      {isUntracked ? (
+                      {badgeLabel ? (
                         <span className="shrink-0 rounded-full bg-app-warning/12 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-app-warning">
-                          U
+                          {badgeLabel}
                         </span>
                       ) : null}
                     </button>

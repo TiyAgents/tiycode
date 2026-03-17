@@ -80,12 +80,12 @@ async fn test_file_tree_hides_only_reserved_entries() {
         "node_modules should still render as a directory"
     );
     assert!(
-        !node_modules.is_expandable,
-        "heavy directories should not expand in the tree"
+        node_modules.is_expandable,
+        "heavy directories should remain expandable in the tree"
     );
     assert!(
         node_modules.children.is_none(),
-        "heavy directories should stay collapsed for performance"
+        "heavy directories should stay lazily collapsed for performance"
     );
 }
 
@@ -122,10 +122,11 @@ async fn test_file_tree_loads_shallow_levels_and_defers_deep_branches() {
     );
 
     let loaded_children = manager
-        .get_children(&base.to_string_lossy(), "src/components")
+        .get_children(&base.to_string_lossy(), "src/components", None, None)
         .await
         .expect("should load children on demand");
     let button = loaded_children
+        .children
         .iter()
         .find(|child| child.path == "src/components/button")
         .expect("deferred child directory should load");
@@ -133,6 +134,71 @@ async fn test_file_tree_loads_shallow_levels_and_defers_deep_branches() {
     assert!(
         button.is_expandable,
         "nested directory should still be expandable"
+    );
+}
+
+#[tokio::test]
+async fn test_large_directories_page_children_without_filtering_them_from_tree() {
+    use tiy_agent_lib::core::index_manager::IndexManager;
+
+    let manager = IndexManager::new();
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+
+    for index in 0..205 {
+        let package_dir = base.join("node_modules").join(format!("pkg_{index:03}"));
+        std::fs::create_dir_all(&package_dir).unwrap();
+        std::fs::write(package_dir.join("index.js"), "module.exports = {};\n").unwrap();
+    }
+
+    let tree = manager.get_tree(&base.to_string_lossy()).await.unwrap();
+    let node_modules = tree
+        .children
+        .as_ref()
+        .and_then(|children| children.iter().find(|child| child.path == "node_modules"))
+        .expect("node_modules should be visible in the tree");
+
+    assert!(
+        node_modules.is_expandable,
+        "node_modules should be expandable"
+    );
+    assert!(
+        node_modules.children.is_none(),
+        "node_modules should defer loading until expanded"
+    );
+
+    let first_page = manager
+        .get_children(&base.to_string_lossy(), "node_modules", Some(0), Some(200))
+        .await
+        .expect("should load first page");
+    assert_eq!(
+        first_page.children.len(),
+        200,
+        "first page should be capped"
+    );
+    assert!(
+        first_page.has_more,
+        "first page should advertise more content"
+    );
+    assert_eq!(first_page.next_offset, Some(200));
+
+    let second_page = manager
+        .get_children(
+            &base.to_string_lossy(),
+            "node_modules",
+            first_page.next_offset,
+            Some(200),
+        )
+        .await
+        .expect("should load second page");
+    assert_eq!(
+        second_page.children.len(),
+        5,
+        "second page should contain the remainder"
+    );
+    assert!(
+        !second_page.has_more,
+        "second page should exhaust the available children"
     );
 }
 

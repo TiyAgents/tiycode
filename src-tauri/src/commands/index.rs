@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::core::app_state::AppState;
 use crate::core::index_manager::{
-    FileFilterResponse, FileTreeNode, FileTreeResponse, SearchResponse,
+    DirectoryChildrenResponse, FileFilterResponse, FileTreeNode, FileTreeResponse, SearchResponse,
 };
 use crate::model::errors::{AppError, ErrorSource};
 use crate::persistence::repo::workspace_repo;
@@ -39,33 +39,46 @@ pub async fn index_get_children(
     state: State<'_, AppState>,
     workspace_id: String,
     directory_path: String,
-) -> Result<Vec<FileTreeNode>, AppError> {
+    offset: Option<usize>,
+    max_results: Option<usize>,
+) -> Result<DirectoryChildrenResponse, AppError> {
     let workspace = workspace_repo::find_by_id(&state.pool, &workspace_id)
         .await?
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
-    let mut root = FileTreeNode {
+    let mut overlay_root = FileTreeNode {
         name: workspace.name.clone(),
         path: String::new(),
         is_dir: true,
         is_expandable: true,
+        children_has_more: false,
+        children_next_offset: None,
         git_state: None,
-        children: Some(
-            state
-                .index_manager
-                .get_children(&workspace.canonical_path, &directory_path)
-                .await?,
-        ),
+        children: None,
     };
+    let response = state
+        .index_manager
+        .get_children(
+            &workspace.canonical_path,
+            &directory_path,
+            offset,
+            max_results,
+        )
+        .await?;
+    overlay_root.children = Some(response.children);
 
     let overlay = state
         .git_manager
         .get_workspace_overlay(&workspace.canonical_path)
         .await?;
 
-    root.apply_git_overlay(&overlay.states);
+    overlay_root.apply_git_overlay(&overlay.states);
 
-    Ok(root.children.unwrap_or_default())
+    Ok(DirectoryChildrenResponse {
+        children: overlay_root.children.unwrap_or_default(),
+        has_more: response.has_more,
+        next_offset: response.next_offset,
+    })
 }
 
 #[tauri::command]

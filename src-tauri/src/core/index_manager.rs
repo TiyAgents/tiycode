@@ -20,8 +20,19 @@ use crate::model::errors::{AppError, ErrorSource};
 /// Entries never shown in the tree or file manifest.
 const ALWAYS_SKIPPED: &[&str] = &[".git", ".DS_Store", "thumbs.db"];
 
-/// Heavy directories excluded from full-path filtering and deep tree expansion.
-const HEAVY_EXCLUDED_DIRS: &[&str] = &[
+/// Heavy directories excluded from the workspace-wide file filter manifest.
+const FILTER_EXCLUDED_DIRS: &[&str] = &[
+    "node_modules",
+    ".next",
+    "target",
+    "dist",
+    "build",
+    ".cache",
+    "__pycache__",
+];
+
+/// Large directories stay visible in TreeView, but skip eager child preloading.
+const TREE_LAZY_ONLY_DIRS: &[&str] = &[
     "node_modules",
     ".next",
     "target",
@@ -37,6 +48,9 @@ const INITIAL_LOADED_DEPTH: usize = 2;
 /// Cache workspace file manifests briefly so repeated filter input stays fast.
 const MANIFEST_TTL: Duration = Duration::from_secs(2);
 
+/// Max children loaded for a directory page in TreeView.
+const DIRECTORY_PAGE_SIZE: usize = 200;
+
 /// Max file filter results returned to the UI in one request.
 const DEFAULT_FILTER_LIMIT: usize = 200;
 
@@ -51,6 +65,9 @@ pub struct FileTreeNode {
     pub path: String,
     pub is_dir: bool,
     pub is_expandable: bool,
+    pub children_has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children_next_offset: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_state: Option<GitFileState>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,6 +78,7 @@ pub struct FileTreeNode {
 #[serde(rename_all = "lowercase")]
 pub enum GitFileState {
     Tracked,
+    Modified,
     Untracked,
     Ignored,
 }
@@ -90,6 +108,14 @@ pub struct FileFilterResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DirectoryChildrenResponse {
+    pub children: Vec<FileTreeNode>,
+    pub has_more: bool,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResult {
     pub path: String,
     pub absolute_path: String,
@@ -113,6 +139,20 @@ pub struct SearchResponse {
 struct ManifestCacheEntry {
     built_at: Instant,
     files: Arc<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+struct DirectoryPage {
+    children: Vec<FileTreeNode>,
+    has_more: bool,
+    next_offset: Option<usize>,
+}
+
+#[derive(Debug)]
+struct DirectoryEntry {
+    name: String,
+    path: PathBuf,
+    is_dir: bool,
 }
 
 #[derive(Clone)]
@@ -152,18 +192,24 @@ impl IndexManager {
         &self,
         workspace_path: &str,
         directory_path: &str,
-    ) -> Result<Vec<FileTreeNode>, AppError> {
+        offset: Option<usize>,
+        max_results: Option<usize>,
+    ) -> Result<DirectoryChildrenResponse, AppError> {
         let root = canonicalize_workspace(workspace_path)?;
         let target = resolve_workspace_directory(&root, directory_path)?;
+        let page_offset = offset.unwrap_or(0);
+        let page_size = max_results.unwrap_or(DIRECTORY_PAGE_SIZE);
 
-        tokio::task::spawn_blocking(move || load_directory_children(&root, &target))
-            .await
-            .map_err(|error| {
-                AppError::internal(
-                    ErrorSource::Index,
-                    format!("Directory children task failed: {error}"),
-                )
-            })?
+        tokio::task::spawn_blocking(move || {
+            load_directory_children(&root, &target, page_offset, page_size)
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal(
+                ErrorSource::Index,
+                format!("Directory children task failed: {error}"),
+            )
+        })?
     }
 
     /// Filter all visible files in the workspace using the cached manifest.
@@ -356,23 +402,48 @@ fn resolve_workspace_directory(root: &Path, directory_path: &str) -> Result<Path
 
 fn build_initial_tree(root: &Path) -> Result<FileTreeNode, AppError> {
     let skipped: HashSet<&str> = ALWAYS_SKIPPED.iter().copied().collect();
-    let excluded: HashSet<&str> = HEAVY_EXCLUDED_DIRS.iter().copied().collect();
+    let tree_lazy_only: HashSet<&str> = TREE_LAZY_ONLY_DIRS.iter().copied().collect();
 
-    scan_tree_node(root, root, &skipped, &excluded, 0, INITIAL_LOADED_DEPTH)
+    scan_tree_node(
+        root,
+        root,
+        &skipped,
+        &tree_lazy_only,
+        0,
+        INITIAL_LOADED_DEPTH,
+    )
 }
 
-fn load_directory_children(root: &Path, target: &Path) -> Result<Vec<FileTreeNode>, AppError> {
+fn load_directory_children(
+    root: &Path,
+    target: &Path,
+    offset: usize,
+    max_results: usize,
+) -> Result<DirectoryChildrenResponse, AppError> {
     let skipped: HashSet<&str> = ALWAYS_SKIPPED.iter().copied().collect();
-    let excluded: HashSet<&str> = HEAVY_EXCLUDED_DIRS.iter().copied().collect();
+    let tree_lazy_only: HashSet<&str> = TREE_LAZY_ONLY_DIRS.iter().copied().collect();
+    let page = read_directory_entries_page(
+        root,
+        target,
+        &skipped,
+        &tree_lazy_only,
+        false,
+        offset,
+        max_results,
+    )?;
 
-    read_directory_entries(root, target, &skipped, &excluded, true)
+    Ok(DirectoryChildrenResponse {
+        children: page.children,
+        has_more: page.has_more,
+        next_offset: page.next_offset,
+    })
 }
 
 fn scan_tree_node(
     path: &Path,
     root: &Path,
     skipped: &HashSet<&str>,
-    excluded: &HashSet<&str>,
+    tree_lazy_only: &HashSet<&str>,
     depth: usize,
     preload_depth: usize,
 ) -> Result<FileTreeNode, AppError> {
@@ -380,25 +451,49 @@ fn scan_tree_node(
         return Ok(make_file_node(path, root));
     }
 
-    let children = read_directory_entries(root, path, skipped, excluded, depth < preload_depth)?;
+    let page = if depth == 0 {
+        read_directory_entries_page(
+            root,
+            path,
+            skipped,
+            tree_lazy_only,
+            depth < preload_depth,
+            0,
+            usize::MAX,
+        )?
+    } else {
+        read_directory_entries_page(
+            root,
+            path,
+            skipped,
+            tree_lazy_only,
+            depth < preload_depth,
+            0,
+            DIRECTORY_PAGE_SIZE,
+        )?
+    };
 
     Ok(FileTreeNode {
         name: node_name(path, root),
         path: relative_path(path, root),
         is_dir: true,
-        is_expandable: !children.is_empty(),
+        is_expandable: !page.children.is_empty() || page.has_more,
+        children_has_more: page.has_more,
+        children_next_offset: page.next_offset,
         git_state: None,
-        children: Some(children),
+        children: Some(page.children),
     })
 }
 
-fn read_directory_entries(
+fn read_directory_entries_page(
     root: &Path,
     directory: &Path,
     skipped: &HashSet<&str>,
-    excluded: &HashSet<&str>,
-    load_child_directories: bool,
-) -> Result<Vec<FileTreeNode>, AppError> {
+    tree_lazy_only: &HashSet<&str>,
+    preload_child_directories: bool,
+    offset: usize,
+    limit: usize,
+) -> Result<DirectoryPage, AppError> {
     let mut entries = Vec::new();
 
     for entry in fs::read_dir(directory).map_err(|error| {
@@ -424,58 +519,82 @@ fn read_directory_entries(
             )
         })?;
 
-        if file_type.is_dir() {
-            if excluded.contains(entry_name.as_str()) {
-                entries.push(FileTreeNode {
-                    name: entry_name,
-                    path: relative_path(&entry_path, root),
-                    is_dir: true,
-                    is_expandable: false,
-                    git_state: None,
-                    children: None,
-                });
-                continue;
-            }
+        entries.push(DirectoryEntry {
+            name: entry_name,
+            path: entry_path,
+            is_dir: file_type.is_dir(),
+        });
+    }
 
-            if load_child_directories {
-                entries.push(make_lazy_directory_node(
-                    &entry_path,
+    sort_directory_entries(&mut entries);
+
+    if offset >= entries.len() {
+        return Ok(DirectoryPage {
+            children: Vec::new(),
+            has_more: false,
+            next_offset: None,
+        });
+    }
+
+    let end = offset.saturating_add(limit).min(entries.len());
+    let has_more = end < entries.len();
+    let next_offset = has_more.then_some(end);
+    let mut nodes = Vec::new();
+
+    for entry in entries.into_iter().skip(offset).take(end - offset) {
+        if entry.is_dir {
+            if preload_child_directories && !tree_lazy_only.contains(entry.name.as_str()) {
+                nodes.push(make_preloaded_directory_node(
+                    &entry.path,
                     root,
                     skipped,
-                    excluded,
+                    tree_lazy_only,
                 )?);
             } else {
-                entries.push(make_directory_placeholder(
-                    &entry_path,
+                nodes.push(make_directory_placeholder(
+                    &entry.path,
                     root,
                     skipped,
-                    excluded,
+                    tree_lazy_only,
                 )?);
             }
-        } else if file_type.is_file() {
-            entries.push(make_file_node(&entry_path, root));
+        } else {
+            nodes.push(make_file_node(&entry.path, root));
         }
     }
 
-    sort_tree_nodes(&mut entries);
-    Ok(entries)
+    Ok(DirectoryPage {
+        children: nodes,
+        has_more,
+        next_offset,
+    })
 }
 
-fn make_lazy_directory_node(
+fn make_preloaded_directory_node(
     path: &Path,
     root: &Path,
     skipped: &HashSet<&str>,
-    excluded: &HashSet<&str>,
+    tree_lazy_only: &HashSet<&str>,
 ) -> Result<FileTreeNode, AppError> {
-    let children = read_directory_entries(root, path, skipped, excluded, false)?;
+    let page = read_directory_entries_page(
+        root,
+        path,
+        skipped,
+        tree_lazy_only,
+        false,
+        0,
+        DIRECTORY_PAGE_SIZE,
+    )?;
 
     Ok(FileTreeNode {
         name: node_name(path, root),
         path: relative_path(path, root),
         is_dir: true,
-        is_expandable: !children.is_empty(),
+        is_expandable: !page.children.is_empty() || page.has_more,
+        children_has_more: page.has_more,
+        children_next_offset: page.next_offset,
         git_state: None,
-        children: Some(children),
+        children: Some(page.children),
     })
 }
 
@@ -483,13 +602,15 @@ fn make_directory_placeholder(
     path: &Path,
     root: &Path,
     skipped: &HashSet<&str>,
-    excluded: &HashSet<&str>,
+    tree_lazy_only: &HashSet<&str>,
 ) -> Result<FileTreeNode, AppError> {
     Ok(FileTreeNode {
         name: node_name(path, root),
         path: relative_path(path, root),
         is_dir: true,
-        is_expandable: directory_has_visible_entries(path, skipped, excluded)?,
+        is_expandable: directory_has_visible_entries(path, skipped, tree_lazy_only)?,
+        children_has_more: false,
+        children_next_offset: None,
         git_state: None,
         children: None,
     })
@@ -501,6 +622,8 @@ fn make_file_node(path: &Path, root: &Path) -> FileTreeNode {
         path: relative_path(path, root),
         is_dir: false,
         is_expandable: false,
+        children_has_more: false,
+        children_next_offset: None,
         git_state: None,
         children: None,
     }
@@ -509,7 +632,7 @@ fn make_file_node(path: &Path, root: &Path) -> FileTreeNode {
 fn directory_has_visible_entries(
     path: &Path,
     skipped: &HashSet<&str>,
-    _excluded: &HashSet<&str>,
+    _tree_lazy_only: &HashSet<&str>,
 ) -> Result<bool, AppError> {
     for entry in fs::read_dir(path).map_err(|error| {
         AppError::internal(ErrorSource::Index, format!("Failed to read dir: {error}"))
@@ -531,7 +654,7 @@ fn directory_has_visible_entries(
     Ok(false)
 }
 
-fn sort_tree_nodes(nodes: &mut [FileTreeNode]) {
+fn sort_directory_entries(nodes: &mut [DirectoryEntry]) {
     nodes.sort_by(|left, right| match (left.is_dir, right.is_dir) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
@@ -560,7 +683,7 @@ fn relative_path(path: &Path, root: &Path) -> String {
 
 fn build_file_manifest(root: &Path) -> Result<Vec<String>, AppError> {
     let skipped: HashSet<&str> = ALWAYS_SKIPPED.iter().copied().collect();
-    let excluded: HashSet<&str> = HEAVY_EXCLUDED_DIRS.iter().copied().collect();
+    let excluded: HashSet<&str> = FILTER_EXCLUDED_DIRS.iter().copied().collect();
     let mut files = Vec::new();
 
     collect_manifest_paths(root, root, &skipped, &excluded, &mut files)?;
@@ -667,7 +790,8 @@ fn git_state_priority(state: GitFileState) -> u8 {
     match state {
         GitFileState::Ignored => 1,
         GitFileState::Tracked => 2,
-        GitFileState::Untracked => 3,
+        GitFileState::Modified => 3,
+        GitFileState::Untracked => 4,
     }
 }
 
