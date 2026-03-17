@@ -83,7 +83,7 @@ export function ThreadTerminalPanel({
           bootstrapError={bootstrapError}
           idleMessage={
             isPendingThread
-              ? "发生第一条消息后可进入Terminal"
+              ? "发送第一条消息后可进入 Terminal"
               : undefined
           }
         />

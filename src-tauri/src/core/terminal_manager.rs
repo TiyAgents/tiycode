@@ -59,7 +59,21 @@ impl ReplayBuffer {
         }
     }
 
+    fn clear(&mut self) {
+        self.chunks.clear();
+        self.total_bytes = 0;
+    }
+
     fn push(&mut self, chunk: String) {
+        let (chunk, resets_screen) = trim_replay_to_last_screen_reset(chunk);
+        if resets_screen {
+            self.clear();
+        }
+
+        if chunk.is_empty() {
+            return;
+        }
+
         self.total_bytes += chunk.len();
         self.chunks.push_back(chunk);
 
@@ -108,6 +122,13 @@ impl TerminalSessionRuntime {
         let mut state = self.state.lock().expect("terminal session state poisoned");
         state.replay.push(data.to_string());
         state.meta.has_unread_output = true;
+        state.meta.last_output_at = Some(Utc::now().to_rfc3339());
+    }
+
+    fn clear_replay(&self) {
+        let mut state = self.state.lock().expect("terminal session state poisoned");
+        state.replay.clear();
+        state.meta.has_unread_output = false;
         state.meta.last_output_at = Some(Utc::now().to_rfc3339());
     }
 
@@ -322,6 +343,10 @@ impl TerminalManager {
                 format!("Failed to flush terminal input: {error}"),
             )
         })?;
+
+        if data.contains('\u{0c}') {
+            session.clear_replay();
+        }
 
         Ok(())
     }
@@ -650,6 +675,41 @@ fn decode_utf8_chunk(pending: &mut Vec<u8>, chunk: &[u8]) -> String {
     output
 }
 
+fn trim_replay_to_last_screen_reset(chunk: String) -> (String, bool) {
+    const SCREEN_RESET_SEQUENCES: &[&str] = &[
+        "\u{1b}c",
+        "\u{1b}[3J\u{1b}[H\u{1b}[2J",
+        "\u{1b}[3J\u{1b}[2J\u{1b}[H",
+        "\u{1b}[H\u{1b}[2J",
+        "\u{1b}[2J\u{1b}[H",
+        "\u{1b}[H\u{1b}[J",
+        "\u{1b}[J\u{1b}[H",
+        "\u{1b}[2J",
+    ];
+
+    let mut reset_range: Option<(usize, usize)> = None;
+    for pattern in SCREEN_RESET_SEQUENCES {
+        if let Some(start) = chunk.rfind(pattern) {
+            let end = start + pattern.len();
+            let should_replace = match reset_range {
+                Some((current_start, current_end)) => {
+                    end > current_end || (end == current_end && start < current_start)
+                }
+                None => true,
+            };
+
+            if should_replace {
+                reset_range = Some((start, end));
+            }
+        }
+    }
+
+    match reset_range {
+        Some((start, _)) => (chunk[start..].to_string(), true),
+        None => (chunk, false),
+    }
+}
+
 fn flush_utf8_tail(pending: &mut Vec<u8>) -> Option<String> {
     if pending.is_empty() {
         return None;
@@ -678,7 +738,7 @@ fn resolve_shell() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_utf8_chunk, flush_utf8_tail};
+    use super::{decode_utf8_chunk, flush_utf8_tail, trim_replay_to_last_screen_reset, ReplayBuffer};
 
     #[test]
     fn decode_utf8_chunk_preserves_split_multibyte_sequences() {
@@ -705,5 +765,25 @@ mod tests {
 
         assert_eq!(first, "");
         assert_eq!(second, "你A");
+    }
+
+    #[test]
+    fn replay_buffer_discards_history_after_screen_reset_sequence() {
+        let mut replay = ReplayBuffer::new();
+
+        replay.push("before clear\r\n".to_string());
+        replay.push("\u{1b}[H\u{1b}[2Jafter clear\r\n".to_string());
+
+        assert_eq!(replay.snapshot(), "\u{1b}[H\u{1b}[2Jafter clear\r\n");
+    }
+
+    #[test]
+    fn trim_replay_uses_last_screen_reset_in_chunk() {
+        let (trimmed, resets_screen) = trim_replay_to_last_screen_reset(
+            "prefix\u{1b}[2Jmiddle\u{1b}[H\u{1b}[2Jsuffix".to_string(),
+        );
+
+        assert!(resets_screen);
+        assert_eq!(trimmed, "\u{1b}[H\u{1b}[2Jsuffix");
     }
 }
