@@ -174,6 +174,13 @@ pub fn run() {
             // Index
             commands::index::index_get_tree,
             commands::index::index_search,
+            // Terminal
+            commands::terminal::terminal_create_or_attach,
+            commands::terminal::terminal_write_input,
+            commands::terminal::terminal_resize,
+            commands::terminal::terminal_restart,
+            commands::terminal::terminal_close,
+            commands::terminal::terminal_list,
         ])
         .setup(move |app| {
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
@@ -216,6 +223,7 @@ pub fn run() {
             tauri::async_runtime::block_on(async {
                 state.workspace_manager.validate_all().await?;
                 state.thread_manager.recover_interrupted_runs().await?;
+                state.terminal_manager.recover_orphaned_sessions().await?;
                 Ok::<(), crate::model::errors::AppError>(())
             })?;
 

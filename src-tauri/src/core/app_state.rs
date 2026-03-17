@@ -6,6 +6,7 @@ use crate::core::index_manager::IndexManager;
 use crate::core::settings_manager::SettingsManager;
 use crate::core::sidecar_manager::SidecarManager;
 use crate::core::sleep_manager::SleepManager;
+use crate::core::terminal_manager::TerminalManager;
 use crate::core::thread_manager::ThreadManager;
 use crate::core::tool_gateway::ToolGateway;
 use crate::core::workspace_manager::WorkspaceManager;
@@ -22,6 +23,7 @@ pub struct AppState {
     pub sleep_manager: Arc<SleepManager>,
     pub agent_run_manager: Arc<AgentRunManager>,
     pub tool_gateway: Arc<ToolGateway>,
+    pub terminal_manager: Arc<TerminalManager>,
     pub index_manager: IndexManager,
 }
 
@@ -32,7 +34,11 @@ impl AppState {
         let thread_manager = ThreadManager::new(pool.clone());
         let sidecar_manager = Arc::new(SidecarManager::new(sidecar_path));
         let sleep_manager = Arc::new(SleepManager::new());
-        let tool_gateway = Arc::new(ToolGateway::new(pool.clone()));
+        let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+        let tool_gateway = Arc::new(ToolGateway::new(
+            pool.clone(),
+            Arc::clone(&terminal_manager),
+        ));
         let agent_run_manager = Arc::new(AgentRunManager::new(
             pool.clone(),
             Arc::clone(&sidecar_manager),
@@ -50,6 +56,7 @@ impl AppState {
             sleep_manager,
             agent_run_manager,
             tool_gateway,
+            terminal_manager,
             index_manager,
         }
     }

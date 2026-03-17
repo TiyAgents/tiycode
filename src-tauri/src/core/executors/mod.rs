@@ -1,9 +1,12 @@
 pub mod filesystem;
 pub mod process;
 pub mod search;
+pub mod terminal;
 
 use serde_json::Value;
+use std::sync::Arc;
 
+use crate::core::terminal_manager::TerminalManager;
 use crate::model::errors::AppError;
 
 /// Result of a tool execution.
@@ -17,6 +20,8 @@ pub async fn execute_tool(
     tool_name: &str,
     input: &Value,
     workspace_path: &str,
+    thread_id: &str,
+    terminal_manager: Option<&Arc<TerminalManager>>,
 ) -> Result<ToolOutput, AppError> {
     match tool_name {
         "read_file" => filesystem::read_file(input, workspace_path).await,
@@ -24,6 +29,19 @@ pub async fn execute_tool(
         "list_dir" => filesystem::list_dir(input, workspace_path).await,
         "search_repo" => search::search_repo(input, workspace_path).await,
         "run_command" => process::run_command(input, workspace_path).await,
+        "terminal_get_status"
+        | "terminal_get_recent_output"
+        | "terminal_write_input"
+        | "terminal_write"
+        | "terminal_restart" => {
+            let manager = terminal_manager.ok_or_else(|| {
+                AppError::internal(
+                    crate::model::errors::ErrorSource::Terminal,
+                    "terminal manager unavailable",
+                )
+            })?;
+            terminal::execute(tool_name, input, thread_id, manager).await
+        }
         _ => Ok(ToolOutput {
             success: false,
             result: serde_json::json!({

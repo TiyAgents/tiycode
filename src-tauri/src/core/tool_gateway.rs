@@ -17,6 +17,7 @@ use sqlx::SqlitePool;
 
 use crate::core::executors::{self, ToolOutput};
 use crate::core::policy_engine::{PolicyCheck, PolicyEngine, PolicyVerdict};
+use crate::core::terminal_manager::TerminalManager;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::persistence::repo::{audit_repo, tool_call_repo};
 
@@ -34,15 +35,17 @@ struct PendingApproval {
 pub struct ToolGateway {
     pool: SqlitePool,
     policy_engine: PolicyEngine,
+    terminal_manager: Arc<TerminalManager>,
     pending_approvals: Arc<Mutex<Vec<PendingApproval>>>,
 }
 
 impl ToolGateway {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: SqlitePool, terminal_manager: Arc<TerminalManager>) -> Self {
         let policy_engine = PolicyEngine::new(pool.clone());
         Self {
             pool,
             policy_engine,
+            terminal_manager,
             pending_approvals: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -227,8 +230,14 @@ impl ToolGateway {
     ) -> Result<ToolOutput, crate::model::errors::AppError> {
         tool_call_repo::update_status(&self.pool, tool_call_id, "running").await?;
 
-        let output = executors::execute_tool(tool_name, tool_input, workspace_path).await?;
-
+        let output = executors::execute_tool(
+            tool_name,
+            tool_input,
+            workspace_path,
+            thread_id,
+            Some(&self.terminal_manager),
+        )
+        .await?;
         // Persist result
         let result_json = output.result.to_string();
         let status = if output.success {
@@ -267,7 +276,7 @@ impl ToolGateway {
         thread_id: &str,
         tool_call_id: &str,
         tool_name: &str,
-        workspace_path: &str,
+        _workspace_path: &str,
         action: &str,
         policy_json: &str,
         result_json: &str,

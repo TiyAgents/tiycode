@@ -258,6 +258,39 @@ export type ThreadStreamEvent =
   | { type: "run_interrupted"; runId: string };
 
 // ---------------------------------------------------------------------------
+// Terminal
+// ---------------------------------------------------------------------------
+
+export type TerminalSessionStatus = "starting" | "running" | "exited";
+
+export interface TerminalSessionDto {
+  sessionId: string;
+  threadId: string;
+  workspaceId: string;
+  shell: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+  status: TerminalSessionStatus;
+  hasUnreadOutput: boolean;
+  lastOutputAt: string | null;
+  exitCode: number | null;
+  createdAt: string;
+}
+
+export interface TerminalAttachDto {
+  session: TerminalSessionDto;
+  replay: string;
+}
+
+export type TerminalStreamEvent =
+  | { type: "session_created"; threadId: string; session: TerminalSessionDto }
+  | { type: "stdout_chunk"; threadId: string; data: string }
+  | { type: "stderr_chunk"; threadId: string; data: string }
+  | { type: "status_changed"; threadId: string; status: TerminalSessionStatus }
+  | { type: "session_exited"; threadId: string; exitCode: number | null };
+
+// ---------------------------------------------------------------------------
 // Sidecar
 // ---------------------------------------------------------------------------
 

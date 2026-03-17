@@ -50,6 +50,9 @@ const MUTATING_TOOLS: &[&str] = &[
     "git_pull",
     "git_fetch",
     "terminal_write",
+    "terminal_write_input",
+    "terminal_restart",
+    "terminal_close",
     "marketplace_install",
 ];
 
@@ -61,6 +64,8 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "git_status",
     "git_diff",
     "git_log",
+    "terminal_get_status",
+    "terminal_get_recent_output",
 ];
 
 // ---------------------------------------------------------------------------

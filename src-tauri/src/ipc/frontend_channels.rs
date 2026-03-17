@@ -2,6 +2,8 @@
 
 use serde::Serialize;
 
+use crate::model::terminal::{TerminalSessionDto, TerminalSessionStatus};
+
 /// Events sent to the frontend for a specific thread.
 /// Consumed by the ThreadStream adapter which maps them to AI Elements.
 #[derive(Debug, Clone, Serialize)]
@@ -88,5 +90,42 @@ pub enum ThreadStreamEvent {
     },
     RunInterrupted {
         run_id: String,
+    },
+}
+
+/// Events sent to the frontend terminal layer for a specific thread terminal.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum TerminalStreamEvent {
+    #[serde(rename = "session_created")]
+    SessionCreated {
+        #[serde(rename = "threadId")]
+        thread_id: String,
+        session: TerminalSessionDto,
+    },
+    #[serde(rename = "stdout_chunk")]
+    StdoutChunk {
+        #[serde(rename = "threadId")]
+        thread_id: String,
+        data: String,
+    },
+    #[serde(rename = "stderr_chunk")]
+    StderrChunk {
+        #[serde(rename = "threadId")]
+        thread_id: String,
+        data: String,
+    },
+    #[serde(rename = "status_changed")]
+    StatusChanged {
+        #[serde(rename = "threadId")]
+        thread_id: String,
+        status: TerminalSessionStatus,
+    },
+    #[serde(rename = "session_exited")]
+    SessionExited {
+        #[serde(rename = "threadId")]
+        thread_id: String,
+        #[serde(rename = "exitCode")]
+        exit_code: Option<i32>,
     },
 }

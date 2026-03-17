@@ -50,6 +50,7 @@ pub async fn thread_update_title(
 
 #[tauri::command]
 pub async fn thread_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    state.terminal_manager.close_for_thread(&id).await?;
     state.thread_manager.delete(&id).await
 }
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import {
   Boxes,
   ChevronDown,
@@ -8,8 +9,6 @@ import {
   GitBranch,
   MessageSquarePlus,
   MoreHorizontal,
-  PanelBottom,
-  TerminalSquare,
 } from "lucide-react";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { useLanguage, type LanguagePreference } from "@/app/providers/language-provider";
@@ -19,6 +18,8 @@ import { MarketplaceOverlay } from "@/modules/marketplace-center/ui/marketplace-
 import { useSettingsController, type SettingsCategory } from "@/modules/settings-center/model/use-settings-controller";
 import { AI_ELEMENTS_THREAD_TITLE } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
+import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
+import { threadCreate, threadList, workspaceAdd, workspaceList } from "@/services/bridge";
 import {
   CONTEXT_WINDOW_INFO,
   CONTEXT_WINDOW_USAGE_DETAIL,
@@ -33,7 +34,6 @@ import {
   MOCK_USER_SESSION,
   PANEL_VISIBILITY_STORAGE_KEY,
   RECENT_PROJECTS,
-  TERMINAL_LINES,
   THEME_OPTIONS,
   TOPBAR_HEIGHT,
   UPDATE_STATUS_DURATION,
@@ -69,7 +69,6 @@ import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-
 import { WorkbenchTopBar } from "@/modules/workbench-shell/ui/workbench-top-bar";
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 import { cn } from "@/shared/lib/utils";
-import { Button } from "@/shared/ui/button";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 
 export function DashboardWorkbench() {
@@ -127,6 +126,7 @@ export function DashboardWorkbench() {
   const [panelVisibilityState, setPanelVisibilityState] = useState<PanelVisibilityState>(() => readPanelVisibilityState());
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const [terminalResize, setTerminalResize] = useState<{ startY: number; startHeight: number } | null>(null);
+  const [terminalThreadBindings, setTerminalThreadBindings] = useState<Record<string, string>>({});
   const [composerValue, setComposerValue] = useState("");
   const [composerError, setComposerError] = useState<string | null>(null);
   const [openSettingsSection, setOpenSettingsSection] = useState<"theme" | "language" | null>(null);
@@ -134,6 +134,8 @@ export function DashboardWorkbench() {
   const [userSession, setUserSession] = useState(() => readStoredUserSession());
   const [isCheckingUpdates, setCheckingUpdates] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [terminalBootstrapError, setTerminalBootstrapError] = useState<string | null>(null);
+  const [terminalWorkspaceBindings, setTerminalWorkspaceBindings] = useState<Record<string, string>>({});
   const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(
     () => Object.fromEntries(WORKSPACE_ITEMS.map((workspace) => [workspace.id, workspace.defaultOpen])),
   );
@@ -145,6 +147,12 @@ export function DashboardWorkbench() {
 
   const selectedDiffFile = GIT_CHANGE_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
   const activeThread = getActiveThread(workspaces);
+  const resolvedWorkspaceId =
+    selectedProject === null ? null : terminalWorkspaceBindings[selectedProject.path] ?? null;
+  const terminalBindingKey =
+    resolvedWorkspaceId && activeThread ? `${resolvedWorkspaceId}:${activeThread.name}` : null;
+  const resolvedTerminalThreadId =
+    terminalBindingKey === null ? null : terminalThreadBindings[terminalBindingKey] ?? null;
   const { isSidebarOpen, isDrawerOpen, isTerminalCollapsed } = panelVisibilityState;
   const isSettingsOpen = activeOverlay === "settings";
   const isMarketplaceOpen = activeOverlay === "marketplace";
@@ -227,6 +235,114 @@ export function DashboardWorkbench() {
       window.removeEventListener("mouseup", handleMouseUp);
     };
   }, [terminalResize]);
+
+  useEffect(() => {
+    if (!isTauri() || !selectedProject || isNewThreadMode) {
+      return;
+    }
+
+    if (terminalWorkspaceBindings[selectedProject.path]) {
+      return;
+    }
+
+    let cancelled = false;
+    setTerminalBootstrapError(null);
+
+    void workspaceList()
+      .then(async (workspaces) => {
+        const existing = workspaces.find((workspace) => workspace.path === selectedProject.path || workspace.canonicalPath === selectedProject.path);
+        if (existing) {
+          return existing;
+        }
+
+        return workspaceAdd(selectedProject.path, selectedProject.name);
+      })
+      .then((workspace) => {
+        if (cancelled) {
+          return;
+        }
+
+        setTerminalWorkspaceBindings((current) => {
+          if (current[selectedProject.path]) {
+            return current;
+          }
+
+          return {
+            ...current,
+            [selectedProject.path]: workspace.id,
+          };
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        setTerminalBootstrapError(message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isNewThreadMode, selectedProject, terminalWorkspaceBindings]);
+
+  useEffect(() => {
+    if (!isTauri() || isNewThreadMode || !activeThread || !resolvedWorkspaceId || !terminalBindingKey) {
+      return;
+    }
+
+    if (terminalThreadBindings[terminalBindingKey]) {
+      return;
+    }
+
+    let cancelled = false;
+    setTerminalBootstrapError(null);
+
+    void threadList(resolvedWorkspaceId, 100)
+      .then(async (threads) => {
+        const existing = threads.find((thread) => thread.title === activeThread.name);
+        if (existing) {
+          return existing;
+        }
+
+        return threadCreate(resolvedWorkspaceId, activeThread.name);
+      })
+      .then((thread) => {
+        if (cancelled) {
+          return;
+        }
+
+        setTerminalThreadBindings((current) => {
+          if (current[terminalBindingKey]) {
+            return current;
+          }
+
+          return {
+            ...current,
+            [terminalBindingKey]: thread.id,
+          };
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        setTerminalBootstrapError(message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeThread,
+    isNewThreadMode,
+    terminalBindingKey,
+    terminalThreadBindings,
+    resolvedWorkspaceId,
+  ]);
 
   const handleTerminalResizeStart = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
@@ -385,6 +501,7 @@ export function DashboardWorkbench() {
     setNewThreadMode(true);
     setWorkspaces((current) => clearActiveThreads(current));
     setComposerError(null);
+    setTerminalBootstrapError(null);
   };
 
   const handleThreadSelect = (threadId: string) => {
@@ -888,30 +1005,13 @@ export function DashboardWorkbench() {
                   isTerminalCollapsed ? "opacity-0" : "opacity-100 delay-75",
                 )}
               >
-                <div className="flex h-[38px] shrink-0 items-center justify-between px-4 text-xs text-app-muted">
-                  <div className="flex items-center gap-2">
-                    <TerminalSquare className="size-3.5" />
-                    <span>Terminal</span>
-                  </div>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="size-7 text-app-subtle hover:bg-app-surface-hover hover:text-app-foreground"
-                    aria-label="收起 terminal"
-                    title="收起 terminal"
-                    onClick={() => setTerminalCollapsed(true)}
-                  >
-                    <PanelBottom className="size-4" />
-                  </Button>
-                </div>
-                <div className="min-h-0 flex-1 overflow-auto overscroll-contain px-4 py-3 font-mono text-[12px] leading-6 text-app-muted [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {TERMINAL_LINES.map((line, index) => (
-                    <div key={line} className="flex gap-3">
-                      <span className={cn("text-app-subtle", index === 0 ? "text-app-info" : "")}>›</span>
-                      <span>{line}</span>
-                    </div>
-                  ))}
-                </div>
+                <ThreadTerminalPanel
+                  threadId={resolvedTerminalThreadId}
+                  threadTitle={activeThread?.name ?? AI_ELEMENTS_THREAD_TITLE}
+                  bootstrapError={terminalBootstrapError}
+                  isPendingThread={isNewThreadMode}
+                  onCollapse={() => setTerminalCollapsed(true)}
+                />
               </div>
             </section>
           </div>
