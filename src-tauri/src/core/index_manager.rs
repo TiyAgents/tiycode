@@ -1,21 +1,27 @@
 //! Workspace file tree cache and ripgrep text search.
 //!
-//! Phase 1 scope:
-//! - In-memory file tree scan with configurable ignores
+//! Phase 2 scope:
+//! - Shallow tree scan optimized for first paint
+//! - On-demand child loading for expandable directories
+//! - Workspace-wide file manifest for complete path filtering
 //! - Ripgrep subprocess for text search
-//! Phase 2+ will add persistent index, FTS5, and semantic search.
 
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
-use tokio::fs;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
+use tokio::sync::RwLock;
 
 use crate::model::errors::{AppError, ErrorSource};
 
-/// Default patterns to ignore during tree scan.
-const DEFAULT_IGNORES: &[&str] = &[
-    ".git",
+/// Entries never shown in the tree or file manifest.
+const ALWAYS_SKIPPED: &[&str] = &[".git", ".DS_Store", "thumbs.db"];
+
+/// Heavy directories excluded from full-path filtering and deep tree expansion.
+const HEAVY_EXCLUDED_DIRS: &[&str] = &[
     "node_modules",
     ".next",
     "target",
@@ -23,15 +29,16 @@ const DEFAULT_IGNORES: &[&str] = &[
     "build",
     ".cache",
     "__pycache__",
-    ".DS_Store",
-    "thumbs.db",
 ];
 
-/// Max depth for tree scan to avoid runaway recursion.
-const MAX_DEPTH: usize = 12;
+/// Load root + first two visible levels eagerly. Deeper levels load on demand.
+const INITIAL_LOADED_DEPTH: usize = 2;
 
-/// Max entries returned in a single tree scan.
-const MAX_ENTRIES: usize = 5000;
+/// Cache workspace file manifests briefly so repeated filter input stays fast.
+const MANIFEST_TTL: Duration = Duration::from_secs(2);
+
+/// Max file filter results returned to the UI in one request.
+const DEFAULT_FILTER_LIMIT: usize = 200;
 
 // ---------------------------------------------------------------------------
 // File tree types
@@ -43,8 +50,42 @@ pub struct FileTreeNode {
     pub name: String,
     pub path: String,
     pub is_dir: bool,
+    pub is_expandable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_state: Option<GitFileState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<FileTreeNode>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitFileState {
+    Tracked,
+    Untracked,
+    Ignored,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTreeResponse {
+    pub repo_available: bool,
+    pub tree: FileTreeNode,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileFilterMatch {
+    pub name: String,
+    pub path: String,
+    pub parent_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileFilterResponse {
+    pub query: String,
+    pub results: Vec<FileFilterMatch>,
+    pub count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,36 +109,117 @@ pub struct SearchResponse {
 // IndexManager
 // ---------------------------------------------------------------------------
 
-pub struct IndexManager;
+#[derive(Debug, Clone)]
+struct ManifestCacheEntry {
+    built_at: Instant,
+    files: Arc<Vec<String>>,
+}
+
+#[derive(Clone)]
+pub struct IndexManager {
+    manifest_cache: Arc<RwLock<HashMap<String, ManifestCacheEntry>>>,
+}
+
+impl FileTreeNode {
+    pub fn apply_git_overlay(&mut self, states: &HashMap<String, GitFileState>) {
+        annotate_git_state(self, states);
+    }
+}
 
 impl IndexManager {
     pub fn new() -> Self {
-        Self
+        Self {
+            manifest_cache: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
-    /// Scan workspace directory and return a file tree.
+    /// Scan workspace directory and return a shallow, expandable file tree.
     pub async fn get_tree(&self, workspace_path: &str) -> Result<FileTreeNode, AppError> {
-        let root = PathBuf::from(workspace_path);
-        if !root.is_dir() {
+        let root = canonicalize_workspace(workspace_path)?;
+
+        tokio::task::spawn_blocking(move || build_initial_tree(&root))
+            .await
+            .map_err(|error| {
+                AppError::internal(
+                    ErrorSource::Index,
+                    format!("Initial tree task failed: {error}"),
+                )
+            })?
+    }
+
+    /// Load a directory's direct children on demand.
+    pub async fn get_children(
+        &self,
+        workspace_path: &str,
+        directory_path: &str,
+    ) -> Result<Vec<FileTreeNode>, AppError> {
+        let root = canonicalize_workspace(workspace_path)?;
+        let target = resolve_workspace_directory(&root, directory_path)?;
+
+        tokio::task::spawn_blocking(move || load_directory_children(&root, &target))
+            .await
+            .map_err(|error| {
+                AppError::internal(
+                    ErrorSource::Index,
+                    format!("Directory children task failed: {error}"),
+                )
+            })?
+    }
+
+    /// Filter all visible files in the workspace using the cached manifest.
+    pub async fn filter_files(
+        &self,
+        workspace_path: &str,
+        query: &str,
+        max_results: Option<usize>,
+    ) -> Result<FileFilterResponse, AppError> {
+        let normalized_query = query.trim().to_lowercase();
+        if normalized_query.is_empty() {
             return Err(AppError::recoverable(
                 ErrorSource::Index,
-                "index.path.not_directory",
-                format!("'{}' is not a directory", workspace_path),
+                "index.filter.empty_query",
+                "File filter query cannot be empty",
             ));
         }
 
-        let ignores: HashSet<&str> = DEFAULT_IGNORES.iter().copied().collect();
-        let mut entry_count = 0;
+        let root = canonicalize_workspace(workspace_path)?;
+        let manifest = self.get_or_build_manifest(&root).await?;
+        let limit = max_results.unwrap_or(DEFAULT_FILTER_LIMIT);
 
-        let tree = scan_dir(&root, &root, &ignores, 0, &mut entry_count).await?;
+        let mut results = Vec::new();
 
-        tracing::debug!(
-            path = %workspace_path,
-            entries = entry_count,
-            "file tree scanned"
-        );
+        for path in manifest.iter() {
+            if !path.to_lowercase().contains(&normalized_query) {
+                continue;
+            }
 
-        Ok(tree)
+            let name = Path::new(path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(path)
+                .to_string();
+            let parent_path = Path::new(path)
+                .parent()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_string();
+
+            results.push(FileFilterMatch {
+                name,
+                path: path.clone(),
+                parent_path,
+            });
+
+            if results.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(FileFilterResponse {
+            query: query.to_string(),
+            count: results.len(),
+            results,
+        })
     }
 
     /// Search workspace files using ripgrep.
@@ -150,102 +272,403 @@ impl IndexManager {
             count,
         })
     }
+
+    async fn get_or_build_manifest(
+        &self,
+        workspace_root: &Path,
+    ) -> Result<Arc<Vec<String>>, AppError> {
+        let cache_key = workspace_root.to_string_lossy().to_string();
+
+        if let Some(cached) = self.manifest_cache.read().await.get(&cache_key) {
+            if cached.built_at.elapsed() < MANIFEST_TTL {
+                return Ok(Arc::clone(&cached.files));
+            }
+        }
+
+        let root = workspace_root.to_path_buf();
+        let files = tokio::task::spawn_blocking(move || build_file_manifest(&root))
+            .await
+            .map_err(|error| {
+                AppError::internal(
+                    ErrorSource::Index,
+                    format!("File manifest task failed: {error}"),
+                )
+            })??;
+
+        let files = Arc::new(files);
+
+        self.manifest_cache.write().await.insert(
+            cache_key,
+            ManifestCacheEntry {
+                built_at: Instant::now(),
+                files: Arc::clone(&files),
+            },
+        );
+
+        Ok(files)
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Recursive directory scanner
+// Tree loading
 // ---------------------------------------------------------------------------
 
-async fn scan_dir(
+fn canonicalize_workspace(workspace_path: &str) -> Result<PathBuf, AppError> {
+    let root =
+        std::fs::canonicalize(workspace_path).unwrap_or_else(|_| PathBuf::from(workspace_path));
+    if !root.is_dir() {
+        return Err(AppError::recoverable(
+            ErrorSource::Index,
+            "index.path.not_directory",
+            format!("'{}' is not a directory", workspace_path),
+        ));
+    }
+
+    Ok(root)
+}
+
+fn resolve_workspace_directory(root: &Path, directory_path: &str) -> Result<PathBuf, AppError> {
+    let candidate = if directory_path.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(directory_path)
+    };
+
+    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+    if !canonical.starts_with(root) {
+        return Err(AppError::recoverable(
+            ErrorSource::Index,
+            "index.path.out_of_workspace",
+            "Requested directory is outside the workspace boundary",
+        ));
+    }
+
+    if !canonical.is_dir() {
+        return Err(AppError::recoverable(
+            ErrorSource::Index,
+            "index.path.not_directory",
+            format!("'{}' is not a directory", directory_path),
+        ));
+    }
+
+    Ok(canonical)
+}
+
+fn build_initial_tree(root: &Path) -> Result<FileTreeNode, AppError> {
+    let skipped: HashSet<&str> = ALWAYS_SKIPPED.iter().copied().collect();
+    let excluded: HashSet<&str> = HEAVY_EXCLUDED_DIRS.iter().copied().collect();
+
+    scan_tree_node(root, root, &skipped, &excluded, 0, INITIAL_LOADED_DEPTH)
+}
+
+fn load_directory_children(root: &Path, target: &Path) -> Result<Vec<FileTreeNode>, AppError> {
+    let skipped: HashSet<&str> = ALWAYS_SKIPPED.iter().copied().collect();
+    let excluded: HashSet<&str> = HEAVY_EXCLUDED_DIRS.iter().copied().collect();
+
+    read_directory_entries(root, target, &skipped, &excluded, true)
+}
+
+fn scan_tree_node(
     path: &Path,
     root: &Path,
-    ignores: &HashSet<&str>,
+    skipped: &HashSet<&str>,
+    excluded: &HashSet<&str>,
     depth: usize,
-    entry_count: &mut usize,
+    preload_depth: usize,
 ) -> Result<FileTreeNode, AppError> {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
-
-    let relative = path
-        .strip_prefix(root)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    if !path.is_dir() || depth > MAX_DEPTH || *entry_count >= MAX_ENTRIES {
-        return Ok(FileTreeNode {
-            name,
-            path: relative,
-            is_dir: path.is_dir(),
-            children: None,
-        });
+    if !path.is_dir() {
+        return Ok(make_file_node(path, root));
     }
 
-    let mut entries = fs::read_dir(path)
-        .await
-        .map_err(|e| AppError::internal(ErrorSource::Index, format!("Failed to read dir: {e}")))?;
-
-    let mut children = Vec::new();
-    let mut dirs = Vec::new();
-    let mut files = Vec::new();
-
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        if *entry_count >= MAX_ENTRIES {
-            break;
-        }
-
-        let entry_name = entry.file_name().to_string_lossy().to_string();
-
-        // Skip ignored patterns
-        if ignores.contains(entry_name.as_str()) {
-            continue;
-        }
-        // Skip hidden files/dirs (except at root level for things like .gitignore)
-        if entry_name.starts_with('.') && depth > 0 {
-            continue;
-        }
-
-        let entry_path = entry.path();
-        let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
-
-        *entry_count += 1;
-
-        if is_dir {
-            dirs.push((entry_name, entry_path));
-        } else {
-            let rel = entry_path
-                .strip_prefix(root)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            files.push(FileTreeNode {
-                name: entry_name,
-                path: rel,
-                is_dir: false,
-                children: None,
-            });
-        }
-    }
-
-    // Sort: directories first (alphabetical), then files (alphabetical)
-    dirs.sort_by(|a, b| a.0.cmp(&b.0));
-    files.sort_by(|a, b| a.name.cmp(&b.name));
-
-    // Recurse into directories
-    for (dir_name, dir_path) in dirs {
-        let child = Box::pin(scan_dir(&dir_path, root, ignores, depth + 1, entry_count)).await?;
-        children.push(child);
-    }
-
-    children.extend(files);
+    let children = read_directory_entries(root, path, skipped, excluded, depth < preload_depth)?;
 
     Ok(FileTreeNode {
-        name,
-        path: relative,
+        name: node_name(path, root),
+        path: relative_path(path, root),
         is_dir: true,
+        is_expandable: !children.is_empty(),
+        git_state: None,
         children: Some(children),
     })
+}
+
+fn read_directory_entries(
+    root: &Path,
+    directory: &Path,
+    skipped: &HashSet<&str>,
+    excluded: &HashSet<&str>,
+    load_child_directories: bool,
+) -> Result<Vec<FileTreeNode>, AppError> {
+    let mut entries = Vec::new();
+
+    for entry in fs::read_dir(directory).map_err(|error| {
+        AppError::internal(ErrorSource::Index, format!("Failed to read dir: {error}"))
+    })? {
+        let entry = entry.map_err(|error| {
+            AppError::internal(
+                ErrorSource::Index,
+                format!("Failed to read dir entry: {error}"),
+            )
+        })?;
+        let entry_path = entry.path();
+        let entry_name = entry.file_name().to_string_lossy().to_string();
+
+        if skipped.contains(entry_name.as_str()) {
+            continue;
+        }
+
+        let file_type = entry.file_type().map_err(|error| {
+            AppError::internal(
+                ErrorSource::Index,
+                format!("Failed to inspect dir entry: {error}"),
+            )
+        })?;
+
+        if file_type.is_dir() {
+            if excluded.contains(entry_name.as_str()) {
+                entries.push(FileTreeNode {
+                    name: entry_name,
+                    path: relative_path(&entry_path, root),
+                    is_dir: true,
+                    is_expandable: false,
+                    git_state: None,
+                    children: None,
+                });
+                continue;
+            }
+
+            if load_child_directories {
+                entries.push(make_lazy_directory_node(
+                    &entry_path,
+                    root,
+                    skipped,
+                    excluded,
+                )?);
+            } else {
+                entries.push(make_directory_placeholder(
+                    &entry_path,
+                    root,
+                    skipped,
+                    excluded,
+                )?);
+            }
+        } else if file_type.is_file() {
+            entries.push(make_file_node(&entry_path, root));
+        }
+    }
+
+    sort_tree_nodes(&mut entries);
+    Ok(entries)
+}
+
+fn make_lazy_directory_node(
+    path: &Path,
+    root: &Path,
+    skipped: &HashSet<&str>,
+    excluded: &HashSet<&str>,
+) -> Result<FileTreeNode, AppError> {
+    let children = read_directory_entries(root, path, skipped, excluded, false)?;
+
+    Ok(FileTreeNode {
+        name: node_name(path, root),
+        path: relative_path(path, root),
+        is_dir: true,
+        is_expandable: !children.is_empty(),
+        git_state: None,
+        children: Some(children),
+    })
+}
+
+fn make_directory_placeholder(
+    path: &Path,
+    root: &Path,
+    skipped: &HashSet<&str>,
+    excluded: &HashSet<&str>,
+) -> Result<FileTreeNode, AppError> {
+    Ok(FileTreeNode {
+        name: node_name(path, root),
+        path: relative_path(path, root),
+        is_dir: true,
+        is_expandable: directory_has_visible_entries(path, skipped, excluded)?,
+        git_state: None,
+        children: None,
+    })
+}
+
+fn make_file_node(path: &Path, root: &Path) -> FileTreeNode {
+    FileTreeNode {
+        name: node_name(path, root),
+        path: relative_path(path, root),
+        is_dir: false,
+        is_expandable: false,
+        git_state: None,
+        children: None,
+    }
+}
+
+fn directory_has_visible_entries(
+    path: &Path,
+    skipped: &HashSet<&str>,
+    _excluded: &HashSet<&str>,
+) -> Result<bool, AppError> {
+    for entry in fs::read_dir(path).map_err(|error| {
+        AppError::internal(ErrorSource::Index, format!("Failed to read dir: {error}"))
+    })? {
+        let entry = entry.map_err(|error| {
+            AppError::internal(
+                ErrorSource::Index,
+                format!("Failed to read dir entry: {error}"),
+            )
+        })?;
+        let entry_name = entry.file_name().to_string_lossy().to_string();
+        if skipped.contains(entry_name.as_str()) {
+            continue;
+        }
+
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+fn sort_tree_nodes(nodes: &mut [FileTreeNode]) {
+    nodes.sort_by(|left, right| match (left.is_dir, right.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => left.name.cmp(&right.name),
+    });
+}
+
+fn node_name(path: &Path, root: &Path) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            root.file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_string()
+        })
+}
+
+fn relative_path(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+fn build_file_manifest(root: &Path) -> Result<Vec<String>, AppError> {
+    let skipped: HashSet<&str> = ALWAYS_SKIPPED.iter().copied().collect();
+    let excluded: HashSet<&str> = HEAVY_EXCLUDED_DIRS.iter().copied().collect();
+    let mut files = Vec::new();
+
+    collect_manifest_paths(root, root, &skipped, &excluded, &mut files)?;
+    files.sort();
+
+    Ok(files)
+}
+
+fn collect_manifest_paths(
+    root: &Path,
+    directory: &Path,
+    skipped: &HashSet<&str>,
+    excluded: &HashSet<&str>,
+    files: &mut Vec<String>,
+) -> Result<(), AppError> {
+    for entry in fs::read_dir(directory).map_err(|error| {
+        AppError::internal(ErrorSource::Index, format!("Failed to read dir: {error}"))
+    })? {
+        let entry = entry.map_err(|error| {
+            AppError::internal(
+                ErrorSource::Index,
+                format!("Failed to read dir entry: {error}"),
+            )
+        })?;
+        let entry_path = entry.path();
+        let entry_name = entry.file_name().to_string_lossy().to_string();
+        let file_type = entry.file_type().map_err(|error| {
+            AppError::internal(
+                ErrorSource::Index,
+                format!("Failed to inspect dir entry: {error}"),
+            )
+        })?;
+
+        if skipped.contains(entry_name.as_str()) {
+            continue;
+        }
+
+        if file_type.is_dir() {
+            if excluded.contains(entry_name.as_str()) {
+                continue;
+            }
+
+            collect_manifest_paths(root, &entry_path, skipped, excluded, files)?;
+            continue;
+        }
+
+        if file_type.is_file() {
+            files.push(relative_path(&entry_path, root));
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Git overlay helpers
+// ---------------------------------------------------------------------------
+
+fn annotate_git_state(
+    node: &mut FileTreeNode,
+    states: &HashMap<String, GitFileState>,
+) -> Option<GitFileState> {
+    let child_state = node.children.as_mut().and_then(|children| {
+        let mut aggregate = None;
+
+        for child in children {
+            if let Some(state) = annotate_git_state(child, states) {
+                aggregate = Some(match aggregate {
+                    Some(current) => strongest_git_state(current, state),
+                    None => state,
+                });
+            }
+        }
+
+        aggregate
+    });
+
+    let direct_state = if node.path.is_empty() {
+        None
+    } else {
+        states.get(&node.path).copied()
+    };
+
+    let resolved = match (direct_state, child_state) {
+        (Some(direct), Some(child)) => Some(strongest_git_state(direct, child)),
+        (Some(direct), None) => Some(direct),
+        (None, Some(child)) => Some(child),
+        (None, None) => None,
+    };
+
+    node.git_state = resolved;
+    resolved
+}
+
+fn strongest_git_state(left: GitFileState, right: GitFileState) -> GitFileState {
+    if git_state_priority(left) >= git_state_priority(right) {
+        left
+    } else {
+        right
+    }
+}
+
+fn git_state_priority(state: GitFileState) -> u8 {
+    match state {
+        GitFileState::Ignored => 1,
+        GitFileState::Tracked => 2,
+        GitFileState::Untracked => 3,
+    }
 }
 
 // ---------------------------------------------------------------------------

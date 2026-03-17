@@ -1,16 +1,26 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { Check, ChevronDown, FolderOpen, LoaderCircle } from "lucide-react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { Check, ChevronDown, ChevronRight, FolderOpen, LoaderCircle } from "lucide-react";
+import {
+  indexFilterFiles,
+  indexGetChildren,
+  indexGetTree,
+  type FileFilterMatch,
+  type FileFilterResponse,
+  type FileTreeNode,
+  type FileTreeResponse,
+} from "@/services/bridge";
 import { Input } from "@/shared/ui/input";
 import { cn } from "@/shared/lib/utils";
 import {
   DRAWER_LIST_LABEL_CLASS,
+  DRAWER_LIST_META_CLASS,
   DRAWER_LIST_ROW_CLASS,
   DRAWER_LIST_STACK_CLASS,
   PROJECT_TREE_ITEMS,
 } from "@/modules/workbench-shell/model/fixtures";
 import { useWorkspaceOpenApps } from "@/modules/workbench-shell/model/use-workspace-open-apps";
-import type { ProjectOption, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
+import type { ProjectOption, ProjectTreeItem, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
 
 const APP_ICON_FALLBACKS: Record<
@@ -32,6 +42,37 @@ const APP_ICON_FALLBACKS: Record<
   pycharm: { label: "PY", className: "bg-linear-to-br from-lime-300 to-emerald-700 text-slate-950" },
   goland: { label: "GO", className: "bg-linear-to-br from-cyan-300 to-blue-700 text-white" },
   "android-studio": { label: "AS", className: "bg-linear-to-br from-emerald-300 to-green-600 text-slate-950" },
+};
+
+type TreeState = {
+  data: FileTreeResponse | null;
+  error: string | null;
+  isLoading: boolean;
+};
+
+type FilterState = {
+  data: FileFilterResponse | null;
+  error: string | null;
+  isLoading: boolean;
+};
+
+type VisibleTreeRow = {
+  node: FileTreeNode;
+  depth: number;
+  isExpanded: boolean;
+  isLoading: boolean;
+};
+
+const initialTreeState: TreeState = {
+  data: null,
+  error: null,
+  isLoading: true,
+};
+
+const initialFilterState: FilterState = {
+  data: null,
+  error: null,
+  isLoading: false,
 };
 
 function WorkspaceAppIcon({
@@ -74,8 +115,168 @@ function WorkspaceAppIcon({
   );
 }
 
-export function ProjectPanel({ currentProject }: { currentProject: ProjectOption | null }) {
+function buildMockTreeResponse(): FileTreeResponse {
+  return {
+    repoAvailable: true,
+    tree: {
+      name: "Project",
+      path: "",
+      isDir: true,
+      isExpandable: true,
+      children: PROJECT_TREE_ITEMS.map((item) => ({
+        name: item.name,
+        path: item.name,
+        isDir: item.kind === "folder",
+        isExpandable: false,
+        gitState: item.ignored ? "ignored" : "tracked",
+      })),
+    },
+  };
+}
+
+function buildMockFilterResponse(query: string): FileFilterResponse {
+  const normalized = query.trim().toLowerCase();
+  const results = PROJECT_TREE_ITEMS
+    .filter((item) => item.name.toLowerCase().includes(normalized))
+    .map((item) => ({
+      name: item.name,
+      path: item.name,
+      parentPath: "",
+    }));
+
+  return {
+    query,
+    results,
+    count: results.length,
+  };
+}
+
+function inferIcon(name: string, isDir: boolean): ProjectTreeItem["icon"] {
+  if (isDir) {
+    return "folder";
+  }
+
+  const lowerName = name.toLowerCase();
+
+  if (lowerName === ".gitignore" || lowerName.startsWith(".git")) {
+    return "git";
+  }
+
+  if (lowerName.endsWith(".json")) {
+    return "json";
+  }
+
+  if (lowerName.endsWith(".html")) {
+    return "html";
+  }
+
+  if (lowerName.endsWith(".css")) {
+    return "css";
+  }
+
+  if (lowerName === "license") {
+    return "license";
+  }
+
+  if (lowerName === "readme.md") {
+    return "readme";
+  }
+
+  return "ts";
+}
+
+function flattenVisibleTree(
+  nodes: ReadonlyArray<FileTreeNode>,
+  expandedPaths: ReadonlySet<string>,
+  loadingPaths: ReadonlySet<string>,
+  depth = 0,
+): Array<VisibleTreeRow> {
+  const rows: Array<VisibleTreeRow> = [];
+
+  for (const node of nodes) {
+    const isExpanded = expandedPaths.has(node.path);
+    const isLoading = loadingPaths.has(node.path);
+
+    rows.push({
+      node,
+      depth,
+      isExpanded,
+      isLoading,
+    });
+
+    if (node.children && node.children.length > 0 && isExpanded) {
+      rows.push(...flattenVisibleTree(node.children, expandedPaths, loadingPaths, depth + 1));
+    }
+  }
+
+  return rows;
+}
+
+function replaceNodeChildren(
+  node: FileTreeNode,
+  targetPath: string,
+  children: FileTreeNode[],
+): FileTreeNode {
+  if (node.path === targetPath) {
+    return {
+      ...node,
+      isExpandable: children.length > 0,
+      children,
+    };
+  }
+
+  if (!node.children) {
+    return node;
+  }
+
+  return {
+    ...node,
+    children: node.children.map((child) => replaceNodeChildren(child, targetPath, children)),
+  };
+}
+
+function findNodeByPath(node: FileTreeNode, targetPath: string): FileTreeNode | null {
+  if (node.path === targetPath) {
+    return node;
+  }
+
+  if (!node.children) {
+    return null;
+  }
+
+  for (const child of node.children) {
+    const match = findNodeByPath(child, targetPath);
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+}
+
+function collectAncestorPaths(path: string): string[] {
+  const segments = path.split("/").filter(Boolean);
+  const ancestors: string[] = [];
+
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    ancestors.push(segments.slice(0, index + 1).join("/"));
+  }
+
+  return ancestors;
+}
+
+export function ProjectPanel({
+  currentProject,
+  workspaceId,
+}: {
+  currentProject: ProjectOption | null;
+  workspaceId: string | null;
+}) {
   const [filterValue, setFilterValue] = useState("");
+  const [treeState, setTreeState] = useState<TreeState>(initialTreeState);
+  const [filterState, setFilterState] = useState<FilterState>(initialFilterState);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
+  const [loadingPaths, setLoadingPaths] = useState<Set<string>>(() => new Set());
   const [isOpenMenuOpen, setOpenMenuOpen] = useState(false);
   const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(null);
   const [activeOpenTargetId, setActiveOpenTargetId] = useState<string | null>(null);
@@ -85,9 +286,6 @@ export function ProjectPanel({ currentProject }: { currentProject: ProjectOption
   const errorTimeoutRef = useRef<number | null>(null);
   const { data: openApps, error: openAppsError, isLoading: isLoadingOpenApps } = useWorkspaceOpenApps();
   const normalizedFilter = deferredFilterValue.trim().toLowerCase();
-  const visibleItems = normalizedFilter
-    ? PROJECT_TREE_ITEMS.filter((item) => item.name.toLowerCase().includes(normalizedFilter))
-    : PROJECT_TREE_ITEMS;
   const projectName = currentProject?.name ?? "Project";
   const projectPath = currentProject?.path ?? null;
   const preferredOpenApp = openApps.find((app) => app.id === preferredOpenAppId) ?? openApps[0] ?? null;
@@ -124,6 +322,154 @@ export function ProjectPanel({ currentProject }: { currentProject: ProjectOption
       setPreferredOpenAppId(openApps[0]?.id ?? null);
     }
   }, [openApps, preferredOpenAppId]);
+
+  useEffect(() => {
+    setExpandedPaths(new Set());
+    setLoadingPaths(new Set());
+  }, [workspaceId, projectPath]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!currentProject) {
+      setTreeState({ data: null, error: null, isLoading: false });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isTauri()) {
+      setTreeState({
+        data: buildMockTreeResponse(),
+        error: null,
+        isLoading: false,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!workspaceId) {
+      setTreeState((current) => ({
+        data: current.data,
+        error: null,
+        isLoading: true,
+      }));
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setTreeState((current) => ({
+      data: current.data,
+      error: null,
+      isLoading: true,
+    }));
+
+    void indexGetTree(workspaceId)
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+
+        setTreeState({
+          data: response ?? buildMockTreeResponse(),
+          error: null,
+          isLoading: false,
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : "读取文件树失败";
+        setTreeState({
+          data: null,
+          error: message,
+          isLoading: false,
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProject, workspaceId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (normalizedFilter.length === 0) {
+      setFilterState(initialFilterState);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!currentProject) {
+      setFilterState(initialFilterState);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isTauri()) {
+      setFilterState({
+        data: buildMockFilterResponse(normalizedFilter),
+        error: null,
+        isLoading: false,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!workspaceId) {
+      setFilterState((current) => ({
+        data: current.data,
+        error: null,
+        isLoading: true,
+      }));
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setFilterState((current) => ({
+      data: current.data,
+      error: null,
+      isLoading: true,
+    }));
+
+    void indexFilterFiles(workspaceId, normalizedFilter, 200)
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+
+        setFilterState({
+          data: response,
+          error: null,
+          isLoading: false,
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : "过滤文件失败";
+        setFilterState({
+          data: null,
+          error: message,
+          isLoading: false,
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProject, normalizedFilter, workspaceId]);
 
   const getOpenErrorMessage = (error: unknown, fallback: string) => {
     if (typeof error === "string" && error.trim().length > 0) {
@@ -183,6 +529,124 @@ export function ProjectPanel({ currentProject }: { currentProject: ProjectOption
       setActiveOpenTargetId(null);
     }
   };
+
+  const loadChildrenIntoTree = async (path: string, sourceTree: FileTreeNode) => {
+    if (!workspaceId) {
+      return sourceTree;
+    }
+
+    setLoadingPaths((current) => new Set(current).add(path));
+
+    try {
+      const children = await indexGetChildren(workspaceId, path);
+      return replaceNodeChildren(sourceTree, path, children);
+    } finally {
+      setLoadingPaths((current) => {
+        const next = new Set(current);
+        next.delete(path);
+        return next;
+      });
+    }
+  };
+
+  const handleTreeToggle = async (node: FileTreeNode) => {
+    if (!node.isDir || !node.isExpandable) {
+      return;
+    }
+
+    if (expandedPaths.has(node.path)) {
+      setExpandedPaths((current) => {
+        const next = new Set(current);
+        next.delete(node.path);
+        return next;
+      });
+      return;
+    }
+
+    setExpandedPaths((current) => new Set(current).add(node.path));
+
+    if (node.children !== undefined || !treeState.data || loadingPaths.has(node.path)) {
+      return;
+    }
+
+    try {
+      const nextTree = await loadChildrenIntoTree(node.path, treeState.data.tree);
+      setTreeState((current) => {
+        if (!current.data) {
+          return current;
+        }
+
+        return {
+          ...current,
+          data: {
+            ...current.data,
+            tree: nextTree,
+          },
+        };
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "读取目录内容失败";
+      setTreeState((current) => ({
+        ...current,
+        error: message,
+      }));
+    }
+  };
+
+  const handleRevealFilterResult = async (match: FileFilterMatch) => {
+    if (!treeState.data) {
+      return;
+    }
+
+    if (!workspaceId) {
+      setFilterValue("");
+      return;
+    }
+
+    try {
+      const nextExpanded = new Set(expandedPaths);
+      let nextTree = treeState.data.tree;
+
+      for (const ancestorPath of collectAncestorPaths(match.path)) {
+        nextExpanded.add(ancestorPath);
+
+        const ancestorNode = findNodeByPath(nextTree, ancestorPath);
+        if (ancestorNode?.isDir && ancestorNode.isExpandable && ancestorNode.children === undefined) {
+          nextTree = await loadChildrenIntoTree(ancestorPath, nextTree);
+        }
+      }
+
+      setTreeState((current) => {
+        if (!current.data) {
+          return current;
+        }
+
+        return {
+          ...current,
+          data: {
+            ...current.data,
+            tree: nextTree,
+          },
+        };
+      });
+      setExpandedPaths(nextExpanded);
+      setFilterValue("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法展开筛选结果路径";
+      setFilterState((current) => ({
+        ...current,
+        error: message,
+      }));
+    }
+  };
+
+  const visibleRows = flattenVisibleTree(
+    treeState.data?.tree.children ?? [],
+    expandedPaths,
+    loadingPaths,
+  );
+  const filterResults = filterState.data?.results ?? [];
+  const isFiltering = normalizedFilter.length > 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col px-4 pb-5 pt-2">
@@ -291,6 +755,29 @@ export function ProjectPanel({ currentProject }: { currentProject: ProjectOption
           />
           {openAppsError ? <p className="mt-2 text-[11px] text-app-danger">{openAppsError}</p> : null}
           {openError ? <p className="mt-2 text-[11px] text-app-danger">{openError}</p> : null}
+          {!openAppsError && !openError && treeState.data && !treeState.data.repoAvailable ? (
+            <p className="mt-2 text-[11px] text-app-subtle">Git overlay unavailable for this workspace</p>
+          ) : null}
+          {!openAppsError && !openError && !isFiltering && treeState.isLoading && workspaceId ? (
+            <p className="mt-2 flex items-center gap-1.5 text-[11px] text-app-subtle">
+              <LoaderCircle className="size-3 animate-spin" />
+              <span>Loading tree…</span>
+            </p>
+          ) : null}
+          {!openAppsError && !openError && isFiltering && filterState.isLoading ? (
+            <p className="mt-2 flex items-center gap-1.5 text-[11px] text-app-subtle">
+              <LoaderCircle className="size-3 animate-spin" />
+              <span>Searching all files…</span>
+            </p>
+          ) : null}
+          {!openAppsError && !openError && !workspaceId && currentProject ? (
+            <p className="mt-2 flex items-center gap-1.5 text-[11px] text-app-subtle">
+              <LoaderCircle className="size-3 animate-spin" />
+              <span>Preparing workspace…</span>
+            </p>
+          ) : null}
+          {treeState.error ? <p className="mt-2 text-[11px] text-app-danger">{treeState.error}</p> : null}
+          {filterState.error ? <p className="mt-2 text-[11px] text-app-danger">{filterState.error}</p> : null}
         </div>
       </div>
 
@@ -298,24 +785,74 @@ export function ProjectPanel({ currentProject }: { currentProject: ProjectOption
         <div className="relative pl-5">
           <div className="absolute bottom-0 left-[6px] top-0 w-px bg-app-border" />
           <div className={DRAWER_LIST_STACK_CLASS}>
-            {visibleItems.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={cn(
-                  `${DRAWER_LIST_ROW_CLASS} relative flex items-center gap-2`,
-                  item.ignored
-                    ? "text-app-subtle/70 hover:bg-app-surface-hover/60 hover:text-app-muted"
-                    : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                )}
-              >
-                <ProjectTreeIcon icon={item.icon} muted={Boolean(item.ignored)} />
-                <span className={DRAWER_LIST_LABEL_CLASS}>{item.name}</span>
-              </button>
-            ))}
+            {isFiltering
+              ? filterResults.map((match) => {
+                  const icon = inferIcon(match.name, false);
 
-            {visibleItems.length === 0 ? (
+                  return (
+                    <button
+                      key={match.path}
+                      type="button"
+                      className={cn(
+                        `${DRAWER_LIST_ROW_CLASS} relative flex items-center gap-2 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground`,
+                      )}
+                      onClick={() => void handleRevealFilterResult(match)}
+                    >
+                      <span className="flex size-4 shrink-0 items-center justify-center" />
+                      <ProjectTreeIcon icon={icon} muted={false} />
+                      <span className={DRAWER_LIST_LABEL_CLASS}>{match.name}</span>
+                      {match.parentPath ? (
+                        <span className={cn(DRAWER_LIST_META_CLASS, "max-w-[48%] truncate")}>
+                          {match.parentPath}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })
+              : visibleRows.map(({ node, depth, isExpanded, isLoading }) => {
+                  const isIgnored = node.gitState === "ignored";
+                  const isUntracked = node.gitState === "untracked";
+                  const icon = inferIcon(node.name, node.isDir);
+
+                  return (
+                    <button
+                      key={node.path || node.name}
+                      type="button"
+                      className={cn(
+                        `${DRAWER_LIST_ROW_CLASS} relative flex items-center gap-2`,
+                        isIgnored
+                          ? "text-app-subtle/70 hover:bg-app-surface-hover/60 hover:text-app-muted"
+                          : isUntracked
+                            ? "text-app-foreground hover:bg-app-surface-hover hover:text-app-foreground"
+                            : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                      )}
+                      style={{ paddingLeft: `${10 + depth * 14}px` }}
+                      onClick={() => void handleTreeToggle(node)}
+                    >
+                      <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
+                        {isLoading ? (
+                          <LoaderCircle className="size-3 animate-spin" />
+                        ) : node.isDir && node.isExpandable ? (
+                          isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />
+                        ) : null}
+                      </span>
+                      <ProjectTreeIcon icon={icon} muted={isIgnored} />
+                      <span className={DRAWER_LIST_LABEL_CLASS}>{node.name}</span>
+                      {isUntracked ? (
+                        <span className="shrink-0 rounded-full bg-app-warning/12 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-app-warning">
+                          U
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+
+            {isFiltering && !filterState.isLoading && !filterState.error && filterResults.length === 0 ? (
               <div className="px-2.5 py-2 text-[13px] text-app-subtle">No matching files</div>
+            ) : null}
+
+            {!isFiltering && !treeState.isLoading && !treeState.error && visibleRows.length === 0 ? (
+              <div className="px-2.5 py-2 text-[13px] text-app-subtle">No files to display</div>
             ) : null}
           </div>
         </div>

@@ -173,6 +173,8 @@ pub fn run() {
             commands::agent::sidecar_status,
             // Index
             commands::index::index_get_tree,
+            commands::index::index_get_children,
+            commands::index::index_filter_files,
             commands::index::index_search,
             // Terminal
             commands::terminal::terminal_create_or_attach,

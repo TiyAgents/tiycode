@@ -1,6 +1,7 @@
 pub mod agent_run_manager;
 pub mod app_state;
 pub mod executors;
+pub mod git_manager;
 pub mod index_manager;
 pub mod policy_engine;
 pub mod settings_manager;

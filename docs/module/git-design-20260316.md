@@ -166,6 +166,52 @@ The overlay should distinguish at least:
 
 This lets TreeView reuse the app's existing indexing and caching model while still reflecting `.gitignore` and repository state in a Git-aware way.
 
+### Tree Loading Strategy
+
+Tree loading should optimize for two goals at the same time:
+
+- the first screen should reveal as much useful structure as possible
+- the app should not eagerly materialize the entire repository tree for large workspaces
+
+Recommended strategy:
+
+- initial TreeView loading should prefer breadth-first or level-priority scanning
+- the first pass should try to cover top-level and second-level directories before spending budget on deeper branches
+- if the scan budget is exhausted, deeper directories should remain expandable placeholders rather than being represented as leaf nodes
+- expanding a directory should trigger on-demand child loading for that directory
+
+This avoids the failure mode where depth-first scanning consumes the entire entry budget inside a few early branches and leaves later sibling directories looking empty or non-expandable.
+
+Recommended node semantics:
+
+- `children: undefined` means not loaded yet
+- `children: []` means loaded and empty
+- `is_partially_loaded: true` means the node is known to have more descendants and should remain expandable
+
+### Filter Files Strategy
+
+`Filter files` should not depend on the currently loaded in-memory TreeView subtree.
+
+Recommended rule:
+
+- TreeView browsing and file filtering are separate capabilities
+- TreeView uses hierarchical browsing with incremental loading
+- `Filter files` uses a workspace-wide file manifest or path index
+
+The file manifest should:
+
+- include all visible files in the workspace
+- exclude heavy ignored roots such as `.git`, `node_modules`, `dist`, `target`, and similar configured exclusions
+- support substring or fuzzy matching over relative paths
+
+This ensures `Filter files` can find all relevant files even when large parts of the tree have not yet been expanded or loaded into memory.
+
+Recommended UX:
+
+- empty query shows the hierarchical TreeView
+- non-empty query shows global file results sourced from the manifest or index
+- selecting a result may reveal and expand the corresponding path in TreeView
+
 ### Recommended Snapshot Shape
 
 ```rust

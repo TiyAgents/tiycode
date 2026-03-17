@@ -237,7 +237,7 @@ export function DashboardWorkbench() {
   }, [terminalResize]);
 
   useEffect(() => {
-    if (!isTauri() || !selectedProject || isNewThreadMode) {
+    if (!isTauri() || !selectedProject) {
       return;
     }
 
@@ -285,7 +285,7 @@ export function DashboardWorkbench() {
     return () => {
       cancelled = true;
     };
-  }, [isNewThreadMode, selectedProject, terminalWorkspaceBindings]);
+  }, [selectedProject, terminalWorkspaceBindings]);
 
   useEffect(() => {
     if (!isTauri() || isNewThreadMode || !activeThread || !resolvedWorkspaceId || !terminalBindingKey) {
@@ -973,7 +973,7 @@ export function DashboardWorkbench() {
 
                   <div className="min-h-0 flex-1 overscroll-none">
                     {activeDrawerPanel === "project" ? (
-                      <ProjectPanel currentProject={selectedProject} />
+                      <ProjectPanel currentProject={selectedProject} workspaceId={resolvedWorkspaceId} />
                     ) : (
                       <GitPanel onOpenDiffPreview={(fileId, isStaged) => setSelectedDiffFilePreview({ fileId, isStaged })} />
                     )}

@@ -2,6 +2,7 @@ use sqlx::SqlitePool;
 use std::sync::Arc;
 
 use crate::core::agent_run_manager::AgentRunManager;
+use crate::core::git_manager::GitManager;
 use crate::core::index_manager::IndexManager;
 use crate::core::settings_manager::SettingsManager;
 use crate::core::sidecar_manager::SidecarManager;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub tool_gateway: Arc<ToolGateway>,
     pub terminal_manager: Arc<TerminalManager>,
     pub index_manager: IndexManager,
+    pub git_manager: GitManager,
 }
 
 impl AppState {
@@ -46,6 +48,7 @@ impl AppState {
             Arc::clone(&tool_gateway),
         ));
         let index_manager = IndexManager::new();
+        let git_manager = GitManager::new();
 
         Self {
             pool,
@@ -58,6 +61,7 @@ impl AppState {
             tool_gateway,
             terminal_manager,
             index_manager,
+            git_manager,
         }
     }
 }

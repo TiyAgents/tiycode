@@ -1,7 +1,9 @@
 use tauri::State;
 
 use crate::core::app_state::AppState;
-use crate::core::index_manager::{FileTreeNode, SearchResponse};
+use crate::core::index_manager::{
+    FileFilterResponse, FileTreeNode, FileTreeResponse, SearchResponse,
+};
 use crate::model::errors::{AppError, ErrorSource};
 use crate::persistence::repo::workspace_repo;
 
@@ -9,14 +11,77 @@ use crate::persistence::repo::workspace_repo;
 pub async fn index_get_tree(
     state: State<'_, AppState>,
     workspace_id: String,
-) -> Result<FileTreeNode, AppError> {
+) -> Result<FileTreeResponse, AppError> {
+    let workspace = workspace_repo::find_by_id(&state.pool, &workspace_id)
+        .await?
+        .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
+
+    let mut tree = state
+        .index_manager
+        .get_tree(&workspace.canonical_path)
+        .await?;
+
+    let overlay = state
+        .git_manager
+        .get_workspace_overlay(&workspace.canonical_path)
+        .await?;
+
+    tree.apply_git_overlay(&overlay.states);
+
+    Ok(FileTreeResponse {
+        repo_available: overlay.repo_available,
+        tree,
+    })
+}
+
+#[tauri::command]
+pub async fn index_get_children(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    directory_path: String,
+) -> Result<Vec<FileTreeNode>, AppError> {
+    let workspace = workspace_repo::find_by_id(&state.pool, &workspace_id)
+        .await?
+        .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
+
+    let mut root = FileTreeNode {
+        name: workspace.name.clone(),
+        path: String::new(),
+        is_dir: true,
+        is_expandable: true,
+        git_state: None,
+        children: Some(
+            state
+                .index_manager
+                .get_children(&workspace.canonical_path, &directory_path)
+                .await?,
+        ),
+    };
+
+    let overlay = state
+        .git_manager
+        .get_workspace_overlay(&workspace.canonical_path)
+        .await?;
+
+    root.apply_git_overlay(&overlay.states);
+
+    Ok(root.children.unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn index_filter_files(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    query: String,
+    max_results: Option<usize>,
+) -> Result<FileFilterResponse, AppError> {
     let workspace = workspace_repo::find_by_id(&state.pool, &workspace_id)
         .await?
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
     state
         .index_manager
-        .get_tree(&workspace.canonical_path)
+        .filter_files(&workspace.canonical_path, &query, max_results)
         .await
 }
 
