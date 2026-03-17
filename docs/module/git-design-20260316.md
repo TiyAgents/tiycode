@@ -72,6 +72,19 @@ Rust should own Git operations either through a Git library, controlled command 
 
 The key requirement is that the Git subsystem exposes typed results, not raw unstructured command blobs, to the rest of the app.
 
+### Use a Hybrid Backend Strategy with One Typed Surface
+
+The product should expose one typed `GitBackend` abstraction to the rest of the app while allowing different implementations per capability class.
+
+Recommended strategy:
+
+- tree and index views come from filesystem or IndexManager scanning
+- Git metadata overlays for tree rendering come from `git2-rs`
+- Git panel read flows use `git2-rs`
+- Git panel mutating and remote-facing flows require local Git CLI
+
+This keeps local repository inspection available even when the device does not have Git CLI installed, while preserving compatibility with the user's existing Git authentication setup for commands such as `fetch`, `pull`, and `push`.
+
 ### Separate Snapshot Reads from Mutating Actions
 
 Read flows such as:
@@ -127,6 +140,32 @@ Git state should be keyed by:
 
 This allows a workspace to determine whether Git features are available and where repository-relative actions should anchor.
 
+### Capability Detection
+
+Git capability should be resolved per workspace into two related but distinct flags:
+
+- `repo_available`: whether the workspace is inside a readable Git repository
+- `git_cli_available`: whether a local `git` executable is available for CLI-backed operations
+
+This allows the app to support a read-only Git experience without requiring Git CLI to be installed on the device.
+
+### TreeView Integration
+
+The TreeView should not use Git as its primary source of file enumeration.
+
+Recommended rule:
+
+- file tree structure comes from `IndexManager` or direct filesystem scanning
+- Git contributes overlay metadata only
+
+The overlay should distinguish at least:
+
+- tracked files
+- untracked files
+- ignored files
+
+This lets TreeView reuse the app's existing indexing and caching model while still reflecting `.gitignore` and repository state in a Git-aware way.
+
 ### Recommended Snapshot Shape
 
 ```rust
@@ -169,6 +208,11 @@ Diff should be chunkable so the UI can render progressively for large files.
 
 These may often be auto-allowed within the current workspace.
 
+Recommended backend:
+
+- implement these through `git2-rs`
+- keep the returned models identical regardless of whether Git CLI is installed
+
 ### Mutating Local Actions
 
 - `git_stage`
@@ -176,6 +220,13 @@ These may often be auto-allowed within the current workspace.
 - `git_commit`
 
 These may be auto-allowed or approval-gated depending on policy.
+
+Recommended backend split:
+
+- `git_stage` and `git_unstage` may be implemented via the shared Git backend
+- `git_commit` should require local Git CLI
+
+If Git CLI is not available, CLI-backed actions should be disabled in the UI rather than failing only after the user submits the action.
 
 ### Mutating Remote Actions
 
@@ -185,6 +236,15 @@ These may be auto-allowed or approval-gated depending on policy.
 
 These should always consider network policy in addition to Git mutation risk.
 
+Recommended backend:
+
+- require local Git CLI for all remote-facing actions
+
+Rationale:
+
+- users commonly rely on existing SSH key, agent, and credential-helper setup in their local Git environment
+- this reduces authentication drift between Tiy Agent and the user's terminal workflow
+
 ## Refresh Model
 
 ### Initial Snapshot
@@ -193,7 +253,7 @@ When the Git drawer opens:
 
 1. frontend requests snapshot
 2. Rust resolves workspace repository root
-3. Rust loads status, staged groups, and recent history in parallel where possible
+3. Rust loads status, staged groups, and recent history in parallel where possible through the shared typed backend
 4. Rust returns one typed snapshot
 
 ### Event-Triggered Refresh
@@ -213,6 +273,7 @@ If needed later, Rust may also emit derived `file_delta` or `history_delta` even
 - read actions from the Git drawer may call `GitManager` commands directly
 - mutating actions should reuse the same policy primitives and audit schema that agent-initiated actions use
 - the UI entry path may differ, but the backend execution and audit model should stay aligned
+- UI capability state should reflect whether the current workspace has `repo_available` and `git_cli_available`
 
 Recommended implementation rule:
 
@@ -232,12 +293,19 @@ This keeps one Git execution model, even if the UI entry points differ.
 
 - not a Git repository
 - repository inaccessible
+- Git CLI unavailable for CLI-backed action
 - merge or rebase state blocks action
 - remote authentication failed
 - network disabled by policy
 - commit message invalid
 
 The UI should be able to render these without scraping raw CLI stderr.
+
+Recommended behavior when Git CLI is unavailable:
+
+- TreeView Git overlay remains available if the repository can be read
+- Git panel read-only views remain available
+- CLI-backed actions such as `git_commit`, `git_fetch`, `git_pull`, and `git_push` render as disabled with a clear installation hint
 
 ## Key Flows
 
@@ -320,6 +388,10 @@ Both were rejected because they weaken structure, observability, and performance
 ## Implementation Notes
 
 - place logic in `src-tauri/src/core/git_manager.rs`
+- define a typed backend boundary so `git2-rs` and Git CLI can coexist behind one manager
+- keep TreeView file enumeration in `IndexManager` or filesystem code, not in Git code
+- use `git2-rs` for tracked or untracked or ignored overlay metadata used by TreeView
 - prefer typed repository results over raw command text
 - keep diff loading lazy and chunk-aware
+- require Git CLI capability checks before enabling commit or remote operations
 - route remote actions through network-aware policy checks
