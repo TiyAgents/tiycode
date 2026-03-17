@@ -13,12 +13,15 @@ use tokio::sync::{mpsc, Mutex};
 use sqlx::SqlitePool;
 
 use crate::core::sidecar_manager::SidecarManager;
+use crate::core::sleep_manager::SleepManager;
 use crate::core::tool_gateway::{ToolGateway, ToolGatewayResult};
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::ipc::sidecar_protocol::{RunStartPayload, SidecarEvent, ToolResultPayload};
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::MessageRecord;
-use crate::persistence::repo::{message_repo, run_repo, thread_repo, tool_call_repo, workspace_repo};
+use crate::persistence::repo::{
+    message_repo, run_repo, thread_repo, tool_call_repo, workspace_repo,
+};
 
 /// In-memory state for an active run.
 struct ActiveRun {
@@ -35,16 +38,23 @@ struct ActiveRun {
 pub struct AgentRunManager {
     pool: SqlitePool,
     sidecar: Arc<SidecarManager>,
+    sleep_manager: Arc<SleepManager>,
     tool_gateway: Arc<ToolGateway>,
     /// Active runs indexed by run_id.
     active_runs: Arc<Mutex<HashMap<String, ActiveRun>>>,
 }
 
 impl AgentRunManager {
-    pub fn new(pool: SqlitePool, sidecar: Arc<SidecarManager>, tool_gateway: Arc<ToolGateway>) -> Self {
+    pub fn new(
+        pool: SqlitePool,
+        sidecar: Arc<SidecarManager>,
+        sleep_manager: Arc<SleepManager>,
+        tool_gateway: Arc<ToolGateway>,
+    ) -> Self {
         Self {
             pool,
             sidecar,
+            sleep_manager,
             tool_gateway,
             active_runs: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -94,71 +104,82 @@ impl AgentRunManager {
                 },
             );
         }
+        self.sleep_manager.set_has_active_runs(true).await;
 
-        // 3. Persist user message
-        let user_msg = MessageRecord {
-            id: uuid::Uuid::now_v7().to_string(),
-            thread_id: thread_id.to_string(),
-            run_id: None,
-            role: "user".to_string(),
-            content_markdown: prompt.to_string(),
-            message_type: "plain_message".to_string(),
-            status: "completed".to_string(),
-            metadata_json: None,
-            created_at: String::new(),
-        };
-        message_repo::insert(&self.pool, &user_msg).await?;
-        thread_repo::touch_active(&self.pool, thread_id).await?;
+        let start_result = async {
+            // 3. Persist user message
+            let user_msg = MessageRecord {
+                id: uuid::Uuid::now_v7().to_string(),
+                thread_id: thread_id.to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: prompt.to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                created_at: String::new(),
+            };
+            message_repo::insert(&self.pool, &user_msg).await?;
+            thread_repo::touch_active(&self.pool, thread_id).await?;
 
-        // 4. Create run record
-        let run_insert = run_repo::RunInsert {
-            id: run_id.clone(),
-            thread_id: thread_id.to_string(),
-            profile_id: None,
-            run_mode: run_mode.to_string(),
-            provider_id: None,
-            model_id: None,
-            effective_model_plan_json: Some(model_plan.to_string()),
-            status: "created".to_string(),
-        };
-        run_repo::insert(&self.pool, &run_insert).await?;
+            // 4. Create run record
+            let run_insert = run_repo::RunInsert {
+                id: run_id.clone(),
+                thread_id: thread_id.to_string(),
+                profile_id: None,
+                run_mode: run_mode.to_string(),
+                provider_id: None,
+                model_id: None,
+                effective_model_plan_json: Some(model_plan.to_string()),
+                status: "created".to_string(),
+            };
+            run_repo::insert(&self.pool, &run_insert).await?;
 
-        // 5. Update thread status to running
-        thread_repo::update_status(
-            &self.pool,
-            thread_id,
-            &crate::model::thread::ThreadStatus::Running,
-        )
-        .await?;
-
-        // 7. Dispatch to sidecar
-        run_repo::update_status(&self.pool, &run_id, "dispatching").await?;
-
-        let snapshot = serde_json::json!({
-            "threadId": thread_id,
-            "prompt": prompt,
-        });
-
-        let payload = serde_json::to_value(RunStartPayload {
-            run_id: run_id.clone(),
-            thread_id: thread_id.to_string(),
-            run_mode: run_mode.to_string(),
-            prompt: prompt.to_string(),
-            model_plan,
-            thread_snapshot: snapshot,
-        })
-        .unwrap_or_default();
-
-        self.sidecar
-            .send_request(&format!("run_{run_id}"), "agent.run.start", payload)
+            // 5. Update thread status to running
+            thread_repo::update_status(
+                &self.pool,
+                thread_id,
+                &crate::model::thread::ThreadStatus::Running,
+            )
             .await?;
 
-        tracing::info!(
-            run_id = %run_id,
-            thread_id = %thread_id,
-            run_mode = %run_mode,
-            "run dispatched to sidecar"
-        );
+            // 7. Dispatch to sidecar
+            run_repo::update_status(&self.pool, &run_id, "dispatching").await?;
+
+            let snapshot = serde_json::json!({
+                "threadId": thread_id,
+                "prompt": prompt,
+            });
+
+            let payload = serde_json::to_value(RunStartPayload {
+                run_id: run_id.clone(),
+                thread_id: thread_id.to_string(),
+                run_mode: run_mode.to_string(),
+                prompt: prompt.to_string(),
+                model_plan,
+                thread_snapshot: snapshot,
+            })
+            .unwrap_or_default();
+
+            self.sidecar
+                .send_request(&format!("run_{run_id}"), "agent.run.start", payload)
+                .await?;
+
+            tracing::info!(
+                run_id = %run_id,
+                thread_id = %thread_id,
+                run_mode = %run_mode,
+                "run dispatched to sidecar"
+            );
+
+            Ok::<(), AppError>(())
+        }
+        .await;
+
+        if let Err(error) = start_result {
+            self.remove_active_run(&run_id).await;
+            return Err(error);
+        }
 
         Ok((run_id, frontend_rx))
     }
@@ -225,10 +246,13 @@ impl AgentRunManager {
         match event {
             SidecarEvent::RunStarted { .. } => {
                 run_repo::update_status(&self.pool, &run_id, "running").await?;
-                self.emit(&run_id, ThreadStreamEvent::RunStarted {
-                    run_id: run_id.clone(),
-                    run_mode: self.get_run_mode(&run_id).await,
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::RunStarted {
+                        run_id: run_id.clone(),
+                        run_mode: self.get_run_mode(&run_id).await,
+                    },
+                )
                 .await;
             }
 
@@ -236,16 +260,17 @@ impl AgentRunManager {
                 message_id, delta, ..
             } => {
                 // Create or append to streaming assistant message
-                let msg_id = self
-                    .ensure_streaming_message(&run_id, &message_id)
-                    .await?;
+                let msg_id = self.ensure_streaming_message(&run_id, &message_id).await?;
                 message_repo::append_content(&self.pool, &msg_id, &delta).await?;
 
-                self.emit(&run_id, ThreadStreamEvent::MessageDelta {
-                    run_id: run_id.clone(),
-                    message_id: msg_id,
-                    delta,
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::MessageDelta {
+                        run_id: run_id.clone(),
+                        message_id: msg_id,
+                        delta,
+                    },
+                )
                 .await;
             }
 
@@ -254,9 +279,7 @@ impl AgentRunManager {
                 content,
                 ..
             } => {
-                let msg_id = self
-                    .ensure_streaming_message(&run_id, &message_id)
-                    .await?;
+                let msg_id = self.ensure_streaming_message(&run_id, &message_id).await?;
                 message_repo::update_status(&self.pool, &msg_id, "completed").await?;
 
                 // Clear streaming message
@@ -267,43 +290,58 @@ impl AgentRunManager {
                     }
                 }
 
-                self.emit(&run_id, ThreadStreamEvent::MessageCompleted {
-                    run_id: run_id.clone(),
-                    message_id: msg_id,
-                    content,
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::MessageCompleted {
+                        run_id: run_id.clone(),
+                        message_id: msg_id,
+                        content,
+                    },
+                )
                 .await;
             }
 
             SidecarEvent::PlanUpdated { plan, .. } => {
-                self.emit(&run_id, ThreadStreamEvent::PlanUpdated {
-                    run_id: run_id.clone(),
-                    plan,
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::PlanUpdated {
+                        run_id: run_id.clone(),
+                        plan,
+                    },
+                )
                 .await;
             }
 
             SidecarEvent::ReasoningUpdated { reasoning, .. } => {
-                self.emit(&run_id, ThreadStreamEvent::ReasoningUpdated {
-                    run_id: run_id.clone(),
-                    reasoning,
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::ReasoningUpdated {
+                        run_id: run_id.clone(),
+                        reasoning,
+                    },
+                )
                 .await;
             }
 
             SidecarEvent::QueueUpdated { queue, .. } => {
-                self.emit(&run_id, ThreadStreamEvent::QueueUpdated {
-                    run_id: run_id.clone(),
-                    queue,
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::QueueUpdated {
+                        run_id: run_id.clone(),
+                        queue,
+                    },
+                )
                 .await;
             }
 
             SidecarEvent::SubagentStarted { subtask_id, .. } => {
-                self.emit(&run_id, ThreadStreamEvent::SubagentStarted {
-                    run_id: run_id.clone(),
-                    subtask_id,
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::SubagentStarted {
+                        run_id: run_id.clone(),
+                        subtask_id,
+                    },
+                )
                 .await;
             }
 
@@ -312,22 +350,28 @@ impl AgentRunManager {
                 summary,
                 ..
             } => {
-                self.emit(&run_id, ThreadStreamEvent::SubagentCompleted {
-                    run_id: run_id.clone(),
-                    subtask_id,
-                    summary,
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::SubagentCompleted {
+                        run_id: run_id.clone(),
+                        subtask_id,
+                        summary,
+                    },
+                )
                 .await;
             }
 
             SidecarEvent::SubagentFailed {
                 subtask_id, error, ..
             } => {
-                self.emit(&run_id, ThreadStreamEvent::SubagentFailed {
-                    run_id: run_id.clone(),
-                    subtask_id,
-                    error,
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::SubagentFailed {
+                        run_id: run_id.clone(),
+                        subtask_id,
+                        error,
+                    },
+                )
                 .await;
             }
 
@@ -372,30 +416,47 @@ impl AgentRunManager {
                     .await?;
 
                 match gw_result {
-                    ToolGatewayResult::Executed { tool_call_id, output } => {
+                    ToolGatewayResult::Executed {
+                        tool_call_id,
+                        output,
+                    } => {
                         // Auto-allowed and executed — send result to sidecar
-                        self.emit(&run_id, ThreadStreamEvent::ToolCompleted {
-                            run_id: run_id.clone(),
-                            tool_call_id: tool_call_id.clone(),
-                            result: output.result.clone(),
-                        })
+                        self.emit(
+                            &run_id,
+                            ThreadStreamEvent::ToolCompleted {
+                                run_id: run_id.clone(),
+                                tool_call_id: tool_call_id.clone(),
+                                result: output.result.clone(),
+                            },
+                        )
                         .await;
                         run_repo::update_status(&self.pool, &run_id, "running").await?;
-                        self.send_tool_result(&tool_call_id, &run_id, output.result, output.success)
-                            .await?;
+                        self.send_tool_result(
+                            &tool_call_id,
+                            &run_id,
+                            output.result,
+                            output.success,
+                        )
+                        .await?;
                     }
                     ToolGatewayResult::ApprovalRequired { event } => {
                         // Needs user approval — emit to frontend, wait for response
                         run_repo::update_status(&self.pool, &run_id, "waiting_approval").await?;
                         self.emit(&run_id, event).await;
                     }
-                    ToolGatewayResult::Denied { tool_call_id, reason } => {
+                    ToolGatewayResult::Denied {
+                        tool_call_id,
+                        reason,
+                    } => {
                         // Denied by policy — send denial to sidecar
-                        self.emit(&run_id, ThreadStreamEvent::ToolFailed {
-                            run_id: run_id.clone(),
-                            tool_call_id: tool_call_id.clone(),
-                            error: reason.clone(),
-                        })
+                        self.emit(
+                            &run_id,
+                            ThreadStreamEvent::ToolFailed {
+                                run_id: run_id.clone(),
+                                tool_call_id: tool_call_id.clone(),
+                                error: reason.clone(),
+                            },
+                        )
                         .await;
                         run_repo::update_status(&self.pool, &run_id, "running").await?;
                         self.send_tool_result(
@@ -411,9 +472,12 @@ impl AgentRunManager {
 
             SidecarEvent::RunCompleted { .. } => {
                 self.finish_run(&run_id, "completed").await?;
-                self.emit(&run_id, ThreadStreamEvent::RunCompleted {
-                    run_id: run_id.clone(),
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::RunCompleted {
+                        run_id: run_id.clone(),
+                    },
+                )
                 .await;
                 self.remove_active_run(&run_id).await;
             }
@@ -437,10 +501,13 @@ impl AgentRunManager {
                 let _ = message_repo::insert(&self.pool, &err_msg).await;
 
                 self.finish_run(&run_id, "failed").await?;
-                self.emit(&run_id, ThreadStreamEvent::RunFailed {
-                    run_id: run_id.clone(),
-                    error,
-                })
+                self.emit(
+                    &run_id,
+                    ThreadStreamEvent::RunFailed {
+                        run_id: run_id.clone(),
+                        error,
+                    },
+                )
                 .await;
                 self.remove_active_run(&run_id).await;
             }
@@ -555,7 +622,14 @@ impl AgentRunManager {
     }
 
     async fn remove_active_run(&self, run_id: &str) {
-        let mut runs = self.active_runs.lock().await;
-        runs.remove(run_id);
+        let has_active_runs = {
+            let mut runs = self.active_runs.lock().await;
+            runs.remove(run_id);
+            !runs.is_empty()
+        };
+
+        self.sleep_manager
+            .set_has_active_runs(has_active_runs)
+            .await;
     }
 }

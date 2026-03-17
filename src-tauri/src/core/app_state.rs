@@ -1,10 +1,11 @@
-use std::sync::Arc;
 use sqlx::SqlitePool;
+use std::sync::Arc;
 
 use crate::core::agent_run_manager::AgentRunManager;
 use crate::core::index_manager::IndexManager;
 use crate::core::settings_manager::SettingsManager;
 use crate::core::sidecar_manager::SidecarManager;
+use crate::core::sleep_manager::SleepManager;
 use crate::core::thread_manager::ThreadManager;
 use crate::core::tool_gateway::ToolGateway;
 use crate::core::workspace_manager::WorkspaceManager;
@@ -18,6 +19,7 @@ pub struct AppState {
     pub settings_manager: SettingsManager,
     pub thread_manager: ThreadManager,
     pub sidecar_manager: Arc<SidecarManager>,
+    pub sleep_manager: Arc<SleepManager>,
     pub agent_run_manager: Arc<AgentRunManager>,
     pub tool_gateway: Arc<ToolGateway>,
     pub index_manager: IndexManager,
@@ -29,10 +31,12 @@ impl AppState {
         let settings_manager = SettingsManager::new(pool.clone());
         let thread_manager = ThreadManager::new(pool.clone());
         let sidecar_manager = Arc::new(SidecarManager::new(sidecar_path));
+        let sleep_manager = Arc::new(SleepManager::new());
         let tool_gateway = Arc::new(ToolGateway::new(pool.clone()));
         let agent_run_manager = Arc::new(AgentRunManager::new(
             pool.clone(),
             Arc::clone(&sidecar_manager),
+            Arc::clone(&sleep_manager),
             Arc::clone(&tool_gateway),
         ));
         let index_manager = IndexManager::new();
@@ -43,6 +47,7 @@ impl AppState {
             settings_manager,
             thread_manager,
             sidecar_manager,
+            sleep_manager,
             agent_run_manager,
             tool_gateway,
             index_manager,

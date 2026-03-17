@@ -74,6 +74,7 @@ export type CommandSettings = {
 
 export type GeneralPreferences = {
   launchAtLogin: boolean;
+  preventSleepWhileRunning: boolean;
   minimizeToTray: boolean;
 };
 

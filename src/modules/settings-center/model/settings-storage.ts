@@ -127,6 +127,10 @@ export function readStoredSettings(): SettingsState {
     return {
       general: {
         launchAtLogin: typeof generalRaw.launchAtLogin === "boolean" ? generalRaw.launchAtLogin : DEFAULT_GENERAL_PREFERENCES.launchAtLogin,
+        preventSleepWhileRunning:
+          typeof generalRaw.preventSleepWhileRunning === "boolean"
+            ? generalRaw.preventSleepWhileRunning
+            : DEFAULT_GENERAL_PREFERENCES.preventSleepWhileRunning,
         minimizeToTray: typeof generalRaw.minimizeToTray === "boolean" ? generalRaw.minimizeToTray : DEFAULT_GENERAL_PREFERENCES.minimizeToTray,
       },
       workspaces: workspaces

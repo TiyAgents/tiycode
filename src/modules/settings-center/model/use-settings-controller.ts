@@ -1,5 +1,12 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
-import { persistSettings, readStoredSettings } from "@/modules/settings-center/model/settings-storage";
+import {
+  GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
+} from "@/modules/settings-center/model/defaults";
+import {
+  persistSettings,
+  readStoredSettings,
+} from "@/modules/settings-center/model/settings-storage";
 import type {
   AgentProfile,
   CommandSettings,
@@ -12,6 +19,7 @@ import type {
   WorkspaceEntry,
   WritableRootEntry,
 } from "@/modules/settings-center/model/types";
+import { settingsSet } from "@/services/bridge";
 
 export * from "@/modules/settings-center/model/types";
 
@@ -21,6 +29,19 @@ export function useSettingsController() {
   useEffect(() => {
     persistSettings(settings);
   }, [settings]);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    void settingsSet(
+      GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
+      JSON.stringify(settings.general.preventSleepWhileRunning),
+    ).catch((error) => {
+      console.warn("Failed to sync preventSleepWhileRunning setting", error);
+    });
+  }, [settings.general.preventSleepWhileRunning]);
 
   const updateGeneralPreference = <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => {
     setSettings((current) => ({

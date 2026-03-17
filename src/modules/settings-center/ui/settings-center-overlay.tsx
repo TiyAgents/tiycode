@@ -1149,6 +1149,18 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <SettingsRow
+          label="Prevent sleep while running"
+          description="Keep the system awake while an agent run is active."
+          control={
+            <Switch
+              size="sm"
+              checked={generalPreferences.preventSleepWhileRunning}
+              onCheckedChange={(checked) => onUpdateGeneralPreference("preventSleepWhileRunning", checked)}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
           label="Close to tray"
           description="Minimize to system tray instead of quitting when the window is closed."
           control={

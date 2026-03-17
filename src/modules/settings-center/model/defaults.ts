@@ -9,6 +9,7 @@ import type {
 } from "@/modules/settings-center/model/types";
 
 export const SETTINGS_STORAGE_KEY = "tiy-agent-workbench-settings";
+export const GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY = "general.prevent_sleep_while_running";
 
 const DEFAULT_CUSTOM_INSTRUCTIONS =
   "You are Tiy Agent, a desktop coding partner. Keep answers crisp, grounded in the local workspace, and explicit about risks before taking action.";
@@ -181,6 +182,7 @@ export const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
 
 export const DEFAULT_GENERAL_PREFERENCES: GeneralPreferences = {
   launchAtLogin: false,
+  preventSleepWhileRunning: false,
   minimizeToTray: false,
 };
 

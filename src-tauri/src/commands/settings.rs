@@ -1,6 +1,7 @@
 use tauri::State;
 
 use crate::core::app_state::AppState;
+use crate::core::sleep_manager::PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY;
 use crate::model::errors::AppError;
 use crate::model::provider::{
     AgentProfileDto, AgentProfileInput, ProviderDto, ProviderInput, ProviderModelDto,
@@ -17,7 +18,11 @@ pub async fn settings_get(
     state: State<'_, AppState>,
     key: String,
 ) -> Result<Option<SettingDto>, AppError> {
-    Ok(state.settings_manager.get_setting(&key).await?.map(|r| r.into_dto()))
+    Ok(state
+        .settings_manager
+        .get_setting(&key)
+        .await?
+        .map(|r| r.into_dto()))
 }
 
 #[tauri::command]
@@ -37,7 +42,16 @@ pub async fn settings_set(
     key: String,
     value: String,
 ) -> Result<(), AppError> {
-    state.settings_manager.set_setting(&key, &value).await
+    state.settings_manager.set_setting(&key, &value).await?;
+
+    if key == PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY {
+        match serde_json::from_str::<bool>(&value) {
+            Ok(enabled) => state.sleep_manager.set_user_preference(enabled).await,
+            Err(error) => tracing::warn!(error = %error, "invalid prevent sleep setting payload"),
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +63,11 @@ pub async fn policy_get(
     state: State<'_, AppState>,
     key: String,
 ) -> Result<Option<SettingDto>, AppError> {
-    Ok(state.settings_manager.get_policy(&key).await?.map(|r| r.into_dto()))
+    Ok(state
+        .settings_manager
+        .get_policy(&key)
+        .await?
+        .map(|r| r.into_dto()))
 }
 
 #[tauri::command]
@@ -107,10 +125,7 @@ pub async fn provider_update(
 }
 
 #[tauri::command]
-pub async fn provider_delete(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), AppError> {
+pub async fn provider_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     state.settings_manager.delete_provider(&id).await
 }
 
@@ -138,15 +153,15 @@ pub async fn provider_model_add(
     provider_id: String,
     input: ProviderModelInput,
 ) -> Result<ProviderModelDto, AppError> {
-    let record = state.settings_manager.add_model(&provider_id, input).await?;
+    let record = state
+        .settings_manager
+        .add_model(&provider_id, input)
+        .await?;
     Ok(ProviderModelDto::from(record))
 }
 
 #[tauri::command]
-pub async fn provider_model_remove(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), AppError> {
+pub async fn provider_model_remove(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     state.settings_manager.remove_model(&id).await
 }
 
@@ -185,9 +200,6 @@ pub async fn profile_update(
 }
 
 #[tauri::command]
-pub async fn profile_delete(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), AppError> {
+pub async fn profile_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     state.settings_manager.delete_profile(&id).await
 }

@@ -5,6 +5,7 @@ pub mod index_manager;
 pub mod policy_engine;
 pub mod settings_manager;
 pub mod sidecar_manager;
+pub mod sleep_manager;
 pub mod thread_manager;
 pub mod tool_gateway;
 pub mod workspace_manager;

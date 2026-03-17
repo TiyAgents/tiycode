@@ -15,6 +15,7 @@ use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::core::app_state::AppState;
+use crate::core::sleep_manager::PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY;
 
 const MAIN_WINDOW_LABEL: &str = "main";
 
@@ -87,8 +88,8 @@ fn init_logging() {
         .build(&log_path)
         .expect("failed to create log appender");
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn"));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn"));
 
     tracing_subscriber::registry()
         .with(env_filter)
@@ -192,6 +193,24 @@ pub fn run() {
 
             // 6. Construct and manage AppState
             let state = AppState::new(pool, sidecar_path);
+
+            if let Some(setting) = tauri::async_runtime::block_on(async {
+                state
+                    .settings_manager
+                    .get_setting(PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY)
+                    .await
+            })? {
+                match serde_json::from_str::<bool>(&setting.value_json) {
+                    Ok(enabled) => {
+                        tauri::async_runtime::block_on(async {
+                            state.sleep_manager.set_user_preference(enabled).await;
+                        });
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "failed to parse prevent sleep setting");
+                    }
+                }
+            }
 
             // 7. Startup recovery: validate workspaces + interrupt dangling runs
             tauri::async_runtime::block_on(async {
