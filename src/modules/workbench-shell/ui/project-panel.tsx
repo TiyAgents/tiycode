@@ -334,6 +334,9 @@ export function ProjectPanel({
   const [filterState, setFilterState] = useState<FilterState>(initialFilterState);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(() => new Set());
+  const [pendingRevealPath, setPendingRevealPath] = useState<string | null>(null);
+  const [revealedPath, setRevealedPath] = useState<string | null>(null);
+  const [activeFilterRevealPath, setActiveFilterRevealPath] = useState<string | null>(null);
   const [isOpenMenuOpen, setOpenMenuOpen] = useState(false);
   const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(null);
   const [activeOpenTargetId, setActiveOpenTargetId] = useState<string | null>(null);
@@ -341,6 +344,9 @@ export function ProjectPanel({
   const deferredFilterValue = useDeferredValue(filterValue);
   const openMenuRef = useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = useRef<number | null>(null);
+  const revealTimeoutRef = useRef<number | null>(null);
+  const treeScrollRef = useRef<HTMLDivElement | null>(null);
+  const treeRowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const { data: openApps, error: openAppsError, isLoading: isLoadingOpenApps } = useWorkspaceOpenApps();
   const normalizedFilter = deferredFilterValue.trim().toLowerCase();
   const projectName = currentProject?.name ?? "Project";
@@ -351,6 +357,9 @@ export function ProjectPanel({
     return () => {
       if (errorTimeoutRef.current) {
         window.clearTimeout(errorTimeoutRef.current);
+      }
+      if (revealTimeoutRef.current) {
+        window.clearTimeout(revealTimeoutRef.current);
       }
     };
   }, []);
@@ -383,7 +392,51 @@ export function ProjectPanel({
   useEffect(() => {
     setExpandedPaths(new Set());
     setLoadingPaths(new Set());
+    setPendingRevealPath(null);
+    setRevealedPath(null);
+    setActiveFilterRevealPath(null);
   }, [workspaceId, projectPath]);
+
+  useEffect(() => {
+    if (!pendingRevealPath || normalizedFilter.length > 0) {
+      return;
+    }
+
+    let frameId = window.requestAnimationFrame(() => {
+      const targetRow = treeRowRefs.current.get(pendingRevealPath);
+      if (!targetRow) {
+        return;
+      }
+
+      targetRow.scrollIntoView({
+        block: "center",
+        inline: "nearest",
+      });
+      setRevealedPath(pendingRevealPath);
+      setPendingRevealPath(null);
+
+      if (revealTimeoutRef.current) {
+        window.clearTimeout(revealTimeoutRef.current);
+      }
+
+      revealTimeoutRef.current = window.setTimeout(() => {
+        setRevealedPath((current) => (current === pendingRevealPath ? null : current));
+        revealTimeoutRef.current = null;
+      }, 1600);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [pendingRevealPath, normalizedFilter.length, treeState.data, expandedPaths]);
+
+  const setTreeRowRef = (path: string, element: HTMLButtonElement | null) => {
+    if (element) {
+      treeRowRefs.current.set(path, element);
+    } else {
+      treeRowRefs.current.delete(path);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -776,12 +829,15 @@ export function ProjectPanel({
   };
 
   const handleRevealFilterResult = async (match: FileFilterMatch) => {
-    if (!treeState.data) {
+    if (!treeState.data || activeFilterRevealPath) {
       return;
     }
 
+    setActiveFilterRevealPath(match.path);
+
     if (!workspaceId) {
       setFilterValue("");
+      setActiveFilterRevealPath(null);
       return;
     }
 
@@ -823,6 +879,7 @@ export function ProjectPanel({
         };
       });
       setExpandedPaths(nextExpanded);
+      setPendingRevealPath(match.path);
       setFilterValue("");
     } catch (error) {
       const message = error instanceof Error ? error.message : "无法展开筛选结果路径";
@@ -830,6 +887,8 @@ export function ProjectPanel({
         ...current,
         error: message,
       }));
+    } finally {
+      setActiveFilterRevealPath(null);
     }
   };
 
@@ -974,13 +1033,17 @@ export function ProjectPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto overscroll-none pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div
+        ref={treeScrollRef}
+        className="min-h-0 flex-1 overflow-auto overscroll-none pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
         <div className="relative pl-5">
           <div className="absolute bottom-0 left-[6px] top-0 w-px bg-app-border" />
           <div className={DRAWER_LIST_STACK_CLASS}>
             {isFiltering
               ? filterResults.map((match) => {
                   const icon = inferIcon(match.name, false);
+                  const isRevealing = activeFilterRevealPath === match.path;
 
                   return (
                     <button
@@ -988,11 +1051,15 @@ export function ProjectPanel({
                       type="button"
                       className={cn(
                         `${DRAWER_LIST_ROW_CLASS} relative flex items-center gap-2 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground`,
+                        isRevealing && "bg-app-surface-hover text-app-foreground",
+                        activeFilterRevealPath && !isRevealing && "opacity-60",
                       )}
+                      disabled={Boolean(activeFilterRevealPath)}
                       onClick={() => void handleRevealFilterResult(match)}
-                      onDoubleClick={() => void handleOpenTreeFile(match.path)}
                     >
-                      <span className="flex size-4 shrink-0 items-center justify-center" />
+                      <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
+                        {isRevealing ? <LoaderCircle className="size-3 animate-spin" /> : null}
+                      </span>
                       <ProjectTreeIcon icon={icon} muted={false} />
                       <span className={DRAWER_LIST_LABEL_CLASS}>{match.name}</span>
                       {match.parentPath ? (
@@ -1030,10 +1097,13 @@ export function ProjectPanel({
 
                   return (
                     <button
+                      ref={(element) => setTreeRowRef(node.path, element)}
+                      data-tree-path={node.path}
                       key={node.path || node.name}
                       type="button"
                       className={cn(
                         `${DRAWER_LIST_ROW_CLASS} relative flex items-center gap-2`,
+                        revealedPath === node.path && "bg-app-surface-hover/90 ring-1 ring-app-border-strong",
                         isIgnored
                           ? "text-app-subtle/70 hover:bg-app-surface-hover/60 hover:text-app-muted"
                           : isUntracked || isModified
