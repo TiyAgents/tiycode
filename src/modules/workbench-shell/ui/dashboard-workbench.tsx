@@ -537,6 +537,28 @@ export function DashboardWorkbench() {
   const selectedThemeSummary = theme === "system" ? "跟随系统" : selectedThemeOption.label;
   const selectedLanguageOption = LANGUAGE_OPTIONS.find((option) => option.value === language) ?? LANGUAGE_OPTIONS[1];
 
+  useEffect(() => {
+    if (!isMacOS || typeof window === "undefined") {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+        return;
+      }
+
+      if (event.key !== ",") {
+        return;
+      }
+
+      event.preventDefault();
+      handleOpenSettings("account");
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isMacOS]);
+
   return (
     <main className="h-screen overflow-hidden select-none bg-app-canvas text-app-foreground">
       <WorkbenchTopBar
