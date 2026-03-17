@@ -26,9 +26,9 @@ fn test_policy_dangerous_commands() {
         ("sudo apt install foo", "sudo "),
         ("mkfs.ext4 /dev/sda", "mkfs"),
         ("dd if=/dev/zero of=/dev/sda", "dd if="),
-        ("curl|sh", "curl|sh"),                // exact: no spaces
-        ("curl |sh", "curl |sh"),              // exact: space before pipe
-        ("curl | sh", "curl | sh"),            // exact: space both sides
+        ("curl|sh", "curl|sh"),     // exact: no spaces
+        ("curl |sh", "curl |sh"),   // exact: space before pipe
+        ("curl | sh", "curl | sh"), // exact: space both sides
         ("wget|bash", "wget|bash"),
         ("wget |bash", "wget |bash"),
         ("echo > /dev/sda1", "> /dev/sd"),
@@ -37,10 +37,27 @@ fn test_policy_dangerous_commands() {
     ];
 
     let patterns = [
-        "rm -rf /", "rm -rf /*", "rm -rf ~", "sudo ", "mkfs", "dd if=",
-        "curl|sh", "curl |sh", "curl | sh", "wget|sh", "wget |sh", "wget | sh",
-        "curl|bash", "curl |bash", "curl | bash", "wget|bash", "wget |bash",
-        "wget | bash", "> /dev/sd", "chmod 777 /", ":(){ :|:& };:",
+        "rm -rf /",
+        "rm -rf /*",
+        "rm -rf ~",
+        "sudo ",
+        "mkfs",
+        "dd if=",
+        "curl|sh",
+        "curl |sh",
+        "curl | sh",
+        "wget|sh",
+        "wget |sh",
+        "wget | sh",
+        "curl|bash",
+        "curl |bash",
+        "curl | bash",
+        "wget|bash",
+        "wget |bash",
+        "wget | bash",
+        "> /dev/sd",
+        "chmod 777 /",
+        ":(){ :|:& };:",
     ];
 
     for (cmd, expected_match) in &dangerous_commands {
@@ -67,17 +84,37 @@ fn test_safe_commands_not_flagged() {
     ];
 
     let patterns = [
-        "rm -rf /", "rm -rf /*", "rm -rf ~", "sudo ", "mkfs", "dd if=",
-        "curl|sh", "curl |sh", "curl | sh", "wget|sh", "wget |sh", "wget | sh",
-        "curl|bash", "curl |bash", "curl | bash", "wget|bash", "wget |bash",
-        "wget | bash", "> /dev/sd", "chmod 777 /", ":(){ :|:& };:",
+        "rm -rf /",
+        "rm -rf /*",
+        "rm -rf ~",
+        "sudo ",
+        "mkfs",
+        "dd if=",
+        "curl|sh",
+        "curl |sh",
+        "curl | sh",
+        "wget|sh",
+        "wget |sh",
+        "wget | sh",
+        "curl|bash",
+        "curl |bash",
+        "curl | bash",
+        "wget|bash",
+        "wget |bash",
+        "wget | bash",
+        "> /dev/sd",
+        "chmod 777 /",
+        ":(){ :|:& };:",
     ];
 
     for cmd in &safe_commands {
         let lower = cmd.to_lowercase();
         let is_dangerous = patterns.iter().any(|pattern| lower.contains(pattern));
 
-        assert!(!is_dangerous, "Command '{cmd}' should NOT match dangerous patterns");
+        assert!(
+            !is_dangerous,
+            "Command '{cmd}' should NOT match dangerous patterns"
+        );
     }
 }
 
@@ -119,9 +156,16 @@ fn test_plan_mode_allows_read_tools() {
     ];
 
     let mutating_tools = vec![
-        "write_file", "apply_patch", "run_command",
-        "git_add", "git_commit", "git_push", "git_pull", "git_fetch",
-        "terminal_write", "marketplace_install",
+        "write_file",
+        "apply_patch",
+        "run_command",
+        "git_add",
+        "git_commit",
+        "git_push",
+        "git_pull",
+        "git_fetch",
+        "terminal_write",
+        "marketplace_install",
     ];
 
     for tool in &read_only_tools {
@@ -196,7 +240,15 @@ async fn test_tool_call_approval_flow() {
     test_helpers::seed_workspace(&pool, "ws-appr", "/tmp/appr").await;
     test_helpers::seed_thread(&pool, "t-appr", "ws-appr").await;
     test_helpers::seed_run(&pool, "r-appr", "t-appr", "running", "default").await;
-    test_helpers::seed_tool_call(&pool, "tc-appr", "r-appr", "t-appr", "write_file", "waiting_approval").await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-appr",
+        "r-appr",
+        "t-appr",
+        "write_file",
+        "waiting_approval",
+    )
+    .await;
 
     // Simulate user approval
     sqlx::query(
@@ -212,7 +264,10 @@ async fn test_tool_call_approval_flow() {
         .unwrap();
 
     assert_eq!(row.get::<String, _>("status"), "running");
-    assert_eq!(row.get::<Option<String>, _>("approval_status").unwrap(), "approved");
+    assert_eq!(
+        row.get::<Option<String>, _>("approval_status").unwrap(),
+        "approved"
+    );
 }
 
 #[tokio::test]
@@ -221,7 +276,15 @@ async fn test_tool_call_rejection() {
     test_helpers::seed_workspace(&pool, "ws-rej", "/tmp/rej").await;
     test_helpers::seed_thread(&pool, "t-rej", "ws-rej").await;
     test_helpers::seed_run(&pool, "r-rej", "t-rej", "running", "default").await;
-    test_helpers::seed_tool_call(&pool, "tc-rej", "r-rej", "t-rej", "run_command", "waiting_approval").await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-rej",
+        "r-rej",
+        "t-rej",
+        "run_command",
+        "waiting_approval",
+    )
+    .await;
 
     // User rejects
     sqlx::query(
@@ -310,7 +373,15 @@ async fn test_audit_event_recording() {
     test_helpers::seed_workspace(&pool, "ws-audit", "/tmp/audit").await;
     test_helpers::seed_thread(&pool, "t-audit", "ws-audit").await;
     test_helpers::seed_run(&pool, "r-audit", "t-audit", "running", "default").await;
-    test_helpers::seed_tool_call(&pool, "tc-audit", "r-audit", "t-audit", "read_file", "completed").await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-audit",
+        "r-audit",
+        "t-audit",
+        "read_file",
+        "completed",
+    )
+    .await;
 
     // Verify audit_events table accepts records with correct schema
     sqlx::query(
@@ -323,10 +394,12 @@ async fn test_audit_event_recording() {
     .await
     .unwrap();
 
-    let row = sqlx::query("SELECT action, policy_check_json, result_json FROM audit_events WHERE id = 'audit-001'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let row = sqlx::query(
+        "SELECT action, policy_check_json, result_json FROM audit_events WHERE id = 'audit-001'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     assert_eq!(row.get::<String, _>("action"), "tool_execute");
     let policy: serde_json::Value =
@@ -345,10 +418,42 @@ async fn test_pending_tool_calls_query() {
     test_helpers::seed_thread(&pool, "t-pending", "ws-pending").await;
     test_helpers::seed_run(&pool, "r-pending", "t-pending", "running", "default").await;
 
-    test_helpers::seed_tool_call(&pool, "tc-req", "r-pending", "t-pending", "read_file", "requested").await;
-    test_helpers::seed_tool_call(&pool, "tc-wait", "r-pending", "t-pending", "write_file", "waiting_approval").await;
-    test_helpers::seed_tool_call(&pool, "tc-run", "r-pending", "t-pending", "search_repo", "running").await;
-    test_helpers::seed_tool_call(&pool, "tc-done", "r-pending", "t-pending", "read_file", "completed").await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-req",
+        "r-pending",
+        "t-pending",
+        "read_file",
+        "requested",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-wait",
+        "r-pending",
+        "t-pending",
+        "write_file",
+        "waiting_approval",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-run",
+        "r-pending",
+        "t-pending",
+        "search_repo",
+        "running",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-done",
+        "r-pending",
+        "t-pending",
+        "read_file",
+        "completed",
+    )
+    .await;
 
     let pending = sqlx::query(
         "SELECT id FROM tool_calls

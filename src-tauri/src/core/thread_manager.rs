@@ -2,8 +2,8 @@ use sqlx::SqlitePool;
 
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{
-    AddMessageInput, MessageDto, MessageRecord, RunSummaryDto, ThreadRecord,
-    ThreadSnapshotDto, ThreadStatus, ThreadSummaryDto,
+    AddMessageInput, MessageDto, MessageRecord, RunSummaryDto, ThreadRecord, ThreadSnapshotDto,
+    ThreadStatus, ThreadSummaryDto,
 };
 use crate::persistence::repo::{message_repo, run_repo, thread_repo};
 
@@ -63,9 +63,7 @@ impl ThreadManager {
         // Re-fetch for server-set timestamps
         let saved = thread_repo::find_by_id(&self.pool, &record.id)
             .await?
-            .ok_or_else(|| {
-                AppError::internal(ErrorSource::Thread, "failed to read back thread")
-            })?;
+            .ok_or_else(|| AppError::internal(ErrorSource::Thread, "failed to read back thread"))?;
 
         Ok(ThreadSummaryDto::from(saved))
     }
@@ -144,7 +142,9 @@ impl ThreadManager {
             run_id: None,
             role: input.role,
             content_markdown: input.content,
-            message_type: input.message_type.unwrap_or_else(|| "plain_message".to_string()),
+            message_type: input
+                .message_type
+                .unwrap_or_else(|| "plain_message".to_string()),
             status: "completed".to_string(),
             metadata_json: input.metadata.map(|v| v.to_string()),
             created_at: String::new(),
@@ -157,10 +157,9 @@ impl ThreadManager {
 
         // Re-read to get server timestamp
         let messages = message_repo::list_recent(&self.pool, thread_id, None, 1).await?;
-        let msg = messages
-            .into_iter()
-            .last()
-            .ok_or_else(|| AppError::internal(ErrorSource::Thread, "failed to read back message"))?;
+        let msg = messages.into_iter().last().ok_or_else(|| {
+            AppError::internal(ErrorSource::Thread, "failed to read back message")
+        })?;
 
         Ok(MessageDto::from(msg))
     }

@@ -50,16 +50,21 @@ pub async fn write_file(
     workspace_path: &str,
 ) -> Result<ToolOutput, AppError> {
     let path = resolve_path(input, workspace_path)?;
-    let content = input["content"]
-        .as_str()
-        .ok_or_else(|| {
-            AppError::recoverable(ErrorSource::Tool, "tool.input.missing", "Missing 'content' field")
-        })?;
+    let content = input["content"].as_str().ok_or_else(|| {
+        AppError::recoverable(
+            ErrorSource::Tool,
+            "tool.input.missing",
+            "Missing 'content' field",
+        )
+    })?;
 
     // Ensure parent directory exists
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent).await.map_err(|e| {
-            AppError::internal(ErrorSource::Tool, format!("Failed to create directory: {e}"))
+            AppError::internal(
+                ErrorSource::Tool,
+                format!("Failed to create directory: {e}"),
+            )
         })?;
     }
 
@@ -130,13 +135,20 @@ pub async fn list_dir(
 /// Both absolute and relative paths are resolved, then checked against the workspace root.
 fn resolve_path(input: &serde_json::Value, workspace_path: &str) -> Result<String, AppError> {
     let raw = input["path"].as_str().ok_or_else(|| {
-        AppError::recoverable(ErrorSource::Tool, "tool.input.missing", "Missing 'path' field")
+        AppError::recoverable(
+            ErrorSource::Tool,
+            "tool.input.missing",
+            "Missing 'path' field",
+        )
     })?;
 
     let resolved = if Path::new(raw).is_absolute() {
         raw.to_string()
     } else {
-        Path::new(workspace_path).join(raw).to_string_lossy().to_string()
+        Path::new(workspace_path)
+            .join(raw)
+            .to_string_lossy()
+            .to_string()
     };
 
     // Enforce workspace boundary — the resolved path must be within workspace
@@ -164,7 +176,10 @@ fn resolve_path_or_default(input: &serde_json::Value, workspace_path: &str) -> S
             let resolved = if Path::new(raw).is_absolute() {
                 raw.to_string()
             } else {
-                Path::new(workspace_path).join(raw).to_string_lossy().to_string()
+                Path::new(workspace_path)
+                    .join(raw)
+                    .to_string_lossy()
+                    .to_string()
             };
             // For list_dir, also enforce boundary — fall back to workspace if outside
             let resolved_canonical = Path::new(&resolved)

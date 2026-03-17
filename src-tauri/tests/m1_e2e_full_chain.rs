@@ -41,12 +41,14 @@ async fn test_full_workspace_thread_message_chain() {
 
     // 6. Record a tool call
     test_helpers::seed_tool_call(&pool, "tc-e2e", "r-e2e", "t-e2e", "read_file", "completed").await;
-    sqlx::query("UPDATE tool_calls SET tool_input_json = ?, tool_output_json = ? WHERE id = 'tc-e2e'")
-        .bind(r#"{"path":"src/main.rs"}"#)
-        .bind(r#"{"content":"fn main() {}"}"#)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE tool_calls SET tool_input_json = ?, tool_output_json = ? WHERE id = 'tc-e2e'",
+    )
+    .bind(r#"{"path":"src/main.rs"}"#)
+    .bind(r#"{"content":"fn main() {}"}"#)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     // 7. Complete the run
     sqlx::query("UPDATE thread_runs SET status = 'completed', finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 'r-e2e'")
@@ -81,10 +83,11 @@ async fn test_full_workspace_thread_message_chain() {
     assert_eq!(thread.get::<String, _>("workspace_id"), "ws-e2e");
 
     // Verify messages in thread
-    let messages = sqlx::query("SELECT id, role FROM messages WHERE thread_id = 't-e2e' ORDER BY created_at")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+    let messages =
+        sqlx::query("SELECT id, role FROM messages WHERE thread_id = 't-e2e' ORDER BY created_at")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].get::<String, _>("role"), "user");
     assert_eq!(messages[1].get::<String, _>("role"), "assistant");
@@ -124,8 +127,15 @@ async fn test_full_approval_flow() {
     test_helpers::seed_run(&pool, "r-appr", "t-appr", "running", "default").await;
 
     // 1. Tool requested
-    test_helpers::seed_tool_call(&pool, "tc-appr", "r-appr", "t-appr", "write_file", "requested")
-        .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-appr",
+        "r-appr",
+        "t-appr",
+        "write_file",
+        "requested",
+    )
+    .await;
 
     // 2. Policy evaluates → require approval
     sqlx::query(
@@ -181,7 +191,10 @@ async fn test_full_approval_flow() {
         .await
         .unwrap();
     assert_eq!(tc.get::<String, _>("status"), "completed");
-    assert_eq!(tc.get::<Option<String>, _>("approval_status").unwrap(), "approved");
+    assert_eq!(
+        tc.get::<Option<String>, _>("approval_status").unwrap(),
+        "approved"
+    );
 
     let run = sqlx::query("SELECT status FROM thread_runs WHERE id = 'r-appr'")
         .fetch_one(&pool)
@@ -281,13 +294,19 @@ async fn test_settings_provider_profile_chain() {
     let profile_id: String = serde_json::from_str(&setting.get::<String, _>("value_json")).unwrap();
     assert_eq!(profile_id, "prof-e2e");
 
-    let profile = sqlx::query("SELECT primary_provider_id, primary_model_id FROM agent_profiles WHERE id = ?")
-        .bind(&profile_id)
-        .fetch_one(&pool)
-        .await
+    let profile = sqlx::query(
+        "SELECT primary_provider_id, primary_model_id FROM agent_profiles WHERE id = ?",
+    )
+    .bind(&profile_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let provider_id = profile
+        .get::<Option<String>, _>("primary_provider_id")
         .unwrap();
-    let provider_id = profile.get::<Option<String>, _>("primary_provider_id").unwrap();
-    let model_id = profile.get::<Option<String>, _>("primary_model_id").unwrap();
+    let model_id = profile
+        .get::<Option<String>, _>("primary_model_id")
+        .unwrap();
 
     let model = sqlx::query("SELECT model_name FROM provider_models WHERE id = ?")
         .bind(&model_id)
@@ -302,7 +321,10 @@ async fn test_settings_provider_profile_chain() {
         .await
         .unwrap();
     assert_eq!(provider.get::<String, _>("name"), "OpenAI");
-    assert_eq!(provider.get::<String, _>("base_url"), "https://api.openai.com/v1");
+    assert_eq!(
+        provider.get::<String, _>("base_url"),
+        "https://api.openai.com/v1"
+    );
 }
 
 // =========================================================================
@@ -337,7 +359,15 @@ async fn test_snapshot_recovery_after_crash() {
     test_helpers::seed_thread(&pool, "t-crash", "ws-crash").await;
     test_helpers::seed_message(&pool, "m-c1", "t-crash", "user", "Help me").await;
     test_helpers::seed_run(&pool, "r-crash", "t-crash", "running", "default").await;
-    test_helpers::seed_tool_call(&pool, "tc-crash", "r-crash", "t-crash", "read_file", "running").await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-crash",
+        "r-crash",
+        "t-crash",
+        "read_file",
+        "running",
+    )
+    .await;
 
     // Simulate crash recovery: mark dangling runs as interrupted
     sqlx::query(

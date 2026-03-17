@@ -20,7 +20,11 @@ async fn test_file_tree_scan_current_dir() {
         .to_string();
 
     let result = manager.get_tree(&cwd).await;
-    assert!(result.is_ok(), "File tree scan should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "File tree scan should succeed: {:?}",
+        result.err()
+    );
 
     let tree = result.unwrap();
     assert!(tree.is_dir, "Root should be a directory");
@@ -60,10 +64,7 @@ async fn test_file_tree_excludes_default_ignores() {
         !child_names.contains(&"node_modules"),
         "Should exclude 'node_modules'"
     );
-    assert!(
-        !child_names.contains(&".git"),
-        "Should exclude '.git'"
-    );
+    assert!(!child_names.contains(&".git"), "Should exclude '.git'");
     assert!(
         !child_names.contains(&".DS_Store"),
         "Should exclude '.DS_Store'"
@@ -75,7 +76,9 @@ async fn test_file_tree_nonexistent_path() {
     use tiy_agent_lib::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
-    let result = manager.get_tree("/nonexistent/path/that/does/not/exist").await;
+    let result = manager
+        .get_tree("/nonexistent/path/that/does/not/exist")
+        .await;
 
     assert!(result.is_err(), "Should fail for nonexistent path");
 }
@@ -93,10 +96,20 @@ async fn test_search_repo_basic() {
     // Create temp directory with searchable content
     let tmp = tempfile::tempdir().expect("should create tempdir");
     let base = tmp.path();
-    std::fs::write(base.join("hello.rs"), "fn main() {\n    println!(\"hello world\");\n}").unwrap();
-    std::fs::write(base.join("lib.rs"), "pub fn greet() -> &'static str {\n    \"hello\"\n}").unwrap();
+    std::fs::write(
+        base.join("hello.rs"),
+        "fn main() {\n    println!(\"hello world\");\n}",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("lib.rs"),
+        "pub fn greet() -> &'static str {\n    \"hello\"\n}",
+    )
+    .unwrap();
 
-    let result = manager.search(&base.to_string_lossy(), "hello", None, None).await;
+    let result = manager
+        .search(&base.to_string_lossy(), "hello", None, None)
+        .await;
 
     // If ripgrep is installed, this should succeed
     match result {
@@ -131,7 +144,14 @@ async fn test_search_repo_no_results() {
     let base = tmp.path();
     std::fs::write(base.join("file.txt"), "nothing special here").unwrap();
 
-    let result = manager.search(&base.to_string_lossy(), "xyzzy_nonexistent_pattern", None, None).await;
+    let result = manager
+        .search(
+            &base.to_string_lossy(),
+            "xyzzy_nonexistent_pattern",
+            None,
+            None,
+        )
+        .await;
 
     match result {
         Ok(response) => {
@@ -150,8 +170,8 @@ async fn test_search_repo_no_results() {
 
 #[tokio::test]
 async fn test_file_tree_scan_performance() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
     use std::time::Instant;
+    use tiy_agent_lib::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
 

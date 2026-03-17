@@ -2,8 +2,8 @@ use sqlx::SqlitePool;
 
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::{
-    AgentProfileInput, AgentProfileRecord, ProviderInput, ProviderModelInput,
-    ProviderModelRecord, ProviderRecord,
+    AgentProfileInput, AgentProfileRecord, ProviderInput, ProviderModelInput, ProviderModelRecord,
+    ProviderRecord,
 };
 use crate::model::settings::SettingRecord;
 use crate::persistence::repo::{profile_repo, provider_repo, settings_repo};
@@ -91,7 +91,9 @@ impl SettingsManager {
         // Re-fetch to get server-set timestamps
         provider_repo::find_by_id(&self.pool, &record.id)
             .await?
-            .ok_or_else(|| AppError::internal(ErrorSource::Settings, "failed to read back provider"))
+            .ok_or_else(|| {
+                AppError::internal(ErrorSource::Settings, "failed to read back provider")
+            })
     }
 
     pub async fn update_provider(
@@ -123,7 +125,9 @@ impl SettingsManager {
 
         provider_repo::find_by_id(&self.pool, id)
             .await?
-            .ok_or_else(|| AppError::internal(ErrorSource::Settings, "failed to read back provider"))
+            .ok_or_else(|| {
+                AppError::internal(ErrorSource::Settings, "failed to read back provider")
+            })
     }
 
     pub async fn delete_provider(&self, id: &str) -> Result<(), AppError> {
@@ -232,7 +236,9 @@ impl SettingsManager {
             response_language: input.response_language.or(existing.response_language),
             primary_provider_id: input.primary_provider_id.or(existing.primary_provider_id),
             primary_model_id: input.primary_model_id.or(existing.primary_model_id),
-            auxiliary_provider_id: input.auxiliary_provider_id.or(existing.auxiliary_provider_id),
+            auxiliary_provider_id: input
+                .auxiliary_provider_id
+                .or(existing.auxiliary_provider_id),
             auxiliary_model_id: input.auxiliary_model_id.or(existing.auxiliary_model_id),
             lightweight_provider_id: input
                 .lightweight_provider_id

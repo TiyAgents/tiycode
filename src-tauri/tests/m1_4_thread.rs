@@ -128,10 +128,12 @@ async fn test_message_append_and_persist() {
     test_helpers::seed_message(&pool, "m-001", "t-msg", "user", "Hello AI").await;
     test_helpers::seed_message(&pool, "m-002", "t-msg", "assistant", "Hello human").await;
 
-    let rows = sqlx::query("SELECT role, content_markdown FROM messages WHERE thread_id = 't-msg' ORDER BY created_at")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+    let rows = sqlx::query(
+        "SELECT role, content_markdown FROM messages WHERE thread_id = 't-msg' ORDER BY created_at",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].get::<String, _>("role"), "user");
@@ -275,10 +277,11 @@ async fn test_thread_snapshot_assembly() {
         .unwrap();
     assert_eq!(thread.get::<String, _>("id"), "t-snap");
 
-    let messages = sqlx::query("SELECT id FROM messages WHERE thread_id = 't-snap' ORDER BY id DESC")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+    let messages =
+        sqlx::query("SELECT id FROM messages WHERE thread_id = 't-snap' ORDER BY id DESC")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert_eq!(messages.len(), 2);
 
     let runs = sqlx::query("SELECT id, status FROM thread_runs WHERE thread_id = 't-snap' ORDER BY started_at DESC LIMIT 1")

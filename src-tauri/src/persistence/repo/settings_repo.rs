@@ -36,11 +36,10 @@ pub async fn get(pool: &SqlitePool, key: &str) -> Result<Option<SettingRecord>, 
 }
 
 pub async fn get_all(pool: &SqlitePool) -> Result<Vec<SettingRecord>, AppError> {
-    let rows = sqlx::query_as::<_, KvRow>(
-        "SELECT key, value_json, updated_at FROM settings ORDER BY key",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows =
+        sqlx::query_as::<_, KvRow>("SELECT key, value_json, updated_at FROM settings ORDER BY key")
+            .fetch_all(pool)
+            .await?;
 
     Ok(rows.into_iter().map(|r| r.into_record()).collect())
 }
@@ -84,11 +83,10 @@ pub async fn policy_get(pool: &SqlitePool, key: &str) -> Result<Option<SettingRe
 }
 
 pub async fn policy_get_all(pool: &SqlitePool) -> Result<Vec<SettingRecord>, AppError> {
-    let rows = sqlx::query_as::<_, KvRow>(
-        "SELECT key, value_json, updated_at FROM policies ORDER BY key",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows =
+        sqlx::query_as::<_, KvRow>("SELECT key, value_json, updated_at FROM policies ORDER BY key")
+            .fetch_all(pool)
+            .await?;
 
     Ok(rows.into_iter().map(|r| r.into_record()).collect())
 }

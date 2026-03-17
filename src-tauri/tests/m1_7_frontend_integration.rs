@@ -69,7 +69,10 @@ fn test_thread_stream_event_approval_required_serialization() {
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "approval_required");
     assert_eq!(json["tool_name"].as_str().unwrap(), "write_file");
-    assert_eq!(json["reason"].as_str().unwrap(), "Mutating tool requires approval");
+    assert_eq!(
+        json["reason"].as_str().unwrap(),
+        "Mutating tool requires approval"
+    );
     assert_eq!(json["tool_input"]["path"].as_str().unwrap(), "/src/lib.rs");
 }
 
@@ -200,23 +203,83 @@ fn test_all_events_have_type_field() {
     use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let events: Vec<ThreadStreamEvent> = vec![
-        ThreadStreamEvent::RunStarted { run_id: "r".into(), run_mode: "default".into() },
-        ThreadStreamEvent::MessageDelta { run_id: "r".into(), message_id: "m".into(), delta: "d".into() },
-        ThreadStreamEvent::MessageCompleted { run_id: "r".into(), message_id: "m".into(), content: "c".into() },
-        ThreadStreamEvent::PlanUpdated { run_id: "r".into(), plan: serde_json::json!({}) },
-        ThreadStreamEvent::ReasoningUpdated { run_id: "r".into(), reasoning: "r".into() },
-        ThreadStreamEvent::QueueUpdated { run_id: "r".into(), queue: serde_json::json!([]) },
-        ThreadStreamEvent::SubagentStarted { run_id: "r".into(), subtask_id: "s".into() },
-        ThreadStreamEvent::SubagentCompleted { run_id: "r".into(), subtask_id: "s".into(), summary: None },
-        ThreadStreamEvent::SubagentFailed { run_id: "r".into(), subtask_id: "s".into(), error: "e".into() },
-        ThreadStreamEvent::ToolRequested { run_id: "r".into(), tool_call_id: "t".into(), tool_name: "n".into(), tool_input: serde_json::json!({}) },
-        ThreadStreamEvent::ApprovalRequired { run_id: "r".into(), tool_call_id: "t".into(), tool_name: "n".into(), tool_input: serde_json::json!({}), reason: "r".into() },
-        ThreadStreamEvent::ApprovalResolved { run_id: "r".into(), tool_call_id: "t".into(), approved: true },
-        ThreadStreamEvent::ToolRunning { run_id: "r".into(), tool_call_id: "t".into() },
-        ThreadStreamEvent::ToolCompleted { run_id: "r".into(), tool_call_id: "t".into(), result: serde_json::json!({}) },
-        ThreadStreamEvent::ToolFailed { run_id: "r".into(), tool_call_id: "t".into(), error: "e".into() },
+        ThreadStreamEvent::RunStarted {
+            run_id: "r".into(),
+            run_mode: "default".into(),
+        },
+        ThreadStreamEvent::MessageDelta {
+            run_id: "r".into(),
+            message_id: "m".into(),
+            delta: "d".into(),
+        },
+        ThreadStreamEvent::MessageCompleted {
+            run_id: "r".into(),
+            message_id: "m".into(),
+            content: "c".into(),
+        },
+        ThreadStreamEvent::PlanUpdated {
+            run_id: "r".into(),
+            plan: serde_json::json!({}),
+        },
+        ThreadStreamEvent::ReasoningUpdated {
+            run_id: "r".into(),
+            reasoning: "r".into(),
+        },
+        ThreadStreamEvent::QueueUpdated {
+            run_id: "r".into(),
+            queue: serde_json::json!([]),
+        },
+        ThreadStreamEvent::SubagentStarted {
+            run_id: "r".into(),
+            subtask_id: "s".into(),
+        },
+        ThreadStreamEvent::SubagentCompleted {
+            run_id: "r".into(),
+            subtask_id: "s".into(),
+            summary: None,
+        },
+        ThreadStreamEvent::SubagentFailed {
+            run_id: "r".into(),
+            subtask_id: "s".into(),
+            error: "e".into(),
+        },
+        ThreadStreamEvent::ToolRequested {
+            run_id: "r".into(),
+            tool_call_id: "t".into(),
+            tool_name: "n".into(),
+            tool_input: serde_json::json!({}),
+        },
+        ThreadStreamEvent::ApprovalRequired {
+            run_id: "r".into(),
+            tool_call_id: "t".into(),
+            tool_name: "n".into(),
+            tool_input: serde_json::json!({}),
+            reason: "r".into(),
+        },
+        ThreadStreamEvent::ApprovalResolved {
+            run_id: "r".into(),
+            tool_call_id: "t".into(),
+            approved: true,
+        },
+        ThreadStreamEvent::ToolRunning {
+            run_id: "r".into(),
+            tool_call_id: "t".into(),
+        },
+        ThreadStreamEvent::ToolCompleted {
+            run_id: "r".into(),
+            tool_call_id: "t".into(),
+            result: serde_json::json!({}),
+        },
+        ThreadStreamEvent::ToolFailed {
+            run_id: "r".into(),
+            tool_call_id: "t".into(),
+            error: "e".into(),
+        },
         ThreadStreamEvent::RunCompleted { run_id: "r".into() },
-        ThreadStreamEvent::RunFailed { run_id: "r".into(), error: "e".into() },
+        ThreadStreamEvent::RunFailed {
+            run_id: "r".into(),
+            error: "e".into(),
+        },
         ThreadStreamEvent::RunInterrupted { run_id: "r".into() },
     ];
 
@@ -231,7 +294,11 @@ fn test_all_events_have_type_field() {
     }
 
     // Verify total count matches enum variants (18 variants)
-    assert_eq!(events.len(), 18, "Should test all 18 ThreadStreamEvent variants");
+    assert_eq!(
+        events.len(),
+        18,
+        "Should test all 18 ThreadStreamEvent variants"
+    );
 }
 
 // =========================================================================
@@ -260,17 +327,41 @@ fn test_workspace_dto_camel_case() {
     let json = serde_json::to_value(&dto).unwrap();
 
     // Verify camelCase keys
-    assert!(json.get("isDefault").is_some(), "Should use camelCase: isDefault");
+    assert!(
+        json.get("isDefault").is_some(),
+        "Should use camelCase: isDefault"
+    );
     assert!(json.get("isGit").is_some(), "Should use camelCase: isGit");
-    assert!(json.get("autoWorkTree").is_some(), "Should use camelCase: autoWorkTree");
-    assert!(json.get("canonicalPath").is_some(), "Should use camelCase: canonicalPath");
-    assert!(json.get("displayPath").is_some(), "Should use camelCase: displayPath");
-    assert!(json.get("lastValidatedAt").is_some(), "Should use camelCase: lastValidatedAt");
-    assert!(json.get("createdAt").is_some(), "Should use camelCase: createdAt");
+    assert!(
+        json.get("autoWorkTree").is_some(),
+        "Should use camelCase: autoWorkTree"
+    );
+    assert!(
+        json.get("canonicalPath").is_some(),
+        "Should use camelCase: canonicalPath"
+    );
+    assert!(
+        json.get("displayPath").is_some(),
+        "Should use camelCase: displayPath"
+    );
+    assert!(
+        json.get("lastValidatedAt").is_some(),
+        "Should use camelCase: lastValidatedAt"
+    );
+    assert!(
+        json.get("createdAt").is_some(),
+        "Should use camelCase: createdAt"
+    );
 
     // Verify no snake_case keys
-    assert!(json.get("is_default").is_none(), "Should NOT have snake_case key");
-    assert!(json.get("is_git").is_none(), "Should NOT have snake_case key");
+    assert!(
+        json.get("is_default").is_none(),
+        "Should NOT have snake_case key"
+    );
+    assert!(
+        json.get("is_git").is_none(),
+        "Should NOT have snake_case key"
+    );
 }
 
 #[test]
@@ -332,7 +423,16 @@ fn test_app_error_serialization_camel_case() {
 
     let json = serde_json::to_value(&err).unwrap();
 
-    assert!(json.get("errorCode").is_some(), "Should use camelCase: errorCode");
-    assert!(json.get("userMessage").is_some(), "Should use camelCase: userMessage");
-    assert!(json.get("error_code").is_none(), "Should NOT have snake_case");
+    assert!(
+        json.get("errorCode").is_some(),
+        "Should use camelCase: errorCode"
+    );
+    assert!(
+        json.get("userMessage").is_some(),
+        "Should use camelCase: userMessage"
+    );
+    assert!(
+        json.get("error_code").is_none(),
+        "Should NOT have snake_case"
+    );
 }

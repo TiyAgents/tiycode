@@ -144,7 +144,9 @@ impl PolicyEngine {
                             return Ok(PolicyCheck {
                                 tool_name: tool_name.to_string(),
                                 verdict: PolicyVerdict::Deny {
-                                    reason: format!("Denied by user deny list rule: {tool}/{pattern}"),
+                                    reason: format!(
+                                        "Denied by user deny list rule: {tool}/{pattern}"
+                                    ),
                                 },
                                 checked_rules: checked,
                             });

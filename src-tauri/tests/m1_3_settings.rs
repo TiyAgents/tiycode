@@ -63,7 +63,11 @@ async fn test_settings_get_all() {
         .await
         .unwrap();
 
-    assert_eq!(rows.len() as i64, baseline + 3, "Should have 3 additional settings beyond baseline");
+    assert_eq!(
+        rows.len() as i64,
+        baseline + 3,
+        "Should have 3 additional settings beyond baseline"
+    );
 }
 
 // =========================================================================
@@ -131,10 +135,12 @@ async fn test_provider_update() {
     .await
     .unwrap();
 
-    sqlx::query("UPDATE providers SET name = 'New Name', base_url = 'https://new.api' WHERE id = 'prov-u'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE providers SET name = 'New Name', base_url = 'https://new.api' WHERE id = 'prov-u'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let row = sqlx::query("SELECT name, base_url FROM providers WHERE id = 'prov-u'")
         .fetch_one(&pool)
@@ -176,7 +182,11 @@ async fn test_provider_delete_cascades_models() {
         .await
         .unwrap();
 
-    assert_eq!(models.len(), 0, "Models should be cascade-deleted with provider");
+    assert_eq!(
+        models.len(),
+        0,
+        "Models should be cascade-deleted with provider"
+    );
 }
 
 // =========================================================================
@@ -211,7 +221,10 @@ async fn test_provider_model_unique_constraint() {
     .execute(&pool)
     .await;
 
-    assert!(result.is_err(), "Duplicate provider+model_name should be rejected");
+    assert!(
+        result.is_err(),
+        "Duplicate provider+model_name should be rejected"
+    );
 }
 
 // =========================================================================
@@ -246,7 +259,17 @@ async fn test_profile_three_layer_model() {
     .await
     .unwrap();
 
-    assert_eq!(row.get::<Option<String>, _>("primary_provider_id").unwrap(), "prov-a");
-    assert_eq!(row.get::<Option<String>, _>("auxiliary_model_id").unwrap(), "model-claude");
-    assert_eq!(row.get::<Option<String>, _>("lightweight_model_id").unwrap(), "model-gpt35");
+    assert_eq!(
+        row.get::<Option<String>, _>("primary_provider_id").unwrap(),
+        "prov-a"
+    );
+    assert_eq!(
+        row.get::<Option<String>, _>("auxiliary_model_id").unwrap(),
+        "model-claude"
+    );
+    assert_eq!(
+        row.get::<Option<String>, _>("lightweight_model_id")
+            .unwrap(),
+        "model-gpt35"
+    );
 }

@@ -56,14 +56,20 @@ pub async fn tool_approval_respond(
         .await?;
 
     match result {
-        Some(ToolGatewayResult::Executed { tool_call_id, output }) => {
+        Some(ToolGatewayResult::Executed {
+            tool_call_id,
+            output,
+        }) => {
             // Tool executed successfully — send result back to sidecar
             state
                 .agent_run_manager
                 .send_tool_result(&tool_call_id, &run_id, output.result, output.success)
                 .await?;
         }
-        Some(ToolGatewayResult::Denied { tool_call_id, reason }) => {
+        Some(ToolGatewayResult::Denied {
+            tool_call_id,
+            reason,
+        }) => {
             // Denied — send denial back to sidecar
             state
                 .agent_run_manager
@@ -96,9 +102,7 @@ pub async fn tool_approval_respond(
 }
 
 #[tauri::command]
-pub async fn sidecar_status(
-    state: State<'_, AppState>,
-) -> Result<serde_json::Value, AppError> {
+pub async fn sidecar_status(state: State<'_, AppState>) -> Result<serde_json::Value, AppError> {
     let running = state.sidecar_manager.is_running().await;
     Ok(serde_json::json!({
         "running": running,

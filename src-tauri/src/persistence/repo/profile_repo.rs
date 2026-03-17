@@ -151,20 +151,17 @@ pub async fn set_default(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     let mut tx = pool.begin().await?;
 
-    sqlx::query(
-        "UPDATE agent_profiles SET is_default = 0, updated_at = ? WHERE is_default = 1",
-    )
-    .bind(&now)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE agent_profiles SET is_default = 0, updated_at = ? WHERE is_default = 1")
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
 
-    let result = sqlx::query(
-        "UPDATE agent_profiles SET is_default = 1, updated_at = ? WHERE id = ?",
-    )
-    .bind(&now)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+    let result =
+        sqlx::query("UPDATE agent_profiles SET is_default = 1, updated_at = ? WHERE id = ?")
+            .bind(&now)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::not_found(ErrorSource::Settings, "agent profile"));

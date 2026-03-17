@@ -158,16 +158,22 @@ impl SidecarManager {
         };
 
         let json = serde_json::to_string(&msg).map_err(|e| {
-            AppError::internal(ErrorSource::Sidecar, format!("Failed to serialize request: {e}"))
+            AppError::internal(
+                ErrorSource::Sidecar,
+                format!("Failed to serialize request: {e}"),
+            )
         })?;
 
         let tx = self.stdin_tx.lock().await;
-        let tx = tx.as_ref().ok_or_else(|| {
-            AppError::internal(ErrorSource::Sidecar, "Sidecar not started")
-        })?;
+        let tx = tx
+            .as_ref()
+            .ok_or_else(|| AppError::internal(ErrorSource::Sidecar, "Sidecar not started"))?;
 
         tx.send(json).await.map_err(|e| {
-            AppError::internal(ErrorSource::Sidecar, format!("Failed to send to sidecar: {e}"))
+            AppError::internal(
+                ErrorSource::Sidecar,
+                format!("Failed to send to sidecar: {e}"),
+            )
         })?;
 
         tracing::debug!(id, method, "sent request to sidecar");
@@ -182,12 +188,7 @@ impl SidecarManager {
         let mut child_lock = self.child.lock().await;
         if let Some(mut child) = child_lock.take() {
             // Give it a moment to exit gracefully, then kill
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                child.wait(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
                 Ok(Ok(status)) => {
                     tracing::info!(?status, "sidecar exited");
                 }

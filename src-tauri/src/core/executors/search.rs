@@ -25,7 +25,10 @@ pub async fn search_repo(
             if p.is_absolute() {
                 d.to_string()
             } else {
-                Path::new(workspace_path).join(d).to_string_lossy().to_string()
+                Path::new(workspace_path)
+                    .join(d)
+                    .to_string_lossy()
+                    .to_string()
             }
         })
         .unwrap_or_else(|| workspace_path.to_string());

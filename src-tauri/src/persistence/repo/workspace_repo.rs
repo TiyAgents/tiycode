@@ -155,12 +155,11 @@ pub async fn set_default(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
         .execute(&mut *tx)
         .await?;
 
-    let result =
-        sqlx::query("UPDATE workspaces SET is_default = 1, updated_at = ? WHERE id = ?")
-            .bind(&now)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+    let result = sqlx::query("UPDATE workspaces SET is_default = 1, updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::not_found(ErrorSource::Workspace, "workspace"));

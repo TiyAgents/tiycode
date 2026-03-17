@@ -158,7 +158,16 @@ async fn test_threads_table_schema() {
 
     let columns: Vec<String> = rows.iter().map(|r| r.get::<String, _>("name")).collect();
 
-    for col in &["id", "workspace_id", "title", "status", "summary", "last_active_at", "created_at", "updated_at"] {
+    for col in &[
+        "id",
+        "workspace_id",
+        "title",
+        "status",
+        "summary",
+        "last_active_at",
+        "created_at",
+        "updated_at",
+    ] {
         assert!(
             columns.contains(&col.to_string()),
             "Missing column '{col}' in threads table"
@@ -178,8 +187,15 @@ async fn test_messages_table_schema() {
     let columns: Vec<String> = rows.iter().map(|r| r.get::<String, _>("name")).collect();
 
     for col in &[
-        "id", "thread_id", "run_id", "role", "content_markdown",
-        "message_type", "status", "metadata_json", "created_at",
+        "id",
+        "thread_id",
+        "run_id",
+        "role",
+        "content_markdown",
+        "message_type",
+        "status",
+        "metadata_json",
+        "created_at",
     ] {
         assert!(
             columns.contains(&col.to_string()),
@@ -200,8 +216,15 @@ async fn test_thread_runs_table_schema() {
     let columns: Vec<String> = rows.iter().map(|r| r.get::<String, _>("name")).collect();
 
     for col in &[
-        "id", "thread_id", "profile_id", "run_mode", "execution_strategy",
-        "status", "error_message", "started_at", "finished_at",
+        "id",
+        "thread_id",
+        "profile_id",
+        "run_mode",
+        "execution_strategy",
+        "status",
+        "error_message",
+        "started_at",
+        "finished_at",
         "effective_model_plan_json",
     ] {
         assert!(
@@ -223,8 +246,15 @@ async fn test_tool_calls_table_schema() {
     let columns: Vec<String> = rows.iter().map(|r| r.get::<String, _>("name")).collect();
 
     for col in &[
-        "id", "run_id", "thread_id", "tool_name", "tool_input_json",
-        "tool_output_json", "status", "approval_status", "policy_verdict_json",
+        "id",
+        "run_id",
+        "thread_id",
+        "tool_name",
+        "tool_input_json",
+        "tool_output_json",
+        "status",
+        "approval_status",
+        "policy_verdict_json",
     ] {
         assert!(
             columns.contains(&col.to_string()),
@@ -241,10 +271,12 @@ async fn test_tool_calls_table_schema() {
 async fn test_critical_indexes_exist() {
     let pool = test_helpers::setup_test_pool().await;
 
-    let rows = sqlx::query("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'")
-        .fetch_all(&pool)
-        .await
-        .expect("should query indexes");
+    let rows = sqlx::query(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("should query indexes");
 
     let indexes: Vec<String> = rows.iter().map(|r| r.get("name")).collect();
 

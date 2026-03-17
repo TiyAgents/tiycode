@@ -11,7 +11,10 @@ pub async fn thread_list(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<ThreadSummaryDto>, AppError> {
-    state.thread_manager.list(&workspace_id, limit, offset).await
+    state
+        .thread_manager
+        .list(&workspace_id, limit, offset)
+        .await
 }
 
 #[tauri::command]
@@ -30,7 +33,10 @@ pub async fn thread_load(
     message_cursor: Option<String>,
     message_limit: Option<i64>,
 ) -> Result<ThreadSnapshotDto, AppError> {
-    state.thread_manager.load(&id, message_cursor, message_limit).await
+    state
+        .thread_manager
+        .load(&id, message_cursor, message_limit)
+        .await
 }
 
 #[tauri::command]
@@ -43,10 +49,7 @@ pub async fn thread_update_title(
 }
 
 #[tauri::command]
-pub async fn thread_delete(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), AppError> {
+pub async fn thread_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     state.thread_manager.delete(&id).await
 }
 

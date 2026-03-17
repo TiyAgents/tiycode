@@ -96,8 +96,7 @@ impl ToolGateway {
             }
 
             PolicyVerdict::RequireApproval { reason } => {
-                tool_call_repo::update_status(&self.pool, tool_call_id, "waiting_approval")
-                    .await?;
+                tool_call_repo::update_status(&self.pool, tool_call_id, "waiting_approval").await?;
 
                 // Store pending approval
                 {
@@ -232,7 +231,11 @@ impl ToolGateway {
 
         // Persist result
         let result_json = output.result.to_string();
-        let status = if output.success { "completed" } else { "failed" };
+        let status = if output.success {
+            "completed"
+        } else {
+            "failed"
+        };
         tool_call_repo::update_result(&self.pool, tool_call_id, &result_json, status).await?;
 
         // Audit
@@ -298,9 +301,7 @@ pub enum ToolGatewayResult {
         output: ToolOutput,
     },
     /// Tool requires user approval before execution.
-    ApprovalRequired {
-        event: ThreadStreamEvent,
-    },
+    ApprovalRequired { event: ThreadStreamEvent },
     /// Tool was denied by policy or user.
     Denied {
         tool_call_id: String,

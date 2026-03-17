@@ -23,13 +23,9 @@ pub async fn run_command(
         });
     }
 
-    let cwd = input["cwd"]
-        .as_str()
-        .unwrap_or(workspace_path);
+    let cwd = input["cwd"].as_str().unwrap_or(workspace_path);
 
-    let timeout_secs = input["timeout"]
-        .as_u64()
-        .unwrap_or(DEFAULT_TIMEOUT_SECS);
+    let timeout_secs = input["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
     // Use the user's default shell
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());

@@ -76,13 +76,11 @@ pub async fn update_approval(
     approval_status: &str,
     tool_status: &str,
 ) -> Result<(), AppError> {
-    sqlx::query(
-        "UPDATE tool_calls SET approval_status = ?, status = ? WHERE id = ?",
-    )
-    .bind(approval_status)
-    .bind(tool_status)
-    .bind(id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE tool_calls SET approval_status = ?, status = ? WHERE id = ?")
+        .bind(approval_status)
+        .bind(tool_status)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }

@@ -183,9 +183,9 @@ async fn scan_dir(
         });
     }
 
-    let mut entries = fs::read_dir(path).await.map_err(|e| {
-        AppError::internal(ErrorSource::Index, format!("Failed to read dir: {e}"))
-    })?;
+    let mut entries = fs::read_dir(path)
+        .await
+        .map_err(|e| AppError::internal(ErrorSource::Index, format!("Failed to read dir: {e}")))?;
 
     let mut children = Vec::new();
     let mut dirs = Vec::new();

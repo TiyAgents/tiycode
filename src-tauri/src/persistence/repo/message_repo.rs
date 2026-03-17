@@ -106,11 +106,7 @@ pub async fn insert(pool: &SqlitePool, record: &MessageRecord) -> Result<(), App
 }
 
 /// Update message status (e.g. streaming → completed).
-pub async fn update_status(
-    pool: &SqlitePool,
-    id: &str,
-    status: &str,
-) -> Result<(), AppError> {
+pub async fn update_status(pool: &SqlitePool, id: &str, status: &str) -> Result<(), AppError> {
     sqlx::query("UPDATE messages SET status = ? WHERE id = ?")
         .bind(status)
         .bind(id)
@@ -120,11 +116,7 @@ pub async fn update_status(
 }
 
 /// Append content to an existing streaming message.
-pub async fn append_content(
-    pool: &SqlitePool,
-    id: &str,
-    delta: &str,
-) -> Result<(), AppError> {
+pub async fn append_content(pool: &SqlitePool, id: &str, delta: &str) -> Result<(), AppError> {
     sqlx::query("UPDATE messages SET content_markdown = content_markdown || ? WHERE id = ?")
         .bind(delta)
         .bind(id)

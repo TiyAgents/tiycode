@@ -95,7 +95,10 @@ async fn test_run_failure_with_error() {
         .unwrap();
 
     assert_eq!(row.get::<String, _>("status"), "failed");
-    assert_eq!(row.get::<Option<String>, _>("error_message").unwrap(), "LLM timeout");
+    assert_eq!(
+        row.get::<Option<String>, _>("error_message").unwrap(),
+        "LLM timeout"
+    );
 }
 
 #[tokio::test]

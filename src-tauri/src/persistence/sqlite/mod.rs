@@ -1,4 +1,6 @@
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+};
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
@@ -10,10 +12,12 @@ pub async fn create_pool(db_path: &Path) -> Result<SqlitePool, AppError> {
     let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
 
     let options = SqliteConnectOptions::from_str(&db_url)
-        .map_err(|e| AppError::internal(
-            crate::model::errors::ErrorSource::Database,
-            format!("Invalid database path: {e}"),
-        ))?
+        .map_err(|e| {
+            AppError::internal(
+                crate::model::errors::ErrorSource::Database,
+                format!("Invalid database path: {e}"),
+            )
+        })?
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
@@ -34,10 +38,12 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), AppError> {
     sqlx::migrate!("./migrations")
         .run(pool)
         .await
-        .map_err(|e| AppError::internal(
-            crate::model::errors::ErrorSource::Database,
-            format!("Migration failed: {e}"),
-        ))?;
+        .map_err(|e| {
+            AppError::internal(
+                crate::model::errors::ErrorSource::Database,
+                format!("Migration failed: {e}"),
+            )
+        })?;
 
     tracing::info!("database migrations completed");
     Ok(())

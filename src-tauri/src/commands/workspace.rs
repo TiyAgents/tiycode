@@ -22,18 +22,12 @@ pub async fn workspace_add(
 }
 
 #[tauri::command]
-pub async fn workspace_remove(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), AppError> {
+pub async fn workspace_remove(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     state.workspace_manager.remove(&id).await
 }
 
 #[tauri::command]
-pub async fn workspace_set_default(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), AppError> {
+pub async fn workspace_set_default(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     state.workspace_manager.set_default(&id).await
 }
 
