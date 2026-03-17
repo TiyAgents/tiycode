@@ -87,6 +87,51 @@ pub fn open_workspace_in_app(
     }
 }
 
+#[tauri::command]
+pub fn open_tree_path_in_app(
+    target_path: String,
+    is_directory: bool,
+    app_id: String,
+    app_path: Option<String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return open_tree_path_in_app_macos(
+            &target_path,
+            is_directory,
+            &app_id,
+            app_path.as_deref(),
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        #[cfg(target_os = "windows")]
+        {
+            return open_tree_path_in_app_windows(
+                &target_path,
+                is_directory,
+                &app_id,
+                app_path.as_deref(),
+            );
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (target_path, is_directory, app_id, app_path);
+            Err("Opening tree paths in external apps is only supported on macOS and Windows right now.".into())
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TreePathOpenBehavior {
+    OpenTarget,
+    RevealTarget,
+    OpenContainingFolder,
+}
+
 #[cfg(target_os = "macos")]
 struct WorkspaceOpenAppSpec {
     id: &'static str,
@@ -227,6 +272,52 @@ fn open_workspace_in_app_macos(
 }
 
 #[cfg(target_os = "macos")]
+fn open_tree_path_in_app_macos(
+    target_path: &str,
+    is_directory: bool,
+    app_id: &str,
+    app_path: Option<&str>,
+) -> Result<(), String> {
+    let resolved_app_path = app_path
+        .map(PathBuf::from)
+        .or_else(|| find_workspace_open_app_spec(app_id).and_then(find_app_bundle))
+        .map(|path| path.to_string_lossy().into_owned());
+
+    let behavior = tree_path_open_behavior_macos(app_id, is_directory);
+    match behavior {
+        TreePathOpenBehavior::OpenTarget => {
+            if app_id == "warp" {
+                open_workspace_in_warp_macos(target_path)
+            } else {
+                open_workspace_with_open_command_macos(target_path, resolved_app_path.as_deref())
+            }
+        }
+        TreePathOpenBehavior::RevealTarget => reveal_tree_path_in_finder_macos(target_path),
+        TreePathOpenBehavior::OpenContainingFolder => {
+            let folder_path = containing_directory_path(target_path)?;
+            if app_id == "warp" {
+                open_workspace_in_warp_macos(&folder_path)
+            } else {
+                open_workspace_with_open_command_macos(&folder_path, resolved_app_path.as_deref())
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn tree_path_open_behavior_macos(app_id: &str, is_directory: bool) -> TreePathOpenBehavior {
+    if is_directory {
+        return TreePathOpenBehavior::OpenTarget;
+    }
+
+    match app_id {
+        "finder" => TreePathOpenBehavior::RevealTarget,
+        "terminal" | "iterm2" | "warp" => TreePathOpenBehavior::OpenContainingFolder,
+        _ => TreePathOpenBehavior::OpenTarget,
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn open_workspace_with_open_command_macos(
     target_path: &str,
     app_path: Option<&str>,
@@ -253,6 +344,31 @@ fn open_workspace_with_open_command_macos(
             stdout
         } else {
             format!("`open` exited with status {}.", output.status)
+        };
+
+        Err(message)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_tree_path_in_finder_macos(target_path: &str) -> Result<(), String> {
+    let output = Command::new("open")
+        .arg("-R")
+        .arg(target_path)
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let message = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("`open -R` exited with status {}.", output.status)
         };
 
         Err(message)
@@ -770,6 +886,51 @@ fn open_workspace_in_app_windows(
 }
 
 #[cfg(target_os = "windows")]
+fn open_tree_path_in_app_windows(
+    target_path: &str,
+    is_directory: bool,
+    app_id: &str,
+    app_path: Option<&str>,
+) -> Result<(), String> {
+    let behavior = tree_path_open_behavior_windows(app_id, is_directory);
+
+    match behavior {
+        TreePathOpenBehavior::OpenTarget => {
+            open_workspace_in_app_windows(target_path, app_id, app_path)
+        }
+        TreePathOpenBehavior::RevealTarget => reveal_tree_path_in_explorer_windows(target_path),
+        TreePathOpenBehavior::OpenContainingFolder => {
+            let folder_path = containing_directory_path(target_path)?;
+            open_workspace_in_app_windows(&folder_path, app_id, app_path)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn tree_path_open_behavior_windows(app_id: &str, is_directory: bool) -> TreePathOpenBehavior {
+    if is_directory {
+        return TreePathOpenBehavior::OpenTarget;
+    }
+
+    match app_id {
+        "explorer" => TreePathOpenBehavior::RevealTarget,
+        "powershell" | "git-bash" => TreePathOpenBehavior::OpenContainingFolder,
+        _ => TreePathOpenBehavior::OpenTarget,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_tree_path_in_explorer_windows(target_path: &str) -> Result<(), String> {
+    let normalized_target_path = normalize_windows_target_path(target_path);
+    Command::new("explorer.exe")
+        .arg(format!("/select,{normalized_target_path}"))
+        .spawn()
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 fn open_workspace_in_powershell_windows(
     normalized_target_path: &str,
     app_path: Option<&str>,
@@ -800,6 +961,96 @@ fn normalize_windows_target_path(target_path: &str) -> String {
     }
 
     value
+}
+
+fn containing_directory_path(target_path: &str) -> Result<String, String> {
+    let path = PathBuf::from(target_path);
+
+    let directory = if path.is_dir() {
+        path
+    } else {
+        path.parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "The selected file does not have a containing folder.".to_string())?
+    };
+
+    Ok(directory.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::containing_directory_path;
+    use std::fs;
+
+    #[test]
+    fn containing_directory_uses_parent_for_files() {
+        let tempdir = tempfile::tempdir().expect("should create tempdir");
+        let src_dir = tempdir.path().join("src");
+        fs::create_dir_all(&src_dir).expect("should create src dir");
+        let file_path = src_dir.join("main.rs");
+        fs::write(&file_path, "fn main() {}\n").expect("should write file");
+
+        let directory = containing_directory_path(&file_path.to_string_lossy())
+            .expect("file path should resolve to its parent directory");
+        assert_eq!(directory, src_dir.to_string_lossy());
+    }
+
+    #[test]
+    fn containing_directory_keeps_directories() {
+        let tempdir = tempfile::tempdir().expect("should create tempdir");
+        let src_dir = tempdir.path().join("src");
+        fs::create_dir_all(&src_dir).expect("should create src dir");
+
+        let directory = containing_directory_path(&src_dir.to_string_lossy())
+            .expect("directory path should remain unchanged");
+        assert_eq!(directory, src_dir.to_string_lossy());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_tree_path_behavior_matches_app_capabilities() {
+        use super::{tree_path_open_behavior_macos, TreePathOpenBehavior};
+
+        assert_eq!(
+            tree_path_open_behavior_macos("finder", false),
+            TreePathOpenBehavior::RevealTarget
+        );
+        assert_eq!(
+            tree_path_open_behavior_macos("terminal", false),
+            TreePathOpenBehavior::OpenContainingFolder
+        );
+        assert_eq!(
+            tree_path_open_behavior_macos("cursor", false),
+            TreePathOpenBehavior::OpenTarget
+        );
+        assert_eq!(
+            tree_path_open_behavior_macos("finder", true),
+            TreePathOpenBehavior::OpenTarget
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_tree_path_behavior_matches_app_capabilities() {
+        use super::{tree_path_open_behavior_windows, TreePathOpenBehavior};
+
+        assert_eq!(
+            tree_path_open_behavior_windows("explorer", false),
+            TreePathOpenBehavior::RevealTarget
+        );
+        assert_eq!(
+            tree_path_open_behavior_windows("powershell", false),
+            TreePathOpenBehavior::OpenContainingFolder
+        );
+        assert_eq!(
+            tree_path_open_behavior_windows("cursor", false),
+            TreePathOpenBehavior::OpenTarget
+        );
+        assert_eq!(
+            tree_path_open_behavior_windows("explorer", true),
+            TreePathOpenBehavior::OpenTarget
+        );
+    }
 }
 
 #[cfg(target_os = "windows")]

@@ -133,6 +133,7 @@ pub fn run() {
             commands::system::get_system_metadata,
             commands::system::get_workspace_open_apps,
             commands::system::open_workspace_in_app,
+            commands::system::open_tree_path_in_app,
             // Workspace
             commands::workspace::workspace_list,
             commands::workspace::workspace_add,

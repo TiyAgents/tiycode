@@ -309,6 +309,15 @@ function collectAncestorPaths(path: string): string[] {
   return ancestors;
 }
 
+function resolveProjectTargetPath(projectRoot: string, relativePath: string): string {
+  const trimmedRoot = projectRoot.replace(/[\\/]+$/, "");
+  const normalizedRelativePath = relativePath.replace(/^[/\\]+/, "");
+
+  return normalizedRelativePath.length > 0
+    ? `${trimmedRoot}/${normalizedRelativePath}`
+    : trimmedRoot;
+}
+
 function hasLoadedChildPath(node: FileTreeNode, childPath: string): boolean {
   return node.children?.some((child) => child.path === childPath) ?? false;
 }
@@ -565,6 +574,37 @@ export function ProjectPanel({
       setOpenError(null);
     } catch (error) {
       const message = getOpenErrorMessage(error, `Couldn't open in ${app.name}`);
+      setOpenError(message);
+      if (errorTimeoutRef.current) {
+        window.clearTimeout(errorTimeoutRef.current);
+      }
+      errorTimeoutRef.current = window.setTimeout(() => {
+        setOpenError(null);
+        errorTimeoutRef.current = null;
+      }, 2200);
+    } finally {
+      setActiveOpenTargetId(null);
+    }
+  };
+
+  const handleOpenTreeFile = async (relativePath: string) => {
+    if (!projectPath || !preferredOpenApp) {
+      return;
+    }
+
+    const targetPath = resolveProjectTargetPath(projectPath, relativePath);
+    setActiveOpenTargetId(preferredOpenApp.id);
+
+    try {
+      await invoke("open_tree_path_in_app", {
+        targetPath,
+        isDirectory: false,
+        appId: preferredOpenApp.id,
+        appPath: preferredOpenApp.openWith,
+      });
+      setOpenError(null);
+    } catch (error) {
+      const message = getOpenErrorMessage(error, `Couldn't open file in ${preferredOpenApp.name}`);
       setOpenError(message);
       if (errorTimeoutRef.current) {
         window.clearTimeout(errorTimeoutRef.current);
@@ -950,6 +990,7 @@ export function ProjectPanel({
                         `${DRAWER_LIST_ROW_CLASS} relative flex items-center gap-2 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground`,
                       )}
                       onClick={() => void handleRevealFilterResult(match)}
+                      onDoubleClick={() => void handleOpenTreeFile(match.path)}
                     >
                       <span className="flex size-4 shrink-0 items-center justify-center" />
                       <ProjectTreeIcon icon={icon} muted={false} />
@@ -1001,6 +1042,11 @@ export function ProjectPanel({
                       )}
                       style={{ paddingLeft: `${10 + depth * 14}px` }}
                       onClick={() => void handleTreeToggle(node)}
+                      onDoubleClick={() => {
+                        if (!node.isDir) {
+                          void handleOpenTreeFile(node.path);
+                        }
+                      }}
                     >
                       <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
                         {isLoading ? (
