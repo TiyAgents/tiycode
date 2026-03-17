@@ -29,9 +29,11 @@ export function ThreadTerminalPanel({
         <div className="min-w-0 flex items-center gap-2">
           <TerminalSquare className="size-3.5" />
           <span className="font-medium text-app-foreground">Terminal</span>
-          <span className="truncate text-app-subtle">
-            {threadTitle ?? "未选择线程"}
-          </span>
+          {isPendingThread ? null : (
+            <span className="truncate text-app-subtle">
+              {threadTitle ?? "未选择线程"}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1">
