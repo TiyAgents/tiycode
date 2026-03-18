@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import {
   AlertCircle,
@@ -77,6 +77,7 @@ type GitPanelProps = {
   workspaceId: string | null;
   currentProject: ProjectOption | null;
   workspaceBootstrapError: string | null;
+  layoutResizeSignal: number;
   onOpenDiffPreview: (selection: GitDiffSelection) => void;
 };
 
@@ -93,7 +94,9 @@ type GitDiffPreviewPanelProps = {
 
 const ACTION_ALERT_TIMEOUT_MS = 4200;
 
-const MIN_HISTORY_HEIGHT = 228;
+const DEFAULT_HISTORY_HEIGHT = 228;
+const MIN_CHANGES_BODY_HEIGHT = 160;
+const CHANGES_SECTION_VERTICAL_GAP = 24;
 
 function formatUiError(error: unknown, fallback = "Request failed") {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -715,10 +718,14 @@ export function GitPanel({
   workspaceId,
   currentProject,
   workspaceBootstrapError,
+  layoutResizeSignal,
   onOpenDiffPreview,
 }: GitPanelProps) {
   const isMockMode = !isTauri();
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const topContentRef = useRef<HTMLDivElement | null>(null);
+  const changesHeaderRef = useRef<HTMLDivElement | null>(null);
+  const historyResizeHandleRef = useRef<HTMLDivElement | null>(null);
   const copyResetTimeoutRef = useRef<number>(0);
   const actionAlertTimeoutRef = useRef<number>(0);
   const [snapshot, setSnapshot] = useState<GitSnapshotDto | null>(() =>
@@ -737,7 +744,7 @@ export function GitPanel({
   const [commitMessage, setCommitMessage] = useState("");
   const [isCommitMessageExpanded, setCommitMessageExpanded] = useState(false);
   const [copiedCommitId, setCopiedCommitId] = useState<string | null>(null);
-  const [historyHeight, setHistoryHeight] = useState(MIN_HISTORY_HEIGHT);
+  const [historyHeight, setHistoryHeight] = useState(DEFAULT_HISTORY_HEIGHT);
   const [historyResize, setHistoryResize] = useState<{
     startY: number;
     startHeight: number;
@@ -852,12 +859,33 @@ export function GitPanel({
   }, [isMockMode, workspaceId]);
 
   const getMaxHistoryHeight = () => {
-    const panelHeight = panelRef.current?.getBoundingClientRect().height ?? MIN_HISTORY_HEIGHT * 2;
-    return Math.max(Math.floor(panelHeight * 0.5), MIN_HISTORY_HEIGHT);
+    const panelHeight = panelRef.current?.getBoundingClientRect().height ?? DEFAULT_HISTORY_HEIGHT * 2;
+    const topContentHeight = topContentRef.current?.getBoundingClientRect().height ?? 0;
+    const historyResizeHandleHeight =
+      historyResizeHandleRef.current?.getBoundingClientRect().height ?? 0;
+    const changesHeaderHeight = changesHeaderRef.current?.getBoundingClientRect().height ?? 24;
+    const minChangesHeight =
+      Math.ceil(changesHeaderHeight) + CHANGES_SECTION_VERTICAL_GAP + MIN_CHANGES_BODY_HEIGHT;
+    const maxByRatio = Math.floor(panelHeight * 0.5);
+    const maxByAvailableSpace = Math.floor(
+      panelHeight - topContentHeight - historyResizeHandleHeight - minChangesHeight,
+    );
+
+    return Math.max(0, Math.min(maxByRatio, maxByAvailableSpace));
   };
 
   const clampHistoryHeight = (nextHeight: number) =>
-    Math.min(getMaxHistoryHeight(), Math.max(MIN_HISTORY_HEIGHT, nextHeight));
+    Math.min(getMaxHistoryHeight(), Math.max(DEFAULT_HISTORY_HEIGHT, nextHeight));
+
+  const getMinChangesSectionHeight = () => {
+    const changesHeaderHeight = changesHeaderRef.current?.getBoundingClientRect().height ?? 24;
+    return Math.ceil(changesHeaderHeight) + CHANGES_SECTION_VERTICAL_GAP + MIN_CHANGES_BODY_HEIGHT;
+  };
+
+  const getMinTopSectionHeight = () => {
+    const topContentHeight = topContentRef.current?.getBoundingClientRect().height ?? (gitCliAvailable ? 36 : 88);
+    return Math.ceil(topContentHeight) + 16 + getMinChangesSectionHeight();
+  };
 
   useEffect(() => {
     const element = panelRef.current;
@@ -936,6 +964,10 @@ export function GitPanel({
   const gitCliAvailable = snapshot?.capabilities.gitCliAvailable ?? false;
   const commitDisabled =
     !gitCliAvailable || pendingAction !== null || commitMessage.trim().length === 0;
+
+  useLayoutEffect(() => {
+    setHistoryHeight((current) => clampHistoryHeight(current));
+  }, [gitCliAvailable, isCommitMessageExpanded, layoutResizeSignal, totalChanges]);
 
   const branchLabel = snapshot?.isDetached
     ? "detached HEAD"
@@ -1302,78 +1334,86 @@ export function GitPanel({
           </div>
         ) : null}
 
-        <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-start gap-2">
-          <div className={cn("relative h-9 min-w-0 flex-1", isCommitMessageExpanded && "z-20")}>
-            <Textarea
-              value={commitMessage}
-              readOnly={!gitCliAvailable || pendingAction !== null}
-              placeholder={
-                gitCliAvailable
-                  ? "Write a commit message for the staged changes"
-                  : "Install Git CLI to enable commit, fetch, pull, and push"
-              }
-              aria-label="Commit Message"
-              rows={isCommitMessageExpanded ? 4 : 1}
-              onChange={(event) => setCommitMessage(event.target.value)}
-              onFocus={() => setCommitMessageExpanded(true)}
-              onBlur={() => setCommitMessageExpanded(false)}
-              className={cn(
-                "resize-none overflow-hidden rounded-xl border-app-border px-3 pr-10 text-[13px] font-medium leading-5 text-app-foreground placeholder:text-app-subtle focus-visible:border-app-border-strong focus-visible:ring-0",
-                isCommitMessageExpanded
-                  ? "absolute inset-x-0 top-0 min-h-[112px] bg-app-surface shadow-[0_24px_48px_-24px_rgba(15,23,42,0.48)]"
-                  : "h-9 min-h-9 bg-transparent shadow-none",
-                !gitCliAvailable && "cursor-not-allowed opacity-70",
-              )}
-            />
+        <div
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          style={{ minHeight: `${getMinTopSectionHeight()}px` }}
+        >
+        <div ref={topContentRef} className="shrink-0">
+          <div className="flex items-start gap-2">
+            <div className={cn("relative h-9 min-w-0 flex-1", isCommitMessageExpanded && "z-20")}>
+              <Textarea
+                value={commitMessage}
+                readOnly={!gitCliAvailable || pendingAction !== null}
+                placeholder={
+                  gitCliAvailable
+                    ? "Write a commit message for the staged changes"
+                    : "Install Git CLI to enable commit, fetch, pull, and push"
+                }
+                aria-label="Commit Message"
+                rows={isCommitMessageExpanded ? 4 : 1}
+                onChange={(event) => setCommitMessage(event.target.value)}
+                onFocus={() => setCommitMessageExpanded(true)}
+                onBlur={() => setCommitMessageExpanded(false)}
+                className={cn(
+                  "resize-none overflow-hidden rounded-xl border-app-border px-3 pr-10 text-[13px] font-medium leading-5 text-app-foreground placeholder:text-app-subtle focus-visible:border-app-border-strong focus-visible:ring-0",
+                  isCommitMessageExpanded
+                    ? "absolute inset-x-0 top-0 min-h-[112px] bg-app-surface shadow-[0_24px_48px_-24px_rgba(15,23,42,0.48)]"
+                    : "h-9 min-h-9 bg-transparent shadow-none",
+                  !gitCliAvailable && "cursor-not-allowed opacity-70",
+                )}
+              />
+              <button
+                type="button"
+                aria-label="智能生成 Commit Message"
+                title="Commit message generation is not wired yet"
+                disabled
+                className={cn(
+                  "absolute right-1.5 flex size-6 items-center justify-center rounded-md text-app-subtle opacity-60 transition-[top,transform] duration-200",
+                  isCommitMessageExpanded ? "top-3" : "top-1/2 -translate-y-1/2",
+                )}
+              >
+                <Sparkles className="size-3.5" />
+              </button>
+            </div>
             <button
               type="button"
-              aria-label="智能生成 Commit Message"
-              title="Commit message generation is not wired yet"
-              disabled
+              aria-label="Commit"
+              title={
+                !gitCliAvailable
+                  ? "Git CLI is required"
+                  : pendingAction === "commit"
+                    ? "Commit in progress"
+                    : "Commit staged changes"
+              }
+              disabled={commitDisabled}
               className={cn(
-                "absolute right-1.5 flex size-6 items-center justify-center rounded-md text-app-subtle opacity-60 transition-[top,transform] duration-200",
-                isCommitMessageExpanded ? "top-3" : "top-1/2 -translate-y-1/2",
+                "flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border transition-colors",
+                commitDisabled
+                  ? "cursor-not-allowed text-app-subtle opacity-60"
+                  : "text-app-foreground hover:bg-app-surface-hover",
               )}
+              onClick={handleCommit}
             >
-              <Sparkles className="size-3.5" />
+              {pendingAction === "commit" ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Check className="size-4" />
+              )}
             </button>
           </div>
-          <button
-            type="button"
-            aria-label="Commit"
-            title={
-              !gitCliAvailable
-                ? "Git CLI is required"
-                : pendingAction === "commit"
-                  ? "Commit in progress"
-                  : "Commit staged changes"
-            }
-            disabled={commitDisabled}
-            className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border transition-colors",
-              commitDisabled
-                ? "cursor-not-allowed text-app-subtle opacity-60"
-                : "text-app-foreground hover:bg-app-surface-hover",
-            )}
-            onClick={handleCommit}
-          >
-            {pendingAction === "commit" ? (
-              <LoaderCircle className="size-4 animate-spin" />
-            ) : (
-              <Check className="size-4" />
-            )}
-          </button>
+
+          {!gitCliAvailable ? (
+            <div className="mt-3 rounded-xl border border-app-border bg-app-surface-muted/70 px-3 py-2 text-[12px] leading-5 text-app-subtle">
+              Git CLI is unavailable. Status, diff, and history stay readable, but commit, fetch, pull, and push remain disabled.
+            </div>
+          ) : null}
         </div>
 
-        {!gitCliAvailable ? (
-          <div className="mt-3 rounded-xl border border-app-border bg-app-surface-muted/70 px-3 py-2 text-[12px] leading-5 text-app-subtle">
-            Git CLI is unavailable. Status, diff, and history stay readable, but commit, fetch, pull, and push remain disabled.
-          </div>
-        ) : null}
-
-        <section className="mt-4 flex min-h-0 flex-1 flex-col">
-          <div className={DRAWER_SECTION_HEADER_CLASS}>
+        <section
+          className="mt-4 flex min-h-0 flex-1 flex-col"
+          style={{ minHeight: `${getMinChangesSectionHeight()}px` }}
+        >
+          <div ref={changesHeaderRef} className={DRAWER_SECTION_HEADER_CLASS}>
             <div className="flex items-center gap-2">
               <p className="text-sm font-semibold text-app-foreground">Changes</p>
               <span className="rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-subtle">
@@ -1393,7 +1433,7 @@ export function GitPanel({
             </div>
           </div>
 
-          <div className="mt-2 min-h-0 flex-1 overflow-auto overscroll-contain pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="mt-2 min-h-[160px] flex-1 overflow-auto overscroll-contain pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {totalChanges === 0 ? (
               <div className="flex h-full min-h-[180px] items-center justify-center">
                 <div className="text-center">
@@ -1444,6 +1484,7 @@ export function GitPanel({
       </div>
 
       <div
+        ref={historyResizeHandleRef}
         role="separator"
         aria-orientation="horizontal"
         aria-label="Resize history panel"
@@ -1456,7 +1497,7 @@ export function GitPanel({
       </div>
 
       <section
-        className="relative flex shrink-0 flex-col"
+        className="relative flex min-h-0 flex-col overflow-hidden"
         style={{ height: `${historyHeight}px` }}
       >
         <div className={DRAWER_SECTION_HEADER_CLASS}>

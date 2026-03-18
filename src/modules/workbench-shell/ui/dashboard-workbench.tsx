@@ -1126,6 +1126,7 @@ export function DashboardWorkbench() {
                         workspaceId={resolvedWorkspaceId}
                         currentProject={selectedProject}
                         workspaceBootstrapError={terminalBootstrapError}
+                        layoutResizeSignal={isTerminalCollapsed ? 0 : terminalHeight}
                         onOpenDiffPreview={setSelectedDiffSelection}
                       />
                     )}

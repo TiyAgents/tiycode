@@ -456,7 +456,7 @@ export const GIT_HISTORY_ITEMS: ReadonlyArray<GitHistoryItem> = [
 
 export const DEFAULT_TERMINAL_HEIGHT = 260;
 export const MIN_TERMINAL_HEIGHT = 180;
-export const MIN_WORKBENCH_HEIGHT = 240;
+export const MIN_WORKBENCH_HEIGHT = 500;
 export const TOPBAR_HEIGHT = 36;
 
 export const THEME_OPTIONS: Array<{
