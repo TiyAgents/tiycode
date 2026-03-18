@@ -583,6 +583,7 @@ export function GitPanel({
 }: GitPanelProps) {
   const isMockMode = !isTauri();
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const copyResetTimeoutRef = useRef<number>(0);
   const [snapshot, setSnapshot] = useState<GitSnapshotDto | null>(() =>
     isMockMode ? buildMockSnapshot() : null,
   );
@@ -594,11 +595,19 @@ export function GitPanel({
   const [pendingPaths, setPendingPaths] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [isCommitMessageExpanded, setCommitMessageExpanded] = useState(false);
+  const [copiedCommitId, setCopiedCommitId] = useState<string | null>(null);
   const [historyHeight, setHistoryHeight] = useState(MIN_HISTORY_HEIGHT);
   const [historyResize, setHistoryResize] = useState<{
     startY: number;
     startHeight: number;
   } | null>(null);
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(copyResetTimeoutRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (isMockMode) {
@@ -857,6 +866,23 @@ export function GitPanel({
 
   const handleToggleAll = (paths: string[], staged: boolean) => {
     handleToggleStage(paths, staged);
+  };
+
+  const handleCopyCommitId = async (commitId: string) => {
+    if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(commitId);
+      setCopiedCommitId(commitId);
+      window.clearTimeout(copyResetTimeoutRef.current);
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopiedCommitId((current) => (current === commitId ? null : current));
+      }, 2000);
+    } catch {
+      // Ignore clipboard failures to avoid disrupting the Git panel.
+    }
   };
 
   if (workspaceBootstrapError) {
@@ -1128,45 +1154,79 @@ export function GitPanel({
                         : "border-app-border bg-app-drawer",
                     )}
                   />
-                  <div className="relative rounded-lg px-2.5 py-1.5">
-                    <div className="flex items-center justify-between gap-3">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Copy commit ${item.shortId} to clipboard`}
+                        className={cn(
+                          "relative cursor-pointer rounded-lg px-2.5 py-1.5 outline-none transition-colors duration-200 hover:bg-app-surface-muted/40 focus-visible:bg-app-surface-muted/40",
+                          copiedCommitId === item.id && "bg-app-surface-muted/50",
+                        )}
+                        onClick={() => {
+                          void handleCopyCommitId(item.id);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") {
+                            return;
+                          }
+
+                          event.preventDefault();
+                          void handleCopyCommitId(item.id);
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-3">
                           <p className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-app-foreground">
                             {item.summary}
                           </p>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[28rem] whitespace-normal break-words">
-                          {item.summary}
-                        </TooltipContent>
-                      </Tooltip>
-                      <span className="shrink-0 text-[11px] text-app-subtle">
-                        {item.shortId}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex items-center justify-between gap-3">
-                      <p className="min-w-0 flex-1 truncate text-[11px] text-app-subtle">
-                        {item.authorName} · {formatRelativeTime(item.committedAt)}
-                      </p>
-                      {item.refs.length > 0 ? (
-                        <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                          {item.refs.map((ref) => (
-                            <span
-                              key={ref}
-                              className={cn(
-                                "inline-flex items-center rounded-full font-medium leading-none transition-[background-color,color,box-shadow] duration-200",
-                                ref === "HEAD"
-                                  ? "h-5 bg-primary/88 px-1.5 text-[9px] text-primary-foreground shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
-                                  : "h-6 bg-app-surface-muted px-2 text-[10px] text-app-muted",
-                              )}
-                            >
-                              {ref}
-                            </span>
-                          ))}
+                          <span
+                            className={cn(
+                              "shrink-0 text-[11px] text-app-subtle transition-colors duration-200",
+                              copiedCommitId === item.id && "text-app-success",
+                            )}
+                          >
+                            {copiedCommitId === item.id ? "Copied" : item.shortId}
+                          </span>
                         </div>
-                      ) : null}
-                    </div>
-                  </div>
+                        <div className="mt-1 flex items-center justify-between gap-3">
+                          <p className="min-w-0 flex-1 truncate text-[11px] text-app-subtle">
+                            {item.authorName} · {formatRelativeTime(item.committedAt)}
+                          </p>
+                          {item.refs.length > 0 ? (
+                            <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                              {item.refs.map((ref) => (
+                                <span
+                                  key={ref}
+                                  className={cn(
+                                    "inline-flex items-center rounded-full font-medium leading-none transition-[background-color,color,box-shadow] duration-200",
+                                    ref === "HEAD"
+                                      ? "h-5 bg-primary/88 px-1.5 text-[9px] text-primary-foreground shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
+                                      : "h-6 bg-app-surface-muted px-2 text-[10px] text-app-muted",
+                                  )}
+                                >
+                                  {ref}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="top"
+                      align="start"
+                      sideOffset={6}
+                      className="max-w-[28rem] whitespace-normal break-words"
+                    >
+                      <div className="space-y-1">
+                        <p>{item.summary}</p>
+                        <p className="text-[11px] opacity-80">
+                          Click to copy full commit id
+                        </p>
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               ))}
             </div>
