@@ -116,6 +116,22 @@ pub struct DirectoryChildrenResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RevealPathSegment {
+    pub directory_path: String,
+    pub children: Vec<FileTreeNode>,
+    pub has_more: bool,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealPathResponse {
+    pub target_path: String,
+    pub segments: Vec<RevealPathSegment>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResult {
     pub path: String,
     pub absolute_path: String,
@@ -268,6 +284,88 @@ impl IndexManager {
         })
     }
 
+    /// Materialize the directory chain needed to reveal a target path in the tree.
+    pub async fn reveal_path(
+        &self,
+        workspace_path: &str,
+        target_path: &str,
+    ) -> Result<RevealPathResponse, AppError> {
+        let normalized_target = target_path.trim().trim_matches('/');
+        if normalized_target.is_empty() {
+            return Err(AppError::recoverable(
+                ErrorSource::Index,
+                "index.reveal.empty_path",
+                "Reveal target path cannot be empty",
+            ));
+        }
+
+        let root = canonicalize_workspace(workspace_path)?;
+        let target = resolve_workspace_entry(&root, normalized_target)?;
+        let relative_target = relative_path(&target, &root);
+        let components = relative_target
+            .split('/')
+            .filter(|component| !component.is_empty())
+            .collect::<Vec<_>>();
+
+        if components.is_empty() {
+            return Err(AppError::recoverable(
+                ErrorSource::Index,
+                "index.reveal.invalid_path",
+                "Reveal target path must resolve inside the workspace",
+            ));
+        }
+
+        let skipped: HashSet<&str> = ALWAYS_SKIPPED.iter().copied().collect();
+        let tree_lazy_only: HashSet<&str> = TREE_LAZY_ONLY_DIRS.iter().copied().collect();
+        let mut segments = Vec::with_capacity(components.len());
+
+        for component_index in 0..components.len() {
+            let directory_path = if component_index == 0 {
+                String::new()
+            } else {
+                components[..component_index].join("/")
+            };
+            let child_path = components[..=component_index].join("/");
+
+            let page = tokio::task::spawn_blocking({
+                let root = root.clone();
+                let directory_path = directory_path.clone();
+                let child_path = child_path.clone();
+                let skipped = skipped.clone();
+                let tree_lazy_only = tree_lazy_only.clone();
+
+                move || {
+                    load_directory_entries_until_contains(
+                        &root,
+                        &directory_path,
+                        &child_path,
+                        &skipped,
+                        &tree_lazy_only,
+                    )
+                }
+            })
+            .await
+            .map_err(|error| {
+                AppError::internal(
+                    ErrorSource::Index,
+                    format!("Reveal path task failed: {error}"),
+                )
+            })??;
+
+            segments.push(RevealPathSegment {
+                directory_path,
+                children: page.children,
+                has_more: page.has_more,
+                next_offset: page.next_offset,
+            });
+        }
+
+        Ok(RevealPathResponse {
+            target_path: relative_target,
+            segments,
+        })
+    }
+
     /// Search workspace files using ripgrep.
     pub async fn search(
         &self,
@@ -400,6 +498,29 @@ fn resolve_workspace_directory(root: &Path, directory_path: &str) -> Result<Path
     Ok(canonical)
 }
 
+fn resolve_workspace_entry(root: &Path, entry_path: &str) -> Result<PathBuf, AppError> {
+    let candidate = root.join(entry_path);
+    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate.clone());
+
+    if !canonical.starts_with(root) {
+        return Err(AppError::recoverable(
+            ErrorSource::Index,
+            "index.path.out_of_workspace",
+            "Requested path is outside the workspace boundary",
+        ));
+    }
+
+    if !canonical.exists() {
+        return Err(AppError::recoverable(
+            ErrorSource::Index,
+            "index.path.not_found",
+            format!("'{}' no longer exists", entry_path),
+        ));
+    }
+
+    Ok(canonical)
+}
+
 fn build_initial_tree(root: &Path) -> Result<FileTreeNode, AppError> {
     let skipped: HashSet<&str> = ALWAYS_SKIPPED.iter().copied().collect();
     let tree_lazy_only: HashSet<&str> = TREE_LAZY_ONLY_DIRS.iter().copied().collect();
@@ -437,6 +558,54 @@ fn load_directory_children(
         has_more: page.has_more,
         next_offset: page.next_offset,
     })
+}
+
+fn load_directory_entries_until_contains(
+    root: &Path,
+    directory_path: &str,
+    child_path: &str,
+    skipped: &HashSet<&str>,
+    tree_lazy_only: &HashSet<&str>,
+) -> Result<DirectoryPage, AppError> {
+    let directory = resolve_workspace_directory(root, directory_path)?;
+    let mut offset = 0usize;
+    let mut merged_children = Vec::new();
+
+    loop {
+        let page = read_directory_entries_page(
+            root,
+            &directory,
+            skipped,
+            tree_lazy_only,
+            false,
+            offset,
+            DIRECTORY_PAGE_SIZE,
+        )?;
+        let contains_child = page.children.iter().any(|child| child.path == child_path);
+
+        merged_children.extend(page.children);
+
+        if contains_child {
+            return Ok(DirectoryPage {
+                children: merged_children,
+                has_more: page.has_more,
+                next_offset: page.next_offset,
+            });
+        }
+
+        if !page.has_more {
+            return Err(AppError::recoverable(
+                ErrorSource::Index,
+                "index.reveal.target_not_found",
+                format!(
+                    "Could not materialize '{}' from directory '{}'",
+                    child_path, directory_path
+                ),
+            ));
+        }
+
+        offset = page.next_offset.unwrap_or(offset + DIRECTORY_PAGE_SIZE);
+    }
 }
 
 fn scan_tree_node(

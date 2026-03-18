@@ -341,6 +341,156 @@ async fn test_filter_files_finds_deep_paths_beyond_loaded_tree() {
     );
 }
 
+#[tokio::test]
+async fn test_reveal_path_materializes_new_file_in_loaded_directory() {
+    use tiy_agent_lib::core::index_manager::IndexManager;
+
+    let manager = IndexManager::new();
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(
+        base.join("src/existing.ts"),
+        "export const existing = true;\n",
+    )
+    .unwrap();
+
+    let tree = manager.get_tree(&base.to_string_lossy()).await.unwrap();
+    let src = tree
+        .children
+        .as_ref()
+        .and_then(|children| children.iter().find(|child| child.path == "src"))
+        .expect("src should be present in the initial tree");
+    assert!(
+        src.children
+            .as_ref()
+            .is_some_and(|children| children.iter().all(|child| child.path != "src/new.ts")),
+        "new file should not exist in the initial tree snapshot"
+    );
+
+    std::fs::write(base.join("src/new.ts"), "export const fresh = true;\n").unwrap();
+
+    let reveal = manager
+        .reveal_path(&base.to_string_lossy(), "src/new.ts")
+        .await
+        .expect("reveal should materialize the new file");
+
+    let src_segment = reveal
+        .segments
+        .iter()
+        .find(|segment| segment.directory_path == "src")
+        .expect("src segment should be returned");
+    assert!(
+        src_segment
+            .children
+            .iter()
+            .any(|child| child.path == "src/new.ts"),
+        "reveal should return the newly added child for a previously loaded directory"
+    );
+}
+
+#[tokio::test]
+async fn test_reveal_path_materializes_root_level_file() {
+    use tiy_agent_lib::core::index_manager::IndexManager;
+
+    let manager = IndexManager::new();
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+
+    std::fs::write(base.join("existing.md"), "# existing\n").unwrap();
+    let tree = manager.get_tree(&base.to_string_lossy()).await.unwrap();
+    assert!(
+        tree.children
+            .as_ref()
+            .is_some_and(|children| children.iter().all(|child| child.path != "root-new.md")),
+        "new root file should not appear in the stale tree snapshot"
+    );
+
+    std::fs::write(base.join("root-new.md"), "# new\n").unwrap();
+
+    let reveal = manager
+        .reveal_path(&base.to_string_lossy(), "root-new.md")
+        .await
+        .expect("reveal should materialize a root-level file");
+
+    assert_eq!(reveal.target_path, "root-new.md");
+    let root_segment = reveal
+        .segments
+        .iter()
+        .find(|segment| segment.directory_path.is_empty())
+        .expect("root segment should be returned");
+    assert!(
+        root_segment
+            .children
+            .iter()
+            .any(|child| child.path == "root-new.md"),
+        "reveal should return root-level files through the root segment"
+    );
+}
+
+#[tokio::test]
+async fn test_reveal_path_pages_until_large_directory_target_is_found() {
+    use tiy_agent_lib::core::index_manager::IndexManager;
+
+    let manager = IndexManager::new();
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+
+    let large_dir = base.join("large");
+    std::fs::create_dir_all(&large_dir).unwrap();
+    for index in 0..205 {
+        std::fs::write(
+            large_dir.join(format!("file_{index:03}.ts")),
+            "export const value = 1;\n",
+        )
+        .unwrap();
+    }
+
+    let tree = manager.get_tree(&base.to_string_lossy()).await.unwrap();
+    let large = tree
+        .children
+        .as_ref()
+        .and_then(|children| children.iter().find(|child| child.path == "large"))
+        .expect("large directory should be present");
+    assert!(
+        large.children_has_more,
+        "large directory should still be paged in the initial tree"
+    );
+    assert_eq!(
+        large.children.as_ref().map(Vec::len),
+        Some(200),
+        "initial tree should only preload the first page for large directories"
+    );
+
+    let reveal = manager
+        .reveal_path(&base.to_string_lossy(), "large/file_204.ts")
+        .await
+        .expect("reveal should page until the target child is included");
+
+    let large_segment = reveal
+        .segments
+        .iter()
+        .find(|segment| segment.directory_path == "large")
+        .expect("large segment should be returned");
+    assert_eq!(
+        large_segment.children.len(),
+        205,
+        "reveal should merge additional pages until the target child is present"
+    );
+    assert!(
+        large_segment
+            .children
+            .iter()
+            .any(|child| child.path == "large/file_204.ts"),
+        "reveal should include the requested target child from later pages"
+    );
+    assert!(
+        !large_segment.has_more,
+        "the reveal segment should report that no additional pages remain once exhausted"
+    );
+}
+
 // =========================================================================
 // T1.8.3 — Performance (basic timing)
 // =========================================================================

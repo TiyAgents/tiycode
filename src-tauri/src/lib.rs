@@ -176,6 +176,7 @@ pub fn run() {
             commands::index::index_get_tree,
             commands::index::index_get_children,
             commands::index::index_filter_files,
+            commands::index::index_reveal_path,
             commands::index::index_search,
             // Terminal
             commands::terminal::terminal_create_or_attach,

@@ -36,6 +36,18 @@ export interface DirectoryChildrenResponse {
   nextOffset?: number;
 }
 
+export interface RevealPathSegment {
+  directoryPath: string;
+  children: FileTreeNode[];
+  hasMore: boolean;
+  nextOffset?: number;
+}
+
+export interface RevealPathResponse {
+  targetPath: string;
+  segments: RevealPathSegment[];
+}
+
 export interface SearchResult {
   path: string;
   absolutePath: string;
@@ -79,6 +91,16 @@ export async function indexFilterFiles(
     workspaceId,
     query,
     maxResults: maxResults ?? null,
+  });
+}
+
+export async function indexRevealPath(
+  workspaceId: string,
+  targetPath: string,
+): Promise<RevealPathResponse> {
+  return invoke<RevealPathResponse>("index_reveal_path", {
+    workspaceId,
+    targetPath,
   });
 }
 

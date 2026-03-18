@@ -5,6 +5,7 @@ import {
   type DirectoryChildrenResponse,
   indexFilterFiles,
   indexGetChildren,
+  indexRevealPath,
   indexGetTree,
   type FileFilterMatch,
   type FileFilterResponse,
@@ -298,17 +299,6 @@ function findNodeByPath(node: FileTreeNode, targetPath: string): FileTreeNode | 
   return null;
 }
 
-function collectAncestorPaths(path: string): string[] {
-  const segments = path.split("/").filter(Boolean);
-  const ancestors: string[] = [];
-
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    ancestors.push(segments.slice(0, index + 1).join("/"));
-  }
-
-  return ancestors;
-}
-
 function resolveProjectTargetPath(projectRoot: string, relativePath: string): string {
   const trimmedRoot = projectRoot.replace(/[\\/]+$/, "");
   const normalizedRelativePath = relativePath.replace(/^[/\\]+/, "");
@@ -318,8 +308,63 @@ function resolveProjectTargetPath(projectRoot: string, relativePath: string): st
     : trimmedRoot;
 }
 
-function hasLoadedChildPath(node: FileTreeNode, childPath: string): boolean {
-  return node.children?.some((child) => child.path === childPath) ?? false;
+function sortTreeNodes(nodes: ReadonlyArray<FileTreeNode>): FileTreeNode[] {
+  return [...nodes].sort((left, right) => {
+    if (left.isDir !== right.isDir) {
+      return left.isDir ? -1 : 1;
+    }
+
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function mergeRevealedChildren(
+  existingChildren: ReadonlyArray<FileTreeNode> | undefined,
+  nextChildren: ReadonlyArray<FileTreeNode>,
+): FileTreeNode[] {
+  const merged = new Map<string, FileTreeNode>();
+
+  for (const child of existingChildren ?? []) {
+    merged.set(child.path, child);
+  }
+
+  for (const child of nextChildren) {
+    merged.set(child.path, child);
+  }
+
+  return sortTreeNodes(Array.from(merged.values()));
+}
+
+function applyRevealSegment(
+  node: FileTreeNode,
+  targetPath: string,
+  response: DirectoryChildrenResponse,
+): FileTreeNode {
+  if (node.path === targetPath) {
+    const wasFullyLoaded = node.children !== undefined && !node.childrenHasMore;
+    const children =
+      node.children === undefined
+        ? response.children
+        : mergeRevealedChildren(node.children, response.children);
+    const childrenHasMore = wasFullyLoaded ? false : response.hasMore;
+
+    return {
+      ...node,
+      isExpandable: children.length > 0 || childrenHasMore,
+      childrenHasMore,
+      childrenNextOffset: childrenHasMore ? response.nextOffset : undefined,
+      children,
+    };
+  }
+
+  if (!node.children) {
+    return node;
+  }
+
+  return {
+    ...node,
+    children: node.children.map((child) => applyRevealSegment(child, targetPath, response)),
+  };
 }
 
 export function ProjectPanel({
@@ -726,37 +771,6 @@ export function ProjectPanel({
     }
   };
 
-  const ensureChildPathLoaded = async (
-    sourceTree: FileTreeNode,
-    parentPath: string,
-    childPath: string,
-  ) => {
-    let nextTree = sourceTree;
-
-    while (true) {
-      const parentNode = findNodeByPath(nextTree, parentPath);
-      if (!parentNode || !parentNode.isDir) {
-        return nextTree;
-      }
-
-      if (parentNode.children === undefined) {
-        const loaded = await loadChildrenIntoTree(parentPath, nextTree);
-        nextTree = loaded.tree;
-        continue;
-      }
-
-      if (hasLoadedChildPath(parentNode, childPath)) {
-        return nextTree;
-      }
-
-      if (!parentNode.childrenHasMore) {
-        return nextTree;
-      }
-
-      nextTree = await loadMoreChildrenIntoTree(parentPath, nextTree);
-    }
-  };
-
   const handleTreeToggle = async (node: FileTreeNode) => {
     if (!node.isDir || !node.isExpandable) {
       return;
@@ -844,27 +858,20 @@ export function ProjectPanel({
     }
 
     try {
+      const response = await indexRevealPath(workspaceId, match.path);
       const nextExpanded = new Set(expandedPaths);
       let nextTree = treeState.data.tree;
 
-      for (const ancestorPath of collectAncestorPaths(match.path)) {
-        const parentPath = ancestorPath.split("/").slice(0, -1).join("/");
+      for (const segment of response.segments) {
+        nextTree = applyRevealSegment(nextTree, segment.directoryPath, {
+          children: segment.children,
+          hasMore: segment.hasMore,
+          nextOffset: segment.nextOffset,
+        });
 
-        if (parentPath) {
-          nextTree = await ensureChildPathLoaded(nextTree, parentPath, ancestorPath);
+        if (segment.directoryPath) {
+          nextExpanded.add(segment.directoryPath);
         }
-
-        nextExpanded.add(ancestorPath);
-
-        const ancestorNode = findNodeByPath(nextTree, ancestorPath);
-        if (ancestorNode?.isDir && ancestorNode.isExpandable && ancestorNode.children === undefined) {
-          const loaded = await loadChildrenIntoTree(ancestorPath, nextTree);
-          nextTree = loaded.tree;
-        }
-      }
-
-      if (match.parentPath) {
-        nextTree = await ensureChildPathLoaded(nextTree, match.parentPath, match.path);
       }
 
       setTreeState((current) => {
@@ -881,7 +888,7 @@ export function ProjectPanel({
         };
       });
       setExpandedPaths(nextExpanded);
-      setPendingRevealPath(match.path);
+      setPendingRevealPath(response.targetPath);
       setFilterValue("");
     } catch (error) {
       const message = error instanceof Error ? error.message : "无法展开筛选结果路径";

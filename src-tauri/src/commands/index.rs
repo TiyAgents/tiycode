@@ -2,7 +2,8 @@ use tauri::State;
 
 use crate::core::app_state::AppState;
 use crate::core::index_manager::{
-    DirectoryChildrenResponse, FileFilterResponse, FileTreeNode, FileTreeResponse, SearchResponse,
+    DirectoryChildrenResponse, FileFilterResponse, FileTreeNode, FileTreeResponse,
+    RevealPathResponse, SearchResponse,
 };
 use crate::model::errors::{AppError, ErrorSource};
 use crate::persistence::repo::workspace_repo;
@@ -96,6 +97,54 @@ pub async fn index_filter_files(
         .index_manager
         .filter_files(&workspace.canonical_path, &query, max_results)
         .await
+}
+
+#[tauri::command]
+pub async fn index_reveal_path(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    target_path: String,
+) -> Result<RevealPathResponse, AppError> {
+    let workspace = workspace_repo::find_by_id(&state.pool, &workspace_id)
+        .await?
+        .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
+
+    let mut response = state
+        .index_manager
+        .reveal_path(&workspace.canonical_path, &target_path)
+        .await?;
+
+    let overlay = state
+        .git_manager
+        .get_workspace_overlay(&workspace.canonical_path)
+        .await?;
+
+    for segment in &mut response.segments {
+        let mut overlay_root = FileTreeNode {
+            name: if segment.directory_path.is_empty() {
+                workspace.name.clone()
+            } else {
+                segment
+                    .directory_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&workspace.name)
+                    .to_string()
+            },
+            path: segment.directory_path.clone(),
+            is_dir: true,
+            is_expandable: true,
+            children_has_more: segment.has_more,
+            children_next_offset: segment.next_offset,
+            git_state: None,
+            children: Some(segment.children.clone()),
+        };
+
+        overlay_root.apply_git_overlay(&overlay.states);
+        segment.children = overlay_root.children.unwrap_or_default();
+    }
+
+    Ok(response)
 }
 
 #[tauri::command]
