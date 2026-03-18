@@ -35,7 +35,7 @@ import type {
   GitSnapshotDto,
   GitStreamEvent,
 } from "@/shared/types/api";
-import { Input } from "@/shared/ui/input";
+import { Textarea } from "@/shared/ui/textarea";
 import { cn } from "@/shared/lib/utils";
 import {
   DRAWER_ICON_ACTION_CLASS,
@@ -284,6 +284,25 @@ function formatChangeSummary(change: GitFileChangeDto) {
   return pieces.join(" ") || statusLabel(change.status);
 }
 
+function renderChangeStats(change: GitFileChangeDto) {
+  const hasLineStats = change.additions > 0 || change.deletions > 0;
+
+  if (!hasLineStats) {
+    return <span className={DRAWER_LIST_META_CLASS}>{statusLabel(change.status)}</span>;
+  }
+
+  return (
+    <span className={cn(DRAWER_LIST_META_CLASS, "flex items-center gap-2")}>
+      {change.deletions > 0 ? (
+        <span className="font-medium text-app-danger">-{change.deletions}</span>
+      ) : null}
+      {change.additions > 0 ? (
+        <span className="font-medium text-app-success">+{change.additions}</span>
+      ) : null}
+    </span>
+  );
+}
+
 function formatRelativeTime(value: string) {
   const timestamp = new Date(value).getTime();
   if (Number.isNaN(timestamp)) {
@@ -525,7 +544,7 @@ function ChangeGroup({
             <span className={DRAWER_LIST_LABEL_CLASS}>
               {file.path.split("/").pop() ?? file.path}
             </span>
-            <span className={DRAWER_LIST_META_CLASS}>{formatChangeSummary(file)}</span>
+            {renderChangeStats(file)}
             <button
               type="button"
               aria-label={staged ? `Unstage ${file.path}` : `Stage ${file.path}`}
@@ -573,6 +592,7 @@ export function GitPanel({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [pendingPaths, setPendingPaths] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [isCommitMessageExpanded, setCommitMessageExpanded] = useState(false);
   const [historyHeight, setHistoryHeight] = useState(MIN_HISTORY_HEIGHT);
   const [historyResize, setHistoryResize] = useState<{
     startY: number;
@@ -756,9 +776,6 @@ export function GitPanel({
   const branchLabel = snapshot?.isDetached
     ? "detached HEAD"
     : (snapshot?.headRef ?? "No branch");
-  const lastUpdatedLabel = snapshot?.lastRefreshedAt
-    ? formatRelativeTime(snapshot.lastRefreshedAt)
-    : "just now";
 
   const handleHistoryResizeStart = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -905,22 +922,32 @@ export function GitPanel({
       className="relative flex h-full min-h-0 flex-col px-4 pb-4 pt-3"
     >
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center gap-2">
-          <div className="relative min-w-0 flex-1">
-            <Input
+        <div className="flex items-start gap-2">
+          <div className={cn("relative h-9 min-w-0 flex-1", isCommitMessageExpanded && "z-20")}>
+            <Textarea
               value=""
               readOnly
-              disabled
               placeholder="Stage/unstage is available below. Commit/fetch/pull/push land in M2.2c."
               aria-label="Commit Message"
-              className="h-9 rounded-xl border-app-border bg-transparent px-3 pr-10 text-[13px] font-medium text-app-foreground placeholder:text-app-subtle focus-visible:border-app-border-strong focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-70"
+              rows={isCommitMessageExpanded ? 4 : 1}
+              onFocus={() => setCommitMessageExpanded(true)}
+              onBlur={() => setCommitMessageExpanded(false)}
+              className={cn(
+                "resize-none overflow-hidden rounded-xl border-app-border px-3 pr-10 text-[13px] font-medium leading-5 text-app-foreground placeholder:text-app-subtle focus-visible:border-app-border-strong focus-visible:ring-0",
+                isCommitMessageExpanded
+                  ? "absolute inset-x-0 top-0 min-h-[112px] bg-app-surface shadow-[0_24px_48px_-24px_rgba(15,23,42,0.48)]"
+                  : "h-9 min-h-9 bg-transparent shadow-none",
+              )}
             />
             <button
               type="button"
               aria-label="智能生成 Commit Message"
               title="Read-only in M2.2b"
               disabled
-              className="absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-app-subtle opacity-60"
+              className={cn(
+                "absolute right-1.5 flex size-6 items-center justify-center rounded-md text-app-subtle opacity-60 transition-[top,transform] duration-200",
+                isCommitMessageExpanded ? "top-3" : "top-1/2 -translate-y-1/2",
+              )}
             >
               <Sparkles className="size-3.5" />
             </button>
@@ -944,9 +971,16 @@ export function GitPanel({
                 {totalChanges}
               </span>
             </div>
-            <div className="flex items-center gap-2 text-[11px] text-app-subtle">
-              <span>{branchLabel}</span>
-              <span>Updated {lastUpdatedLabel}</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="Refresh Git snapshot"
+                title="Refresh Git snapshot"
+                className={DRAWER_ICON_ACTION_CLASS}
+                onClick={handleRefresh}
+              >
+                <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} />
+              </button>
             </div>
           </div>
 
@@ -1062,15 +1096,6 @@ export function GitPanel({
               className={cn(DRAWER_ICON_ACTION_CLASS, "opacity-60")}
             >
               <ArrowUpFromLine className="size-4" />
-            </button>
-            <button
-              type="button"
-              aria-label="Refresh Git snapshot"
-              title="Refresh Git snapshot"
-              className={DRAWER_ICON_ACTION_CLASS}
-              onClick={handleRefresh}
-            >
-              <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} />
             </button>
           </div>
         </div>
