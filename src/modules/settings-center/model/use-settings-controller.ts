@@ -14,21 +14,91 @@ import type {
   GeneralPreferences,
   PatternEntry,
   PolicySettings,
+  ProviderCatalogEntry,
   ProviderEntry,
   SettingsState,
   WorkspaceEntry,
   WritableRootEntry,
 } from "@/modules/settings-center/model/types";
-import { settingsSet } from "@/services/bridge";
+import type { ProviderSettingsDto } from "@/shared/types/api";
+import {
+  providerCatalogList,
+  providerSettingsCreateCustom,
+  providerSettingsDeleteCustom,
+  providerSettingsGetAll,
+  providerSettingsUpdateCustom,
+  providerSettingsUpsertBuiltin,
+  settingsSet,
+} from "@/services/bridge";
 
 export * from "@/modules/settings-center/model/types";
 
+function mapProviderDto(provider: ProviderSettingsDto): ProviderEntry {
+  return {
+    id: provider.id,
+    kind: provider.kind,
+    providerKey: provider.providerKey,
+    providerType: provider.providerType as ProviderEntry["providerType"],
+    displayName: provider.displayName,
+    baseUrl: provider.baseUrl,
+    apiKey: "",
+    hasApiKey: provider.hasApiKey,
+    lockedMapping: provider.lockedMapping,
+    customHeaders: provider.customHeaders ?? {},
+    enabled: provider.enabled,
+    models: provider.models.map((model) => ({
+      id: model.id,
+      modelId: model.modelId,
+      displayName: model.displayName ?? model.modelId,
+      enabled: model.enabled,
+      contextWindow: model.contextWindow ?? undefined,
+      maxOutputTokens: model.maxOutputTokens ?? undefined,
+      capabilityOverrides: model.capabilityOverrides ?? {},
+      providerOptions: model.providerOptions ?? {},
+      isManual: model.isManual,
+    })),
+  };
+}
+
 export function useSettingsController() {
   const [settings, setSettings] = useState<SettingsState>(() => readStoredSettings());
+  const [providerCatalog, setProviderCatalog] = useState<Array<ProviderCatalogEntry>>([]);
 
   useEffect(() => {
     persistSettings(settings);
   }, [settings]);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    void providerSettingsGetAll()
+      .then((providers) => {
+        setSettings((current) => ({
+          ...current,
+          providers: providers.map(mapProviderDto),
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to load provider settings", error);
+      });
+
+    void providerCatalogList()
+      .then((catalog) => {
+        setProviderCatalog(catalog.map((entry) => ({
+          providerKey: entry.providerKey as ProviderCatalogEntry["providerKey"],
+          providerType: entry.providerType as ProviderCatalogEntry["providerType"],
+          displayName: entry.displayName,
+          builtin: entry.builtin,
+          supportsCustom: entry.supportsCustom,
+          defaultBaseUrl: entry.defaultBaseUrl,
+        })));
+      })
+      .catch((error) => {
+        console.warn("Failed to load provider catalog", error);
+      });
+  }, []);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -251,26 +321,133 @@ export function useSettingsController() {
   };
 
   const addProvider = (entry: Omit<ProviderEntry, "id">) => {
-    setSettings((current) => ({
-      ...current,
-      providers: [...current.providers, { ...entry, id: crypto.randomUUID() }],
-    }));
+    if (!isTauri()) {
+      setSettings((current) => ({
+        ...current,
+        providers: [...current.providers, { ...entry, id: crypto.randomUUID() }],
+      }));
+      return;
+    }
+
+    void providerSettingsCreateCustom({
+      displayName: entry.displayName,
+      providerType: entry.providerType,
+      baseUrl: entry.baseUrl,
+      apiKey: entry.apiKey || undefined,
+      enabled: entry.enabled,
+      customHeaders: entry.customHeaders,
+      models: entry.models.map((model) => ({
+        id: model.id,
+        modelId: model.modelId,
+        displayName: model.displayName,
+        enabled: model.enabled,
+        contextWindow: model.contextWindow,
+        maxOutputTokens: model.maxOutputTokens,
+        capabilityOverrides: model.capabilityOverrides,
+        providerOptions: model.providerOptions,
+        isManual: model.isManual,
+      })),
+    })
+      .then((provider) => {
+        setSettings((current) => ({
+          ...current,
+          providers: [...current.providers, mapProviderDto(provider)],
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to create provider", error);
+      });
   };
 
   const removeProvider = (id: string) => {
-    setSettings((current) => ({
-      ...current,
-      providers: current.providers.filter((provider) => provider.id !== id),
-    }));
+    const target = settings.providers.find((provider) => provider.id === id);
+    if (!target) {
+      return;
+    }
+
+    if (!isTauri()) {
+      setSettings((current) => ({
+        ...current,
+        providers: current.providers.filter((provider) => provider.id !== id),
+      }));
+      return;
+    }
+
+    if (target.kind !== "custom") {
+      return;
+    }
+
+    void providerSettingsDeleteCustom(id)
+      .then(() => {
+        setSettings((current) => ({
+          ...current,
+          providers: current.providers.filter((provider) => provider.id !== id),
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to delete provider", error);
+      });
   };
 
   const updateProvider = (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => {
+    const currentProvider = settings.providers.find((provider) => provider.id === id);
+    if (!currentProvider) {
+      return;
+    }
+
+    const nextProvider = { ...currentProvider, ...patch };
+
     setSettings((current) => ({
       ...current,
       providers: current.providers.map((provider) =>
-        provider.id === id ? { ...provider, ...patch } : provider,
+        provider.id === id ? nextProvider : provider,
       ),
     }));
+
+    if (!isTauri()) {
+      return;
+    }
+
+    const input = {
+      ...(Object.prototype.hasOwnProperty.call(patch, "displayName") ? { displayName: nextProvider.displayName } : {}),
+      ...(Object.prototype.hasOwnProperty.call(patch, "providerType") ? { providerType: nextProvider.providerType } : {}),
+      ...(Object.prototype.hasOwnProperty.call(patch, "baseUrl") ? { baseUrl: nextProvider.baseUrl } : {}),
+      ...(Object.prototype.hasOwnProperty.call(patch, "apiKey") ? { apiKey: nextProvider.apiKey } : {}),
+      ...(Object.prototype.hasOwnProperty.call(patch, "enabled") ? { enabled: nextProvider.enabled } : {}),
+      ...(Object.prototype.hasOwnProperty.call(patch, "customHeaders") ? { customHeaders: nextProvider.customHeaders } : {}),
+      ...(Object.prototype.hasOwnProperty.call(patch, "models")
+        ? {
+            models: nextProvider.models.map((model) => ({
+              id: model.id,
+              modelId: model.modelId,
+              displayName: model.displayName,
+              enabled: model.enabled,
+              contextWindow: model.contextWindow,
+              maxOutputTokens: model.maxOutputTokens,
+              capabilityOverrides: model.capabilityOverrides,
+              providerOptions: model.providerOptions,
+              isManual: model.isManual,
+            })),
+          }
+        : {}),
+    };
+
+    const request = currentProvider.kind === "builtin"
+      ? providerSettingsUpsertBuiltin(currentProvider.providerKey, input)
+      : providerSettingsUpdateCustom(id, input);
+
+    void request
+      .then((provider) => {
+        setSettings((current) => ({
+          ...current,
+          providers: current.providers.map((entry) =>
+            entry.id === id ? mapProviderDto(provider) : entry,
+          ),
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to update provider", error);
+      });
   };
 
   const addCommand = (entry: Omit<CommandEntry, "id">) => {
@@ -308,6 +485,7 @@ export function useSettingsController() {
   return {
     general: settings.general,
     workspaces: settings.workspaces,
+    providerCatalog,
     providers: settings.providers,
     commands: settings.commands,
     policy: settings.policy,

@@ -3,15 +3,13 @@ import {
   DEFAULT_COMMAND_SETTINGS,
   DEFAULT_GENERAL_PREFERENCES,
   DEFAULT_POLICY_SETTINGS,
-  DEFAULT_PROVIDERS,
   DEFAULT_SETTINGS,
   DEFAULT_WORKSPACES,
   SETTINGS_STORAGE_KEY,
+  SETTINGS_STORAGE_SCHEMA_VERSION,
 } from "@/modules/settings-center/model/defaults";
 import type {
   AgentProfile,
-  ApiProtocol,
-  ProviderModelCapabilities,
   SettingsState,
 } from "@/modules/settings-center/model/types";
 import {
@@ -41,33 +39,6 @@ function isNetworkAccessPolicy(value: unknown): value is NetworkAccessPolicy {
   return value === "ask" || value === "block" || value === "allow";
 }
 
-function parseCustomHeaders(value: unknown): Record<string, string> {
-  if (!isRecord(value)) {
-    return {};
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-  );
-}
-
-function parseProviderOptions(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
-}
-
-function parseCapabilityOverrides(value: unknown): Partial<ProviderModelCapabilities> {
-  if (!isRecord(value)) {
-    return {};
-  }
-
-  const entries = Object.entries(value).filter(
-    (entry): entry is [keyof ProviderModelCapabilities, boolean] =>
-      ["vision", "imageOutput", "toolCalling", "reasoning", "embedding"].includes(entry[0]) && typeof entry[1] === "boolean",
-  );
-
-  return Object.fromEntries(entries);
-}
-
 function parseAgentProfileEntry(raw: Record<string, unknown>): AgentProfile {
   const defaultProfile = DEFAULT_AGENT_PROFILES[0];
 
@@ -77,9 +48,12 @@ function parseAgentProfileEntry(raw: Record<string, unknown>): AgentProfile {
     customInstructions: typeof raw.customInstructions === "string" ? raw.customInstructions : defaultProfile.customInstructions,
     responseStyle: isPromptResponseStyle(raw.responseStyle) ? raw.responseStyle : defaultProfile.responseStyle,
     responseLanguage: typeof raw.responseLanguage === "string" ? raw.responseLanguage : defaultProfile.responseLanguage,
-    primaryModel: typeof raw.primaryModel === "string" ? raw.primaryModel : defaultProfile.primaryModel,
-    assistantModel: typeof raw.assistantModel === "string" ? raw.assistantModel : defaultProfile.assistantModel,
-    liteModel: typeof raw.liteModel === "string" ? raw.liteModel : defaultProfile.liteModel,
+    primaryProviderId: typeof raw.primaryProviderId === "string" ? raw.primaryProviderId : "",
+    primaryModelId: typeof raw.primaryModelId === "string" ? raw.primaryModelId : "",
+    assistantProviderId: typeof raw.assistantProviderId === "string" ? raw.assistantProviderId : "",
+    assistantModelId: typeof raw.assistantModelId === "string" ? raw.assistantModelId : "",
+    liteProviderId: typeof raw.liteProviderId === "string" ? raw.liteProviderId : "",
+    liteModelId: typeof raw.liteModelId === "string" ? raw.liteModelId : "",
   };
 }
 
@@ -118,9 +92,13 @@ export function readStoredSettings(): SettingsState {
       return DEFAULT_SETTINGS;
     }
 
+    const schemaVersion = typeof parsed.schemaVersion === "number" ? parsed.schemaVersion : 0;
+    if (schemaVersion < SETTINGS_STORAGE_SCHEMA_VERSION) {
+      return DEFAULT_SETTINGS;
+    }
+
     const generalRaw = isRecord(parsed.general) ? parsed.general : {};
     const workspaces = Array.isArray(parsed.workspaces) ? parsed.workspaces : null;
-    const providers = Array.isArray(parsed.providers) ? parsed.providers : null;
     const commandsRaw = isRecord(parsed.commands) ? parsed.commands : {};
     const policyRaw = isRecord(parsed.policy) ? parsed.policy : {};
 
@@ -143,33 +121,7 @@ export function readStoredSettings(): SettingsState {
             autoWorkTree: typeof entry.autoWorkTree === "boolean" ? entry.autoWorkTree : false,
           }))
         : DEFAULT_WORKSPACES,
-      providers: providers
-        ? (providers as Array<unknown>).filter(isRecord).map((entry) => ({
-            id: typeof entry.id === "string" ? entry.id : crypto.randomUUID(),
-            name: typeof entry.name === "string" ? entry.name : "Unnamed",
-            baseUrl: typeof entry.baseUrl === "string" ? entry.baseUrl : "",
-            apiKey: typeof entry.apiKey === "string" ? entry.apiKey : "",
-            apiProtocol: (["chat-completions", "responses", "anthropic", "gemini", "ollama"] as const).includes(entry.apiProtocol as ApiProtocol)
-              ? (entry.apiProtocol as ApiProtocol)
-              : "chat-completions",
-            customHeaders: parseCustomHeaders(entry.customHeaders),
-            enabled: typeof entry.enabled === "boolean" ? entry.enabled : false,
-            isCustom: typeof entry.isCustom === "boolean" ? entry.isCustom : false,
-            models: Array.isArray(entry.models)
-              ? (entry.models as Array<unknown>).filter(isRecord).map((model) => ({
-                  id: typeof model.id === "string" ? model.id : crypto.randomUUID(),
-                  modelId: typeof model.modelId === "string" ? model.modelId : "",
-                  displayName: typeof model.displayName === "string" ? model.displayName : "",
-                  enabled: typeof model.enabled === "boolean" ? model.enabled : false,
-                  contextWindow: typeof model.contextWindow === "string" ? model.contextWindow : undefined,
-                  maxOutputTokens: typeof model.maxOutputTokens === "string" ? model.maxOutputTokens : undefined,
-                  capabilityOverrides: parseCapabilityOverrides(model.capabilityOverrides),
-                  providerOptions: parseProviderOptions(model.providerOptions),
-                  isManual: typeof model.isManual === "boolean" ? model.isManual : undefined,
-                }))
-              : [],
-          }))
-        : DEFAULT_PROVIDERS,
+      providers: [],
       commands: {
         commands: (() => {
           const rawCommands = Array.isArray(commandsRaw.commands) ? commandsRaw.commands : null;
@@ -226,5 +178,9 @@ export function persistSettings(settings: SettingsState) {
     return;
   }
 
-  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({
+    schemaVersion: SETTINGS_STORAGE_SCHEMA_VERSION,
+    ...settings,
+    providers: [],
+  }));
 }

@@ -1,69 +1,63 @@
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Provider
+// Provider catalog
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct ProviderRecord {
-    pub id: String,
-    pub name: String,
-    pub protocol_type: String,
-    pub base_url: String,
-    pub api_key_encrypted: Option<String>,
-    pub enabled: bool,
-    pub custom_headers_json: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProviderDto {
-    pub id: String,
-    pub name: String,
-    pub protocol_type: String,
-    pub base_url: String,
-    /// Never expose the raw key; frontend sees whether one is set.
-    pub has_api_key: bool,
-    pub enabled: bool,
-    pub custom_headers: Option<serde_json::Value>,
-    pub created_at: String,
-    pub updated_at: String,
+pub struct ProviderCatalogEntryDto {
+    pub provider_key: String,
+    pub provider_type: String,
+    pub display_name: String,
+    pub builtin: bool,
+    pub supports_custom: bool,
+    pub default_base_url: String,
 }
 
-impl From<ProviderRecord> for ProviderDto {
-    fn from(r: ProviderRecord) -> Self {
-        Self {
-            id: r.id,
-            name: r.name,
-            protocol_type: r.protocol_type,
-            base_url: r.base_url,
-            has_api_key: r.api_key_encrypted.is_some(),
-            enabled: r.enabled,
-            custom_headers: r
-                .custom_headers_json
-                .and_then(|s| serde_json::from_str(&s).ok()),
-            created_at: r.created_at,
-            updated_at: r.updated_at,
+// ---------------------------------------------------------------------------
+// Provider settings
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderKind {
+    Builtin,
+    Custom,
+}
+
+impl ProviderKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Builtin => "builtin",
+            Self::Custom => "custom",
         }
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderInput {
-    pub name: String,
-    pub protocol_type: Option<String>,
-    pub base_url: String,
-    pub api_key: Option<String>,
-    pub enabled: Option<bool>,
-    pub custom_headers: Option<serde_json::Value>,
+impl From<String> for ProviderKind {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "builtin" => Self::Builtin,
+            _ => Self::Custom,
+        }
+    }
 }
 
-// ---------------------------------------------------------------------------
-// ProviderModel
-// ---------------------------------------------------------------------------
+#[derive(Debug, Clone)]
+pub struct ProviderRecord {
+    pub id: String,
+    pub provider_kind: ProviderKind,
+    pub provider_key: String,
+    pub provider_type: String,
+    pub display_name: String,
+    pub base_url: String,
+    pub api_key_encrypted: Option<String>,
+    pub enabled: bool,
+    pub mapping_locked: bool,
+    pub custom_headers_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct ProviderModelRecord {
@@ -72,43 +66,126 @@ pub struct ProviderModelRecord {
     pub model_name: String,
     pub display_name: Option<String>,
     pub enabled: bool,
+    pub context_window: Option<String>,
+    pub max_output_tokens: Option<String>,
     pub capabilities_json: Option<String>,
+    pub provider_options_json: Option<String>,
+    pub is_manual: bool,
     pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProviderModelDto {
+pub struct ProviderModelSettingsDto {
     pub id: String,
     pub provider_id: String,
-    pub model_name: String,
+    pub model_id: String,
     pub display_name: Option<String>,
     pub enabled: bool,
-    pub capabilities: Option<serde_json::Value>,
+    pub context_window: Option<String>,
+    pub max_output_tokens: Option<String>,
+    pub capability_overrides: Option<serde_json::Value>,
+    pub provider_options: Option<serde_json::Value>,
+    pub is_manual: bool,
 }
 
-impl From<ProviderModelRecord> for ProviderModelDto {
+impl From<ProviderModelRecord> for ProviderModelSettingsDto {
     fn from(r: ProviderModelRecord) -> Self {
         Self {
             id: r.id,
             provider_id: r.provider_id,
-            model_name: r.model_name,
+            model_id: r.model_name,
             display_name: r.display_name,
             enabled: r.enabled,
-            capabilities: r
+            context_window: r.context_window,
+            max_output_tokens: r.max_output_tokens,
+            capability_overrides: r
                 .capabilities_json
                 .and_then(|s| serde_json::from_str(&s).ok()),
+            provider_options: r
+                .provider_options_json
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            is_manual: r.is_manual,
         }
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSettingsDto {
+    pub id: String,
+    pub kind: String,
+    pub provider_key: String,
+    pub provider_type: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub locked_mapping: bool,
+    pub base_url: String,
+    pub has_api_key: bool,
+    pub custom_headers: Option<serde_json::Value>,
+    pub models: Vec<ProviderModelSettingsDto>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl ProviderSettingsDto {
+    pub fn from_record(record: ProviderRecord, models: Vec<ProviderModelRecord>) -> Self {
+        Self {
+            id: record.id,
+            kind: record.provider_kind.as_str().to_string(),
+            provider_key: record.provider_key,
+            provider_type: record.provider_type,
+            display_name: record.display_name,
+            enabled: record.enabled,
+            locked_mapping: record.mapping_locked,
+            base_url: record.base_url,
+            has_api_key: record.api_key_encrypted.is_some(),
+            custom_headers: record
+                .custom_headers_json
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            models: models.into_iter().map(ProviderModelSettingsDto::from).collect(),
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderModelInput {
-    pub model_name: String,
+    pub id: Option<String>,
+    pub model_id: String,
     pub display_name: Option<String>,
     pub enabled: Option<bool>,
-    pub capabilities: Option<serde_json::Value>,
+    pub context_window: Option<String>,
+    pub max_output_tokens: Option<String>,
+    pub capability_overrides: Option<serde_json::Value>,
+    pub provider_options: Option<serde_json::Value>,
+    pub is_manual: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSettingsUpdateInput {
+    pub display_name: Option<String>,
+    pub provider_type: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub enabled: Option<bool>,
+    pub custom_headers: Option<serde_json::Value>,
+    pub models: Option<Vec<ProviderModelInput>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomProviderCreateInput {
+    pub display_name: String,
+    pub provider_type: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub enabled: Option<bool>,
+    pub custom_headers: Option<serde_json::Value>,
+    pub models: Option<Vec<ProviderModelInput>>,
 }
 
 // ---------------------------------------------------------------------------

@@ -47,15 +47,16 @@ import { Textarea } from "@/shared/ui/textarea";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import type {
   AgentProfile,
-  ApiProtocol,
   ApprovalPolicy,
   CommandEntry,
   CommandSettings,
+  CustomProviderType,
   GeneralPreferences,
   NetworkAccessPolicy,
   PatternEntry,
   PolicySettings,
   PromptResponseStyle,
+  ProviderCatalogEntry,
   ProviderEntry,
   ProviderModel,
   ProviderModelCapabilities,
@@ -81,6 +82,7 @@ type SettingsCenterOverlayProps = {
   language: LanguagePreference;
   commands: CommandSettings;
   policy: PolicySettings;
+  providerCatalog: Array<ProviderCatalogEntry>;
   providers: Array<ProviderEntry>;
   systemMetadata: SystemMetadata | null;
   theme: ThemePreference;
@@ -233,6 +235,7 @@ export function SettingsCenterOverlay({
   language,
   commands,
   policy,
+  providerCatalog,
   providers,
   systemMetadata,
   theme,
@@ -416,6 +419,7 @@ export function SettingsCenterOverlay({
                   <ProviderSettingsPanel
                     description={activeMeta.description}
                     providers={providers}
+                    providerCatalog={providerCatalog}
                     onAddProvider={onAddProvider}
                     onRemoveProvider={onRemoveProvider}
                     onUpdateProvider={onUpdateProvider}
@@ -1076,16 +1080,23 @@ function GeneralSettingsPanel({
   onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
 }) {
   const availableModels = useMemo(() => {
-    const models: Array<{ value: string; modelId: string; displayName: string; providerName: string }> = [];
+    const models: Array<{
+      providerId: string;
+      providerName: string;
+      modelRecordId: string;
+      modelId: string;
+      displayName: string;
+    }> = [];
     for (const provider of providers) {
       if (!provider.enabled) continue;
       for (const model of provider.models) {
         if (!model.enabled) continue;
         models.push({
-          value: `${provider.name}/${model.modelId}`,
+          providerId: provider.id,
+          modelRecordId: model.id,
           modelId: model.modelId,
           displayName: model.displayName || model.modelId,
-          providerName: provider.name,
+          providerName: provider.displayName,
         });
       }
     }
@@ -1101,9 +1112,12 @@ function GeneralSettingsPanel({
       customInstructions: "",
       responseStyle: "balanced",
       responseLanguage: "English",
-      primaryModel: "",
-      assistantModel: "",
-      liteModel: "",
+      primaryProviderId: "",
+      primaryModelId: "",
+      assistantProviderId: "",
+      assistantModelId: "",
+      liteProviderId: "",
+      liteModelId: "",
     });
   };
 
@@ -1224,25 +1238,37 @@ function GeneralSettingsPanel({
         <ModelSelectRow
           label="Primary model"
           description="Handles main tasks including planning, building, and reasoning."
-          value={activeProfile.primaryModel}
+          providerId={activeProfile.primaryProviderId}
+          modelRecordId={activeProfile.primaryModelId}
           availableModels={availableModels}
-          onValueChange={(value) => onUpdateAgentProfile(activeProfile.id, { primaryModel: value })}
+          onValueChange={(providerId, modelRecordId) => onUpdateAgentProfile(activeProfile.id, {
+            primaryProviderId: providerId,
+            primaryModelId: modelRecordId,
+          })}
         />
         <SectionDivider />
         <ModelSelectRow
           label="Assistant model"
           description="Supports the primary model with sub-agent tasks and tool calls."
-          value={activeProfile.assistantModel}
+          providerId={activeProfile.assistantProviderId}
+          modelRecordId={activeProfile.assistantModelId}
           availableModels={availableModels}
-          onValueChange={(value) => onUpdateAgentProfile(activeProfile.id, { assistantModel: value })}
+          onValueChange={(providerId, modelRecordId) => onUpdateAgentProfile(activeProfile.id, {
+            assistantProviderId: providerId,
+            assistantModelId: modelRecordId,
+          })}
         />
         <SectionDivider />
         <ModelSelectRow
           label="Lite model"
           description="Lightweight model for title generation and quick summaries."
-          value={activeProfile.liteModel}
+          providerId={activeProfile.liteProviderId}
+          modelRecordId={activeProfile.liteModelId}
           availableModels={availableModels}
-          onValueChange={(value) => onUpdateAgentProfile(activeProfile.id, { liteModel: value })}
+          onValueChange={(providerId, modelRecordId) => onUpdateAgentProfile(activeProfile.id, {
+            liteProviderId: providerId,
+            liteModelId: modelRecordId,
+          })}
         />
         <SectionDivider />
         <div className="px-4 py-3">
@@ -1265,14 +1291,22 @@ function ModelSelectRow({
   availableModels,
   description,
   label,
-  value,
+  providerId,
+  modelRecordId,
   onValueChange,
 }: {
-  availableModels: Array<{ value: string; modelId: string; displayName: string; providerName: string }>;
+  availableModels: Array<{
+    providerId: string;
+    providerName: string;
+    modelRecordId: string;
+    modelId: string;
+    displayName: string;
+  }>;
   description: string;
   label: string;
-  value: string;
-  onValueChange: (value: string) => void;
+  providerId: string;
+  modelRecordId: string;
+  onValueChange: (providerId: string, modelRecordId: string) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -1307,15 +1341,21 @@ function ModelSelectRow({
     return () => document.removeEventListener("pointerdown", handleClickOutside);
   }, [isOpen]);
 
-  const selectedModel = availableModels.find((m) => m.value === value);
+  const selectedModel = availableModels.find((m) => m.providerId === providerId && m.modelRecordId === modelRecordId);
   const displayValue = selectedModel
     ? `${selectedModel.displayName}`
-    : value
-      ? value
+    : modelRecordId
+      ? modelRecordId
       : "Not set";
 
   const grouped = useMemo(() => {
-    const map = new Map<string, Array<{ value: string; modelId: string; displayName: string }>>();
+    const map = new Map<string, Array<{
+      providerId: string;
+      providerName: string;
+      modelRecordId: string;
+      modelId: string;
+      displayName: string;
+    }>>();
     for (const model of availableModels) {
       const list = map.get(model.providerName) ?? [];
       list.push(model);
@@ -1336,16 +1376,16 @@ function ModelSelectRow({
           type="button"
           className={cn(
             "inline-flex min-h-8 w-full items-center justify-between gap-2 rounded-lg border border-app-border bg-app-surface-muted px-3 text-[12px] transition-colors hover:bg-app-surface-hover md:w-auto md:min-w-[200px]",
-            !selectedModel && !value && "text-app-muted",
+            !selectedModel && !modelRecordId && "text-app-muted",
           )}
           onClick={() => setIsOpen(!isOpen)}
         >
           <span className="flex min-w-0 items-center gap-2">
-            {value ? (
+            {selectedModel ? (
               <ModelBrandIcon
                 className="size-4"
-                displayName={selectedModel?.displayName ?? value}
-                modelId={selectedModel?.modelId ?? value}
+                displayName={selectedModel.displayName}
+                modelId={selectedModel.modelId}
               />
             ) : null}
             <span className="truncate">{displayValue}</span>
@@ -1363,9 +1403,9 @@ function ModelSelectRow({
                   type="button"
                   className={cn(
                     "flex w-full items-center px-3 py-2 text-left text-[12px] transition-colors hover:bg-app-surface-hover",
-                    !value && "text-app-accent",
+                    !modelRecordId && "text-app-accent",
                   )}
-                  onClick={() => { onValueChange(""); setIsOpen(false); }}
+                  onClick={() => { onValueChange("", ""); setIsOpen(false); }}
                 >
                   <span className="italic text-app-muted">Not set</span>
                 </button>
@@ -1376,13 +1416,13 @@ function ModelSelectRow({
                     </div>
                     {models.map((model) => (
                       <button
-                        key={model.value}
+                        key={`${model.providerId}:${model.modelRecordId}`}
                         type="button"
                         className={cn(
                           "flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] transition-colors hover:bg-app-surface-hover",
-                          value === model.value && "text-app-accent",
+                          providerId === model.providerId && modelRecordId === model.modelRecordId && "text-app-accent",
                         )}
-                        onClick={() => { onValueChange(model.value); setIsOpen(false); }}
+                        onClick={() => { onValueChange(model.providerId, model.modelRecordId); setIsOpen(false); }}
                       >
                         <ModelBrandIcon className="size-4" displayName={model.displayName} modelId={model.modelId} />
                         <span className="truncate">{model.displayName}</span>
@@ -2112,14 +2152,6 @@ function WritableRootItem({
   );
 }
 
-const API_PROTOCOL_OPTIONS: ReadonlyArray<{ label: string; value: ApiProtocol }> = [
-  { value: "chat-completions", label: "Chat Completions (/chat/completions)" },
-  { value: "responses", label: "Responses (/responses)" },
-  { value: "anthropic", label: "Anthropic (/messages)" },
-  { value: "gemini", label: "Gemini (/generateContent)" },
-  { value: "ollama", label: "Ollama (/api/chat)" },
-];
-
 const MODEL_CAPABILITY_META: ReadonlyArray<{
   icon: React.ComponentType<{ className?: string }>;
   key: keyof ProviderModelCapabilities;
@@ -2228,12 +2260,14 @@ function getEffectiveModelCapabilities(model: ProviderModel): ProviderModelCapab
 
 function ProviderSettingsPanel({
   description,
+  providerCatalog,
   providers,
   onAddProvider,
   onRemoveProvider,
   onUpdateProvider,
 }: {
   description: string;
+  providerCatalog: Array<ProviderCatalogEntry>;
   providers: Array<ProviderEntry>;
   onAddProvider: (entry: Omit<ProviderEntry, "id">) => void;
   onRemoveProvider: (id: string) => void;
@@ -2257,7 +2291,7 @@ function ProviderSettingsPanel({
   const filteredProviders = useMemo(() => {
     if (!providerSearch.trim()) return providers;
     const query = providerSearch.toLowerCase();
-    return providers.filter((provider) => provider.name.toLowerCase().includes(query));
+    return providers.filter((provider) => provider.displayName.toLowerCase().includes(query));
   }, [providers, providerSearch]);
 
   const filteredModels = useMemo(() => {
@@ -2270,6 +2304,24 @@ function ProviderSettingsPanel({
         model.displayName.toLowerCase().includes(query),
     );
   }, [selectedProvider, modelSearch]);
+
+  const customProviderTypeOptions = useMemo(
+    () =>
+      providerCatalog
+        .filter((entry) => entry.supportsCustom)
+        .map((entry) => ({
+          value: entry.providerType as CustomProviderType,
+          label: entry.displayName,
+          defaultBaseUrl: entry.defaultBaseUrl,
+        })),
+    [providerCatalog],
+  );
+
+  useEffect(() => {
+    if (!providers.some((provider) => provider.id === selectedProviderId)) {
+      setSelectedProviderId(providers[0]?.id ?? null);
+    }
+  }, [providers, selectedProviderId]);
 
   useEffect(() => {
     if (!selectedProvider) {
@@ -2293,13 +2345,16 @@ function ProviderSettingsPanel({
 
   const handleAddCustomProvider = () => {
     const newProvider: Omit<ProviderEntry, "id"> = {
-      name: "Custom Provider",
-      baseUrl: "https://api.example.com/v1",
+      kind: "custom",
+      providerKey: crypto.randomUUID(),
+      providerType: customProviderTypeOptions[0]?.value ?? "openai-compatible",
+      displayName: "Custom Provider",
+      baseUrl: customProviderTypeOptions[0]?.defaultBaseUrl ?? "https://api.example.com/v1",
       apiKey: "",
-      apiProtocol: "chat-completions",
+      hasApiKey: false,
+      lockedMapping: false,
       customHeaders: {},
       enabled: false,
-      isCustom: true,
       models: [],
     };
     onAddProvider(newProvider);
@@ -2409,9 +2464,9 @@ function ProviderSettingsPanel({
                         setModelSearch("");
                       }}
                     >
-                      <ProviderIcon name={provider.name} className="size-5 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{provider.name}</span>
-                      {provider.isCustom ? (
+                      <ProviderIcon name={provider.displayName} className="size-5 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{provider.displayName}</span>
+                      {provider.kind === "custom" ? (
                         <span className="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-app-subtle">
                           custom
                         </span>
@@ -2437,12 +2492,16 @@ function ProviderSettingsPanel({
                 <div className="flex items-center justify-between border-b border-app-border px-5 py-4">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2.5">
-                      <h3 className="text-[15px] font-semibold text-app-foreground">{selectedProvider.name}</h3>
-                      {selectedProvider.isCustom ? (
+                      <h3 className="text-[15px] font-semibold text-app-foreground">{selectedProvider.displayName}</h3>
+                      {selectedProvider.kind === "custom" ? (
                         <span className="rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-app-muted">
                           Custom
                         </span>
-                      ) : null}
+                      ) : (
+                        <span className="rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-app-muted">
+                          Built-in
+                        </span>
+                      )}
                       {selectedProvider.enabled ? (
                         <span className="rounded-md bg-app-success/15 px-1.5 py-0.5 text-[10px] font-medium text-app-success">
                           Active
@@ -2452,7 +2511,7 @@ function ProviderSettingsPanel({
                     <p className="mt-0.5 truncate text-[12px] text-app-subtle">{selectedProvider.baseUrl}</p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    {selectedProvider.isCustom ? (
+                    {selectedProvider.kind === "custom" ? (
                       <button
                         type="button"
                         title="Delete provider"
@@ -2478,8 +2537,9 @@ function ProviderSettingsPanel({
                 <div className="space-y-5 px-5 py-4">
                   <ProviderField label="Provider Name">
                     <Input
-                      value={selectedProvider.name}
-                      onChange={(event) => onUpdateProvider(selectedProvider.id, { name: event.target.value })}
+                      value={selectedProvider.displayName}
+                      onChange={(event) => onUpdateProvider(selectedProvider.id, { displayName: event.target.value })}
+                      disabled={selectedProvider.lockedMapping}
                     />
                   </ProviderField>
 
@@ -2497,6 +2557,7 @@ function ProviderSettingsPanel({
                       value={selectedProvider.apiKey}
                       onChange={(event) => onUpdateProvider(selectedProvider.id, { apiKey: event.target.value })}
                       className="pr-10"
+                      placeholder={selectedProvider.hasApiKey ? "Saved in app" : "Not set"}
                     />
                     <button
                       type="button"
@@ -2510,7 +2571,7 @@ function ProviderSettingsPanel({
                 </ProviderField>
 
                 <ProviderField
-                  label="API Protocol"
+                  label="Provider Type"
                   action={(
                     <button
                       type="button"
@@ -2529,24 +2590,32 @@ function ProviderSettingsPanel({
                     </button>
                   )}
                 >
-                  <div className="relative">
-                    <select
-                      value={selectedProvider.apiProtocol}
-                      onChange={(event) =>
-                        onUpdateProvider(selectedProvider.id, { apiProtocol: event.target.value as ApiProtocol })
-                      }
-                      className="h-9 w-full appearance-none rounded-lg border border-app-border bg-app-surface-muted px-3 pr-8 text-[13px] text-app-foreground outline-none transition-colors focus-visible:border-app-border-strong"
-                    >
-                      {API_PROTOCOL_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-app-subtle" />
-                  </div>
+                  {selectedProvider.lockedMapping ? (
+                    <div className="rounded-lg border border-app-border bg-app-surface-muted px-3 py-2 text-[13px] text-app-foreground">
+                      {selectedProvider.providerType}
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <select
+                        value={selectedProvider.providerType}
+                        onChange={(event) =>
+                          onUpdateProvider(selectedProvider.id, { providerType: event.target.value as CustomProviderType })
+                        }
+                        className="h-9 w-full appearance-none rounded-lg border border-app-border bg-app-surface-muted px-3 pr-8 text-[13px] text-app-foreground outline-none transition-colors focus-visible:border-app-border-strong"
+                      >
+                        {customProviderTypeOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-app-subtle" />
+                    </div>
+                  )}
                   <p className="mt-1.5 text-[11px] text-app-subtle">
-                    Choose the API protocol your provider uses
+                    {selectedProvider.lockedMapping
+                      ? "Built-in providers stay mapped to their tiy-core provider type."
+                      : "Choose which tiy-core provider type backs this custom provider."}
                   </p>
                   {showAdvancedSettings ? (
                     <div className="mt-3 rounded-xl border border-app-border bg-app-surface-muted/70 p-3">

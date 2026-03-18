@@ -9,6 +9,7 @@ import type {
 } from "@/modules/settings-center/model/types";
 
 export const SETTINGS_STORAGE_KEY = "tiy-agent-workbench-settings";
+export const SETTINGS_STORAGE_SCHEMA_VERSION = 2;
 export const GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY = "general.prevent_sleep_while_running";
 
 const DEFAULT_CUSTOM_INSTRUCTIONS =
@@ -20,9 +21,12 @@ export const DEFAULT_AGENT_PROFILES: Array<AgentProfile> = [{
   customInstructions: DEFAULT_CUSTOM_INSTRUCTIONS,
   responseStyle: "balanced",
   responseLanguage: "English",
-  primaryModel: "",
-  assistantModel: "",
-  liteModel: "",
+  primaryProviderId: "",
+  primaryModelId: "",
+  assistantProviderId: "",
+  assistantModelId: "",
+  liteProviderId: "",
+  liteModelId: "",
 }];
 
 export const DEFAULT_COMMAND_SETTINGS: CommandSettings = {
@@ -46,122 +50,7 @@ export const DEFAULT_COMMAND_SETTINGS: CommandSettings = {
 
 export const DEFAULT_WORKSPACES: Array<WorkspaceEntry> = [];
 
-export const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
-  {
-    id: "zenmux",
-    name: "ZenMux",
-    baseUrl: "https://zenmux.ai/api/v1",
-    apiKey: "sk-zenmux-xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    apiProtocol: "responses",
-    customHeaders: {},
-    enabled: true,
-    isCustom: true,
-    models: [
-      {
-        id: "m1",
-        modelId: "openai/gpt-5.4",
-        displayName: "GPT-5.4",
-        enabled: true,
-        capabilityOverrides: {},
-        providerOptions: {},
-        isManual: true,
-      },
-      {
-        id: "m2",
-        modelId: "stepfun/step-3.5-flash",
-        displayName: "stepfun/step-3.5-flash",
-        enabled: true,
-        contextWindow: "256K",
-        capabilityOverrides: {},
-        providerOptions: {},
-      },
-      {
-        id: "m3",
-        modelId: "anthropic/claude-3.5-haiku",
-        displayName: "anthropic/claude-3.5-haiku",
-        enabled: false,
-        contextWindow: "200K",
-        capabilityOverrides: {},
-        providerOptions: {},
-      },
-      {
-        id: "m4",
-        modelId: "anthropic/claude-3.7-sonnet",
-        displayName: "anthropic/claude-3.7-sonnet",
-        enabled: false,
-        contextWindow: "200K",
-        capabilityOverrides: {},
-        providerOptions: {},
-      },
-    ],
-  },
-  {
-    id: "openai",
-    name: "OpenAI",
-    baseUrl: "https://api.openai.com/v1",
-    apiKey: "",
-    apiProtocol: "chat-completions",
-    customHeaders: {},
-    enabled: false,
-    isCustom: false,
-    models: [],
-  },
-  {
-    id: "anthropic",
-    name: "Anthropic",
-    baseUrl: "https://api.anthropic.com/v1",
-    apiKey: "",
-    apiProtocol: "chat-completions",
-    customHeaders: {},
-    enabled: false,
-    isCustom: false,
-    models: [],
-  },
-  {
-    id: "google-gemini",
-    name: "Google Gemini",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    apiKey: "",
-    apiProtocol: "chat-completions",
-    customHeaders: {},
-    enabled: false,
-    isCustom: false,
-    models: [],
-  },
-  {
-    id: "deepseek",
-    name: "DeepSeek",
-    baseUrl: "https://api.deepseek.com/v1",
-    apiKey: "",
-    apiProtocol: "chat-completions",
-    customHeaders: {},
-    enabled: false,
-    isCustom: false,
-    models: [],
-  },
-  {
-    id: "moonshot",
-    name: "Moonshot",
-    baseUrl: "https://api.moonshot.cn/v1",
-    apiKey: "",
-    apiProtocol: "chat-completions",
-    customHeaders: {},
-    enabled: false,
-    isCustom: false,
-    models: [],
-  },
-  {
-    id: "openrouter",
-    name: "OpenRouter",
-    baseUrl: "https://openrouter.ai/api/v1",
-    apiKey: "",
-    apiProtocol: "chat-completions",
-    customHeaders: {},
-    enabled: false,
-    isCustom: false,
-    models: [],
-  },
-];
+export const DEFAULT_PROVIDERS: Array<ProviderEntry> = [];
 
 export const DEFAULT_GENERAL_PREFERENCES: GeneralPreferences = {
   launchAtLogin: false,

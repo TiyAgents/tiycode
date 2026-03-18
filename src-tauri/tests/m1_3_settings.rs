@@ -8,6 +8,8 @@
 mod test_helpers;
 
 use sqlx::Row;
+use tiy_agent_lib::core::settings_manager::SettingsManager;
+use tiy_agent_lib::model::provider::CustomProviderCreateInput;
 
 // =========================================================================
 // T1.3.1 — Settings CRUD
@@ -271,5 +273,83 @@ async fn test_profile_three_layer_model() {
         row.get::<Option<String>, _>("lightweight_model_id")
             .unwrap(),
         "model-gpt35"
+    );
+}
+
+// =========================================================================
+// T1.3.6 — tiy-core-backed provider settings
+// =========================================================================
+
+#[tokio::test]
+async fn test_provider_settings_seed_builtin_catalog() {
+    let pool = test_helpers::setup_test_pool().await;
+    let manager = SettingsManager::new(pool);
+
+    let providers = manager.get_all_provider_settings().await.unwrap();
+    let catalog = manager.list_provider_catalog().await.unwrap();
+
+    assert!(
+        providers.iter().any(|provider| provider.provider_key == "openai"),
+        "Expected OpenAI to be present in the built-in provider catalog"
+    );
+    assert!(
+        providers.iter().any(|provider| provider.provider_key == "zenmux"),
+        "Expected Zenmux to be present in the built-in provider catalog"
+    );
+
+    let openai = providers
+        .iter()
+        .find(|provider| provider.provider_key == "openai")
+        .unwrap();
+    assert_eq!(openai.kind, "builtin");
+    assert!(openai.locked_mapping);
+
+    assert!(
+        !providers
+            .iter()
+            .any(|provider| provider.provider_key == "openai-compatible"),
+        "OpenAI Compatible should not appear in the built-in provider settings list"
+    );
+    assert!(
+        catalog
+            .iter()
+            .any(|entry| entry.provider_type == "openai-compatible" && !entry.builtin && entry.supports_custom),
+        "OpenAI Compatible should still be available as a custom provider type"
+    );
+}
+
+#[tokio::test]
+async fn test_provider_settings_create_custom_and_protect_builtins() {
+    let pool = test_helpers::setup_test_pool().await;
+    let manager = SettingsManager::new(pool);
+
+    let custom = manager
+        .create_custom_provider(CustomProviderCreateInput {
+            display_name: "My Gateway".to_string(),
+            provider_type: "openai-compatible".to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            api_key: Some("sk-test".to_string()),
+            enabled: Some(true),
+            custom_headers: None,
+            models: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(custom.kind, "custom");
+    assert_eq!(custom.provider_type, "openai-compatible");
+
+    let builtin = manager
+        .get_all_provider_settings()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|provider| provider.provider_key == "openai")
+        .unwrap();
+
+    let delete_builtin = manager.delete_custom_provider(&builtin.id).await;
+    assert!(
+        delete_builtin.is_err(),
+        "Built-in providers should not be deletable through the custom delete path"
     );
 }

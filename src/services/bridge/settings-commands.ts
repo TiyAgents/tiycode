@@ -1,12 +1,12 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
-  SettingDto,
-  ProviderDto,
-  ProviderInput,
-  ProviderModelDto,
-  ProviderModelInput,
   AgentProfileDto,
   AgentProfileInput,
+  CustomProviderCreateInput,
+  ProviderCatalogEntryDto,
+  ProviderSettingsDto,
+  ProviderSettingsUpdateInput,
+  SettingDto,
 } from "@/shared/types/api";
 
 const requireTauri = (cmd: string) => {
@@ -55,46 +55,42 @@ export async function policySet(key: string, value: string): Promise<void> {
 // Providers
 // ---------------------------------------------------------------------------
 
-export async function providerList(): Promise<ProviderDto[]> {
+export async function providerCatalogList(): Promise<ProviderCatalogEntryDto[]> {
   if (!isTauri()) return [];
-  return invoke<ProviderDto[]>("provider_list");
+  return invoke<ProviderCatalogEntryDto[]>("provider_catalog_list");
 }
 
-export async function providerCreate(input: ProviderInput): Promise<ProviderDto> {
-  requireTauri("provider_create");
-  return invoke<ProviderDto>("provider_create", { input });
-}
-
-export async function providerUpdate(id: string, input: ProviderInput): Promise<ProviderDto> {
-  requireTauri("provider_update");
-  return invoke<ProviderDto>("provider_update", { id, input });
-}
-
-export async function providerDelete(id: string): Promise<void> {
-  requireTauri("provider_delete");
-  return invoke("provider_delete", { id });
-}
-
-// ---------------------------------------------------------------------------
-// Provider Models
-// ---------------------------------------------------------------------------
-
-export async function providerModelList(providerId: string): Promise<ProviderModelDto[]> {
+export async function providerSettingsGetAll(): Promise<ProviderSettingsDto[]> {
   if (!isTauri()) return [];
-  return invoke<ProviderModelDto[]>("provider_model_list", { providerId });
+  return invoke<ProviderSettingsDto[]>("provider_settings_get_all");
 }
 
-export async function providerModelAdd(
-  providerId: string,
-  input: ProviderModelInput,
-): Promise<ProviderModelDto> {
-  requireTauri("provider_model_add");
-  return invoke<ProviderModelDto>("provider_model_add", { providerId, input });
+export async function providerSettingsUpsertBuiltin(
+  providerKey: string,
+  input: ProviderSettingsUpdateInput,
+): Promise<ProviderSettingsDto> {
+  requireTauri("provider_settings_upsert_builtin");
+  return invoke<ProviderSettingsDto>("provider_settings_upsert_builtin", { providerKey, input });
 }
 
-export async function providerModelRemove(id: string): Promise<void> {
-  requireTauri("provider_model_remove");
-  return invoke("provider_model_remove", { id });
+export async function providerSettingsCreateCustom(
+  input: CustomProviderCreateInput,
+): Promise<ProviderSettingsDto> {
+  requireTauri("provider_settings_create_custom");
+  return invoke<ProviderSettingsDto>("provider_settings_create_custom", { input });
+}
+
+export async function providerSettingsUpdateCustom(
+  id: string,
+  input: ProviderSettingsUpdateInput,
+): Promise<ProviderSettingsDto> {
+  requireTauri("provider_settings_update_custom");
+  return invoke<ProviderSettingsDto>("provider_settings_update_custom", { id, input });
+}
+
+export async function providerSettingsDeleteCustom(id: string): Promise<void> {
+  requireTauri("provider_settings_delete_custom");
+  return invoke("provider_settings_delete_custom", { id });
 }
 
 // ---------------------------------------------------------------------------

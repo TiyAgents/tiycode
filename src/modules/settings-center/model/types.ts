@@ -15,7 +15,33 @@ export type WorkspaceEntry = {
   autoWorkTree: boolean;
 };
 
-export type ApiProtocol = "chat-completions" | "responses" | "anthropic" | "gemini" | "ollama";
+export type ProviderKind = "builtin" | "custom";
+export type ProviderType =
+  | "openai"
+  | "openai-compatible"
+  | "anthropic"
+  | "google"
+  | "ollama"
+  | "xai"
+  | "groq"
+  | "openrouter"
+  | "minimax"
+  | "minimax-cn"
+  | "kimi-coding"
+  | "zai"
+  | "deepseek"
+  | "zenmux";
+
+export type CustomProviderType = "openai-compatible" | "anthropic" | "google" | "ollama";
+
+export type ProviderCatalogEntry = {
+  providerKey: ProviderType;
+  providerType: ProviderType;
+  displayName: string;
+  builtin: boolean;
+  supportsCustom: boolean;
+  defaultBaseUrl: string;
+};
 
 export type ProviderModelCapabilities = {
   vision: boolean;
@@ -39,13 +65,16 @@ export type ProviderModel = {
 
 export type ProviderEntry = {
   id: string;
-  name: string;
+  kind: ProviderKind;
+  providerKey: string;
+  providerType: ProviderType;
+  displayName: string;
   baseUrl: string;
   apiKey: string;
-  apiProtocol: ApiProtocol;
+  hasApiKey: boolean;
+  lockedMapping: boolean;
   customHeaders: Record<string, string>;
   enabled: boolean;
-  isCustom: boolean;
   models: Array<ProviderModel>;
 };
 
@@ -63,9 +92,12 @@ export type AgentProfile = {
   customInstructions: string;
   responseStyle: PromptResponseStyle;
   responseLanguage: string;
-  primaryModel: string;
-  assistantModel: string;
-  liteModel: string;
+  primaryProviderId: string;
+  primaryModelId: string;
+  assistantProviderId: string;
+  assistantModelId: string;
+  liteProviderId: string;
+  liteModelId: string;
 };
 
 export type CommandSettings = {

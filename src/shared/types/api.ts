@@ -40,41 +40,76 @@ export interface SettingDto {
 // Provider
 // ---------------------------------------------------------------------------
 
-export interface ProviderDto {
+export type ProviderSettingsKind = "builtin" | "custom";
+
+export interface ProviderCatalogEntryDto {
+  providerKey: string;
+  providerType: string;
+  displayName: string;
+  builtin: boolean;
+  supportsCustom: boolean;
+  defaultBaseUrl: string;
+}
+
+export interface ProviderModelSettingsDto {
   id: string;
-  name: string;
-  protocolType: string;
+  providerId: string;
+  modelId: string;
+  displayName: string | null;
+  enabled: boolean;
+  contextWindow: string | null;
+  maxOutputTokens: string | null;
+  capabilityOverrides: Record<string, boolean> | null;
+  providerOptions: Record<string, unknown> | null;
+  isManual: boolean;
+}
+
+export interface ProviderSettingsDto {
+  id: string;
+  kind: ProviderSettingsKind;
+  providerKey: string;
+  providerType: string;
+  displayName: string;
+  enabled: boolean;
+  lockedMapping: boolean;
   baseUrl: string;
   hasApiKey: boolean;
-  enabled: boolean;
   customHeaders: Record<string, string> | null;
+  models: ProviderModelSettingsDto[];
   createdAt: string;
   updatedAt: string;
 }
 
-export interface ProviderInput {
-  name: string;
-  protocolType?: string;
+export interface ProviderModelInput {
+  id?: string;
+  modelId: string;
+  displayName?: string;
+  enabled?: boolean;
+  contextWindow?: string;
+  maxOutputTokens?: string;
+  capabilityOverrides?: Record<string, boolean>;
+  providerOptions?: Record<string, unknown>;
+  isManual?: boolean;
+}
+
+export interface ProviderSettingsUpdateInput {
+  displayName?: string;
+  providerType?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  enabled?: boolean;
+  customHeaders?: Record<string, string>;
+  models?: ProviderModelInput[];
+}
+
+export interface CustomProviderCreateInput {
+  displayName: string;
+  providerType: string;
   baseUrl: string;
   apiKey?: string;
   enabled?: boolean;
   customHeaders?: Record<string, string>;
-}
-
-export interface ProviderModelDto {
-  id: string;
-  providerId: string;
-  modelName: string;
-  displayName: string | null;
-  enabled: boolean;
-  capabilities: Record<string, boolean> | null;
-}
-
-export interface ProviderModelInput {
-  modelName: string;
-  displayName?: string;
-  enabled?: boolean;
-  capabilities?: Record<string, boolean>;
+  models?: ProviderModelInput[];
 }
 
 // ---------------------------------------------------------------------------

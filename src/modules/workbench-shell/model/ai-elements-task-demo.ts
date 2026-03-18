@@ -142,18 +142,16 @@ export function getProfileToneLabel(profile: AgentProfile) {
 
 function resolveProviderModel(
   providers: ReadonlyArray<ProviderEntry>,
-  value: string,
+  providerId: string,
+  modelRecordId: string,
 ) {
-  const normalized = value.trim().toLowerCase();
-
   for (const provider of providers) {
-    for (const model of provider.models) {
-      const candidates = [
-        model.modelId,
-        `${provider.name}/${model.modelId}`,
-      ].map((entry) => entry.trim().toLowerCase());
+    if (provider.id !== providerId) {
+      continue;
+    }
 
-      if (candidates.includes(normalized)) {
+    for (const model of provider.models) {
+      if (model.id === modelRecordId) {
         return {
           displayName: model.displayName || model.modelId,
           modelId: model.modelId,
@@ -190,18 +188,18 @@ function resolveProfilePrimaryModel(
   profile: AgentProfile,
   providers: ReadonlyArray<ProviderEntry> = [],
 ) {
-  const modelId = profile.primaryModel || profile.assistantModel || profile.liteModel || "";
+  const providerId = profile.primaryProviderId || profile.assistantProviderId || profile.liteProviderId || "";
+  const modelRecordId = profile.primaryModelId || profile.assistantModelId || profile.liteModelId || "";
 
-  if (modelId) {
-    const providerModel = resolveProviderModel(providers, modelId);
+  if (providerId && modelRecordId) {
+    const providerModel = resolveProviderModel(providers, providerId, modelRecordId);
     if (providerModel) {
       return providerModel;
     }
 
-    const compactName = modelId.includes("/") ? modelId.split("/").pop() ?? modelId : modelId;
     return {
-      displayName: compactName.trim() || modelId,
-      modelId,
+      displayName: modelRecordId,
+      modelId: modelRecordId,
     };
   }
 

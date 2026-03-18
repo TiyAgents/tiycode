@@ -4,8 +4,8 @@ use crate::core::app_state::AppState;
 use crate::core::sleep_manager::PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY;
 use crate::model::errors::AppError;
 use crate::model::provider::{
-    AgentProfileDto, AgentProfileInput, ProviderDto, ProviderInput, ProviderModelDto,
-    ProviderModelInput,
+    AgentProfileDto, AgentProfileInput, CustomProviderCreateInput, ProviderCatalogEntryDto,
+    ProviderSettingsDto, ProviderSettingsUpdateInput,
 };
 use crate::model::settings::SettingDto;
 
@@ -95,74 +95,57 @@ pub async fn policy_set(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn provider_list(state: State<'_, AppState>) -> Result<Vec<ProviderDto>, AppError> {
-    Ok(state
-        .settings_manager
-        .list_providers()
-        .await?
-        .into_iter()
-        .map(ProviderDto::from)
-        .collect())
-}
-
-#[tauri::command]
-pub async fn provider_create(
+pub async fn provider_catalog_list(
     state: State<'_, AppState>,
-    input: ProviderInput,
-) -> Result<ProviderDto, AppError> {
-    let record = state.settings_manager.create_provider(input).await?;
-    Ok(ProviderDto::from(record))
+) -> Result<Vec<ProviderCatalogEntryDto>, AppError> {
+    state.settings_manager.list_provider_catalog().await
 }
 
 #[tauri::command]
-pub async fn provider_update(
+pub async fn provider_settings_get_all(
+    state: State<'_, AppState>,
+) -> Result<Vec<ProviderSettingsDto>, AppError> {
+    state.settings_manager.get_all_provider_settings().await
+}
+
+#[tauri::command]
+pub async fn provider_settings_upsert_builtin(
+    state: State<'_, AppState>,
+    provider_key: String,
+    input: ProviderSettingsUpdateInput,
+) -> Result<ProviderSettingsDto, AppError> {
+    state
+        .settings_manager
+        .upsert_builtin_provider_settings(&provider_key, input)
+        .await
+}
+
+#[tauri::command]
+pub async fn provider_settings_create_custom(
+    state: State<'_, AppState>,
+    input: CustomProviderCreateInput,
+) -> Result<ProviderSettingsDto, AppError> {
+    state.settings_manager.create_custom_provider(input).await
+}
+
+#[tauri::command]
+pub async fn provider_settings_update_custom(
     state: State<'_, AppState>,
     id: String,
-    input: ProviderInput,
-) -> Result<ProviderDto, AppError> {
-    let record = state.settings_manager.update_provider(&id, input).await?;
-    Ok(ProviderDto::from(record))
-}
-
-#[tauri::command]
-pub async fn provider_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
-    state.settings_manager.delete_provider(&id).await
-}
-
-// ---------------------------------------------------------------------------
-// Provider Models
-// ---------------------------------------------------------------------------
-
-#[tauri::command]
-pub async fn provider_model_list(
-    state: State<'_, AppState>,
-    provider_id: String,
-) -> Result<Vec<ProviderModelDto>, AppError> {
-    Ok(state
+    input: ProviderSettingsUpdateInput,
+) -> Result<ProviderSettingsDto, AppError> {
+    state
         .settings_manager
-        .list_models(&provider_id)
-        .await?
-        .into_iter()
-        .map(ProviderModelDto::from)
-        .collect())
+        .update_custom_provider(&id, input)
+        .await
 }
 
 #[tauri::command]
-pub async fn provider_model_add(
+pub async fn provider_settings_delete_custom(
     state: State<'_, AppState>,
-    provider_id: String,
-    input: ProviderModelInput,
-) -> Result<ProviderModelDto, AppError> {
-    let record = state
-        .settings_manager
-        .add_model(&provider_id, input)
-        .await?;
-    Ok(ProviderModelDto::from(record))
-}
-
-#[tauri::command]
-pub async fn provider_model_remove(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
-    state.settings_manager.remove_model(&id).await
+    id: String,
+) -> Result<(), AppError> {
+    state.settings_manager.delete_custom_provider(&id).await
 }
 
 // ---------------------------------------------------------------------------

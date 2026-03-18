@@ -139,6 +139,7 @@ export function DashboardWorkbench() {
   const {
     general: generalPreferences,
     workspaces: settingsWorkspaces,
+    providerCatalog,
     providers,
     commands,
     policy,
@@ -1290,6 +1291,7 @@ export function DashboardWorkbench() {
           language={language}
           policy={policy}
           commands={commands}
+          providerCatalog={providerCatalog}
           providers={providers}
           systemMetadata={data}
           theme={theme}
