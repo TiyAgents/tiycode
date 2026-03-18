@@ -167,6 +167,7 @@ function inferIcon(name: string, isDir: boolean): ProjectTreeItem["icon"] {
   }
 
   const lowerName = name.toLowerCase();
+  const extension = lowerName.includes(".") ? lowerName.split(".").pop() ?? "" : "";
 
   if (lowerName === ".gitignore" || lowerName.startsWith(".git")) {
     return "git";
@@ -192,7 +193,11 @@ function inferIcon(name: string, isDir: boolean): ProjectTreeItem["icon"] {
     return "readme";
   }
 
-  return "ts";
+  if (extension === "ts" || extension === "tsx") {
+    return "ts";
+  }
+
+  return "file";
 }
 
 function flattenVisibleTree(

@@ -1,4 +1,4 @@
-import { BookOpen, Braces, Code2, Folder, GitBranch } from "lucide-react";
+import { BookOpen, Braces, Code2, File, Folder, GitBranch } from "lucide-react";
 import { cn } from "@/shared/lib/utils";
 import type { ProjectTreeItem } from "@/modules/workbench-shell/model/types";
 
@@ -33,6 +33,10 @@ export function ProjectTreeIcon({
 
   if (icon === "license") {
     return <span className={cn("text-base leading-none", muted ? "text-app-subtle/70" : "text-app-subtle")}>=</span>;
+  }
+
+  if (icon === "file") {
+    return <File className={iconClassName} />;
   }
 
   return (

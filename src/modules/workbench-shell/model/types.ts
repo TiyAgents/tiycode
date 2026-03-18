@@ -41,7 +41,7 @@ export type ProjectTreeItem = {
   id: string;
   name: string;
   kind: "folder" | "file";
-  icon: "folder" | "git" | "json" | "html" | "css" | "license" | "readme" | "ts";
+  icon: "folder" | "git" | "json" | "html" | "css" | "license" | "readme" | "ts" | "file";
   ignored?: boolean;
 };
 
