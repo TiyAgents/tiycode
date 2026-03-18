@@ -19,7 +19,14 @@ import { useSettingsController, type SettingsCategory } from "@/modules/settings
 import { AI_ELEMENTS_THREAD_TITLE } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
 import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
-import { threadCreate, threadList, threadUpdateTitle, workspaceAdd, workspaceList } from "@/services/bridge";
+import {
+  threadCreate,
+  threadList,
+  threadUpdateTitle,
+  workspaceAdd,
+  workspaceList,
+  workspaceSetDefault,
+} from "@/services/bridge";
 import {
   CONTEXT_WINDOW_INFO,
   CONTEXT_WINDOW_USAGE_DETAIL,
@@ -79,6 +86,43 @@ const NEW_THREAD_TERMINAL_KEY_SUFFIX = "__new_thread__";
 
 function getNewThreadTerminalBindingKey(workspaceId: string) {
   return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
+}
+
+function findWorkspaceForThread(
+  workspaces: ReadonlyArray<WorkspaceItem>,
+  threadId: string | null,
+) {
+  if (!threadId) {
+    return null;
+  }
+
+  return workspaces.find((workspace) => workspace.threads.some((thread) => thread.id === threadId)) ?? null;
+}
+
+function resolveProjectForWorkspace(
+  workspace: WorkspaceItem | null,
+  recentProjects: ReadonlyArray<ProjectOption>,
+) {
+  if (!workspace) {
+    return null;
+  }
+
+  const matchedProject = recentProjects.find(
+    (project) =>
+      (workspace.path && project.path === workspace.path) ||
+      project.id === workspace.id ||
+      project.name === workspace.name,
+  );
+
+  if (matchedProject) {
+    return matchedProject;
+  }
+
+  if (!workspace.path) {
+    return null;
+  }
+
+  return buildProjectOptionFromPath(workspace.path);
 }
 
 export function DashboardWorkbench() {
@@ -146,6 +190,7 @@ export function DashboardWorkbench() {
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [terminalBootstrapError, setTerminalBootstrapError] = useState<string | null>(null);
   const [terminalWorkspaceBindings, setTerminalWorkspaceBindings] = useState<Record<string, string>>({});
+  const [defaultWorkspaceId, setDefaultWorkspaceId] = useState<string | null>(null);
   const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(
     () => Object.fromEntries(WORKSPACE_ITEMS.map((workspace) => [workspace.id, workspace.defaultOpen])),
   );
@@ -156,12 +201,17 @@ export function DashboardWorkbench() {
   const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   const activeThread = getActiveThread(workspaces);
-  const resolvedWorkspaceId =
+  const selectedProjectWorkspaceId =
     selectedProject === null ? null : terminalWorkspaceBindings[selectedProject.path] ?? null;
+  const activeThreadWorkspace = findWorkspaceForThread(workspaces, activeThread?.id ?? null);
+  const activeThreadProject = resolveProjectForWorkspace(activeThreadWorkspace, recentProjects);
+  const currentProject = isNewThreadMode ? selectedProject : activeThreadProject;
+  const resolvedWorkspaceId =
+    currentProject === null ? null : terminalWorkspaceBindings[currentProject.path] ?? null;
   const newThreadTerminalBindingKey =
-    resolvedWorkspaceId === null ? null : getNewThreadTerminalBindingKey(resolvedWorkspaceId);
+    selectedProjectWorkspaceId === null ? null : getNewThreadTerminalBindingKey(selectedProjectWorkspaceId);
   const terminalBindingKey =
-    resolvedWorkspaceId && activeThread ? `${resolvedWorkspaceId}:${activeThread.name}` : null;
+    !isNewThreadMode && resolvedWorkspaceId && activeThread ? `${resolvedWorkspaceId}:${activeThread.name}` : null;
   const resolvedTerminalThreadId = isNewThreadMode
     ? (newThreadTerminalBindingKey === null ? null : terminalThreadBindings[newThreadTerminalBindingKey] ?? null)
     : terminalBindingKey === null
@@ -243,9 +293,24 @@ export function DashboardWorkbench() {
             };
           })
           .filter((project): project is ProjectOption => project !== null);
+        const defaultWorkspace = workspaceEntries.find((workspace) => workspace.isDefault) ?? null;
+        const defaultProject =
+          defaultWorkspace === null
+            ? null
+            : nextProjects.find((project) => project.id === defaultWorkspace.id || project.path === defaultWorkspace.canonicalPath)
+              ?? null;
 
         setRecentProjects(nextProjects);
-        setSelectedProject((current) => current ?? nextProjects[0] ?? null);
+        setDefaultWorkspaceId(defaultWorkspace?.id ?? null);
+        setSelectedProject((current) => {
+          if (current) {
+            return (
+              nextProjects.find((project) => project.id === current.id || project.path === current.path) ?? current
+            );
+          }
+
+          return defaultProject ?? nextProjects[0] ?? null;
+        });
       })
       .catch((error) => {
         if (cancelled) {
@@ -296,11 +361,11 @@ export function DashboardWorkbench() {
   }, [terminalResize]);
 
   useEffect(() => {
-    if (!isTauri() || !selectedProject) {
+    if (!isTauri() || !currentProject) {
       return;
     }
 
-    if (terminalWorkspaceBindings[selectedProject.path]) {
+    if (terminalWorkspaceBindings[currentProject.path]) {
       return;
     }
 
@@ -309,12 +374,12 @@ export function DashboardWorkbench() {
 
     void workspaceList()
       .then(async (workspaces) => {
-        const existing = workspaces.find((workspace) => workspace.path === selectedProject.path || workspace.canonicalPath === selectedProject.path);
+        const existing = workspaces.find((workspace) => workspace.path === currentProject.path || workspace.canonicalPath === currentProject.path);
         if (existing) {
           return existing;
         }
 
-        return workspaceAdd(selectedProject.path, selectedProject.name);
+        return workspaceAdd(currentProject.path, currentProject.name);
       })
       .then((workspace) => {
         if (cancelled) {
@@ -322,13 +387,13 @@ export function DashboardWorkbench() {
         }
 
         setTerminalWorkspaceBindings((current) => {
-          if (current[selectedProject.path]) {
+          if (current[currentProject.path]) {
             return current;
           }
 
           return {
             ...current,
-            [selectedProject.path]: workspace.id,
+            [currentProject.path]: workspace.id,
           };
         });
       })
@@ -344,7 +409,41 @@ export function DashboardWorkbench() {
     return () => {
       cancelled = true;
     };
-  }, [selectedProject, terminalWorkspaceBindings]);
+  }, [currentProject, terminalWorkspaceBindings]);
+
+  useEffect(() => {
+    if (
+      !isTauri() ||
+      !selectedProject ||
+      !selectedProjectWorkspaceId ||
+      selectedProjectWorkspaceId === defaultWorkspaceId
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void workspaceSetDefault(selectedProjectWorkspaceId)
+      .then(() => {
+        if (cancelled) {
+          return;
+        }
+
+        setDefaultWorkspaceId(selectedProjectWorkspaceId);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        setTerminalBootstrapError(message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [defaultWorkspaceId, selectedProject, selectedProjectWorkspaceId]);
 
   useEffect(() => {
     if (!isTauri() || isNewThreadMode || !activeThread || !resolvedWorkspaceId || !terminalBindingKey) {
@@ -1117,14 +1216,14 @@ export function DashboardWorkbench() {
                   <div className="min-h-0 flex-1 overscroll-none">
                     {activeDrawerPanel === "project" ? (
                       <ProjectPanel
-                        currentProject={selectedProject}
+                        currentProject={currentProject}
                         workspaceId={resolvedWorkspaceId}
                         workspaceBootstrapError={terminalBootstrapError}
                       />
                     ) : (
                       <GitPanel
                         workspaceId={resolvedWorkspaceId}
-                        currentProject={selectedProject}
+                        currentProject={currentProject}
                         workspaceBootstrapError={terminalBootstrapError}
                         layoutResizeSignal={isTerminalCollapsed ? 0 : terminalHeight}
                         onOpenDiffPreview={setSelectedDiffSelection}
