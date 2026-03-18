@@ -38,6 +38,7 @@ src-tauri/
 - 内置工作台设置中心，包含 `Account / General / Providers / Commands / Permissions / Workspace / About` 分类页与本地持久化
 - 内置基于 AI Elements 原生组件的 existing-thread Demo，覆盖 `Plan / Queue / Reasoning / Chain of Thought / Tool / Confirmation / Sources / Suggestion / PromptInput`，并支持基于 Settings 的 Profile 切换
 - 内置 Marketplace 全屏浮层，支持 `Skills / MCPs / Plugins / Automations` tab、搜索、已安装/推荐列表，以及本地持久化的安装/启用/禁用/卸载交互
+- Git Drawer 已接入真实仓库状态、Diff、History，并支持 `stage / unstage / commit / fetch / pull / push`；其中 `commit / fetch / pull / push` 依赖本地 Git CLI，缺失时会自动降级为只读
 - Rust 端示例命令 `get_system_metadata`
 
 ## Visual System

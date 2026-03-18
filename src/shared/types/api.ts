@@ -345,6 +345,27 @@ export interface GitFileStatusDto {
   isIgnored: boolean;
 }
 
+export type GitMutationAction = "commit" | "fetch" | "pull" | "push";
+
+export interface GitCommandResultDto {
+  action: GitMutationAction;
+  summary: string;
+  stdout: string | null;
+  stderr: string | null;
+}
+
+export type GitMutationResponseDto =
+  | {
+      type: "completed";
+      result: GitCommandResultDto;
+      snapshot: GitSnapshotDto;
+    }
+  | {
+      type: "approval_required";
+      action: GitMutationAction;
+      reason: string;
+    };
+
 export type GitStreamEvent =
   | { type: "refresh_started"; workspaceId: string }
   | { type: "snapshot_updated"; workspaceId: string; snapshot: GitSnapshotDto }

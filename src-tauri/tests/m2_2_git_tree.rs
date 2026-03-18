@@ -1,6 +1,7 @@
 //! M2.2a — Git-backed TreeView tests
 
 use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
 use git2::{Repository, Signature};
@@ -452,6 +453,131 @@ async fn test_git_stage_and_unstage_move_files_between_snapshot_groups() {
     );
 }
 
+#[tokio::test]
+async fn test_git_commit_refreshes_snapshot_and_history() {
+    if !git_cli_available() {
+        return;
+    }
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let root = tmp.path();
+
+    std::fs::write(root.join("README.md"), "# Demo\n").expect("should write readme");
+
+    let repo = Repository::init(root).expect("should init repository");
+    configure_git_user(root);
+    commit_selected(&repo, &["README.md"], "initial commit");
+
+    std::fs::write(root.join("README.md"), "# Demo\n\nupdated\n").expect("should update readme");
+    stage_selected(&repo, &["README.md"]);
+
+    let manager = GitManager::new();
+    let (result, snapshot) = manager
+        .commit("workspace-1", &root.to_string_lossy(), "docs: update readme")
+        .await
+        .expect("git commit should succeed");
+
+    assert_eq!(result.action.as_str(), "commit");
+    assert_eq!(result.summary, "Committed staged changes");
+    assert!(
+        snapshot.staged_files.is_empty(),
+        "staged changes should be cleared after commit"
+    );
+    assert_eq!(
+        snapshot
+            .recent_commits
+            .first()
+            .map(|commit| commit.summary.as_str()),
+        Some("docs: update readme"),
+        "latest history entry should reflect the new commit"
+    );
+}
+
+#[tokio::test]
+async fn test_git_fetch_pull_and_push_round_trip_against_local_remote() {
+    if !git_cli_available() {
+        return;
+    }
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let remote = tmp.path().join("remote.git");
+    let local = tmp.path().join("local");
+    let peer = tmp.path().join("peer");
+
+    Command::new("git")
+        .args(["init", "--bare", remote.to_string_lossy().as_ref()])
+        .status()
+        .expect("should init bare remote");
+
+    run_git(tmp.path(), &["clone", remote.to_string_lossy().as_ref(), local.to_string_lossy().as_ref()]);
+    configure_git_user(&local);
+    std::fs::write(local.join("README.md"), "# Demo\n").expect("should write initial file");
+    run_git(&local, &["add", "README.md"]);
+    run_git(&local, &["commit", "-m", "initial commit"]);
+    run_git(&local, &["push", "-u", "origin", "HEAD"]);
+
+    run_git(tmp.path(), &["clone", remote.to_string_lossy().as_ref(), peer.to_string_lossy().as_ref()]);
+    configure_git_user(&peer);
+    std::fs::write(peer.join("peer.txt"), "peer change\n").expect("should write peer file");
+    run_git(&peer, &["add", "peer.txt"]);
+    run_git(&peer, &["commit", "-m", "peer change"]);
+    run_git(&peer, &["push"]);
+
+    let manager = GitManager::new();
+
+    let (fetch_result, fetched_snapshot) = manager
+        .fetch("workspace-1", &local.to_string_lossy())
+        .await
+        .expect("git fetch should succeed");
+    assert_eq!(fetch_result.action.as_str(), "fetch");
+    assert!(
+        fetched_snapshot.behind_count >= 1,
+        "fetch should update ahead/behind metadata after the remote moves"
+    );
+
+    let (pull_result, pulled_snapshot) = manager
+        .pull("workspace-1", &local.to_string_lossy())
+        .await
+        .expect("git pull should succeed");
+    assert_eq!(pull_result.action.as_str(), "pull");
+    assert_eq!(pulled_snapshot.behind_count, 0);
+    assert_eq!(
+        pulled_snapshot
+            .recent_commits
+            .first()
+            .map(|commit| commit.summary.as_str()),
+        Some("peer change"),
+        "pull should bring the peer commit into local history"
+    );
+
+    std::fs::write(local.join("local.txt"), "local change\n").expect("should write local file");
+    run_git(&local, &["add", "local.txt"]);
+
+    manager
+        .commit("workspace-1", &local.to_string_lossy(), "local push change")
+        .await
+        .expect("local commit should succeed");
+
+    let (push_result, pushed_snapshot) = manager
+        .push("workspace-1", &local.to_string_lossy())
+        .await
+        .expect("git push should succeed");
+    assert_eq!(push_result.action.as_str(), "push");
+    assert_eq!(pushed_snapshot.ahead_count, 0);
+
+    let remote_subject = run_git(
+        tmp.path(),
+        &[
+            "--git-dir",
+            remote.to_string_lossy().as_ref(),
+            "log",
+            "-1",
+            "--pretty=%s",
+        ],
+    );
+    assert_eq!(remote_subject.trim(), "local push change");
+}
+
 fn commit_selected(repo: &Repository, paths: &[&str], message: &str) {
     let mut index = repo.index().expect("should get repository index");
 
@@ -496,6 +622,37 @@ fn stage_selected(repo: &Repository, paths: &[&str]) {
             .expect("should stage selected path");
     }
     index.write().expect("should write index");
+}
+
+fn git_cli_available() -> bool {
+    Command::new("git")
+        .arg("--version")
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn configure_git_user(repo_root: &Path) {
+    run_git(repo_root, &["config", "user.name", "Tiy Agent"]);
+    run_git(repo_root, &["config", "user.email", "tests@tiy.local"]);
+}
+
+fn run_git(cwd: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("git command should launch");
+
+    assert!(
+        output.status.success(),
+        "git {:?} should succeed:\nstdout: {}\nstderr: {}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    String::from_utf8_lossy(&output.stdout).to_string()
 }
 
 fn find_node<'a>(

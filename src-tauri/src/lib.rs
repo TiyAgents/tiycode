@@ -187,6 +187,10 @@ pub fn run() {
             commands::git::git_refresh,
             commands::git::git_stage,
             commands::git::git_unstage,
+            commands::git::git_commit,
+            commands::git::git_fetch,
+            commands::git::git_pull,
+            commands::git::git_push,
             // Terminal
             commands::terminal::terminal_create_or_attach,
             commands::terminal::terminal_write_input,

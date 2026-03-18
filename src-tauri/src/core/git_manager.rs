@@ -9,12 +9,13 @@ use git2::{
 };
 use tokio::sync::{broadcast, Mutex};
 
+use crate::core::executors::git as git_executor;
 use crate::ipc::frontend_channels::GitStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::git::{
-    GitChangeKind, GitCommitSummaryDto, GitDiffDto, GitDiffHunkDto, GitDiffLineDto,
-    GitDiffLineKind, GitFileChangeDto, GitFileState, GitFileStatusDto, GitRepoCapabilitiesDto,
-    GitSnapshotDto,
+    GitChangeKind, GitCommandResultDto, GitCommitSummaryDto, GitDiffDto, GitDiffHunkDto,
+    GitDiffLineDto, GitDiffLineKind, GitFileChangeDto, GitFileState, GitFileStatusDto,
+    GitRepoCapabilitiesDto, GitSnapshotDto,
 };
 
 const DEFAULT_HISTORY_LIMIT: usize = 24;
@@ -219,14 +220,7 @@ impl GitManager {
         workspace_path: &str,
         paths: &[String],
     ) -> Result<GitSnapshotDto, AppError> {
-        let workspace_root = canonicalize_workspace(workspace_path);
-        let normalized_paths = normalize_workspace_relative_paths(paths)?;
-
-        tokio::task::spawn_blocking(move || stage_paths(&workspace_root, &normalized_paths))
-            .await
-            .map_err(|error| {
-                AppError::internal(ErrorSource::Git, format!("Git stage task failed: {error}"))
-            })??;
+        git_executor::stage_paths(workspace_path, paths).await?;
 
         self.refresh(workspace_id, workspace_path).await
     }
@@ -237,19 +231,50 @@ impl GitManager {
         workspace_path: &str,
         paths: &[String],
     ) -> Result<GitSnapshotDto, AppError> {
-        let workspace_root = canonicalize_workspace(workspace_path);
-        let normalized_paths = normalize_workspace_relative_paths(paths)?;
-
-        tokio::task::spawn_blocking(move || unstage_paths(&workspace_root, &normalized_paths))
-            .await
-            .map_err(|error| {
-                AppError::internal(
-                    ErrorSource::Git,
-                    format!("Git unstage task failed: {error}"),
-                )
-            })??;
+        git_executor::unstage_paths(workspace_path, paths).await?;
 
         self.refresh(workspace_id, workspace_path).await
+    }
+
+    pub async fn commit(
+        &self,
+        workspace_id: &str,
+        workspace_path: &str,
+        message: &str,
+    ) -> Result<(GitCommandResultDto, GitSnapshotDto), AppError> {
+        let result = git_executor::commit(workspace_path, message).await?;
+        let snapshot = self.refresh(workspace_id, workspace_path).await?;
+        Ok((result, snapshot))
+    }
+
+    pub async fn fetch(
+        &self,
+        workspace_id: &str,
+        workspace_path: &str,
+    ) -> Result<(GitCommandResultDto, GitSnapshotDto), AppError> {
+        let result = git_executor::fetch(workspace_path).await?;
+        let snapshot = self.refresh(workspace_id, workspace_path).await?;
+        Ok((result, snapshot))
+    }
+
+    pub async fn pull(
+        &self,
+        workspace_id: &str,
+        workspace_path: &str,
+    ) -> Result<(GitCommandResultDto, GitSnapshotDto), AppError> {
+        let result = git_executor::pull(workspace_path).await?;
+        let snapshot = self.refresh(workspace_id, workspace_path).await?;
+        Ok((result, snapshot))
+    }
+
+    pub async fn push(
+        &self,
+        workspace_id: &str,
+        workspace_path: &str,
+    ) -> Result<(GitCommandResultDto, GitSnapshotDto), AppError> {
+        let result = git_executor::push(workspace_path).await?;
+        let snapshot = self.refresh(workspace_id, workspace_path).await?;
+        Ok((result, snapshot))
     }
 
     async fn get_or_create_sender(&self, workspace_id: &str) -> broadcast::Sender<GitStreamEvent> {
@@ -952,58 +977,6 @@ fn open_repository(workspace_root: &Path) -> Result<Repository, AppError> {
     })
 }
 
-fn stage_paths(workspace_root: &Path, workspace_paths: &[String]) -> Result<(), AppError> {
-    let repo = open_repository(workspace_root)?;
-    let repo_root = repo_workdir(&repo)?;
-    let mut index = repo.index().map_err(|error| {
-        AppError::recoverable(
-            ErrorSource::Git,
-            "git.index.read_failed",
-            format!("Unable to read Git index: {error}"),
-        )
-    })?;
-
-    for workspace_relative in workspace_paths {
-        let repo_relative =
-            workspace_path_to_repo_path(&repo_root, workspace_root, workspace_relative)?;
-        index.add_path(Path::new(&repo_relative)).map_err(|error| {
-            AppError::recoverable(
-                ErrorSource::Git,
-                "git.stage.failed",
-                format!("Unable to stage '{}': {error}", workspace_relative),
-            )
-        })?;
-    }
-
-    index.write().map_err(|error| {
-        AppError::recoverable(
-            ErrorSource::Git,
-            "git.index.write_failed",
-            format!("Unable to write staged changes: {error}"),
-        )
-    })
-}
-
-fn unstage_paths(workspace_root: &Path, workspace_paths: &[String]) -> Result<(), AppError> {
-    let repo = open_repository(workspace_root)?;
-    let repo_root = repo_workdir(&repo)?;
-    let repo_relative_paths = workspace_paths
-        .iter()
-        .map(|path| workspace_path_to_repo_path(&repo_root, workspace_root, path))
-        .collect::<Result<Vec<_>, _>>()?;
-    let head_commit = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
-    let head_object = head_commit.as_ref().map(|commit| commit.as_object());
-
-    repo.reset_default(head_object, repo_relative_paths.iter())
-        .map_err(|error| {
-            AppError::recoverable(
-                ErrorSource::Git,
-                "git.unstage.failed",
-                format!("Unable to unstage selected files: {error}"),
-            )
-        })
-}
-
 fn repo_workdir(repo: &Repository) -> Result<PathBuf, AppError> {
     repo.workdir()
         .map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
@@ -1058,24 +1031,6 @@ fn repo_path_to_workspace_path(
 
 fn normalize_workspace_relative_path(path: &str) -> String {
     path.trim().trim_matches('/').to_string()
-}
-
-fn normalize_workspace_relative_paths(paths: &[String]) -> Result<Vec<String>, AppError> {
-    let normalized = paths
-        .iter()
-        .map(|path| normalize_workspace_relative_path(path))
-        .filter(|path| !path.is_empty())
-        .collect::<Vec<_>>();
-
-    if normalized.is_empty() {
-        return Err(AppError::recoverable(
-            ErrorSource::Git,
-            "git.path.empty",
-            "At least one Git path is required",
-        ));
-    }
-
-    Ok(normalized)
 }
 
 fn is_repo_available(workspace_root: &Path) -> Result<bool, AppError> {

@@ -3,6 +3,7 @@ import type {
   GitCommitSummaryDto,
   GitDiffDto,
   GitFileStatusDto,
+  GitMutationResponseDto,
   GitSnapshotDto,
   GitStreamEvent,
 } from "@/shared/types/api";
@@ -87,4 +88,50 @@ export async function gitUnstage(
 ): Promise<GitSnapshotDto> {
   requireTauri("git_unstage");
   return invoke<GitSnapshotDto>("git_unstage", { workspaceId, paths });
+}
+
+export async function gitCommit(
+  workspaceId: string,
+  message: string,
+  approved?: boolean,
+): Promise<GitMutationResponseDto> {
+  requireTauri("git_commit");
+  return invoke<GitMutationResponseDto>("git_commit", {
+    workspaceId,
+    message,
+    approved: approved ?? null,
+  });
+}
+
+export async function gitFetch(
+  workspaceId: string,
+  approved?: boolean,
+): Promise<GitMutationResponseDto> {
+  requireTauri("git_fetch");
+  return invoke<GitMutationResponseDto>("git_fetch", {
+    workspaceId,
+    approved: approved ?? null,
+  });
+}
+
+export async function gitPull(
+  workspaceId: string,
+  approved?: boolean,
+): Promise<GitMutationResponseDto> {
+  requireTauri("git_pull");
+  return invoke<GitMutationResponseDto>("git_pull", {
+    workspaceId,
+    approved: approved ?? null,
+  });
+}
+
+export async function gitPush(
+  workspaceId: string,
+  approved?: boolean,
+): Promise<GitMutationResponseDto> {
+  requireTauri("git_push");
+  return invoke<GitMutationResponseDto>("git_push", {
+    workspaceId,
+    approved: approved ?? null,
+  });
 }

@@ -125,3 +125,56 @@ pub struct GitFileStatusDto {
     pub is_untracked: bool,
     pub is_ignored: bool,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitMutationAction {
+    Commit,
+    Fetch,
+    Pull,
+    Push,
+}
+
+impl GitMutationAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::Fetch => "fetch",
+            Self::Pull => "pull",
+            Self::Push => "push",
+        }
+    }
+
+    pub fn tool_name(&self) -> &'static str {
+        match self {
+            Self::Commit => "git_commit",
+            Self::Fetch => "git_fetch",
+            Self::Pull => "git_pull",
+            Self::Push => "git_push",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommandResultDto {
+    pub action: GitMutationAction,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GitMutationResponseDto {
+    Completed {
+        result: GitCommandResultDto,
+        snapshot: GitSnapshotDto,
+    },
+    ApprovalRequired {
+        action: GitMutationAction,
+        reason: String,
+    },
+}

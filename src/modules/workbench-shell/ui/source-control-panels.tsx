@@ -17,9 +17,13 @@ import {
   Undo2,
 } from "lucide-react";
 import {
+  gitCommit,
   gitGetDiff,
   gitGetFileStatus,
   gitGetHistory,
+  gitFetch,
+  gitPull,
+  gitPush,
   gitGetSnapshot,
   gitRefresh,
   gitStage,
@@ -32,9 +36,21 @@ import type {
   GitDiffDto,
   GitFileChangeDto,
   GitFileStatusDto,
+  GitMutationAction,
+  GitMutationResponseDto,
   GitSnapshotDto,
   GitStreamEvent,
 } from "@/shared/types/api";
+import { Alert, AlertDescription } from "@/shared/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
+import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/tooltip";
 import { cn } from "@/shared/lib/utils";
@@ -75,7 +91,38 @@ type GitDiffPreviewPanelProps = {
   onClose: () => void;
 };
 
+const ACTION_ALERT_TIMEOUT_MS = 4200;
+
 const MIN_HISTORY_HEIGHT = 228;
+
+function formatUiError(error: unknown, fallback = "Request failed") {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const record = error as Record<string, unknown>;
+    const candidates = [
+      record.userMessage,
+      record.user_message,
+      record.detail,
+      record.error,
+      record.message,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate;
+      }
+    }
+  }
+
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+
+  return fallback;
+}
 
 function mapMockStatus(status: GitChangeFile["status"]): GitChangeKind {
   switch (status) {
@@ -237,6 +284,82 @@ function applyMockStageMutation(
   };
 }
 
+function makeMockCommitId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID().replace(/-/g, "");
+  }
+
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function applyMockCommitMutation(
+  snapshot: GitSnapshotDto,
+  message: string,
+): GitSnapshotDto {
+  const trimmed = message.trim();
+  if (trimmed.length === 0) {
+    throw new Error("Commit message cannot be empty");
+  }
+
+  if (snapshot.stagedFiles.length === 0) {
+    throw new Error("There are no staged changes to commit");
+  }
+
+  const nextCommitId = makeMockCommitId();
+  const committedAt = new Date().toISOString();
+
+  return {
+    ...snapshot,
+    stagedFiles: [],
+    recentCommits: [
+      {
+        id: nextCommitId,
+        shortId: nextCommitId.slice(0, 7),
+        summary: trimmed,
+        authorName: "Tiy Agent",
+        committedAt,
+        refs: snapshot.headRef ? [snapshot.headRef, "HEAD"] : ["HEAD"],
+        isHead: true,
+      },
+      ...snapshot.recentCommits.map((commit) => ({
+        ...commit,
+        isHead: false,
+        refs: commit.refs.filter((ref) => ref !== "HEAD"),
+      })),
+    ],
+    aheadCount: snapshot.aheadCount + 1,
+    lastRefreshedAt: committedAt,
+  };
+}
+
+function applyMockRemoteMutation(
+  snapshot: GitSnapshotDto,
+  action: Exclude<GitMutationAction, "commit">,
+): GitSnapshotDto {
+  const refreshedAt = new Date().toISOString();
+
+  if (action === "pull") {
+    return {
+      ...snapshot,
+      behindCount: 0,
+      lastRefreshedAt: refreshedAt,
+    };
+  }
+
+  if (action === "push") {
+    return {
+      ...snapshot,
+      aheadCount: 0,
+      lastRefreshedAt: refreshedAt,
+    };
+  }
+
+  return {
+    ...snapshot,
+    lastRefreshedAt: refreshedAt,
+  };
+}
+
 function statusCode(status: GitChangeKind) {
   switch (status) {
     case "added":
@@ -268,6 +391,19 @@ function statusLabel(status: GitChangeKind) {
       return "Conflict";
     default:
       return "Modified";
+  }
+}
+
+function gitActionLabel(action: GitMutationAction) {
+  switch (action) {
+    case "commit":
+      return "Commit";
+    case "fetch":
+      return "Fetch";
+    case "pull":
+      return "Pull";
+    case "push":
+      return "Push";
   }
 }
 
@@ -584,6 +720,7 @@ export function GitPanel({
   const isMockMode = !isTauri();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const copyResetTimeoutRef = useRef<number>(0);
+  const actionAlertTimeoutRef = useRef<number>(0);
   const [snapshot, setSnapshot] = useState<GitSnapshotDto | null>(() =>
     isMockMode ? buildMockSnapshot() : null,
   );
@@ -594,6 +731,10 @@ export function GitPanel({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [pendingPaths, setPendingPaths] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [actionAlert, setActionAlert] = useState<string | null>(null);
+  const [remoteConfirmAction, setRemoteConfirmAction] = useState<Exclude<GitMutationAction, "commit"> | null>(null);
+  const [pendingAction, setPendingAction] = useState<GitMutationAction | null>(null);
+  const [commitMessage, setCommitMessage] = useState("");
   const [isCommitMessageExpanded, setCommitMessageExpanded] = useState(false);
   const [copiedCommitId, setCopiedCommitId] = useState<string | null>(null);
   const [historyHeight, setHistoryHeight] = useState(MIN_HISTORY_HEIGHT);
@@ -605,6 +746,7 @@ export function GitPanel({
   useEffect(
     () => () => {
       window.clearTimeout(copyResetTimeoutRef.current);
+      window.clearTimeout(actionAlertTimeoutRef.current);
     },
     [],
   );
@@ -617,6 +759,10 @@ export function GitPanel({
       setIsLoading(false);
       setIsRefreshing(false);
       setError(null);
+      setActionAlert(null);
+      setRemoteConfirmAction(null);
+      setPendingAction(null);
+      setCommitMessage("");
       return;
     }
 
@@ -626,12 +772,20 @@ export function GitPanel({
       setIsLoading(false);
       setIsRefreshing(false);
       setError(null);
+      setActionAlert(null);
+      setRemoteConfirmAction(null);
+      setPendingAction(null);
+      setCommitMessage("");
       return;
     }
 
     let cancelled = false;
     setIsLoading(true);
     setError(null);
+    setActionAlert(null);
+    setRemoteConfirmAction(null);
+    setPendingAction(null);
+    setCommitMessage("");
 
     void gitGetSnapshot(workspaceId)
       .then(async (nextSnapshot) => {
@@ -655,7 +809,7 @@ export function GitPanel({
         if (cancelled) {
           return;
         }
-        const message = nextError instanceof Error ? nextError.message : String(nextError);
+        const message = formatUiError(nextError, "Failed to load Git state");
         setError(message);
       })
       .finally(() => {
@@ -688,10 +842,7 @@ export function GitPanel({
         return;
       }
 
-      const message =
-        subscriptionError instanceof Error
-          ? subscriptionError.message
-          : String(subscriptionError);
+      const message = formatUiError(subscriptionError, "Failed to subscribe to Git updates");
       setError(message);
     });
 
@@ -782,6 +933,9 @@ export function GitPanel({
     (snapshot?.stagedFiles.length ?? 0) +
     (snapshot?.unstagedFiles.length ?? 0) +
     (snapshot?.untrackedFiles.length ?? 0);
+  const gitCliAvailable = snapshot?.capabilities.gitCliAvailable ?? false;
+  const commitDisabled =
+    !gitCliAvailable || pendingAction !== null || commitMessage.trim().length === 0;
 
   const branchLabel = snapshot?.isDetached
     ? "detached HEAD"
@@ -795,6 +949,80 @@ export function GitPanel({
     });
   };
 
+  const clearActionAlert = () => {
+    setActionAlert(null);
+    if (typeof window !== "undefined") {
+      window.clearTimeout(actionAlertTimeoutRef.current);
+    }
+  };
+
+  const clearRemoteConfirm = () => {
+    setRemoteConfirmAction(null);
+  };
+
+  const showActionAlert = (message: string) => {
+    setActionAlert(message);
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.clearTimeout(actionAlertTimeoutRef.current);
+    actionAlertTimeoutRef.current = window.setTimeout(() => {
+      setActionAlert((current) => (current === message ? null : current));
+    }, ACTION_ALERT_TIMEOUT_MS);
+  };
+
+  const applyMutationResponse = (response: Extract<GitMutationResponseDto, { type: "completed" }>) => {
+    setSnapshot(response.snapshot);
+    setHistory(response.snapshot.recentCommits);
+    setActionAlert(null);
+    clearRemoteConfirm();
+  };
+
+  const requestApproval = (action: GitMutationAction, reason: string) => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    return window.confirm(`${reason}\n\nContinue with ${gitActionLabel(action)}?`);
+  };
+
+  const runCliMutation = async (
+    action: GitMutationAction,
+    execute: (approved?: boolean) => Promise<GitMutationResponseDto>,
+  ) => {
+    setPendingAction(action);
+    clearActionAlert();
+
+    try {
+      let response = await execute();
+
+      if (response.type === "approval_required") {
+        const confirmed = requestApproval(action, response.reason);
+        if (!confirmed) {
+          return;
+        }
+
+        response = await execute(true);
+      }
+
+      if (response.type === "approval_required") {
+        showActionAlert(response.reason);
+        return;
+      }
+
+      applyMutationResponse(response);
+      if (action === "commit") {
+        setCommitMessage("");
+      }
+    } catch (nextError) {
+      const message = formatUiError(nextError, `${gitActionLabel(action)} failed`);
+      showActionAlert(message);
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
   const handleRefresh = () => {
     if (isMockMode || !workspaceId || isRefreshing) {
       return;
@@ -802,6 +1030,8 @@ export function GitPanel({
 
     setIsRefreshing(true);
     setError(null);
+    clearActionAlert();
+    clearRemoteConfirm();
 
     void gitRefresh(workspaceId)
       .then((nextSnapshot) => {
@@ -809,7 +1039,7 @@ export function GitPanel({
         setHistory(nextSnapshot.recentCommits);
       })
       .catch((nextError) => {
-        const message = nextError instanceof Error ? nextError.message : String(nextError);
+        const message = formatUiError(nextError, "Failed to refresh Git snapshot");
         setError(message);
         setIsRefreshing(false);
       });
@@ -821,7 +1051,8 @@ export function GitPanel({
     }
 
     setPendingPaths((current) => new Set([...current, ...paths]));
-    setError(null);
+    clearActionAlert();
+    clearRemoteConfirm();
 
     if (isMockMode) {
       setSnapshot((current) =>
@@ -852,8 +1083,8 @@ export function GitPanel({
         setHistory(nextSnapshot.recentCommits);
       })
       .catch((nextError) => {
-        const message = nextError instanceof Error ? nextError.message : String(nextError);
-        setError(message);
+        const message = formatUiError(nextError, "Git action failed");
+        showActionAlert(message);
       })
       .finally(() => {
         setPendingPaths((current) => {
@@ -866,6 +1097,84 @@ export function GitPanel({
 
   const handleToggleAll = (paths: string[], staged: boolean) => {
     handleToggleStage(paths, staged);
+  };
+
+  const handleCommit = () => {
+    if (pendingAction !== null) {
+      return;
+    }
+
+    clearRemoteConfirm();
+
+    if (isMockMode) {
+      try {
+        setSnapshot((current) => {
+          if (current === null) {
+            return current;
+          }
+
+          const nextSnapshot = applyMockCommitMutation(current, commitMessage);
+          setHistory(nextSnapshot.recentCommits);
+          return nextSnapshot;
+        });
+        clearActionAlert();
+        setCommitMessage("");
+      } catch (nextError) {
+        const message = formatUiError(nextError, "Commit failed");
+        showActionAlert(message);
+      }
+      return;
+    }
+
+    if (!workspaceId) {
+      return;
+    }
+
+    void runCliMutation("commit", (approved) => gitCommit(workspaceId, commitMessage, approved));
+  };
+
+  const handleRemoteAction = (action: Exclude<GitMutationAction, "commit">) => {
+    if (pendingAction !== null) {
+      return;
+    }
+
+    clearActionAlert();
+    setRemoteConfirmAction(action);
+  };
+
+  const executeRemoteAction = (action: Exclude<GitMutationAction, "commit">) => {
+    if (pendingAction !== null) {
+      return;
+    }
+
+    clearRemoteConfirm();
+
+    if (isMockMode) {
+      setSnapshot((current) => {
+        if (current === null) {
+          return current;
+        }
+
+        const nextSnapshot = applyMockRemoteMutation(current, action);
+        setHistory(nextSnapshot.recentCommits);
+        return nextSnapshot;
+      });
+      clearActionAlert();
+      return;
+    }
+
+    if (!workspaceId) {
+      return;
+    }
+
+    const invokeAction =
+      action === "fetch"
+        ? () => gitFetch(workspaceId, true)
+        : action === "pull"
+          ? () => gitPull(workspaceId, true)
+          : () => gitPush(workspaceId, true);
+
+    void runCliMutation(action, invokeAction);
   };
 
   const handleCopyCommitId = async (commitId: string) => {
@@ -944,19 +1253,81 @@ export function GitPanel({
   }
 
   return (
-    <div
-      ref={panelRef}
-      className="relative flex h-full min-h-0 flex-col px-4 pb-4 pt-3"
-    >
-      <div className="flex min-h-0 flex-1 flex-col">
+    <>
+      <Dialog
+        open={remoteConfirmAction !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            clearRemoteConfirm();
+          }
+        }}
+      >
+        <DialogContent
+          showCloseButton={false}
+          className="max-w-md rounded-2xl border-app-border bg-app-surface p-5"
+        >
+          <DialogHeader className="gap-2 text-left">
+            <DialogTitle className="text-base font-semibold text-app-foreground">
+              {remoteConfirmAction ? `Confirm ${gitActionLabel(remoteConfirmAction)}` : "Confirm action"}
+            </DialogTitle>
+            <DialogDescription className="text-[13px] leading-6 text-app-subtle">
+              {remoteConfirmAction
+                ? `${gitActionLabel(remoteConfirmAction)} will operate on the remote repository for the current branch.`
+                : "This action will operate on the remote repository."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-1">
+            <Button
+              variant="outline"
+              onClick={clearRemoteConfirm}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (remoteConfirmAction) {
+                  executeRemoteAction(remoteConfirmAction);
+                }
+              }}
+            >
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <div
+        ref={panelRef}
+        className="relative flex h-full min-h-0 flex-col px-4 pb-4 pt-3"
+      >
+        {actionAlert ? (
+          <div className="pointer-events-none absolute inset-x-4 bottom-4 z-30 flex justify-end">
+            <Alert
+              variant="destructive"
+              className="pointer-events-auto max-w-[320px] grid-cols-[auto_1fr] border-app-danger/25 bg-app-surface shadow-[0_18px_40px_-24px_rgba(15,23,42,0.5)]"
+            >
+              <AlertCircle className="mt-0.5 size-4" />
+              <AlertDescription className="col-start-2 text-[12px] leading-5 text-app-danger">
+                {actionAlert}
+              </AlertDescription>
+            </Alert>
+          </div>
+        ) : null}
+
+        <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex items-start gap-2">
           <div className={cn("relative h-9 min-w-0 flex-1", isCommitMessageExpanded && "z-20")}>
             <Textarea
-              value=""
-              readOnly
-              placeholder="Stage/unstage is available below. Commit/fetch/pull/push land in M2.2c."
+              value={commitMessage}
+              readOnly={!gitCliAvailable || pendingAction !== null}
+              placeholder={
+                gitCliAvailable
+                  ? "Write a commit message for the staged changes"
+                  : "Install Git CLI to enable commit, fetch, pull, and push"
+              }
               aria-label="Commit Message"
               rows={isCommitMessageExpanded ? 4 : 1}
+              onChange={(event) => setCommitMessage(event.target.value)}
               onFocus={() => setCommitMessageExpanded(true)}
               onBlur={() => setCommitMessageExpanded(false)}
               className={cn(
@@ -964,12 +1335,13 @@ export function GitPanel({
                 isCommitMessageExpanded
                   ? "absolute inset-x-0 top-0 min-h-[112px] bg-app-surface shadow-[0_24px_48px_-24px_rgba(15,23,42,0.48)]"
                   : "h-9 min-h-9 bg-transparent shadow-none",
+                !gitCliAvailable && "cursor-not-allowed opacity-70",
               )}
             />
             <button
               type="button"
               aria-label="智能生成 Commit Message"
-              title="Read-only in M2.2b"
+              title="Commit message generation is not wired yet"
               disabled
               className={cn(
                 "absolute right-1.5 flex size-6 items-center justify-center rounded-md text-app-subtle opacity-60 transition-[top,transform] duration-200",
@@ -982,13 +1354,35 @@ export function GitPanel({
           <button
             type="button"
             aria-label="Commit"
-            title="Read-only in M2.2b"
-            disabled
-            className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border text-app-subtle opacity-60"
+            title={
+              !gitCliAvailable
+                ? "Git CLI is required"
+                : pendingAction === "commit"
+                  ? "Commit in progress"
+                  : "Commit staged changes"
+            }
+            disabled={commitDisabled}
+            className={cn(
+              "flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border transition-colors",
+              commitDisabled
+                ? "cursor-not-allowed text-app-subtle opacity-60"
+                : "text-app-foreground hover:bg-app-surface-hover",
+            )}
+            onClick={handleCommit}
           >
-            <Check className="size-4" />
+            {pendingAction === "commit" ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : (
+              <Check className="size-4" />
+            )}
           </button>
         </div>
+
+        {!gitCliAvailable ? (
+          <div className="mt-3 rounded-xl border border-app-border bg-app-surface-muted/70 px-3 py-2 text-[12px] leading-5 text-app-subtle">
+            Git CLI is unavailable. Status, diff, and history stay readable, but commit, fetch, pull, and push remain disabled.
+          </div>
+        ) : null}
 
         <section className="mt-4 flex min-h-0 flex-1 flex-col">
           <div className={DRAWER_SECTION_HEADER_CLASS}>
@@ -1074,7 +1468,7 @@ export function GitPanel({
       </div>
 
       <section
-        className="flex shrink-0 flex-col"
+        className="relative flex shrink-0 flex-col"
         style={{ height: `${historyHeight}px` }}
       >
         <div className={DRAWER_SECTION_HEADER_CLASS}>
@@ -1089,40 +1483,70 @@ export function GitPanel({
               type="button"
               aria-label="Fetch"
               title={
-                snapshot.capabilities.gitCliAvailable
-                  ? "Available in M2.2c"
+                gitCliAvailable
+                  ? pendingAction === "fetch"
+                    ? "Fetch in progress"
+                    : "Fetch remote updates"
                   : "Git CLI is required"
               }
-              disabled
-              className={cn(DRAWER_ICON_ACTION_CLASS, "opacity-60")}
+              disabled={!gitCliAvailable || pendingAction !== null}
+              className={cn(
+                DRAWER_ICON_ACTION_CLASS,
+                (!gitCliAvailable || pendingAction !== null) && "opacity-60",
+              )}
+              onClick={() => handleRemoteAction("fetch")}
             >
-              <Download className="size-4" />
+              {pendingAction === "fetch" ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Download className="size-4" />
+              )}
             </button>
             <button
               type="button"
               aria-label="Pull"
               title={
-                snapshot.capabilities.gitCliAvailable
-                  ? "Available in M2.2c"
+                gitCliAvailable
+                  ? pendingAction === "pull"
+                    ? "Pull in progress"
+                    : "Pull remote updates"
                   : "Git CLI is required"
               }
-              disabled
-              className={cn(DRAWER_ICON_ACTION_CLASS, "opacity-60")}
+              disabled={!gitCliAvailable || pendingAction !== null}
+              className={cn(
+                DRAWER_ICON_ACTION_CLASS,
+                (!gitCliAvailable || pendingAction !== null) && "opacity-60",
+              )}
+              onClick={() => handleRemoteAction("pull")}
             >
-              <ArrowDownToLine className="size-4" />
+              {pendingAction === "pull" ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <ArrowDownToLine className="size-4" />
+              )}
             </button>
             <button
               type="button"
               aria-label="Push"
               title={
-                snapshot.capabilities.gitCliAvailable
-                  ? "Available in M2.2c"
+                gitCliAvailable
+                  ? pendingAction === "push"
+                    ? "Push in progress"
+                    : "Push local commits"
                   : "Git CLI is required"
               }
-              disabled
-              className={cn(DRAWER_ICON_ACTION_CLASS, "opacity-60")}
+              disabled={!gitCliAvailable || pendingAction !== null}
+              className={cn(
+                DRAWER_ICON_ACTION_CLASS,
+                (!gitCliAvailable || pendingAction !== null) && "opacity-60",
+              )}
+              onClick={() => handleRemoteAction("push")}
             >
-              <ArrowUpFromLine className="size-4" />
+              {pendingAction === "push" ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <ArrowUpFromLine className="size-4" />
+              )}
             </button>
           </div>
         </div>
@@ -1233,7 +1657,8 @@ export function GitPanel({
           </TooltipProvider>
         </div>
       </section>
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -1278,7 +1703,7 @@ export function GitDiffPreviewPanel({
           return;
         }
 
-        const message = nextError instanceof Error ? nextError.message : String(nextError);
+        const message = formatUiError(nextError, "Failed to load file diff");
         setError(message);
       })
       .finally(() => {
