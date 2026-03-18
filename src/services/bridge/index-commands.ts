@@ -1,6 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-
-export type GitFileState = "tracked" | "modified" | "untracked" | "ignored";
+import type { GitFileState } from "@/shared/types/api";
 
 export interface FileTreeNode {
   name: string;

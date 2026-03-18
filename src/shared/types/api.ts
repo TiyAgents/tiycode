@@ -258,6 +258,99 @@ export type ThreadStreamEvent =
   | { type: "run_interrupted"; runId: string };
 
 // ---------------------------------------------------------------------------
+// Git
+// ---------------------------------------------------------------------------
+
+export type GitFileState = "tracked" | "modified" | "untracked" | "ignored";
+
+export type GitChangeKind =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "typechange"
+  | "unmerged";
+
+export interface GitRepoCapabilitiesDto {
+  repoAvailable: boolean;
+  gitCliAvailable: boolean;
+}
+
+export interface GitFileChangeDto {
+  path: string;
+  previousPath: string | null;
+  status: GitChangeKind;
+  additions: number;
+  deletions: number;
+}
+
+export interface GitCommitSummaryDto {
+  id: string;
+  shortId: string;
+  summary: string;
+  authorName: string;
+  committedAt: string;
+  refs: string[];
+  isHead: boolean;
+}
+
+export interface GitSnapshotDto {
+  workspaceId: string;
+  repoRoot: string | null;
+  capabilities: GitRepoCapabilitiesDto;
+  headRef: string | null;
+  headOid: string | null;
+  isDetached: boolean;
+  aheadCount: number;
+  behindCount: number;
+  stagedFiles: GitFileChangeDto[];
+  unstagedFiles: GitFileChangeDto[];
+  untrackedFiles: GitFileChangeDto[];
+  recentCommits: GitCommitSummaryDto[];
+  lastRefreshedAt: string;
+}
+
+export type GitDiffLineKind = "context" | "add" | "remove";
+
+export interface GitDiffLineDto {
+  kind: GitDiffLineKind;
+  oldNumber: number | null;
+  newNumber: number | null;
+  text: string;
+}
+
+export interface GitDiffHunkDto {
+  header: string;
+  lines: GitDiffLineDto[];
+}
+
+export interface GitDiffDto {
+  path: string;
+  staged: boolean;
+  status: GitChangeKind;
+  oldPath: string | null;
+  newPath: string | null;
+  additions: number;
+  deletions: number;
+  isBinary: boolean;
+  truncated: boolean;
+  hunks: GitDiffHunkDto[];
+}
+
+export interface GitFileStatusDto {
+  path: string;
+  stagedStatus: GitChangeKind | null;
+  unstagedStatus: GitChangeKind | null;
+  isUntracked: boolean;
+  isIgnored: boolean;
+}
+
+export type GitStreamEvent =
+  | { type: "refresh_started"; workspaceId: string }
+  | { type: "snapshot_updated"; workspaceId: string; snapshot: GitSnapshotDto }
+  | { type: "refresh_completed"; workspaceId: string };
+
+// ---------------------------------------------------------------------------
 // Terminal
 // ---------------------------------------------------------------------------
 

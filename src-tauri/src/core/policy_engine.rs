@@ -45,6 +45,8 @@ const MUTATING_TOOLS: &[&str] = &[
     "apply_patch",
     "run_command",
     "git_add",
+    "git_stage",
+    "git_unstage",
     "git_commit",
     "git_push",
     "git_pull",

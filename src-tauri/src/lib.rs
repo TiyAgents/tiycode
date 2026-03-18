@@ -178,6 +178,15 @@ pub fn run() {
             commands::index::index_filter_files,
             commands::index::index_reveal_path,
             commands::index::index_search,
+            // Git
+            commands::git::git_get_snapshot,
+            commands::git::git_get_history,
+            commands::git::git_get_diff,
+            commands::git::git_get_file_status,
+            commands::git::git_subscribe,
+            commands::git::git_refresh,
+            commands::git::git_stage,
+            commands::git::git_unstage,
             // Terminal
             commands::terminal::terminal_create_or_attach,
             commands::terminal::terminal_write_input,

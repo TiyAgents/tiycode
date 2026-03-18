@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod git;
 pub mod index;
 pub mod settings;
 pub mod system;

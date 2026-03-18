@@ -27,7 +27,6 @@ import {
   DRAWER_LIST_LABEL_CLASS,
   DRAWER_LIST_ROW_CLASS,
   DRAWER_LIST_STACK_CLASS,
-  GIT_CHANGE_FILES,
   LANGUAGE_OPTIONS,
   MIN_TERMINAL_HEIGHT,
   MIN_WORKBENCH_HEIGHT,
@@ -64,7 +63,11 @@ import type {
 import { AiElementsTaskDemo } from "@/modules/workbench-shell/ui/ai-elements-task-demo";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
-import { GitDiffPreviewPanel, GitPanel } from "@/modules/workbench-shell/ui/source-control-panels";
+import {
+  GitDiffPreviewPanel,
+  GitPanel,
+  type GitDiffSelection,
+} from "@/modules/workbench-shell/ui/source-control-panels";
 import { ThreadStatusIndicator } from "@/modules/workbench-shell/ui/thread-status-indicator";
 import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 import { WorkbenchTopBar } from "@/modules/workbench-shell/ui/workbench-top-bar";
@@ -147,12 +150,11 @@ export function DashboardWorkbench() {
     () => Object.fromEntries(WORKSPACE_ITEMS.map((workspace) => [workspace.id, workspace.defaultOpen])),
   );
   const [activeDrawerPanel, setActiveDrawerPanel] = useState<DrawerPanel>("project");
-  const [selectedDiffFilePreview, setSelectedDiffFilePreview] = useState<{ fileId: string; isStaged: boolean } | null>(null);
+  const [selectedDiffSelection, setSelectedDiffSelection] = useState<GitDiffSelection | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
   const overlayContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const selectedDiffFile = GIT_CHANGE_FILES.find((file) => file.id === selectedDiffFilePreview?.fileId) ?? null;
   const activeThread = getActiveThread(workspaces);
   const resolvedWorkspaceId =
     selectedProject === null ? null : terminalWorkspaceBindings[selectedProject.path] ?? null;
@@ -520,19 +522,19 @@ export function DashboardWorkbench() {
   }, [updateStatus]);
 
   useEffect(() => {
-    if (!selectedDiffFile || typeof window === "undefined") {
+    if (!selectedDiffSelection || typeof window === "undefined") {
       return;
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setSelectedDiffFilePreview(null);
+        setSelectedDiffSelection(null);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedDiffFile]);
+  }, [selectedDiffSelection]);
 
   useEffect(() => {
     if (!activeOverlay || typeof window === "undefined") {
@@ -1120,7 +1122,12 @@ export function DashboardWorkbench() {
                         workspaceBootstrapError={terminalBootstrapError}
                       />
                     ) : (
-                      <GitPanel onOpenDiffPreview={(fileId, isStaged) => setSelectedDiffFilePreview({ fileId, isStaged })} />
+                      <GitPanel
+                        workspaceId={resolvedWorkspaceId}
+                        currentProject={selectedProject}
+                        workspaceBootstrapError={terminalBootstrapError}
+                        onOpenDiffPreview={setSelectedDiffSelection}
+                      />
                     )}
                   </div>
                 </div>
@@ -1164,11 +1171,11 @@ export function DashboardWorkbench() {
         </section>
       </div>
 
-      {selectedDiffFile ? (
+      {selectedDiffSelection ? (
         <GitDiffPreviewPanel
-          file={selectedDiffFile}
-          isStaged={Boolean(selectedDiffFilePreview?.isStaged)}
-          onClose={() => setSelectedDiffFilePreview(null)}
+          workspaceId={resolvedWorkspaceId}
+          selection={selectedDiffSelection}
+          onClose={() => setSelectedDiffSelection(null)}
         />
       ) : null}
 

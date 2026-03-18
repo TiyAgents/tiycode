@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 
+use crate::model::git::GitSnapshotDto;
 use crate::model::terminal::{TerminalSessionDto, TerminalSessionStatus};
 
 /// Events sent to the frontend for a specific thread.
@@ -127,5 +128,24 @@ pub enum TerminalStreamEvent {
         thread_id: String,
         #[serde(rename = "exitCode")]
         exit_code: Option<i32>,
+    },
+}
+
+/// Events sent to the frontend Git drawer for refresh lifecycle updates.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GitStreamEvent {
+    RefreshStarted {
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+    },
+    SnapshotUpdated {
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+        snapshot: GitSnapshotDto,
+    },
+    RefreshCompleted {
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
     },
 }

@@ -16,6 +16,7 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 
 use crate::model::errors::{AppError, ErrorSource};
+use crate::model::git::GitFileState;
 
 /// Entries never shown in the tree or file manifest.
 const ALWAYS_SKIPPED: &[&str] = &[".git", ".DS_Store", "thumbs.db"];
@@ -72,15 +73,6 @@ pub struct FileTreeNode {
     pub git_state: Option<GitFileState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<FileTreeNode>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GitFileState {
-    Tracked,
-    Modified,
-    Untracked,
-    Ignored,
 }
 
 #[derive(Debug, Clone, Serialize)]
