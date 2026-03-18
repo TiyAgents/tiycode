@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { Check, ChevronDown, ChevronRight, FolderOpen, LoaderCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FolderOpen, LoaderCircle, RefreshCw } from "lucide-react";
 import {
   type DirectoryChildrenResponse,
   indexFilterFiles,
@@ -384,6 +384,8 @@ export function ProjectPanel({
   const [pendingRevealPath, setPendingRevealPath] = useState<string | null>(null);
   const [revealedPath, setRevealedPath] = useState<string | null>(null);
   const [activeFilterRevealPath, setActiveFilterRevealPath] = useState<string | null>(null);
+  const [isRefreshingTree, setRefreshingTree] = useState(false);
+  const [treeReloadVersion, setTreeReloadVersion] = useState(0);
   const [isOpenMenuOpen, setOpenMenuOpen] = useState(false);
   const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(null);
   const [activeOpenTargetId, setActiveOpenTargetId] = useState<string | null>(null);
@@ -489,6 +491,7 @@ export function ProjectPanel({
     let cancelled = false;
 
     if (!currentProject) {
+      setRefreshingTree(false);
       setTreeState({ data: null, error: null, isLoading: false });
       return () => {
         cancelled = true;
@@ -496,6 +499,7 @@ export function ProjectPanel({
     }
 
     if (!isTauri()) {
+      setRefreshingTree(false);
       setTreeState({
         data: buildMockTreeResponse(),
         error: null,
@@ -507,6 +511,7 @@ export function ProjectPanel({
     }
 
     if (!workspaceId) {
+      setRefreshingTree(false);
       setTreeState((current) => ({
         data: current.data,
         error: null,
@@ -546,12 +551,17 @@ export function ProjectPanel({
           error: message,
           isLoading: false,
         });
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRefreshingTree(false);
+        }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [currentProject, workspaceId]);
+  }, [currentProject, workspaceId, treeReloadVersion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -654,6 +664,25 @@ export function ProjectPanel({
     }
 
     return fallback;
+  };
+
+  const handleRefreshTree = () => {
+    if (!currentProject || !workspaceId || !isTauri() || treeState.isLoading) {
+      return;
+    }
+
+    setRefreshingTree(true);
+    setExpandedPaths(new Set());
+    setLoadingPaths(new Set());
+    setPendingRevealPath(null);
+    setRevealedPath(null);
+    setActiveFilterRevealPath(null);
+    setTreeState((current) => ({
+      data: current.data,
+      error: null,
+      isLoading: true,
+    }));
+    setTreeReloadVersion((current) => current + 1);
   };
 
   const handleOpenInApp = async (app: WorkspaceOpenApp) => {
@@ -1007,13 +1036,25 @@ export function ProjectPanel({
 
         <div className="relative mt-2.5 pl-5 pr-1 pb-2.5">
           <div className="absolute bottom-0 left-[6px] top-0 w-px bg-app-border" />
-          <Input
-            value={filterValue}
-            onChange={(event) => setFilterValue(event.target.value)}
-            placeholder="Filter files"
-            aria-label="Filter files"
-            className="h-8 rounded-lg border-app-border bg-app-surface-muted px-2.5 text-[13px] text-app-foreground placeholder:text-app-subtle focus-visible:border-app-border-strong focus-visible:ring-0"
-          />
+          <div className="relative">
+            <Input
+              value={filterValue}
+              onChange={(event) => setFilterValue(event.target.value)}
+              placeholder="Filter files"
+              aria-label="Filter files"
+              className="h-8 rounded-lg border-app-border bg-app-surface-muted px-2.5 pr-10 text-[13px] text-app-foreground placeholder:text-app-subtle focus-visible:border-app-border-strong focus-visible:ring-0"
+            />
+            <button
+              type="button"
+              aria-label="Refresh tree view"
+              title="Refresh tree view"
+              disabled={!currentProject || !workspaceId || treeState.isLoading}
+              className="absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={handleRefreshTree}
+            >
+              <RefreshCw className={cn("size-3.5", isRefreshingTree && "animate-spin")} />
+            </button>
+          </div>
           {openAppsError ? <p className="mt-2 text-[11px] text-app-danger">{openAppsError}</p> : null}
           {openError ? <p className="mt-2 text-[11px] text-app-danger">{openError}</p> : null}
           {workspaceBootstrapError ? (
