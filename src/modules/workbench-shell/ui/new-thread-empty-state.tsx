@@ -69,7 +69,12 @@ export function NewThreadEmptyState({
   };
 
   return (
-    <div className="relative isolate flex h-full min-h-0 w-full self-stretch items-center justify-center px-4 py-8">
+    <div
+      className={cn(
+        "relative isolate flex h-full min-h-0 w-full self-stretch items-center justify-center px-4 py-8",
+        isMenuOpen && "z-30",
+      )}
+    >
       <div className="relative flex w-full max-w-[28rem] flex-col items-center justify-center gap-4">
         <div className="flex size-11 items-center justify-center rounded-2xl border border-app-border bg-app-surface text-app-foreground shadow-[0_10px_28px_rgba(15,23,42,0.08)] dark:shadow-[0_14px_30px_rgba(0,0,0,0.24)]">
           <img src="/app-icon.png" alt="Tiy Agent logo" className="size-7 object-contain opacity-90" />
@@ -119,8 +124,8 @@ export function NewThreadEmptyState({
           </button>
 
           {isMenuOpen ? (
-            <div className="absolute inset-x-0 top-[calc(100%+0.55rem)] z-20 max-h-[15rem] overflow-hidden rounded-[1.1rem] border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
-              <div className="flex max-h-[calc(15rem-0.75rem)] flex-col">
+            <div className="absolute inset-x-0 top-[calc(100%+0.55rem)] z-30 max-h-[18rem] overflow-hidden rounded-[1.1rem] border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
+              <div className="flex max-h-[calc(18rem-0.75rem)] flex-col">
                 <div className="flex items-center justify-between gap-3 px-2.5 pb-1.5 pt-0.5">
                   <span className="text-[11px] font-medium text-app-subtle">Recent projects</span>
                   {activeProject ? (
