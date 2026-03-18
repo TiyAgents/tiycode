@@ -325,9 +325,11 @@ function hasLoadedChildPath(node: FileTreeNode, childPath: string): boolean {
 export function ProjectPanel({
   currentProject,
   workspaceId,
+  workspaceBootstrapError = null,
 }: {
   currentProject: ProjectOption | null;
   workspaceId: string | null;
+  workspaceBootstrapError?: string | null;
 }) {
   const [filterValue, setFilterValue] = useState("");
   const [treeState, setTreeState] = useState<TreeState>(initialTreeState);
@@ -1007,6 +1009,9 @@ export function ProjectPanel({
           />
           {openAppsError ? <p className="mt-2 text-[11px] text-app-danger">{openAppsError}</p> : null}
           {openError ? <p className="mt-2 text-[11px] text-app-danger">{openError}</p> : null}
+          {workspaceBootstrapError ? (
+            <p className="mt-2 text-[11px] text-app-danger">{workspaceBootstrapError}</p>
+          ) : null}
           {!openAppsError && !openError && treeState.data && !treeState.data.repoAvailable ? (
             <p className="mt-2 text-[11px] text-app-subtle">Git overlay unavailable for this workspace</p>
           ) : null}
@@ -1022,7 +1027,7 @@ export function ProjectPanel({
               <span>Searching all files…</span>
             </p>
           ) : null}
-          {!openAppsError && !openError && !workspaceId && currentProject ? (
+          {!openAppsError && !openError && !workspaceBootstrapError && !workspaceId && currentProject ? (
             <p className="mt-2 flex items-center gap-1.5 text-[11px] text-app-subtle">
               <LoaderCircle className="size-3 animate-spin" />
               <span>Preparing workspace…</span>

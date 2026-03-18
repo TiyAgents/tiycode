@@ -44,24 +44,7 @@ export const DEFAULT_COMMAND_SETTINGS: CommandSettings = {
   ],
 };
 
-export const DEFAULT_WORKSPACES: Array<WorkspaceEntry> = [
-  {
-    id: "tiy-desktop",
-    name: "tiy-desktop",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/tiy-desktop",
-    isDefault: true,
-    isGit: true,
-    autoWorkTree: false,
-  },
-  {
-    id: "default",
-    name: "Default",
-    path: "/Users/jorben/Library/Application Support/tiy/workspaces/default",
-    isDefault: false,
-    isGit: false,
-    autoWorkTree: false,
-  },
-];
+export const DEFAULT_WORKSPACES: Array<WorkspaceEntry> = [];
 
 export const DEFAULT_PROVIDERS: Array<ProviderEntry> = [
   {

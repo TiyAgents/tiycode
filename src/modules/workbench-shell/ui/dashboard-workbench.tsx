@@ -42,6 +42,7 @@ import {
 } from "@/modules/workbench-shell/model/fixtures";
 import {
   activateThread,
+  buildProjectOptionFromPath,
   buildInitialWorkspaces,
   buildThreadTitle,
   clearActiveThreads,
@@ -118,8 +119,8 @@ export function DashboardWorkbench() {
     updateCommand,
   } = useSettingsController();
   const [workspaces, setWorkspaces] = useState<Array<WorkspaceItem>>(() => buildInitialWorkspaces());
-  const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(() => [...RECENT_PROJECTS]);
-  const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(() => RECENT_PROJECTS[0] ?? null);
+  const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(() => (isTauri() ? [] : [...RECENT_PROJECTS]));
+  const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(() => (isTauri() ? null : RECENT_PROJECTS[0] ?? null));
   const [isNewThreadMode, setNewThreadMode] = useState(true);
   const [activeOverlay, setActiveOverlay] = useState<WorkbenchOverlay>(null);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState<SettingsCategory>("account");
@@ -200,6 +201,51 @@ export function DashboardWorkbench() {
     window.addEventListener("resize", syncTerminalHeight);
 
     return () => window.removeEventListener("resize", syncTerminalHeight);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void workspaceList()
+      .then((workspaceEntries) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextProjects = workspaceEntries
+          .map((workspace) => {
+            const project = buildProjectOptionFromPath(workspace.canonicalPath || workspace.path);
+            if (!project) {
+              return null;
+            }
+
+            return {
+              ...project,
+              id: workspace.id,
+              name: workspace.name,
+            };
+          })
+          .filter((project): project is ProjectOption => project !== null);
+
+        setRecentProjects(nextProjects);
+        setSelectedProject((current) => current ?? nextProjects[0] ?? null);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        setTerminalBootstrapError(message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -973,7 +1019,11 @@ export function DashboardWorkbench() {
 
                   <div className="min-h-0 flex-1 overscroll-none">
                     {activeDrawerPanel === "project" ? (
-                      <ProjectPanel currentProject={selectedProject} workspaceId={resolvedWorkspaceId} />
+                      <ProjectPanel
+                        currentProject={selectedProject}
+                        workspaceId={resolvedWorkspaceId}
+                        workspaceBootstrapError={terminalBootstrapError}
+                      />
                     ) : (
                       <GitPanel onOpenDiffPreview={(fileId, isStaged) => setSelectedDiffFilePreview({ fileId, isStaged })} />
                     )}
