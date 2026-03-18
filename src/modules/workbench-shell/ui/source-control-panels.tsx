@@ -732,7 +732,7 @@ export function GitPanel({
   const [pendingPaths, setPendingPaths] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [actionAlert, setActionAlert] = useState<string | null>(null);
-  const [remoteConfirmAction, setRemoteConfirmAction] = useState<Exclude<GitMutationAction, "commit"> | null>(null);
+  const [confirmAction, setConfirmAction] = useState<GitMutationAction | null>(null);
   const [pendingAction, setPendingAction] = useState<GitMutationAction | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
   const [isCommitMessageExpanded, setCommitMessageExpanded] = useState(false);
@@ -760,7 +760,7 @@ export function GitPanel({
       setIsRefreshing(false);
       setError(null);
       setActionAlert(null);
-      setRemoteConfirmAction(null);
+      setConfirmAction(null);
       setPendingAction(null);
       setCommitMessage("");
       return;
@@ -773,7 +773,7 @@ export function GitPanel({
       setIsRefreshing(false);
       setError(null);
       setActionAlert(null);
-      setRemoteConfirmAction(null);
+      setConfirmAction(null);
       setPendingAction(null);
       setCommitMessage("");
       return;
@@ -783,7 +783,7 @@ export function GitPanel({
     setIsLoading(true);
     setError(null);
     setActionAlert(null);
-    setRemoteConfirmAction(null);
+    setConfirmAction(null);
     setPendingAction(null);
     setCommitMessage("");
 
@@ -956,8 +956,8 @@ export function GitPanel({
     }
   };
 
-  const clearRemoteConfirm = () => {
-    setRemoteConfirmAction(null);
+  const clearConfirmAction = () => {
+    setConfirmAction(null);
   };
 
   const showActionAlert = (message: string) => {
@@ -976,15 +976,7 @@ export function GitPanel({
     setSnapshot(response.snapshot);
     setHistory(response.snapshot.recentCommits);
     setActionAlert(null);
-    clearRemoteConfirm();
-  };
-
-  const requestApproval = (action: GitMutationAction, reason: string) => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-
-    return window.confirm(`${reason}\n\nContinue with ${gitActionLabel(action)}?`);
+    clearConfirmAction();
   };
 
   const runCliMutation = async (
@@ -995,17 +987,7 @@ export function GitPanel({
     clearActionAlert();
 
     try {
-      let response = await execute();
-
-      if (response.type === "approval_required") {
-        const confirmed = requestApproval(action, response.reason);
-        if (!confirmed) {
-          return;
-        }
-
-        response = await execute(true);
-      }
-
+      const response = await execute();
       if (response.type === "approval_required") {
         showActionAlert(response.reason);
         return;
@@ -1031,7 +1013,7 @@ export function GitPanel({
     setIsRefreshing(true);
     setError(null);
     clearActionAlert();
-    clearRemoteConfirm();
+    clearConfirmAction();
 
     void gitRefresh(workspaceId)
       .then((nextSnapshot) => {
@@ -1052,7 +1034,7 @@ export function GitPanel({
 
     setPendingPaths((current) => new Set([...current, ...paths]));
     clearActionAlert();
-    clearRemoteConfirm();
+    clearConfirmAction();
 
     if (isMockMode) {
       setSnapshot((current) =>
@@ -1104,33 +1086,8 @@ export function GitPanel({
       return;
     }
 
-    clearRemoteConfirm();
-
-    if (isMockMode) {
-      try {
-        setSnapshot((current) => {
-          if (current === null) {
-            return current;
-          }
-
-          const nextSnapshot = applyMockCommitMutation(current, commitMessage);
-          setHistory(nextSnapshot.recentCommits);
-          return nextSnapshot;
-        });
-        clearActionAlert();
-        setCommitMessage("");
-      } catch (nextError) {
-        const message = formatUiError(nextError, "Commit failed");
-        showActionAlert(message);
-      }
-      return;
-    }
-
-    if (!workspaceId) {
-      return;
-    }
-
-    void runCliMutation("commit", (approved) => gitCommit(workspaceId, commitMessage, approved));
+    clearActionAlert();
+    setConfirmAction("commit");
   };
 
   const handleRemoteAction = (action: Exclude<GitMutationAction, "commit">) => {
@@ -1139,15 +1096,44 @@ export function GitPanel({
     }
 
     clearActionAlert();
-    setRemoteConfirmAction(action);
+    setConfirmAction(action);
   };
 
-  const executeRemoteAction = (action: Exclude<GitMutationAction, "commit">) => {
+  const executeConfirmedAction = (action: GitMutationAction) => {
     if (pendingAction !== null) {
       return;
     }
 
-    clearRemoteConfirm();
+    clearConfirmAction();
+
+    if (action === "commit") {
+      if (isMockMode) {
+        try {
+          setSnapshot((current) => {
+            if (current === null) {
+              return current;
+            }
+
+            const nextSnapshot = applyMockCommitMutation(current, commitMessage);
+            setHistory(nextSnapshot.recentCommits);
+            return nextSnapshot;
+          });
+          clearActionAlert();
+          setCommitMessage("");
+        } catch (nextError) {
+          const message = formatUiError(nextError, "Commit failed");
+          showActionAlert(message);
+        }
+        return;
+      }
+
+      if (!workspaceId) {
+        return;
+      }
+
+      void runCliMutation("commit", () => gitCommit(workspaceId, commitMessage, true));
+      return;
+    }
 
     if (isMockMode) {
       setSnapshot((current) => {
@@ -1255,10 +1241,10 @@ export function GitPanel({
   return (
     <>
       <Dialog
-        open={remoteConfirmAction !== null}
+        open={confirmAction !== null}
         onOpenChange={(open) => {
           if (!open) {
-            clearRemoteConfirm();
+            clearConfirmAction();
           }
         }}
       >
@@ -1268,25 +1254,27 @@ export function GitPanel({
         >
           <DialogHeader className="gap-2 text-left">
             <DialogTitle className="text-base font-semibold text-app-foreground">
-              {remoteConfirmAction ? `Confirm ${gitActionLabel(remoteConfirmAction)}` : "Confirm action"}
+              {confirmAction ? `Confirm ${gitActionLabel(confirmAction)}` : "Confirm action"}
             </DialogTitle>
             <DialogDescription className="text-[13px] leading-6 text-app-subtle">
-              {remoteConfirmAction
-                ? `${gitActionLabel(remoteConfirmAction)} will operate on the remote repository for the current branch.`
-                : "This action will operate on the remote repository."}
+              {confirmAction === "commit"
+                ? "Commit will create a new local revision from the currently staged changes."
+                : confirmAction
+                  ? `${gitActionLabel(confirmAction)} will operate on the remote repository for the current branch.`
+                  : "This action requires confirmation."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="mt-1">
             <Button
               variant="outline"
-              onClick={clearRemoteConfirm}
+              onClick={clearConfirmAction}
             >
               Cancel
             </Button>
             <Button
               onClick={() => {
-                if (remoteConfirmAction) {
-                  executeRemoteAction(remoteConfirmAction);
+                if (confirmAction) {
+                  executeConfirmedAction(confirmAction);
                 }
               }}
             >
