@@ -36,6 +36,7 @@ import type {
   GitStreamEvent,
 } from "@/shared/types/api";
 import { Textarea } from "@/shared/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/tooltip";
 import { cn } from "@/shared/lib/utils";
 import {
   DRAWER_ICON_ACTION_CLASS,
@@ -1109,58 +1110,67 @@ export function GitPanel({
             </span>
           </div>
 
-          <div className={DRAWER_LIST_STACK_CLASS}>
-            {history.map((item, index) => (
-              <div key={item.id} className="relative pl-4">
-                {item.isHead ? (
-                  <span className="absolute inset-y-0 -left-1.5 rounded-lg bg-primary/8" />
-                ) : null}
-                {index < history.length - 1 ? (
-                  <span className="absolute left-[4px] top-[18px] h-[calc(100%+0.25rem)] w-px bg-app-border" />
-                ) : null}
-                <span
-                  className={cn(
-                    "absolute left-0 top-1/2 size-2.5 -translate-y-1/2 rounded-full border",
-                    item.isHead
-                      ? "border-primary/30 bg-primary/72 shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
-                      : "border-app-border bg-app-drawer",
-                  )}
-                />
-                <div className="relative rounded-lg px-2.5 py-1.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-app-foreground">
-                      {item.summary}
-                    </p>
-                    <span className="shrink-0 text-[11px] text-app-subtle">
-                      {item.shortId}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between gap-3">
-                    <p className="min-w-0 flex-1 truncate text-[11px] text-app-subtle">
-                      {item.authorName} · {formatRelativeTime(item.committedAt)}
-                    </p>
-                    {item.refs.length > 0 ? (
-                      <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                        {item.refs.map((ref) => (
-                          <span
-                            key={ref}
-                            className={cn(
-                              "rounded-full px-2 py-1 text-[10px] transition-[background-color,color,box-shadow] duration-200",
-                              ref === "HEAD"
-                                ? "bg-primary/88 text-primary-foreground shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
-                                : "bg-app-surface-muted text-app-muted",
-                            )}
-                          >
-                            {ref}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
+          <TooltipProvider>
+            <div className={DRAWER_LIST_STACK_CLASS}>
+              {history.map((item, index) => (
+                <div key={item.id} className="relative pl-4">
+                  {item.isHead ? (
+                    <span className="absolute inset-y-0 -left-1.5 rounded-lg bg-primary/8" />
+                  ) : null}
+                  {index < history.length - 1 ? (
+                    <span className="absolute left-[4px] top-[18px] h-[calc(100%+0.25rem)] w-px bg-app-border" />
+                  ) : null}
+                  <span
+                    className={cn(
+                      "absolute left-0 top-1/2 size-2.5 -translate-y-1/2 rounded-full border",
+                      item.isHead
+                        ? "border-primary/30 bg-primary/72 shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
+                        : "border-app-border bg-app-drawer",
+                    )}
+                  />
+                  <div className="relative rounded-lg px-2.5 py-1.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <p className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-app-foreground">
+                            {item.summary}
+                          </p>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[28rem] whitespace-normal break-words">
+                          {item.summary}
+                        </TooltipContent>
+                      </Tooltip>
+                      <span className="shrink-0 text-[11px] text-app-subtle">
+                        {item.shortId}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-3">
+                      <p className="min-w-0 flex-1 truncate text-[11px] text-app-subtle">
+                        {item.authorName} · {formatRelativeTime(item.committedAt)}
+                      </p>
+                      {item.refs.length > 0 ? (
+                        <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                          {item.refs.map((ref) => (
+                            <span
+                              key={ref}
+                              className={cn(
+                                "inline-flex items-center rounded-full font-medium leading-none transition-[background-color,color,box-shadow] duration-200",
+                                ref === "HEAD"
+                                  ? "h-5 bg-primary/88 px-1.5 text-[9px] text-primary-foreground shadow-[0_1px_2px_rgba(15,23,42,0.14)]"
+                                  : "h-6 bg-app-surface-muted px-2 text-[10px] text-app-muted",
+                              )}
+                            >
+                              {ref}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </TooltipProvider>
         </div>
       </section>
     </div>
