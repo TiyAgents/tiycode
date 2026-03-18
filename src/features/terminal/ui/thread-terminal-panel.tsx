@@ -11,6 +11,7 @@ type ThreadTerminalPanelProps = {
   threadTitle: string | null;
   bootstrapError?: string | null;
   isPendingThread?: boolean;
+  idleMessage?: string;
   onCollapse: () => void;
 };
 
@@ -19,6 +20,7 @@ export function ThreadTerminalPanel({
   threadTitle,
   bootstrapError,
   isPendingThread = false,
+  idleMessage,
   onCollapse,
 }: ThreadTerminalPanelProps) {
   const terminalHostRef = useRef<TerminalHostHandle | null>(null);
@@ -85,7 +87,7 @@ export function ThreadTerminalPanel({
           bootstrapError={bootstrapError}
           idleMessage={
             isPendingThread
-              ? "发送第一条消息后可进入 Terminal"
+              ? (idleMessage ?? "发送第一条消息后可进入 Terminal")
               : undefined
           }
         />

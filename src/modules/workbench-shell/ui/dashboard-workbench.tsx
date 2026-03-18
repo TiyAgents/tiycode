@@ -19,7 +19,7 @@ import { useSettingsController, type SettingsCategory } from "@/modules/settings
 import { AI_ELEMENTS_THREAD_TITLE } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
 import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
-import { threadCreate, threadList, workspaceAdd, workspaceList } from "@/services/bridge";
+import { threadCreate, threadList, threadUpdateTitle, workspaceAdd, workspaceList } from "@/services/bridge";
 import {
   CONTEXT_WINDOW_INFO,
   CONTEXT_WINDOW_USAGE_DETAIL,
@@ -71,6 +71,12 @@ import { WorkbenchTopBar } from "@/modules/workbench-shell/ui/workbench-top-bar"
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 import { cn } from "@/shared/lib/utils";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
+
+const NEW_THREAD_TERMINAL_KEY_SUFFIX = "__new_thread__";
+
+function getNewThreadTerminalBindingKey(workspaceId: string) {
+  return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
+}
 
 export function DashboardWorkbench() {
   const { data } = useSystemMetadata();
@@ -150,10 +156,15 @@ export function DashboardWorkbench() {
   const activeThread = getActiveThread(workspaces);
   const resolvedWorkspaceId =
     selectedProject === null ? null : terminalWorkspaceBindings[selectedProject.path] ?? null;
+  const newThreadTerminalBindingKey =
+    resolvedWorkspaceId === null ? null : getNewThreadTerminalBindingKey(resolvedWorkspaceId);
   const terminalBindingKey =
     resolvedWorkspaceId && activeThread ? `${resolvedWorkspaceId}:${activeThread.name}` : null;
-  const resolvedTerminalThreadId =
-    terminalBindingKey === null ? null : terminalThreadBindings[terminalBindingKey] ?? null;
+  const resolvedTerminalThreadId = isNewThreadMode
+    ? (newThreadTerminalBindingKey === null ? null : terminalThreadBindings[newThreadTerminalBindingKey] ?? null)
+    : terminalBindingKey === null
+      ? null
+      : terminalThreadBindings[terminalBindingKey] ?? null;
   const { isSidebarOpen, isDrawerOpen, isTerminalCollapsed } = panelVisibilityState;
   const isSettingsOpen = activeOverlay === "settings";
   const isMarketplaceOpen = activeOverlay === "marketplace";
@@ -390,6 +401,62 @@ export function DashboardWorkbench() {
     resolvedWorkspaceId,
   ]);
 
+  useEffect(() => {
+    if (!isTauri() || !isNewThreadMode || !resolvedWorkspaceId || !newThreadTerminalBindingKey) {
+      return;
+    }
+
+    if (terminalThreadBindings[newThreadTerminalBindingKey]) {
+      return;
+    }
+
+    let cancelled = false;
+    setTerminalBootstrapError(null);
+
+    void threadList(resolvedWorkspaceId, 100)
+      .then(async (threads) => {
+        const existing = threads.find((thread) => thread.title.trim().length === 0);
+        if (existing) {
+          return existing;
+        }
+
+        return threadCreate(resolvedWorkspaceId, "");
+      })
+      .then((thread) => {
+        if (cancelled) {
+          return;
+        }
+
+        setTerminalThreadBindings((current) => {
+          if (current[newThreadTerminalBindingKey]) {
+            return current;
+          }
+
+          return {
+            ...current,
+            [newThreadTerminalBindingKey]: thread.id,
+          };
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        setTerminalBootstrapError(message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isNewThreadMode,
+    newThreadTerminalBindingKey,
+    resolvedWorkspaceId,
+    terminalThreadBindings,
+  ]);
+
   const handleTerminalResizeStart = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
       return;
@@ -594,6 +661,10 @@ export function DashboardWorkbench() {
         active: true,
         status: "running" as const,
       };
+      const draftThreadId =
+        newThreadTerminalBindingKey === null ? null : terminalThreadBindings[newThreadTerminalBindingKey] ?? null;
+      const promotedTerminalBindingKey =
+        resolvedWorkspaceId === null ? null : `${resolvedWorkspaceId}:${nextThread.name}`;
 
       setSelectedProject(project);
       setRecentProjects((current) => mergeRecentProjects(current, project));
@@ -628,6 +699,25 @@ export function DashboardWorkbench() {
         ...current,
         [existingWorkspace?.id ?? project.id]: true,
       }));
+      if (draftThreadId && promotedTerminalBindingKey) {
+        setTerminalThreadBindings((current) => {
+          const next = {
+            ...current,
+            [promotedTerminalBindingKey]: draftThreadId,
+          };
+
+          if (newThreadTerminalBindingKey) {
+            delete next[newThreadTerminalBindingKey];
+          }
+
+          return next;
+        });
+
+        void threadUpdateTitle(draftThreadId, nextThread.name).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          setTerminalBootstrapError(message);
+        });
+      }
       setNewThreadMode(false);
       setComposerValue("");
       setComposerError(null);
@@ -699,6 +789,11 @@ export function DashboardWorkbench() {
   const selectedThemeOption = THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[0];
   const selectedThemeSummary = theme === "system" ? "跟随系统" : selectedThemeOption.label;
   const selectedLanguageOption = LANGUAGE_OPTIONS.find((option) => option.value === language) ?? LANGUAGE_OPTIONS[1];
+  const newThreadTerminalIdleMessage = !selectedProject
+    ? "选择workspace后可进入 Terminal"
+    : !resolvedWorkspaceId && !terminalBootstrapError
+      ? "Preparing workspace…"
+      : undefined;
 
   useEffect(() => {
     if (!isMacOS || typeof window === "undefined") {
@@ -1060,6 +1155,7 @@ export function DashboardWorkbench() {
                   threadTitle={activeThread?.name ?? AI_ELEMENTS_THREAD_TITLE}
                   bootstrapError={terminalBootstrapError}
                   isPendingThread={isNewThreadMode}
+                  idleMessage={newThreadTerminalIdleMessage}
                   onCollapse={() => setTerminalCollapsed(true)}
                 />
               </div>
