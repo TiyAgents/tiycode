@@ -14,7 +14,13 @@ import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/
 import type { AgentProfile, ProviderEntry } from "@/modules/settings-center/model/types";
 import { threadLoad } from "@/services/bridge";
 import { ThreadStream, type HelperEvent, type QueueEvent, type RunState } from "@/services/thread-stream";
-import type { MessageDto, SubagentProgressSnapshot, ThreadSnapshotDto } from "@/shared/types/api";
+import type {
+  MessageDto,
+  RunHelperDto,
+  SubagentProgressSnapshot,
+  ThreadSnapshotDto,
+  ToolCallDto,
+} from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -22,8 +28,11 @@ import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 
 type SurfaceMessage = {
+  createdAt: string;
   id: string;
+  messageType: MessageDto["messageType"];
   role: "user" | "assistant" | "system";
+  runId: string | null;
   content: string;
   status: "streaming" | "completed" | "failed";
 };
@@ -55,10 +64,13 @@ type SurfaceApproval =
 type SurfaceToolEntry = {
   approval?: SurfaceApproval;
   error?: string;
+  finishedAt?: string | null;
   id: string;
   input?: unknown;
   name: string;
   result?: unknown;
+  runId: string;
+  startedAt: string;
   state: SurfaceToolState;
 };
 
@@ -66,15 +78,50 @@ type SurfaceHelperEntry = {
   completedSteps: number;
   currentAction?: string | null;
   error?: string;
+  finishedAt?: string | null;
   id: string;
+  inputSummary?: string | null;
   kind: string;
   latestMessage?: string;
   recentActions: string[];
-  status: "pending" | "completed" | "failed";
+  runId: string;
+  startedAt: string;
+  status: "running" | "completed" | "failed";
   summary?: string | null;
   toolCounts: Record<string, number>;
   totalToolCalls: number;
 };
+
+type TimelineEntry =
+  | {
+      kind: "message";
+      key: string;
+      occurredAt: string;
+      message: SurfaceMessage;
+    }
+  | {
+      kind: "tool";
+      key: string;
+      occurredAt: string;
+      tool: SurfaceToolEntry;
+    }
+  | {
+      kind: "helper";
+      key: string;
+      occurredAt: string;
+      helper: SurfaceHelperEntry;
+    };
+
+type ToolTimelineEntry = Extract<TimelineEntry, { kind: "tool" }>;
+
+type TimelinePresentationEntry =
+  | TimelineEntry
+  | {
+      kind: "tool-group";
+      key: string;
+      occurredAt: string;
+      tools: SurfaceToolEntry[];
+    };
 
 type SurfaceRuntimeError = {
   message: string;
@@ -100,13 +147,111 @@ type RuntimeThreadSurfaceProps = {
 
 function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
   return {
+    createdAt: message.createdAt ?? new Date().toISOString(),
     id: message.id,
+    messageType: message.messageType,
     role:
       message.role === "user" || message.role === "assistant" || message.role === "system"
         ? message.role
         : "assistant",
+    runId: message.runId,
     content: message.contentMarkdown,
     status: message.status,
+  };
+}
+
+function mapSnapshotToolState(tool: ToolCallDto): SurfaceToolState {
+  switch (tool.status) {
+    case "waiting_approval":
+      return "approval-requested";
+    case "approved":
+      return "approval-responded";
+    case "running":
+      return "input-available";
+    case "completed":
+      return "output-available";
+    case "denied":
+      return "output-denied";
+    case "failed":
+    case "cancelled":
+      return "output-error";
+    default:
+      return "input-streaming";
+  }
+}
+
+function mapSnapshotToolApproval(tool: ToolCallDto): SurfaceApproval | undefined {
+  if (tool.status === "waiting_approval") {
+    return { id: tool.id };
+  }
+  if (tool.approvalStatus === "approved") {
+    return { approved: true, id: tool.id };
+  }
+  if (tool.approvalStatus === "denied" || tool.status === "denied") {
+    return { approved: false, id: tool.id };
+  }
+  return undefined;
+}
+
+function mapSnapshotTool(tool: ToolCallDto): SurfaceToolEntry {
+  return {
+    approval: mapSnapshotToolApproval(tool),
+    error:
+      tool.status === "failed" || tool.status === "denied"
+        ? typeof tool.toolOutput === "object" && tool.toolOutput && "error" in tool.toolOutput
+          ? String((tool.toolOutput as Record<string, unknown>).error)
+          : undefined
+        : undefined,
+    finishedAt: tool.finishedAt,
+    id: tool.id,
+    input: tool.toolInput,
+    name: tool.toolName,
+    result: tool.toolOutput ?? undefined,
+    runId: tool.runId,
+    startedAt: tool.startedAt,
+    state: mapSnapshotToolState(tool),
+  };
+}
+
+function mapSnapshotHelperStatus(
+  helper: RunHelperDto,
+): SurfaceHelperEntry["status"] {
+  switch (helper.status) {
+    case "running":
+    case "requested":
+    case "created":
+    case "dispatching":
+    case "waiting_tool_result":
+    case "waiting_approval":
+      return "running";
+    case "completed":
+      return "completed";
+    case "failed":
+    case "interrupted":
+    case "cancelled":
+      return "failed";
+    default:
+      return "running";
+  }
+}
+
+function mapSnapshotHelper(helper: RunHelperDto): SurfaceHelperEntry {
+  return {
+    completedSteps: 0,
+    currentAction: null,
+    error: helper.errorSummary ?? undefined,
+    finishedAt: helper.finishedAt,
+    id: helper.id,
+    inputSummary: helper.inputSummary,
+    kind: helper.helperKind,
+    latestMessage: undefined,
+    recentActions: [],
+    runId: helper.runId,
+    startedAt: helper.startedAt,
+    status: mapSnapshotHelperStatus(helper),
+    summary: helper.outputSummary,
+    toolCounts: {},
+    totalToolCalls: 0,
   };
 }
 
@@ -287,11 +432,11 @@ function applyHelperSnapshot(
   "completedSteps" | "currentAction" | "recentActions" | "toolCounts" | "totalToolCalls"
 > {
   return {
-    completedSteps: snapshot.completedSteps,
-    currentAction: snapshot.currentAction,
-    recentActions: snapshot.recentActions,
-    toolCounts: snapshot.toolCounts,
-    totalToolCalls: snapshot.totalToolCalls,
+    completedSteps: snapshot.completedSteps ?? 0,
+    currentAction: snapshot.currentAction ?? null,
+    recentActions: snapshot.recentActions ?? [],
+    toolCounts: snapshot.toolCounts ?? {},
+    totalToolCalls: snapshot.totalToolCalls ?? 0,
   };
 }
 
@@ -309,9 +454,61 @@ function formatHelperKind(kind: string) {
 }
 
 function formatHelperToolCounts(toolCounts: Record<string, number>) {
-  return Object.entries(toolCounts)
+  return Object.entries(toolCounts ?? {})
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .map(([toolName, count]) => `${toolName} ${count}`);
+}
+
+function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry) {
+  const timestampOrder = left.occurredAt.localeCompare(right.occurredAt);
+  if (timestampOrder !== 0) {
+    return timestampOrder;
+  }
+
+  return left.key.localeCompare(right.key);
+}
+
+function isCompletedToolEntry(entry: TimelineEntry): entry is ToolTimelineEntry {
+  return entry.kind === "tool" && entry.tool.state === "output-available";
+}
+
+function groupCompletedToolEntries(
+  entries: Array<TimelineEntry>,
+): Array<TimelinePresentationEntry> {
+  const grouped: Array<TimelinePresentationEntry> = [];
+  let completedBuffer: Array<ToolTimelineEntry> = [];
+
+  const flushCompletedBuffer = () => {
+    if (completedBuffer.length === 0) {
+      return;
+    }
+
+    if (completedBuffer.length === 1) {
+      grouped.push(completedBuffer[0]);
+    } else {
+      grouped.push({
+        kind: "tool-group",
+        key: `tool-group:${completedBuffer.map((entry) => entry.tool.id).join(":")}`,
+        occurredAt: completedBuffer[0].occurredAt,
+        tools: completedBuffer.map((entry) => entry.tool),
+      });
+    }
+
+    completedBuffer = [];
+  };
+
+  for (const entry of entries) {
+    if (isCompletedToolEntry(entry)) {
+      completedBuffer.push(entry);
+      continue;
+    }
+
+    flushCompletedBuffer();
+    grouped.push(entry);
+  }
+
+  flushCompletedBuffer();
+  return grouped;
 }
 
 export function RuntimeThreadSurface({
@@ -337,11 +534,12 @@ export function RuntimeThreadSurface({
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
   const [planArtifact, setPlanArtifact] = useState<unknown>(null);
   const [queueArtifact, setQueueArtifact] = useState<unknown>(null);
-  const [reasoning, setReasoning] = useState("");
   const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
   const [runState, setRunState] = useState<RunState>("idle");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
+  const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});
+  const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
   const streamRef = useRef<ThreadStream | null>(null);
 
   const loadSnapshot = useCallback(async () => {
@@ -363,6 +561,8 @@ export function RuntimeThreadSurface({
       const snapshot = await threadLoad(threadId);
       const nextState = mapSnapshotToRunState(snapshot);
       setMessages(snapshot.messages.map(mapSnapshotMessage));
+      setTools((snapshot.toolCalls ?? []).map(mapSnapshotTool));
+      setHelpers((snapshot.helpers ?? []).map(mapSnapshotHelper));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
       setRunState(nextState);
       setSnapshotReady(true);
@@ -383,7 +583,6 @@ export function RuntimeThreadSurface({
     setMessages([]);
     setPlanArtifact(null);
     setQueueArtifact(null);
-    setReasoning("");
     setRuntimeError(null);
     setRunState("idle");
     setSnapshotReady(false);
@@ -403,8 +602,13 @@ export function RuntimeThreadSurface({
       if (event.kind === "delta") {
         setMessages((current) =>
           appendOrReplaceMessage(current, {
+            createdAt:
+              current.find((entry) => entry.id === event.messageId)?.createdAt
+              ?? new Date().toISOString(),
             id: event.messageId,
+            messageType: "plain_message",
             role: "assistant",
+            runId: event.runId,
             content:
               current.find((entry) => entry.id === event.messageId)?.content.concat(event.delta ?? "")
               ?? (event.delta ?? ""),
@@ -416,8 +620,13 @@ export function RuntimeThreadSurface({
 
       setMessages((current) =>
         appendOrReplaceMessage(current, {
+          createdAt:
+            current.find((entry) => entry.id === event.messageId)?.createdAt
+            ?? new Date().toISOString(),
           id: event.messageId,
+          messageType: "plain_message",
           role: "assistant",
+          runId: event.runId,
           content: event.content ?? "",
           status: "completed",
         }),
@@ -429,7 +638,20 @@ export function RuntimeThreadSurface({
     };
 
     stream.onReasoning = (event) => {
-      setReasoning(event.reasoning);
+      const reasoningMessageId = event.messageId ?? `reasoning-${event.runId}`;
+      setMessages((current) =>
+        appendOrReplaceMessage(current, {
+          createdAt:
+            current.find((entry) => entry.id === reasoningMessageId)?.createdAt
+            ?? new Date().toISOString(),
+          id: reasoningMessageId,
+          messageType: "reasoning",
+          role: "assistant",
+          runId: event.runId,
+          content: event.reasoning,
+          status: "streaming",
+        }),
+      );
     };
 
     stream.onQueue = (event: QueueEvent) => {
@@ -443,10 +665,14 @@ export function RuntimeThreadSurface({
             return updateHelper(current, event.subtaskId, (entry) => ({
               ...applyHelperSnapshot(event.snapshot),
               error: undefined,
+              finishedAt: entry?.finishedAt ?? null,
               id: event.subtaskId,
+              inputSummary: entry?.inputSummary,
               kind: event.helperKind,
               latestMessage: undefined,
-              status: "pending",
+              runId: event.runId,
+              startedAt: entry?.startedAt ?? new Date().toISOString(),
+              status: "running",
               summary: entry?.summary,
               totalToolCalls: event.snapshot.totalToolCalls,
             }));
@@ -454,10 +680,14 @@ export function RuntimeThreadSurface({
             return updateHelper(current, event.subtaskId, (entry) => ({
               ...applyHelperSnapshot(event.snapshot),
               error: entry?.error,
+              finishedAt: entry?.finishedAt ?? null,
               id: event.subtaskId,
+              inputSummary: entry?.inputSummary,
               kind: event.helperKind,
               latestMessage: event.message,
-              status: entry?.status ?? "pending",
+              runId: event.runId,
+              startedAt: entry?.startedAt ?? new Date().toISOString(),
+              status: entry?.status ?? "running",
               summary: entry?.summary,
               totalToolCalls: event.snapshot.totalToolCalls,
             }));
@@ -465,9 +695,13 @@ export function RuntimeThreadSurface({
             return updateHelper(current, event.subtaskId, (_entry) => ({
               ...applyHelperSnapshot(event.snapshot),
               error: undefined,
+              finishedAt: new Date().toISOString(),
               id: event.subtaskId,
+              inputSummary: _entry?.inputSummary,
               kind: event.helperKind,
               latestMessage: undefined,
+              runId: event.runId,
+              startedAt: _entry?.startedAt ?? new Date().toISOString(),
               status: "completed",
               summary: event.summary,
               totalToolCalls: event.snapshot.totalToolCalls,
@@ -476,9 +710,13 @@ export function RuntimeThreadSurface({
             return updateHelper(current, event.subtaskId, (_entry) => ({
               ...applyHelperSnapshot(event.snapshot),
               error: event.error,
+              finishedAt: new Date().toISOString(),
               id: event.subtaskId,
+              inputSummary: _entry?.inputSummary,
               kind: event.helperKind,
               latestMessage: undefined,
+              runId: event.runId,
+              startedAt: _entry?.startedAt ?? new Date().toISOString(),
               status: "failed",
               summary: undefined,
               totalToolCalls: event.snapshot.totalToolCalls,
@@ -494,30 +732,39 @@ export function RuntimeThreadSurface({
             return updateTool(current, event.toolCallId, (entry) => ({
               approval: entry?.approval,
               error: undefined,
+              finishedAt: entry?.finishedAt ?? null,
               id: event.toolCallId,
               input: event.toolInput,
               name: event.toolName ?? entry?.name ?? "tool",
               result: entry?.result,
+              runId: event.runId,
+              startedAt: entry?.startedAt ?? new Date().toISOString(),
               state: entry?.state === "approval-requested" ? "approval-requested" : "input-streaming",
             }));
           case "running":
             return updateTool(current, event.toolCallId, (entry) => ({
               approval: entry?.approval,
               error: undefined,
+              finishedAt: entry?.finishedAt ?? null,
               id: event.toolCallId,
               input: entry?.input,
               name: entry?.name ?? "tool",
               result: undefined,
+              runId: event.runId,
+              startedAt: entry?.startedAt ?? new Date().toISOString(),
               state: "input-available",
             }));
           case "completed":
             return updateTool(current, event.toolCallId, (entry) => ({
               approval: entry?.approval,
               error: undefined,
+              finishedAt: new Date().toISOString(),
               id: event.toolCallId,
               input: entry?.input,
               name: entry?.name ?? "tool",
               result: event.result,
+              runId: event.runId,
+              startedAt: entry?.startedAt ?? new Date().toISOString(),
               state: "output-available",
             }));
           case "failed": {
@@ -528,10 +775,13 @@ export function RuntimeThreadSurface({
             return updateTool(current, event.toolCallId, (entry) => ({
               approval: entry?.approval,
               error: event.error,
+              finishedAt: new Date().toISOString(),
               id: event.toolCallId,
               input: entry?.input,
               name: entry?.name ?? "tool",
               result: undefined,
+              runId: event.runId,
+              startedAt: entry?.startedAt ?? new Date().toISOString(),
               state: denied ? "output-denied" : "output-error",
             }));
           }
@@ -559,10 +809,13 @@ export function RuntimeThreadSurface({
                     reason: event.reason ?? getApprovalReason(entry?.approval),
                   },
           error: entry?.error,
+          finishedAt: entry?.finishedAt ?? null,
           id: event.toolCallId,
           input: event.toolInput ?? entry?.input,
           name: event.toolName ?? entry?.name ?? "tool",
           result: entry?.result,
+          runId: event.runId,
+          startedAt: entry?.startedAt ?? new Date().toISOString(),
           state: event.kind === "required" ? "approval-requested" : "approval-responded",
         })),
       );
@@ -635,14 +888,14 @@ export function RuntimeThreadSurface({
     setRuntimeError(null);
     setPlanArtifact(null);
     setQueueArtifact(null);
-    setReasoning("");
-    setHelpers([]);
-    setTools([]);
     setMessages((current) => [
       ...current,
       {
+        createdAt: new Date().toISOString(),
         id: `local-user-${Date.now()}`,
+        messageType: "plain_message",
         role: "user",
+        runId: null,
         content: prompt,
         status: "completed",
       },
@@ -664,15 +917,82 @@ export function RuntimeThreadSurface({
 
   const composerStatus: ChatStatus =
     runState === "running" || runState === "waiting_approval" ? "streaming" : "ready";
-  const activeHelpersCount = helpers.filter((entry) => entry.status === "pending").length;
   const hasRuntimeArtifacts =
     Boolean(runtimeError)
-    || Boolean(reasoning)
     || Boolean(planArtifact)
     || Boolean(queueArtifact)
     || helpers.length > 0
     || tools.length > 0;
   const formattedPlan = planArtifact ? formatPlan(planArtifact) : null;
+  const timelineEntries = useMemo<Array<TimelineEntry>>(
+    () =>
+      [
+        ...messages.map((message) => ({
+          kind: "message" as const,
+          key: `message:${message.id}`,
+          occurredAt: message.createdAt,
+          message,
+        })),
+        ...helpers.map((helper) => ({
+          kind: "helper" as const,
+          key: `helper:${helper.id}`,
+          occurredAt: helper.startedAt,
+          helper,
+        })),
+        ...tools.map((tool) => ({
+          kind: "tool" as const,
+          key: `tool:${tool.id}`,
+          occurredAt: tool.startedAt,
+          tool,
+        })),
+      ].sort(compareTimelineEntries),
+    [helpers, messages, tools],
+  );
+  const presentationEntries = useMemo<Array<TimelinePresentationEntry>>(
+    () => groupCompletedToolEntries(timelineEntries),
+    [timelineEntries],
+  );
+
+  useEffect(() => {
+    const previousToolStates = previousToolStatesRef.current;
+    const nextToolStates = Object.fromEntries(tools.map((tool) => [tool.id, tool.state]));
+
+    setCompletedToolOpen((current) => {
+      const next: Record<string, boolean> = {};
+
+      for (const tool of tools) {
+        const previousState = previousToolStates[tool.id];
+
+        if (previousState !== tool.state) {
+          next[tool.id] = tool.state !== "output-available";
+          continue;
+        }
+
+        if (tool.id in current) {
+          next[tool.id] = current[tool.id];
+          continue;
+        }
+
+        next[tool.id] = tool.state !== "output-available";
+      }
+
+      const currentKeys = Object.keys(current);
+      const nextKeys = Object.keys(next);
+      if (currentKeys.length !== nextKeys.length) {
+        return next;
+      }
+
+      for (const key of nextKeys) {
+        if (current[key] !== next[key]) {
+          return next;
+        }
+      }
+
+      return current;
+    });
+
+    previousToolStatesRef.current = nextToolStates;
+  }, [tools]);
 
   const handleSubmit = useCallback(async (message: PromptInputMessage) => {
     const prompt = buildPromptText(message);
@@ -683,6 +1003,10 @@ export function RuntimeThreadSurface({
     setComposerValue("");
     await submitPrompt(prompt);
   }, [submitPrompt]);
+
+  const handleCompletedToolOpenChange = useCallback((toolId: string, open: boolean) => {
+    setCompletedToolOpen((current) => (current[toolId] === open ? current : { ...current, [toolId]: open }));
+  }, []);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">
@@ -712,7 +1036,7 @@ export function RuntimeThreadSurface({
               </div>
             ) : null}
 
-            {!isLoading && !loadError && messages.length === 0 ? (
+            {!isLoading && !loadError && messages.length === 0 && !hasRuntimeArtifacts ? (
               <ConversationEmptyState
                 description="Ask Tiy to inspect the workspace, run tools, or plan the next task."
                 icon={<BotIcon className="size-5" />}
@@ -720,83 +1044,59 @@ export function RuntimeThreadSurface({
               />
             ) : null}
 
-            {messages.map((message) => (
-              <Message
-                className={message.role === "assistant" ? "max-w-full" : undefined}
-                from={message.role}
-                key={message.id}
-              >
-                <MessageContent
-                  className={
-                    message.role === "assistant"
-                      ? "w-full max-w-full bg-transparent px-0 py-0 shadow-none"
-                      : "rounded-2xl bg-app-surface/62 px-4 py-3 shadow-none backdrop-blur-sm"
-                  }
-                >
-                  <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
-                </MessageContent>
-              </Message>
-            ))}
+            {presentationEntries.map((entry) => {
+              if (entry.kind === "message") {
+                const { message } = entry;
 
-            {formattedPlan ? (
-              <Message className="max-w-full" from="assistant">
-                <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                  <Plan className="overflow-hidden rounded-2xl border border-app-border/28 bg-app-surface/28 shadow-none" defaultOpen>
-                    <PlanHeader>
-                      <div className="space-y-3">
-                        <PlanTitle>{formattedPlan.title}</PlanTitle>
-                        <PlanDescription>{formattedPlan.description}</PlanDescription>
-                      </div>
-                      <PlanTrigger />
-                    </PlanHeader>
-                    <PlanContent className="space-y-3">
-                      {formattedPlan.steps.length > 0 ? (
-                        <ol className="space-y-2 text-sm leading-6 text-app-muted">
-                          {formattedPlan.steps.map((step, index) => (
-                            <li className="flex items-start gap-3" key={`${step}-${index}`}>
-                              <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-app-surface-muted text-[11px] font-semibold text-app-foreground ring-1 ring-app-border/45">
-                                {index + 1}
-                              </span>
-                              <span className="whitespace-pre-wrap">{step}</span>
-                            </li>
-                          ))}
-                        </ol>
-                      ) : (
-                        <MessageResponse>{JSON.stringify(planArtifact, null, 2)}</MessageResponse>
-                      )}
-                    </PlanContent>
-                  </Plan>
-                </MessageContent>
-              </Message>
-            ) : null}
+                if (message.messageType === "reasoning") {
+                  return (
+                    <Message className="max-w-full" from="assistant" key={entry.key}>
+                      <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                        <Reasoning
+                          className="w-full bg-transparent px-0 py-0"
+                          defaultOpen={message.status === "streaming" || runState === "running"}
+                          isStreaming={message.status === "streaming"}
+                        >
+                          <ReasoningTrigger />
+                          <ReasoningContent>{message.content}</ReasoningContent>
+                        </Reasoning>
+                      </MessageContent>
+                    </Message>
+                  );
+                }
 
-            {reasoning ? (
-              <Message className="max-w-full" from="assistant">
-                <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                  <Reasoning className="w-full bg-transparent px-0 py-0" defaultOpen={runState === "running"}>
-                    <ReasoningTrigger />
-                    <ReasoningContent>{reasoning}</ReasoningContent>
-                  </Reasoning>
-                </MessageContent>
-              </Message>
-            ) : null}
+                return (
+                  <Message
+                    className={message.role === "assistant" ? "max-w-full" : undefined}
+                    from={message.role}
+                    key={entry.key}
+                  >
+                    <MessageContent
+                      className={
+                        message.role === "assistant"
+                          ? "w-full max-w-full bg-transparent px-0 py-0 shadow-none"
+                          : "rounded-2xl bg-app-surface/62 px-4 py-3 shadow-none backdrop-blur-sm"
+                      }
+                    >
+                      <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
+                    </MessageContent>
+                  </Message>
+                );
+              }
 
-            {queueArtifact || helpers.length > 0 ? (
-              <Message className="max-w-full" from="assistant">
-                <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                  <Queue className="rounded-2xl border border-app-border/24 bg-app-surface/16 p-2 shadow-none">
-                    {helpers.length > 0 ? (
-                      <QueueSection defaultOpen>
-                        <QueueSectionTrigger>
-                          <QueueSectionLabel
-                            count={helpers.length}
-                            label={activeHelpersCount > 0 ? "Helper Tasks Active" : "Helper Tasks"}
-                          />
-                        </QueueSectionTrigger>
-                        <QueueSectionContent>
-                          <QueueList>
-                            {helpers.map((helper) => (
-                              <QueueItem key={helper.id}>
+              if (entry.kind === "helper") {
+                const { helper } = entry;
+                return (
+                  <Message className="max-w-full" from="assistant" key={entry.key}>
+                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                      <Queue className="rounded-2xl border border-app-border/24 bg-app-surface/16 p-2 shadow-none">
+                        <QueueSection defaultOpen>
+                          <QueueSectionTrigger>
+                            <QueueSectionLabel count={1} label="Helper Task" />
+                          </QueueSectionTrigger>
+                          <QueueSectionContent>
+                            <QueueList>
+                              <QueueItem>
                                 <div className="flex items-start gap-3">
                                   <QueueItemIndicator completed={helper.status === "completed"} />
                                   <QueueItemContent completed={helper.status === "completed"}>
@@ -816,6 +1116,11 @@ export function RuntimeThreadSurface({
                                     {helper.status}
                                   </Badge>
                                 </div>
+                                {helper.inputSummary ? (
+                                  <QueueItemDescription completed={helper.status === "completed"}>
+                                    {helper.inputSummary}
+                                  </QueueItemDescription>
+                                ) : null}
                                 {helper.totalToolCalls > 0 ? (
                                   <QueueItemDescription completed={helper.status === "completed"}>
                                     {`${helper.totalToolCalls} tool calls, ${helper.completedSteps} finished`}
@@ -859,33 +1164,66 @@ export function RuntimeThreadSurface({
                                   </QueueItemDescription>
                                 ) : null}
                               </QueueItem>
-                            ))}
-                          </QueueList>
-                        </QueueSectionContent>
-                      </QueueSection>
-                    ) : null}
+                            </QueueList>
+                          </QueueSectionContent>
+                        </QueueSection>
+                      </Queue>
+                    </MessageContent>
+                  </Message>
+                );
+              }
 
-                    {queueArtifact ? (
-                      <div className={cn(helpers.length > 0 && "border-t border-app-border/45 pt-2")}>
-                        <div className="px-3 py-2 text-sm font-medium text-app-foreground">Runtime Queue</div>
-                        <div className="rounded-xl bg-app-surface/45 px-3 py-3 text-sm text-app-muted">
-                          <MessageResponse>{JSON.stringify(queueArtifact, null, 2)}</MessageResponse>
-                        </div>
-                      </div>
-                    ) : null}
-                  </Queue>
-                </MessageContent>
-              </Message>
-            ) : null}
+              if (entry.kind === "tool-group") {
+                return (
+                  <Message className="max-w-full" from="assistant" key={entry.key}>
+                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                      <Tool
+                        className="rounded-2xl border border-app-border/28 bg-app-surface/24 shadow-none"
+                        defaultOpen={false}
+                      >
+                        <ToolHeader
+                          state="output-available"
+                          title={`Tools × ${entry.tools.length}`}
+                          toolName="tools"
+                          type="dynamic-tool"
+                        />
+                        <ToolContent className="space-y-3">
+                          {entry.tools.map((tool) => (
+                            <div
+                              className="space-y-3 rounded-xl border border-app-border/24 bg-app-surface/18 p-3"
+                              key={tool.id}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-app-foreground">{tool.name}</span>
+                                <Badge className="rounded-full bg-app-success/10 text-app-success" variant="outline">
+                                  completed
+                                </Badge>
+                              </div>
+                              {tool.input !== undefined ? <ToolInput input={tool.input} /> : null}
+                              <ToolOutput errorText={undefined} output={tool.result} />
+                            </div>
+                          ))}
+                        </ToolContent>
+                      </Tool>
+                    </MessageContent>
+                  </Message>
+                );
+              }
 
-            {tools.length > 0 ? (
-              <Message className="max-w-full" from="assistant">
-                <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                  {tools.map((tool) => (
+              const { tool } = entry;
+              return (
+                <Message className="max-w-full" from="assistant" key={entry.key}>
+                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
                     <Tool
                       className="rounded-2xl border border-app-border/28 bg-app-surface/24 shadow-none"
-                      defaultOpen={tool.state !== "output-available"}
-                      key={tool.id}
+                      onOpenChange={(open) => {
+                        if (tool.state !== "output-available") {
+                          return;
+                        }
+
+                        handleCompletedToolOpenChange(tool.id, open);
+                      }}
+                      open={tool.state !== "output-available" ? true : (completedToolOpen[tool.id] ?? false)}
                     >
                       <ToolHeader state={tool.state} title={tool.name} toolName={tool.name} type="dynamic-tool" />
                       <ToolContent>
@@ -936,7 +1274,54 @@ export function RuntimeThreadSurface({
                         ) : null}
                       </ToolContent>
                     </Tool>
-                  ))}
+                  </MessageContent>
+                </Message>
+              );
+            })}
+
+            {formattedPlan ? (
+              <Message className="max-w-full" from="assistant">
+                <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                  <Plan className="overflow-hidden rounded-2xl border border-app-border/28 bg-app-surface/28 shadow-none" defaultOpen>
+                    <PlanHeader>
+                      <div className="space-y-3">
+                        <PlanTitle>{formattedPlan.title}</PlanTitle>
+                        <PlanDescription>{formattedPlan.description}</PlanDescription>
+                      </div>
+                      <PlanTrigger />
+                    </PlanHeader>
+                    <PlanContent className="space-y-3">
+                      {formattedPlan.steps.length > 0 ? (
+                        <ol className="space-y-2 text-sm leading-6 text-app-muted">
+                          {formattedPlan.steps.map((step, index) => (
+                            <li className="flex items-start gap-3" key={`${step}-${index}`}>
+                              <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-app-surface-muted text-[11px] font-semibold text-app-foreground ring-1 ring-app-border/45">
+                                {index + 1}
+                              </span>
+                              <span className="whitespace-pre-wrap">{step}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <MessageResponse>{JSON.stringify(planArtifact, null, 2)}</MessageResponse>
+                      )}
+                    </PlanContent>
+                  </Plan>
+                </MessageContent>
+              </Message>
+            ) : null}
+
+            {queueArtifact ? (
+              <Message className="max-w-full" from="assistant">
+                <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                  <Queue className="rounded-2xl border border-app-border/24 bg-app-surface/16 p-2 shadow-none">
+                    <div>
+                      <div className="px-3 py-2 text-sm font-medium text-app-foreground">Runtime Queue</div>
+                      <div className="rounded-xl bg-app-surface/45 px-3 py-3 text-sm text-app-muted">
+                        <MessageResponse>{JSON.stringify(queueArtifact, null, 2)}</MessageResponse>
+                      </div>
+                    </div>
+                  </Queue>
                 </MessageContent>
               </Message>
             ) : null}
