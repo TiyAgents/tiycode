@@ -247,6 +247,7 @@ export interface RunSummaryDto {
   runMode: RunMode;
   status: RunStatus;
   modelId: string | null;
+  errorMessage: string | null;
   startedAt: string;
 }
 
@@ -255,6 +256,7 @@ export interface ThreadSnapshotDto {
   messages: MessageDto[];
   hasMoreMessages: boolean;
   activeRun: RunSummaryDto | null;
+  latestRun: RunSummaryDto | null;
 }
 
 export interface AddMessageInput {

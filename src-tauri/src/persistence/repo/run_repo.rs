@@ -11,6 +11,7 @@ struct RunRow {
     run_mode: String,
     status: String,
     model_id: Option<String>,
+    error_message: Option<String>,
     started_at: String,
 }
 
@@ -91,7 +92,7 @@ pub async fn find_active_by_thread(
     thread_id: &str,
 ) -> Result<Option<RunSummaryDto>, AppError> {
     let row = sqlx::query_as::<_, RunRow>(
-        "SELECT id, thread_id, run_mode, status, model_id, started_at
+        "SELECT id, thread_id, run_mode, status, model_id, error_message, started_at
          FROM thread_runs
          WHERE thread_id = ?
            AND status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled')
@@ -108,6 +109,7 @@ pub async fn find_active_by_thread(
         run_mode: r.run_mode,
         status: r.status,
         model_id: r.model_id,
+        error_message: r.error_message,
         started_at: r.started_at,
     }))
 }
@@ -118,7 +120,7 @@ pub async fn find_latest_by_thread(
     thread_id: &str,
 ) -> Result<Option<RunSummaryDto>, AppError> {
     let row = sqlx::query_as::<_, RunRow>(
-        "SELECT id, thread_id, run_mode, status, model_id, started_at
+        "SELECT id, thread_id, run_mode, status, model_id, error_message, started_at
          FROM thread_runs
          WHERE thread_id = ?
          ORDER BY started_at DESC
@@ -134,6 +136,7 @@ pub async fn find_latest_by_thread(
         run_mode: r.run_mode,
         status: r.status,
         model_id: r.model_id,
+        error_message: r.error_message,
         started_at: r.started_at,
     }))
 }

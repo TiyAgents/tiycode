@@ -76,6 +76,11 @@ type SurfaceHelperEntry = {
   totalToolCalls: number;
 };
 
+type SurfaceRuntimeError = {
+  message: string;
+  runId: string;
+};
+
 type InitialPromptRequest = {
   id: string;
   prompt: string;
@@ -140,6 +145,26 @@ function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
     default:
       return "completed";
   }
+}
+
+function getLatestVisibleRun(snapshot: ThreadSnapshotDto) {
+  return snapshot.activeRun ?? snapshot.latestRun;
+}
+
+function getSnapshotRuntimeError(snapshot: ThreadSnapshotDto): SurfaceRuntimeError | null {
+  const run = getLatestVisibleRun(snapshot);
+  if (!run?.errorMessage) {
+    return null;
+  }
+
+  if (run.status !== "failed" && run.status !== "denied") {
+    return null;
+  }
+
+  return {
+    message: run.errorMessage,
+    runId: run.id,
+  };
 }
 
 function buildPromptText(message: PromptInputMessage) {
@@ -313,6 +338,7 @@ export function RuntimeThreadSurface({
   const [planArtifact, setPlanArtifact] = useState<unknown>(null);
   const [queueArtifact, setQueueArtifact] = useState<unknown>(null);
   const [reasoning, setReasoning] = useState("");
+  const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
   const [runState, setRunState] = useState<RunState>("idle");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
@@ -323,6 +349,7 @@ export function RuntimeThreadSurface({
       setMessages([]);
       setLoadError(null);
       setLoading(false);
+      setRuntimeError(null);
       setRunState("idle");
       setSnapshotReady(true);
       onRunStateChange?.("idle");
@@ -336,6 +363,7 @@ export function RuntimeThreadSurface({
       const snapshot = await threadLoad(threadId);
       const nextState = mapSnapshotToRunState(snapshot);
       setMessages(snapshot.messages.map(mapSnapshotMessage));
+      setRuntimeError(getSnapshotRuntimeError(snapshot));
       setRunState(nextState);
       setSnapshotReady(true);
       onRunStateChange?.(nextState);
@@ -356,6 +384,7 @@ export function RuntimeThreadSurface({
     setPlanArtifact(null);
     setQueueArtifact(null);
     setReasoning("");
+    setRuntimeError(null);
     setRunState("idle");
     setSnapshotReady(false);
     setTools([]);
@@ -543,6 +572,10 @@ export function RuntimeThreadSurface({
       setRunState(state);
       onRunStateChange?.(state);
 
+      if (state === "running" || state === "waiting_approval") {
+        setRuntimeError(null);
+      }
+
       if (state === "running") {
         return;
       }
@@ -552,7 +585,15 @@ export function RuntimeThreadSurface({
       }
     };
 
-    stream.onError = (message) => {
+    stream.onError = (message, runId) => {
+      if (runId) {
+        setRuntimeError({
+          message,
+          runId,
+        });
+        return;
+      }
+
       setComposerError(message);
     };
 
@@ -591,6 +632,7 @@ export function RuntimeThreadSurface({
     }
 
     setComposerError(null);
+    setRuntimeError(null);
     setPlanArtifact(null);
     setQueueArtifact(null);
     setReasoning("");
@@ -624,7 +666,8 @@ export function RuntimeThreadSurface({
     runState === "running" || runState === "waiting_approval" ? "streaming" : "ready";
   const activeHelpersCount = helpers.filter((entry) => entry.status === "pending").length;
   const hasRuntimeArtifacts =
-    Boolean(reasoning)
+    Boolean(runtimeError)
+    || Boolean(reasoning)
     || Boolean(planArtifact)
     || Boolean(queueArtifact)
     || helpers.length > 0
@@ -894,6 +937,20 @@ export function RuntimeThreadSurface({
                       </ToolContent>
                     </Tool>
                   ))}
+                </MessageContent>
+              </Message>
+            ) : null}
+
+            {runtimeError ? (
+              <Message className="max-w-full" from="assistant">
+                <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                  <div className="rounded-2xl border border-app-danger/25 bg-app-danger/8 px-4 py-3 text-sm text-app-danger">
+                    <div className="flex items-center gap-2 font-medium">
+                      <AlertCircleIcon className="size-4" />
+                      Last run failed
+                    </div>
+                    <p className="mt-2 whitespace-pre-wrap leading-6 text-app-danger/90">{runtimeError.message}</p>
+                  </div>
                 </MessageContent>
               </Message>
             ) : null}

@@ -10,6 +10,8 @@ mod test_helpers;
 
 use sqlx::Row;
 
+use tiy_agent_lib::core::thread_manager::ThreadManager;
+
 // =========================================================================
 // T1.4.1 — Thread CRUD
 // =========================================================================
@@ -290,6 +292,37 @@ async fn test_thread_snapshot_assembly() {
         .unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].get::<String, _>("status"), "completed");
+}
+
+#[tokio::test]
+async fn test_thread_snapshot_includes_latest_failed_run_error() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-fail", "/tmp/fail").await;
+    test_helpers::seed_thread(&pool, "t-fail", "ws-fail").await;
+    test_helpers::seed_message(&pool, "m-f1", "t-fail", "user", "Q").await;
+
+    sqlx::query(
+        "INSERT INTO thread_runs (id, thread_id, run_mode, status, error_message)
+         VALUES ('r-fail', 't-fail', 'default', 'failed', 'Upstream API timeout')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let manager = ThreadManager::new(pool);
+    let snapshot = manager.load("t-fail", None, None).await.unwrap();
+
+    assert!(
+        snapshot.active_run.is_none(),
+        "failed runs should not be treated as active"
+    );
+    let latest_run = snapshot.latest_run.expect("latest run should be returned");
+    assert_eq!(latest_run.id, "r-fail");
+    assert_eq!(latest_run.status, "failed");
+    assert_eq!(
+        latest_run.error_message.as_deref(),
+        Some("Upstream API timeout")
+    );
 }
 
 // =========================================================================

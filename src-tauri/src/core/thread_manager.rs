@@ -97,12 +97,14 @@ impl ThreadManager {
             .collect();
 
         let active_run = run_repo::find_active_by_thread(&self.pool, id).await?;
+        let latest_run = run_repo::find_latest_by_thread(&self.pool, id).await?;
 
         Ok(ThreadSnapshotDto {
             thread: ThreadSummaryDto::from(thread),
             messages,
             has_more_messages: has_more,
             active_run,
+            latest_run,
         })
     }
 

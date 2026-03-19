@@ -140,6 +140,7 @@ pub struct RunSummaryDto {
     pub run_mode: String,
     pub status: String,
     pub model_id: Option<String>,
+    pub error_message: Option<String>,
     pub started_at: String,
 }
 
@@ -154,6 +155,7 @@ pub struct ThreadSnapshotDto {
     pub messages: Vec<MessageDto>,
     pub has_more_messages: bool,
     pub active_run: Option<RunSummaryDto>,
+    pub latest_run: Option<RunSummaryDto>,
 }
 
 // ---------------------------------------------------------------------------
