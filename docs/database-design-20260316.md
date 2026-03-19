@@ -203,34 +203,53 @@ CREATE INDEX idx_runs_status ON thread_runs(status)
 
 **设计说明**：
 
-- `effective_model_plan_json` 在 run 创建时冻结，包含 primary/auxiliary/lightweight 三层模型映射
+- `effective_model_plan_json` 在 run 创建时冻结，包含 primary/helper/lite 三层模型映射以及运行时工具画像
 - `execution_strategy` 仅当从 plan run 转入 default run 时有值
 - 活跃 run 索引用于快速检测"同一线程是否存在正在运行的 run"
 - 应用启动时检查无 `finished_at` 的 run，标记为 `interrupted`
 
 ---
 
-### 4.5 run_subtasks — SubAgent 子任务
+### 4.5 run_helpers — HelperAgent 摘要
 
 ```sql
-CREATE TABLE run_subtasks (
+CREATE TABLE run_helpers (
     id              TEXT PRIMARY KEY,           -- UUID v7
     run_id          TEXT NOT NULL REFERENCES thread_runs(id),
     thread_id       TEXT NOT NULL REFERENCES threads(id),
-    subtask_type    TEXT NOT NULL,              -- subagent | auxiliary_summary | auxiliary_seed
-    role            TEXT NOT NULL DEFAULT 'auxiliary', -- primary | auxiliary | lightweight
+    helper_kind     TEXT NOT NULL,              -- scout | planner | reviewer | custom
+    parent_tool_call_id TEXT,                   -- 触发该 helper 的父工具调用（可空）
+    model_role      TEXT NOT NULL DEFAULT 'assistant', -- assistant | lite
     provider_id     TEXT,
     model_id        TEXT,
-    status          TEXT NOT NULL DEFAULT 'created', -- created | running | completed | failed
+    status          TEXT NOT NULL DEFAULT 'created', -- created | running | completed | failed | interrupted | cancelled
+    input_summary   TEXT,
+    output_summary  TEXT,
+    error_summary   TEXT,
     started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    finished_at     TEXT,
-    summary         TEXT,                       -- 子任务执行摘要
-    error_message   TEXT
+    finished_at     TEXT
 );
 
-CREATE INDEX idx_subtasks_run ON run_subtasks(run_id);
-CREATE INDEX idx_subtasks_thread ON run_subtasks(thread_id);
+CREATE INDEX idx_run_helpers_run ON run_helpers(run_id);
+CREATE INDEX idx_run_helpers_thread ON run_helpers(thread_id);
 ```
+
+**设计说明**：
+
+- `run_helpers` 只记录 helper 执行摘要，不保存完整 helper transcript
+- helper 作为 parent run 的内部编排单元存在，不占用新的 thread run
+- `parent_tool_call_id` 用于将 helper 与触发它的 orchestration tool 关联
+
+**迁移策略**：
+
+- 若当前环境仅存在开发态或未正式启用的 `run_subtasks` 数据，可采用 destructive migration：
+  新增 `run_helpers` 后停止写入 `run_subtasks`
+- 若已有需保留的数据，迁移时执行字段映射：
+  - `run_subtasks.subtask_type -> run_helpers.helper_kind`
+  - `run_subtasks.role -> run_helpers.model_role`
+  - `run_subtasks.summary -> run_helpers.output_summary`
+  - `run_subtasks.error_message -> run_helpers.error_summary`
+- 迁移完成后，`run_subtasks` 仅保留兼容读取窗口，后续版本删除
 
 ---
 
@@ -540,7 +559,7 @@ erDiagram
     threads ||--o{ terminal_sessions : "binds"
     threads ||--o{ thread_summaries : "derives"
     thread_runs ||--o{ messages : "produces"
-    thread_runs ||--o{ run_subtasks : "spawns"
+    thread_runs ||--o{ run_helpers : "summarizes"
     thread_runs ||--o{ tool_calls : "triggers"
     thread_runs ||--o{ audit_events : "records"
     tool_calls ||--o{ audit_events : "references"
@@ -653,7 +672,7 @@ migrations/
 | `threads` | `threads` | 一致 |
 | `messages` | `messages` | 扩展了 `run_id` nullable 关联 |
 | `thread_runs` | `thread_runs` | 扩展了 `execution_strategy`、`source_plan_run_id` |
-| `run_subtasks` | `run_subtasks` | 一致 |
+| `run_helpers` | `run_helpers` | helper 摘要替代旧 `run_subtasks` |
 | `tool_calls` | `tool_calls` | 扩展了 `policy_verdict_json` |
 | `settings` | `settings` + `policies` | 拆分为通用设置和权限策略两表 |
 | `marketplace_items` | `marketplace_items` | 扩展了 `name`、`description`、`metadata_json` |

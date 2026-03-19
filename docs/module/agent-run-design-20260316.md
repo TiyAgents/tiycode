@@ -2,178 +2,128 @@
 
 ## Summary
 
-This document defines the `AgentRun` subsystem for Tiy Agent.
+This document defines the `AgentRun` subsystem for Tiy Agent after removing the
+sidecar architecture.
 
-An agent run is one execution attempt of the agent against a thread snapshot. It starts when the user submits work and ends when the agent completes, fails, is denied by policy, or is interrupted.
+An agent run is one parent execution attempt against a thread snapshot. It is
+owned by Rust `AgentRunManager`, executed by the built-in Rust runtime layer,
+and powered by `tiy-core::agent::Agent` as the single-agent kernel.
 
-Within one parent run, the sidecar may orchestrate one or more `SubAgent` helper tasks using the `Agent Profile` model plan:
+The runtime model is:
 
-- the primary model handles the main task loop
-- the auxiliary model handles `SubAgent`-style helper work
-- the lightweight model handles cheap classification, routing, or formatting steps
+- `AgentRunManager` owns durable run lifecycle and persistence
+- `BuiltInAgentRuntime` owns desktop-specific execution orchestration
+- `AgentSession` owns one active parent run in memory
+- `HelperAgentOrchestrator` runs internal helper tasks under the parent run
+- `tiy-core` owns the single-agent loop, streaming, tool hooks, and queues
 
-Each run also carries an explicit `run_mode`:
-
-- `default` for normal execution-oriented collaboration
-- `plan` for planning-first collaboration
-
-The run subsystem exists to coordinate:
-
-- run creation and cancellation
-- sidecar session dispatch
-- tool and approval pauses
-- event ordering and persistence
-- frontend streaming updates
-
-The run subsystem is owned by Rust `AgentRunManager`. The sidecar executes the agent loop, but Rust remains the source of truth for lifecycle and status.
+Helper-agent work is an internal orchestration capability. In v1 it is folded
+back into the parent thread as collapsed status and result artifacts rather than
+exposed as standalone visible child threads.
 
 ## Goals
 
-- enforce at most one active run per thread
-- allow concurrent runs across different threads
-- make run lifecycle explicit and durable
-- support streaming events from sidecar to frontend through Rust
-- support cancellation and interruption recovery
-- keep tool and approval pauses inside one coherent run state machine
-- support `SubAgent` helper execution without breaking the one-active-run-per-thread rule
-- freeze the effective `Agent Profile` model plan at run start for reproducibility
-- support `Plan` mode as a first-class run behavior
+- enforce at most one active parent run per thread
+- keep Rust as the authoritative source of run truth
+- stream parent run events to the frontend through one stable event model
+- freeze the effective execution model plan at run start
+- support helper-agent orchestration without creating additional thread runs
+- keep `plan` mode as a first-class run mode
+- make helper-task results auditable without polluting main thread history
 
 ## Non-Goals
 
-- no multiple active runs for the same thread in v1
-- no cross-thread orchestration DAG in v1
-- no frontend-owned run lifecycle
+- no sidecar process lifecycle
 - no direct sidecar-to-frontend event bypass
-
-## Context
-
-The broader architecture separates:
-
-- `Thread`: durable task history
-- `Run`: one execution attempt
-- `ToolCall`: one concrete tool execution inside a run
-
-The PRD also defines `Agent Profile` as a mapping of:
-
-- primary model
-- auxiliary model
-- lightweight model
-
-This means one run is not necessarily a single-model loop. It is a parent execution container that may include internal `SubAgent` child work driven by the profile's auxiliary model.
-
-This separation matters because a user may:
-
-- ask follow-up questions in the same thread
-- retry after a failed run
-- interrupt a run and start a new one later
-- review prior run traces without rewriting thread history
-
-## Requirements
-
-### Functional
-
-- create a new run from the latest thread snapshot
-- dispatch run start to the sidecar
-- ingest sidecar events in order
-- persist run status transitions
-- expose thread stream events to the frontend
-- support tool approval pauses without losing run context
-- support user-driven cancel and system-driven interrupt
-- detect and mark sidecar crash impact on active runs
-- persist the effective model plan chosen from `Agent Profile`
-- track `SubAgent` child execution spans under the parent run
-- persist the selected `run_mode`
-
-### Non-Functional
-
-- local transition to `running` should appear quickly in the UI
-- cancellation should be cooperative first and forceful on timeout
-- event processing must be idempotent
-- one broken run must not block unrelated threads
-- restart recovery should identify incomplete runs deterministically
+- no helper-agent full transcript UI in v1
+- no task-graph scheduler for arbitrary multi-agent DAGs in v1
+- no automatic crash replay of interrupted runs in v1
 
 ## Core Decisions
 
 ### Rust Owns Run Truth
 
-The sidecar may know that a run is executing, but Rust owns:
+Only Rust may decide:
 
 - whether a run exists
-- whether it is currently active
-- whether it is waiting for approval
-- whether it has been cancelled, failed, or interrupted
+- whether it is active
+- whether it is waiting for approval, tool result, or helper completion
+- whether it is cancelling
+- whether it completed, failed, was cancelled, or was interrupted
 
-This prevents lifecycle ambiguity when:
+`tiy-core` events are runtime signals, not lifecycle truth.
 
-- the sidecar crashes
-- a channel disconnects
-- a tool execution outlives a sidecar step
-- the frontend reconnects and needs current truth
+### One Active Parent Run Per Thread
 
-### One Active Run per Thread
-
-This is the simplest model that preserves conversational coherence.
-
-If multiple runs were allowed in the same thread, the system would need:
-
-- interleaved message ownership rules
-- multiple simultaneous approval queues
-- conflicting assistant deltas in one visible thread
-
-That added complexity is not justified for v1.
-
-### Event Ingestion Must Be Idempotent
-
-Sidecar and IPC retries can produce duplicate events. Rust should attach a monotonic `event_seq` or stable `event_id` to each persisted run event and ignore duplicates.
-
-### `SubAgent` Is a Child Execution Unit, Not Another Thread Run
-
-`SubAgent` work belongs inside one parent run.
-
-That means:
-
-- a `SubAgent` does not create a second active run for the same thread
-- a `SubAgent` is tracked as a child execution span or subtask under the parent run
-- `SubAgent` output may surface in the thread stream, but lifecycle authority remains on the parent run
-
-This preserves the main thread-level invariant:
+The thread invariant remains:
 
 - one thread
 - one active parent run
-- zero or more child `SubAgent` spans inside that run
+- zero or more internal helper tasks
 
-### Effective Model Plan Is Frozen at Run Start
+Helper-agent work must not consume a second active-run slot for the same
+thread.
 
-The user may edit `Agent Profile` later, but a running execution should not drift halfway through.
+### `AgentSession` Is The Runtime Session Boundary
 
-At run creation time, Rust should persist a snapshot of the effective model plan:
+Each parent run gets one in-memory `AgentSession` that owns:
 
-- primary model mapping
-- auxiliary model mapping
-- lightweight model mapping
+- `run_id`, `thread_id`, `workspace_id`, `run_mode`
+- the main `tiy-core::agent::Agent`
+- the frozen execution config
+- the active tool profile
+- current thread snapshot and optional plan artifact
+- helper orchestration state
+- frontend stream sender
 
-The sidecar consumes that plan for the lifetime of the run. A later follow-up prompt may use a different plan in a new run.
+`AgentSession` is not a database entity. It is the runtime session container for
+one parent run.
 
-### `Plan` Mode Is a Real Run Mode
+### Helper-Agent Is An Internal Child Execution Unit
 
-`Plan` should not exist only as an AI Elements rendering block.
+Helper-agent work belongs inside the parent run, not beside it.
 
-Recommended v1 meaning:
+Rust should represent helper work as `HelperTask` records managed by
+`HelperAgentOrchestrator`. The parent agent triggers helper work through
+runtime-owned internal orchestration tools such as:
 
-- `default` mode is the normal execution-oriented agent behavior
-- `plan` mode focuses on plan generation, refinement, and decomposition
-- `plan` mode may inspect context and use internal tools
-- mutating system tools should be blocked or explicitly escalated while the run remains in `plan` mode
+- `delegate_research`
+- `delegate_plan_review`
+- `delegate_code_review`
 
-From `plan` to execution, the product should support two explicit launch strategies:
+These tools do not directly perform privileged system work. They hand execution
+to the orchestrator, which spins up a helper `tiy-core` agent or standalone loop
+with a scoped prompt, model, and tool profile.
 
-- `continue_in_thread`: directly start a new `default` run in the current thread
-- `clean_context_from_plan`: keep history durable, but build a reduced execution snapshot from the approved plan before starting a new `default` run
+### Effective Model Plan Is Frozen At Run Start
 
-Important rule:
+The `Agent Profile` model mapping is still resolved and frozen when a run
+starts. The persisted runtime model plan is:
 
-- "clean context" means cleaning the execution prompt window, not deleting persisted thread history
+- `primary_model` for the parent agent
+- `helper_default_model` for helper-agent tasks
+- `lite_model` for lightweight internal tasks when needed
+- `thinking_level`
+- `transport`
+- `security_profile`
+- `tool_profile_by_mode`
+
+The runtime creates one concrete `Model` per concrete agent execution. It does
+not rely on sidecar-style multi-role routing inside a single loop.
+
+### `Plan` Mode Is A Runtime-Owned Constraint Profile
+
+`plan` is implemented by Rust runtime configuration, not by a special sidecar
+behavior.
+
+When `run_mode = plan`, `AgentSession` changes:
+
+- the visible tool set
+- the hidden runtime context instructions
+- the helper-agent tool ceiling
+
+`tiy-core` still sees a normal agent loop, but the loop receives a read-only
+planning-oriented runtime configuration.
 
 ## High-Level Architecture
 
@@ -181,19 +131,22 @@ Important rule:
 flowchart LR
   UI["React Thread UI"] --> BRIDGE["Thread Stream Bridge"]
   BRIDGE --> ARM["AgentRunManager (Rust)"]
-  PROFILE["Agent Profile Snapshot"] --> ARM
-  ARM --> TM["ThreadManager"]
-  ARM --> TG["ToolGateway"]
+  ARM --> RUNTIME["BuiltInAgentRuntime"]
+  RUNTIME --> SESSION["AgentSession"]
+  SESSION --> KERNEL["tiy-core::agent::Agent"]
+  SESSION --> HELPER["HelperAgentOrchestrator"]
+  SESSION --> TG["ToolGateway"]
   ARM --> DB["SQLite"]
-  ARM <-->|JSON-RPC / NDJSON| SC["TS Agent Sidecar"]
-  SC --> MAIN["Primary Model"]
-  SC --> SUB["Auxiliary Model / SubAgent Tasks"]
-  SC --> LIGHT["Lightweight Model"]
+  KERNEL --> MAIN["Primary Model"]
+  HELPER --> AUX["Helper Model"]
+  HELPER --> LITE["Lite Model"]
 ```
 
 ## Data Model
 
-### Primary Table
+### Parent Run Table
+
+`thread_runs` remains the parent-run source of truth:
 
 ```text
 thread_runs
@@ -210,31 +163,36 @@ thread_runs
   error_message
 ```
 
-`provider_id` and `model_id` may represent the primary model path for quick lookup, while `effective_model_plan_json` stores the frozen primary/auxiliary/lightweight routing used by that run.
+Notes:
 
-Recommended additional run metadata:
+- `provider_id` and `model_id` should continue to represent the primary model
+  path for quick lookup
+- `effective_model_plan_json` now stores Rust runtime execution configuration,
+  not a payload for a sidecar session
 
-- `execution_strategy nullable`
-- `source_plan_run_id nullable`
-- `plan_artifact_ref nullable`
+### Helper Run Summary Table
 
-### Child Execution Table
+Add `run_helpers` for collapsed helper-task persistence:
 
 ```text
-run_subtasks
+run_helpers
   id
   run_id
   thread_id
-  subtask_type
-  role
+  helper_kind
+  parent_tool_call_id nullable
+  status
+  model_role
   provider_id
   model_id
-  status
+  input_summary
+  output_summary
+  error_summary
   started_at
   finished_at
-  summary
-  error_message
 ```
+
+This table stores helper execution summaries, not full helper transcripts.
 
 ### Recommended Runtime Fields
 
@@ -242,16 +200,12 @@ run_subtasks
 pub struct ActiveRun {
     pub run_id: String,
     pub thread_id: String,
-    pub profile_id: String,
+    pub workspace_id: String,
     pub run_mode: RunMode,
-    pub execution_strategy: Option<ExecutionStrategy>,
-    pub session_key: String,
     pub status: RunStatus,
     pub started_at: DateTime<Utc>,
-    pub primary_model_id: String,
-    pub last_event_seq: u64,
-    pub pending_tool_call_id: Option<String>,
-    pub active_subagent_count: u32,
+    pub waiting_state: WaitingState,
+    pub active_helper_count: u32,
     pub cancel_requested: bool,
 }
 
@@ -260,286 +214,209 @@ pub enum RunMode {
     Plan,
 }
 
-pub enum ExecutionStrategy {
-    ContinueInThread,
-    CleanContextFromPlan,
+pub enum WaitingState {
+    None,
+    Streaming,
+    ToolResult,
+    Approval,
+    Helper,
 }
 
 pub enum RunStatus {
     Created,
-    Dispatching,
     Running,
     WaitingApproval,
     WaitingToolResult,
     Cancelling,
     Completed,
     Failed,
-    Denied,
-    Interrupted,
     Cancelled,
+    Interrupted,
 }
 ```
 
-## State Machine
+## Parent Run State Machine
 
 ```mermaid
 stateDiagram-v2
   [*] --> Created
-  Created --> Dispatching: snapshot prepared
-  Dispatching --> Running: sidecar accepted
-  Running --> WaitingApproval: tool requires approval
-  WaitingApproval --> Running: approval granted
-  WaitingApproval --> Denied: approval denied
-  Running --> WaitingToolResult: executor in progress
-  WaitingToolResult --> Running: tool result returned
-  Running --> Cancelling: user cancel
-  WaitingApproval --> Cancelling: user cancel
-  WaitingToolResult --> Cancelling: user cancel
-  Cancelling --> Cancelled: graceful stop
-  Running --> Completed: sidecar completed
-  Running --> Failed: sidecar reported failure
-  Dispatching --> Interrupted: sidecar unavailable
-  Running --> Interrupted: crash or disconnect
+  Created --> Running
+  Running --> WaitingApproval
+  Running --> WaitingToolResult
+  Running --> Cancelling
+  Running --> Completed
+  Running --> Failed
+  Running --> Interrupted
+  WaitingApproval --> Running
+  WaitingToolResult --> Running
+  WaitingApproval --> Cancelling
+  WaitingToolResult --> Cancelling
+  Cancelling --> Cancelled
+  Cancelling --> Interrupted
 ```
 
-## `SubAgent` Execution Model
+Helper execution is an internal sub-state of `Running`, not a top-level
+`RunStatus`.
 
-`SubAgent` execution is a child workflow inside `Running`, not a new top-level `RunStatus`.
+## Helper Execution Model
 
-Recommended rules:
+Helper execution rules:
 
-- the parent run remains `Running` while child `SubAgent` spans execute
-- each child span is recorded in `run_subtasks`
-- the sidecar may emit `subagent_started`, `subagent_completed`, and `subagent_failed`
-- `SubAgent` recursion should be bounded by policy or runtime configuration
-- child failures may be either recoverable or terminal, depending on the parent planner's intent
+- helper tasks run under one parent run
+- helper tasks inherit the parent `run_mode` ceiling
+- helper tasks do not create new thread-level active runs
+- helper results are folded into the parent thread as collapsed status artifacts
+- helper full transcripts stay out of `messages` in v1
 
-This gives visibility into helper-model work without exploding the main run state machine.
+Recommended helper event surface for the frontend:
 
-## `Plan` Mode Model
+- `helper_started`
+- `helper_progress`
+- `helper_completed`
+- `helper_failed`
 
-`Plan` mode is orthogonal to `RunStatus`.
+## Tool Executor Bridge
+
+`AgentSession` should register `ToolGateway` as the `tiy-core` tool executor
+bridge through `set_tool_executor(...)`.
+
+Recommended execution contract:
+
+1. `tiy-core` selects a tool call
+2. `AgentSession` executor callback resolves the runtime tool profile
+3. privileged tools are forwarded to `ToolGateway`
+4. `ToolGateway` may execute immediately, deny, or wait for approval
+5. the callback maps the final outcome into `AgentToolResult`
+6. `tiy-core` resumes the same loop with the resulting `ToolResultMessage`
+
+### Approval wait semantics
+
+Approval waits should suspend the loop by suspending the tool executor future.
 
 That means:
 
-- a run may be `run_mode = Plan` and `status = Running`
-- tool waits and approval waits still use the same lifecycle states
-- mode changes allowed behavior and expected output shape, not whether a run exists
+- parent run status becomes `WaitingApproval`
+- no separate side-channel resume protocol is required
+- approval resolution fulfills the pending executor future
+- the same loop turn then continues normally
 
-Recommended v1 expectations:
+This makes approval a Rust runtime concern rather than a custom protocol concern.
 
-- `plan_updated` and `queue_updated` become the primary structured outputs
-- read-only inspection tools may be used when policy allows
-- mutating tools should be denied or escalated while still in `Plan` mode
-- the user may launch execution either with full current-thread context or with a clean execution snapshot derived from the approved plan
+## Run Modes
 
-### Plan-to-Execute Strategies
+### `default`
 
-#### 1. Continue in Current Thread
+- full tool surface, subject to normal policy and approval
+- helper-agent orchestration allowed
+- execution-oriented collaboration
 
-Use when:
+### `plan`
 
-- the planning conversation remains useful execution context
-- the user wants continuity in one thread
+- read-only planning-oriented tool profile
+- planning context injected by `AgentSession`
+- helper tasks inherit read-only limits
+- mutating tools denied or explicitly escalated through policy
 
-Behavior:
+### Helper Profile Constraints
 
-- start a new `default` run in the same thread
-- keep normal thread snapshot rules
-- include the approved or latest plan artifact in execution context
+Recommended v1 helper profiles:
 
-#### 2. Clean Context From Plan
-
-Use when:
-
-- the planning conversation is noisy
-- the user wants execution to start from the plan itself, not from all exploratory discussion
-
-Behavior:
-
-- start a new `default` run
-- do not delete any persisted thread history
-- derive a reduced execution snapshot centered on:
-  - approved plan artifact
-  - selected task queue
-  - essential constraints
-  - workspace context
-  - optional execution brief distilled from the planning run
-
-This is context compaction, not destructive reset.
-
-## Plan Artifact and Execution Seed
-
-To support reliable transition from planning to execution, Rust should persist or derive a stable plan artifact from the `plan` run.
-
-Recommended contents:
-
-- ordered task list
-- assumptions and constraints
-- selected scope or file hints
-- unresolved risks
-- execution notes generated by the planner
-
-When the user chooses `clean_context_from_plan`, Rust should derive an `execution_seed` from this artifact and use that as the main input for the next `default` run.
-
-Recommended structure:
-
-```rust
-pub struct ExecutionSeed {
-    pub goal: String,
-    pub ordered_tasks: Vec<String>,
-    pub constraints: Vec<String>,
-    pub scope_hints: Vec<String>,
-    pub unresolved_risks: Vec<String>,
-    pub execution_brief: Option<String>,
-}
-```
+- `helper_scout`
+- `helper_planner`
+- `helper_reviewer`
 
 Rules:
 
-- `execution_seed` is a Rust-owned structured artifact, not a sidecar-only prompt string
-- sidecar may help synthesize the seed, but Rust must validate shape before persisting
-- if structured derivation fails, `clean_context_from_plan` must fall back to `continue_in_thread` or an explicit degraded truncation path
-- execution startup must never block indefinitely on summarization or plan post-processing
+- all helper profiles remain read-only in `plan` mode
+- helpers must not open independent approval UI in v1
+- if a helper reaches an approval-required or mutating path, the runtime should
+  terminate that helper step and fold back an escalation-needed summary to the
+  parent run
+- helper concurrency must be capped at the session layer independently of
+  `tiy-core` per-agent `max_parallel_tool_calls`
 
-## Run Ownership Boundaries
+### Plan To Execution Transitions
 
-### Frontend Owns
+Support two launch strategies:
 
-- visible rendering of run state
-- subscribe and unsubscribe behavior for thread stream
-- user actions such as cancel and approval response
-- mode selection when starting a run
-- execution-start strategy selection when launching from a plan
+- `continue_in_thread`
+- `clean_context_from_plan`
 
-### Rust Owns
+Important rule:
 
-- run creation
-- active-run exclusivity checks
-- `run_mode` persistence
-- plan-artifact and execution-seed persistence or derivation
-- event ingestion and persistence
-- transition validation
-- crash recovery
-- cancellation orchestration
+- "clean context" only rebuilds the execution input window
+- it does not delete or rewrite persisted thread history
 
-### Sidecar Owns
+## End-To-End Flow
 
-- agent loop execution
-- main-agent and `SubAgent` orchestration inside one parent run
-- plan-generation behavior when `run_mode = Plan`
-- reduced-context execution behavior when `execution_strategy = CleanContextFromPlan`
-- provider invocation
-- tool selection
-- structured event emission
+### Normal Run
 
-The sidecar does not own authoritative run state.
+1. frontend submits prompt with `run_mode`
+2. Rust persists the user message and creates a parent run
+3. `AgentRunManager` freezes the effective runtime model plan
+4. `BuiltInAgentRuntime` creates an `AgentSession`
+5. `AgentSession` starts the main `tiy-core` loop
+6. tool requests go through `ToolGateway` and `PolicyEngine`
+7. helper requests go through `HelperAgentOrchestrator`
+8. final run state is persisted by `AgentRunManager`
 
-## Key Flows
+### Helper Task Within A Parent Run
 
-### Start Run
+1. parent agent invokes an internal orchestration tool
+2. `AgentSession` asks `HelperAgentOrchestrator` to start a helper task
+3. orchestrator resolves helper model and tool profile from the frozen plan
+4. helper executes as a scoped `tiy-core` agent or standalone loop
+5. helper summary is persisted in `run_helpers`
+6. helper status and result are folded into the parent thread stream
+7. parent agent continues with the folded helper result as context
 
-1. frontend submits user prompt
-2. Rust persists the user message
-3. `AgentRunManager` checks no active run exists for the thread
-4. frontend or backend selects `run_mode`
-5. Rust resolves the effective `Agent Profile` model plan and snapshots it
-6. Rust creates `thread_runs` record with `Created`
-7. Rust builds thread snapshot
-8. Rust sends `agent.run.start`
-9. sidecar acknowledges and emits `agent.run.started`
-10. Rust marks the run `Running` and opens thread stream updates
+### Cancellation
 
-### `Plan` Mode Run
+1. frontend requests cancellation
+2. Rust marks the parent run as `Cancelling`
+3. `AgentSession` aborts the main `tiy-core` agent
+4. helper orchestrator propagates the same cancellation signal to active helpers
+5. run settles as `Cancelled` or `Interrupted`
 
-1. frontend starts a run with `run_mode = Plan`
-2. Rust persists the run mode on the run record
-3. sidecar enters planning-first behavior
-4. sidecar emits `plan_updated`, `queue_updated`, and reasoning events as primary outputs
-5. if a mutating tool is requested, policy checks the run mode before execution
-6. the user may continue refining the plan or later start a new `default` mode run for execution
+### Cancellation Contract
 
-### Execute Plan in Current Thread
+`tiy-core` already provides:
 
-1. user confirms execution from an existing plan
-2. frontend starts a new `default` run with `execution_strategy = ContinueInThread`
-3. Rust reuses the normal thread snapshot rules
-4. Rust ensures the approved plan artifact is included in the next execution context
-5. sidecar starts normal execution in the same thread
+- `Agent.abort()`
+- `AbortSignal`
+- abort-aware provider requests
+- abort-aware tool execution and tool timeout handling
 
-### Execute From Plan With Clean Context
+Tiy Desktop must add:
 
-1. user confirms execution with clean context
-2. frontend starts a new `default` run with `execution_strategy = CleanContextFromPlan`
-3. Rust derives an `execution_seed` from the plan artifact
-4. Rust builds a reduced execution snapshot instead of the normal recent-message window
-5. sidecar starts execution from the reduced plan-centric context
-6. full thread history remains durable and queryable, but is not injected wholesale into the new execution prompt
+- `ToolGateway` executor cancellation handling
+- cancellation propagation to active helpers
+- timeout and cleanup policy while a run remains in `Cancelling`
 
-### `SubAgent` Helper Task Within a Run
+## Failure Recovery
 
-1. the sidecar determines the parent run needs helper work
-2. the sidecar selects the auxiliary model from the frozen model plan
-3. the sidecar emits `agent.subagent.started`
-4. Rust persists a `run_subtasks` child span
-5. helper output returns to the parent agent loop
-6. the sidecar emits `agent.subagent.completed` or `agent.subagent.failed`
-7. Rust updates the child span and forwards the event to the frontend thread stream if relevant
+The recovery unit is now the built-in runtime session, not a sidecar process.
 
-### Tool Pause and Resume
+Recommended v1 behavior:
 
-1. sidecar emits `agent.tool.requested`
-2. Rust routes the request through `ToolGateway`
-3. if approval is required, run becomes `WaitingApproval`
-4. frontend shows approval UI
-5. user approves or denies
-6. Rust resumes the run with tool result or denial result
+- if app shutdown or runtime failure interrupts a run, mark it `Interrupted`
+- active helper tasks are marked `Interrupted` or `Failed`
+- do not attempt automatic replay
+- let the user retry from thread history or a persisted plan artifact
 
-### Cancel Run
+## Testing
 
-1. frontend calls `thread_cancel_run`
-2. Rust marks `Cancelling`
-3. Rust sends cancel to sidecar
-4. running executors are asked to stop if cancellable
-5. if sidecar exits gracefully, mark `Cancelled`
-6. if timeout expires, mark `Interrupted` or `Cancelled` according to final outcome
+Recommended coverage:
 
-### Crash Recovery
-
-1. app boots and checks `thread_runs` without `finished_at`
-2. if sidecar session is gone, mark these runs `Interrupted`
-3. affected threads surface retry affordance in UI
-
-## Event Processing Rules
-
-- every event must include `thread_id`, `run_id`, and event identity
-- Rust must reject events for unknown or already-finished runs
-- message deltas should write to a staged assistant message buffer before completion
-- terminal and tool execution updates should be forwarded as typed thread stream events
-- `SubAgent` child events must include child identity and parent `run_id`
-- events inherit the persisted parent `run_mode`
-- execution-strategy choice is resolved at run start and should not drift mid-run
-- completion is final: once a run is terminal, later duplicate events are ignored
-
-## Failure Modes
-
-| Failure | Impact | Mitigation |
-|---|---|---|
-| duplicate sidecar event | duplicate UI records | idempotent event ingestion keyed by event identity |
-| sidecar crash mid-run | hanging active state | boot-time and runtime interruption detection |
-| tool executor stalls | frozen run | timeout + cancellation path + surfaced error |
-| frontend disconnect | user loses live updates | Rust keeps processing and UI resubscribes from persisted state |
-| approval never answered | run appears stuck | explicit `WaitingApproval` with visible timeout or reminder strategy later |
-| auxiliary model unavailable | helper work cannot start | fail or degrade child span according to parent planner policy |
-| runaway subagent fan-out | latency and cost spike | enforce per-run child span count and recursion limits |
-| profile edited mid-run | inconsistent model routing | freeze effective model plan at run creation |
-| plan mode silently mutates workspace | planning contract broken | mode-aware policy restrictions on mutating tools |
-| clean-context launch drops critical constraints | execution starts from incomplete plan | build `execution_seed` from structured plan artifact, not free text alone |
-| users think clean context deletes history | audit and thread continuity confusion | define clean context as snapshot compaction only |
+- runtime event translation from `tiy-core` events to `ThreadStreamEvent`
+- parent run lifecycle and idempotent persistence
+- helper orchestration and folded result behavior
+- plan mode inheritance and policy ceilings
+- cancellation propagation from parent run to helper tasks
 
 ## ADR
 
-### ADR-R1: Rust is the lifecycle authority for runs
+### ADR-AR1: Build Tiy Agent Run On `tiy-core` With A Rust-Owned Runtime Layer
 
 #### Status
 
@@ -547,38 +424,26 @@ Accepted
 
 #### Context
 
-Runs cross multiple boundaries: frontend interactions, sidecar agent loop, tool execution, approvals, and persistence. A single authority is needed to prevent split-brain state.
+The old design depended on a sidecar to host the agent loop and helper-task
+orchestration. Current `tiy-core` capabilities already cover the single-agent
+kernel concerns needed by the desktop product.
 
 #### Decision
 
-Make `AgentRunManager` in Rust the authoritative run lifecycle owner. The sidecar becomes an execution engine that emits structured events, not the lifecycle database.
+Use `tiy-core` as the single-agent kernel and add a Rust-owned built-in runtime
+layer for session orchestration, helper delegation, event folding, and run-mode
+enforcement.
 
 #### Consequences
 
-##### Positive
+Positive:
 
-- better crash recovery
-- stable UI resubscription behavior
-- clearer cancellation and approval handling
+- simpler lifecycle ownership
+- fewer protocol boundaries
+- helper orchestration becomes auditable inside Rust
+- sidecar-specific failure modes disappear
 
-##### Negative
+Negative:
 
-- Rust event handling layer becomes more complex
-- more transition validation is required in the core
-
-##### Alternatives Considered
-
-- lifecycle owned by the sidecar
-- lifecycle derived entirely in the frontend
-
-Both were rejected because they weaken recovery and make policy-driven execution harder to reason about.
-
-## Implementation Notes
-
-- place lifecycle logic in `src-tauri/src/core/agent_run_manager.rs`
-- persist status transitions before emitting external stream changes
-- keep active-run registry in memory but rebuild terminal states from SQLite on boot
-- add protocol version checks before accepting sidecar events
-- persist `effective_model_plan_json` and `run_subtasks` for replay and observability
-- persist `run_mode` so planning runs are auditable and replayable
-- add explicit plan-to-execute launch strategy support instead of inferring it from prompt text
+- Tiy must own helper orchestration logic directly
+- multi-agent DAG scheduling remains a future design concern

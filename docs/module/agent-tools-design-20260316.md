@@ -2,62 +2,77 @@
 
 ## Summary
 
-This document centralizes the built-in tool surface supported by Tiy Agent.
+This document defines the built-in tool surface exposed to the Tiy Agent
+runtime after removing the sidecar architecture.
 
-Before this document, tool design was spread across:
+In the new model:
 
-- the high-level architecture document
-- `Tool Gateway + Policy`
-- subsystem-specific documents such as Terminal, Git, and Index
-
-This document provides one place to answer:
-
-1. which tools are built into the core product
-2. which subsystem owns each tool family
-3. how those tools behave under `default` and `plan` run modes
+- tools are registered by Rust runtime
+- `tiy-core` receives those tools as part of the active `AgentSession`
+- privileged execution remains in Rust through `ToolGateway`
+- helper delegation tools are runtime-owned orchestration tools, not sidecar-only
+  internals
 
 ## Goals
 
-- define a centralized built-in tool catalog
-- separate internal agent tools from privileged system tools
-- map tool families to owning subsystems
-- define recommended v1 `Plan` mode restrictions
-- keep extension tools distinct from built-in core tools
+- define one centralized built-in tool catalog
+- separate runtime orchestration tools from privileged system tools
+- map every tool family to its Rust owner
+- define `default` and `plan` mode tool behavior
+- ensure helper-agent orchestration cannot bypass policy
 
 ## Non-Goals
 
 - no exhaustive listing of third-party extension tools
-- no promise that every tool listed here is already fully implemented
-- no replacement for subsystem-level execution details
+- no promise that every listed tool is already implemented
+- no direct embedding of CLI/TUI-only extension mechanisms from `pi-mono`
 
-## Core Principle
+## Core Principles
 
-Built-in tools follow one architectural rule:
+### Tools Are A Rust Runtime Concern
 
-- tools are described in TypeScript
-- privileged execution happens in Rust
+The active tool set seen by `tiy-core` is prepared by `AgentSession`, not by a
+TypeScript sidecar.
 
-Internal tools that do not cross system boundaries may remain in the sidecar.
+### Privileged Execution Stays Behind `ToolGateway`
+
+Any tool that touches the local system must still pass through:
+
+- `ToolGateway`
+- `PolicyEngine`
+- subsystem executors
+- audit persistence
+
+### Internal Orchestration Tools Are First-Class
+
+Some tools do not cross privileged system boundaries but still matter to product
+behavior. These should be modeled explicitly as runtime orchestration tools
+instead of being hidden inside an implementation detail.
 
 ## Tool Categories
 
-### Internal Agent Tools
+### Runtime Orchestration Tools
 
-Owned primarily by the sidecar.
+Owned by:
+
+- `AgentSession`
+- `HelperAgentOrchestrator`
 
 Recommended v1 tools:
 
-- `summarize_context`
-- `rewrite_plan`
-- `rank_candidates`
+- `delegate_research`
+- `delegate_plan_review`
+- `delegate_code_review`
 - `format_final_response`
+- `summarize_helper_result`
 
 Characteristics:
 
-- no direct privileged system access
-- used for reasoning, planning, ranking, and output shaping
+- no direct privileged system execution
+- may create helper tasks or reshape runtime context
+- results are folded back into the parent run
 
-### Workspace and File Tools
+### Workspace And File Tools
 
 Owned by:
 
@@ -106,76 +121,102 @@ Recommended v1 tools:
 - `terminal_write_input`
 - `terminal_restart`
 
-Do not expose:
+Important constraint:
 
-- direct PTY ownership
-- unrestricted raw shell streaming into the sidecar
+- raw PTY ownership remains in Rust
+- helper-agent and parent agent use the same terminal permission boundary
 
-### Marketplace and Extension Tools
+### Marketplace And Extension Tools
 
 Owned by:
 
 - `MarketplaceHost`
-- extension executors through `ToolGateway`
+- MCP / extension executors through `ToolGateway`
 
 Recommended v1 tools:
 
 - `marketplace_install`
 - `mcp_call`
 
-Important rule:
-
-- extension-provided tools are not automatically built-in core tools
-- extension tools still go through the same gateway and policy path
-
 ## Ownership Matrix
 
-| Tool Family | TS Sidecar | Rust Owner | Notes |
+| Tool Family | Runtime Registration | Rust Executor | Notes |
 |---|---|---|---|
-| Internal agent tools | define + execute | none | no privileged boundary crossing |
-| Workspace/file tools | define only | workspace/filesystem executors | path and sandbox checks required |
-| Git tools | define only | `GitManager` | remote actions also depend on network policy |
-| Terminal tools | define only | `TerminalManager` | thread-scoped and policy-gated |
-| Marketplace/MCP tools | define only | `MarketplaceHost` or MCP executor | extension-safe path required |
+| Runtime orchestration | `AgentSession` | runtime internal | helper delegation and result folding |
+| Workspace/file tools | `AgentSession` | filesystem executors | path and sandbox checks required |
+| Git tools | `AgentSession` | `GitManager` | remote actions still depend on policy |
+| Terminal tools | `AgentSession` | `TerminalManager` | thread-scoped and policy-gated |
+| Marketplace/MCP tools | `AgentSession` | `MarketplaceHost` or MCP executor | extension-safe boundary required |
 
 ## `Plan` Mode Tool Matrix
 
-`Plan` mode is a real run mode, not just a UI rendering choice.
-
-Recommended v1 behavior:
+`plan` mode is enforced by runtime tool selection plus policy ceilings.
 
 | Tool Category | `default` Mode | `plan` Mode |
 |---|---|---|
-| Internal agent tools | allowed | allowed |
+| Runtime orchestration tools | allowed | allowed if helper profile is read-only |
 | Read-only file/search tools | allowed by normal policy | allowed by normal policy |
 | Read-only Git tools | allowed by normal policy | allowed by normal policy |
-| Mutating file tools | allowed or approval-gated by policy | denied or explicitly escalated |
-| Mutating Git tools | allowed or approval-gated by policy | denied or explicitly escalated |
-| Terminal write/restart tools | allowed or approval-gated by policy | denied or explicitly escalated |
+| Read-only terminal inspection | allowed by normal policy | allowed by normal policy with command allowlist |
+| Mutating file tools | allowed or approval-gated | denied or explicitly escalated |
+| Mutating Git tools | allowed or approval-gated | denied or explicitly escalated |
+| Terminal write/restart tools | allowed or approval-gated | denied or explicitly escalated |
 | Marketplace/runtime mutation tools | policy-gated | denied or explicitly escalated |
 
-Key idea:
+Key rule:
 
-- `Plan` mode may inspect and reason
-- `Plan` mode should not silently mutate local state
+- helper tasks inherit the same `plan` mode ceiling as the parent run
+- helper delegation must not create an escape hatch around read-only mode
 
-After the user explicitly launches a new `default` execution run from the plan, the tool matrix falls back to normal execution rules. The difference is how the execution context is built:
+## Runtime Tool Selection
 
-- `ContinueInThread`: full current-thread context
-- `CleanContextFromPlan`: reduced plan-centric execution context
+`AgentSession` should select tools from named profiles, not by ad hoc lists
+spread across the codebase.
 
-## Relationship to Other Documents
+Recommended profiles:
 
-- high-level architecture: [technical-architecture-20260316.md](/Users/jorbenzhu/Documents/Workplace/TiyAgents/tiy-desktop/docs/technical-architecture-20260316.md)
-- gateway and approval model: [tool-gateway-policy-design-20260316.md](/Users/jorbenzhu/Documents/Workplace/TiyAgents/tiy-desktop/docs/module/tool-gateway-policy-design-20260316.md)
-- sidecar tool description layer: [agent-sidecar-design-20260316.md](/Users/jorbenzhu/Documents/Workplace/TiyAgents/tiy-desktop/docs/module/agent-sidecar-design-20260316.md)
-- terminal-specific tools: [terminal-design-20260316.md](/Users/jorbenzhu/Documents/Workplace/TiyAgents/tiy-desktop/docs/module/terminal-design-20260316.md)
-- Git-specific behavior: [git-design-20260316.md](/Users/jorbenzhu/Documents/Workplace/TiyAgents/tiy-desktop/docs/module/git-design-20260316.md)
-- search and retrieval backing: [index-design-20260316.md](/Users/jorbenzhu/Documents/Workplace/TiyAgents/tiy-desktop/docs/module/index-design-20260316.md)
+- `default_full`
+- `plan_read_only`
+- `helper_scout`
+- `helper_planner`
+- `helper_reviewer`
+
+Each profile should define:
+
+- visible tool names
+- optional terminal command restrictions
+- helper delegation allowance
+- approval allowance
+- run-mode compatibility
+- max concurrent helper count
+- policy hints for audit and telemetry
+
+Recommended v1 helper-profile rules:
+
+- `helper_scout` / `helper_planner` / `helper_reviewer` are all read-only
+  profiles
+- all three are allowed in `plan` mode only in their read-only form
+- helpers do not open independent approval UI in v1
+- if a helper reaches an approval-required or mutating tool path, runtime should
+  fold back an escalation-needed result to the parent run instead of waiting for
+  helper-local approval
+
+## Relationship To Other Documents
+
+- runtime and run lifecycle:
+  `docs/module/agent-run-design-20260316.md`
+- superseding overall design:
+  `docs/superpowers/specs/2026-03-19-built-in-agent-runtime-tiy-core-design.md`
+- technical architecture:
+  `docs/technical-architecture-20260316.md`
+- terminal-specific behavior:
+  `docs/module/terminal-design-20260316.md`
+- Git-specific behavior:
+  `docs/module/git-design-20260316.md`
 
 ## ADR
 
-### ADR-AT1: Core product tools need a centralized catalog
+### ADR-AT1: Built-In Tools Must Be Registered By Rust Runtime Profiles
 
 #### Status
 
@@ -183,26 +224,23 @@ Accepted
 
 #### Context
 
-Tool behavior naturally lives close to each owning subsystem, but implementation planning also needs a centralized view of the core built-in tool surface and its mode-specific constraints.
+The old tool catalog assumed a sidecar-defined tool description layer. That no
+longer matches the built-in runtime architecture.
 
 #### Decision
 
-Keep execution details in subsystem documents, and use this document as the centralized built-in tool catalog and run-mode matrix for the core product.
+Move tool registration responsibility into Rust `AgentSession` profiles, keep
+privileged execution in `ToolGateway`, and model helper delegation as explicit
+runtime orchestration tools.
 
 #### Consequences
 
-##### Positive
+Positive:
 
-- easier implementation planning
-- clearer distinction between built-in and extension tools
-- clearer `Plan` mode expectations
+- tool availability becomes auditable in one place
+- `plan` mode enforcement becomes clearer
+- helper orchestration is visible in the product model
 
-##### Negative
+Negative:
 
-- cross-document consistency now matters more
-
-## Implementation Notes
-
-- use this document as the source when defining `tool-registry.ts`
-- keep executor behavior in the owning subsystem documents
-- extend the matrix when new built-in tool families are added
+- runtime profile maintenance now lives fully in Rust
