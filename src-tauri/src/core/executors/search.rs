@@ -1,6 +1,5 @@
-use tokio::process::Command;
-
 use super::ToolOutput;
+use crate::core::ripgrep::run_rg;
 use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
 use crate::model::errors::{AppError, ErrorSource};
 
@@ -35,20 +34,19 @@ pub async fn search_repo(
         None => workspace_root.clone(),
     };
 
-    let mut cmd = Command::new("rg");
-    cmd.arg("--json")
-        .arg("--max-count=50")
-        .arg("--max-filesize=1M")
-        .arg(query)
-        .arg(&search_dir)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
+    let mut args = vec![
+        "--json".into(),
+        "--max-count=50".into(),
+        "--max-filesize=1M".into(),
+        query.into(),
+        search_dir.as_os_str().to_os_string(),
+    ];
     if let Some(pattern) = input["filePattern"].as_str() {
-        cmd.arg("--glob").arg(pattern);
+        args.push("--glob".into());
+        args.push(pattern.into());
     }
 
-    match cmd.output().await {
+    match run_rg(args).await {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let results = parse_rg_json(&stdout, &workspace_root);
@@ -67,7 +65,7 @@ pub async fn search_repo(
             success: false,
             result: serde_json::json!({
                 "error": format!("ripgrep execution failed: {e}"),
-                "hint": "Ensure 'rg' (ripgrep) is installed and in PATH",
+                "hint": "Ensure 'rg' (ripgrep) is installed, reachable from a login shell, or bundled with the app",
             }),
         }),
     }

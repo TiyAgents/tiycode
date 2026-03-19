@@ -6,6 +6,7 @@ pub mod executors;
 pub mod git_manager;
 pub mod index_manager;
 pub mod policy_engine;
+pub mod ripgrep;
 pub mod settings_manager;
 pub mod sleep_manager;
 pub mod subagent;

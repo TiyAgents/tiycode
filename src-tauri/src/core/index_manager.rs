@@ -12,9 +12,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::process::Command;
 use tokio::sync::RwLock;
 
+use crate::core::ripgrep::run_rg;
 use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::git::GitFileState;
@@ -377,25 +377,26 @@ impl IndexManager {
 
         let limit = max_results.unwrap_or(50);
 
-        let mut cmd = Command::new("rg");
-        cmd.arg("--json")
-            .arg("--max-count")
-            .arg(limit.to_string())
-            .arg("--max-filesize=1M")
-            .arg(query)
-            .arg(workspace_path)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
+        let mut args = vec![
+            "--json".into(),
+            "--max-count".into(),
+            limit.to_string().into(),
+            "--max-filesize=1M".into(),
+            query.into(),
+            workspace_path.into(),
+        ];
         if let Some(pattern) = file_pattern {
-            cmd.arg("--glob").arg(pattern);
+            args.push("--glob".into());
+            args.push(pattern.into());
         }
 
-        let output = cmd.output().await.map_err(|e| {
+        let output = run_rg(args).await.map_err(|e| {
             AppError::recoverable(
                 ErrorSource::Index,
                 "index.search.rg_failed",
-                format!("ripgrep failed: {e}. Ensure 'rg' is installed."),
+                format!(
+                    "ripgrep failed: {e}. Ensure 'rg' is installed, reachable from a login shell, or bundled with the app."
+                ),
             )
         })?;
 

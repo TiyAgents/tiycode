@@ -2,6 +2,7 @@
 //!
 //! Provides an in-memory SQLite pool with migrations applied,
 //! useful for testing repo and manager layers without touching disk.
+#![allow(dead_code)]
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::str::FromStr;

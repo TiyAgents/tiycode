@@ -75,15 +75,6 @@ pub async fn list_recent(
     Ok(records)
 }
 
-/// Count total messages in a thread (for has_more detection).
-pub async fn count(pool: &SqlitePool, thread_id: &str) -> Result<i64, AppError> {
-    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE thread_id = ?")
-        .bind(thread_id)
-        .fetch_one(pool)
-        .await?;
-    Ok(row.0)
-}
-
 /// Insert a new message (append-only).
 pub async fn insert(pool: &SqlitePool, record: &MessageRecord) -> Result<(), AppError> {
     sqlx::query(
