@@ -108,6 +108,40 @@ fn init_logging() {
         .init();
 }
 
+fn bundled_rg_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "rg.exe"
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        "rg"
+    }
+}
+
+fn configure_ripgrep_path<R: tauri::Runtime>(app: &tauri::App<R>) {
+    let bundled_name = bundled_rg_name();
+    let candidates = [
+        app.path()
+            .executable_dir()
+            .ok()
+            .map(|path| path.join(bundled_name)),
+        app.path()
+            .resource_dir()
+            .ok()
+            .map(|path| path.join(bundled_name)),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.is_file() {
+            std::env::set_var("TIY_RG_PATH", &candidate);
+            tracing::info!(path = %candidate.display(), "configured bundled ripgrep");
+            return;
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let tiy_home = tiy_home();
@@ -200,6 +234,8 @@ pub fn run() {
             commands::terminal::terminal_list,
         ])
         .setup(move |app| {
+            configure_ripgrep_path(app);
+
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
             let db_path = tiy_home.join("db/tiy-agent.db");
 

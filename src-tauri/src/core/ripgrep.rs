@@ -47,6 +47,10 @@ async fn resolve_rg_executable() -> io::Result<PathBuf> {
         return Ok(path);
     }
 
+    if let Some(path) = find_common_install_locations() {
+        return Ok(path);
+    }
+
     if let Some(path) = find_bundled_rg() {
         return Ok(path);
     }
@@ -119,6 +123,42 @@ fn find_bundled_rg() -> Option<PathBuf> {
     bundled_rg_candidates(&current_exe)
         .into_iter()
         .find(|candidate| is_executable_file(candidate))
+}
+
+fn find_common_install_locations() -> Option<PathBuf> {
+    common_install_locations()
+        .into_iter()
+        .find(|candidate| is_executable_file(candidate))
+}
+
+fn common_install_locations() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(PathBuf::from("/opt/homebrew/bin/rg"));
+        candidates.push(PathBuf::from("/usr/local/bin/rg"));
+        candidates.push(PathBuf::from(
+            "/Applications/Codex.app/Contents/Resources/rg",
+        ));
+        candidates.push(PathBuf::from(
+            "/Applications/ChatGPT.app/Contents/Resources/rg",
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        candidates.push(PathBuf::from("/usr/local/bin/rg"));
+        candidates.push(PathBuf::from("/usr/bin/rg"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        candidates.push(PathBuf::from(r"C:\Program Files\ripgrep\rg.exe"));
+        candidates.push(PathBuf::from(r"C:\Program Files (x86)\ripgrep\rg.exe"));
+    }
+
+    candidates
 }
 
 fn bundled_rg_candidates(current_exe: &Path) -> Vec<PathBuf> {
