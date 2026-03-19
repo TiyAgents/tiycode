@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
@@ -209,9 +209,7 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
     }
 }
 
-fn build_provider_options_payload_hook(
-    provider_options_json: Option<&str>,
-) -> Option<OnPayloadFn> {
+fn build_provider_options_payload_hook(provider_options_json: Option<&str>) -> Option<OnPayloadFn> {
     let provider_options = parse_provider_options_value(provider_options_json)?;
 
     Some(Arc::new(move |payload, _model| {
@@ -329,7 +327,9 @@ fn capability_flag_enabled(capabilities_json: Option<&str>, key: &str) -> bool {
 
 fn infer_embedding_model(model_name: &str) -> bool {
     let normalized = model_name.trim().to_lowercase();
-    normalized.contains("embedding") || normalized.contains("embeddings") || normalized.contains("embed")
+    normalized.contains("embedding")
+        || normalized.contains("embeddings")
+        || normalized.contains("embed")
 }
 
 fn is_embedding_model(model: &ProviderModelRecord) -> bool {
@@ -967,7 +967,9 @@ impl SettingsManager {
                 success: false,
                 unsupported: false,
                 message: "Connection test failed.".to_string(),
-                detail: Some("The provider did not finish responding before the timeout.".to_string()),
+                detail: Some(
+                    "The provider did not finish responding before the timeout.".to_string(),
+                ),
             },
         };
 
@@ -1606,10 +1608,16 @@ mod tests {
         let request = build_provider_model_test_request(&provider, &model);
 
         assert!(!request.unsupported);
-        assert_eq!(request.options.max_tokens, Some(PROVIDER_MODEL_TEST_MAX_TOKENS));
+        assert_eq!(
+            request.options.max_tokens,
+            Some(PROVIDER_MODEL_TEST_MAX_TOKENS)
+        );
         assert_eq!(request.model.max_tokens, 16_384);
         assert_eq!(request.model.context_window, 128_000);
-        assert_eq!(request.options.base_url.as_deref(), Some("https://api.openai.com/v1"));
+        assert_eq!(
+            request.options.base_url.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
         assert_eq!(
             request
                 .options

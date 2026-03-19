@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tokio::sync::{oneshot, Mutex};
 use tiy_core::agent::AbortSignal;
+use tokio::sync::{oneshot, Mutex};
 
 use crate::core::executors::{self, ToolOutput};
 use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
@@ -77,9 +77,7 @@ pub enum ToolGatewayResult {
         reason: String,
     },
     /// Tool was cancelled before approval or execution could finish.
-    Cancelled {
-        tool_call_id: String,
-    },
+    Cancelled { tool_call_id: String },
 }
 
 pub struct ToolGateway {
@@ -152,9 +150,7 @@ impl ToolGateway {
             PolicyVerdict::AutoAllow => {
                 on_execution_started();
 
-                let output = self
-                    .execute_and_audit(&request, &policy_json)
-                    .await?;
+                let output = self.execute_and_audit(&request, &policy_json).await?;
 
                 Ok(ToolGatewayOutcome {
                     approval_required: false,
@@ -194,8 +190,12 @@ impl ToolGateway {
                     });
                 }
 
-                tool_call_repo::update_status(&self.pool, &request.tool_call_id, "waiting_approval")
-                    .await?;
+                tool_call_repo::update_status(
+                    &self.pool,
+                    &request.tool_call_id,
+                    "waiting_approval",
+                )
+                .await?;
 
                 let (approval_tx, approval_rx) = oneshot::channel::<bool>();
                 {
@@ -233,9 +233,7 @@ impl ToolGateway {
 
                         on_execution_started();
 
-                        let output = self
-                            .execute_and_audit(&request, &policy_json)
-                            .await?;
+                        let output = self.execute_and_audit(&request, &policy_json).await?;
 
                         Ok(ToolGatewayOutcome {
                             approval_required: true,
@@ -274,8 +272,12 @@ impl ToolGateway {
                         })
                     }
                     None => {
-                        tool_call_repo::update_status(&self.pool, &request.tool_call_id, "cancelled")
-                            .await?;
+                        tool_call_repo::update_status(
+                            &self.pool,
+                            &request.tool_call_id,
+                            "cancelled",
+                        )
+                        .await?;
 
                         self.write_audit(
                             &request.run_id,
@@ -336,7 +338,11 @@ impl ToolGateway {
         .await?;
 
         let result_json = output.result.to_string();
-        let status = if output.success { "completed" } else { "failed" };
+        let status = if output.success {
+            "completed"
+        } else {
+            "failed"
+        };
         tool_call_repo::update_result(&self.pool, &request.tool_call_id, &result_json, status)
             .await?;
 
