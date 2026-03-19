@@ -251,12 +251,41 @@ export interface RunSummaryDto {
   startedAt: string;
 }
 
+export interface ToolCallDto {
+  id: string;
+  runId: string;
+  threadId: string;
+  toolName: string;
+  toolInput: unknown;
+  toolOutput: unknown | null;
+  status: string;
+  approvalStatus: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface RunHelperDto {
+  id: string;
+  runId: string;
+  threadId: string;
+  helperKind: string;
+  parentToolCallId: string | null;
+  status: string;
+  inputSummary: string | null;
+  outputSummary: string | null;
+  errorSummary: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
 export interface ThreadSnapshotDto {
   thread: ThreadSummaryDto;
   messages: MessageDto[];
   hasMoreMessages: boolean;
   activeRun: RunSummaryDto | null;
   latestRun: RunSummaryDto | null;
+  toolCalls: ToolCallDto[];
+  helpers: RunHelperDto[];
 }
 
 export interface AddMessageInput {
@@ -290,7 +319,7 @@ export type ThreadStreamEvent =
       content: string;
     }
   | { type: "plan_updated"; runId: string; plan: unknown }
-  | { type: "reasoning_updated"; runId: string; reasoning: string }
+  | { type: "reasoning_updated"; runId: string; messageId: string; reasoning: string }
   | { type: "queue_updated"; runId: string; queue: unknown }
   | {
       type: "subagent_started";

@@ -144,6 +144,37 @@ pub struct RunSummaryDto {
     pub started_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallDto {
+    pub id: String,
+    pub run_id: String,
+    pub thread_id: String,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub tool_output: Option<serde_json::Value>,
+    pub status: String,
+    pub approval_status: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunHelperDto {
+    pub id: String,
+    pub run_id: String,
+    pub thread_id: String,
+    pub helper_kind: String,
+    pub parent_tool_call_id: Option<String>,
+    pub status: String,
+    pub input_summary: Option<String>,
+    pub output_summary: Option<String>,
+    pub error_summary: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // ThreadSnapshot — full snapshot for UI recovery and run startup
 // ---------------------------------------------------------------------------
@@ -156,6 +187,8 @@ pub struct ThreadSnapshotDto {
     pub has_more_messages: bool,
     pub active_run: Option<RunSummaryDto>,
     pub latest_run: Option<RunSummaryDto>,
+    pub tool_calls: Vec<ToolCallDto>,
+    pub helpers: Vec<RunHelperDto>,
 }
 
 // ---------------------------------------------------------------------------

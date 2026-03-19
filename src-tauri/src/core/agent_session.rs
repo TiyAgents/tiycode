@@ -176,14 +176,23 @@ impl AgentSession {
 
     async fn run(self: Arc<Self>) {
         let current_message_id = Arc::new(StdMutex::new(None::<String>));
+        let current_reasoning_message_id = Arc::new(StdMutex::new(None::<String>));
         let reasoning_buffer = Arc::new(StdMutex::new(String::new()));
         let run_id = self.spec.run_id.clone();
         let event_tx = self.event_tx.clone();
 
         let message_id_ref = Arc::clone(&current_message_id);
+        let reasoning_message_id_ref = Arc::clone(&current_reasoning_message_id);
         let reasoning_ref = Arc::clone(&reasoning_buffer);
         let unsubscribe = self.agent.subscribe(move |event| {
-            handle_agent_event(&run_id, &event_tx, &message_id_ref, &reasoning_ref, event);
+            handle_agent_event(
+                &run_id,
+                &event_tx,
+                &message_id_ref,
+                &reasoning_message_id_ref,
+                &reasoning_ref,
+                event,
+            );
         });
 
         let _ = self.event_tx.send(ThreadStreamEvent::RunStarted {
@@ -516,6 +525,7 @@ fn handle_agent_event(
     run_id: &str,
     event_tx: &mpsc::UnboundedSender<ThreadStreamEvent>,
     current_message_id: &StdMutex<Option<String>>,
+    current_reasoning_message_id: &StdMutex<Option<String>>,
     reasoning_buffer: &StdMutex<String>,
     event: &tiy_core::agent::AgentEvent,
 ) {
@@ -534,8 +544,10 @@ fn handle_agent_event(
             AssistantMessageEvent::ThinkingDelta { delta, .. } => {
                 if let Ok(mut buffer) = reasoning_buffer.lock() {
                     buffer.push_str(delta);
+                    let message_id = ensure_message_id(current_reasoning_message_id);
                     let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
                         run_id: run_id.to_string(),
+                        message_id,
                         reasoning: buffer.clone(),
                     });
                 }
@@ -701,6 +713,7 @@ fn resolve_tool_profile_name(raw_plan: &RuntimeModelPlan, run_mode: &str) -> Str
 fn convert_history_messages(messages: &[MessageRecord], model: &Model) -> Vec<AgentMessage> {
     messages
         .iter()
+        .filter(|message| message.message_type == "plain_message")
         .filter_map(|message| match message.role.as_str() {
             "user" => Some(AgentMessage::User(UserMessage::text(
                 message.content_markdown.clone(),

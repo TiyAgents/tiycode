@@ -31,6 +31,7 @@ pub enum ThreadStreamEvent {
     },
     ReasoningUpdated {
         run_id: String,
+        message_id: String,
         reasoning: String,
     },
     QueueUpdated {

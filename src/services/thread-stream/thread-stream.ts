@@ -71,6 +71,7 @@ export type PlanEvent = {
 
 export type ReasoningEvent = {
   runId: string;
+  messageId: string;
   reasoning: string;
 };
 
@@ -241,6 +242,7 @@ export class ThreadStream {
       case "reasoning_updated":
         this.onReasoning?.({
           runId: event.runId,
+          messageId: event.messageId,
           reasoning: event.reasoning,
         });
         break;

@@ -67,7 +67,39 @@ function readSnapshot(
   camelKey: string,
   snakeKey: string,
 ): SubagentProgressSnapshot {
-  return readValue(event, camelKey, snakeKey) as SubagentProgressSnapshot;
+  const value = readValue(event, camelKey, snakeKey) as Record<string, unknown> | null | undefined;
+  return {
+    totalToolCalls:
+      typeof value?.totalToolCalls === "number"
+        ? value.totalToolCalls
+        : typeof value?.total_tool_calls === "number"
+          ? value.total_tool_calls
+          : 0,
+    completedSteps:
+      typeof value?.completedSteps === "number"
+        ? value.completedSteps
+        : typeof value?.completed_steps === "number"
+          ? value.completed_steps
+          : 0,
+    currentAction:
+      typeof value?.currentAction === "string"
+        ? value.currentAction
+        : typeof value?.current_action === "string"
+          ? value.current_action
+          : null,
+    toolCounts:
+      value && typeof value.toolCounts === "object" && value.toolCounts
+        ? value.toolCounts as Record<string, number>
+        : value && typeof value.tool_counts === "object" && value.tool_counts
+          ? value.tool_counts as Record<string, number>
+          : {},
+    recentActions:
+      Array.isArray(value?.recentActions)
+        ? value.recentActions.filter((entry): entry is string => typeof entry === "string")
+        : Array.isArray(value?.recent_actions)
+          ? value.recent_actions.filter((entry): entry is string => typeof entry === "string")
+          : [],
+  };
 }
 
 function readActivity(
@@ -110,6 +142,7 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
       return {
         type: rawEvent.type,
         runId: readRequiredString(rawEvent, "runId", "run_id"),
+        messageId: readRequiredString(rawEvent, "messageId", "message_id"),
         reasoning: readRequiredString(rawEvent, "reasoning", "reasoning"),
       };
     case "queue_updated":

@@ -189,6 +189,25 @@ fn test_thread_stream_event_tool_requested_serialization() {
 }
 
 #[test]
+fn test_thread_stream_event_reasoning_updated_serialization() {
+    use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
+
+    let event = ThreadStreamEvent::ReasoningUpdated {
+        run_id: "run-1".into(),
+        message_id: "reasoning-1".into(),
+        reasoning: "Inspecting the repository layout".into(),
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "reasoning_updated");
+    assert_eq!(json["message_id"].as_str().unwrap(), "reasoning-1");
+    assert_eq!(
+        json["reasoning"].as_str().unwrap(),
+        "Inspecting the repository layout"
+    );
+}
+
+#[test]
 fn test_thread_stream_event_subagent_events_serialization() {
     use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
 
@@ -276,6 +295,7 @@ fn test_all_events_have_type_field() {
         },
         ThreadStreamEvent::ReasoningUpdated {
             run_id: "r".into(),
+            message_id: "rm".into(),
             reasoning: "r".into(),
         },
         ThreadStreamEvent::QueueUpdated {

@@ -5,7 +5,9 @@ use crate::model::thread::{
     AddMessageInput, MessageDto, MessageRecord, RunSummaryDto, ThreadRecord, ThreadSnapshotDto,
     ThreadStatus, ThreadSummaryDto,
 };
-use crate::persistence::repo::{message_repo, run_repo, thread_repo};
+use crate::persistence::repo::{
+    message_repo, run_helper_repo, run_repo, thread_repo, tool_call_repo,
+};
 
 const DEFAULT_MESSAGE_PAGE_SIZE: i64 = 50;
 
@@ -98,6 +100,22 @@ impl ThreadManager {
 
         let active_run = run_repo::find_active_by_thread(&self.pool, id).await?;
         let latest_run = run_repo::find_latest_by_thread(&self.pool, id).await?;
+        let mut run_ids: Vec<String> = messages
+            .iter()
+            .filter_map(|message| message.run_id.clone())
+            .collect();
+        if let Some(run) = active_run.as_ref() {
+            if !run_ids.iter().any(|candidate| candidate == &run.id) {
+                run_ids.push(run.id.clone());
+            }
+        }
+        if let Some(run) = latest_run.as_ref() {
+            if !run_ids.iter().any(|candidate| candidate == &run.id) {
+                run_ids.push(run.id.clone());
+            }
+        }
+        let tool_calls = tool_call_repo::list_by_run_ids(&self.pool, &run_ids).await?;
+        let helpers = run_helper_repo::list_by_run_ids(&self.pool, &run_ids).await?;
 
         Ok(ThreadSnapshotDto {
             thread: ThreadSummaryDto::from(thread),
@@ -105,6 +123,8 @@ impl ThreadManager {
             has_more_messages: has_more,
             active_run,
             latest_run,
+            tool_calls,
+            helpers,
         })
     }
 

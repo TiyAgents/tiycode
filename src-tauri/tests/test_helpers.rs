@@ -131,6 +131,29 @@ pub async fn seed_tool_call(
     .expect("failed to seed tool_call");
 }
 
+/// Create a helper run record for test setup.
+pub async fn seed_run_helper(
+    pool: &SqlitePool,
+    helper_id: &str,
+    run_id: &str,
+    thread_id: &str,
+    helper_kind: &str,
+    status: &str,
+) {
+    sqlx::query(
+        "INSERT INTO run_helpers (id, run_id, thread_id, helper_kind, status)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(helper_id)
+    .bind(run_id)
+    .bind(thread_id)
+    .bind(helper_kind)
+    .bind(status)
+    .execute(pool)
+    .await
+    .expect("failed to seed run_helper");
+}
+
 /// Create a settings entry.
 pub async fn seed_setting(pool: &SqlitePool, key: &str, value_json: &str) {
     sqlx::query("INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)")

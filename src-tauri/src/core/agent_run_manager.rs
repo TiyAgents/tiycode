@@ -19,6 +19,7 @@ struct ActiveRun {
     thread_id: String,
     frontend_tx: mpsc::Sender<ThreadStreamEvent>,
     streaming_message_id: Option<String>,
+    reasoning_message_id: Option<String>,
     cancellation_requested: bool,
 }
 
@@ -82,6 +83,7 @@ impl AgentRunManager {
                     thread_id: thread_id.to_string(),
                     frontend_tx: frontend_tx.clone(),
                     streaming_message_id: None,
+                    reasoning_message_id: None,
                     cancellation_requested: false,
                 },
             );
@@ -213,6 +215,14 @@ impl AgentRunManager {
                     run.streaming_message_id = None;
                 }
             }
+            ThreadStreamEvent::ReasoningUpdated {
+                message_id,
+                reasoning,
+                ..
+            } => {
+                let persisted_id = self.ensure_reasoning_message(run_id, message_id).await?;
+                message_repo::replace_content(&self.pool, &persisted_id, reasoning).await?;
+            }
             ThreadStreamEvent::ToolRequested { .. } => {
                 run_repo::update_status(&self.pool, run_id, "waiting_tool_result").await?;
             }
@@ -326,18 +336,84 @@ impl AgentRunManager {
         Ok(message_id)
     }
 
+    async fn ensure_reasoning_message(
+        &self,
+        run_id: &str,
+        requested_message_id: &str,
+    ) -> Result<String, AppError> {
+        let mut runs = self.active_runs.lock().await;
+        let run = runs.get_mut(run_id).ok_or_else(|| {
+            AppError::internal(
+                ErrorSource::Thread,
+                "active run not found for reasoning event",
+            )
+        })?;
+
+        if let Some(existing) = run.reasoning_message_id.clone() {
+            return Ok(existing);
+        }
+
+        let message_id = if requested_message_id.trim().is_empty() {
+            uuid::Uuid::now_v7().to_string()
+        } else {
+            requested_message_id.to_string()
+        };
+
+        message_repo::insert(
+            &self.pool,
+            &MessageRecord {
+                id: message_id.clone(),
+                thread_id: run.thread_id.clone(),
+                run_id: Some(run_id.to_string()),
+                role: "assistant".to_string(),
+                content_markdown: String::new(),
+                message_type: "reasoning".to_string(),
+                status: "streaming".to_string(),
+                metadata_json: None,
+                created_at: String::new(),
+            },
+        )
+        .await?;
+
+        run.reasoning_message_id = Some(message_id.clone());
+        Ok(message_id)
+    }
+
     async fn finish_run(
         &self,
         run_id: &str,
         status: &str,
         error_message: Option<&str>,
     ) -> Result<(), AppError> {
+        let finalized_message_status = if status == "failed" {
+            "failed"
+        } else {
+            "completed"
+        };
+        let (thread_id, streaming_message_id, reasoning_message_id) = {
+            let runs = self.active_runs.lock().await;
+            let run = runs.get(run_id).ok_or_else(|| {
+                AppError::internal(ErrorSource::Thread, "active run not found while finishing")
+            })?;
+            (
+                run.thread_id.clone(),
+                run.streaming_message_id.clone(),
+                run.reasoning_message_id.clone(),
+            )
+        };
+
+        if let Some(message_id) = streaming_message_id {
+            message_repo::update_status(&self.pool, &message_id, finalized_message_status).await?;
+        }
+        if let Some(message_id) = reasoning_message_id {
+            message_repo::update_status(&self.pool, &message_id, finalized_message_status).await?;
+        }
+
         run_repo::update_status(&self.pool, run_id, status).await?;
         if let Some(error_message) = error_message {
             run_repo::set_error_message(&self.pool, run_id, error_message).await?;
         }
 
-        let thread_id = self.get_thread_id(run_id).await;
         let thread_status = match status {
             "failed" | "denied" => ThreadStatus::Failed,
             "interrupted" => ThreadStatus::Interrupted,

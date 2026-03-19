@@ -1,7 +1,42 @@
 use chrono::Utc;
+use sqlx::QueryBuilder;
 use sqlx::SqlitePool;
 
 use crate::model::errors::AppError;
+use crate::model::thread::RunHelperDto;
+
+#[derive(sqlx::FromRow)]
+struct RunHelperRow {
+    id: String,
+    run_id: String,
+    thread_id: String,
+    helper_kind: String,
+    parent_tool_call_id: Option<String>,
+    status: String,
+    input_summary: Option<String>,
+    output_summary: Option<String>,
+    error_summary: Option<String>,
+    started_at: String,
+    finished_at: Option<String>,
+}
+
+impl RunHelperRow {
+    fn into_dto(self) -> RunHelperDto {
+        RunHelperDto {
+            id: self.id,
+            run_id: self.run_id,
+            thread_id: self.thread_id,
+            helper_kind: self.helper_kind,
+            parent_tool_call_id: self.parent_tool_call_id,
+            status: self.status,
+            input_summary: self.input_summary,
+            output_summary: self.output_summary,
+            error_summary: self.error_summary,
+            started_at: self.started_at,
+            finished_at: self.finished_at,
+        }
+    }
+}
 
 pub struct RunHelperInsert {
     pub id: String,
@@ -83,4 +118,34 @@ pub async fn mark_failed(
     .await?;
 
     Ok(())
+}
+
+pub async fn list_by_run_ids(
+    pool: &SqlitePool,
+    run_ids: &[String],
+) -> Result<Vec<RunHelperDto>, AppError> {
+    if run_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut query = QueryBuilder::new(
+        "SELECT id, run_id, thread_id, helper_kind, parent_tool_call_id, status,
+                input_summary, output_summary, error_summary, started_at, finished_at
+         FROM run_helpers
+         WHERE run_id IN (",
+    );
+    {
+        let mut separated = query.separated(", ");
+        for run_id in run_ids {
+            separated.push_bind(run_id);
+        }
+    }
+    query.push(") ORDER BY started_at ASC, id ASC");
+
+    let rows = query
+        .build_query_as::<RunHelperRow>()
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows.into_iter().map(RunHelperRow::into_dto).collect())
 }

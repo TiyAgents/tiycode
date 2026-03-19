@@ -325,6 +325,59 @@ async fn test_thread_snapshot_includes_latest_failed_run_error() {
     );
 }
 
+#[tokio::test]
+async fn test_thread_snapshot_includes_runtime_artifacts_for_visible_runs() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-runtime", "/tmp/runtime").await;
+    test_helpers::seed_thread(&pool, "t-runtime", "ws-runtime").await;
+    test_helpers::seed_run(&pool, "r-runtime", "t-runtime", "completed", "default").await;
+
+    sqlx::query(
+        "INSERT INTO messages (id, thread_id, run_id, role, content_markdown, message_type, status)
+         VALUES
+         ('m-runtime-user', 't-runtime', NULL, 'user', 'Investigate this', 'plain_message', 'completed'),
+         ('m-runtime-reasoning', 't-runtime', 'r-runtime', 'assistant', 'Inspecting files', 'reasoning', 'completed'),
+         ('m-runtime-answer', 't-runtime', 'r-runtime', 'assistant', 'Done', 'plain_message', 'completed')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-runtime",
+        "r-runtime",
+        "t-runtime",
+        "search_repo",
+        "completed",
+    )
+    .await;
+    test_helpers::seed_run_helper(
+        &pool,
+        "rh-runtime",
+        "r-runtime",
+        "t-runtime",
+        "helper_scout",
+        "completed",
+    )
+    .await;
+
+    let manager = ThreadManager::new(pool);
+    let snapshot = manager.load("t-runtime", None, None).await.unwrap();
+
+    assert_eq!(snapshot.tool_calls.len(), 1);
+    assert_eq!(snapshot.tool_calls[0].tool_name, "search_repo");
+    assert_eq!(snapshot.helpers.len(), 1);
+    assert_eq!(snapshot.helpers[0].helper_kind, "helper_scout");
+    assert!(
+        snapshot
+            .messages
+            .iter()
+            .any(|message| message.message_type == "reasoning"),
+        "reasoning messages should persist in thread snapshots"
+    );
+}
+
 // =========================================================================
 // T1.4.6 — Message metadata JSON storage
 // =========================================================================
