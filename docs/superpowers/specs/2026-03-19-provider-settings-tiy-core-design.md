@@ -2,7 +2,7 @@
 
 ## Summary
 
-This design aligns the desktop Settings Provider experience with `tiy-core = "0.1.0-rc.26031901"` and makes Tauri/Rust the source of truth for provider definitions and provider settings.
+This design aligns the desktop Settings Provider experience with `tiy-core = "0.1.1-rc.26031910"` and makes Tauri/Rust the source of truth for provider definitions and provider settings.
 
 The current desktop implementation treats providers as a frontend-managed generic HTTP configuration model with mutable API protocol selection. That no longer matches the target architecture. After this change:
 
@@ -47,7 +47,7 @@ Agent profiles and other UI surfaces currently rely on display-oriented strings 
 
 ## Provider Catalog
 
-The built-in provider catalog comes from the set of `tiy-core` providers that have concrete default provider implementations available in `tiy-core` `0.1.0-rc.26031901`.
+The built-in provider catalog comes from the set of `tiy-core` providers that have concrete default provider implementations available in `tiy-core` `0.1.1-rc.26031910`.
 
 The initial built-in catalog is:
 
@@ -352,4 +352,3 @@ No open design questions remain for this scope. The user confirmed:
 
 - show the full current built-in provider set from `tiy-core`
 - do not migrate legacy provider configuration
-

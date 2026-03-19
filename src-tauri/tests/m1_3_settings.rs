@@ -289,11 +289,15 @@ async fn test_provider_settings_seed_builtin_catalog() {
     let catalog = manager.list_provider_catalog().await.unwrap();
 
     assert!(
-        providers.iter().any(|provider| provider.provider_key == "openai"),
+        providers
+            .iter()
+            .any(|provider| provider.provider_key == "openai"),
         "Expected OpenAI to be present in the built-in provider catalog"
     );
     assert!(
-        providers.iter().any(|provider| provider.provider_key == "zenmux"),
+        providers
+            .iter()
+            .any(|provider| provider.provider_key == "zenmux"),
         "Expected Zenmux to be present in the built-in provider catalog"
     );
 
@@ -303,6 +307,10 @@ async fn test_provider_settings_seed_builtin_catalog() {
         .unwrap();
     assert_eq!(openai.kind, "builtin");
     assert!(openai.locked_mapping);
+    assert!(
+        openai.models.is_empty(),
+        "Built-in providers should start with an empty model list until Fetch or manual add"
+    );
 
     assert!(
         !providers
@@ -313,7 +321,9 @@ async fn test_provider_settings_seed_builtin_catalog() {
     assert!(
         catalog
             .iter()
-            .any(|entry| entry.provider_type == "openai-compatible" && !entry.builtin && entry.supports_custom),
+            .any(|entry| entry.provider_type == "openai-compatible"
+                && !entry.builtin
+                && entry.supports_custom),
         "OpenAI Compatible should still be available as a custom provider type"
     );
 }

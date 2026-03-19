@@ -109,6 +109,14 @@ pub async fn provider_settings_get_all(
 }
 
 #[tauri::command]
+pub async fn provider_settings_fetch_models(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<ProviderSettingsDto, AppError> {
+    state.settings_manager.fetch_provider_models(&id).await
+}
+
+#[tauri::command]
 pub async fn provider_settings_upsert_builtin(
     state: State<'_, AppState>,
     provider_key: String,

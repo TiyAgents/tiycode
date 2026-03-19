@@ -119,6 +119,7 @@ type SettingsCenterOverlayProps = {
   onUpdateDenyEntry: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
   onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
   onUpdatePolicySetting: <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => void;
+  onFetchProviderModels: (id: string) => Promise<void>;
   onUpdateProvider: (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => void;
   onUpdateWorkspace: (id: string, patch: Partial<Omit<WorkspaceEntry, "id">>) => void;
   onUpdateWritableRoot: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
@@ -272,6 +273,7 @@ export function SettingsCenterOverlay({
   onUpdateDenyEntry,
   onUpdateGeneralPreference,
   onUpdatePolicySetting,
+  onFetchProviderModels,
   onUpdateProvider,
   onUpdateWorkspace,
   onUpdateWritableRoot,
@@ -421,6 +423,7 @@ export function SettingsCenterOverlay({
                     providers={providers}
                     providerCatalog={providerCatalog}
                     onAddProvider={onAddProvider}
+                    onFetchProviderModels={onFetchProviderModels}
                     onRemoveProvider={onRemoveProvider}
                     onUpdateProvider={onUpdateProvider}
                   />
@@ -2263,6 +2266,7 @@ function ProviderSettingsPanel({
   providerCatalog,
   providers,
   onAddProvider,
+  onFetchProviderModels,
   onRemoveProvider,
   onUpdateProvider,
 }: {
@@ -2270,6 +2274,7 @@ function ProviderSettingsPanel({
   providerCatalog: Array<ProviderCatalogEntry>;
   providers: Array<ProviderEntry>;
   onAddProvider: (entry: Omit<ProviderEntry, "id">) => void;
+  onFetchProviderModels: (id: string) => Promise<void>;
   onRemoveProvider: (id: string) => void;
   onUpdateProvider: (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => void;
 }) {
@@ -2285,6 +2290,8 @@ function ProviderSettingsPanel({
   const [modelSearch, setModelSearch] = useState("");
   const [newModelId, setNewModelId] = useState("");
   const [newModelDisplayName, setNewModelDisplayName] = useState("");
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [fetchFeedback, setFetchFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? null;
 
@@ -2343,6 +2350,11 @@ function ProviderSettingsPanel({
     }
   }, [expandedModelId, selectedProvider]);
 
+  useEffect(() => {
+    setFetchFeedback(null);
+    setIsFetchingModels(false);
+  }, [selectedProvider?.id]);
+
   const handleAddCustomProvider = () => {
     const newProvider: Omit<ProviderEntry, "id"> = {
       kind: "custom",
@@ -2399,7 +2411,8 @@ function ProviderSettingsPanel({
     const newModel: ProviderModel = {
       id: crypto.randomUUID(),
       modelId: newModelId.trim(),
-      displayName: newModelDisplayName.trim() || newModelId.trim(),
+      sortIndex: selectedProvider.models.reduce((max, model) => Math.max(max, model.sortIndex), -1) + 1,
+      displayName: newModelDisplayName.trim(),
       enabled: true,
       capabilityOverrides: {},
       providerOptions: {},
@@ -2411,6 +2424,31 @@ function ProviderSettingsPanel({
     setNewModelId("");
     setNewModelDisplayName("");
     setExpandedModelId(newModel.id);
+  };
+
+  const handleFetchModels = async () => {
+    if (!selectedProvider || isFetchingModels) {
+      return;
+    }
+
+    setIsFetchingModels(true);
+    setFetchFeedback(null);
+
+    try {
+      await onFetchProviderModels(selectedProvider.id);
+      setFetchFeedback({
+        kind: "success",
+        message: "Model catalog updated from provider API.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to fetch provider models.";
+      setFetchFeedback({
+        kind: "error",
+        message,
+      });
+    } finally {
+      setIsFetchingModels(false);
+    }
   };
 
   return (
@@ -2692,20 +2730,36 @@ function ProviderSettingsPanel({
                     <button
                       type="button"
                       className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-2.5 py-1.5 text-[12px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
+                      onClick={() => {
+                        void handleFetchModels();
+                      }}
+                      disabled={isFetchingModels}
                     >
-                      <Download className="size-3" />
-                      <span>Fetch</span>
+                      {isFetchingModels ? <RefreshCw className="size-3 animate-spin" /> : <Download className="size-3" />}
+                      <span>{isFetchingModels ? "Fetching..." : "Fetch"}</span>
                     </button>
                   </div>
 
-                  <p className="mb-2 text-[11px] text-app-subtle">
-                    Showing {filteredModels.length} model{filteredModels.length !== 1 ? "s" : ""} (enabled models shown first)
+                  <p className={cn(
+                    "mb-2 text-[11px]",
+                    fetchFeedback?.kind === "error" ? "text-app-danger" : "text-app-subtle",
+                  )}>
+                    {fetchFeedback?.message
+                      ?? `Showing ${filteredModels.length} model${filteredModels.length !== 1 ? "s" : ""} (enabled models shown first)`}
                   </p>
 
                   {/* Model list */}
                   <div className="space-y-1">
                     {[...filteredModels]
-                      .sort((a, b) => (a.enabled === b.enabled ? 0 : a.enabled ? -1 : 1))
+                      .sort((a, b) => {
+                        if (a.enabled !== b.enabled) {
+                          return a.enabled ? -1 : 1;
+                        }
+                        if (!a.enabled && !b.enabled && Boolean(a.isManual) !== Boolean(b.isManual)) {
+                          return a.isManual ? -1 : 1;
+                        }
+                        return a.sortIndex - b.sortIndex;
+                      })
                       .map((model) => (
                         <ProviderModelRow
                           key={model.id}

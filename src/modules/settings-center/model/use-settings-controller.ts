@@ -25,6 +25,7 @@ import {
   providerCatalogList,
   providerSettingsCreateCustom,
   providerSettingsDeleteCustom,
+  providerSettingsFetchModels,
   providerSettingsGetAll,
   providerSettingsUpdateCustom,
   providerSettingsUpsertBuiltin,
@@ -49,6 +50,7 @@ function mapProviderDto(provider: ProviderSettingsDto): ProviderEntry {
     models: provider.models.map((model) => ({
       id: model.id,
       modelId: model.modelId,
+      sortIndex: model.sortIndex,
       displayName: model.displayName ?? model.modelId,
       enabled: model.enabled,
       contextWindow: model.contextWindow ?? undefined,
@@ -450,6 +452,25 @@ export function useSettingsController() {
       });
   };
 
+  const fetchProviderModels = async (id: string) => {
+    if (!isTauri()) {
+      return;
+    }
+
+    try {
+      const provider = await providerSettingsFetchModels(id);
+      setSettings((current) => ({
+        ...current,
+        providers: current.providers.map((entry) =>
+          entry.id === id ? mapProviderDto(provider) : entry,
+        ),
+      }));
+    } catch (error) {
+      console.warn("Failed to fetch provider models", error);
+      throw error;
+    }
+  };
+
   const addCommand = (entry: Omit<CommandEntry, "id">) => {
     setSettings((current) => ({
       ...current,
@@ -497,6 +518,7 @@ export function useSettingsController() {
     addProvider,
     removeProvider,
     updateProvider,
+    fetchProviderModels,
     updateCommandSetting,
     agentProfiles: settings.agentProfiles,
     activeAgentProfileId: settings.activeAgentProfileId,

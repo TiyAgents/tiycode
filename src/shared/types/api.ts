@@ -55,6 +55,7 @@ export interface ProviderModelSettingsDto {
   id: string;
   providerId: string;
   modelId: string;
+  sortIndex: number;
   displayName: string | null;
   enabled: boolean;
   contextWindow: string | null;

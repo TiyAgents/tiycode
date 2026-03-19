@@ -54,6 +54,7 @@ export type ProviderModelCapabilities = {
 export type ProviderModel = {
   id: string;
   modelId: string;
+  sortIndex: number;
   displayName: string;
   enabled: boolean;
   contextWindow?: string;

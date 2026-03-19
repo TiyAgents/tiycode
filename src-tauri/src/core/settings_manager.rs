@@ -1,5 +1,12 @@
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+
 use sqlx::SqlitePool;
-use tiy_core::models::ModelRegistry;
+use tiy_core::catalog::{
+    enrich_manual_model, list_models, list_models_with_enrichment, load_catalog_metadata_store,
+    refresh_catalog_snapshot, CatalogMetadataStore, CatalogRemoteConfig, EmptyCatalogMetadataStore,
+    FileCatalogMetadataStore, UnifiedModelInfo,
+};
 use tiy_core::types::Provider as TiyProvider;
 
 use crate::model::errors::{AppError, ErrorSource};
@@ -12,7 +19,8 @@ use crate::model::settings::SettingRecord;
 use crate::persistence::repo::{profile_repo, provider_repo, settings_repo};
 
 const PROVIDER_SCHEMA_VERSION_KEY: &str = "providers.schema_version";
-const PROVIDER_SCHEMA_VERSION: u32 = 2;
+const PROVIDER_SCHEMA_VERSION: u32 = 3;
+const TIY_CATALOG_SNAPSHOT_FILE: &str = "catalog.json";
 
 struct ProviderCatalogEntry {
     provider_key: &'static str,
@@ -129,6 +137,250 @@ const CUSTOM_PROVIDER_TYPE_CATALOG: &[ProviderCatalogEntry] = &[
     },
 ];
 
+fn catalog_snapshot_path() -> PathBuf {
+    dirs::home_dir()
+        .expect("cannot resolve HOME directory")
+        .join(".tiy")
+        .join("catalog")
+        .join(TIY_CATALOG_SNAPSHOT_FILE)
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn parse_custom_headers_map(custom_headers_json: Option<&str>) -> Option<HashMap<String, String>> {
+    custom_headers_json.and_then(|json| {
+        serde_json::from_str::<HashMap<String, String>>(json)
+            .map_err(|error| {
+                tracing::warn!(error = %error, "failed to parse provider custom headers for model catalog request");
+                error
+            })
+            .ok()
+    })
+}
+
+fn normalize_catalog_token(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .replace('_', "-")
+        .replace(' ', "-")
+}
+
+fn catalog_capability_overrides(model: &UnifiedModelInfo) -> Option<serde_json::Value> {
+    let capabilities = model
+        .capabilities
+        .as_ref()
+        .map(|values| {
+            values
+                .iter()
+                .map(|value| normalize_catalog_token(value))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let modalities = model
+        .modalities
+        .as_ref()
+        .map(|values| {
+            values
+                .iter()
+                .map(|value| normalize_catalog_token(value))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let has_capability = |candidates: &[&str]| {
+        candidates
+            .iter()
+            .any(|candidate| capabilities.iter().any(|value| value == candidate))
+    };
+    let has_modality = |candidate: &str| modalities.iter().any(|value| value == candidate);
+
+    let mut overrides = serde_json::Map::new();
+
+    if has_modality("image") || has_capability(&["vision", "multimodal", "image-input"]) {
+        overrides.insert("vision".to_string(), serde_json::Value::Bool(true));
+    }
+
+    if has_capability(&[
+        "image-output",
+        "image-generation",
+        "images",
+        "image-generation-model",
+    ]) {
+        overrides.insert("imageOutput".to_string(), serde_json::Value::Bool(true));
+    }
+
+    if has_capability(&[
+        "tools",
+        "tool-calling",
+        "tool-calls",
+        "function-calling",
+        "functions",
+    ]) {
+        overrides.insert("toolCalling".to_string(), serde_json::Value::Bool(true));
+    }
+
+    if has_capability(&["reasoning", "thinking"]) {
+        overrides.insert("reasoning".to_string(), serde_json::Value::Bool(true));
+    }
+
+    if has_capability(&["embedding", "embeddings"]) {
+        overrides.insert("embedding".to_string(), serde_json::Value::Bool(true));
+    }
+
+    if overrides.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(overrides))
+    }
+}
+
+fn serialize_optional_json(value: Option<serde_json::Value>) -> Option<String> {
+    value.map(|value| value.to_string())
+}
+
+fn build_model_record_from_catalog(
+    provider_id: &str,
+    existing: Option<&ProviderModelRecord>,
+    model: &UnifiedModelInfo,
+    sort_index: i64,
+) -> ProviderModelRecord {
+    ProviderModelRecord {
+        id: existing
+            .map(|record| record.id.clone())
+            .unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
+        provider_id: provider_id.to_string(),
+        model_name: model.raw_id.clone(),
+        sort_index,
+        display_name: normalize_optional_string(model.display_name.clone()).or_else(|| {
+            existing.and_then(|record| normalize_optional_string(record.display_name.clone()))
+        }),
+        enabled: existing.map(|record| record.enabled).unwrap_or(false),
+        context_window: model
+            .context_window
+            .map(|value| value.to_string())
+            .or_else(|| {
+                existing.and_then(|record| normalize_optional_string(record.context_window.clone()))
+            }),
+        max_output_tokens: model
+            .max_output_tokens
+            .map(|value| value.to_string())
+            .or_else(|| {
+                existing
+                    .and_then(|record| normalize_optional_string(record.max_output_tokens.clone()))
+            }),
+        capabilities_json: serialize_optional_json(catalog_capability_overrides(model))
+            .or_else(|| existing.and_then(|record| record.capabilities_json.clone())),
+        provider_options_json: existing.and_then(|record| record.provider_options_json.clone()),
+        is_manual: false,
+        created_at: String::new(),
+    }
+}
+
+fn should_enrich_manual_model(
+    existing: Option<&ProviderModelRecord>,
+    model: &ProviderModelInput,
+) -> bool {
+    if !model.is_manual.unwrap_or(true) {
+        return false;
+    }
+
+    if existing.map(|record| record.model_name.as_str()) != Some(model.model_id.as_str()) {
+        return true;
+    }
+
+    normalize_optional_string(model.display_name.clone()).is_none()
+        || normalize_optional_string(model.context_window.clone()).is_none()
+        || normalize_optional_string(model.max_output_tokens.clone()).is_none()
+        || model
+            .capability_overrides
+            .as_ref()
+            .map(|value| value.as_object().map(|map| map.is_empty()).unwrap_or(false))
+            .unwrap_or(true)
+}
+
+fn build_model_record_from_input(
+    provider_id: &str,
+    provider_type: &TiyProvider,
+    existing: Option<&ProviderModelRecord>,
+    model: ProviderModelInput,
+    metadata_store: Option<&dyn CatalogMetadataStore>,
+    sort_index: i64,
+) -> ProviderModelRecord {
+    let display_name = normalize_optional_string(model.display_name);
+    let context_window = normalize_optional_string(model.context_window);
+    let max_output_tokens = normalize_optional_string(model.max_output_tokens);
+    let capability_overrides = model.capability_overrides.and_then(|value| {
+        let is_empty = value.as_object().map(|map| map.is_empty()).unwrap_or(false);
+        if is_empty {
+            None
+        } else {
+            Some(value)
+        }
+    });
+    let is_manual = model.is_manual.unwrap_or(true);
+
+    let enriched = if is_manual {
+        metadata_store.map(|store| {
+            enrich_manual_model(
+                provider_type.clone(),
+                model.model_id.clone(),
+                display_name.clone(),
+                store,
+            )
+        })
+    } else {
+        None
+    };
+
+    ProviderModelRecord {
+        id: model.id.unwrap_or_else(|| {
+            existing
+                .map(|record| record.id.clone())
+                .unwrap_or_else(|| uuid::Uuid::now_v7().to_string())
+        }),
+        provider_id: provider_id.to_string(),
+        model_name: model.model_id,
+        sort_index: existing
+            .map(|record| record.sort_index)
+            .unwrap_or(sort_index),
+        display_name: display_name.or_else(|| {
+            enriched
+                .as_ref()
+                .and_then(|value| normalize_optional_string(value.display_name.clone()))
+        }),
+        enabled: model.enabled.unwrap_or(true),
+        context_window: context_window.or_else(|| {
+            enriched
+                .as_ref()
+                .and_then(|value| value.context_window.map(|number| number.to_string()))
+        }),
+        max_output_tokens: max_output_tokens.or_else(|| {
+            enriched
+                .as_ref()
+                .and_then(|value| value.max_output_tokens.map(|number| number.to_string()))
+        }),
+        capabilities_json: serialize_optional_json(capability_overrides).or_else(|| {
+            enriched
+                .as_ref()
+                .and_then(catalog_capability_overrides)
+                .map(|value| value.to_string())
+        }),
+        provider_options_json: model.provider_options.map(|value| value.to_string()),
+        is_manual,
+        created_at: String::new(),
+    }
+}
+
 pub struct SettingsManager {
     pool: SqlitePool,
 }
@@ -136,6 +388,18 @@ pub struct SettingsManager {
 impl SettingsManager {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    pub async fn refresh_catalog_snapshot_silently() {
+        let snapshot_path = catalog_snapshot_path();
+        match refresh_catalog_snapshot(&snapshot_path, &CatalogRemoteConfig::default()).await {
+            Ok(result) => {
+                tracing::info!(path = %snapshot_path.display(), ?result, "catalog snapshot refresh completed");
+            }
+            Err(error) => {
+                tracing::warn!(path = %snapshot_path.display(), error = %error, "catalog snapshot refresh failed");
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -189,23 +453,29 @@ impl SettingsManager {
     // -----------------------------------------------------------------------
 
     pub async fn list_provider_catalog(&self) -> Result<Vec<ProviderCatalogEntryDto>, AppError> {
-        let builtin_entries = BUILTIN_PROVIDER_CATALOG.iter().map(|entry| ProviderCatalogEntryDto {
-                provider_key: entry.provider_key.to_string(),
-                provider_type: entry.provider_type.to_string(),
-                display_name: entry.display_name.to_string(),
-                builtin: true,
-                supports_custom: false,
-                default_base_url: entry.default_base_url.to_string(),
-            });
+        let builtin_entries =
+            BUILTIN_PROVIDER_CATALOG
+                .iter()
+                .map(|entry| ProviderCatalogEntryDto {
+                    provider_key: entry.provider_key.to_string(),
+                    provider_type: entry.provider_type.to_string(),
+                    display_name: entry.display_name.to_string(),
+                    builtin: true,
+                    supports_custom: false,
+                    default_base_url: entry.default_base_url.to_string(),
+                });
 
-        let custom_entries = CUSTOM_PROVIDER_TYPE_CATALOG.iter().map(|entry| ProviderCatalogEntryDto {
-                provider_key: entry.provider_key.to_string(),
-                provider_type: entry.provider_type.to_string(),
-                display_name: entry.display_name.to_string(),
-                builtin: false,
-                supports_custom: true,
-                default_base_url: entry.default_base_url.to_string(),
-            });
+        let custom_entries =
+            CUSTOM_PROVIDER_TYPE_CATALOG
+                .iter()
+                .map(|entry| ProviderCatalogEntryDto {
+                    provider_key: entry.provider_key.to_string(),
+                    provider_type: entry.provider_type.to_string(),
+                    display_name: entry.display_name.to_string(),
+                    builtin: false,
+                    supports_custom: true,
+                    default_base_url: entry.default_base_url.to_string(),
+                });
 
         Ok(builtin_entries.chain(custom_entries).collect())
     }
@@ -219,6 +489,46 @@ impl SettingsManager {
             result.push(self.provider_settings_from_record(provider).await?);
         }
         Ok(result)
+    }
+
+    pub async fn fetch_provider_models(&self, id: &str) -> Result<ProviderSettingsDto, AppError> {
+        self.ensure_provider_state_ready().await?;
+
+        let provider = provider_repo::find_by_id(&self.pool, id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Settings, "provider"))?;
+        let provider_type = TiyProvider::from(provider.provider_type.clone());
+        let request = tiy_core::catalog::FetchModelsRequest {
+            provider: provider_type,
+            api_key: provider.api_key_encrypted.clone(),
+            base_url: Some(provider.base_url.clone()),
+            headers: parse_custom_headers_map(provider.custom_headers_json.as_deref()),
+        };
+        let store = self.load_catalog_store_best_effort(true).await;
+        let list_result = if let Some(store) = store.as_ref() {
+            list_models_with_enrichment(request, store).await
+        } else {
+            list_models(request).await
+        }
+        .map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Settings,
+                "settings.provider.fetch_models_failed",
+                format!("Failed to fetch provider models: {error}"),
+            )
+        })?;
+
+        let existing_models = provider_repo::list_models(&self.pool, &provider.id).await?;
+        self.merge_fetched_provider_models(&provider.id, &existing_models, list_result.models)
+            .await?;
+
+        let refreshed = provider_repo::find_by_id(&self.pool, &provider.id)
+            .await?
+            .ok_or_else(|| {
+                AppError::internal(ErrorSource::Settings, "failed to reload provider")
+            })?;
+
+        self.provider_settings_from_record(refreshed).await
     }
 
     pub async fn upsert_builtin_provider_settings(
@@ -286,7 +596,9 @@ impl SettingsManager {
 
         let refreshed = provider_repo::find_by_id(&self.pool, &updated.id)
             .await?
-            .ok_or_else(|| AppError::internal(ErrorSource::Settings, "failed to reload provider"))?;
+            .ok_or_else(|| {
+                AppError::internal(ErrorSource::Settings, "failed to reload provider")
+            })?;
 
         self.provider_settings_from_record(refreshed).await
     }
@@ -322,7 +634,9 @@ impl SettingsManager {
 
         let refreshed = provider_repo::find_by_id(&self.pool, &record.id)
             .await?
-            .ok_or_else(|| AppError::internal(ErrorSource::Settings, "failed to reload provider"))?;
+            .ok_or_else(|| {
+                AppError::internal(ErrorSource::Settings, "failed to reload provider")
+            })?;
 
         self.provider_settings_from_record(refreshed).await
     }
@@ -376,7 +690,9 @@ impl SettingsManager {
 
         let refreshed = provider_repo::find_by_id(&self.pool, &updated.id)
             .await?
-            .ok_or_else(|| AppError::internal(ErrorSource::Settings, "failed to reload provider"))?;
+            .ok_or_else(|| {
+                AppError::internal(ErrorSource::Settings, "failed to reload provider")
+            })?;
 
         self.provider_settings_from_record(refreshed).await
     }
@@ -403,16 +719,90 @@ impl SettingsManager {
         Ok(())
     }
 
-    async fn ensure_provider_state_ready(&self) -> Result<(), AppError> {
-        let needs_reset = match settings_repo::get(&self.pool, PROVIDER_SCHEMA_VERSION_KEY).await? {
-            Some(record) => serde_json::from_str::<u32>(&record.value_json)
-                .map(|version| version != PROVIDER_SCHEMA_VERSION)
-                .unwrap_or(true),
-            None => true,
+    async fn load_catalog_store_best_effort(
+        &self,
+        refresh: bool,
+    ) -> Option<FileCatalogMetadataStore> {
+        let snapshot_path = catalog_snapshot_path();
+        let existing_store = match load_catalog_metadata_store(&snapshot_path) {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::warn!(path = %snapshot_path.display(), error = %error, "failed to load catalog snapshot");
+                None
+            }
         };
 
-        if needs_reset {
+        if !refresh {
+            return existing_store;
+        }
+
+        match refresh_catalog_snapshot(&snapshot_path, &CatalogRemoteConfig::default()).await {
+            Ok(_) => match load_catalog_metadata_store(&snapshot_path) {
+                Ok(store) => store.or(existing_store),
+                Err(error) => {
+                    tracing::warn!(path = %snapshot_path.display(), error = %error, "failed to reload catalog snapshot after refresh");
+                    existing_store
+                }
+            },
+            Err(error) => {
+                tracing::warn!(path = %snapshot_path.display(), error = %error, "catalog snapshot refresh failed");
+                existing_store
+            }
+        }
+    }
+
+    async fn merge_fetched_provider_models(
+        &self,
+        provider_id: &str,
+        existing_models: &[ProviderModelRecord],
+        fetched_models: Vec<UnifiedModelInfo>,
+    ) -> Result<(), AppError> {
+        let existing_by_model_name = existing_models
+            .iter()
+            .map(|record| (record.model_name.clone(), record))
+            .collect::<HashMap<_, _>>();
+        let fetched_ids = fetched_models
+            .iter()
+            .map(|model| model.raw_id.clone())
+            .collect::<HashSet<_>>();
+
+        for (sort_index, model) in fetched_models.into_iter().enumerate() {
+            let record = build_model_record_from_catalog(
+                provider_id,
+                existing_by_model_name.get(&model.raw_id).copied(),
+                &model,
+                sort_index as i64,
+            );
+            provider_repo::upsert_model(&self.pool, &record).await?;
+        }
+
+        for existing in existing_models {
+            if !existing.is_manual && !fetched_ids.contains(&existing.model_name) {
+                provider_repo::delete_model(&self.pool, &existing.id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_provider_state_ready(&self) -> Result<(), AppError> {
+        let current_version =
+            match settings_repo::get(&self.pool, PROVIDER_SCHEMA_VERSION_KEY).await? {
+                Some(record) => serde_json::from_str::<u32>(&record.value_json).unwrap_or(0),
+                None => 0,
+            };
+
+        if current_version < 2 {
             provider_repo::delete_all(&self.pool).await?;
+        }
+
+        if current_version < 3 {
+            sqlx::query("DELETE FROM provider_models WHERE is_manual = 0")
+                .execute(&self.pool)
+                .await?;
+        }
+
+        if current_version != PROVIDER_SCHEMA_VERSION {
             settings_repo::set(
                 &self.pool,
                 PROVIDER_SCHEMA_VERSION_KEY,
@@ -425,11 +815,10 @@ impl SettingsManager {
     }
 
     async fn seed_builtin_providers(&self) -> Result<(), AppError> {
-        let registry = ModelRegistry::with_predefined();
         let builtin_keys = BUILTIN_PROVIDER_CATALOG
             .iter()
             .map(|entry| entry.provider_key)
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<HashSet<_>>();
 
         for record in provider_repo::list_all(&self.pool).await? {
             if record.provider_kind == ProviderKind::Builtin
@@ -480,40 +869,12 @@ impl SettingsManager {
                     updated_at: String::new(),
                 };
                 provider_repo::insert(&self.pool, &created).await?;
-                self.seed_builtin_models(&provider_id, entry.provider_key, &registry)
-                    .await?;
                 provider_id
             };
 
             let _ = provider_id;
         }
 
-        Ok(())
-    }
-
-    async fn seed_builtin_models(
-        &self,
-        provider_id: &str,
-        provider_key: &str,
-        registry: &ModelRegistry,
-    ) -> Result<(), AppError> {
-        let provider = TiyProvider::from(provider_key.to_string());
-        for model in registry.models_for_provider(&provider) {
-            let record = ProviderModelRecord {
-                id: uuid::Uuid::now_v7().to_string(),
-                provider_id: provider_id.to_string(),
-                model_name: model.id.clone(),
-                display_name: Some(model.name.clone()),
-                enabled: true,
-                context_window: Some(model.context_window.to_string()),
-                max_output_tokens: Some(model.max_tokens.to_string()),
-                capabilities_json: None,
-                provider_options_json: None,
-                is_manual: false,
-                created_at: String::new(),
-            };
-            provider_repo::upsert_model(&self.pool, &record).await?;
-        }
         Ok(())
     }
 
@@ -531,32 +892,85 @@ impl SettingsManager {
         models: Vec<ProviderModelInput>,
     ) -> Result<(), AppError> {
         let existing_models = provider_repo::list_models(&self.pool, provider_id).await?;
+        let existing_by_id = existing_models
+            .iter()
+            .map(|model| (model.id.clone(), model))
+            .collect::<HashMap<_, _>>();
         let existing_ids = existing_models
             .iter()
             .map(|model| model.id.clone())
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<HashSet<_>>();
         let incoming_ids = models
             .iter()
             .filter_map(|model| model.id.clone())
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<HashSet<_>>();
 
         for existing_id in existing_ids.difference(&incoming_ids) {
             provider_repo::delete_model(&self.pool, existing_id).await?;
         }
 
+        let requires_manual_enrichment = models.iter().any(|model| {
+            let existing = model
+                .id
+                .as_ref()
+                .and_then(|id| existing_by_id.get(id).copied());
+            should_enrich_manual_model(existing, model)
+        });
+        let catalog_store = if requires_manual_enrichment {
+            let existing_store = self.load_catalog_store_best_effort(false).await;
+            if existing_store.is_some() {
+                existing_store
+            } else {
+                self.load_catalog_store_best_effort(true).await
+            }
+        } else {
+            None
+        };
+        let empty_store = EmptyCatalogMetadataStore;
+        let metadata_store = catalog_store
+            .as_ref()
+            .map(|store| store as &dyn CatalogMetadataStore)
+            .unwrap_or(&empty_store);
+
+        let provider_record = provider_repo::find_by_id(&self.pool, provider_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Settings, "provider"))?;
+        let provider_type = TiyProvider::from(provider_record.provider_type);
+        let mut next_manual_sort_index = existing_models
+            .iter()
+            .map(|model| model.sort_index)
+            .max()
+            .unwrap_or(-1)
+            + 1;
+
         for model in models {
-            let record = ProviderModelRecord {
-                id: model.id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
-                provider_id: provider_id.to_string(),
-                model_name: model.model_id,
-                display_name: model.display_name,
-                enabled: model.enabled.unwrap_or(true),
-                context_window: model.context_window,
-                max_output_tokens: model.max_output_tokens,
-                capabilities_json: model.capability_overrides.map(|value| value.to_string()),
-                provider_options_json: model.provider_options.map(|value| value.to_string()),
-                is_manual: model.is_manual.unwrap_or(true),
-                created_at: String::new(),
+            let existing = model
+                .id
+                .as_ref()
+                .and_then(|id| existing_by_id.get(id).copied());
+            let sort_index = existing.map(|record| record.sort_index).unwrap_or_else(|| {
+                let value = next_manual_sort_index;
+                next_manual_sort_index += 1;
+                value
+            });
+            let record = if should_enrich_manual_model(existing, &model) {
+                build_model_record_from_input(
+                    provider_id,
+                    &provider_type,
+                    existing,
+                    model,
+                    Some(metadata_store),
+                    sort_index,
+                )
+            } else {
+                build_model_record_from_input(
+                    provider_id,
+                    &provider_type,
+                    existing,
+                    model,
+                    None,
+                    sort_index,
+                )
             };
             provider_repo::upsert_model(&self.pool, &record).await?;
         }
@@ -667,5 +1081,168 @@ impl SettingsManager {
             return Err(AppError::not_found(ErrorSource::Settings, "agent profile"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use tiy_core::catalog::{CatalogModelMetadata, InMemoryCatalogMetadataStore};
+
+    use super::*;
+
+    fn sample_store() -> InMemoryCatalogMetadataStore {
+        InMemoryCatalogMetadataStore::new(vec![CatalogModelMetadata {
+            canonical_model_key: "openai:gpt-4.1".to_string(),
+            aliases: vec!["openai/gpt-4.1".to_string()],
+            display_name: Some("GPT-4.1".to_string()),
+            description: Some("General-purpose flagship".to_string()),
+            context_window: Some(1_000_000),
+            max_output_tokens: Some(32_768),
+            max_input_tokens: Some(1_000_000),
+            modalities: Some(vec!["text".to_string(), "image".to_string()]),
+            capabilities: Some(vec!["tools".to_string(), "reasoning".to_string()]),
+            pricing: Some(json!({"input": "2.0", "output": "8.0"})),
+            source: "openrouter".to_string(),
+            raw: json!({}),
+        }])
+    }
+
+    #[test]
+    fn manual_model_enrichment_fills_missing_fields() {
+        let store = sample_store();
+        let record = build_model_record_from_input(
+            "provider-1",
+            &TiyProvider::OpenAI,
+            None,
+            ProviderModelInput {
+                id: None,
+                model_id: "openai/gpt-4.1".to_string(),
+                display_name: None,
+                enabled: Some(true),
+                context_window: None,
+                max_output_tokens: None,
+                capability_overrides: None,
+                provider_options: None,
+                is_manual: Some(true),
+            },
+            Some(&store),
+            7,
+        );
+
+        assert_eq!(record.display_name.as_deref(), Some("GPT-4.1"));
+        assert_eq!(record.context_window.as_deref(), Some("1000000"));
+        assert_eq!(record.max_output_tokens.as_deref(), Some("32768"));
+        assert_eq!(
+            record.capabilities_json.as_deref(),
+            Some(r#"{"reasoning":true,"toolCalling":true,"vision":true}"#),
+        );
+    }
+
+    #[test]
+    fn manual_model_enrichment_preserves_user_values() {
+        let store = sample_store();
+        let record = build_model_record_from_input(
+            "provider-1",
+            &TiyProvider::OpenAI,
+            None,
+            ProviderModelInput {
+                id: None,
+                model_id: "openai/gpt-4.1".to_string(),
+                display_name: Some("My GPT".to_string()),
+                enabled: Some(true),
+                context_window: Some("2048".to_string()),
+                max_output_tokens: Some("1024".to_string()),
+                capability_overrides: Some(json!({ "embedding": true })),
+                provider_options: Some(json!({ "tier": "manual" })),
+                is_manual: Some(true),
+            },
+            Some(&store),
+            8,
+        );
+
+        assert_eq!(record.display_name.as_deref(), Some("My GPT"));
+        assert_eq!(record.context_window.as_deref(), Some("2048"));
+        assert_eq!(record.max_output_tokens.as_deref(), Some("1024"));
+        assert_eq!(
+            record.capabilities_json.as_deref(),
+            Some(r#"{"embedding":true}"#)
+        );
+        assert_eq!(
+            record.provider_options_json.as_deref(),
+            Some(r#"{"tier":"manual"}"#),
+        );
+    }
+
+    #[test]
+    fn fetched_model_merge_preserves_existing_state() {
+        let existing = ProviderModelRecord {
+            id: "model-1".to_string(),
+            provider_id: "provider-1".to_string(),
+            model_name: "gpt-4.1".to_string(),
+            sort_index: 4,
+            display_name: Some("Old Name".to_string()),
+            enabled: false,
+            context_window: Some("8192".to_string()),
+            max_output_tokens: Some("4096".to_string()),
+            capabilities_json: Some(r#"{"toolCalling":true}"#.to_string()),
+            provider_options_json: Some(r#"{"tier":"existing"}"#.to_string()),
+            is_manual: true,
+            created_at: String::new(),
+        };
+        let fetched = UnifiedModelInfo {
+            provider: TiyProvider::OpenAI,
+            raw_id: "gpt-4.1".to_string(),
+            canonical_model_key: Some("openai:gpt-4.1".to_string()),
+            display_name: Some("GPT-4.1".to_string()),
+            description: None,
+            context_window: Some(1_000_000),
+            max_output_tokens: Some(32_768),
+            max_input_tokens: None,
+            created_at: None,
+            modalities: Some(vec!["text".to_string(), "image".to_string()]),
+            capabilities: Some(vec!["tools".to_string(), "reasoning".to_string()]),
+            pricing: None,
+            match_confidence: Some(1.0),
+            metadata_sources: vec!["openrouter".to_string()],
+            raw: json!({}),
+        };
+
+        let record = build_model_record_from_catalog("provider-1", Some(&existing), &fetched, 0);
+
+        assert_eq!(record.id, "model-1");
+        assert!(!record.enabled);
+        assert_eq!(record.provider_options_json, existing.provider_options_json);
+        assert!(!record.is_manual);
+        assert_eq!(record.sort_index, 0);
+        assert_eq!(record.display_name.as_deref(), Some("GPT-4.1"));
+        assert_eq!(record.context_window.as_deref(), Some("1000000"));
+    }
+
+    #[test]
+    fn fetched_model_defaults_to_disabled_for_new_entries() {
+        let fetched = UnifiedModelInfo {
+            provider: TiyProvider::OpenAI,
+            raw_id: "gpt-4.1".to_string(),
+            canonical_model_key: Some("openai:gpt-4.1".to_string()),
+            display_name: Some("GPT-4.1".to_string()),
+            description: None,
+            context_window: Some(1_000_000),
+            max_output_tokens: Some(32_768),
+            max_input_tokens: None,
+            created_at: None,
+            modalities: Some(vec!["text".to_string(), "image".to_string()]),
+            capabilities: Some(vec!["tools".to_string(), "reasoning".to_string()]),
+            pricing: None,
+            match_confidence: Some(1.0),
+            metadata_sources: vec!["openrouter".to_string()],
+            raw: json!({}),
+        };
+
+        let record = build_model_record_from_catalog("provider-1", None, &fetched, 0);
+
+        assert!(!record.enabled);
+        assert!(!record.is_manual);
+        assert_eq!(record.sort_index, 0);
     }
 }

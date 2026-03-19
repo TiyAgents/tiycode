@@ -64,6 +64,7 @@ pub struct ProviderModelRecord {
     pub id: String,
     pub provider_id: String,
     pub model_name: String,
+    pub sort_index: i64,
     pub display_name: Option<String>,
     pub enabled: bool,
     pub context_window: Option<String>,
@@ -80,6 +81,7 @@ pub struct ProviderModelSettingsDto {
     pub id: String,
     pub provider_id: String,
     pub model_id: String,
+    pub sort_index: i64,
     pub display_name: Option<String>,
     pub enabled: bool,
     pub context_window: Option<String>,
@@ -95,6 +97,7 @@ impl From<ProviderModelRecord> for ProviderModelSettingsDto {
             id: r.id,
             provider_id: r.provider_id,
             model_id: r.model_name,
+            sort_index: r.sort_index,
             display_name: r.display_name,
             enabled: r.enabled,
             context_window: r.context_window,
@@ -143,7 +146,10 @@ impl ProviderSettingsDto {
             custom_headers: record
                 .custom_headers_json
                 .and_then(|s| serde_json::from_str(&s).ok()),
-            models: models.into_iter().map(ProviderModelSettingsDto::from).collect(),
+            models: models
+                .into_iter()
+                .map(ProviderModelSettingsDto::from)
+                .collect(),
             created_at: record.created_at,
             updated_at: record.updated_at,
         }

@@ -177,6 +177,7 @@ struct ModelRow {
     id: String,
     provider_id: String,
     model_name: String,
+    sort_index: i64,
     display_name: Option<String>,
     enabled: i32,
     context_window: Option<String>,
@@ -193,6 +194,7 @@ impl ModelRow {
             id: self.id,
             provider_id: self.provider_id,
             model_name: self.model_name,
+            sort_index: self.sort_index,
             display_name: self.display_name,
             enabled: self.enabled != 0,
             context_window: self.context_window,
@@ -214,11 +216,11 @@ pub async fn list_models(
     provider_id: &str,
 ) -> Result<Vec<ProviderModelRecord>, AppError> {
     let rows = sqlx::query_as::<_, ModelRow>(
-        "SELECT id, provider_id, model_name, display_name, enabled, context_window,
+        "SELECT id, provider_id, model_name, sort_index, display_name, enabled, context_window,
                 max_output_tokens, capabilities_json, provider_options_json, is_manual, created_at
          FROM provider_models
          WHERE provider_id = ?
-         ORDER BY model_name",
+         ORDER BY is_manual DESC, sort_index ASC, created_at ASC, model_name ASC",
     )
     .bind(provider_id)
     .fetch_all(pool)
@@ -231,12 +233,13 @@ pub async fn upsert_model(pool: &SqlitePool, record: &ProviderModelRecord) -> Re
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT INTO provider_models (
-            id, provider_id, model_name, display_name, enabled, context_window,
+            id, provider_id, model_name, sort_index, display_name, enabled, context_window,
             max_output_tokens, capabilities_json, provider_options_json, is_manual, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
             provider_id = excluded.provider_id,
             model_name = excluded.model_name,
+            sort_index = excluded.sort_index,
             display_name = excluded.display_name,
             enabled = excluded.enabled,
             context_window = excluded.context_window,
@@ -248,6 +251,7 @@ pub async fn upsert_model(pool: &SqlitePool, record: &ProviderModelRecord) -> Re
     .bind(&record.id)
     .bind(&record.provider_id)
     .bind(&record.model_name)
+    .bind(record.sort_index)
     .bind(&record.display_name)
     .bind(record.enabled as i32)
     .bind(&record.context_window)

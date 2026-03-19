@@ -65,6 +65,11 @@ export async function providerSettingsGetAll(): Promise<ProviderSettingsDto[]> {
   return invoke<ProviderSettingsDto[]>("provider_settings_get_all");
 }
 
+export async function providerSettingsFetchModels(id: string): Promise<ProviderSettingsDto> {
+  requireTauri("provider_settings_fetch_models");
+  return invoke<ProviderSettingsDto>("provider_settings_fetch_models", { id });
+}
+
 export async function providerSettingsUpsertBuiltin(
   providerKey: string,
   input: ProviderSettingsUpdateInput,

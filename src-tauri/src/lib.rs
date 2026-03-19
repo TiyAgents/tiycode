@@ -64,6 +64,7 @@ fn init_directories(base: &PathBuf) -> std::io::Result<()> {
         base.join("automations"),
         base.join("cache"),
         base.join("cache/index"),
+        base.join("catalog"),
     ];
 
     for dir in &dirs_to_create {
@@ -150,6 +151,7 @@ pub fn run() {
             // Providers
             commands::settings::provider_catalog_list,
             commands::settings::provider_settings_get_all,
+            commands::settings::provider_settings_fetch_models,
             commands::settings::provider_settings_upsert_builtin,
             commands::settings::provider_settings_create_custom,
             commands::settings::provider_settings_update_custom,
@@ -264,6 +266,11 @@ pub fn run() {
                     });
                 }
             }
+
+            tauri::async_runtime::spawn(async {
+                crate::core::settings_manager::SettingsManager::refresh_catalog_snapshot_silently()
+                    .await;
+            });
 
             app.manage(state);
 
