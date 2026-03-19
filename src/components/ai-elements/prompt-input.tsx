@@ -970,6 +970,8 @@ export const PromptInputTextarea = ({
 
   const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = useCallback(
     (e) => {
+      const nativeEvent = e.nativeEvent as KeyboardEvent;
+
       // Call the external onKeyDown handler first
       onKeyDown?.(e);
 
@@ -979,7 +981,16 @@ export const PromptInputTextarea = ({
       }
 
       if (e.key === "Enter") {
-        if (isComposing || e.nativeEvent.isComposing) {
+        // Some IMEs report composition as finished before the Enter keydown
+        // that confirms the candidate, so keep the legacy 229 / Process guard.
+        const isImeConfirming =
+          isComposing ||
+          nativeEvent.isComposing ||
+          nativeEvent.key === "Process" ||
+          nativeEvent.keyCode === 229 ||
+          nativeEvent.which === 229;
+
+        if (isImeConfirming) {
           return;
         }
         if (e.shiftKey) {
@@ -1227,9 +1238,11 @@ export const PromptInputSubmit = ({
   onStop,
   onClick,
   children,
+  disabled,
   ...props
 }: PromptInputSubmitProps) => {
   const isGenerating = status === "submitted" || status === "streaming";
+  const allowStop = isGenerating && Boolean(onStop);
 
   let Icon = <CornerDownLeftIcon className="size-4" />;
 
@@ -1257,6 +1270,7 @@ export const PromptInputSubmit = ({
     <InputGroupButton
       aria-label={isGenerating ? "Stop" : "Submit"}
       className={cn(className)}
+      disabled={allowStop ? false : disabled}
       onClick={handleClick}
       size={size}
       type={isGenerating && onStop ? "button" : "submit"}

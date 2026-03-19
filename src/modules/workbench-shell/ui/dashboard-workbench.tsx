@@ -7,8 +7,10 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  LoaderCircle,
   MessageSquarePlus,
   MoreHorizontal,
+  Trash2,
 } from "lucide-react";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { useLanguage, type LanguagePreference } from "@/app/providers/language-provider";
@@ -22,6 +24,7 @@ import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-pane
 import type { WorkspaceDto } from "@/shared/types/api";
 import {
   threadCreate,
+  threadDelete,
   threadList,
   threadUpdateTitle,
   workspaceAdd,
@@ -234,6 +237,8 @@ export function DashboardWorkbench() {
   const [isCheckingUpdates, setCheckingUpdates] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [terminalBootstrapError, setTerminalBootstrapError] = useState<string | null>(null);
+  const [pendingDeleteThreadId, setPendingDeleteThreadId] = useState<string | null>(null);
+  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [pendingThreadRun, setPendingThreadRun] = useState<{
     id: string;
     prompt: string;
@@ -757,11 +762,13 @@ export function DashboardWorkbench() {
     setNewThreadMode(true);
     setWorkspaces((current) => clearActiveThreads(current));
     setComposerError(null);
+    setPendingDeleteThreadId(null);
     setTerminalBootstrapError(null);
   };
 
   const handleThreadSelect = (threadId: string) => {
     setNewThreadMode(false);
+    setPendingDeleteThreadId(null);
     setWorkspaces((current) => activateThread(current, threadId));
   };
 
@@ -788,7 +795,6 @@ export function DashboardWorkbench() {
             ? {
                 ...thread,
                 status,
-                time: "刚刚",
               }
             : thread,
         ),
@@ -799,6 +805,67 @@ export function DashboardWorkbench() {
   const handleRuntimeThreadRunStateChange = useCallback((state: RunState) => {
     updateActiveThreadStatus(mapRunStateToWorkbenchThreadStatus(state));
   }, [updateActiveThreadStatus]);
+
+  const handleThreadDeleteRequest = useCallback((threadId: string) => {
+    setPendingDeleteThreadId(threadId);
+    setTerminalBootstrapError(null);
+  }, []);
+
+  const handleThreadDeleteConfirm = useCallback((threadId: string) => {
+    if (deletingThreadId) {
+      return;
+    }
+
+    void (async () => {
+      setDeletingThreadId(threadId);
+      setTerminalBootstrapError(null);
+
+      try {
+        if (isTauri()) {
+          await threadDelete(threadId);
+        }
+
+        const isDeletingActiveThread = activeThread?.id === threadId;
+
+        setWorkspaces((current) => {
+          const next = current.map((workspace) => ({
+            ...workspace,
+            threads: workspace.threads.filter((thread) => thread.id !== threadId),
+          }));
+
+          return isDeletingActiveThread ? clearActiveThreads(next) : next;
+        });
+        setPendingThreadRun((current) => (current?.threadId === threadId ? null : current));
+        setTerminalCollapsedByThreadKey((current) => {
+          if (!(threadId in current)) {
+            return current;
+          }
+
+          const next = { ...current };
+          delete next[threadId];
+          return next;
+        });
+        setTerminalThreadBindings((current) => {
+          const next = Object.fromEntries(
+            Object.entries(current).filter(([, boundThreadId]) => boundThreadId !== threadId),
+          );
+          return next;
+        });
+
+        if (isDeletingActiveThread) {
+          setSelectedProject((current) => activeThreadProject ?? current);
+          setNewThreadMode(true);
+          setComposerError(null);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setTerminalBootstrapError(message);
+      } finally {
+        setDeletingThreadId(null);
+        setPendingDeleteThreadId((current) => (current === threadId ? null : current));
+      }
+    })();
+  }, [activeThread?.id, activeThreadProject, deletingThreadId]);
 
   const handleComposerSubmit = (message: PromptInputMessage) => {
     const trimmedValue = message.text?.trim() ?? "";
@@ -1159,39 +1226,73 @@ export function DashboardWorkbench() {
 
                       {isOpen && workspace.threads.length > 0 ? (
                         <div className={cn(DRAWER_LIST_STACK_CLASS, "pl-2.5")}>
-                          {workspace.threads.map((thread) => (
-                            <div key={thread.id} className="group relative">
-                              <button
-                                type="button"
-                                className={cn(
-                                  `${DRAWER_LIST_ROW_CLASS} border pr-11`,
-                                  thread.active
-                                    ? "border-app-border-strong bg-app-surface-active text-app-foreground"
-                                    : "border-transparent bg-transparent text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                          {workspace.threads.map((thread) => {
+                            const isDeletePending = pendingDeleteThreadId === thread.id;
+                            const isDeleting = deletingThreadId === thread.id;
+
+                            return (
+                              <div key={thread.id} className="group relative">
+                                <button
+                                  type="button"
+                                  className={cn(
+                                    `${DRAWER_LIST_ROW_CLASS} border pr-[4.5rem]`,
+                                    thread.active
+                                      ? "border-app-border-strong bg-app-surface-active text-app-foreground"
+                                      : "border-transparent bg-transparent text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                                  )}
+                                  onClick={() => handleThreadSelect(thread.id)}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <ThreadStatusIndicator
+                                      status={thread.status}
+                                      emphasis={thread.active ? "default" : "subtle"}
+                                    />
+                                    <p className={DRAWER_LIST_LABEL_CLASS}>{thread.name}</p>
+                                  </div>
+                                </button>
+                                <span
+                                  className={cn(
+                                    "pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-app-subtle transition-opacity duration-200",
+                                    isDeletePending || isDeleting ? "opacity-0" : "group-hover:opacity-0",
+                                  )}
+                                >
+                                  {thread.time}
+                                </span>
+                                {isDeletePending || isDeleting ? (
+                                  <button
+                                    type="button"
+                                    aria-label={isDeleting ? "正在删除 thread" : "确认删除 thread"}
+                                    title={isDeleting ? "Deleting" : "Delete"}
+                                    className="absolute right-1.5 top-1/2 inline-flex h-7 -translate-y-1/2 items-center justify-center rounded-md border border-app-danger/20 bg-app-danger/10 px-2 text-[11px] font-medium text-app-danger transition-colors hover:border-app-danger/30 hover:bg-app-danger/14 disabled:cursor-not-allowed disabled:opacity-80"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      handleThreadDeleteConfirm(thread.id);
+                                    }}
+                                    disabled={isDeleting}
+                                  >
+                                    {isDeleting ? (
+                                      <LoaderCircle className="size-3.5 animate-spin" />
+                                    ) : (
+                                      "Delete"
+                                    )}
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    aria-label="删除 thread"
+                                    title="Delete thread"
+                                    className="absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-app-danger opacity-0 transition-all duration-200 hover:bg-app-danger/10 hover:text-app-danger group-hover:opacity-100"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      handleThreadDeleteRequest(thread.id);
+                                    }}
+                                  >
+                                    <Trash2 className="size-4" />
+                                  </button>
                                 )}
-                                onClick={() => handleThreadSelect(thread.id)}
-                              >
-                                <div className="flex items-center gap-2">
-                                  <ThreadStatusIndicator
-                                    status={thread.status}
-                                    emphasis={thread.active ? "default" : "subtle"}
-                                  />
-                                  <p className={DRAWER_LIST_LABEL_CLASS}>{thread.name}</p>
-                                </div>
-                              </button>
-                              <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-app-subtle transition-opacity duration-200 group-hover:opacity-0">
-                                {thread.time}
-                              </span>
-                              <button
-                                type="button"
-                                aria-label="更多操作"
-                                title="更多操作"
-                                className={DRAWER_OVERFLOW_ACTION_CLASS}
-                              >
-                                <MoreHorizontal className="size-4" />
-                              </button>
-                            </div>
-                          ))}
+                              </div>
+                            );
+                          })}
                         </div>
                       ) : null}
                     </div>

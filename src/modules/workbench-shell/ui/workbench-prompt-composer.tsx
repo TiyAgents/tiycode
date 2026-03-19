@@ -198,9 +198,10 @@ function PromptInputSubmitButton({
   const attachments = usePromptInputAttachments();
   const hasText = Boolean(composerValue.trim());
   const hasAttachments = attachments.files.length > 0;
+  const isStopping = status === "submitted" || status === "streaming";
   const canSubmit = Boolean(activeProfile) && (hasText || (allowAttachmentsOnly && hasAttachments));
 
-  return <PromptInputSubmit disabled={!canSubmit} onStop={onStop} status={status} />;
+  return <PromptInputSubmit disabled={isStopping ? false : !canSubmit} onStop={onStop} status={status} />;
 }
 
 function ProfileInlineIdentity({

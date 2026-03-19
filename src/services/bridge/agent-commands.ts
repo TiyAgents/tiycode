@@ -1,9 +1,227 @@
 import { invoke, isTauri, Channel } from "@tauri-apps/api/core";
-import type { RunModelPlanDto, ThreadStreamEvent } from "@/shared/types/api";
+import type {
+  RunModelPlanDto,
+  SubagentActivityStatus,
+  SubagentProgressSnapshot,
+  ThreadStreamEvent,
+} from "@/shared/types/api";
 
 const requireTauri = (cmd: string) => {
   if (!isTauri()) throw new Error(`${cmd} requires Tauri runtime`);
 };
+
+type RawThreadStreamEvent = {
+  type: ThreadStreamEvent["type"];
+  [key: string]: unknown;
+};
+
+function readRequiredString(
+  event: RawThreadStreamEvent,
+  camelKey: string,
+  snakeKey: string,
+) {
+  const value = event[camelKey] ?? event[snakeKey];
+  if (typeof value !== "string") {
+    throw new Error(`Malformed thread stream event '${event.type}': missing ${camelKey}`);
+  }
+  return value;
+}
+
+function readBoolean(
+  event: RawThreadStreamEvent,
+  camelKey: string,
+  snakeKey: string,
+) {
+  const value = event[camelKey] ?? event[snakeKey];
+  if (typeof value !== "boolean") {
+    throw new Error(`Malformed thread stream event '${event.type}': missing ${camelKey}`);
+  }
+  return value;
+}
+
+function readOptionalString(
+  event: RawThreadStreamEvent,
+  camelKey: string,
+  snakeKey: string,
+) {
+  const value = event[camelKey] ?? event[snakeKey];
+  if (value == null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`Malformed thread stream event '${event.type}': invalid ${camelKey}`);
+  }
+  return value;
+}
+
+function readValue(
+  event: RawThreadStreamEvent,
+  camelKey: string,
+  snakeKey: string,
+) {
+  return event[camelKey] ?? event[snakeKey];
+}
+
+function readSnapshot(
+  event: RawThreadStreamEvent,
+  camelKey: string,
+  snakeKey: string,
+): SubagentProgressSnapshot {
+  return readValue(event, camelKey, snakeKey) as SubagentProgressSnapshot;
+}
+
+function readActivity(
+  event: RawThreadStreamEvent,
+  camelKey: string,
+  snakeKey: string,
+): SubagentActivityStatus {
+  return readValue(event, camelKey, snakeKey) as SubagentActivityStatus;
+}
+
+function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStreamEvent {
+  switch (rawEvent.type) {
+    case "run_started":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        runMode: readRequiredString(rawEvent, "runMode", "run_mode"),
+      };
+    case "message_delta":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        messageId: readRequiredString(rawEvent, "messageId", "message_id"),
+        delta: readRequiredString(rawEvent, "delta", "delta"),
+      };
+    case "message_completed":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        messageId: readRequiredString(rawEvent, "messageId", "message_id"),
+        content: readRequiredString(rawEvent, "content", "content"),
+      };
+    case "plan_updated":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        plan: readValue(rawEvent, "plan", "plan"),
+      };
+    case "reasoning_updated":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        reasoning: readRequiredString(rawEvent, "reasoning", "reasoning"),
+      };
+    case "queue_updated":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        queue: readValue(rawEvent, "queue", "queue"),
+      };
+    case "subagent_started":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        subtaskId: readRequiredString(rawEvent, "subtaskId", "subtask_id"),
+        helperKind: readRequiredString(rawEvent, "helperKind", "helper_kind"),
+        snapshot: readSnapshot(rawEvent, "snapshot", "snapshot"),
+      };
+    case "subagent_progress":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        subtaskId: readRequiredString(rawEvent, "subtaskId", "subtask_id"),
+        helperKind: readRequiredString(rawEvent, "helperKind", "helper_kind"),
+        activity: readActivity(rawEvent, "activity", "activity"),
+        message: readRequiredString(rawEvent, "message", "message"),
+        snapshot: readSnapshot(rawEvent, "snapshot", "snapshot"),
+      };
+    case "subagent_completed":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        subtaskId: readRequiredString(rawEvent, "subtaskId", "subtask_id"),
+        helperKind: readRequiredString(rawEvent, "helperKind", "helper_kind"),
+        summary: readOptionalString(rawEvent, "summary", "summary"),
+        snapshot: readSnapshot(rawEvent, "snapshot", "snapshot"),
+      };
+    case "subagent_failed":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        subtaskId: readRequiredString(rawEvent, "subtaskId", "subtask_id"),
+        helperKind: readRequiredString(rawEvent, "helperKind", "helper_kind"),
+        error: readRequiredString(rawEvent, "error", "error"),
+        snapshot: readSnapshot(rawEvent, "snapshot", "snapshot"),
+      };
+    case "tool_requested":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        toolCallId: readRequiredString(rawEvent, "toolCallId", "tool_call_id"),
+        toolName: readRequiredString(rawEvent, "toolName", "tool_name"),
+        toolInput: readValue(rawEvent, "toolInput", "tool_input"),
+      };
+    case "approval_required":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        toolCallId: readRequiredString(rawEvent, "toolCallId", "tool_call_id"),
+        toolName: readRequiredString(rawEvent, "toolName", "tool_name"),
+        toolInput: readValue(rawEvent, "toolInput", "tool_input"),
+        reason: readRequiredString(rawEvent, "reason", "reason"),
+      };
+    case "approval_resolved":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        toolCallId: readRequiredString(rawEvent, "toolCallId", "tool_call_id"),
+        approved: readBoolean(rawEvent, "approved", "approved"),
+      };
+    case "tool_running":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        toolCallId: readRequiredString(rawEvent, "toolCallId", "tool_call_id"),
+      };
+    case "tool_completed":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        toolCallId: readRequiredString(rawEvent, "toolCallId", "tool_call_id"),
+        result: readValue(rawEvent, "result", "result"),
+      };
+    case "tool_failed":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        toolCallId: readRequiredString(rawEvent, "toolCallId", "tool_call_id"),
+        error: readRequiredString(rawEvent, "error", "error"),
+      };
+    case "run_completed":
+    case "run_cancelled":
+    case "run_interrupted":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+      };
+    case "run_failed":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        error: readRequiredString(rawEvent, "error", "error"),
+      };
+  }
+}
+
+function coerceThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStreamEvent {
+  try {
+    return normalizeThreadStreamEvent(rawEvent);
+  } catch (error) {
+    console.error("Failed to normalize thread stream event", rawEvent, error);
+    return rawEvent as ThreadStreamEvent;
+  }
+}
 
 /**
  * Start a new agent run for a thread.
@@ -20,8 +238,10 @@ export async function threadStartRun(
 ): Promise<string> {
   requireTauri("thread_start_run");
 
-  const channel = new Channel<ThreadStreamEvent>();
-  channel.onmessage = onEvent;
+  const channel = new Channel<RawThreadStreamEvent>();
+  channel.onmessage = (event) => {
+    onEvent(coerceThreadStreamEvent(event));
+  };
 
   return invoke<string>("thread_start_run", {
     threadId,
