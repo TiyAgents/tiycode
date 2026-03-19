@@ -68,6 +68,9 @@ impl AgentRunManager {
         thread_id: &str,
         prompt: &str,
         run_mode: &str,
+        profile_id: Option<String>,
+        provider_id: Option<String>,
+        model_id: Option<String>,
         model_plan: serde_json::Value,
     ) -> Result<(String, mpsc::Receiver<ThreadStreamEvent>), AppError> {
         // 1. Look up thread's workspace to get canonical_path for tool boundary checks
@@ -126,10 +129,10 @@ impl AgentRunManager {
             let run_insert = run_repo::RunInsert {
                 id: run_id.clone(),
                 thread_id: thread_id.to_string(),
-                profile_id: None,
+                profile_id,
                 run_mode: run_mode.to_string(),
-                provider_id: None,
-                model_id: None,
+                provider_id,
+                model_id,
                 effective_model_plan_json: Some(model_plan.to_string()),
                 status: "created".to_string(),
             };

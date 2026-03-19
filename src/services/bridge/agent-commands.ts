@@ -1,5 +1,5 @@
 import { invoke, isTauri, Channel } from "@tauri-apps/api/core";
-import type { ThreadStreamEvent, SidecarStatusDto } from "@/shared/types/api";
+import type { RunModelPlanDto, ThreadStreamEvent, SidecarStatusDto } from "@/shared/types/api";
 
 const requireTauri = (cmd: string) => {
   if (!isTauri()) throw new Error(`${cmd} requires Tauri runtime`);
@@ -16,6 +16,7 @@ export async function threadStartRun(
   prompt: string,
   onEvent: (event: ThreadStreamEvent) => void,
   runMode?: string,
+  modelPlan?: RunModelPlanDto | null,
 ): Promise<string> {
   requireTauri("thread_start_run");
 
@@ -26,6 +27,7 @@ export async function threadStartRun(
     threadId,
     prompt,
     runMode: runMode ?? null,
+    modelPlan: modelPlan ?? null,
     onEvent: channel,
   });
 }

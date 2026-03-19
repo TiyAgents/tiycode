@@ -16,6 +16,7 @@
  */
 
 import { threadStartRun, threadCancelRun, toolApprovalRespond } from "@/services/bridge";
+import type { RunModelPlanDto } from "@/shared/types/api";
 import type { ThreadStreamEvent } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -94,11 +95,12 @@ export class ThreadStream {
     threadId: string,
     prompt: string,
     runMode?: string,
+    modelPlan?: RunModelPlanDto | null,
   ): Promise<string> {
     try {
       const runId = await threadStartRun(threadId, prompt, (event) => {
         this.handleEvent(event);
-      }, runMode);
+      }, runMode, modelPlan);
 
       this.currentRunId = runId;
       return runId;

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -11,7 +12,8 @@ use tiy_core::catalog::{
 use tiy_core::provider::get_provider;
 use tiy_core::types::{
     Context as TiyContext, Cost as TiyCost, InputType, Message as TiyMessage, Model as TiyModel,
-    Provider as TiyProvider, StopReason, StreamOptions as TiyStreamOptions, UserMessage,
+    OnPayloadFn, Provider as TiyProvider, StopReason, StreamOptions as TiyStreamOptions,
+    UserMessage,
 };
 
 use crate::model::errors::{AppError, ErrorSource};
@@ -169,6 +171,57 @@ fn parse_custom_headers_map(custom_headers_json: Option<&str>) -> Option<HashMap
             })
             .ok()
     })
+}
+
+fn parse_provider_options_value(provider_options_json: Option<&str>) -> Option<serde_json::Value> {
+    provider_options_json.and_then(|json| {
+        serde_json::from_str::<serde_json::Value>(json)
+            .map_err(|error| {
+                tracing::warn!(error = %error, "failed to parse provider model options");
+                error
+            })
+            .ok()
+            .and_then(|value| match value {
+                serde_json::Value::Object(map) if map.is_empty() => None,
+                serde_json::Value::Object(_) => Some(value),
+                other => {
+                    tracing::warn!(value = %other, "provider model options must be a JSON object");
+                    None
+                }
+            })
+    })
+}
+
+fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
+    match (base, patch) {
+        (serde_json::Value::Object(base_map), serde_json::Value::Object(patch_map)) => {
+            for (key, patch_value) in patch_map {
+                if let Some(base_value) = base_map.get_mut(key) {
+                    merge_json_value(base_value, patch_value);
+                } else {
+                    base_map.insert(key.clone(), patch_value.clone());
+                }
+            }
+        }
+        (base_value, patch_value) => {
+            *base_value = patch_value.clone();
+        }
+    }
+}
+
+fn build_provider_options_payload_hook(
+    provider_options_json: Option<&str>,
+) -> Option<OnPayloadFn> {
+    let provider_options = parse_provider_options_value(provider_options_json)?;
+
+    Some(Arc::new(move |payload, _model| {
+        let provider_options = provider_options.clone();
+        Box::pin(async move {
+            let mut merged = payload;
+            merge_json_value(&mut merged, &provider_options);
+            Some(merged)
+        })
+    }))
 }
 
 fn normalize_catalog_token(value: &str) -> String {
@@ -353,7 +406,7 @@ fn build_provider_model_test_request(
         headers: parse_custom_headers_map(provider.custom_headers_json.as_deref()),
         session_id: None,
         security: None,
-        on_payload: None,
+        on_payload: build_provider_options_payload_hook(model.provider_options_json.as_deref()),
         transport: None,
         max_retry_delay_ms: None,
     };
@@ -1575,5 +1628,105 @@ mod tests {
         };
 
         assert_eq!(prompt, PROVIDER_MODEL_TEST_PROMPT);
+    }
+
+    #[tokio::test]
+    async fn provider_options_payload_hook_deep_merges_request_body() {
+        let hook = build_provider_options_payload_hook(Some(
+            r#"{"thinking":{"type":"disabled"},"metadata":{"source":"settings"},"temperature":0.2}"#,
+        ))
+        .expect("provider options hook should be present");
+
+        let model = TiyModel::builder()
+            .id("gpt-5")
+            .name("GPT-5")
+            .provider(TiyProvider::OpenAI)
+            .context_window(128_000)
+            .max_tokens(16_384)
+            .input(vec![InputType::Text])
+            .cost(TiyCost::default())
+            .build()
+            .expect("test model should build");
+
+        let merged = hook(
+            json!({
+                "model": "gpt-5",
+                "thinking": { "budget": 1024 },
+                "temperature": 0.7
+            }),
+            model,
+        )
+        .await
+        .expect("hook should return merged payload");
+
+        assert_eq!(merged["thinking"]["budget"].as_i64(), Some(1024));
+        assert_eq!(merged["thinking"]["type"].as_str(), Some("disabled"));
+        assert_eq!(merged["metadata"]["source"].as_str(), Some("settings"));
+        assert_eq!(merged["temperature"].as_f64(), Some(0.2));
+    }
+
+    #[test]
+    fn provider_options_payload_hook_ignores_invalid_json() {
+        assert!(build_provider_options_payload_hook(Some("[]")).is_none());
+        assert!(build_provider_options_payload_hook(Some("{")).is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_model_test_request_sets_payload_hook_from_provider_options() {
+        let provider = ProviderRecord {
+            id: "provider-1".to_string(),
+            provider_kind: ProviderKind::Builtin,
+            provider_key: "openai".to_string(),
+            provider_type: "openai".to_string(),
+            display_name: "OpenAI".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key_encrypted: Some("sk-test".to_string()),
+            enabled: true,
+            mapping_locked: true,
+            custom_headers_json: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let model = ProviderModelRecord {
+            id: "model-1".to_string(),
+            provider_id: "provider-1".to_string(),
+            model_name: "gpt-4o-mini".to_string(),
+            sort_index: 0,
+            display_name: Some("GPT-4o Mini".to_string()),
+            enabled: true,
+            context_window: Some("128000".to_string()),
+            max_output_tokens: Some("16384".to_string()),
+            capabilities_json: Some(r#"{"toolCalling":true}"#.to_string()),
+            provider_options_json: Some(
+                r#"{"thinking":{"type":"disabled"},"response_format":{"type":"json_object"}}"#
+                    .to_string(),
+            ),
+            is_manual: false,
+            created_at: String::new(),
+        };
+
+        let request = build_provider_model_test_request(&provider, &model);
+        let hook = request
+            .options
+            .on_payload
+            .as_ref()
+            .expect("provider options should create an on_payload hook");
+
+        let merged = hook(
+            json!({
+                "model": "gpt-4o-mini",
+                "thinking": { "budget": 32 }
+            }),
+            request.model.clone(),
+        )
+        .await
+        .expect("hook should return merged payload");
+
+        assert_eq!(merged["thinking"]["budget"].as_i64(), Some(32));
+        assert_eq!(merged["thinking"]["type"].as_str(), Some("disabled"));
+        assert_eq!(
+            merged["response_format"]["type"].as_str(),
+            Some("json_object")
+        );
     }
 }

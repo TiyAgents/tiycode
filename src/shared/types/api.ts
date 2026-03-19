@@ -155,6 +155,31 @@ export interface AgentProfileInput {
   isDefault?: boolean;
 }
 
+export interface RunModelPlanRoleDto {
+  providerId: string;
+  modelRecordId: string;
+  provider: string;
+  providerKey: string;
+  providerType: string;
+  providerName: string;
+  model: string;
+  modelId: string;
+  modelDisplayName: string;
+  baseUrl: string;
+  contextWindow?: string | null;
+  maxOutputTokens?: string | null;
+  customHeaders?: Record<string, string> | null;
+  providerOptions?: Record<string, unknown> | null;
+}
+
+export interface RunModelPlanDto {
+  profileId?: string | null;
+  profileName?: string | null;
+  primary?: RunModelPlanRoleDto | null;
+  auxiliary?: RunModelPlanRoleDto | null;
+  lightweight?: RunModelPlanRoleDto | null;
+}
+
 // ---------------------------------------------------------------------------
 // Thread
 // ---------------------------------------------------------------------------
