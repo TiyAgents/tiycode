@@ -16,7 +16,11 @@
  */
 
 import { threadStartRun, threadCancelRun, toolApprovalRespond } from "@/services/bridge";
-import type { RunModelPlanDto } from "@/shared/types/api";
+import type {
+  RunModelPlanDto,
+  SubagentActivityStatus,
+  SubagentProgressSnapshot,
+} from "@/shared/types/api";
 import type { ThreadStreamEvent } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -81,6 +85,16 @@ export type HelperEvent =
       runId: string;
       subtaskId: string;
       helperKind: string;
+      snapshot: SubagentProgressSnapshot;
+    }
+  | {
+      kind: "progress";
+      runId: string;
+      subtaskId: string;
+      helperKind: string;
+      activity: SubagentActivityStatus;
+      message: string;
+      snapshot: SubagentProgressSnapshot;
     }
   | {
       kind: "completed";
@@ -88,6 +102,7 @@ export type HelperEvent =
       subtaskId: string;
       helperKind: string;
       summary?: string | null;
+      snapshot: SubagentProgressSnapshot;
     }
   | {
       kind: "failed";
@@ -95,6 +110,7 @@ export type HelperEvent =
       subtaskId: string;
       helperKind: string;
       error: string;
+      snapshot: SubagentProgressSnapshot;
     };
 
 // ---------------------------------------------------------------------------
@@ -115,6 +131,7 @@ export class ThreadStream {
   onRawEvent: ((event: ThreadStreamEvent) => void) | null = null;
 
   private currentRunId: string | null = null;
+  private hiddenToolCallIds = new Set<string>();
 
   get runId() {
     return this.currentRunId;
@@ -182,6 +199,7 @@ export class ThreadStream {
    */
   reset() {
     this.currentRunId = null;
+    this.hiddenToolCallIds.clear();
   }
 
   // -----------------------------------------------------------------------
@@ -240,6 +258,19 @@ export class ThreadStream {
           runId: event.runId,
           subtaskId: event.subtaskId,
           helperKind: event.helperKind,
+          snapshot: event.snapshot,
+        });
+        break;
+
+      case "subagent_progress":
+        this.onHelperEvent?.({
+          kind: "progress",
+          runId: event.runId,
+          subtaskId: event.subtaskId,
+          helperKind: event.helperKind,
+          activity: event.activity,
+          message: event.message,
+          snapshot: event.snapshot,
         });
         break;
 
@@ -250,6 +281,7 @@ export class ThreadStream {
           subtaskId: event.subtaskId,
           helperKind: event.helperKind,
           summary: event.summary,
+          snapshot: event.snapshot,
         });
         break;
 
@@ -260,10 +292,15 @@ export class ThreadStream {
           subtaskId: event.subtaskId,
           helperKind: event.helperKind,
           error: event.error,
+          snapshot: event.snapshot,
         });
         break;
 
       case "tool_requested":
+        if (isRuntimeOrchestrationToolName(event.toolName)) {
+          this.hiddenToolCallIds.add(event.toolCallId);
+          break;
+        }
         this.onToolEvent?.({
           kind: "requested",
           runId: event.runId,
@@ -274,6 +311,9 @@ export class ThreadStream {
         break;
 
       case "approval_required":
+        if (this.hiddenToolCallIds.has(event.toolCallId)) {
+          break;
+        }
         this.onRunStateChange?.("waiting_approval", event.runId);
         this.onApproval?.({
           kind: "required",
@@ -286,6 +326,9 @@ export class ThreadStream {
         break;
 
       case "approval_resolved":
+        if (this.hiddenToolCallIds.has(event.toolCallId)) {
+          break;
+        }
         this.onRunStateChange?.("running", event.runId);
         this.onApproval?.({
           kind: "resolved",
@@ -296,6 +339,9 @@ export class ThreadStream {
         break;
 
       case "tool_running":
+        if (this.hiddenToolCallIds.has(event.toolCallId)) {
+          break;
+        }
         this.onToolEvent?.({
           kind: "running",
           runId: event.runId,
@@ -304,6 +350,10 @@ export class ThreadStream {
         break;
 
       case "tool_completed":
+        if (this.hiddenToolCallIds.has(event.toolCallId)) {
+          this.hiddenToolCallIds.delete(event.toolCallId);
+          break;
+        }
         this.onToolEvent?.({
           kind: "completed",
           runId: event.runId,
@@ -313,6 +363,10 @@ export class ThreadStream {
         break;
 
       case "tool_failed":
+        if (this.hiddenToolCallIds.has(event.toolCallId)) {
+          this.hiddenToolCallIds.delete(event.toolCallId);
+          break;
+        }
         this.onToolEvent?.({
           kind: "failed",
           runId: event.runId,
@@ -343,4 +397,12 @@ export class ThreadStream {
         break;
     }
   }
+}
+
+function isRuntimeOrchestrationToolName(toolName: string) {
+  return (
+    toolName === "delegate_research"
+    || toolName === "delegate_plan_review"
+    || toolName === "delegate_code_review"
+  );
 }

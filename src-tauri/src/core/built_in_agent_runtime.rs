@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::core::agent_session::{AgentSession, AgentSessionSpec};
-use crate::core::helper_agent_orchestrator::HelperAgentOrchestrator;
+use crate::core::subagent::HelperAgentOrchestrator;
 use crate::core::tool_gateway::ToolGateway;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::AppError;

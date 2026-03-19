@@ -268,6 +268,16 @@ export interface AddMessageInput {
 // Thread Stream Events (from Rust channels)
 // ---------------------------------------------------------------------------
 
+export type SubagentActivityStatus = "started" | "succeeded" | "failed";
+
+export interface SubagentProgressSnapshot {
+  totalToolCalls: number;
+  completedSteps: number;
+  currentAction: string | null;
+  toolCounts: Record<string, number>;
+  recentActions: string[];
+}
+
 export type ThreadStreamEvent =
   | { type: "run_started"; runId: string; runMode: string }
   | { type: "message_delta"; runId: string; messageId: string; delta: string }
@@ -280,13 +290,29 @@ export type ThreadStreamEvent =
   | { type: "plan_updated"; runId: string; plan: unknown }
   | { type: "reasoning_updated"; runId: string; reasoning: string }
   | { type: "queue_updated"; runId: string; queue: unknown }
-  | { type: "subagent_started"; runId: string; subtaskId: string; helperKind: string }
+  | {
+      type: "subagent_started";
+      runId: string;
+      subtaskId: string;
+      helperKind: string;
+      snapshot: SubagentProgressSnapshot;
+    }
+  | {
+      type: "subagent_progress";
+      runId: string;
+      subtaskId: string;
+      helperKind: string;
+      activity: SubagentActivityStatus;
+      message: string;
+      snapshot: SubagentProgressSnapshot;
+    }
   | {
       type: "subagent_completed";
       runId: string;
       subtaskId: string;
       helperKind: string;
       summary: string | null;
+      snapshot: SubagentProgressSnapshot;
     }
   | {
       type: "subagent_failed";
@@ -294,6 +320,7 @@ export type ThreadStreamEvent =
       subtaskId: string;
       helperKind: string;
       error: string;
+      snapshot: SubagentProgressSnapshot;
     }
   | {
       type: "tool_requested";

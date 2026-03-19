@@ -216,6 +216,9 @@ impl AgentRunManager {
             ThreadStreamEvent::ToolRequested { .. } => {
                 run_repo::update_status(&self.pool, run_id, "waiting_tool_result").await?;
             }
+            ThreadStreamEvent::SubagentStarted { .. } => {
+                run_repo::update_status(&self.pool, run_id, "waiting_tool_result").await?;
+            }
             ThreadStreamEvent::ApprovalRequired { .. } => {
                 run_repo::update_status(&self.pool, run_id, "waiting_approval").await?;
                 let thread_id = self.get_thread_id(run_id).await;
@@ -227,7 +230,10 @@ impl AgentRunManager {
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
             }
-            ThreadStreamEvent::ToolCompleted { .. } | ThreadStreamEvent::ToolFailed { .. } => {
+            ThreadStreamEvent::ToolCompleted { .. }
+            | ThreadStreamEvent::ToolFailed { .. }
+            | ThreadStreamEvent::SubagentCompleted { .. }
+            | ThreadStreamEvent::SubagentFailed { .. } => {
                 run_repo::update_status(&self.pool, run_id, "running").await?;
             }
             ThreadStreamEvent::RunCompleted { .. } => {
@@ -284,7 +290,10 @@ impl AgentRunManager {
     ) -> Result<String, AppError> {
         let mut runs = self.active_runs.lock().await;
         let run = runs.get_mut(run_id).ok_or_else(|| {
-            AppError::internal(ErrorSource::Thread, "active run not found for runtime event")
+            AppError::internal(
+                ErrorSource::Thread,
+                "active run not found for runtime event",
+            )
         })?;
 
         if let Some(existing) = run.streaming_message_id.clone() {

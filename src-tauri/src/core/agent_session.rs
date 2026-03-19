@@ -3,15 +3,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 use sqlx::SqlitePool;
-use tokio::sync::mpsc;
 use tiy_core::agent::{Agent, AgentMessage, AgentTool, AgentToolResult, ToolExecutionMode};
 use tiy_core::thinking::ThinkingLevel;
 use tiy_core::types::{
     AssistantMessage, AssistantMessageEvent, ContentBlock, Cost, InputType, Model, Provider,
     StopReason, TextContent, Transport, Usage, UserMessage,
 };
+use tokio::sync::mpsc;
 
-use crate::core::helper_agent_orchestrator::{HelperAgentOrchestrator, HelperRunRequest};
+use crate::core::subagent::{
+    runtime_orchestration_tools, HelperAgentOrchestrator, HelperRunRequest,
+    RuntimeOrchestrationTool,
+};
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
 };
@@ -25,6 +28,8 @@ const DEFAULT_CONTEXT_WINDOW: u32 = 128_000;
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 16_384;
 const DEFAULT_FULL_TOOL_PROFILE: &str = "default_full";
 const PLAN_READ_ONLY_TOOL_PROFILE: &str = "plan_read_only";
+const STANDARD_TOOL_TIMEOUT_SECS: u64 = 120;
+const SUBAGENT_TOOL_TIMEOUT_SECS: u64 = 300;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,7 +109,8 @@ pub async fn build_session_spec(
     let raw_plan: RuntimeModelPlan =
         serde_json::from_value(model_plan_value.clone()).unwrap_or_default();
     let resolved_plan = resolve_model_plan(pool, raw_plan.clone()).await?;
-    let history_messages = message_repo::list_recent(pool, thread_id, None, MESSAGE_HISTORY_LIMIT).await?;
+    let history_messages =
+        message_repo::list_recent(pool, thread_id, None, MESSAGE_HISTORY_LIMIT).await?;
     let system_prompt = build_system_prompt(pool, &raw_plan, run_mode).await?;
 
     Ok(AgentSessionSpec {
@@ -177,13 +183,7 @@ impl AgentSession {
         let message_id_ref = Arc::clone(&current_message_id);
         let reasoning_ref = Arc::clone(&reasoning_buffer);
         let unsubscribe = self.agent.subscribe(move |event| {
-            handle_agent_event(
-                &run_id,
-                &event_tx,
-                &message_id_ref,
-                &reasoning_ref,
-                event,
-            );
+            handle_agent_event(&run_id, &event_tx, &message_id_ref, &reasoning_ref, event);
         });
 
         let _ = self.event_tx.send(ThreadStreamEvent::RunStarted {
@@ -244,18 +244,18 @@ impl AgentSession {
             return agent_error_result(format!("failed to persist tool call: {error}"));
         }
 
+        if let Some(tool) = RuntimeOrchestrationTool::parse(tool_name) {
+            return self
+                .execute_helper_tool(tool, tool_call_id, tool_input)
+                .await;
+        }
+
         let _ = self.event_tx.send(ThreadStreamEvent::ToolRequested {
             run_id: self.spec.run_id.clone(),
             tool_call_id: tool_call_id.to_string(),
             tool_name: tool_name.to_string(),
             tool_input: tool_input.clone(),
         });
-
-        if is_helper_tool(tool_name) {
-            return self
-                .execute_helper_tool(tool_name, tool_call_id, tool_input)
-                .await;
-        }
 
         let request = ToolExecutionRequest {
             run_id: self.spec.run_id.clone(),
@@ -270,9 +270,10 @@ impl AgentSession {
         let event_tx = self.event_tx.clone();
         let run_id = self.spec.run_id.clone();
         let tool_call_id_owned = tool_call_id.to_string();
-        let outcome = self
-            .tool_gateway
-            .execute_tool_call(
+        let tool_timeout = standard_tool_timeout();
+        let outcome = tokio::time::timeout(
+            tool_timeout,
+            self.tool_gateway.execute_tool_call(
                 request,
                 self.abort_signal.clone(),
                 ToolExecutionOptions::default(),
@@ -296,8 +297,36 @@ impl AgentSession {
                         });
                     }
                 },
-            )
-            .await;
+            ),
+        )
+        .await;
+
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                let message = format!(
+                    "Tool '{}' timed out after {}s",
+                    tool_name, STANDARD_TOOL_TIMEOUT_SECS
+                );
+                let result = serde_json::json!({ "error": message.clone() });
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_id,
+                    &result.to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+
+                let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                    run_id: self.spec.run_id.clone(),
+                    tool_call_id: tool_call_id.to_string(),
+                    error: message.clone(),
+                });
+
+                return agent_error_result(message);
+            }
+        };
 
         match outcome {
             Ok(outcome) => {
@@ -359,7 +388,7 @@ impl AgentSession {
 
     async fn execute_helper_tool(
         &self,
-        tool_name: &str,
+        tool: RuntimeOrchestrationTool,
         tool_call_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
@@ -371,13 +400,16 @@ impl AgentSession {
             .to_string();
 
         if task.is_empty() {
+            tool_call_repo::update_result(
+                &self.pool,
+                tool_call_id,
+                &serde_json::json!({ "error": "missing helper task" }).to_string(),
+                "failed",
+            )
+            .await
+            .ok();
             return agent_error_result("missing helper task");
         }
-
-        let _ = self.event_tx.send(ThreadStreamEvent::ToolRunning {
-            run_id: self.spec.run_id.clone(),
-            tool_call_id: tool_call_id.to_string(),
-        });
 
         let helper_role = self
             .spec
@@ -391,7 +423,7 @@ impl AgentSession {
             .run_helper(HelperRunRequest {
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
-                helper_kind: tool_name.to_string(),
+                tool,
                 parent_tool_call_id: Some(tool_call_id.to_string()),
                 task,
                 model_role: helper_role,
@@ -404,7 +436,10 @@ impl AgentSession {
 
         match result {
             Ok(summary) => {
-                let result = serde_json::json!({ "summary": summary.summary.clone() });
+                let result = serde_json::json!({
+                    "summary": summary.summary.clone(),
+                    "snapshot": summary.snapshot,
+                });
                 tool_call_repo::update_result(
                     &self.pool,
                     tool_call_id,
@@ -413,12 +448,6 @@ impl AgentSession {
                 )
                 .await
                 .ok();
-
-                let _ = self.event_tx.send(ThreadStreamEvent::ToolCompleted {
-                    run_id: self.spec.run_id.clone(),
-                    tool_call_id: tool_call_id.to_string(),
-                    result: result.clone(),
-                });
 
                 AgentToolResult {
                     content: vec![ContentBlock::Text(TextContent::new(summary.summary))],
@@ -434,12 +463,6 @@ impl AgentSession {
                 )
                 .await
                 .ok();
-
-                let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
-                    run_id: self.spec.run_id.clone(),
-                    tool_call_id: tool_call_id.to_string(),
-                    error: error.to_string(),
-                });
 
                 agent_error_result(error.to_string())
             }
@@ -457,6 +480,7 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
     agent.set_tool_execution(ToolExecutionMode::Sequential);
     agent.set_thinking_level(spec.model_plan.thinking_level);
     agent.set_transport(spec.model_plan.transport);
+    agent.set_security_config(runtime_security_config());
 
     if let Some(api_key) = spec.model_plan.primary.api_key.clone() {
         agent.set_api_key(api_key);
@@ -568,13 +592,6 @@ fn reset_message_id(current_message_id: &StdMutex<Option<String>>) {
     }
 }
 
-fn is_helper_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "delegate_research" | "delegate_plan_review" | "delegate_code_review"
-    )
-}
-
 fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
     let mut tools = vec![
         AgentTool::new(
@@ -628,37 +645,8 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                 "properties": {}
             }),
         ),
-        AgentTool::new(
-            "delegate_research",
-            "Delegate Research",
-            "Run a scoped helper agent to investigate a question and return a summary.",
-            serde_json::json!({
-                "type": "object",
-                "properties": { "task": { "type": "string" } },
-                "required": ["task"]
-            }),
-        ),
-        AgentTool::new(
-            "delegate_plan_review",
-            "Delegate Plan Review",
-            "Run a scoped helper agent to review a plan and return a summary.",
-            serde_json::json!({
-                "type": "object",
-                "properties": { "task": { "type": "string" } },
-                "required": ["task"]
-            }),
-        ),
-        AgentTool::new(
-            "delegate_code_review",
-            "Delegate Code Review",
-            "Run a scoped helper agent to review code and return a summary.",
-            serde_json::json!({
-                "type": "object",
-                "properties": { "task": { "type": "string" } },
-                "required": ["task"]
-            }),
-        ),
     ];
+    tools.extend(runtime_orchestration_tools());
 
     if profile_name == DEFAULT_FULL_TOOL_PROFILE {
         tools.push(AgentTool::new(
@@ -776,7 +764,8 @@ fn effective_api_for_model(model: &Model) -> tiy_core::types::Api {
 }
 
 fn agent_tool_result_from_output(output: crate::core::executors::ToolOutput) -> AgentToolResult {
-    let rendered = serde_json::to_string_pretty(&output.result).unwrap_or_else(|_| output.result.to_string());
+    let rendered =
+        serde_json::to_string_pretty(&output.result).unwrap_or_else(|_| output.result.to_string());
 
     if output.success {
         AgentToolResult {
@@ -785,7 +774,9 @@ fn agent_tool_result_from_output(output: crate::core::executors::ToolOutput) -> 
         }
     } else {
         AgentToolResult {
-            content: vec![ContentBlock::Text(TextContent::new(format!("Error: {rendered}")))],
+            content: vec![ContentBlock::Text(TextContent::new(format!(
+                "Error: {rendered}"
+            )))],
             details: Some(output.result),
         }
     }
@@ -854,10 +845,8 @@ async fn resolve_model_role(
         .clone()
         .unwrap_or_else(|| role.model.clone());
     let context_window = parse_positive_u32(role.context_window.as_deref(), DEFAULT_CONTEXT_WINDOW);
-    let max_output_tokens = parse_positive_u32(
-        role.max_output_tokens.as_deref(),
-        DEFAULT_MAX_OUTPUT_TOKENS,
-    );
+    let max_output_tokens =
+        parse_positive_u32(role.max_output_tokens.as_deref(), DEFAULT_MAX_OUTPUT_TOKENS);
 
     let mut builder = Model::builder()
         .id(&role.model)
@@ -948,6 +937,16 @@ fn normalize_provider_options(value: Option<serde_json::Value>) -> Option<serde_
     })
 }
 
+fn runtime_security_config() -> tiy_core::types::SecurityConfig {
+    let mut security = tiy_core::types::SecurityConfig::default();
+    security.agent.tool_execution_timeout_secs = SUBAGENT_TOOL_TIMEOUT_SECS;
+    security
+}
+
+fn standard_tool_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(STANDARD_TOOL_TIMEOUT_SECS)
+}
+
 fn merge_payload(mut base: serde_json::Value, patch: &serde_json::Value) -> serde_json::Value {
     merge_json_value(&mut base, patch);
     base
@@ -967,5 +966,31 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
         (base_value, patch_value) => {
             *base_value = patch_value.clone();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        runtime_security_config, standard_tool_timeout, STANDARD_TOOL_TIMEOUT_SECS,
+        SUBAGENT_TOOL_TIMEOUT_SECS,
+    };
+
+    #[test]
+    fn test_runtime_security_config_extends_helper_tool_timeout() {
+        let security = runtime_security_config();
+
+        assert_eq!(
+            security.agent.tool_execution_timeout_secs,
+            SUBAGENT_TOOL_TIMEOUT_SECS
+        );
+    }
+
+    #[test]
+    fn test_standard_tool_timeout_remains_120_seconds() {
+        assert_eq!(
+            standard_tool_timeout().as_secs(),
+            STANDARD_TOOL_TIMEOUT_SECS
+        );
     }
 }

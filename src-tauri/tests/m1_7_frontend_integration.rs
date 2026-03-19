@@ -5,6 +5,20 @@
 //! - All Tauri commands are registered in invoke_handler
 //! - No mock data residual in Rust layer
 
+fn sample_subagent_snapshot() -> tiy_agent_lib::core::subagent::SubagentProgressSnapshot {
+    let mut snapshot = tiy_agent_lib::core::subagent::SubagentProgressSnapshot::default();
+    snapshot.total_tool_calls = 2;
+    snapshot.completed_steps = 1;
+    snapshot.current_action = Some("reading src-tauri/src/core/agent_session.rs".into());
+    snapshot.tool_counts.insert("read_file".into(), 1);
+    snapshot.tool_counts.insert("search_repo".into(), 1);
+    snapshot.recent_actions = vec![
+        "Started reading src-tauri/src/core/agent_session.rs".into(),
+        "Finished reading src-tauri/src/core/agent_session.rs".into(),
+    ];
+    snapshot
+}
+
 // =========================================================================
 // T1.7.1 — ThreadStreamEvent serialization covers all variants
 // =========================================================================
@@ -183,10 +197,29 @@ fn test_thread_stream_event_subagent_events_serialization() {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
         helper_kind: "helper_scout".into(),
+        snapshot: sample_subagent_snapshot(),
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_started");
     assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_scout");
+    assert_eq!(json["snapshot"]["total_tool_calls"].as_u64().unwrap(), 2);
+
+    // SubagentProgress
+    let event = ThreadStreamEvent::SubagentProgress {
+        run_id: "run-1".into(),
+        subtask_id: "sub-1".into(),
+        helper_kind: "helper_scout".into(),
+        activity: tiy_agent_lib::core::subagent::SubagentActivityStatus::Started,
+        message: "Reading src-tauri/src/core/agent_session.rs".into(),
+        snapshot: sample_subagent_snapshot(),
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "subagent_progress");
+    assert_eq!(json["activity"].as_str().unwrap(), "started");
+    assert_eq!(
+        json["message"].as_str().unwrap(),
+        "Reading src-tauri/src/core/agent_session.rs"
+    );
 
     // SubagentCompleted
     let event = ThreadStreamEvent::SubagentCompleted {
@@ -194,6 +227,7 @@ fn test_thread_stream_event_subagent_events_serialization() {
         subtask_id: "sub-1".into(),
         helper_kind: "helper_planner".into(),
         summary: Some("Analysis complete".into()),
+        snapshot: sample_subagent_snapshot(),
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_completed");
@@ -206,6 +240,7 @@ fn test_thread_stream_event_subagent_events_serialization() {
         subtask_id: "sub-1".into(),
         helper_kind: "helper_reviewer".into(),
         error: "timeout".into(),
+        snapshot: sample_subagent_snapshot(),
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_failed");
@@ -251,18 +286,29 @@ fn test_all_events_have_type_field() {
             run_id: "r".into(),
             subtask_id: "s".into(),
             helper_kind: "helper_scout".into(),
+            snapshot: sample_subagent_snapshot(),
+        },
+        ThreadStreamEvent::SubagentProgress {
+            run_id: "r".into(),
+            subtask_id: "s".into(),
+            helper_kind: "helper_scout".into(),
+            activity: tiy_agent_lib::core::subagent::SubagentActivityStatus::Started,
+            message: "Reading foo".into(),
+            snapshot: sample_subagent_snapshot(),
         },
         ThreadStreamEvent::SubagentCompleted {
             run_id: "r".into(),
             subtask_id: "s".into(),
             helper_kind: "helper_planner".into(),
             summary: None,
+            snapshot: sample_subagent_snapshot(),
         },
         ThreadStreamEvent::SubagentFailed {
             run_id: "r".into(),
             subtask_id: "s".into(),
             helper_kind: "helper_reviewer".into(),
             error: "e".into(),
+            snapshot: sample_subagent_snapshot(),
         },
         ThreadStreamEvent::ToolRequested {
             run_id: "r".into(),
@@ -315,11 +361,11 @@ fn test_all_events_have_type_field() {
         assert!(!type_val.is_empty(), "Event type should not be empty");
     }
 
-    // Verify total count matches enum variants (19 variants)
+    // Verify total count matches enum variants (20 variants)
     assert_eq!(
         events.len(),
-        19,
-        "Should test all 19 ThreadStreamEvent variants"
+        20,
+        "Should test all 20 ThreadStreamEvent variants"
     );
 }
 

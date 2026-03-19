@@ -14,7 +14,7 @@ import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/
 import type { AgentProfile, ProviderEntry } from "@/modules/settings-center/model/types";
 import { threadLoad } from "@/services/bridge";
 import { ThreadStream, type HelperEvent, type QueueEvent, type RunState } from "@/services/thread-stream";
-import type { MessageDto, ThreadSnapshotDto } from "@/shared/types/api";
+import type { MessageDto, SubagentProgressSnapshot, ThreadSnapshotDto } from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -63,11 +63,17 @@ type SurfaceToolEntry = {
 };
 
 type SurfaceHelperEntry = {
+  completedSteps: number;
+  currentAction?: string | null;
   error?: string;
   id: string;
   kind: string;
+  latestMessage?: string;
+  recentActions: string[];
   status: "pending" | "completed" | "failed";
   summary?: string | null;
+  toolCounts: Record<string, number>;
+  totalToolCalls: number;
 };
 
 type InitialPromptRequest = {
@@ -249,6 +255,40 @@ function isApprovalDenied(approval?: SurfaceApproval) {
   return Boolean(approval && "approved" in approval && approval.approved === false);
 }
 
+function applyHelperSnapshot(
+  snapshot: SubagentProgressSnapshot,
+): Pick<
+  SurfaceHelperEntry,
+  "completedSteps" | "currentAction" | "recentActions" | "toolCounts" | "totalToolCalls"
+> {
+  return {
+    completedSteps: snapshot.completedSteps,
+    currentAction: snapshot.currentAction,
+    recentActions: snapshot.recentActions,
+    toolCounts: snapshot.toolCounts,
+    totalToolCalls: snapshot.totalToolCalls,
+  };
+}
+
+function formatHelperKind(kind: string) {
+  switch (kind) {
+    case "helper_scout":
+      return "Research Helper";
+    case "helper_planner":
+      return "Planning Helper";
+    case "helper_reviewer":
+      return "Review Helper";
+    default:
+      return kind;
+  }
+}
+
+function formatHelperToolCounts(toolCounts: Record<string, number>) {
+  return Object.entries(toolCounts)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([toolName, count]) => `${toolName} ${count}`);
+}
+
 export function RuntimeThreadSurface({
   activeAgentProfileId,
   agentProfiles,
@@ -372,27 +412,47 @@ export function RuntimeThreadSurface({
         switch (event.kind) {
           case "started":
             return updateHelper(current, event.subtaskId, (entry) => ({
+              ...applyHelperSnapshot(event.snapshot),
               error: undefined,
               id: event.subtaskId,
               kind: event.helperKind,
+              latestMessage: undefined,
               status: "pending",
               summary: entry?.summary,
+              totalToolCalls: event.snapshot.totalToolCalls,
+            }));
+          case "progress":
+            return updateHelper(current, event.subtaskId, (entry) => ({
+              ...applyHelperSnapshot(event.snapshot),
+              error: entry?.error,
+              id: event.subtaskId,
+              kind: event.helperKind,
+              latestMessage: event.message,
+              status: entry?.status ?? "pending",
+              summary: entry?.summary,
+              totalToolCalls: event.snapshot.totalToolCalls,
             }));
           case "completed":
             return updateHelper(current, event.subtaskId, (_entry) => ({
+              ...applyHelperSnapshot(event.snapshot),
               error: undefined,
               id: event.subtaskId,
               kind: event.helperKind,
+              latestMessage: undefined,
               status: "completed",
               summary: event.summary,
+              totalToolCalls: event.snapshot.totalToolCalls,
             }));
           case "failed":
-            return updateHelper(current, event.subtaskId, (entry) => ({
+            return updateHelper(current, event.subtaskId, (_entry) => ({
+              ...applyHelperSnapshot(event.snapshot),
               error: event.error,
               id: event.subtaskId,
               kind: event.helperKind,
+              latestMessage: undefined,
               status: "failed",
-              summary: entry?.summary,
+              summary: undefined,
+              totalToolCalls: event.snapshot.totalToolCalls,
             }));
         }
       });
@@ -697,7 +757,7 @@ export function RuntimeThreadSurface({
                                 <div className="flex items-start gap-3">
                                   <QueueItemIndicator completed={helper.status === "completed"} />
                                   <QueueItemContent completed={helper.status === "completed"}>
-                                    {helper.kind}
+                                    {formatHelperKind(helper.kind)}
                                   </QueueItemContent>
                                   <Badge
                                     className={cn(
@@ -713,6 +773,38 @@ export function RuntimeThreadSurface({
                                     {helper.status}
                                   </Badge>
                                 </div>
+                                {helper.totalToolCalls > 0 ? (
+                                  <QueueItemDescription completed={helper.status === "completed"}>
+                                    {`${helper.totalToolCalls} tool calls, ${helper.completedSteps} finished`}
+                                  </QueueItemDescription>
+                                ) : null}
+                                {formatHelperToolCounts(helper.toolCounts).length > 0 ? (
+                                  <QueueItemDescription completed={helper.status === "completed"}>
+                                    {formatHelperToolCounts(helper.toolCounts).join(" · ")}
+                                  </QueueItemDescription>
+                                ) : null}
+                                {helper.currentAction ? (
+                                  <QueueItemDescription completed={helper.status === "completed"}>
+                                    {`Current: ${helper.currentAction}`}
+                                  </QueueItemDescription>
+                                ) : null}
+                                {helper.latestMessage ? (
+                                  <QueueItemDescription completed={helper.status === "completed"}>
+                                    {helper.latestMessage}
+                                  </QueueItemDescription>
+                                ) : null}
+                                {helper.recentActions.length > 0 ? (
+                                  <div className="space-y-1">
+                                    {helper.recentActions.slice(-3).map((action, index) => (
+                                      <QueueItemDescription
+                                        completed={helper.status === "completed"}
+                                        key={`${helper.id}-action-${index}`}
+                                      >
+                                        {action}
+                                      </QueueItemDescription>
+                                    ))}
+                                  </div>
+                                ) : null}
                                 {helper.summary ? (
                                   <QueueItemDescription completed={helper.status === "completed"}>
                                     {helper.summary}

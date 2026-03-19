@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 
+use crate::core::subagent::{SubagentActivityStatus, SubagentProgressSnapshot};
 use crate::model::git::GitSnapshotDto;
 use crate::model::terminal::{TerminalSessionDto, TerminalSessionStatus};
 
@@ -40,18 +41,29 @@ pub enum ThreadStreamEvent {
         run_id: String,
         subtask_id: String,
         helper_kind: String,
+        snapshot: SubagentProgressSnapshot,
+    },
+    SubagentProgress {
+        run_id: String,
+        subtask_id: String,
+        helper_kind: String,
+        activity: SubagentActivityStatus,
+        message: String,
+        snapshot: SubagentProgressSnapshot,
     },
     SubagentCompleted {
         run_id: String,
         subtask_id: String,
         helper_kind: String,
         summary: Option<String>,
+        snapshot: SubagentProgressSnapshot,
     },
     SubagentFailed {
         run_id: String,
         subtask_id: String,
         helper_kind: String,
         error: String,
+        snapshot: SubagentProgressSnapshot,
     },
     ToolRequested {
         run_id: String,
