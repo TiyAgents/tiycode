@@ -490,10 +490,8 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root = std::env::temp_dir().join(format!(
-        "tiy-tool-gateway-{}",
-        uuid::Uuid::now_v7()
-    ));
+    let workspace_root =
+        std::env::temp_dir().join(format!("tiy-tool-gateway-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&workspace_root).unwrap();
     std::fs::write(workspace_root.join("README.md"), "hello").unwrap();
     let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
@@ -506,8 +504,14 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
     )
     .await;
     test_helpers::seed_thread(&pool, "t-helper-escalate", "ws-helper-escalate").await;
-    test_helpers::seed_run(&pool, "r-helper-escalate", "t-helper-escalate", "running", "default")
-        .await;
+    test_helpers::seed_run(
+        &pool,
+        "r-helper-escalate",
+        "t-helper-escalate",
+        "running",
+        "default",
+    )
+    .await;
     test_helpers::seed_tool_call(
         &pool,
         "tc-helper-escalate",
@@ -584,4 +588,101 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
         row.get::<Option<String>, _>("approval_status").unwrap(),
         "escalation_required"
     );
+}
+
+#[tokio::test]
+async fn test_search_repo_allows_relative_directory_within_workspace() {
+    use tiy_agent_lib::core::terminal_manager::TerminalManager;
+    use tiy_agent_lib::core::tool_gateway::{
+        ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
+    };
+
+    let pool = test_helpers::setup_test_pool().await;
+    let workspace_root =
+        std::env::temp_dir().join(format!("tiy-search-relative-{}", uuid::Uuid::now_v7()));
+    let search_dir = workspace_root.join("src-tauri");
+    std::fs::create_dir_all(&search_dir).unwrap();
+    std::fs::write(
+        search_dir.join("main.rs"),
+        "fn main() { println!(\"hello\"); }\n",
+    )
+    .unwrap();
+    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+
+    test_helpers::seed_workspace(
+        &pool,
+        "ws-search-relative",
+        workspace_root.to_str().unwrap(),
+    )
+    .await;
+    test_helpers::seed_thread(&pool, "t-search-relative", "ws-search-relative").await;
+    test_helpers::seed_run(
+        &pool,
+        "r-search-relative",
+        "t-search-relative",
+        "running",
+        "default",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-search-relative",
+        "r-search-relative",
+        "t-search-relative",
+        "search_repo",
+        "requested",
+    )
+    .await;
+
+    let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+    let gateway = ToolGateway::new(pool, terminal_manager);
+
+    let outcome = gateway
+        .execute_tool_call(
+            ToolExecutionRequest {
+                run_id: "r-search-relative".into(),
+                thread_id: "t-search-relative".into(),
+                tool_call_id: "tc-search-relative".into(),
+                tool_name: "search_repo".into(),
+                tool_input: serde_json::json!({
+                    "query": "hello",
+                    "directory": "src-tauri",
+                }),
+                workspace_path: workspace_root.display().to_string(),
+                run_mode: "default".into(),
+            },
+            tiy_core::agent::AbortSignal::new(),
+            ToolExecutionOptions::default(),
+            |_| {},
+            || {},
+        )
+        .await
+        .unwrap();
+
+    match outcome.result {
+        ToolGatewayResult::Executed { output, .. } => {
+            let directory = output.result["directory"].as_str().unwrap_or_default();
+            assert!(
+                directory.ends_with("/src-tauri"),
+                "search should execute inside the requested relative directory"
+            );
+
+            if !output.success {
+                let error = output.result["error"].as_str().unwrap_or_default();
+                assert!(
+                    error.contains("ripgrep execution failed"),
+                    "unexpected search failure: {error}"
+                );
+            }
+        }
+        ToolGatewayResult::Denied { reason, .. } => {
+            panic!("relative workspace directory should not be denied: {reason}");
+        }
+        ToolGatewayResult::EscalationRequired { reason, .. } => {
+            panic!("search_repo should not require approval: {reason}");
+        }
+        ToolGatewayResult::Cancelled { .. } => {
+            panic!("search_repo should not be cancelled");
+        }
+    }
 }

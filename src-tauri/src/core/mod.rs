@@ -13,3 +13,4 @@ pub mod terminal_manager;
 pub mod thread_manager;
 pub mod tool_gateway;
 pub mod workspace_manager;
+pub mod workspace_paths;

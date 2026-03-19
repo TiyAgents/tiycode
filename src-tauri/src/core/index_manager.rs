@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
+use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::git::GitFileState;
 
@@ -450,34 +451,21 @@ impl IndexManager {
 // ---------------------------------------------------------------------------
 
 fn canonicalize_workspace(workspace_path: &str) -> Result<PathBuf, AppError> {
-    let root =
-        std::fs::canonicalize(workspace_path).unwrap_or_else(|_| PathBuf::from(workspace_path));
-    if !root.is_dir() {
-        return Err(AppError::recoverable(
-            ErrorSource::Index,
-            "index.path.not_directory",
-            format!("'{}' is not a directory", workspace_path),
-        ));
-    }
-
-    Ok(root)
+    canonicalize_workspace_root(
+        workspace_path,
+        ErrorSource::Index,
+        "index.path.not_directory",
+    )
 }
 
 fn resolve_workspace_directory(root: &Path, directory_path: &str) -> Result<PathBuf, AppError> {
-    let candidate = if directory_path.is_empty() {
-        root.to_path_buf()
-    } else {
-        root.join(directory_path)
-    };
-
-    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
-    if !canonical.starts_with(root) {
-        return Err(AppError::recoverable(
-            ErrorSource::Index,
-            "index.path.out_of_workspace",
-            "Requested directory is outside the workspace boundary",
-        ));
-    }
+    let canonical = resolve_path_within_workspace(
+        root,
+        directory_path,
+        ErrorSource::Index,
+        "index.path.out_of_workspace",
+        "Requested directory is outside the workspace boundary",
+    )?;
 
     if !canonical.is_dir() {
         return Err(AppError::recoverable(
@@ -491,16 +479,13 @@ fn resolve_workspace_directory(root: &Path, directory_path: &str) -> Result<Path
 }
 
 fn resolve_workspace_entry(root: &Path, entry_path: &str) -> Result<PathBuf, AppError> {
-    let candidate = root.join(entry_path);
-    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate.clone());
-
-    if !canonical.starts_with(root) {
-        return Err(AppError::recoverable(
-            ErrorSource::Index,
-            "index.path.out_of_workspace",
-            "Requested path is outside the workspace boundary",
-        ));
-    }
+    let canonical = resolve_path_within_workspace(
+        root,
+        entry_path,
+        ErrorSource::Index,
+        "index.path.out_of_workspace",
+        "Requested path is outside the workspace boundary",
+    )?;
 
     if !canonical.exists() {
         return Err(AppError::recoverable(

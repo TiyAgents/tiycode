@@ -1,6 +1,6 @@
-use std::path::Path;
 use tokio::fs;
 
+use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
 use crate::model::errors::{AppError, ErrorSource};
 
 use super::ToolOutput;
@@ -11,7 +11,7 @@ pub async fn read_file(
     input: &serde_json::Value,
     workspace_path: &str,
 ) -> Result<ToolOutput, AppError> {
-    let path = resolve_path(input, workspace_path)?;
+    let path = resolve_required_path(input, workspace_path)?;
 
     match fs::read_to_string(&path).await {
         Ok(content) => {
@@ -26,7 +26,7 @@ pub async fn read_file(
             Ok(ToolOutput {
                 success: true,
                 result: serde_json::json!({
-                    "path": path,
+                    "path": path.to_string_lossy().to_string(),
                     "content": content,
                     "lineCount": line_count,
                     "truncated": truncated,
@@ -37,7 +37,7 @@ pub async fn read_file(
             success: false,
             result: serde_json::json!({
                 "error": format!("Failed to read file: {e}"),
-                "path": path,
+                "path": path.to_string_lossy().to_string(),
             }),
         }),
     }
@@ -49,7 +49,7 @@ pub async fn write_file(
     input: &serde_json::Value,
     workspace_path: &str,
 ) -> Result<ToolOutput, AppError> {
-    let path = resolve_path(input, workspace_path)?;
+    let path = resolve_required_path(input, workspace_path)?;
     let content = input["content"].as_str().ok_or_else(|| {
         AppError::recoverable(
             ErrorSource::Tool,
@@ -59,7 +59,7 @@ pub async fn write_file(
     })?;
 
     // Ensure parent directory exists
-    if let Some(parent) = Path::new(&path).parent() {
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await.map_err(|e| {
             AppError::internal(
                 ErrorSource::Tool,
@@ -72,7 +72,7 @@ pub async fn write_file(
         Ok(()) => Ok(ToolOutput {
             success: true,
             result: serde_json::json!({
-                "path": path,
+                "path": path.to_string_lossy().to_string(),
                 "bytesWritten": content.len(),
             }),
         }),
@@ -80,7 +80,7 @@ pub async fn write_file(
             success: false,
             result: serde_json::json!({
                 "error": format!("Failed to write file: {e}"),
-                "path": path,
+                "path": path.to_string_lossy().to_string(),
             }),
         }),
     }
@@ -92,7 +92,7 @@ pub async fn list_dir(
     input: &serde_json::Value,
     workspace_path: &str,
 ) -> Result<ToolOutput, AppError> {
-    let path = resolve_path_or_default(input, workspace_path);
+    let path = resolve_path_or_workspace_root(input, workspace_path)?;
 
     match fs::read_dir(&path).await {
         Ok(mut entries) => {
@@ -115,7 +115,7 @@ pub async fn list_dir(
             Ok(ToolOutput {
                 success: true,
                 result: serde_json::json!({
-                    "path": path,
+                    "path": path.to_string_lossy().to_string(),
                     "items": items,
                     "count": items.len(),
                 }),
@@ -125,15 +125,16 @@ pub async fn list_dir(
             success: false,
             result: serde_json::json!({
                 "error": format!("Failed to list directory: {e}"),
-                "path": path,
+                "path": path.to_string_lossy().to_string(),
             }),
         }),
     }
 }
 
-/// Resolve 'path' from input and enforce workspace boundary.
-/// Both absolute and relative paths are resolved, then checked against the workspace root.
-fn resolve_path(input: &serde_json::Value, workspace_path: &str) -> Result<String, AppError> {
+fn resolve_required_path(
+    input: &serde_json::Value,
+    workspace_path: &str,
+) -> Result<std::path::PathBuf, AppError> {
     let raw = input["path"].as_str().ok_or_else(|| {
         AppError::recoverable(
             ErrorSource::Tool,
@@ -142,58 +143,39 @@ fn resolve_path(input: &serde_json::Value, workspace_path: &str) -> Result<Strin
         )
     })?;
 
-    let resolved = if Path::new(raw).is_absolute() {
-        raw.to_string()
-    } else {
-        Path::new(workspace_path)
-            .join(raw)
-            .to_string_lossy()
-            .to_string()
-    };
+    let workspace_root = canonicalize_workspace_root(
+        workspace_path,
+        ErrorSource::Tool,
+        "tool.workspace.not_directory",
+    )?;
 
-    // Enforce workspace boundary — the resolved path must be within workspace
-    let resolved_canonical = Path::new(&resolved)
-        .canonicalize()
-        .unwrap_or_else(|_| Path::new(&resolved).to_path_buf());
-    let workspace_canonical = Path::new(workspace_path)
-        .canonicalize()
-        .unwrap_or_else(|_| Path::new(workspace_path).to_path_buf());
+    resolve_path_within_workspace(
+        &workspace_root,
+        raw,
+        ErrorSource::Tool,
+        "tool.path.outside_workspace",
+        format!("Path '{}' is outside workspace boundary", raw),
+    )
+}
 
-    if !resolved_canonical.starts_with(&workspace_canonical) {
-        return Err(AppError::recoverable(
+fn resolve_path_or_workspace_root(
+    input: &serde_json::Value,
+    workspace_path: &str,
+) -> Result<std::path::PathBuf, AppError> {
+    let workspace_root = canonicalize_workspace_root(
+        workspace_path,
+        ErrorSource::Tool,
+        "tool.workspace.not_directory",
+    )?;
+
+    match input["path"].as_str() {
+        Some(raw) => resolve_path_within_workspace(
+            &workspace_root,
+            raw,
             ErrorSource::Tool,
             "tool.path.outside_workspace",
             format!("Path '{}' is outside workspace boundary", raw),
-        ));
-    }
-
-    Ok(resolved)
-}
-
-fn resolve_path_or_default(input: &serde_json::Value, workspace_path: &str) -> String {
-    match input["path"].as_str() {
-        Some(raw) => {
-            let resolved = if Path::new(raw).is_absolute() {
-                raw.to_string()
-            } else {
-                Path::new(workspace_path)
-                    .join(raw)
-                    .to_string_lossy()
-                    .to_string()
-            };
-            // For list_dir, also enforce boundary — fall back to workspace if outside
-            let resolved_canonical = Path::new(&resolved)
-                .canonicalize()
-                .unwrap_or_else(|_| Path::new(&resolved).to_path_buf());
-            let workspace_canonical = Path::new(workspace_path)
-                .canonicalize()
-                .unwrap_or_else(|_| Path::new(workspace_path).to_path_buf());
-            if resolved_canonical.starts_with(&workspace_canonical) {
-                resolved
-            } else {
-                workspace_path.to_string()
-            }
-        }
-        None => workspace_path.to_string(),
+        ),
+        None => Ok(workspace_root),
     }
 }

@@ -1,11 +1,11 @@
-use std::path::Path;
 use tokio::process::Command;
 
 use super::ToolOutput;
-use crate::model::errors::AppError;
+use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
+use crate::model::errors::{AppError, ErrorSource};
 
 /// Search workspace files using ripgrep.
-/// Input: { "query": "search term", "directory": "/optional/path", "filePattern": "*.rs" }
+/// Input: { "query": "search term", "directory": "optional/path", "filePattern": "*.rs" }
 pub async fn search_repo(
     input: &serde_json::Value,
     workspace_path: &str,
@@ -18,20 +18,22 @@ pub async fn search_repo(
         });
     }
 
-    let search_dir = input["directory"]
-        .as_str()
-        .map(|d| {
-            let p = Path::new(d);
-            if p.is_absolute() {
-                d.to_string()
-            } else {
-                Path::new(workspace_path)
-                    .join(d)
-                    .to_string_lossy()
-                    .to_string()
-            }
-        })
-        .unwrap_or_else(|| workspace_path.to_string());
+    let workspace_root = canonicalize_workspace_root(
+        workspace_path,
+        ErrorSource::Tool,
+        "tool.workspace.not_directory",
+    )?;
+
+    let search_dir = match input["directory"].as_str() {
+        Some(raw) => resolve_path_within_workspace(
+            &workspace_root,
+            raw,
+            ErrorSource::Tool,
+            "tool.path.outside_workspace",
+            format!("Path '{}' is outside workspace boundary", raw),
+        )?,
+        None => workspace_root.clone(),
+    };
 
     let mut cmd = Command::new("rg");
     cmd.arg("--json")
@@ -49,13 +51,13 @@ pub async fn search_repo(
     match cmd.output().await {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let results = parse_rg_json(&stdout, workspace_path);
+            let results = parse_rg_json(&stdout, &workspace_root);
 
             Ok(ToolOutput {
                 success: true,
                 result: serde_json::json!({
                     "query": query,
-                    "directory": search_dir,
+                    "directory": search_dir.to_string_lossy().to_string(),
                     "results": results,
                     "count": results.len(),
                 }),
@@ -72,7 +74,7 @@ pub async fn search_repo(
 }
 
 /// Parse ripgrep JSON output into structured results.
-fn parse_rg_json(output: &str, workspace_path: &str) -> Vec<serde_json::Value> {
+fn parse_rg_json(output: &str, workspace_root: &std::path::Path) -> Vec<serde_json::Value> {
     let mut results = Vec::new();
 
     for line in output.lines() {
@@ -84,8 +86,8 @@ fn parse_rg_json(output: &str, workspace_path: &str) -> Vec<serde_json::Value> {
                 let line_text = data["lines"]["text"].as_str().unwrap_or("").trim();
 
                 // Make path relative to workspace for display
-                let display_path = Path::new(path)
-                    .strip_prefix(workspace_path)
+                let display_path = std::path::Path::new(path)
+                    .strip_prefix(workspace_root)
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|_| path.to_string());
 

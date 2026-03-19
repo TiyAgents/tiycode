@@ -10,8 +10,8 @@
 
 use serde::Serialize;
 use sqlx::SqlitePool;
-use std::path::Path;
 
+use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
 use crate::model::errors::AppError;
 use crate::persistence::repo::settings_repo;
 
@@ -166,18 +166,31 @@ impl PolicyEngine {
         // 3. Workspace boundary check for file-related tools
         if let Some(ws_path) = workspace_canonical_path {
             checked.push("workspace_boundary".to_string());
+            let workspace_root = canonicalize_workspace_root(
+                ws_path,
+                crate::model::errors::ErrorSource::Tool,
+                "tool.workspace.not_directory",
+            )?;
             let target_path = extract_target_path(tool_name, tool_input);
             if let Some(target) = target_path {
-                if !is_within_workspace(&target, ws_path) {
-                    return Ok(PolicyCheck {
-                        tool_name: tool_name.to_string(),
-                        verdict: PolicyVerdict::Deny {
-                            reason: format!(
-                                "Path '{target}' is outside workspace boundary '{ws_path}'"
-                            ),
-                        },
-                        checked_rules: checked,
-                    });
+                if let Err(error) = resolve_path_within_workspace(
+                    &workspace_root,
+                    &target,
+                    crate::model::errors::ErrorSource::Tool,
+                    "tool.path.outside_workspace",
+                    format!("Path '{target}' is outside workspace boundary '{ws_path}'"),
+                ) {
+                    if error.error_code == "tool.path.outside_workspace" {
+                        return Ok(PolicyCheck {
+                            tool_name: tool_name.to_string(),
+                            verdict: PolicyVerdict::Deny {
+                                reason: error.user_message,
+                            },
+                            checked_rules: checked,
+                        });
+                    }
+
+                    return Err(error);
                 }
             }
         }
@@ -283,18 +296,6 @@ impl PolicyEngine {
             }
             None => Ok("require_for_mutations".to_string()),
         }
-    }
-}
-
-/// Check if a file path is within the workspace boundary.
-fn is_within_workspace(target: &str, workspace: &str) -> bool {
-    let target = Path::new(target);
-    let workspace = Path::new(workspace);
-
-    // Try to canonicalize; if target doesn't exist yet, use starts_with on raw path
-    match target.canonicalize() {
-        Ok(canonical) => canonical.starts_with(workspace),
-        Err(_) => target.starts_with(workspace),
     }
 }
 
