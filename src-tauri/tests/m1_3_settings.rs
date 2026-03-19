@@ -9,7 +9,7 @@ mod test_helpers;
 
 use sqlx::Row;
 use tiy_agent_lib::core::settings_manager::SettingsManager;
-use tiy_agent_lib::model::provider::CustomProviderCreateInput;
+use tiy_agent_lib::model::provider::{CustomProviderCreateInput, ProviderModelInput};
 
 // =========================================================================
 // T1.3.1 — Settings CRUD
@@ -362,4 +362,80 @@ async fn test_provider_settings_create_custom_and_protect_builtins() {
         delete_builtin.is_err(),
         "Built-in providers should not be deletable through the custom delete path"
     );
+}
+
+#[tokio::test]
+async fn test_provider_model_connection_test_returns_unsupported_for_embedding_models() {
+    let pool = test_helpers::setup_test_pool().await;
+    let manager = SettingsManager::new(pool);
+
+    let custom = manager
+        .create_custom_provider(CustomProviderCreateInput {
+            display_name: "Embedding Gateway".to_string(),
+            provider_type: "openai-compatible".to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            api_key: Some("sk-test".to_string()),
+            enabled: Some(true),
+            custom_headers: None,
+            models: Some(vec![ProviderModelInput {
+                id: None,
+                model_id: "text-embedding-3-small".to_string(),
+                display_name: Some("Text Embedding 3 Small".to_string()),
+                enabled: Some(true),
+                context_window: None,
+                max_output_tokens: None,
+                capability_overrides: Some(serde_json::json!({ "embedding": true })),
+                provider_options: None,
+                is_manual: Some(true),
+            }]),
+        })
+        .await
+        .unwrap();
+
+    let result = manager
+        .test_provider_model_connection(&custom.id, &custom.models[0].id)
+        .await
+        .unwrap();
+
+    assert!(!result.success);
+    assert!(result.unsupported);
+    assert_eq!(
+        result.message,
+        "Embedding model test is not supported yet."
+    );
+}
+
+#[tokio::test]
+async fn test_provider_model_connection_test_returns_not_found_for_missing_provider() {
+    let pool = test_helpers::setup_test_pool().await;
+    let manager = SettingsManager::new(pool);
+
+    let error = manager
+        .test_provider_model_connection("missing-provider", "missing-model")
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.error_code, "settings.not_found");
+    assert_eq!(error.user_message, "provider not found");
+}
+
+#[tokio::test]
+async fn test_provider_model_connection_test_returns_not_found_for_missing_model() {
+    let pool = test_helpers::setup_test_pool().await;
+    let manager = SettingsManager::new(pool);
+    let provider = manager
+        .get_all_provider_settings()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.provider_key == "openai")
+        .unwrap();
+
+    let error = manager
+        .test_provider_model_connection(&provider.id, "missing-model")
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.error_code, "settings.not_found");
+    assert_eq!(error.user_message, "provider model not found");
 }

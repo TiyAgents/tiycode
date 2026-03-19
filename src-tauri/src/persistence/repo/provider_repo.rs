@@ -229,6 +229,23 @@ pub async fn list_models(
     Ok(rows.into_iter().map(|r| r.into_record()).collect())
 }
 
+pub async fn find_model_by_id(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<ProviderModelRecord>, AppError> {
+    let row = sqlx::query_as::<_, ModelRow>(
+        "SELECT id, provider_id, model_name, sort_index, display_name, enabled, context_window,
+                max_output_tokens, capabilities_json, provider_options_json, is_manual, created_at
+         FROM provider_models
+         WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| r.into_record()))
+}
+
 pub async fn upsert_model(pool: &SqlitePool, record: &ProviderModelRecord) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(

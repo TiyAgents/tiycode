@@ -5,7 +5,7 @@ use crate::core::sleep_manager::PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY;
 use crate::model::errors::AppError;
 use crate::model::provider::{
     AgentProfileDto, AgentProfileInput, CustomProviderCreateInput, ProviderCatalogEntryDto,
-    ProviderSettingsDto, ProviderSettingsUpdateInput,
+    ProviderModelConnectionTestResultDto, ProviderSettingsDto, ProviderSettingsUpdateInput,
 };
 use crate::model::settings::SettingDto;
 
@@ -154,6 +154,18 @@ pub async fn provider_settings_delete_custom(
     id: String,
 ) -> Result<(), AppError> {
     state.settings_manager.delete_custom_provider(&id).await
+}
+
+#[tauri::command]
+pub async fn provider_model_test_connection(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model_id: String,
+) -> Result<ProviderModelConnectionTestResultDto, AppError> {
+    state
+        .settings_manager
+        .test_provider_model_connection(&provider_id, &model_id)
+        .await
 }
 
 // ---------------------------------------------------------------------------

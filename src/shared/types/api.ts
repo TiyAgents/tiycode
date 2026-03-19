@@ -81,6 +81,13 @@ export interface ProviderSettingsDto {
   updatedAt: string;
 }
 
+export interface ProviderModelConnectionTestResultDto {
+  success: boolean;
+  unsupported: boolean;
+  message: string;
+  detail?: string | null;
+}
+
 export interface ProviderModelInput {
   id?: string;
   modelId: string;

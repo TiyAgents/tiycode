@@ -26,7 +26,6 @@ export type ProviderType =
   | "groq"
   | "openrouter"
   | "minimax"
-  | "minimax-cn"
   | "kimi-coding"
   | "zai"
   | "deepseek"

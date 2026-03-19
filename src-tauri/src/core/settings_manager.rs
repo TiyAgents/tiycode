@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use sqlx::SqlitePool;
 use tiy_core::catalog::{
@@ -7,13 +8,17 @@ use tiy_core::catalog::{
     refresh_catalog_snapshot, CatalogMetadataStore, CatalogRemoteConfig, EmptyCatalogMetadataStore,
     FileCatalogMetadataStore, UnifiedModelInfo,
 };
-use tiy_core::types::Provider as TiyProvider;
+use tiy_core::provider::get_provider;
+use tiy_core::types::{
+    Context as TiyContext, Cost as TiyCost, InputType, Message as TiyMessage, Model as TiyModel,
+    Provider as TiyProvider, StopReason, StreamOptions as TiyStreamOptions, UserMessage,
+};
 
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::{
     AgentProfileInput, AgentProfileRecord, CustomProviderCreateInput, ProviderCatalogEntryDto,
-    ProviderKind, ProviderModelInput, ProviderModelRecord, ProviderRecord, ProviderSettingsDto,
-    ProviderSettingsUpdateInput,
+    ProviderKind, ProviderModelConnectionTestResultDto, ProviderModelInput, ProviderModelRecord,
+    ProviderRecord, ProviderSettingsDto, ProviderSettingsUpdateInput,
 };
 use crate::model::settings::SettingRecord;
 use crate::persistence::repo::{profile_repo, provider_repo, settings_repo};
@@ -21,6 +26,11 @@ use crate::persistence::repo::{profile_repo, provider_repo, settings_repo};
 const PROVIDER_SCHEMA_VERSION_KEY: &str = "providers.schema_version";
 const PROVIDER_SCHEMA_VERSION: u32 = 3;
 const TIY_CATALOG_SNAPSHOT_FILE: &str = "catalog.json";
+const PROVIDER_MODEL_TEST_PROMPT: &str = "Ping from Tiy Agent.";
+const PROVIDER_MODEL_TEST_MAX_TOKENS: u32 = 8;
+const PROVIDER_MODEL_TEST_CONTEXT_WINDOW_FALLBACK: u32 = 8_192;
+const PROVIDER_MODEL_TEST_MAX_OUTPUT_TOKENS_FALLBACK: u32 = 4_096;
+const PROVIDER_MODEL_TEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 struct ProviderCatalogEntry {
     provider_key: &'static str,
@@ -77,12 +87,6 @@ const BUILTIN_PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         provider_type: "minimax",
         display_name: "MiniMax",
         default_base_url: "https://api.minimax.io/anthropic",
-    },
-    ProviderCatalogEntry {
-        provider_key: "minimax-cn",
-        provider_type: "minimax-cn",
-        display_name: "MiniMax CN",
-        default_base_url: "https://api.minimaxi.com/anthropic",
     },
     ProviderCatalogEntry {
         provider_key: "kimi-coding",
@@ -246,6 +250,120 @@ fn catalog_capability_overrides(model: &UnifiedModelInfo) -> Option<serde_json::
 
 fn serialize_optional_json(value: Option<serde_json::Value>) -> Option<String> {
     value.map(|value| value.to_string())
+}
+
+#[derive(Debug, Clone)]
+struct ProviderModelConnectionTestRequest {
+    model: TiyModel,
+    context: TiyContext,
+    options: TiyStreamOptions,
+    unsupported: bool,
+}
+
+fn parse_positive_u32(value: Option<&str>, fallback: u32) -> u32 {
+    value
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(fallback)
+}
+
+fn capability_flag_enabled(capabilities_json: Option<&str>, key: &str) -> bool {
+    capabilities_json
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .and_then(|value| value.get(key).and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
+fn infer_embedding_model(model_name: &str) -> bool {
+    let normalized = model_name.trim().to_lowercase();
+    normalized.contains("embedding") || normalized.contains("embeddings") || normalized.contains("embed")
+}
+
+fn is_embedding_model(model: &ProviderModelRecord) -> bool {
+    capability_flag_enabled(model.capabilities_json.as_deref(), "embedding")
+        || infer_embedding_model(&model.model_name)
+}
+
+fn build_provider_model_test_request(
+    provider: &ProviderRecord,
+    model: &ProviderModelRecord,
+) -> ProviderModelConnectionTestRequest {
+    if is_embedding_model(model) {
+        return ProviderModelConnectionTestRequest {
+            model: TiyModel::builder()
+                .id(&model.model_name)
+                .name(
+                    model
+                        .display_name
+                        .as_deref()
+                        .unwrap_or(model.model_name.as_str()),
+                )
+                .provider(TiyProvider::from(provider.provider_type.clone()))
+                .context_window(PROVIDER_MODEL_TEST_CONTEXT_WINDOW_FALLBACK)
+                .max_tokens(PROVIDER_MODEL_TEST_MAX_OUTPUT_TOKENS_FALLBACK)
+                .input(vec![InputType::Text])
+                .cost(TiyCost::default())
+                .build()
+                .expect("embedding placeholder test model should be valid"),
+            context: TiyContext::new(),
+            options: TiyStreamOptions::default(),
+            unsupported: true,
+        };
+    }
+
+    let provider_type = TiyProvider::from(provider.provider_type.clone());
+    let model_name = model
+        .display_name
+        .clone()
+        .unwrap_or_else(|| model.model_name.clone());
+    let context_window = parse_positive_u32(
+        model.context_window.as_deref(),
+        PROVIDER_MODEL_TEST_CONTEXT_WINDOW_FALLBACK,
+    );
+    let max_output_tokens = parse_positive_u32(
+        model.max_output_tokens.as_deref(),
+        PROVIDER_MODEL_TEST_MAX_OUTPUT_TOKENS_FALLBACK,
+    );
+
+    let built_model = TiyModel::builder()
+        .id(&model.model_name)
+        .name(&model_name)
+        .provider(provider_type)
+        .base_url(&provider.base_url)
+        .context_window(context_window)
+        .max_tokens(max_output_tokens)
+        .input(vec![InputType::Text])
+        .cost(TiyCost::default())
+        .build()
+        .expect("provider model test request should always build");
+
+    let context = TiyContext {
+        system_prompt: None,
+        messages: vec![TiyMessage::User(UserMessage::text(
+            PROVIDER_MODEL_TEST_PROMPT,
+        ))],
+        tools: None,
+    };
+
+    let options = TiyStreamOptions {
+        temperature: None,
+        max_tokens: Some(PROVIDER_MODEL_TEST_MAX_TOKENS),
+        api_key: provider.api_key_encrypted.clone(),
+        base_url: normalize_optional_string(Some(provider.base_url.clone())),
+        headers: parse_custom_headers_map(provider.custom_headers_json.as_deref()),
+        session_id: None,
+        security: None,
+        on_payload: None,
+        transport: None,
+        max_retry_delay_ms: None,
+    };
+
+    ProviderModelConnectionTestRequest {
+        model: built_model,
+        context,
+        options,
+        unsupported: false,
+    }
 }
 
 fn build_model_record_from_catalog(
@@ -717,6 +835,89 @@ impl SettingsManager {
             return Err(AppError::not_found(ErrorSource::Settings, "provider"));
         }
         Ok(())
+    }
+
+    pub async fn test_provider_model_connection(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ProviderModelConnectionTestResultDto, AppError> {
+        self.ensure_provider_state_ready().await?;
+
+        let provider = provider_repo::find_by_id(&self.pool, provider_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Settings, "provider"))?;
+        let model = provider_repo::find_model_by_id(&self.pool, model_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Settings, "provider model"))?;
+
+        if model.provider_id != provider.id {
+            return Err(AppError::not_found(ErrorSource::Settings, "provider model"));
+        }
+
+        let request = build_provider_model_test_request(&provider, &model);
+        if request.unsupported {
+            return Ok(ProviderModelConnectionTestResultDto {
+                success: false,
+                unsupported: true,
+                message: "Embedding model test is not supported yet.".to_string(),
+                detail: None,
+            });
+        }
+
+        let provider_impl = get_provider(&request.model.provider).ok_or_else(|| {
+            AppError::recoverable(
+                ErrorSource::Settings,
+                "settings.provider.test_connection_provider_missing",
+                format!(
+                    "Provider type '{}' is not registered in tiy-core.",
+                    provider.provider_type
+                ),
+            )
+        })?;
+
+        let stream = provider_impl.stream(&request.model, &request.context, request.options);
+        let completion = stream.try_result(PROVIDER_MODEL_TEST_TIMEOUT).await;
+
+        let result = match completion {
+            Some(message) if message.stop_reason == StopReason::Error => {
+                let detail = message.error_message.clone().or_else(|| {
+                    let text = message.text_content();
+                    if text.trim().is_empty() {
+                        None
+                    } else {
+                        Some(text)
+                    }
+                });
+                ProviderModelConnectionTestResultDto {
+                    success: false,
+                    unsupported: false,
+                    message: "Connection test failed.".to_string(),
+                    detail,
+                }
+            }
+            Some(message) => {
+                let text = message.text_content();
+                ProviderModelConnectionTestResultDto {
+                    success: true,
+                    unsupported: false,
+                    message: "Connection test succeeded.".to_string(),
+                    detail: if text.trim().is_empty() {
+                        None
+                    } else {
+                        Some(text)
+                    },
+                }
+            }
+            None => ProviderModelConnectionTestResultDto {
+                success: false,
+                unsupported: false,
+                message: "Connection test failed.".to_string(),
+                detail: Some("The provider did not finish responding before the timeout.".to_string()),
+            },
+        };
+
+        Ok(result)
     }
 
     async fn load_catalog_store_best_effort(
@@ -1244,5 +1445,135 @@ mod tests {
         assert!(!record.enabled);
         assert!(!record.is_manual);
         assert_eq!(record.sort_index, 0);
+    }
+
+    #[test]
+    fn embedding_detection_supports_capabilities_and_name_fallback() {
+        let capability_model = ProviderModelRecord {
+            id: "model-embedding".to_string(),
+            provider_id: "provider-1".to_string(),
+            model_name: "custom-model".to_string(),
+            sort_index: 0,
+            display_name: None,
+            enabled: true,
+            context_window: None,
+            max_output_tokens: None,
+            capabilities_json: Some(r#"{"embedding":true}"#.to_string()),
+            provider_options_json: None,
+            is_manual: true,
+            created_at: String::new(),
+        };
+        let inferred_model = ProviderModelRecord {
+            id: "model-embedding-2".to_string(),
+            provider_id: "provider-1".to_string(),
+            model_name: "text-embedding-3-small".to_string(),
+            sort_index: 1,
+            display_name: None,
+            enabled: true,
+            context_window: None,
+            max_output_tokens: None,
+            capabilities_json: None,
+            provider_options_json: None,
+            is_manual: true,
+            created_at: String::new(),
+        };
+
+        assert!(is_embedding_model(&capability_model));
+        assert!(is_embedding_model(&inferred_model));
+    }
+
+    #[test]
+    fn provider_model_test_request_returns_unsupported_for_embedding_models() {
+        let provider = ProviderRecord {
+            id: "provider-1".to_string(),
+            provider_kind: ProviderKind::Custom,
+            provider_key: "provider-1".to_string(),
+            provider_type: "openai-compatible".to_string(),
+            display_name: "My Gateway".to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            api_key_encrypted: Some("sk-test".to_string()),
+            enabled: true,
+            mapping_locked: false,
+            custom_headers_json: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let model = ProviderModelRecord {
+            id: "model-1".to_string(),
+            provider_id: "provider-1".to_string(),
+            model_name: "text-embedding-3-small".to_string(),
+            sort_index: 0,
+            display_name: Some("Text Embedding".to_string()),
+            enabled: true,
+            context_window: None,
+            max_output_tokens: None,
+            capabilities_json: Some(r#"{"embedding":true}"#.to_string()),
+            provider_options_json: None,
+            is_manual: true,
+            created_at: String::new(),
+        };
+
+        let request = build_provider_model_test_request(&provider, &model);
+
+        assert!(request.unsupported);
+    }
+
+    #[test]
+    fn provider_model_test_request_uses_ping_prompt_and_max_tokens_limit() {
+        let provider = ProviderRecord {
+            id: "provider-1".to_string(),
+            provider_kind: ProviderKind::Builtin,
+            provider_key: "openai".to_string(),
+            provider_type: "openai".to_string(),
+            display_name: "OpenAI".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key_encrypted: Some("sk-test".to_string()),
+            enabled: true,
+            mapping_locked: true,
+            custom_headers_json: Some(r#"{"X-Test":"1"}"#.to_string()),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let model = ProviderModelRecord {
+            id: "model-1".to_string(),
+            provider_id: "provider-1".to_string(),
+            model_name: "gpt-4o-mini".to_string(),
+            sort_index: 0,
+            display_name: Some("GPT-4o Mini".to_string()),
+            enabled: true,
+            context_window: Some("128000".to_string()),
+            max_output_tokens: Some("16384".to_string()),
+            capabilities_json: Some(r#"{"toolCalling":true}"#.to_string()),
+            provider_options_json: None,
+            is_manual: false,
+            created_at: String::new(),
+        };
+
+        let request = build_provider_model_test_request(&provider, &model);
+
+        assert!(!request.unsupported);
+        assert_eq!(request.options.max_tokens, Some(PROVIDER_MODEL_TEST_MAX_TOKENS));
+        assert_eq!(request.model.max_tokens, 16_384);
+        assert_eq!(request.model.context_window, 128_000);
+        assert_eq!(request.options.base_url.as_deref(), Some("https://api.openai.com/v1"));
+        assert_eq!(
+            request
+                .options
+                .headers
+                .as_ref()
+                .and_then(|headers| headers.get("X-Test"))
+                .map(String::as_str),
+            Some("1")
+        );
+
+        let prompt = match &request.context.messages[0] {
+            TiyMessage::User(message) => match &message.content {
+                tiy_core::types::UserContent::Text(text) => text.as_str(),
+                _ => panic!("expected text user message"),
+            },
+            _ => panic!("expected user message"),
+        };
+
+        assert_eq!(prompt, PROVIDER_MODEL_TEST_PROMPT);
     }
 }

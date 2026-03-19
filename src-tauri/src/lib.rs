@@ -156,6 +156,7 @@ pub fn run() {
             commands::settings::provider_settings_create_custom,
             commands::settings::provider_settings_update_custom,
             commands::settings::provider_settings_delete_custom,
+            commands::settings::provider_model_test_connection,
             // Agent Profiles
             commands::settings::profile_list,
             commands::settings::profile_create,

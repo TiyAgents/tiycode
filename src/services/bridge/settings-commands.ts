@@ -4,6 +4,7 @@ import type {
   AgentProfileInput,
   CustomProviderCreateInput,
   ProviderCatalogEntryDto,
+  ProviderModelConnectionTestResultDto,
   ProviderSettingsDto,
   ProviderSettingsUpdateInput,
   SettingDto,
@@ -96,6 +97,17 @@ export async function providerSettingsUpdateCustom(
 export async function providerSettingsDeleteCustom(id: string): Promise<void> {
   requireTauri("provider_settings_delete_custom");
   return invoke("provider_settings_delete_custom", { id });
+}
+
+export async function providerModelTestConnection(
+  providerId: string,
+  modelId: string,
+): Promise<ProviderModelConnectionTestResultDto> {
+  requireTauri("provider_model_test_connection");
+  return invoke<ProviderModelConnectionTestResultDto>("provider_model_test_connection", {
+    providerId,
+    modelId,
+  });
 }
 
 // ---------------------------------------------------------------------------

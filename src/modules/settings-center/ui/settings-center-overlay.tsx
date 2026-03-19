@@ -35,6 +35,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
 import { matchProviderIcon } from "@/shared/lib/llm-brand-matcher";
+import type { ProviderModelConnectionTestResultDto } from "@/shared/types/api";
 import type { SystemMetadata } from "@/shared/types/system";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
@@ -120,6 +121,10 @@ type SettingsCenterOverlayProps = {
   onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
   onUpdatePolicySetting: <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => void;
   onFetchProviderModels: (id: string) => Promise<void>;
+  onTestProviderModelConnection: (
+    providerId: string,
+    modelId: string,
+  ) => Promise<ProviderModelConnectionTestResultDto>;
   onUpdateProvider: (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => void;
   onUpdateWorkspace: (id: string, patch: Partial<Omit<WorkspaceEntry, "id">>) => void;
   onUpdateWritableRoot: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
@@ -226,6 +231,11 @@ const NETWORK_ACCESS_OPTIONS: ReadonlyArray<{
   { value: "allow", label: "Allow", description: "Allow network access without prompts." },
 ] as const;
 
+const MINIMAX_BASE_URL_OPTIONS = [
+  "https://api.minimax.io/anthropic",
+  "https://api.minimaxi.com/anthropic",
+] as const;
+
 export function SettingsCenterOverlay({
   activeCategory,
   agentProfiles,
@@ -274,6 +284,7 @@ export function SettingsCenterOverlay({
   onUpdateGeneralPreference,
   onUpdatePolicySetting,
   onFetchProviderModels,
+  onTestProviderModelConnection,
   onUpdateProvider,
   onUpdateWorkspace,
   onUpdateWritableRoot,
@@ -424,6 +435,7 @@ export function SettingsCenterOverlay({
                     providerCatalog={providerCatalog}
                     onAddProvider={onAddProvider}
                     onFetchProviderModels={onFetchProviderModels}
+                    onTestProviderModelConnection={onTestProviderModelConnection}
                     onRemoveProvider={onRemoveProvider}
                     onUpdateProvider={onUpdateProvider}
                   />
@@ -2267,6 +2279,7 @@ function ProviderSettingsPanel({
   providers,
   onAddProvider,
   onFetchProviderModels,
+  onTestProviderModelConnection,
   onRemoveProvider,
   onUpdateProvider,
 }: {
@@ -2275,6 +2288,10 @@ function ProviderSettingsPanel({
   providers: Array<ProviderEntry>;
   onAddProvider: (entry: Omit<ProviderEntry, "id">) => void;
   onFetchProviderModels: (id: string) => Promise<void>;
+  onTestProviderModelConnection: (
+    providerId: string,
+    modelId: string,
+  ) => Promise<ProviderModelConnectionTestResultDto>;
   onRemoveProvider: (id: string) => void;
   onUpdateProvider: (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => void;
 }) {
@@ -2283,6 +2300,7 @@ function ProviderSettingsPanel({
   );
   const [providerSearch, setProviderSearch] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [customHeadersInput, setCustomHeadersInput] = useState("{}");
   const [customHeadersError, setCustomHeadersError] = useState<string | null>(null);
@@ -2292,8 +2310,19 @@ function ProviderSettingsPanel({
   const [newModelDisplayName, setNewModelDisplayName] = useState("");
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [fetchFeedback, setFetchFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const [testingModelId, setTestingModelId] = useState<string | null>(null);
+  const [modelTestFeedback, setModelTestFeedback] = useState<Record<string, ProviderModelConnectionTestResultDto>>({});
+  const [isMiniMaxCustomBaseUrl, setIsMiniMaxCustomBaseUrl] = useState(false);
+  const modelTestFeedbackTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? null;
+  const isMiniMaxProvider = selectedProvider?.providerKey === "minimax";
+  const minimaxBaseUrlMode =
+    isMiniMaxCustomBaseUrl
+      ? "__custom__"
+      : selectedProvider && MINIMAX_BASE_URL_OPTIONS.includes(selectedProvider.baseUrl as typeof MINIMAX_BASE_URL_OPTIONS[number])
+      ? selectedProvider.baseUrl
+      : "__custom__";
 
   const filteredProviders = useMemo(() => {
     if (!providerSearch.trim()) return providers;
@@ -2335,13 +2364,19 @@ function ProviderSettingsPanel({
       setShowAdvancedSettings(false);
       setCustomHeadersInput("{}");
       setCustomHeadersError(null);
+      setIsMiniMaxCustomBaseUrl(false);
       return;
     }
 
     const hasCustomHeaders = Object.keys(selectedProvider.customHeaders).length > 0;
+    setApiKeyDraft(selectedProvider.apiKey);
     setShowAdvancedSettings(hasCustomHeaders);
     setCustomHeadersInput(formatCustomHeaders(selectedProvider.customHeaders));
     setCustomHeadersError(null);
+    setIsMiniMaxCustomBaseUrl(
+      selectedProvider.providerKey === "minimax"
+      && !MINIMAX_BASE_URL_OPTIONS.includes(selectedProvider.baseUrl as typeof MINIMAX_BASE_URL_OPTIONS[number]),
+    );
   }, [selectedProvider?.id]);
 
   useEffect(() => {
@@ -2353,7 +2388,15 @@ function ProviderSettingsPanel({
   useEffect(() => {
     setFetchFeedback(null);
     setIsFetchingModels(false);
+    setTestingModelId(null);
+    Object.values(modelTestFeedbackTimeoutsRef.current).forEach((timeoutId) => clearTimeout(timeoutId));
+    modelTestFeedbackTimeoutsRef.current = {};
+    setModelTestFeedback({});
   }, [selectedProvider?.id]);
+
+  useEffect(() => () => {
+    Object.values(modelTestFeedbackTimeoutsRef.current).forEach((timeoutId) => clearTimeout(timeoutId));
+  }, []);
 
   const handleAddCustomProvider = () => {
     const newProvider: Omit<ProviderEntry, "id"> = {
@@ -2381,6 +2424,19 @@ function ProviderSettingsPanel({
     }
 
     onUpdateProvider(selectedProvider.id, { customHeaders });
+  };
+
+  const handleApiKeySave = () => {
+    if (!selectedProvider) {
+      return;
+    }
+
+    const value = apiKeyDraft.trim();
+    if (!value) {
+      return;
+    }
+
+    onUpdateProvider(selectedProvider.id, { apiKey: value });
   };
 
   const handleUpdateModel = (modelId: string, patch: Partial<ProviderModel>) => {
@@ -2448,6 +2504,57 @@ function ProviderSettingsPanel({
       });
     } finally {
       setIsFetchingModels(false);
+    }
+  };
+
+  const handleTestModelConnection = async (modelId: string) => {
+    if (!selectedProvider || testingModelId === modelId) {
+      return;
+    }
+
+    setTestingModelId(modelId);
+
+    try {
+      const result = await onTestProviderModelConnection(selectedProvider.id, modelId);
+      setModelTestFeedback((current) => ({
+        ...current,
+        [modelId]: result,
+      }));
+      if (modelTestFeedbackTimeoutsRef.current[modelId]) {
+        clearTimeout(modelTestFeedbackTimeoutsRef.current[modelId]);
+      }
+      modelTestFeedbackTimeoutsRef.current[modelId] = setTimeout(() => {
+        setModelTestFeedback((current) => {
+          const next = { ...current };
+          delete next[modelId];
+          return next;
+        });
+        delete modelTestFeedbackTimeoutsRef.current[modelId];
+      }, 5000);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error";
+      setModelTestFeedback((current) => ({
+        ...current,
+        [modelId]: {
+          success: false,
+          unsupported: false,
+          message: "Connection test failed.",
+          detail,
+        },
+      }));
+      if (modelTestFeedbackTimeoutsRef.current[modelId]) {
+        clearTimeout(modelTestFeedbackTimeoutsRef.current[modelId]);
+      }
+      modelTestFeedbackTimeoutsRef.current[modelId] = setTimeout(() => {
+        setModelTestFeedback((current) => {
+          const next = { ...current };
+          delete next[modelId];
+          return next;
+        });
+        delete modelTestFeedbackTimeoutsRef.current[modelId];
+      }, 5000);
+    } finally {
+      setTestingModelId((current) => (current === modelId ? null : current));
     }
   };
 
@@ -2582,20 +2689,65 @@ function ProviderSettingsPanel({
                   </ProviderField>
 
                   <ProviderField label="Base URL">
-                    <Input
-                      value={selectedProvider.baseUrl}
-                      onChange={(event) => onUpdateProvider(selectedProvider.id, { baseUrl: event.target.value })}
-                    />
+                    {isMiniMaxProvider ? (
+                      <div className="space-y-2">
+                        <div className="relative">
+                          <select
+                            value={minimaxBaseUrlMode}
+                            onChange={(event) => {
+                              if (event.target.value === "__custom__") {
+                                setIsMiniMaxCustomBaseUrl(true);
+                                return;
+                              }
+
+                              setIsMiniMaxCustomBaseUrl(false);
+                              onUpdateProvider(selectedProvider.id, { baseUrl: event.target.value });
+                            }}
+                            className="h-9 w-full appearance-none rounded-lg border border-app-border bg-app-surface-muted px-3 pr-8 text-[13px] text-app-foreground outline-none transition-colors focus-visible:border-app-border-strong"
+                          >
+                            {MINIMAX_BASE_URL_OPTIONS.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                            <option value="__custom__">Custom Base URL</option>
+                          </select>
+                          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-app-subtle" />
+                        </div>
+                        {minimaxBaseUrlMode === "__custom__" ? (
+                          <Input
+                            value={selectedProvider.baseUrl}
+                            onChange={(event) => onUpdateProvider(selectedProvider.id, { baseUrl: event.target.value })}
+                            placeholder="https://your-endpoint.example.com/anthropic"
+                          />
+                        ) : null}
+                        <p className="text-[11px] text-app-subtle">
+                          Choose a recommended MiniMax endpoint or enter your own Base URL.
+                        </p>
+                      </div>
+                    ) : (
+                      <Input
+                        value={selectedProvider.baseUrl}
+                        onChange={(event) => onUpdateProvider(selectedProvider.id, { baseUrl: event.target.value })}
+                      />
+                    )}
                   </ProviderField>
 
                 <ProviderField label="API Key">
                   <div className="relative">
                     <Input
                       type={showApiKey ? "text" : "password"}
-                      value={selectedProvider.apiKey}
-                      onChange={(event) => onUpdateProvider(selectedProvider.id, { apiKey: event.target.value })}
+                      value={apiKeyDraft}
+                      onChange={(event) => setApiKeyDraft(event.target.value)}
+                      onBlur={handleApiKeySave}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          handleApiKeySave();
+                        }
+                      }}
                       className="pr-10"
-                      placeholder={selectedProvider.hasApiKey ? "Saved in app" : "Not set"}
+                      placeholder={selectedProvider.hasApiKey && !apiKeyDraft ? "Saved in app" : "Not set"}
                     />
                     <button
                       type="button"
@@ -2765,6 +2917,11 @@ function ProviderSettingsPanel({
                           key={model.id}
                           model={model}
                           isExpanded={expandedModelId === model.id}
+                          isTesting={testingModelId === model.id}
+                          testFeedback={modelTestFeedback[model.id] ?? null}
+                          onTestConnection={() => {
+                            void handleTestModelConnection(model.id);
+                          }}
                           onToggleExpanded={() =>
                             setExpandedModelId((current) => (current === model.id ? null : model.id))
                           }
@@ -2791,15 +2948,21 @@ function ProviderSettingsPanel({
 
 function ProviderModelRow({
   isExpanded,
+  isTesting,
   model,
+  testFeedback,
   onRemove,
+  onTestConnection,
   onToggleEnabled,
   onToggleExpanded,
   onUpdate,
 }: {
   isExpanded: boolean;
+  isTesting: boolean;
   model: ProviderModel;
+  testFeedback: ProviderModelConnectionTestResultDto | null;
   onRemove: () => void;
+  onTestConnection: () => void;
   onToggleEnabled: (checked: boolean) => void;
   onToggleExpanded: () => void;
   onUpdate: (patch: Partial<ProviderModel>) => void;
@@ -2893,11 +3056,16 @@ function ProviderModelRow({
           >
             <button
               type="button"
-              title="Test connection"
+              title={isTesting ? "Testing connection" : "Test connection"}
               aria-label="Test model connection"
-              className="flex size-6 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface hover:text-app-foreground"
+              onClick={onTestConnection}
+              disabled={isTesting}
+              className={cn(
+                "flex size-6 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface hover:text-app-foreground",
+                isTesting && "cursor-wait opacity-70",
+              )}
             >
-              <MousePointerClick className="size-3" />
+              {isTesting ? <RefreshCw className="size-3 animate-spin" /> : <MousePointerClick className="size-3" />}
             </button>
             <button
               type="button"
@@ -2934,6 +3102,29 @@ function ProviderModelRow({
           />
         </div>
       </div>
+
+      {isTesting || testFeedback ? (
+        <div className="border-t border-app-border/70 bg-app-surface px-4 py-2">
+          <p
+            className={cn(
+              "text-[11px] leading-5",
+              isTesting
+                ? "text-app-subtle"
+                : testFeedback?.success
+                ? "text-app-success"
+                : testFeedback?.unsupported
+                ? "text-app-muted"
+                : "text-app-danger",
+            )}
+          >
+            {isTesting
+              ? "Testing connection..."
+              : testFeedback?.detail
+              ? `${testFeedback.message} ${testFeedback.detail}`
+              : testFeedback?.message}
+          </p>
+        </div>
+      ) : null}
 
       {isExpanded ? (
         <div className="border-t border-app-border bg-app-surface px-4 py-4">

@@ -156,6 +156,15 @@ impl ProviderSettingsDto {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelConnectionTestResultDto {
+    pub success: bool,
+    pub unsupported: bool,
+    pub message: String,
+    pub detail: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderModelInput {

@@ -152,6 +152,7 @@ export function DashboardWorkbench() {
     removeProvider,
     updateProvider,
     fetchProviderModels,
+    testProviderModelConnection,
     agentProfiles,
     activeAgentProfileId,
     addAgentProfile,
@@ -1331,6 +1332,7 @@ export function DashboardWorkbench() {
           onUpdatePolicySetting={updatePolicySetting}
           onUpdateProvider={updateProvider}
           onFetchProviderModels={fetchProviderModels}
+          onTestProviderModelConnection={testProviderModelConnection}
           onUpdateWorkspace={updateWorkspace}
           onUpdateWritableRoot={updateWritableRoot}
         />

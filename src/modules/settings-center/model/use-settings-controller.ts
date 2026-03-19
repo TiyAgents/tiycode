@@ -20,9 +20,13 @@ import type {
   WorkspaceEntry,
   WritableRootEntry,
 } from "@/modules/settings-center/model/types";
-import type { ProviderSettingsDto } from "@/shared/types/api";
+import type {
+  ProviderModelConnectionTestResultDto,
+  ProviderSettingsDto,
+} from "@/shared/types/api";
 import {
   providerCatalogList,
+  providerModelTestConnection,
   providerSettingsCreateCustom,
   providerSettingsDeleteCustom,
   providerSettingsFetchModels,
@@ -471,6 +475,22 @@ export function useSettingsController() {
     }
   };
 
+  const testProviderModelConnection = async (
+    providerId: string,
+    modelId: string,
+  ): Promise<ProviderModelConnectionTestResultDto> => {
+    if (!isTauri()) {
+      return {
+        success: false,
+        unsupported: false,
+        message: "Test Connection requires Tauri runtime.",
+        detail: null,
+      };
+    }
+
+    return providerModelTestConnection(providerId, modelId);
+  };
+
   const addCommand = (entry: Omit<CommandEntry, "id">) => {
     setSettings((current) => ({
       ...current,
@@ -519,6 +539,7 @@ export function useSettingsController() {
     removeProvider,
     updateProvider,
     fetchProviderModels,
+    testProviderModelConnection,
     updateCommandSetting,
     agentProfiles: settings.agentProfiles,
     activeAgentProfileId: settings.activeAgentProfileId,
