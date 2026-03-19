@@ -75,10 +75,7 @@ pub async fn execute(
     }
 }
 
-pub async fn commit(
-    workspace_path: &str,
-    message: &str,
-) -> Result<GitCommandResultDto, AppError> {
+pub async fn commit(workspace_path: &str, message: &str) -> Result<GitCommandResultDto, AppError> {
     let trimmed = message.trim();
     if trimmed.is_empty() {
         return Err(git_error(
@@ -115,7 +112,12 @@ pub async fn pull(workspace_path: &str) -> Result<GitCommandResultDto, AppError>
 }
 
 pub async fn push(workspace_path: &str) -> Result<GitCommandResultDto, AppError> {
-    run_git_action(workspace_path, GitMutationAction::Push, vec!["push".to_string()]).await
+    run_git_action(
+        workspace_path,
+        GitMutationAction::Push,
+        vec!["push".to_string()],
+    )
+    .await
 }
 
 pub async fn stage_paths(workspace_path: &str, workspace_paths: &[String]) -> Result<(), AppError> {
@@ -139,7 +141,10 @@ pub async fn unstage_paths(
     tokio::task::spawn_blocking(move || unstage_paths_sync(&workspace_root, &normalized_paths))
         .await
         .map_err(|error| {
-            AppError::internal(ErrorSource::Git, format!("Git unstage task failed: {error}"))
+            AppError::internal(
+                ErrorSource::Git,
+                format!("Git unstage task failed: {error}"),
+            )
         })?
 }
 
@@ -157,7 +162,9 @@ async fn run_git_action(
         run_git_command(&repo_root, action, args)
     })
     .await
-    .map_err(|error| AppError::internal(ErrorSource::Git, format!("Git CLI task failed: {error}")))?
+    .map_err(|error| {
+        AppError::internal(ErrorSource::Git, format!("Git CLI task failed: {error}"))
+    })?
 }
 
 fn run_git_command(
@@ -459,7 +466,11 @@ fn workspace_path_to_repo_path(
 ) -> Result<String, AppError> {
     let normalized = workspace_relative_path.trim().trim_matches('/');
     if normalized.is_empty() {
-        return Err(git_error("git.path.empty", "Git path cannot be empty", false));
+        return Err(git_error(
+            "git.path.empty",
+            "Git path cannot be empty",
+            false,
+        ));
     }
 
     let absolute_path = workspace_root.join(normalized);

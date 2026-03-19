@@ -175,7 +175,9 @@ pub async fn git_fetch(
         &input,
         approved.unwrap_or(false),
         move || async move {
-            git_manager.fetch(&workspace_id_for_run, &workspace_path).await
+            git_manager
+                .fetch(&workspace_id_for_run, &workspace_path)
+                .await
         },
     )
     .await
@@ -200,7 +202,9 @@ pub async fn git_pull(
         &input,
         approved.unwrap_or(false),
         move || async move {
-            git_manager.pull(&workspace_id_for_run, &workspace_path).await
+            git_manager
+                .pull(&workspace_id_for_run, &workspace_path)
+                .await
         },
     )
     .await
@@ -225,16 +229,15 @@ pub async fn git_push(
         &input,
         approved.unwrap_or(false),
         move || async move {
-            git_manager.push(&workspace_id_for_run, &workspace_path).await
+            git_manager
+                .push(&workspace_id_for_run, &workspace_path)
+                .await
         },
     )
     .await
 }
 
-async fn load_workspace(
-    state: &AppState,
-    workspace_id: &str,
-) -> Result<WorkspaceRecord, AppError> {
+async fn load_workspace(state: &AppState, workspace_id: &str) -> Result<WorkspaceRecord, AppError> {
     workspace_repo::find_by_id(&state.pool, workspace_id)
         .await?
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))
@@ -254,7 +257,12 @@ where
 {
     let policy_engine = PolicyEngine::new(state.pool.clone());
     let check = policy_engine
-        .evaluate(action.tool_name(), input, Some(&workspace.canonical_path), "default")
+        .evaluate(
+            action.tool_name(),
+            input,
+            Some(&workspace.canonical_path),
+            "default",
+        )
         .await?;
     let policy_json = serde_json::to_string(&check).unwrap_or_default();
 

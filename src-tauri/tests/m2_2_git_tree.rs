@@ -473,7 +473,11 @@ async fn test_git_commit_refreshes_snapshot_and_history() {
 
     let manager = GitManager::new();
     let (result, snapshot) = manager
-        .commit("workspace-1", &root.to_string_lossy(), "docs: update readme")
+        .commit(
+            "workspace-1",
+            &root.to_string_lossy(),
+            "docs: update readme",
+        )
         .await
         .expect("git commit should succeed");
 
@@ -509,14 +513,28 @@ async fn test_git_fetch_pull_and_push_round_trip_against_local_remote() {
         .status()
         .expect("should init bare remote");
 
-    run_git(tmp.path(), &["clone", remote.to_string_lossy().as_ref(), local.to_string_lossy().as_ref()]);
+    run_git(
+        tmp.path(),
+        &[
+            "clone",
+            remote.to_string_lossy().as_ref(),
+            local.to_string_lossy().as_ref(),
+        ],
+    );
     configure_git_user(&local);
     std::fs::write(local.join("README.md"), "# Demo\n").expect("should write initial file");
     run_git(&local, &["add", "README.md"]);
     run_git(&local, &["commit", "-m", "initial commit"]);
     run_git(&local, &["push", "-u", "origin", "HEAD"]);
 
-    run_git(tmp.path(), &["clone", remote.to_string_lossy().as_ref(), peer.to_string_lossy().as_ref()]);
+    run_git(
+        tmp.path(),
+        &[
+            "clone",
+            remote.to_string_lossy().as_ref(),
+            peer.to_string_lossy().as_ref(),
+        ],
+    );
     configure_git_user(&peer);
     std::fs::write(peer.join("peer.txt"), "peer change\n").expect("should write peer file");
     run_git(&peer, &["add", "peer.txt"]);

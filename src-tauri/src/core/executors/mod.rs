@@ -30,12 +30,7 @@ pub async fn execute_tool(
         "list_dir" => filesystem::list_dir(input, workspace_path).await,
         "search_repo" => search::search_repo(input, workspace_path).await,
         "run_command" => process::run_command(input, workspace_path).await,
-        "git_add"
-        | "git_stage"
-        | "git_unstage"
-        | "git_commit"
-        | "git_fetch"
-        | "git_pull"
+        "git_add" | "git_stage" | "git_unstage" | "git_commit" | "git_fetch" | "git_pull"
         | "git_push" => git::execute(tool_name, input, workspace_path).await,
         "terminal_get_status"
         | "terminal_get_recent_output"
