@@ -6,7 +6,6 @@ mod persistence;
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
@@ -173,7 +172,6 @@ pub fn run() {
             commands::agent::thread_start_run,
             commands::agent::thread_cancel_run,
             commands::agent::tool_approval_respond,
-            commands::agent::sidecar_status,
             // Index
             commands::index::index_get_tree,
             commands::index::index_get_children,
@@ -211,14 +209,8 @@ pub fn run() {
 
             tracing::info!(db = %db_path.display(), "database ready");
 
-            // 5. Resolve sidecar path
-            // In dev, use a placeholder. Real sidecar will be resolved from
-            // app resources or config once the sidecar project is built.
-            let sidecar_path = std::env::var("TIY_SIDECAR_PATH")
-                .unwrap_or_else(|_| "tiy-agent-sidecar".to_string());
-
-            // 6. Construct and manage AppState
-            let state = AppState::new(pool, sidecar_path);
+            // 5. Construct and manage AppState
+            let state = AppState::new(pool);
 
             if let Some(setting) = tauri::async_runtime::block_on(async {
                 state
@@ -238,35 +230,13 @@ pub fn run() {
                 }
             }
 
-            // 7. Startup recovery: validate workspaces + interrupt dangling runs
+            // 6. Startup recovery: validate workspaces + interrupt dangling runs
             tauri::async_runtime::block_on(async {
                 state.workspace_manager.validate_all().await?;
                 state.thread_manager.recover_interrupted_runs().await?;
                 state.terminal_manager.recover_orphaned_sessions().await?;
                 Ok::<(), crate::model::errors::AppError>(())
             })?;
-
-            // 8. Start sidecar process and event processing loop
-            //    Sidecar start is best-effort — if the binary is not found,
-            //    the app still launches but agent runs will fail gracefully.
-            let sidecar_started = tauri::async_runtime::block_on(async {
-                match state.sidecar_manager.start().await {
-                    Ok(()) => true,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "sidecar failed to start (agent runs will be unavailable)");
-                        false
-                    }
-                }
-            });
-
-            if sidecar_started {
-                if let Some(event_rx) = state.sidecar_manager.take_event_receiver() {
-                    let manager = Arc::clone(&state.agent_run_manager);
-                    tauri::async_runtime::spawn(async move {
-                        manager.spawn_event_loop(event_rx);
-                    });
-                }
-            }
 
             tauri::async_runtime::spawn(async {
                 crate::core::settings_manager::SettingsManager::refresh_catalog_snapshot_silently()
@@ -275,7 +245,7 @@ pub fn run() {
 
             app.manage(state);
 
-            // 9. Platform-specific window setup
+            // 7. Platform-specific window setup
             #[cfg(target_os = "windows")]
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 let _ = window.set_decorations(false);

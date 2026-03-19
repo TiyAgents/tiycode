@@ -178,6 +178,7 @@ export interface RunModelPlanDto {
   primary?: RunModelPlanRoleDto | null;
   auxiliary?: RunModelPlanRoleDto | null;
   lightweight?: RunModelPlanRoleDto | null;
+  toolProfileByMode?: Partial<Record<RunMode, string>> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,17 +280,19 @@ export type ThreadStreamEvent =
   | { type: "plan_updated"; runId: string; plan: unknown }
   | { type: "reasoning_updated"; runId: string; reasoning: string }
   | { type: "queue_updated"; runId: string; queue: unknown }
-  | { type: "subagent_started"; runId: string; subtaskId: string }
+  | { type: "subagent_started"; runId: string; subtaskId: string; helperKind: string }
   | {
       type: "subagent_completed";
       runId: string;
       subtaskId: string;
+      helperKind: string;
       summary: string | null;
     }
   | {
       type: "subagent_failed";
       runId: string;
       subtaskId: string;
+      helperKind: string;
       error: string;
     }
   | {
@@ -323,6 +326,7 @@ export type ThreadStreamEvent =
   | { type: "tool_failed"; runId: string; toolCallId: string; error: string }
   | { type: "run_completed"; runId: string }
   | { type: "run_failed"; runId: string; error: string }
+  | { type: "run_cancelled"; runId: string }
   | { type: "run_interrupted"; runId: string };
 
 // ---------------------------------------------------------------------------
@@ -471,11 +475,3 @@ export type TerminalStreamEvent =
   | { type: "stderr_chunk"; threadId: string; data: string }
   | { type: "status_changed"; threadId: string; status: TerminalSessionStatus }
   | { type: "session_exited"; threadId: string; exitCode: number | null };
-
-// ---------------------------------------------------------------------------
-// Sidecar
-// ---------------------------------------------------------------------------
-
-export interface SidecarStatusDto {
-  running: boolean;
-}

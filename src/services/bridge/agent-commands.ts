@@ -1,5 +1,5 @@
 import { invoke, isTauri, Channel } from "@tauri-apps/api/core";
-import type { RunModelPlanDto, ThreadStreamEvent, SidecarStatusDto } from "@/shared/types/api";
+import type { RunModelPlanDto, ThreadStreamEvent } from "@/shared/types/api";
 
 const requireTauri = (cmd: string) => {
   if (!isTauri()) throw new Error(`${cmd} requires Tauri runtime`);
@@ -44,9 +44,4 @@ export async function toolApprovalRespond(
 ): Promise<void> {
   requireTauri("tool_approval_respond");
   return invoke("tool_approval_respond", { toolCallId, runId, approved });
-}
-
-export async function sidecarStatus(): Promise<SidecarStatusDto> {
-  if (!isTauri()) return { running: false };
-  return invoke<SidecarStatusDto>("sidecar_status");
 }

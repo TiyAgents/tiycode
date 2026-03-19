@@ -102,6 +102,10 @@ export function buildRunModelPlan(
     primary: toRunModelPlanRole(primarySelection),
     auxiliary: auxiliarySelection ? toRunModelPlanRole(auxiliarySelection) : null,
     lightweight: lightweightSelection ? toRunModelPlanRole(lightweightSelection) : null,
+    toolProfileByMode: {
+      default: "default_full",
+      plan: "plan_read_only",
+    },
   };
 }
 

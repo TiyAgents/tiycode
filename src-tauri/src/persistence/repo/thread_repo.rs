@@ -141,6 +141,11 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
         .execute(&mut *tx)
         .await?;
 
+    sqlx::query("DELETE FROM run_helpers WHERE thread_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
     sqlx::query("DELETE FROM thread_runs WHERE thread_id = ?")
         .bind(id)
         .execute(&mut *tx)

@@ -10,6 +10,8 @@
 mod test_helpers;
 
 use sqlx::Row;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 // =========================================================================
 // T1.6.1 — Dangerous command hard deny
@@ -474,4 +476,112 @@ async fn test_pending_tool_calls_query() {
     assert!(ids.contains(&"tc-wait".to_string()));
     assert!(ids.contains(&"tc-run".to_string()));
     assert!(!ids.contains(&"tc-done".to_string()));
+}
+
+// =========================================================================
+// T1.6.8 — Helper-safe approval escalation
+// =========================================================================
+
+#[tokio::test]
+async fn test_tool_gateway_can_fold_approval_into_escalation() {
+    use tiy_agent_lib::core::terminal_manager::TerminalManager;
+    use tiy_agent_lib::core::tool_gateway::{
+        ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
+    };
+
+    let pool = test_helpers::setup_test_pool().await;
+    let workspace_root = std::env::temp_dir().join(format!(
+        "tiy-tool-gateway-{}",
+        uuid::Uuid::now_v7()
+    ));
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::write(workspace_root.join("README.md"), "hello").unwrap();
+    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let readme_path = std::fs::canonicalize(workspace_root.join("README.md")).unwrap();
+
+    test_helpers::seed_workspace(
+        &pool,
+        "ws-helper-escalate",
+        workspace_root.to_str().unwrap(),
+    )
+    .await;
+    test_helpers::seed_thread(&pool, "t-helper-escalate", "ws-helper-escalate").await;
+    test_helpers::seed_run(&pool, "r-helper-escalate", "t-helper-escalate", "running", "default")
+        .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-helper-escalate",
+        "r-helper-escalate",
+        "t-helper-escalate",
+        "write_file",
+        "requested",
+    )
+    .await;
+    test_helpers::seed_policy(&pool, "approval_policy", r#""require_all""#).await;
+
+    let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+    let gateway = ToolGateway::new(pool.clone(), terminal_manager);
+    let approval_prompted = Arc::new(AtomicBool::new(false));
+    let execution_started = Arc::new(AtomicBool::new(false));
+
+    let outcome = gateway
+        .execute_tool_call(
+            ToolExecutionRequest {
+                run_id: "r-helper-escalate".into(),
+                thread_id: "t-helper-escalate".into(),
+                tool_call_id: "tc-helper-escalate".into(),
+                tool_name: "write_file".into(),
+                tool_input: serde_json::json!({
+                    "path": readme_path.display().to_string(),
+                    "content": "updated by helper",
+                }),
+                workspace_path: workspace_root.display().to_string(),
+                run_mode: "default".into(),
+            },
+            tiy_core::agent::AbortSignal::new(),
+            ToolExecutionOptions {
+                allow_user_approval: false,
+            },
+            {
+                let approval_prompted = Arc::clone(&approval_prompted);
+                move |_| {
+                    approval_prompted.store(true, Ordering::SeqCst);
+                }
+            },
+            {
+                let execution_started = Arc::clone(&execution_started);
+                move || {
+                    execution_started.store(true, Ordering::SeqCst);
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(!outcome.approval_required);
+    assert!(!approval_prompted.load(Ordering::SeqCst));
+    assert!(!execution_started.load(Ordering::SeqCst));
+
+    match outcome.result {
+        ToolGatewayResult::EscalationRequired { reason, .. } => {
+            assert!(reason.contains("requiring approval"));
+        }
+        other => panic!(
+            "expected escalation_required outcome, got {:?}",
+            std::mem::discriminant(&other)
+        ),
+    }
+
+    let row = sqlx::query(
+        "SELECT status, approval_status FROM tool_calls WHERE id = 'tc-helper-escalate'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(row.get::<String, _>("status"), "denied");
+    assert_eq!(
+        row.get::<Option<String>, _>("approval_status").unwrap(),
+        "escalation_required"
+    );
 }

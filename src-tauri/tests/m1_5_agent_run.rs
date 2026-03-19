@@ -1,9 +1,9 @@
-//! M1.5 — Agent Run & Sidecar connection tests
+//! M1.5 — Built-in agent runtime tests
 //!
 //! Acceptance criteria:
 //! - Run state machine: Created → Dispatching → Running ⇄ WaitingApproval → Completed/Failed/Cancelled/Interrupted
 //! - Crash recovery marks dangling runs as interrupted
-//! - Sidecar protocol types parse correctly
+//! - Runtime model plan resolves into executable built-in agent sessions
 
 mod test_helpers;
 
@@ -251,162 +251,156 @@ async fn test_effective_model_plan_stored() {
 }
 
 // =========================================================================
-// T1.5.6 — Sidecar protocol event parsing
+// T1.5.6 — Built-in runtime session configuration
 // =========================================================================
 
-#[test]
-fn test_sidecar_event_parse_message_delta() {
-    use tiy_agent_lib::ipc::sidecar_protocol::SidecarEvent;
+#[tokio::test]
+async fn test_build_session_spec_resolves_primary_model_and_profile_prompt() {
+    use tiy_agent_lib::core::agent_session::build_session_spec;
 
-    let payload = serde_json::json!({
-        "runId": "run-123",
-        "messageId": "msg-456",
-        "delta": "Hello "
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-runtime", "/tmp/runtime").await;
+    test_helpers::seed_thread(&pool, "t-runtime", "ws-runtime").await;
+    test_helpers::seed_message(&pool, "m-runtime", "t-runtime", "user", "Explain this project")
+        .await;
+
+    sqlx::query(
+        "INSERT INTO providers (
+            id, provider_kind, provider_key, name, protocol_type, base_url,
+            api_key_encrypted, enabled, mapping_locked
+         ) VALUES ('prov-runtime', 'builtin', 'openai', 'OpenAI', 'openai',
+                   'https://api.openai.com/v1', 'sk-test', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO agent_profiles (id, name, custom_instructions, primary_provider_id, primary_model_id, is_default)
+         VALUES ('profile-runtime', 'Runtime Profile', 'Always answer in concise engineering prose.', 'prov-runtime', 'model-record-runtime', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let model_plan = serde_json::json!({
+        "profileId": "profile-runtime",
+        "primary": {
+            "providerId": "prov-runtime",
+            "modelRecordId": "model-record-runtime",
+            "providerType": "openai",
+            "providerName": "OpenAI",
+            "model": "gpt-4.1",
+            "modelId": "gpt-4.1",
+            "modelDisplayName": "GPT-4.1",
+            "baseUrl": "https://api.openai.com/v1",
+            "contextWindow": "128000",
+            "maxOutputTokens": "16384"
+        }
     });
 
-    let event = SidecarEvent::parse("agent.message.delta", payload);
-    assert!(event.is_some());
+    let spec = build_session_spec(
+        &pool,
+        "run-runtime",
+        "t-runtime",
+        "/tmp/runtime",
+        "default",
+        &model_plan,
+    )
+    .await
+    .unwrap();
 
-    match event.unwrap() {
-        SidecarEvent::MessageDelta {
-            run_id,
-            message_id,
-            delta,
-        } => {
-            assert_eq!(run_id, "run-123");
-            assert_eq!(message_id, "msg-456");
-            assert_eq!(delta, "Hello ");
-        }
-        _ => panic!("Expected MessageDelta"),
-    }
+    assert_eq!(spec.run_id, "run-runtime");
+    assert_eq!(spec.model_plan.primary.model.id, "gpt-4.1");
+    assert_eq!(spec.model_plan.primary.provider_id, "prov-runtime");
+    assert_eq!(spec.model_plan.primary.api_key.as_deref(), Some("sk-test"));
+    assert_eq!(spec.tool_profile_name, "default_full");
+    assert!(spec
+        .system_prompt
+        .contains("Always answer in concise engineering prose."));
+    assert_eq!(spec.history_messages.len(), 1);
 }
 
-#[test]
-fn test_sidecar_event_parse_tool_requested() {
-    use tiy_agent_lib::ipc::sidecar_protocol::SidecarEvent;
+#[tokio::test]
+async fn test_build_session_spec_adds_plan_mode_guardrails() {
+    use tiy_agent_lib::core::agent_session::build_session_spec;
 
-    let payload = serde_json::json!({
-        "runId": "run-789",
-        "toolCallId": "tc-001",
-        "toolName": "read_file",
-        "toolInput": {"path": "/src/main.rs"}
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-plan", "/tmp/plan").await;
+    test_helpers::seed_thread(&pool, "t-plan", "ws-plan").await;
+    test_helpers::seed_message(&pool, "m-plan", "t-plan", "user", "Draft an implementation plan")
+        .await;
+
+    sqlx::query(
+        "INSERT INTO providers (
+            id, provider_kind, provider_key, name, protocol_type, base_url,
+            api_key_encrypted, enabled, mapping_locked
+         ) VALUES ('prov-plan', 'builtin', 'openai', 'OpenAI', 'openai',
+                   'https://api.openai.com/v1', 'sk-test', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let model_plan = serde_json::json!({
+        "primary": {
+            "providerId": "prov-plan",
+            "modelRecordId": "model-record-plan",
+            "providerType": "openai",
+            "providerName": "OpenAI",
+            "model": "gpt-4.1-mini",
+            "modelId": "gpt-4.1-mini",
+            "modelDisplayName": "GPT-4.1 Mini",
+            "baseUrl": "https://api.openai.com/v1"
+        }
     });
 
-    let event = SidecarEvent::parse("agent.tool.requested", payload);
-    assert!(event.is_some());
+    let spec = build_session_spec(
+        &pool,
+        "run-plan",
+        "t-plan",
+        "/tmp/plan",
+        "plan",
+        &model_plan,
+    )
+    .await
+    .unwrap();
 
-    match event.unwrap() {
-        SidecarEvent::ToolRequested {
-            run_id,
-            tool_call_id,
-            tool_name,
-            tool_input,
-        } => {
-            assert_eq!(run_id, "run-789");
-            assert_eq!(tool_call_id, "tc-001");
-            assert_eq!(tool_name, "read_file");
-            assert_eq!(tool_input["path"].as_str().unwrap(), "/src/main.rs");
-        }
-        _ => panic!("Expected ToolRequested"),
-    }
+    assert_eq!(spec.tool_profile_name, "plan_read_only");
+    assert!(spec.system_prompt.contains("Plan mode is active."));
 }
 
-#[test]
-fn test_sidecar_event_parse_run_completed() {
-    use tiy_agent_lib::ipc::sidecar_protocol::SidecarEvent;
+#[tokio::test]
+async fn test_run_helpers_table_persists_collapsed_helper_summary() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-helper", "/tmp/helper").await;
+    test_helpers::seed_thread(&pool, "t-helper", "ws-helper").await;
+    test_helpers::seed_run(&pool, "r-helper", "t-helper", "running", "default").await;
 
-    let payload = serde_json::json!({"runId": "run-done"});
-    let event = SidecarEvent::parse("agent.run.completed", payload);
+    sqlx::query(
+        "INSERT INTO run_helpers (
+            id, run_id, thread_id, helper_kind, status, model_role, provider_id, model_id,
+            input_summary, output_summary
+         ) VALUES (
+            'helper-1', 'r-helper', 't-helper', 'delegate_research', 'completed', 'assistant',
+            'prov-helper', 'gpt-4.1-mini', 'Inspect the repository layout', 'Repository layout summarized'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
-    match event.unwrap() {
-        SidecarEvent::RunCompleted { run_id } => assert_eq!(run_id, "run-done"),
-        _ => panic!("Expected RunCompleted"),
-    }
-}
+    let row = sqlx::query(
+        "SELECT helper_kind, status, output_summary FROM run_helpers WHERE id = 'helper-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
-#[test]
-fn test_sidecar_event_parse_run_failed() {
-    use tiy_agent_lib::ipc::sidecar_protocol::SidecarEvent;
-
-    let payload = serde_json::json!({"runId": "run-err", "error": "provider timeout"});
-    let event = SidecarEvent::parse("agent.run.failed", payload);
-
-    match event.unwrap() {
-        SidecarEvent::RunFailed { run_id, error } => {
-            assert_eq!(run_id, "run-err");
-            assert_eq!(error, "provider timeout");
-        }
-        _ => panic!("Expected RunFailed"),
-    }
-}
-
-#[test]
-fn test_sidecar_event_parse_unknown_returns_none() {
-    use tiy_agent_lib::ipc::sidecar_protocol::SidecarEvent;
-
-    let payload = serde_json::json!({"data": "something"});
-    let event = SidecarEvent::parse("unknown.event.type", payload);
-    assert!(event.is_none());
-}
-
-#[test]
-fn test_sidecar_event_run_id_accessor() {
-    use tiy_agent_lib::ipc::sidecar_protocol::SidecarEvent;
-
-    let event = SidecarEvent::RunCompleted {
-        run_id: "test-run".to_string(),
-    };
-    assert_eq!(event.run_id(), "test-run");
-}
-
-#[test]
-fn test_sidecar_event_parse_plan_updated() {
-    use tiy_agent_lib::ipc::sidecar_protocol::SidecarEvent;
-
-    let payload = serde_json::json!({
-        "runId": "run-plan",
-        "plan": {"steps": ["analyze", "implement"]}
-    });
-
-    let event = SidecarEvent::parse("agent.plan.updated", payload);
-    match event.unwrap() {
-        SidecarEvent::PlanUpdated { run_id, plan } => {
-            assert_eq!(run_id, "run-plan");
-            assert!(plan["steps"].is_array());
-        }
-        _ => panic!("Expected PlanUpdated"),
-    }
-}
-
-#[test]
-fn test_sidecar_event_parse_subagent_events() {
-    use tiy_agent_lib::ipc::sidecar_protocol::SidecarEvent;
-
-    // SubagentStarted
-    let payload = serde_json::json!({"runId": "r1", "subtaskId": "st1"});
-    match SidecarEvent::parse("agent.subagent.started", payload).unwrap() {
-        SidecarEvent::SubagentStarted { run_id, subtask_id } => {
-            assert_eq!(run_id, "r1");
-            assert_eq!(subtask_id, "st1");
-        }
-        _ => panic!("Expected SubagentStarted"),
-    }
-
-    // SubagentCompleted
-    let payload = serde_json::json!({"runId": "r1", "subtaskId": "st1", "summary": "done"});
-    match SidecarEvent::parse("agent.subagent.completed", payload).unwrap() {
-        SidecarEvent::SubagentCompleted { summary, .. } => {
-            assert_eq!(summary.unwrap(), "done");
-        }
-        _ => panic!("Expected SubagentCompleted"),
-    }
-
-    // SubagentFailed
-    let payload = serde_json::json!({"runId": "r1", "subtaskId": "st1", "error": "timeout"});
-    match SidecarEvent::parse("agent.subagent.failed", payload).unwrap() {
-        SidecarEvent::SubagentFailed { error, .. } => {
-            assert_eq!(error, "timeout");
-        }
-        _ => panic!("Expected SubagentFailed"),
-    }
+    assert_eq!(row.get::<String, _>("helper_kind"), "delegate_research");
+    assert_eq!(row.get::<String, _>("status"), "completed");
+    assert_eq!(
+        row.get::<Option<String>, _>("output_summary").unwrap(),
+        "Repository layout summarized"
+    );
 }

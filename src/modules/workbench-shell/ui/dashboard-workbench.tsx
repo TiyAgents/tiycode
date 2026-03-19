@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import {
   Boxes,
@@ -27,6 +27,7 @@ import {
   workspaceList,
   workspaceSetDefault,
 } from "@/services/bridge";
+import type { RunState } from "@/services/thread-stream";
 import {
   CONTEXT_WINDOW_INFO,
   CONTEXT_WINDOW_USAGE_DETAIL,
@@ -64,12 +65,13 @@ import type {
   DrawerPanel,
   PanelVisibilityState,
   ProjectOption,
+  ThreadStatus as WorkbenchThreadStatus,
   WorkbenchOverlay,
   WorkspaceItem,
 } from "@/modules/workbench-shell/model/types";
-import { AiElementsTaskDemo } from "@/modules/workbench-shell/ui/ai-elements-task-demo";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
+import { RuntimeThreadSurface } from "@/modules/workbench-shell/ui/runtime-thread-surface";
 import {
   GitDiffPreviewPanel,
   GitPanel,
@@ -125,6 +127,20 @@ function resolveProjectForWorkspace(
   }
 
   return buildProjectOptionFromPath(workspace.path);
+}
+
+function mapRunStateToWorkbenchThreadStatus(state: RunState | "idle"): WorkbenchThreadStatus {
+  switch (state) {
+    case "running":
+      return "running";
+    case "waiting_approval":
+      return "needs-reply";
+    case "failed":
+    case "interrupted":
+      return "failed";
+    default:
+      return "completed";
+  }
 }
 
 export function DashboardWorkbench() {
@@ -195,6 +211,11 @@ export function DashboardWorkbench() {
   const [isCheckingUpdates, setCheckingUpdates] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [terminalBootstrapError, setTerminalBootstrapError] = useState<string | null>(null);
+  const [pendingThreadRun, setPendingThreadRun] = useState<{
+    id: string;
+    prompt: string;
+    threadId: string;
+  } | null>(null);
   const [terminalWorkspaceBindings, setTerminalWorkspaceBindings] = useState<Record<string, string>>({});
   const [defaultWorkspaceId, setDefaultWorkspaceId] = useState<string | null>(null);
   const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(
@@ -767,111 +788,171 @@ export function DashboardWorkbench() {
     setRecentProjects((current) => mergeRecentProjects(current, nextProject));
   };
 
+  const updateActiveThreadStatus = useCallback((status: WorkbenchThreadStatus) => {
+    if (!activeThread?.id) {
+      return;
+    }
+
+    setWorkspaces((current) =>
+      current.map((workspace) => ({
+        ...workspace,
+        threads: workspace.threads.map((thread) =>
+          thread.id === activeThread.id
+            ? {
+                ...thread,
+                status,
+                time: "刚刚",
+              }
+            : thread,
+        ),
+      })),
+    );
+  }, [activeThread?.id]);
+
+  const handleRuntimeThreadRunStateChange = useCallback((state: RunState) => {
+    updateActiveThreadStatus(mapRunStateToWorkbenchThreadStatus(state));
+  }, [updateActiveThreadStatus]);
+
   const handleComposerSubmit = (message: PromptInputMessage) => {
     const trimmedValue = message.text?.trim() ?? "";
+    const attachmentNames = message.files
+      .map((file, index) => file.filename?.trim() || `Attachment ${index + 1}`)
+      .filter((value) => value.length > 0);
+    const promptText = attachmentNames.length > 0
+      ? [trimmedValue, "Attached files:", attachmentNames.map((name) => `- ${name}`).join("\n")]
+          .filter(Boolean)
+          .join("\n\n")
+      : trimmedValue;
 
-    if (!trimmedValue) {
+    if (!promptText) {
       return;
     }
 
     if (isNewThreadMode) {
-      if (!selectedProject) {
-        return;
-      }
-
-      const project = {
-        ...selectedProject,
-        lastOpenedLabel: "刚刚",
-      };
-      const existingWorkspace = workspaces.find(
-        (workspace) =>
-          workspace.id === project.id ||
-          workspace.name === project.name ||
-          (workspace.path && workspace.path === project.path),
-      );
-      const nextThread = {
-        id: `${project.id}-thread-${Date.now()}`,
-        name: buildThreadTitle(trimmedValue),
-        time: "刚刚",
-        active: true,
-        status: "running" as const,
-      };
-      const draftThreadId =
-        newThreadTerminalBindingKey === null ? null : terminalThreadBindings[newThreadTerminalBindingKey] ?? null;
-      const promotedTerminalBindingKey =
-        resolvedWorkspaceId === null ? null : `${resolvedWorkspaceId}:${nextThread.name}`;
-
-      setSelectedProject(project);
-      setRecentProjects((current) => mergeRecentProjects(current, project));
-      setWorkspaces((current) => {
-        const cleared = clearActiveThreads(current);
-
-        if (existingWorkspace) {
-          return cleared.map((workspace) =>
-            workspace.id === existingWorkspace.id
-              ? {
-                  ...workspace,
-                  name: project.name,
-                  path: project.path,
-                  threads: [nextThread, ...workspace.threads],
-                }
-              : workspace,
-          );
+      void (async () => {
+        if (!selectedProject) {
+          return;
         }
 
-        return [
-          {
-            id: project.id,
-            name: project.name,
-            defaultOpen: true,
-            path: project.path,
-            threads: [nextThread],
-          },
-          ...cleared,
-        ];
-      });
-      setOpenWorkspaces((current) => ({
-        ...current,
-        [existingWorkspace?.id ?? project.id]: true,
-      }));
+        if (isTauri() && !resolvedWorkspaceId) {
+          setComposerError("Workspace is still preparing. Try again in a moment.");
+          return;
+        }
 
-      if (activeTerminalStateKey) {
-        setTerminalCollapsedByThreadKey((current) => {
-          if (!(activeTerminalStateKey in current)) {
-            return current;
+        const project = {
+          ...selectedProject,
+          lastOpenedLabel: "刚刚",
+        };
+        const existingWorkspace = workspaces.find(
+          (workspace) =>
+            workspace.id === project.id ||
+            workspace.name === project.name ||
+            (workspace.path && workspace.path === project.path),
+        );
+        const nextThread = {
+          id: `${project.id}-thread-${Date.now()}`,
+          name: buildThreadTitle(trimmedValue || promptText),
+          time: "刚刚",
+          active: true,
+          status: "running" as const,
+        };
+        const promotedTerminalBindingKey =
+          resolvedWorkspaceId === null ? null : `${resolvedWorkspaceId}:${nextThread.name}`;
+        const nextPendingRunId = typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}`;
+
+        let persistedThreadId =
+          newThreadTerminalBindingKey === null ? null : terminalThreadBindings[newThreadTerminalBindingKey] ?? null;
+
+        try {
+          if (isTauri() && resolvedWorkspaceId) {
+            if (!persistedThreadId) {
+              const createdThread = await threadCreate(resolvedWorkspaceId, "");
+              persistedThreadId = createdThread.id;
+            }
+
+            await threadUpdateTitle(persistedThreadId, nextThread.name);
           }
-
-          const next = {
-            ...current,
-            [nextThread.id]: current[activeTerminalStateKey],
-          };
-          delete next[activeTerminalStateKey];
-          return next;
-        });
-      }
-
-      if (draftThreadId && promotedTerminalBindingKey) {
-        setTerminalThreadBindings((current) => {
-          const next = {
-            ...current,
-            [promotedTerminalBindingKey]: draftThreadId,
-          };
-
-          if (newThreadTerminalBindingKey) {
-            delete next[newThreadTerminalBindingKey];
-          }
-
-          return next;
-        });
-
-        void threadUpdateTitle(draftThreadId, nextThread.name).catch((error) => {
+        } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          setTerminalBootstrapError(message);
+          setComposerError(message);
+          return;
+        }
+
+        setSelectedProject(project);
+        setRecentProjects((current) => mergeRecentProjects(current, project));
+        setWorkspaces((current) => {
+          const cleared = clearActiveThreads(current);
+
+          if (existingWorkspace) {
+            return cleared.map((workspace) =>
+              workspace.id === existingWorkspace.id
+                ? {
+                    ...workspace,
+                    name: project.name,
+                    path: project.path,
+                    threads: [nextThread, ...workspace.threads],
+                  }
+                : workspace,
+            );
+          }
+
+          return [
+            {
+              id: project.id,
+              name: project.name,
+              defaultOpen: true,
+              path: project.path,
+              threads: [nextThread],
+            },
+            ...cleared,
+          ];
         });
-      }
-      setNewThreadMode(false);
-      setComposerValue("");
-      setComposerError(null);
+        setOpenWorkspaces((current) => ({
+          ...current,
+          [existingWorkspace?.id ?? project.id]: true,
+        }));
+
+        if (activeTerminalStateKey) {
+          setTerminalCollapsedByThreadKey((current) => {
+            if (!(activeTerminalStateKey in current)) {
+              return current;
+            }
+
+            const next = {
+              ...current,
+              [nextThread.id]: current[activeTerminalStateKey],
+            };
+            delete next[activeTerminalStateKey];
+            return next;
+          });
+        }
+
+        if (persistedThreadId && promotedTerminalBindingKey) {
+          setTerminalThreadBindings((current) => {
+            const next = {
+              ...current,
+              [promotedTerminalBindingKey]: persistedThreadId!,
+            };
+
+            if (newThreadTerminalBindingKey) {
+              delete next[newThreadTerminalBindingKey];
+            }
+
+            return next;
+          });
+          setPendingThreadRun({
+            id: nextPendingRunId,
+            prompt: promptText,
+            threadId: persistedThreadId,
+          });
+        }
+
+        setNewThreadMode(false);
+        setComposerValue("");
+        setComposerError(null);
+      })();
       return;
     }
 
@@ -1221,11 +1302,22 @@ export function DashboardWorkbench() {
                         </div>
                       </div>
 
-                      <AiElementsTaskDemo
+                      <RuntimeThreadSurface
                         activeAgentProfileId={activeAgentProfileId}
                         agentProfiles={agentProfiles}
+                        initialPromptRequest={
+                          pendingThreadRun && pendingThreadRun.threadId === resolvedTerminalThreadId
+                            ? pendingThreadRun
+                            : null
+                        }
+                        onConsumeInitialPrompt={(id) => {
+                          setPendingThreadRun((current) => (current?.id === id ? null : current));
+                        }}
+                        onRunStateChange={handleRuntimeThreadRunStateChange}
                         onSelectAgentProfile={setActiveAgentProfile}
                         providers={providers}
+                        threadId={resolvedTerminalThreadId}
+                        threadTitle={activeThread?.name ?? AI_ELEMENTS_THREAD_TITLE}
                       />
                     </>
                   )}

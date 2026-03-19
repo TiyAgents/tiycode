@@ -133,6 +133,18 @@ fn test_thread_stream_event_run_failed_serialization() {
 }
 
 #[test]
+fn test_thread_stream_event_run_cancelled_serialization() {
+    use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
+
+    let event = ThreadStreamEvent::RunCancelled {
+        run_id: "run-1".into(),
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "run_cancelled");
+}
+
+#[test]
 fn test_thread_stream_event_plan_updated_serialization() {
     use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
 
@@ -170,28 +182,34 @@ fn test_thread_stream_event_subagent_events_serialization() {
     let event = ThreadStreamEvent::SubagentStarted {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
+        helper_kind: "helper_scout".into(),
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_started");
+    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_scout");
 
     // SubagentCompleted
     let event = ThreadStreamEvent::SubagentCompleted {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
+        helper_kind: "helper_planner".into(),
         summary: Some("Analysis complete".into()),
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_completed");
+    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_planner");
     assert_eq!(json["summary"].as_str().unwrap(), "Analysis complete");
 
     // SubagentFailed
     let event = ThreadStreamEvent::SubagentFailed {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
+        helper_kind: "helper_reviewer".into(),
         error: "timeout".into(),
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_failed");
+    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_reviewer");
 }
 
 // =========================================================================
@@ -232,15 +250,18 @@ fn test_all_events_have_type_field() {
         ThreadStreamEvent::SubagentStarted {
             run_id: "r".into(),
             subtask_id: "s".into(),
+            helper_kind: "helper_scout".into(),
         },
         ThreadStreamEvent::SubagentCompleted {
             run_id: "r".into(),
             subtask_id: "s".into(),
+            helper_kind: "helper_planner".into(),
             summary: None,
         },
         ThreadStreamEvent::SubagentFailed {
             run_id: "r".into(),
             subtask_id: "s".into(),
+            helper_kind: "helper_reviewer".into(),
             error: "e".into(),
         },
         ThreadStreamEvent::ToolRequested {
@@ -280,6 +301,7 @@ fn test_all_events_have_type_field() {
             run_id: "r".into(),
             error: "e".into(),
         },
+        ThreadStreamEvent::RunCancelled { run_id: "r".into() },
         ThreadStreamEvent::RunInterrupted { run_id: "r".into() },
     ];
 
@@ -293,11 +315,11 @@ fn test_all_events_have_type_field() {
         assert!(!type_val.is_empty(), "Event type should not be empty");
     }
 
-    // Verify total count matches enum variants (18 variants)
+    // Verify total count matches enum variants (19 variants)
     assert_eq!(
         events.len(),
-        18,
-        "Should test all 18 ThreadStreamEvent variants"
+        19,
+        "Should test all 19 ThreadStreamEvent variants"
     );
 }
 

@@ -51,7 +51,14 @@ export type ApprovalEvent = {
   approved?: boolean;
 };
 
-export type RunState = "idle" | "running" | "waiting_approval" | "completed" | "failed" | "interrupted";
+export type RunState =
+  | "idle"
+  | "running"
+  | "waiting_approval"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
 
 export type PlanEvent = {
   runId: string;
@@ -62,6 +69,33 @@ export type ReasoningEvent = {
   runId: string;
   reasoning: string;
 };
+
+export type QueueEvent = {
+  runId: string;
+  queue: unknown;
+};
+
+export type HelperEvent =
+  | {
+      kind: "started";
+      runId: string;
+      subtaskId: string;
+      helperKind: string;
+    }
+  | {
+      kind: "completed";
+      runId: string;
+      subtaskId: string;
+      helperKind: string;
+      summary?: string | null;
+    }
+  | {
+      kind: "failed";
+      runId: string;
+      subtaskId: string;
+      helperKind: string;
+      error: string;
+    };
 
 // ---------------------------------------------------------------------------
 // ThreadStream class
@@ -75,6 +109,8 @@ export class ThreadStream {
   onRunStateChange: ((state: RunState, runId: string) => void) | null = null;
   onPlan: ((event: PlanEvent) => void) | null = null;
   onReasoning: ((event: ReasoningEvent) => void) | null = null;
+  onQueue: ((event: QueueEvent) => void) | null = null;
+  onHelperEvent: ((event: HelperEvent) => void) | null = null;
   onError: ((error: string, runId: string) => void) | null = null;
   onRawEvent: ((event: ThreadStreamEvent) => void) | null = null;
 
@@ -191,6 +227,42 @@ export class ThreadStream {
         });
         break;
 
+      case "queue_updated":
+        this.onQueue?.({
+          runId: event.runId,
+          queue: event.queue,
+        });
+        break;
+
+      case "subagent_started":
+        this.onHelperEvent?.({
+          kind: "started",
+          runId: event.runId,
+          subtaskId: event.subtaskId,
+          helperKind: event.helperKind,
+        });
+        break;
+
+      case "subagent_completed":
+        this.onHelperEvent?.({
+          kind: "completed",
+          runId: event.runId,
+          subtaskId: event.subtaskId,
+          helperKind: event.helperKind,
+          summary: event.summary,
+        });
+        break;
+
+      case "subagent_failed":
+        this.onHelperEvent?.({
+          kind: "failed",
+          runId: event.runId,
+          subtaskId: event.subtaskId,
+          helperKind: event.helperKind,
+          error: event.error,
+        });
+        break;
+
       case "tool_requested":
         this.onToolEvent?.({
           kind: "requested",
@@ -258,6 +330,11 @@ export class ThreadStream {
         this.currentRunId = null;
         this.onRunStateChange?.("failed", event.runId);
         this.onError?.(event.error, event.runId);
+        break;
+
+      case "run_cancelled":
+        this.currentRunId = null;
+        this.onRunStateChange?.("cancelled", event.runId);
         break;
 
       case "run_interrupted":

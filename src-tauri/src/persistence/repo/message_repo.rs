@@ -124,3 +124,13 @@ pub async fn append_content(pool: &SqlitePool, id: &str, delta: &str) -> Result<
         .await?;
     Ok(())
 }
+
+/// Replace the full content of an existing message.
+pub async fn replace_content(pool: &SqlitePool, id: &str, content: &str) -> Result<(), AppError> {
+    sqlx::query("UPDATE messages SET content_markdown = ? WHERE id = ?")
+        .bind(content)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}

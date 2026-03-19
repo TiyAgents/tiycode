@@ -6,5 +6,7 @@ export type {
   RunState,
   PlanEvent,
   ReasoningEvent,
+  QueueEvent,
+  HelperEvent,
 } from "./thread-stream";
 export type { ThreadStreamEvent } from "./types";

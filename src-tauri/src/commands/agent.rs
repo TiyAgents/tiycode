@@ -1,7 +1,6 @@
 use tauri::{ipc::Channel, State};
 
 use crate::core::app_state::AppState;
-use crate::core::tool_gateway::ToolGatewayResult;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::AppError;
 
@@ -41,6 +40,7 @@ pub async fn thread_start_run(
 
     let (run_id, mut event_rx) = state
         .agent_run_manager
+        .clone()
         .start_run(
             &thread_id,
             &prompt,
@@ -119,61 +119,20 @@ pub async fn tool_approval_respond(
     run_id: String,
     approved: bool,
 ) -> Result<(), AppError> {
-    let result = state
+    let found = state
         .tool_gateway
         .resolve_approval(&tool_call_id, approved)
         .await?;
 
-    match result {
-        Some(ToolGatewayResult::Executed {
-            tool_call_id,
-            output,
-        }) => {
-            // Tool executed successfully — send result back to sidecar
-            state
-                .agent_run_manager
-                .send_tool_result(&tool_call_id, &run_id, output.result, output.success)
-                .await?;
-        }
-        Some(ToolGatewayResult::Denied {
-            tool_call_id,
-            reason,
-        }) => {
-            // Denied — send denial back to sidecar
-            state
-                .agent_run_manager
-                .send_tool_result(
-                    &tool_call_id,
-                    &run_id,
-                    serde_json::json!({"denied": true, "reason": reason}),
-                    false,
-                )
-                .await?;
-        }
-        Some(ToolGatewayResult::ApprovalRequired { .. }) => {
-            // Should not happen after resolve_approval
-        }
-        None => {
-            // Approval not found — send error back
-            state
-                .agent_run_manager
-                .send_tool_result(
-                    &tool_call_id,
-                    &run_id,
-                    serde_json::json!({"error": "approval not found"}),
-                    false,
-                )
-                .await?;
-        }
+    if !found {
+        return Err(AppError::recoverable(
+            crate::model::errors::ErrorSource::Tool,
+            "tool.approval.not_found",
+            format!(
+                "No pending approval was found for tool call '{tool_call_id}' in run '{run_id}'"
+            ),
+        ));
     }
 
     Ok(())
-}
-
-#[tauri::command]
-pub async fn sidecar_status(state: State<'_, AppState>) -> Result<serde_json::Value, AppError> {
-    let running = state.sidecar_manager.is_running().await;
-    Ok(serde_json::json!({
-        "running": running,
-    }))
 }

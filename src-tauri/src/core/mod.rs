@@ -1,11 +1,13 @@
 pub mod agent_run_manager;
+pub mod agent_session;
 pub mod app_state;
+pub mod built_in_agent_runtime;
 pub mod executors;
 pub mod git_manager;
+pub mod helper_agent_orchestrator;
 pub mod index_manager;
 pub mod policy_engine;
 pub mod settings_manager;
-pub mod sidecar_manager;
 pub mod sleep_manager;
 pub mod terminal_manager;
 pub mod thread_manager;

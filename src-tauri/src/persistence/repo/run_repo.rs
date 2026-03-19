@@ -72,6 +72,19 @@ pub async fn update_status(pool: &SqlitePool, id: &str, status: &str) -> Result<
     Ok(())
 }
 
+pub async fn set_error_message(
+    pool: &SqlitePool,
+    id: &str,
+    error_message: &str,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE thread_runs SET error_message = ? WHERE id = ?")
+        .bind(error_message)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Find the currently active (non-terminal) run for a thread.
 pub async fn find_active_by_thread(
     pool: &SqlitePool,

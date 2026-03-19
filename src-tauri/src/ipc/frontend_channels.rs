@@ -39,15 +39,18 @@ pub enum ThreadStreamEvent {
     SubagentStarted {
         run_id: String,
         subtask_id: String,
+        helper_kind: String,
     },
     SubagentCompleted {
         run_id: String,
         subtask_id: String,
+        helper_kind: String,
         summary: Option<String>,
     },
     SubagentFailed {
         run_id: String,
         subtask_id: String,
+        helper_kind: String,
         error: String,
     },
     ToolRequested {
@@ -88,6 +91,9 @@ pub enum ThreadStreamEvent {
     RunFailed {
         run_id: String,
         error: String,
+    },
+    RunCancelled {
+        run_id: String,
     },
     RunInterrupted {
         run_id: String,

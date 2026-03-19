@@ -1,42 +1,92 @@
 //! Unified tool execution gateway.
 //!
 //! All privileged tool requests flow through here:
-//! 1. Receive tool request (from sidecar via AgentRunManager)
-//! 2. Evaluate with PolicyEngine
-//! 3. If auto-allow → execute immediately
-//! 4. If require-approval → pause and notify frontend
-//! 5. If deny → reject immediately
-//! 6. Execute tool via appropriate executor
-//! 7. Write audit record
-//! 8. Return result
+//! 1. Policy evaluation
+//! 2. Optional approval suspension
+//! 3. Tool execution
+//! 4. Audit persistence
 
+use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use sqlx::SqlitePool;
+use tokio::sync::{oneshot, Mutex};
+use tiy_core::agent::AbortSignal;
 
 use crate::core::executors::{self, ToolOutput};
-use crate::core::policy_engine::{PolicyCheck, PolicyEngine, PolicyVerdict};
+use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
 use crate::core::terminal_manager::TerminalManager;
-use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::persistence::repo::{audit_repo, tool_call_repo};
 
-/// Pending approval state.
-struct PendingApproval {
-    run_id: String,
-    thread_id: String,
-    tool_call_id: String,
-    tool_name: String,
-    tool_input: serde_json::Value,
-    workspace_path: String,
-    policy_check: PolicyCheck,
+/// Request context for a single tool execution.
+#[derive(Debug, Clone)]
+pub struct ToolExecutionRequest {
+    pub run_id: String,
+    pub thread_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub workspace_path: String,
+    pub run_mode: String,
+}
+
+/// Approval payload emitted back to the runtime when user input is required.
+#[derive(Debug, Clone)]
+pub struct ApprovalRequest {
+    pub run_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub reason: String,
+}
+
+/// Final execution result surfaced back to the runtime.
+pub struct ToolGatewayOutcome {
+    pub approval_required: bool,
+    pub result: ToolGatewayResult,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolExecutionOptions {
+    pub allow_user_approval: bool,
+}
+
+impl Default for ToolExecutionOptions {
+    fn default() -> Self {
+        Self {
+            allow_user_approval: true,
+        }
+    }
+}
+
+/// Result from ToolGateway processing.
+pub enum ToolGatewayResult {
+    /// Tool was executed successfully (or completed with a structured failure payload).
+    Executed {
+        tool_call_id: String,
+        output: ToolOutput,
+    },
+    /// Tool was denied by policy or by the user during approval.
+    Denied {
+        tool_call_id: String,
+        reason: String,
+    },
+    /// Tool would require approval, but the caller requested folded escalation instead.
+    EscalationRequired {
+        tool_call_id: String,
+        reason: String,
+    },
+    /// Tool was cancelled before approval or execution could finish.
+    Cancelled {
+        tool_call_id: String,
+    },
 }
 
 pub struct ToolGateway {
     pool: SqlitePool,
     policy_engine: PolicyEngine,
     terminal_manager: Arc<TerminalManager>,
-    pending_approvals: Arc<Mutex<Vec<PendingApproval>>>,
+    pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
 }
 
 impl ToolGateway {
@@ -46,214 +96,255 @@ impl ToolGateway {
             pool,
             policy_engine,
             terminal_manager,
-            pending_approvals: Arc::new(Mutex::new(Vec::new())),
+            pending_approvals: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Process a tool request from the sidecar.
-    ///
-    /// Returns:
-    /// - `Ok(Some(event))` — an event to emit to the frontend (approval_required or tool result)
-    /// - `Ok(None)` — tool was auto-allowed and result was sent back directly
-    pub async fn handle_tool_request(
+    /// Evaluate, optionally suspend for approval, and then execute a tool call.
+    pub async fn execute_tool_call<FA, FR>(
         &self,
-        run_id: &str,
-        thread_id: &str,
-        tool_call_id: &str,
-        tool_name: &str,
-        tool_input: &serde_json::Value,
-        workspace_path: &str,
-        run_mode: &str,
-    ) -> Result<ToolGatewayResult, crate::model::errors::AppError> {
-        // 1. Policy evaluation
+        request: ToolExecutionRequest,
+        abort_signal: AbortSignal,
+        options: ToolExecutionOptions,
+        mut on_approval_required: FA,
+        mut on_execution_started: FR,
+    ) -> Result<ToolGatewayOutcome, crate::model::errors::AppError>
+    where
+        FA: FnMut(ApprovalRequest),
+        FR: FnMut(),
+    {
         let check = self
             .policy_engine
-            .evaluate(tool_name, tool_input, Some(workspace_path), run_mode)
+            .evaluate(
+                &request.tool_name,
+                &request.tool_input,
+                Some(&request.workspace_path),
+                &request.run_mode,
+            )
             .await?;
 
         let policy_json = serde_json::to_string(&check).unwrap_or_default();
         let verdict = check.verdict.clone();
 
-        match &verdict {
+        match verdict {
             PolicyVerdict::Deny { reason } => {
-                // Update tool call status
-                tool_call_repo::update_status(&self.pool, tool_call_id, "denied").await?;
+                tool_call_repo::update_status(&self.pool, &request.tool_call_id, "denied").await?;
 
-                // Audit
                 self.write_audit(
-                    run_id,
-                    thread_id,
-                    tool_call_id,
-                    tool_name,
-                    workspace_path,
+                    &request.run_id,
+                    &request.thread_id,
+                    &request.tool_call_id,
+                    &request.tool_name,
                     "tool_denied",
                     &policy_json,
-                    &serde_json::json!({"reason": reason}).to_string(),
+                    &serde_json::json!({ "reason": reason }).to_string(),
                 )
                 .await?;
 
-                Ok(ToolGatewayResult::Denied {
-                    tool_call_id: tool_call_id.to_string(),
-                    reason: reason.clone(),
-                })
-            }
-
-            PolicyVerdict::RequireApproval { reason } => {
-                tool_call_repo::update_status(&self.pool, tool_call_id, "waiting_approval").await?;
-
-                // Store pending approval
-                {
-                    let mut pending = self.pending_approvals.lock().await;
-                    pending.push(PendingApproval {
-                        run_id: run_id.to_string(),
-                        thread_id: thread_id.to_string(),
-                        tool_call_id: tool_call_id.to_string(),
-                        tool_name: tool_name.to_string(),
-                        tool_input: tool_input.clone(),
-                        workspace_path: workspace_path.to_string(),
-                        policy_check: check,
-                    });
-                }
-
-                Ok(ToolGatewayResult::ApprovalRequired {
-                    event: ThreadStreamEvent::ApprovalRequired {
-                        run_id: run_id.to_string(),
-                        tool_call_id: tool_call_id.to_string(),
-                        tool_name: tool_name.to_string(),
-                        tool_input: tool_input.clone(),
-                        reason: reason.clone(),
+                Ok(ToolGatewayOutcome {
+                    approval_required: false,
+                    result: ToolGatewayResult::Denied {
+                        tool_call_id: request.tool_call_id,
+                        reason,
                     },
                 })
             }
-
             PolicyVerdict::AutoAllow => {
-                tool_call_repo::update_status(&self.pool, tool_call_id, "approved").await?;
+                on_execution_started();
 
-                // Execute
                 let output = self
-                    .execute_and_audit(
-                        run_id,
-                        thread_id,
-                        tool_call_id,
-                        tool_name,
-                        tool_input,
-                        workspace_path,
-                        &policy_json,
+                    .execute_and_audit(&request, &policy_json)
+                    .await?;
+
+                Ok(ToolGatewayOutcome {
+                    approval_required: false,
+                    result: ToolGatewayResult::Executed {
+                        tool_call_id: request.tool_call_id,
+                        output,
+                    },
+                })
+            }
+            PolicyVerdict::RequireApproval { reason } => {
+                if !options.allow_user_approval {
+                    tool_call_repo::update_approval(
+                        &self.pool,
+                        &request.tool_call_id,
+                        "escalation_required",
+                        "denied",
                     )
                     .await?;
 
-                Ok(ToolGatewayResult::Executed {
-                    tool_call_id: tool_call_id.to_string(),
-                    output,
-                })
+                    self.write_audit(
+                        &request.run_id,
+                        &request.thread_id,
+                        &request.tool_call_id,
+                        &request.tool_name,
+                        "tool_approval_escalated",
+                        &policy_json,
+                        &serde_json::json!({ "reason": reason }).to_string(),
+                    )
+                    .await?;
+
+                    return Ok(ToolGatewayOutcome {
+                        approval_required: false,
+                        result: ToolGatewayResult::EscalationRequired {
+                            tool_call_id: request.tool_call_id,
+                            reason,
+                        },
+                    });
+                }
+
+                tool_call_repo::update_status(&self.pool, &request.tool_call_id, "waiting_approval")
+                    .await?;
+
+                let (approval_tx, approval_rx) = oneshot::channel::<bool>();
+                {
+                    let mut approvals = self.pending_approvals.lock().await;
+                    approvals.insert(request.tool_call_id.clone(), approval_tx);
+                }
+
+                on_approval_required(ApprovalRequest {
+                    run_id: request.run_id.clone(),
+                    tool_call_id: request.tool_call_id.clone(),
+                    tool_name: request.tool_name.clone(),
+                    tool_input: request.tool_input.clone(),
+                    reason: reason.clone(),
+                });
+
+                let approval = tokio::select! {
+                    _ = abort_signal.cancelled() => None,
+                    result = approval_rx => result.ok(),
+                };
+
+                {
+                    let mut approvals = self.pending_approvals.lock().await;
+                    approvals.remove(&request.tool_call_id);
+                }
+
+                match approval {
+                    Some(true) => {
+                        tool_call_repo::update_approval(
+                            &self.pool,
+                            &request.tool_call_id,
+                            "approved",
+                            "approved",
+                        )
+                        .await?;
+
+                        on_execution_started();
+
+                        let output = self
+                            .execute_and_audit(&request, &policy_json)
+                            .await?;
+
+                        Ok(ToolGatewayOutcome {
+                            approval_required: true,
+                            result: ToolGatewayResult::Executed {
+                                tool_call_id: request.tool_call_id,
+                                output,
+                            },
+                        })
+                    }
+                    Some(false) => {
+                        tool_call_repo::update_approval(
+                            &self.pool,
+                            &request.tool_call_id,
+                            "denied",
+                            "denied",
+                        )
+                        .await?;
+
+                        self.write_audit(
+                            &request.run_id,
+                            &request.thread_id,
+                            &request.tool_call_id,
+                            &request.tool_name,
+                            "tool_approval_denied",
+                            &serde_json::to_string(&check).unwrap_or_default(),
+                            "{}",
+                        )
+                        .await?;
+
+                        Ok(ToolGatewayOutcome {
+                            approval_required: true,
+                            result: ToolGatewayResult::Denied {
+                                tool_call_id: request.tool_call_id,
+                                reason: "User denied the tool execution".to_string(),
+                            },
+                        })
+                    }
+                    None => {
+                        tool_call_repo::update_status(&self.pool, &request.tool_call_id, "cancelled")
+                            .await?;
+
+                        self.write_audit(
+                            &request.run_id,
+                            &request.thread_id,
+                            &request.tool_call_id,
+                            &request.tool_name,
+                            "tool_cancelled",
+                            &serde_json::to_string(&check).unwrap_or_default(),
+                            "{}",
+                        )
+                        .await?;
+
+                        Ok(ToolGatewayOutcome {
+                            approval_required: true,
+                            result: ToolGatewayResult::Cancelled {
+                                tool_call_id: request.tool_call_id,
+                            },
+                        })
+                    }
+                }
             }
         }
     }
 
-    /// Resolve a pending approval.
+    /// Resolve a pending approval. Returns `true` when a waiter was found.
     pub async fn resolve_approval(
         &self,
         tool_call_id: &str,
         approved: bool,
-    ) -> Result<Option<ToolGatewayResult>, crate::model::errors::AppError> {
-        // Find and remove pending approval
-        let pending = {
+    ) -> Result<bool, crate::model::errors::AppError> {
+        let sender = {
             let mut approvals = self.pending_approvals.lock().await;
-            let idx = approvals
-                .iter()
-                .position(|p| p.tool_call_id == tool_call_id);
-            idx.map(|i| approvals.remove(i))
+            approvals.remove(tool_call_id)
         };
 
-        let pending = match pending {
-            Some(p) => p,
-            None => return Ok(None),
-        };
-
-        if !approved {
-            tool_call_repo::update_approval(&self.pool, tool_call_id, "denied", "denied").await?;
-
-            self.write_audit(
-                &pending.run_id,
-                &pending.thread_id,
-                tool_call_id,
-                &pending.tool_name,
-                &pending.workspace_path,
-                "tool_approval_denied",
-                &serde_json::to_string(&pending.policy_check).unwrap_or_default(),
-                "{}",
-            )
-            .await?;
-
-            return Ok(Some(ToolGatewayResult::Denied {
-                tool_call_id: tool_call_id.to_string(),
-                reason: "User denied the tool execution".to_string(),
-            }));
+        if let Some(sender) = sender {
+            let _ = sender.send(approved);
+            Ok(true)
+        } else {
+            Ok(false)
         }
-
-        // Approved — execute
-        tool_call_repo::update_approval(&self.pool, tool_call_id, "approved", "approved").await?;
-
-        let policy_json = serde_json::to_string(&pending.policy_check).unwrap_or_default();
-
-        let output = self
-            .execute_and_audit(
-                &pending.run_id,
-                &pending.thread_id,
-                tool_call_id,
-                &pending.tool_name,
-                &pending.tool_input,
-                &pending.workspace_path,
-                &policy_json,
-            )
-            .await?;
-
-        Ok(Some(ToolGatewayResult::Executed {
-            tool_call_id: tool_call_id.to_string(),
-            output,
-        }))
     }
-
-    // -----------------------------------------------------------------------
-    // Internal
-    // -----------------------------------------------------------------------
 
     async fn execute_and_audit(
         &self,
-        run_id: &str,
-        thread_id: &str,
-        tool_call_id: &str,
-        tool_name: &str,
-        tool_input: &serde_json::Value,
-        workspace_path: &str,
+        request: &ToolExecutionRequest,
         policy_json: &str,
     ) -> Result<ToolOutput, crate::model::errors::AppError> {
-        tool_call_repo::update_status(&self.pool, tool_call_id, "running").await?;
+        tool_call_repo::update_status(&self.pool, &request.tool_call_id, "running").await?;
 
         let output = executors::execute_tool(
-            tool_name,
-            tool_input,
-            workspace_path,
-            thread_id,
+            &request.tool_name,
+            &request.tool_input,
+            &request.workspace_path,
+            &request.thread_id,
             Some(&self.terminal_manager),
         )
         .await?;
-        // Persist result
-        let result_json = output.result.to_string();
-        let status = if output.success {
-            "completed"
-        } else {
-            "failed"
-        };
-        tool_call_repo::update_result(&self.pool, tool_call_id, &result_json, status).await?;
 
-        // Audit
+        let result_json = output.result.to_string();
+        let status = if output.success { "completed" } else { "failed" };
+        tool_call_repo::update_result(&self.pool, &request.tool_call_id, &result_json, status)
+            .await?;
+
         self.write_audit(
-            run_id,
-            thread_id,
-            tool_call_id,
-            tool_name,
-            workspace_path,
+            &request.run_id,
+            &request.thread_id,
+            &request.tool_call_id,
+            &request.tool_name,
             &format!("tool_{status}"),
             policy_json,
             &result_json,
@@ -261,8 +352,8 @@ impl ToolGateway {
         .await?;
 
         tracing::info!(
-            tool_call_id,
-            tool_name,
+            tool_call_id = %request.tool_call_id,
+            tool_name = %request.tool_name,
             success = output.success,
             "tool executed"
         );
@@ -276,7 +367,6 @@ impl ToolGateway {
         thread_id: &str,
         tool_call_id: &str,
         tool_name: &str,
-        _workspace_path: &str,
         action: &str,
         policy_json: &str,
         result_json: &str,
@@ -300,20 +390,4 @@ impl ToolGateway {
         )
         .await
     }
-}
-
-/// Result from ToolGateway processing.
-pub enum ToolGatewayResult {
-    /// Tool was executed (auto-allow or post-approval).
-    Executed {
-        tool_call_id: String,
-        output: ToolOutput,
-    },
-    /// Tool requires user approval before execution.
-    ApprovalRequired { event: ThreadStreamEvent },
-    /// Tool was denied by policy or user.
-    Denied {
-        tool_call_id: String,
-        reason: String,
-    },
 }
