@@ -5,6 +5,11 @@ import {
   WORKSPACE_ITEMS,
 } from "@/modules/workbench-shell/model/fixtures";
 import type {
+  ThreadStatus as ApiThreadStatus,
+  ThreadSummaryDto,
+  WorkspaceDto,
+} from "@/shared/types/api";
+import type {
   GitChangeFile,
   GitDiffPreview,
   GitDiffLine,
@@ -12,6 +17,7 @@ import type {
   MockUserSession,
   PanelVisibilityState,
   ProjectOption,
+  ThreadStatus as WorkbenchThreadStatus,
   WorkspaceItem,
   WorkspaceThreadItem,
 } from "@/modules/workbench-shell/model/types";
@@ -348,6 +354,91 @@ export function buildInitialWorkspaces(): Array<WorkspaceItem> {
       id: `${workspace.id}-thread-${index + 1}`,
       active: false,
     })),
+  }));
+}
+
+function mapThreadStatus(status: ApiThreadStatus): WorkbenchThreadStatus {
+  switch (status) {
+    case "running":
+      return "running";
+    case "waiting_approval":
+      return "needs-reply";
+    case "failed":
+    case "interrupted":
+      return "failed";
+    default:
+      return "completed";
+  }
+}
+
+export function formatThreadTimeLabel(value: string | null | undefined, now = Date.now()) {
+  if (!value) {
+    return "";
+  }
+
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) {
+    return "";
+  }
+
+  const diffMs = Math.max(0, now - timestamp);
+  const diffMinutes = Math.floor(diffMs / 60_000);
+
+  if (diffMinutes < 1) {
+    return "刚刚";
+  }
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours}h`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) {
+    return `${diffDays}d`;
+  }
+
+  return `${Math.floor(diffDays / 7)}w`;
+}
+
+export function buildWorkspaceThreadItem(
+  thread: ThreadSummaryDto,
+  activeThreadId: string | null,
+): WorkspaceThreadItem | null {
+  const trimmedTitle = thread.title.trim();
+
+  // Draft threads are persisted early for terminal bootstrapping but should
+  // stay hidden from the visible sidebar until they have a title.
+  if (!trimmedTitle) {
+    return null;
+  }
+
+  return {
+    id: thread.id,
+    name: trimmedTitle,
+    time: formatThreadTimeLabel(thread.lastActiveAt || thread.createdAt),
+    active: thread.id === activeThreadId,
+    status: mapThreadStatus(thread.status),
+  };
+}
+
+export function buildWorkspaceItemsFromDtos(
+  workspaces: ReadonlyArray<WorkspaceDto>,
+  threadsByWorkspaceId: Record<string, ReadonlyArray<ThreadSummaryDto>>,
+  activeThreadId: string | null,
+): Array<WorkspaceItem> {
+  return workspaces.map((workspace) => ({
+    id: workspace.id,
+    name: workspace.name,
+    defaultOpen: workspace.isDefault,
+    path: workspace.canonicalPath || workspace.path,
+    threads: (threadsByWorkspaceId[workspace.id] ?? [])
+      .map((thread) => buildWorkspaceThreadItem(thread, activeThreadId))
+      .filter((thread): thread is WorkspaceThreadItem => thread !== null),
   }));
 }
 
