@@ -502,7 +502,6 @@ export const MOCK_USER_SESSION: MockUserSession = {
 export const DEFAULT_PANEL_VISIBILITY_STATE: PanelVisibilityState = {
   isSidebarOpen: true,
   isDrawerOpen: false,
-  isTerminalCollapsed: true,
 };
 
 export const CONTEXT_WINDOW_INFO = {

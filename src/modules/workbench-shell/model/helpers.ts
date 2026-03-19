@@ -334,10 +334,6 @@ export function readPanelVisibilityState(): PanelVisibilityState {
         typeof parsed.isDrawerOpen === "boolean"
           ? parsed.isDrawerOpen
           : DEFAULT_PANEL_VISIBILITY_STATE.isDrawerOpen,
-      isTerminalCollapsed:
-        typeof parsed.isTerminalCollapsed === "boolean"
-          ? parsed.isTerminalCollapsed
-          : DEFAULT_PANEL_VISIBILITY_STATE.isTerminalCollapsed,
     };
   } catch {
     return DEFAULT_PANEL_VISIBILITY_STATE;

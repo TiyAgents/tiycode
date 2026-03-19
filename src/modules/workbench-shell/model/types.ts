@@ -92,5 +92,4 @@ export type MockUserSession = {
 export type PanelVisibilityState = {
   isSidebarOpen: boolean;
   isDrawerOpen: boolean;
-  isTerminalCollapsed: boolean;
 };

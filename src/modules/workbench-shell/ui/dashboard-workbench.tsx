@@ -83,6 +83,8 @@ import { cn } from "@/shared/lib/utils";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 
 const NEW_THREAD_TERMINAL_KEY_SUFFIX = "__new_thread__";
+const UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY = "__new_thread_pending__";
+const DEFAULT_TERMINAL_COLLAPSED = true;
 
 function getNewThreadTerminalBindingKey(workspaceId: string) {
   return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
@@ -181,6 +183,7 @@ export function DashboardWorkbench() {
   const [activeOverlay, setActiveOverlay] = useState<WorkbenchOverlay>(null);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState<SettingsCategory>("account");
   const [panelVisibilityState, setPanelVisibilityState] = useState<PanelVisibilityState>(() => readPanelVisibilityState());
+  const [terminalCollapsedByThreadKey, setTerminalCollapsedByThreadKey] = useState<Record<string, boolean>>({});
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const [terminalResize, setTerminalResize] = useState<{ startY: number; startHeight: number } | null>(null);
   const [terminalThreadBindings, setTerminalThreadBindings] = useState<Record<string, string>>({});
@@ -220,7 +223,14 @@ export function DashboardWorkbench() {
     : terminalBindingKey === null
       ? null
       : terminalThreadBindings[terminalBindingKey] ?? null;
-  const { isSidebarOpen, isDrawerOpen, isTerminalCollapsed } = panelVisibilityState;
+  const { isSidebarOpen, isDrawerOpen } = panelVisibilityState;
+  const activeTerminalStateKey = isNewThreadMode
+    ? (newThreadTerminalBindingKey ?? UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY)
+    : (activeThread?.id ?? null);
+  const isTerminalCollapsed =
+    activeTerminalStateKey === null
+      ? DEFAULT_TERMINAL_COLLAPSED
+      : (terminalCollapsedByThreadKey[activeTerminalStateKey] ?? DEFAULT_TERMINAL_COLLAPSED);
   const isSettingsOpen = activeOverlay === "settings";
   const isMarketplaceOpen = activeOverlay === "marketplace";
   const isOverlayOpen = activeOverlay !== null;
@@ -240,10 +250,31 @@ export function DashboardWorkbench() {
   };
 
   const setTerminalCollapsed = (nextState: boolean | ((current: boolean) => boolean)) => {
-    setPanelVisibilityState((current) => ({
-      ...current,
-      isTerminalCollapsed: typeof nextState === "function" ? nextState(current.isTerminalCollapsed) : nextState,
-    }));
+    setTerminalCollapsedByThreadKey((current) => {
+      if (activeTerminalStateKey === null) {
+        return current;
+      }
+
+      const resolvedNextState =
+        typeof nextState === "function"
+          ? nextState(current[activeTerminalStateKey] ?? DEFAULT_TERMINAL_COLLAPSED)
+          : nextState;
+
+      if (resolvedNextState === DEFAULT_TERMINAL_COLLAPSED) {
+        if (!(activeTerminalStateKey in current)) {
+          return current;
+        }
+
+        const next = { ...current };
+        delete next[activeTerminalStateKey];
+        return next;
+      }
+
+      return {
+        ...current,
+        [activeTerminalStateKey]: resolvedNextState,
+      };
+    });
   };
 
   const getMaxTerminalHeight = () => {
@@ -803,6 +834,22 @@ export function DashboardWorkbench() {
         ...current,
         [existingWorkspace?.id ?? project.id]: true,
       }));
+
+      if (activeTerminalStateKey) {
+        setTerminalCollapsedByThreadKey((current) => {
+          if (!(activeTerminalStateKey in current)) {
+            return current;
+          }
+
+          const next = {
+            ...current,
+            [nextThread.id]: current[activeTerminalStateKey],
+          };
+          delete next[activeTerminalStateKey];
+          return next;
+        });
+      }
+
       if (draftThreadId && promotedTerminalBindingKey) {
         setTerminalThreadBindings((current) => {
           const next = {
