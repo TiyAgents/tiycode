@@ -409,6 +409,7 @@ fn build_provider_model_test_request(
         on_payload: build_provider_options_payload_hook(model.provider_options_json.as_deref()),
         transport: None,
         max_retry_delay_ms: None,
+        ..TiyStreamOptions::default()
     };
 
     ProviderModelConnectionTestRequest {
