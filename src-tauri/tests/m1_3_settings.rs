@@ -399,10 +399,7 @@ async fn test_provider_model_connection_test_returns_unsupported_for_embedding_m
 
     assert!(!result.success);
     assert!(result.unsupported);
-    assert_eq!(
-        result.message,
-        "Embedding model test is not supported yet."
-    );
+    assert_eq!(result.message, "Embedding model test is not supported yet.");
 }
 
 #[tokio::test]

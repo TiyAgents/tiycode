@@ -116,10 +116,87 @@ pub async fn insert(pool: &SqlitePool, record: &WorkspaceRecord) -> Result<(), A
 }
 
 pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "DELETE FROM audit_events
+         WHERE workspace_id = ?
+            OR thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
+    )
+    .bind(id)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM tool_calls
+         WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM run_subtasks
+         WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM run_helpers
+         WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM thread_runs
+         WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM thread_summaries
+         WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM messages
+         WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM terminal_sessions
+         WHERE workspace_id = ?
+            OR thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
+    )
+    .bind(id)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("DELETE FROM threads WHERE workspace_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
     let result = sqlx::query("DELETE FROM workspaces WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
 
     Ok(result.rows_affected() > 0)
 }

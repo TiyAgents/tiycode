@@ -261,8 +261,14 @@ async fn test_build_session_spec_resolves_primary_model_and_profile_prompt() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-runtime", "/tmp/runtime").await;
     test_helpers::seed_thread(&pool, "t-runtime", "ws-runtime").await;
-    test_helpers::seed_message(&pool, "m-runtime", "t-runtime", "user", "Explain this project")
-        .await;
+    test_helpers::seed_message(
+        &pool,
+        "m-runtime",
+        "t-runtime",
+        "user",
+        "Explain this project",
+    )
+    .await;
 
     sqlx::query(
         "INSERT INTO providers (
@@ -328,8 +334,14 @@ async fn test_build_session_spec_adds_plan_mode_guardrails() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-plan", "/tmp/plan").await;
     test_helpers::seed_thread(&pool, "t-plan", "ws-plan").await;
-    test_helpers::seed_message(&pool, "m-plan", "t-plan", "user", "Draft an implementation plan")
-        .await;
+    test_helpers::seed_message(
+        &pool,
+        "m-plan",
+        "t-plan",
+        "user",
+        "Draft an implementation plan",
+    )
+    .await;
 
     sqlx::query(
         "INSERT INTO providers (

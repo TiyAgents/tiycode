@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   Boxes,
   ChevronDown,
@@ -29,6 +30,7 @@ import {
   threadUpdateTitle,
   workspaceAdd,
   workspaceList,
+  workspaceRemove,
   workspaceSetDefault,
 } from "@/services/bridge";
 import type { RunState } from "@/services/thread-stream";
@@ -169,6 +171,44 @@ function mapRunStateToWorkbenchThreadStatus(state: RunState | "idle"): Workbench
   }
 }
 
+function getInvokeErrorMessage(error: unknown, fallback: string) {
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const userMessage = Reflect.get(error, "userMessage");
+    if (typeof userMessage === "string" && userMessage.trim().length > 0) {
+      return userMessage;
+    }
+
+    const message = Reflect.get(error, "message");
+    if (typeof message === "string" && message.trim().length > 0) {
+      return message;
+    }
+
+    const detail = Reflect.get(error, "detail");
+    if (typeof detail === "string" && detail.trim().length > 0) {
+      return detail;
+    }
+
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== "{}") {
+        return serialized;
+      }
+    } catch {
+      // no-op
+    }
+  }
+
+  return fallback;
+}
+
 export function DashboardWorkbench() {
   const { data } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
@@ -239,6 +279,12 @@ export function DashboardWorkbench() {
   const [terminalBootstrapError, setTerminalBootstrapError] = useState<string | null>(null);
   const [pendingDeleteThreadId, setPendingDeleteThreadId] = useState<string | null>(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
+  const [isAddingWorkspace, setAddingWorkspace] = useState(false);
+  const [activeWorkspaceMenuId, setActiveWorkspaceMenuId] = useState<string | null>(null);
+  const [workspaceAction, setWorkspaceAction] = useState<{
+    workspaceId: string;
+    kind: "open" | "remove";
+  } | null>(null);
   const [pendingThreadRun, setPendingThreadRun] = useState<{
     id: string;
     prompt: string;
@@ -254,6 +300,7 @@ export function DashboardWorkbench() {
   const mainContentRef = useRef<HTMLElement | null>(null);
   const overlayContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
+  const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
 
   const activeThread = getActiveThread(workspaces);
   const selectedProjectWorkspaceId =
@@ -279,6 +326,8 @@ export function DashboardWorkbench() {
   const isSettingsOpen = activeOverlay === "settings";
   const isMarketplaceOpen = activeOverlay === "marketplace";
   const isOverlayOpen = activeOverlay !== null;
+  const isMacOS = data?.platform === "macos" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Mac"));
+  const isWindows = data?.platform === "windows" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Windows"));
 
   const setSidebarOpen = (nextState: boolean | ((current: boolean) => boolean)) => {
     setPanelVisibilityState((current) => ({
@@ -330,7 +379,11 @@ export function DashboardWorkbench() {
     return Math.max(MIN_TERMINAL_HEIGHT, window.innerHeight - TOPBAR_HEIGHT - MIN_WORKBENCH_HEIGHT);
   };
 
-  const syncWorkspaceSidebar = useCallback(async () => {
+  const syncWorkspaceSidebar = useCallback(async ({
+    preserveSelectedProjectIfMissing = true,
+  }: {
+    preserveSelectedProjectIfMissing?: boolean;
+  } = {}) => {
     const workspaceEntries = await workspaceList();
     const threadEntries = await Promise.all(
       workspaceEntries.map(async (workspace) => [workspace.id, await threadList(workspace.id, 100)] as const),
@@ -351,15 +404,23 @@ export function DashboardWorkbench() {
               project.path === defaultWorkspace.path,
           ) ?? null;
 
-    setTerminalWorkspaceBindings((current) => ({
-      ...current,
-      ...nextBindings,
-    }));
+    setTerminalWorkspaceBindings(nextBindings);
     setRecentProjects(nextProjects);
     setDefaultWorkspaceId(defaultWorkspace?.id ?? null);
     setSelectedProject((current) => {
       if (current) {
-        return nextProjects.find((project) => project.id === current.id || project.path === current.path) ?? current;
+        const matchingProject =
+          nextProjects.find((project) => project.id === current.id || project.path === current.path) ?? null;
+
+        if (matchingProject) {
+          return matchingProject;
+        }
+
+        if (preserveSelectedProjectIfMissing) {
+          return current;
+        }
+
+        return defaultProject ?? nextProjects[0] ?? null;
       }
 
       return defaultProject ?? nextProjects[0] ?? null;
@@ -635,6 +696,25 @@ export function DashboardWorkbench() {
   }, [isUserMenuOpen]);
 
   useEffect(() => {
+    if (!activeWorkspaceMenuId || typeof window === "undefined") {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+
+      if (target && workspaceMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setActiveWorkspaceMenuId(null);
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => window.removeEventListener("mousedown", handlePointerDown);
+  }, [activeWorkspaceMenuId]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -700,6 +780,14 @@ export function DashboardWorkbench() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeOverlay]);
+
+  useEffect(() => {
+    if (!isOverlayOpen) {
+      return;
+    }
+
+    setActiveWorkspaceMenuId(null);
+  }, [isOverlayOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -768,6 +856,7 @@ export function DashboardWorkbench() {
 
   const handleThreadSelect = (threadId: string) => {
     setNewThreadMode(false);
+    setActiveWorkspaceMenuId(null);
     setPendingDeleteThreadId(null);
     setWorkspaces((current) => activateThread(current, threadId));
   };
@@ -780,6 +869,39 @@ export function DashboardWorkbench() {
 
     setSelectedProject(nextProject);
     setRecentProjects((current) => mergeRecentProjects(current, nextProject));
+  };
+
+  const handleNewThreadForWorkspace = (workspace: WorkspaceItem) => {
+    if (!workspace.path) {
+      return;
+    }
+
+    const projectFromPath = buildProjectOptionFromPath(workspace.path);
+    const nextProject = {
+      ...(projectFromPath ?? {
+        id: workspace.id,
+        name: workspace.name,
+        path: workspace.path,
+        lastOpenedLabel: "刚刚",
+      }),
+      id: workspace.id,
+      name: workspace.name,
+      path: workspace.path,
+      lastOpenedLabel: "刚刚",
+    };
+
+    setSelectedProject(nextProject);
+    setRecentProjects((current) => mergeRecentProjects(current, nextProject));
+    setOpenWorkspaces((current) => ({
+      ...current,
+      [workspace.id]: true,
+    }));
+    setNewThreadMode(true);
+    setWorkspaces((current) => clearActiveThreads(current));
+    setComposerError(null);
+    setPendingDeleteThreadId(null);
+    setTerminalBootstrapError(null);
+    setActiveWorkspaceMenuId(null);
   };
 
   const updateActiveThreadStatus = useCallback((status: WorkbenchThreadStatus) => {
@@ -1036,6 +1158,157 @@ export function DashboardWorkbench() {
     setOpenSettingsSection(null);
   };
 
+  const handleChooseWorkspaceFolder = useCallback(() => {
+    if (!isTauri() || isAddingWorkspace) {
+      return;
+    }
+
+    void (async () => {
+      setAddingWorkspace(true);
+      setTerminalBootstrapError(null);
+
+      try {
+        const selectedPath = await open({
+          directory: true,
+          multiple: false,
+          title: "Choose workspace folder",
+        });
+
+        if (typeof selectedPath !== "string") {
+          return;
+        }
+
+        const nextProject = buildProjectOptionFromPath(selectedPath);
+
+        if (!nextProject) {
+          return;
+        }
+
+        const workspaceEntries = await workspaceList();
+        const existingWorkspace =
+          workspaceEntries.find(
+            (workspace) => workspace.path === selectedPath || workspace.canonicalPath === selectedPath,
+          ) ?? null;
+        const workspace = existingWorkspace ?? await workspaceAdd(selectedPath, nextProject.name);
+
+        await syncWorkspaceSidebar();
+        setOpenWorkspaces((current) => ({
+          ...current,
+          [workspace.id]: true,
+        }));
+      } catch (error) {
+        const message = getInvokeErrorMessage(error, "Failed to add workspace");
+        setTerminalBootstrapError(message);
+      } finally {
+        setAddingWorkspace(false);
+      }
+    })();
+  }, [isAddingWorkspace, syncWorkspaceSidebar]);
+
+  const handleWorkspaceMenuToggle = (workspaceId: string) => {
+    setActiveWorkspaceMenuId((current) => (current === workspaceId ? null : workspaceId));
+  };
+
+  const handleOpenWorkspaceInSystem = useCallback((workspace: WorkspaceItem) => {
+    if (!isTauri() || !workspace.path || workspaceAction) {
+      return;
+    }
+
+    const appId = isWindows ? "explorer" : "finder";
+
+    void (async () => {
+      setWorkspaceAction({
+        workspaceId: workspace.id,
+        kind: "open",
+      });
+      setTerminalBootstrapError(null);
+
+      try {
+        await invoke("open_workspace_in_app", {
+          targetPath: workspace.path,
+          appId,
+          appPath: null,
+        });
+        setActiveWorkspaceMenuId(null);
+      } catch (error) {
+        const message = getInvokeErrorMessage(error, `Couldn't open ${workspace.name}`);
+        setTerminalBootstrapError(message);
+      } finally {
+        setWorkspaceAction(null);
+      }
+    })();
+  }, [isWindows, workspaceAction]);
+
+  const handleWorkspaceRemove = useCallback((workspace: WorkspaceItem) => {
+    if (!isTauri() || workspaceAction) {
+      return;
+    }
+
+    void (async () => {
+      const workspaceThreadIds = new Set(workspace.threads.map((thread) => thread.id));
+      const nextThreadBindingKey = getNewThreadTerminalBindingKey(workspace.id);
+      const isRemovingActiveWorkspace = activeThreadWorkspace?.id === workspace.id;
+      const shouldPreserveSelectedProject =
+        selectedProject?.id !== workspace.id && selectedProject?.path !== workspace.path;
+
+      setWorkspaceAction({
+        workspaceId: workspace.id,
+        kind: "remove",
+      });
+      setTerminalBootstrapError(null);
+
+      try {
+        await workspaceRemove(workspace.id);
+
+        if (isRemovingActiveWorkspace) {
+          setNewThreadMode(true);
+          setWorkspaces((current) => clearActiveThreads(current));
+          setComposerError(null);
+          setSelectedDiffSelection(null);
+        }
+
+        setPendingDeleteThreadId((current) => (current && workspaceThreadIds.has(current) ? null : current));
+        setPendingThreadRun((current) =>
+          current && workspaceThreadIds.has(current.threadId) ? null : current,
+        );
+        setTerminalThreadBindings((current) =>
+          Object.fromEntries(
+            Object.entries(current).filter(
+              ([bindingKey, threadId]) => bindingKey !== nextThreadBindingKey && !workspaceThreadIds.has(threadId),
+            ),
+          ),
+        );
+        setTerminalWorkspaceBindings((current) =>
+          Object.fromEntries(
+            Object.entries(current).filter(([, workspaceId]) => workspaceId !== workspace.id),
+          ),
+        );
+        setTerminalCollapsedByThreadKey((current) =>
+          Object.fromEntries(
+            Object.entries(current).filter(([threadId]) => !workspaceThreadIds.has(threadId)),
+          ),
+        );
+        setOpenWorkspaces((current) => {
+          if (!(workspace.id in current)) {
+            return current;
+          }
+
+          const next = { ...current };
+          delete next[workspace.id];
+          return next;
+        });
+        setActiveWorkspaceMenuId(null);
+
+        await syncWorkspaceSidebar({ preserveSelectedProjectIfMissing: shouldPreserveSelectedProject });
+      } catch (error) {
+        const message = getInvokeErrorMessage(error, `Failed to remove ${workspace.name}`);
+        setTerminalBootstrapError(message);
+      } finally {
+        setWorkspaceAction(null);
+      }
+    })();
+  }, [activeThreadWorkspace?.id, selectedProject?.id, selectedProject?.path, syncWorkspaceSidebar, workspaceAction]);
+
   const handleUserMenuToggle = () => {
     setUserMenuOpen((current) => {
       const nextOpen = !current;
@@ -1069,8 +1342,8 @@ export function DashboardWorkbench() {
     }, 900);
   };
 
-  const isMacOS = data?.platform === "macos" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Mac"));
-  const isWindows = data?.platform === "windows" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Windows"));
+  const workspaceOpenLabel = isWindows ? "Open in Explorer" : isMacOS ? "Open in Finder" : "Open folder";
+  const canOpenWorkspaceInSystem = isTauri() && (isMacOS || isWindows);
   const selectedThemeOption = THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[0];
   const selectedThemeSummary = theme === "system" ? "跟随系统" : selectedThemeOption.label;
   const selectedLanguageOption = LANGUAGE_OPTIONS.find((option) => option.value === language) ?? LANGUAGE_OPTIONS[1];
@@ -1187,7 +1460,16 @@ export function DashboardWorkbench() {
 
             <div className="mt-6 flex items-center justify-between px-3">
               <span className="text-xs uppercase tracking-[0.14em] text-app-subtle">WORKSPACE</span>
-              <FolderPlus className="size-3.5 text-app-subtle" />
+              <button
+                type="button"
+                aria-label="Add workspace"
+                title="Add workspace"
+                className="inline-flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={handleChooseWorkspaceFolder}
+                disabled={isAddingWorkspace}
+              >
+                {isAddingWorkspace ? <LoaderCircle className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
+              </button>
             </div>
 
             <div className="mx-1 mt-3 h-px shrink-0 bg-app-border" />
@@ -1197,11 +1479,19 @@ export function DashboardWorkbench() {
                 {workspaces.map((workspace) => {
                   const isOpen = openWorkspaces[workspace.id] ?? workspace.defaultOpen;
                   const FolderIcon = isOpen ? FolderOpen : Folder;
+                  const isWorkspaceMenuOpen = activeWorkspaceMenuId === workspace.id;
+                  const isOpeningWorkspace =
+                    workspaceAction?.workspaceId === workspace.id && workspaceAction.kind === "open";
+                  const isRemovingWorkspace =
+                    workspaceAction?.workspaceId === workspace.id && workspaceAction.kind === "remove";
 
                   return (
                     <div key={workspace.id} className="space-y-1">
                       <div className="group px-1">
-                        <div className="relative">
+                        <div
+                          ref={isWorkspaceMenuOpen ? workspaceMenuRef : undefined}
+                          className="relative"
+                        >
                           <button
                             type="button"
                             className={cn(
@@ -1217,10 +1507,71 @@ export function DashboardWorkbench() {
                             type="button"
                             aria-label="更多操作"
                             title="更多操作"
-                            className={DRAWER_OVERFLOW_ACTION_CLASS}
+                            aria-haspopup="menu"
+                            aria-expanded={isWorkspaceMenuOpen}
+                            className={cn(
+                              DRAWER_OVERFLOW_ACTION_CLASS,
+                              isWorkspaceMenuOpen && "opacity-100 text-app-foreground",
+                            )}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleWorkspaceMenuToggle(workspace.id);
+                            }}
                           >
                             <MoreHorizontal className="size-4" />
                           </button>
+
+                          {isWorkspaceMenuOpen ? (
+                            <div className="absolute right-0 top-[calc(100%+0.35rem)] z-20 min-w-[11rem] overflow-hidden rounded-xl border border-app-border bg-app-menu/98 p-1 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
+                              <button
+                                type="button"
+                                role="menuitem"
+                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-app-foreground transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:text-app-subtle"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleNewThreadForWorkspace(workspace);
+                                }}
+                                disabled={!workspace.path || isOpeningWorkspace || isRemovingWorkspace}
+                              >
+                                <MessageSquarePlus className="size-4 shrink-0" />
+                                <span>New Thread</span>
+                              </button>
+                              <button
+                                type="button"
+                                role="menuitem"
+                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-app-foreground transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:text-app-subtle"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleOpenWorkspaceInSystem(workspace);
+                                }}
+                                disabled={!canOpenWorkspaceInSystem || !workspace.path || isOpeningWorkspace || isRemovingWorkspace}
+                              >
+                                {isOpeningWorkspace ? (
+                                  <LoaderCircle className="size-4 shrink-0 animate-spin" />
+                                ) : (
+                                  <FolderOpen className="size-4 shrink-0" />
+                                )}
+                                <span>{workspaceOpenLabel}</span>
+                              </button>
+                              <button
+                                type="button"
+                                role="menuitem"
+                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-app-danger transition-colors hover:bg-app-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleWorkspaceRemove(workspace);
+                                }}
+                                disabled={isOpeningWorkspace || isRemovingWorkspace}
+                              >
+                                {isRemovingWorkspace ? (
+                                  <LoaderCircle className="size-4 shrink-0 animate-spin" />
+                                ) : (
+                                  <Trash2 className="size-4 shrink-0" />
+                                )}
+                                <span>Remove</span>
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
 
