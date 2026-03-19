@@ -968,6 +968,38 @@ export const PromptInputTextarea = ({
   const attachments = usePromptInputAttachments();
   const [isComposing, setIsComposing] = useState(false);
 
+  const moveCaretToLineBoundary = useCallback(
+    (textarea: HTMLTextAreaElement, key: "Home" | "End", extendSelection: boolean) => {
+      const { selectionDirection, selectionEnd, selectionStart, value } = textarea;
+      const focusPosition = selectionDirection === "backward" ? selectionStart : selectionEnd;
+      const lineStart = value.lastIndexOf("\n", Math.max(0, focusPosition - 1)) + 1;
+      const nextLineBreak = value.indexOf("\n", focusPosition);
+      const lineEnd = nextLineBreak === -1 ? value.length : nextLineBreak;
+      const targetPosition = key === "Home" ? lineStart : lineEnd;
+
+      if (!extendSelection) {
+        textarea.setSelectionRange(targetPosition, targetPosition, "none");
+        return;
+      }
+
+      const anchorPosition =
+        selectionDirection === "backward" ? selectionEnd : selectionStart;
+
+      if (targetPosition === anchorPosition) {
+        textarea.setSelectionRange(targetPosition, targetPosition, "none");
+        return;
+      }
+
+      if (targetPosition < anchorPosition) {
+        textarea.setSelectionRange(targetPosition, anchorPosition, "backward");
+        return;
+      }
+
+      textarea.setSelectionRange(anchorPosition, targetPosition, "forward");
+    },
+    []
+  );
+
   const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = useCallback(
     (e) => {
       const nativeEvent = e.nativeEvent as KeyboardEvent;
@@ -977,6 +1009,17 @@ export const PromptInputTextarea = ({
 
       // If the external handler prevented default, don't run internal logic
       if (e.defaultPrevented) {
+        return;
+      }
+
+      if (
+        (e.key === "Home" || e.key === "End") &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        moveCaretToLineBoundary(e.currentTarget, e.key, e.shiftKey);
         return;
       }
 
@@ -1023,7 +1066,7 @@ export const PromptInputTextarea = ({
         }
       }
     },
-    [onKeyDown, isComposing, attachments]
+    [onKeyDown, isComposing, attachments, moveCaretToLineBoundary]
   );
 
   const handlePaste: ClipboardEventHandler<HTMLTextAreaElement> = useCallback(
