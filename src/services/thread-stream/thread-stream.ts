@@ -118,6 +118,12 @@ export type HelperEvent =
       snapshot: SubagentProgressSnapshot;
     };
 
+export type ThreadTitleEvent = {
+  runId: string;
+  threadId: string;
+  title: string;
+};
+
 // ---------------------------------------------------------------------------
 // ThreadStream class
 // ---------------------------------------------------------------------------
@@ -132,6 +138,7 @@ export class ThreadStream {
   onReasoning: ((event: ReasoningEvent) => void) | null = null;
   onQueue: ((event: QueueEvent) => void) | null = null;
   onHelperEvent: ((event: HelperEvent) => void) | null = null;
+  onThreadTitle: ((event: ThreadTitleEvent) => void) | null = null;
   onError: ((error: string, runId: string) => void) | null = null;
   onRawEvent: ((event: ThreadStreamEvent) => void) | null = null;
 
@@ -382,6 +389,14 @@ export class ThreadStream {
           runId: event.runId,
           toolCallId: event.toolCallId,
           error: event.error,
+        });
+        break;
+
+      case "thread_title_updated":
+        this.onThreadTitle?.({
+          runId: event.runId,
+          threadId: event.threadId,
+          title: event.title,
         });
         break;
 

@@ -235,6 +235,13 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         toolCallId: readRequiredString(rawEvent, "toolCallId", "tool_call_id"),
         error: readRequiredString(rawEvent, "error", "error"),
       };
+    case "thread_title_updated":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        threadId: readRequiredString(rawEvent, "threadId", "thread_id"),
+        title: readRequiredString(rawEvent, "title", "title"),
+      };
     case "run_completed":
     case "run_cancelled":
     case "run_interrupted":

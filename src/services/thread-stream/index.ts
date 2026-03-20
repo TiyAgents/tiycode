@@ -8,5 +8,6 @@ export type {
   ReasoningEvent,
   QueueEvent,
   HelperEvent,
+  ThreadTitleEvent,
 } from "./thread-stream";
 export type { ThreadStreamEvent } from "./types";

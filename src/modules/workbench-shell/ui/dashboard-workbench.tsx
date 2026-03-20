@@ -928,6 +928,27 @@ export function DashboardWorkbench() {
     updateActiveThreadStatus(mapRunStateToWorkbenchThreadStatus(state));
   }, [updateActiveThreadStatus]);
 
+  const handleRuntimeThreadTitleChange = useCallback((threadId: string, title: string) => {
+    setWorkspaces((current) =>
+      current.map((workspace) => ({
+        ...workspace,
+        threads: workspace.threads.map((thread) =>
+          thread.id === threadId
+            ? {
+                ...thread,
+                name: title,
+              }
+            : thread,
+        ),
+      })),
+    );
+
+    void syncWorkspaceSidebar().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      setTerminalBootstrapError(message);
+    });
+  }, [syncWorkspaceSidebar]);
+
   const handleThreadDeleteRequest = useCallback((threadId: string) => {
     setPendingDeleteThreadId(threadId);
     setTerminalBootstrapError(null);
@@ -1753,6 +1774,7 @@ export function DashboardWorkbench() {
                         }}
                         onRunStateChange={handleRuntimeThreadRunStateChange}
                         onSelectAgentProfile={setActiveAgentProfile}
+                        onThreadTitleChange={handleRuntimeThreadTitleChange}
                         providers={providers}
                         threadId={resolvedTerminalThreadId}
                         threadTitle={activeThread?.name ?? AI_ELEMENTS_THREAD_TITLE}

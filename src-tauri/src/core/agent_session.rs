@@ -20,6 +20,7 @@ use crate::core::tool_gateway::{
 };
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
+use crate::model::provider::AgentProfileRecord;
 use crate::model::thread::MessageRecord;
 use crate::persistence::repo::{message_repo, profile_repo, provider_repo, tool_call_repo};
 
@@ -30,6 +31,13 @@ const DEFAULT_FULL_TOOL_PROFILE: &str = "default_full";
 const PLAN_READ_ONLY_TOOL_PROFILE: &str = "plan_read_only";
 const STANDARD_TOOL_TIMEOUT_SECS: u64 = 120;
 const SUBAGENT_TOOL_TIMEOUT_SECS: u64 = 300;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileResponseStyle {
+    Balanced,
+    Concise,
+    Guide,
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -909,11 +917,12 @@ async fn build_system_prompt(
 
     if let Some(profile_id) = raw_plan.profile_id.as_deref() {
         if let Some(profile) = profile_repo::find_by_id(pool, profile_id).await? {
-            if let Some(custom_instructions) = profile.custom_instructions {
+            if let Some(custom_instructions) = profile.custom_instructions.as_deref() {
                 if !custom_instructions.trim().is_empty() {
-                    parts.push(custom_instructions);
+                    parts.push(custom_instructions.to_string());
                 }
             }
+            parts.extend(build_profile_response_prompt_parts(&profile));
         }
     }
 
@@ -925,6 +934,56 @@ async fn build_system_prompt(
     }
 
     Ok(parts.join("\n\n"))
+}
+
+pub fn build_profile_response_prompt_parts(profile: &AgentProfileRecord) -> Vec<String> {
+    let mut parts = Vec::new();
+
+    if let Some(language) =
+        normalize_profile_response_language(profile.response_language.as_deref())
+    {
+        parts.push(format!(
+            "Respond in {language} unless the user explicitly asks for a different language."
+        ));
+    }
+
+    parts.push(
+        response_style_system_instruction(normalize_profile_response_style(
+            profile.response_style.as_deref(),
+        ))
+        .to_string(),
+    );
+
+    parts
+}
+
+pub fn normalize_profile_response_language(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+pub fn normalize_profile_response_style(value: Option<&str>) -> ProfileResponseStyle {
+    match value.unwrap_or("balanced").trim().to_lowercase().as_str() {
+        "concise" => ProfileResponseStyle::Concise,
+        "guide" | "guided" => ProfileResponseStyle::Guide,
+        _ => ProfileResponseStyle::Balanced,
+    }
+}
+
+pub fn response_style_system_instruction(style: ProfileResponseStyle) -> &'static str {
+    match style {
+        ProfileResponseStyle::Balanced => {
+            "Use a balanced response style: clear by default, and expand when extra detail is useful."
+        }
+        ProfileResponseStyle::Concise => {
+            "Use a concise response style: keep answers short, direct, and low-friction."
+        }
+        ProfileResponseStyle::Guide => {
+            "Use a guided response style: explain tradeoffs, reasoning, and next steps clearly."
+        }
+    }
 }
 
 fn parse_positive_u32(value: Option<&str>, fallback: u32) -> u32 {
@@ -985,9 +1044,31 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        runtime_security_config, standard_tool_timeout, STANDARD_TOOL_TIMEOUT_SECS,
-        SUBAGENT_TOOL_TIMEOUT_SECS,
+        build_profile_response_prompt_parts, normalize_profile_response_language,
+        normalize_profile_response_style, response_style_system_instruction,
+        runtime_security_config, standard_tool_timeout, ProfileResponseStyle,
+        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
+    use crate::model::provider::AgentProfileRecord;
+
+    fn sample_profile() -> AgentProfileRecord {
+        AgentProfileRecord {
+            id: "profile-1".to_string(),
+            name: "Default".to_string(),
+            custom_instructions: None,
+            response_style: Some("balanced".to_string()),
+            response_language: Some("English".to_string()),
+            primary_provider_id: None,
+            primary_model_id: None,
+            auxiliary_provider_id: None,
+            auxiliary_model_id: None,
+            lightweight_provider_id: None,
+            lightweight_model_id: None,
+            is_default: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
 
     #[test]
     fn test_runtime_security_config_extends_helper_tool_timeout() {
@@ -1004,6 +1085,47 @@ mod tests {
         assert_eq!(
             standard_tool_timeout().as_secs(),
             STANDARD_TOOL_TIMEOUT_SECS
+        );
+    }
+
+    #[test]
+    fn profile_response_language_is_trimmed() {
+        assert_eq!(
+            normalize_profile_response_language(Some("  简体中文  ")).as_deref(),
+            Some("简体中文")
+        );
+        assert_eq!(normalize_profile_response_language(Some("   ")), None);
+    }
+
+    #[test]
+    fn profile_response_style_defaults_to_balanced() {
+        assert_eq!(
+            normalize_profile_response_style(Some("guide")),
+            ProfileResponseStyle::Guide
+        );
+        assert_eq!(
+            normalize_profile_response_style(Some("concise")),
+            ProfileResponseStyle::Concise
+        );
+        assert_eq!(
+            normalize_profile_response_style(Some("unknown")),
+            ProfileResponseStyle::Balanced
+        );
+    }
+
+    #[test]
+    fn profile_prompt_parts_include_language_and_style() {
+        let mut profile = sample_profile();
+        profile.response_language = Some("Japanese".to_string());
+        profile.response_style = Some("concise".to_string());
+
+        let parts = build_profile_response_prompt_parts(&profile);
+
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].contains("Japanese"));
+        assert_eq!(
+            parts[1],
+            response_style_system_instruction(ProfileResponseStyle::Concise)
         );
     }
 }

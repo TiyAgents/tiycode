@@ -2,22 +2,38 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use sqlx::SqlitePool;
+use tiy_core::provider::get_provider;
+use tiy_core::types::{
+    Context as TiyContext, Message as TiyMessage, OnPayloadFn, StopReason,
+    StreamOptions as TiyStreamOptions, UserMessage,
+};
 use tokio::sync::{mpsc, Mutex};
 
-use crate::core::agent_session::build_session_spec;
+use crate::core::agent_session::{
+    build_session_spec, normalize_profile_response_language, normalize_profile_response_style,
+    ProfileResponseStyle, ResolvedModelRole,
+};
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
 use crate::core::sleep_manager::SleepManager;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{MessageRecord, ThreadStatus};
-use crate::persistence::repo::{message_repo, run_repo, thread_repo, workspace_repo};
+use crate::persistence::repo::{message_repo, profile_repo, run_repo, thread_repo, workspace_repo};
+
+const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(12);
+const TITLE_GENERATION_MAX_TOKENS: u32 = 32;
+const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
 
 struct ActiveRun {
     run_id: String,
     thread_id: String,
+    profile_id: Option<String>,
+    run_mode: String,
     frontend_tx: mpsc::Sender<ThreadStreamEvent>,
+    lightweight_model_role: Option<ResolvedModelRole>,
     streaming_message_id: Option<String>,
     reasoning_message_id: Option<String>,
     cancellation_requested: bool,
@@ -81,7 +97,10 @@ impl AgentRunManager {
                 ActiveRun {
                     run_id: run_id.clone(),
                     thread_id: thread_id.to_string(),
+                    profile_id: profile_id.clone(),
+                    run_mode: run_mode.to_string(),
                     frontend_tx: frontend_tx.clone(),
+                    lightweight_model_role: None,
                     streaming_message_id: None,
                     reasoning_message_id: None,
                     cancellation_requested: false,
@@ -129,6 +148,13 @@ impl AgentRunManager {
                 &model_plan,
             )
             .await?;
+
+            {
+                let mut runs = self.active_runs.lock().await;
+                if let Some(run) = runs.get_mut(&run_id) {
+                    run.lightweight_model_role = spec.model_plan.lightweight.clone();
+                }
+            }
 
             let (runtime_tx, runtime_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
             self.runtime.start_session(spec, runtime_tx).await?;
@@ -390,13 +416,25 @@ impl AgentRunManager {
         } else {
             "completed"
         };
-        let (thread_id, streaming_message_id, reasoning_message_id) = {
+        let (
+            thread_id,
+            profile_id,
+            run_mode,
+            frontend_tx,
+            lightweight_model_role,
+            streaming_message_id,
+            reasoning_message_id,
+        ) = {
             let runs = self.active_runs.lock().await;
             let run = runs.get(run_id).ok_or_else(|| {
                 AppError::internal(ErrorSource::Thread, "active run not found while finishing")
             })?;
             (
                 run.thread_id.clone(),
+                run.profile_id.clone(),
+                run.run_mode.clone(),
+                run.frontend_tx.clone(),
+                run.lightweight_model_role.clone(),
                 run.streaming_message_id.clone(),
                 run.reasoning_message_id.clone(),
             )
@@ -421,7 +459,51 @@ impl AgentRunManager {
         };
         thread_repo::update_status(&self.pool, &thread_id, &thread_status).await?;
 
+        if status == "completed" && run_mode == "default" {
+            self.spawn_thread_title_generation(
+                run_id.to_string(),
+                thread_id,
+                profile_id,
+                frontend_tx,
+                lightweight_model_role,
+            );
+        }
+
         Ok(())
+    }
+
+    fn spawn_thread_title_generation(
+        &self,
+        run_id: String,
+        thread_id: String,
+        profile_id: Option<String>,
+        frontend_tx: mpsc::Sender<ThreadStreamEvent>,
+        lightweight_model_role: Option<ResolvedModelRole>,
+    ) {
+        let Some(model_role) = lightweight_model_role else {
+            return;
+        };
+
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            if let Err(error) = maybe_generate_thread_title(
+                &pool,
+                &run_id,
+                &thread_id,
+                profile_id,
+                model_role,
+                frontend_tx,
+            )
+            .await
+            {
+                tracing::warn!(
+                    run_id = %run_id,
+                    thread_id = %thread_id,
+                    error = %error,
+                    "failed to generate thread title"
+                );
+            }
+        });
     }
 
     async fn get_thread_id(&self, run_id: &str) -> String {
@@ -448,5 +530,315 @@ impl AgentRunManager {
         self.sleep_manager
             .set_has_active_runs(has_active_runs)
             .await;
+    }
+}
+
+async fn maybe_generate_thread_title(
+    pool: &SqlitePool,
+    run_id: &str,
+    thread_id: &str,
+    profile_id: Option<String>,
+    model_role: ResolvedModelRole,
+    frontend_tx: mpsc::Sender<ThreadStreamEvent>,
+) -> Result<(), AppError> {
+    if message_repo::count_completed_assistant_plain_messages(pool, thread_id).await? != 1 {
+        return Ok(());
+    }
+
+    let Some((user_message, assistant_message)) =
+        load_initial_title_context(pool, thread_id).await?
+    else {
+        return Ok(());
+    };
+
+    let profile = match profile_id {
+        Some(profile_id) => profile_repo::find_by_id(pool, &profile_id).await?,
+        None => None,
+    };
+    let response_language = profile.as_ref().and_then(|profile| {
+        normalize_profile_response_language(profile.response_language.as_deref())
+    });
+    let response_style = normalize_profile_response_style(
+        profile
+            .as_ref()
+            .and_then(|profile| profile.response_style.as_deref()),
+    );
+
+    let Some(title) = generate_thread_title(
+        &model_role,
+        &user_message,
+        &assistant_message,
+        response_language.as_deref(),
+        response_style,
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    thread_repo::update_title(pool, thread_id, &title).await?;
+    let _ = frontend_tx
+        .send(ThreadStreamEvent::ThreadTitleUpdated {
+            run_id: run_id.to_string(),
+            thread_id: thread_id.to_string(),
+            title,
+        })
+        .await;
+
+    Ok(())
+}
+
+async fn load_initial_title_context(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<(String, String)>, AppError> {
+    let messages = message_repo::list_recent(pool, thread_id, None, 12).await?;
+    let first_user_message = messages
+        .iter()
+        .find(|message| message.role == "user" && message.message_type == "plain_message")
+        .map(|message| message.content_markdown.trim())
+        .filter(|content| !content.is_empty());
+    let first_assistant_message = messages
+        .iter()
+        .find(|message| {
+            message.role == "assistant"
+                && message.message_type == "plain_message"
+                && message.status == "completed"
+        })
+        .map(|message| message.content_markdown.trim())
+        .filter(|content| !content.is_empty());
+
+    match (first_user_message, first_assistant_message) {
+        (Some(user_message), Some(assistant_message)) => Ok(Some((
+            truncate_chars(user_message, TITLE_CONTEXT_MAX_CHARS),
+            truncate_chars(assistant_message, TITLE_CONTEXT_MAX_CHARS),
+        ))),
+        _ => Ok(None),
+    }
+}
+
+async fn generate_thread_title(
+    model_role: &ResolvedModelRole,
+    user_message: &str,
+    assistant_message: &str,
+    response_language: Option<&str>,
+    response_style: ProfileResponseStyle,
+) -> Result<Option<String>, AppError> {
+    let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
+        AppError::recoverable(
+            ErrorSource::Settings,
+            "settings.title_generation.provider_missing",
+            format!(
+                "Provider type '{:?}' is not registered for lightweight title generation.",
+                model_role.model.provider
+            ),
+        )
+    })?;
+
+    let prompt = build_title_prompt(
+        user_message,
+        assistant_message,
+        response_language,
+        response_style,
+    );
+    let context = TiyContext {
+        system_prompt: Some(
+            "You write concise conversation titles. Return only the title text.".to_string(),
+        ),
+        messages: vec![TiyMessage::User(UserMessage::text(prompt))],
+        tools: None,
+    };
+
+    let options = TiyStreamOptions {
+        api_key: model_role.api_key.clone(),
+        max_tokens: Some(TITLE_GENERATION_MAX_TOKENS),
+        on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
+        ..TiyStreamOptions::default()
+    };
+
+    let completion = provider
+        .stream(&model_role.model, &context, options)
+        .try_result(TITLE_GENERATION_TIMEOUT)
+        .await;
+
+    let message = match completion {
+        Some(message) => message,
+        None => return Ok(None),
+    };
+
+    if message.stop_reason == StopReason::Error {
+        let detail = message
+            .error_message
+            .clone()
+            .unwrap_or_else(|| "lightweight title generation failed".to_string());
+        return Err(AppError::recoverable(
+            ErrorSource::Settings,
+            "settings.title_generation.failed",
+            detail,
+        ));
+    }
+
+    Ok(normalize_generated_title(&message.text_content()))
+}
+
+fn build_title_prompt(
+    user_message: &str,
+    assistant_message: &str,
+    response_language: Option<&str>,
+    response_style: ProfileResponseStyle,
+) -> String {
+    let language_rule = match response_language {
+        Some(language) => format!("- Write the title in {language}."),
+        None => "- Match the conversation language.".to_string(),
+    };
+    let style_rule = match response_style {
+        ProfileResponseStyle::Balanced => {
+            "- Keep the title clear and natural, with enough specificity to scan quickly."
+        }
+        ProfileResponseStyle::Concise => {
+            "- Keep the title especially terse, direct, and low-friction."
+        }
+        ProfileResponseStyle::Guide => {
+            "- Prefer a title that signals the user's goal or decision focus clearly."
+        }
+    };
+
+    format!(
+        "Create a short thread title for this conversation.\n\
+Rules:\n\
+- {language_rule}\n\
+- {style_rule}\n\
+- Prefer concrete nouns and actions.\n\
+- Max 18 Chinese characters or 7 English words.\n\
+- No quotes, no markdown, no prefixes.\n\
+\n\
+User message:\n{user_message}\n\
+\n\
+Assistant reply:\n{assistant_message}"
+    )
+}
+
+fn normalize_generated_title(raw: &str) -> Option<String> {
+    let mut title = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?
+        .to_string();
+
+    for prefix in ["title:", "Title:", "标题：", "标题:"] {
+        if let Some(stripped) = title.strip_prefix(prefix) {
+            title = stripped.trim().to_string();
+            break;
+        }
+    }
+
+    let title = collapse_whitespace(&title);
+    let title = title
+        .trim_matches(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '"' | '\'' | '`' | '“' | '”' | '‘' | '’' | '[' | ']' | '(' | ')'
+                )
+        })
+        .trim_end_matches(|character: char| {
+            matches!(character, '.' | '。' | '!' | '！' | '?' | '？' | ':' | '：')
+        })
+        .trim()
+        .to_string();
+
+    if title.is_empty() {
+        return None;
+    }
+
+    Some(truncate_chars(&title, 40))
+}
+
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let truncated: String = value.chars().take(max_chars).collect();
+    if value.chars().count() > max_chars {
+        truncated.trim_end().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn build_provider_options_payload_hook(
+    provider_options: Option<serde_json::Value>,
+) -> Option<OnPayloadFn> {
+    let provider_options = provider_options?;
+
+    Some(Arc::new(move |payload, _model| {
+        let provider_options = provider_options.clone();
+        Box::pin(async move {
+            let mut merged = payload;
+            merge_json_value(&mut merged, &provider_options);
+            Some(merged)
+        })
+    }))
+}
+
+fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
+    match (base, patch) {
+        (serde_json::Value::Object(base_map), serde_json::Value::Object(patch_map)) => {
+            for (key, patch_value) in patch_map {
+                if let Some(base_value) = base_map.get_mut(key) {
+                    merge_json_value(base_value, patch_value);
+                } else {
+                    base_map.insert(key.clone(), patch_value.clone());
+                }
+            }
+        }
+        (base_value, patch_value) => {
+            *base_value = patch_value.clone();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_title_prompt, collapse_whitespace, normalize_generated_title, truncate_chars,
+    };
+    use crate::core::agent_session::ProfileResponseStyle;
+
+    #[test]
+    fn normalize_generated_title_strips_prefixes_and_wrappers() {
+        assert_eq!(
+            normalize_generated_title("Title: \"Fix terminal resize drift\"").as_deref(),
+            Some("Fix terminal resize drift")
+        );
+        assert_eq!(
+            normalize_generated_title("标题：   新建线程标题生成   ").as_deref(),
+            Some("新建线程标题生成")
+        );
+    }
+
+    #[test]
+    fn collapse_whitespace_compacts_internal_spacing() {
+        assert_eq!(collapse_whitespace("foo   bar\nbaz"), "foo bar baz");
+    }
+
+    #[test]
+    fn truncate_chars_limits_character_count() {
+        assert_eq!(truncate_chars("abcdef", 4), "abcd");
+        assert_eq!(truncate_chars("你好世界标题", 4), "你好世界");
+    }
+
+    #[test]
+    fn title_prompt_uses_profile_response_language_when_present() {
+        let prompt = build_title_prompt(
+            "请帮我排查窗口缩放问题",
+            "我已经定位到标题栏重绘时机。",
+            Some("Japanese"),
+            ProfileResponseStyle::Guide,
+        );
+
+        assert!(prompt.contains("Write the title in Japanese."));
+        assert!(prompt.contains("signals the user's goal or decision focus clearly"));
     }
 }

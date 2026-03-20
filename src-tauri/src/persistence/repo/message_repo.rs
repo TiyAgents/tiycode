@@ -75,6 +75,25 @@ pub async fn list_recent(
     Ok(records)
 }
 
+pub async fn count_completed_assistant_plain_messages(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<i64, AppError> {
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)
+         FROM messages
+         WHERE thread_id = ?
+           AND role = 'assistant'
+           AND message_type = 'plain_message'
+           AND status = 'completed'",
+    )
+    .bind(thread_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count)
+}
+
 /// Insert a new message (append-only).
 pub async fn insert(pool: &SqlitePool, record: &MessageRecord) -> Result<(), AppError> {
     sqlx::query(

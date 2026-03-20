@@ -102,6 +102,11 @@ pub enum ThreadStreamEvent {
         tool_call_id: String,
         error: String,
     },
+    ThreadTitleUpdated {
+        run_id: String,
+        thread_id: String,
+        title: String,
+    },
     RunCompleted {
         run_id: String,
     },

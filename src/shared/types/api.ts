@@ -386,6 +386,7 @@ export type ThreadStreamEvent =
       result: unknown;
     }
   | { type: "tool_failed"; runId: string; toolCallId: string; error: string }
+  | { type: "thread_title_updated"; runId: string; threadId: string; title: string }
   | { type: "run_completed"; runId: string }
   | { type: "run_failed"; runId: string; error: string }
   | { type: "run_cancelled"; runId: string }

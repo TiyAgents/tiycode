@@ -13,7 +13,14 @@ import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/componen
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
 import type { AgentProfile, ProviderEntry } from "@/modules/settings-center/model/types";
 import { threadLoad } from "@/services/bridge";
-import { ThreadStream, type HelperEvent, type QueueEvent, type RunState } from "@/services/thread-stream";
+import {
+  ThreadStream,
+  type HelperEvent,
+  type QueueEvent,
+  type RunState,
+  type ThreadStreamEvent,
+  type ThreadTitleEvent,
+} from "@/services/thread-stream";
 import type {
   MessageDto,
   RunHelperDto,
@@ -101,6 +108,11 @@ type TimelineEntry =
       message: SurfaceMessage;
     }
   | {
+      kind: "thinking-placeholder";
+      key: string;
+      occurredAt: string;
+    }
+  | {
       kind: "tool";
       key: string;
       occurredAt: string;
@@ -134,6 +146,12 @@ type InitialPromptRequest = {
   prompt: string;
 };
 
+type ThinkingPlaceholder = {
+  createdAt: string;
+  id: string;
+  runId?: string | null;
+};
+
 type RuntimeThreadSurfaceProps = {
   activeAgentProfileId: string;
   agentProfiles: ReadonlyArray<AgentProfile>;
@@ -141,6 +159,7 @@ type RuntimeThreadSurfaceProps = {
   onConsumeInitialPrompt?: (id: string) => void;
   onRunStateChange?: (state: RunState) => void;
   onSelectAgentProfile: (id: string) => void;
+  onThreadTitleChange?: (threadId: string, title: string) => void;
   providers: ReadonlyArray<ProviderEntry>;
   threadId: string | null;
   threadTitle: string;
@@ -534,7 +553,43 @@ function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry) {
     return timestampOrder;
   }
 
+  const kindOrder = getTimelineEntryKindOrder(left) - getTimelineEntryKindOrder(right);
+  if (kindOrder !== 0) {
+    return kindOrder;
+  }
+
   return left.key.localeCompare(right.key);
+}
+
+function getTimelineEntryKindOrder(entry: TimelineEntry) {
+  switch (entry.kind) {
+    case "message":
+      if (entry.message.role === "user") {
+        return 0;
+      }
+
+      if (entry.message.messageType === "reasoning") {
+        return 2;
+      }
+
+      return 5;
+    case "thinking-placeholder":
+      return 1;
+    case "helper":
+      return 3;
+    case "tool":
+      return 4;
+  }
+}
+
+function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
+  switch (event.type) {
+    case "run_started":
+    case "reasoning_updated":
+      return false;
+    default:
+      return true;
+  }
 }
 
 function isCompletedToolEntry(entry: TimelineEntry): entry is ToolTimelineEntry {
@@ -587,6 +642,7 @@ export function RuntimeThreadSurface({
   onConsumeInitialPrompt,
   onRunStateChange,
   onSelectAgentProfile,
+  onThreadTitleChange,
   providers,
   threadId,
   threadTitle,
@@ -607,18 +663,89 @@ export function RuntimeThreadSurface({
   const [runState, setRunState] = useState<RunState>("idle");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [snapshotThreadId, setSnapshotThreadId] = useState<string | null>(null);
+  const [thinkingPlaceholder, setThinkingPlaceholder] = useState<ThinkingPlaceholder | null>(null);
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
   const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});
   const [completedToolGroupOpen, setCompletedToolGroupOpen] = useState<Record<string, boolean>>({});
   const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
   const snapshotLoadRequestRef = useRef(0);
   const streamRef = useRef<ThreadStream | null>(null);
+  const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearScheduledThinkingPhase = useCallback(() => {
+    if (thinkingTimerRef.current !== null) {
+      clearTimeout(thinkingTimerRef.current);
+      thinkingTimerRef.current = null;
+    }
+  }, []);
+
+  const showThinkingPlaceholder = useCallback((runId?: string | null, createdAt?: string) => {
+    setThinkingPlaceholder((current) => {
+      if (current && current.runId === (runId ?? null)) {
+        return current;
+      }
+
+      return {
+        createdAt: createdAt ?? new Date().toISOString(),
+        id:
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `thinking-${Date.now()}`,
+        runId: runId ?? null,
+      };
+    });
+  }, []);
+
+  const scheduleThinkingPhase = useCallback((runId?: string | null, delayMs = 160) => {
+    clearScheduledThinkingPhase();
+    thinkingTimerRef.current = setTimeout(() => {
+      thinkingTimerRef.current = null;
+      showThinkingPlaceholder(runId);
+    }, delayMs);
+  }, [clearScheduledThinkingPhase, showThinkingPlaceholder]);
+
+  const finalizeReasoningForRun = useCallback((runId?: string | null) => {
+    setMessages((current) => {
+      let changed = false;
+
+      const next: Array<SurfaceMessage> = current.map((message) => {
+        if (
+          message.messageType !== "reasoning"
+          || message.status !== "streaming"
+          || (runId && message.runId !== runId)
+        ) {
+          return message;
+        }
+
+        changed = true;
+        return {
+          ...message,
+          status: "completed",
+        };
+      });
+
+      return changed ? next : current;
+    });
+  }, []);
+
+  const completeThinkingPhase = useCallback((runId?: string | null) => {
+    clearScheduledThinkingPhase();
+    setThinkingPlaceholder((current) => {
+      if (runId && current?.runId && current.runId !== runId) {
+        return current;
+      }
+
+      return null;
+    });
+    finalizeReasoningForRun(runId);
+  }, [clearScheduledThinkingPhase, finalizeReasoningForRun]);
 
   const loadSnapshot = useCallback(async () => {
     const requestId = snapshotLoadRequestRef.current + 1;
     snapshotLoadRequestRef.current = requestId;
 
     if (!threadId) {
+      clearScheduledThinkingPhase();
       setMessages([]);
       setLoadError(null);
       setLoading(false);
@@ -626,6 +753,7 @@ export function RuntimeThreadSurface({
       setRunState("idle");
       setSnapshotReady(true);
       setSnapshotThreadId(null);
+      setThinkingPlaceholder(null);
       onRunStateChange?.("idle");
       return;
     }
@@ -647,6 +775,9 @@ export function RuntimeThreadSurface({
       setRunState(nextState);
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
+      if (snapshot.thread.title.trim()) {
+        onThreadTitleChange?.(snapshot.thread.id, snapshot.thread.title.trim());
+      }
       onRunStateChange?.(nextState);
     } catch (error) {
       if (snapshotLoadRequestRef.current !== requestId) {
@@ -662,7 +793,7 @@ export function RuntimeThreadSurface({
         setLoading(false);
       }
     }
-  }, [onRunStateChange, threadId]);
+  }, [clearScheduledThinkingPhase, onRunStateChange, onThreadTitleChange, threadId]);
 
   useEffect(() => {
     setComposerError(null);
@@ -675,9 +806,11 @@ export function RuntimeThreadSurface({
     setRunState("idle");
     setSnapshotReady(false);
     setSnapshotThreadId(null);
+    clearScheduledThinkingPhase();
+    setThinkingPlaceholder(null);
     setTools([]);
     void loadSnapshot();
-  }, [loadSnapshot]);
+  }, [clearScheduledThinkingPhase, loadSnapshot]);
 
   useEffect(() => {
     if (!threadId) {
@@ -686,6 +819,12 @@ export function RuntimeThreadSurface({
     }
 
     const stream = new ThreadStream();
+
+    stream.onRawEvent = (event) => {
+      if (shouldCompleteThinkingPhase(event)) {
+        completeThinkingPhase(event.runId);
+      }
+    };
 
     stream.onMessage = (event) => {
       if (event.kind === "delta") {
@@ -727,6 +866,8 @@ export function RuntimeThreadSurface({
     };
 
     stream.onReasoning = (event) => {
+      clearScheduledThinkingPhase();
+      setThinkingPlaceholder(null);
       const reasoningMessageId = event.messageId ?? `reasoning-${event.runId}`;
       setMessages((current) =>
         appendOrReplaceMessage(current, {
@@ -747,7 +888,16 @@ export function RuntimeThreadSurface({
       setQueueArtifact(event.queue);
     };
 
+    stream.onThreadTitle = (event: ThreadTitleEvent) => {
+      onThreadTitleChange?.(event.threadId, event.title);
+      void loadSnapshot();
+    };
+
     stream.onHelperEvent = (event: HelperEvent) => {
+      if (event.kind === "completed" || event.kind === "failed") {
+        scheduleThinkingPhase(event.runId);
+      }
+
       setHelpers((current) => {
         switch (event.kind) {
           case "started":
@@ -815,6 +965,10 @@ export function RuntimeThreadSurface({
     };
 
     stream.onToolEvent = (event) => {
+      if (event.kind === "completed" || event.kind === "failed") {
+        scheduleThinkingPhase(event.runId);
+      }
+
       setTools((current) => {
         switch (event.kind) {
           case "requested":
@@ -879,6 +1033,9 @@ export function RuntimeThreadSurface({
     };
 
     stream.onApproval = (event) => {
+      if (event.kind === "resolved" && event.approved) {
+        scheduleThinkingPhase(event.runId);
+      }
       setTools((current) =>
         updateTool(current, event.toolCallId, (entry) => ({
           approval:
@@ -910,12 +1067,16 @@ export function RuntimeThreadSurface({
       );
     };
 
-    stream.onRunStateChange = (state) => {
+    stream.onRunStateChange = (state, runId) => {
       setRunState(state);
       onRunStateChange?.(state);
 
       if (state === "running" || state === "waiting_approval") {
         setRuntimeError(null);
+      }
+
+      if (state === "completed" || state === "failed" || state === "cancelled" || state === "interrupted") {
+        completeThinkingPhase(runId);
       }
 
       if (state === "running") {
@@ -941,10 +1102,19 @@ export function RuntimeThreadSurface({
 
     streamRef.current = stream;
     return () => {
+      clearScheduledThinkingPhase();
       stream.reset();
       streamRef.current = null;
     };
-  }, [loadSnapshot, onRunStateChange, threadId]);
+  }, [
+    clearScheduledThinkingPhase,
+    completeThinkingPhase,
+    loadSnapshot,
+    onRunStateChange,
+    onThreadTitleChange,
+    scheduleThinkingPhase,
+    threadId,
+  ]);
 
   const submitPrompt = useCallback(async (prompt: string) => {
     if (!threadId) {
@@ -969,7 +1139,7 @@ export function RuntimeThreadSurface({
     );
 
     if (!modelPlan) {
-      setComposerError("No enabled model is available for the selected profile.");
+      setComposerError("Select an enabled primary model for the current profile before starting a run.");
       return;
     }
 
@@ -977,11 +1147,14 @@ export function RuntimeThreadSurface({
     setRuntimeError(null);
     setPlanArtifact(null);
     setQueueArtifact(null);
+    const userCreatedAt = new Date().toISOString();
+    const localUserMessageId = `local-user-${Date.now()}`;
+
     setMessages((current) => [
       ...current,
       {
-        createdAt: new Date().toISOString(),
-        id: `local-user-${Date.now()}`,
+        createdAt: userCreatedAt,
+        id: localUserMessageId,
         messageType: "plain_message",
         role: "user",
         runId: null,
@@ -989,9 +1162,15 @@ export function RuntimeThreadSurface({
         status: "completed",
       },
     ]);
+    showThinkingPlaceholder(null, userCreatedAt);
 
-    await streamRef.current?.startRun(threadId, prompt, "default", modelPlan);
-  }, [activeAgentProfileId, activeProfile, agentProfiles, providers, runState, threadId]);
+    try {
+      await streamRef.current?.startRun(threadId, prompt, "default", modelPlan);
+    } catch (error) {
+      setThinkingPlaceholder(null);
+      throw error;
+    }
+  }, [activeAgentProfileId, activeProfile, agentProfiles, providers, runState, showThinkingPlaceholder, threadId]);
 
   useEffect(() => {
     const isCurrentThreadSnapshotReady =
@@ -1038,6 +1217,13 @@ export function RuntimeThreadSurface({
           occurredAt: message.createdAt,
           message,
         })),
+        ...(thinkingPlaceholder
+          ? [{
+              kind: "thinking-placeholder" as const,
+              key: `thinking-placeholder:${thinkingPlaceholder.id}`,
+              occurredAt: thinkingPlaceholder.createdAt,
+            }]
+          : []),
         ...helpers.map((helper) => ({
           kind: "helper" as const,
           key: `helper:${helper.id}`,
@@ -1051,7 +1237,7 @@ export function RuntimeThreadSurface({
           tool,
         })),
       ].sort(compareTimelineEntries),
-    [helpers, messages, visibleTools],
+    [helpers, messages, thinkingPlaceholder, visibleTools],
   );
   const presentationEntries = useMemo<Array<TimelinePresentationEntry>>(
     () => groupCompletedToolEntries(timelineEntries),
@@ -1240,6 +1426,22 @@ export function RuntimeThreadSurface({
             ) : null}
 
             {presentationEntries.map((entry) => {
+              if (entry.kind === "thinking-placeholder") {
+                return (
+                  <Message className="max-w-full" from="assistant" key={entry.key}>
+                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                      <Reasoning
+                        className="w-full bg-transparent px-0 py-0"
+                        defaultOpen={false}
+                        isStreaming
+                      >
+                        <ReasoningTrigger />
+                      </Reasoning>
+                    </MessageContent>
+                  </Message>
+                );
+              }
+
               if (entry.kind === "message") {
                 const { message } = entry;
 

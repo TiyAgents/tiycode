@@ -32,24 +32,6 @@ function findSelectedEnabledModel(
   return { provider, model };
 }
 
-function findFirstEnabledModel(providers: ReadonlyArray<ProviderEntry>): ProviderModelSelection | null {
-  for (const provider of providers) {
-    if (!provider.enabled) {
-      continue;
-    }
-
-    for (const model of provider.models) {
-      if (!model.enabled) {
-        continue;
-      }
-
-      return { provider, model };
-    }
-  }
-
-  return null;
-}
-
 function toRunModelPlanRole(selection: ProviderModelSelection): RunModelPlanRoleDto {
   const { model, provider } = selection;
 
@@ -75,11 +57,11 @@ export function buildRunModelPlan(
   profile: AgentProfile,
   providers: ReadonlyArray<ProviderEntry>,
 ): RunModelPlanDto | null {
-  const primarySelection =
-    findSelectedEnabledModel(providers, profile.primaryProviderId, profile.primaryModelId)
-    ?? findSelectedEnabledModel(providers, profile.assistantProviderId, profile.assistantModelId)
-    ?? findSelectedEnabledModel(providers, profile.liteProviderId, profile.liteModelId)
-    ?? findFirstEnabledModel(providers);
+  const primarySelection = findSelectedEnabledModel(
+    providers,
+    profile.primaryProviderId,
+    profile.primaryModelId,
+  );
 
   if (!primarySelection) {
     return null;
@@ -94,7 +76,7 @@ export function buildRunModelPlan(
     providers,
     profile.liteProviderId,
     profile.liteModelId,
-  );
+  ) ?? auxiliarySelection ?? primarySelection;
 
   return {
     profileId: profile.id,
