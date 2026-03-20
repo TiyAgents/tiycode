@@ -14,6 +14,7 @@ dist-ssr
 .npm-cache
 .tmp-tauri-scaffold
 .superpowers
+.workbuddy
 
 # Rust
 src-tauri/target

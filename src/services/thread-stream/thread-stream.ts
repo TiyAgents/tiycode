@@ -170,7 +170,7 @@ export class ThreadStream {
       this.currentRunId = runId;
       return runId;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = extractErrorMessage(error);
       this.onError?.(message, "");
       throw error;
     }
@@ -183,7 +183,7 @@ export class ThreadStream {
     try {
       await threadCancelRun(threadId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = extractErrorMessage(error);
       this.onError?.(message, this.currentRunId ?? "");
       throw error;
     }
@@ -200,7 +200,7 @@ export class ThreadStream {
     try {
       await toolApprovalRespond(toolCallId, runId, approved);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = extractErrorMessage(error);
       this.onError?.(message, runId);
       throw error;
     }
@@ -430,4 +430,39 @@ function isRuntimeOrchestrationToolName(toolName: string) {
     || toolName === "delegate_plan_review"
     || toolName === "delegate_code_review"
   );
+}
+
+/**
+ * Extract a human-readable error message from an unknown thrown value.
+ *
+ * Tauri `invoke` rejections are often plain objects (not Error instances),
+ * so `String(error)` would produce the unhelpful "[object Object]".
+ * This helper covers the common shapes.
+ */
+function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    // Tauri serialized errors may carry `message`, `error`, or `description`
+    const obj = error as Record<string, unknown>;
+    if (typeof obj.message === "string" && obj.message) {
+      return obj.message;
+    }
+    if (typeof obj.error === "string" && obj.error) {
+      return obj.error;
+    }
+    if (typeof obj.description === "string" && obj.description) {
+      return obj.description;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      // circular reference or other serialization failure
+    }
+  }
+  return String(error);
 }

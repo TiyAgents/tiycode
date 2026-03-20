@@ -768,7 +768,10 @@ export function RuntimeThreadSurface({
       }
 
       const nextState = mapSnapshotToRunState(snapshot);
-      setMessages(snapshot.messages.map(mapSnapshotMessage));
+      const snapshotMessages = snapshot.messages.map(mapSnapshotMessage);
+      // Use functional update to ensure we replace the entire list atomically,
+      // discarding any local-user optimistic messages that may still be in state.
+      setMessages(() => snapshotMessages);
       setTools((snapshot.toolCalls ?? []).map(mapSnapshotTool));
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
@@ -1150,18 +1153,25 @@ export function RuntimeThreadSurface({
     const userCreatedAt = new Date().toISOString();
     const localUserMessageId = `local-user-${Date.now()}`;
 
-    setMessages((current) => [
-      ...current,
-      {
-        createdAt: userCreatedAt,
-        id: localUserMessageId,
-        messageType: "plain_message",
-        role: "user",
-        runId: null,
-        content: prompt,
-        status: "completed",
-      },
-    ]);
+    setMessages((current) => {
+      // Remove any previous local-user optimistic messages to avoid duplicates
+      // when a snapshot load races with this insertion.
+      const withoutStaleLocal = current.filter(
+        (entry) => !(entry.role === "user" && entry.id.startsWith("local-user-")),
+      );
+      return [
+        ...withoutStaleLocal,
+        {
+          createdAt: userCreatedAt,
+          id: localUserMessageId,
+          messageType: "plain_message",
+          role: "user",
+          runId: null,
+          content: prompt,
+          status: "completed",
+        },
+      ];
+    });
     showThinkingPlaceholder(null, userCreatedAt);
 
     try {
