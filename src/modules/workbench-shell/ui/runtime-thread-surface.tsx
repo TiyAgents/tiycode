@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Plan, PlanContent, PlanDescription, PlanHeader, PlanTitle, PlanTrigger } from "@/components/ai-elements/plan";
-import { Queue, QueueItem, QueueItemContent, QueueItemDescription, QueueItemIndicator, QueueSection, QueueSectionContent, QueueSectionLabel, QueueSectionTrigger } from "@/components/ai-elements/queue";
+import { Queue } from "@/components/ai-elements/queue";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "@/components/ai-elements/confirmation";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
@@ -236,9 +236,37 @@ function mapSnapshotHelperStatus(
   }
 }
 
-function mapSnapshotHelper(helper: RunHelperDto): SurfaceHelperEntry {
+function buildSnapshotHelperToolSummary(
+  helperId: string,
+  toolCalls: ReadonlyArray<ToolCallDto>,
+) {
+  const helperToolCalls = toolCalls.filter((tool) => tool.id.startsWith(`${helperId}:`));
+  const toolCounts = helperToolCalls.reduce<Record<string, number>>((counts, tool) => {
+    counts[tool.toolName] = (counts[tool.toolName] ?? 0) + 1;
+    return counts;
+  }, {});
+  const completedSteps = helperToolCalls.filter((tool) =>
+    tool.status === "completed"
+    || tool.status === "failed"
+    || tool.status === "denied"
+    || tool.status === "cancelled",
+  ).length;
+
   return {
-    completedSteps: 0,
+    completedSteps,
+    toolCounts,
+    totalToolCalls: helperToolCalls.length,
+  };
+}
+
+function mapSnapshotHelper(
+  helper: RunHelperDto,
+  toolCalls: ReadonlyArray<ToolCallDto>,
+): SurfaceHelperEntry {
+  const toolSummary = buildSnapshotHelperToolSummary(helper.id, toolCalls);
+
+  return {
+    completedSteps: toolSummary.completedSteps,
     currentAction: null,
     error: helper.errorSummary ?? undefined,
     finishedAt: helper.finishedAt,
@@ -251,8 +279,8 @@ function mapSnapshotHelper(helper: RunHelperDto): SurfaceHelperEntry {
     startedAt: helper.startedAt,
     status: mapSnapshotHelperStatus(helper),
     summary: helper.outputSummary,
-    toolCounts: {},
-    totalToolCalls: 0,
+    toolCounts: toolSummary.toolCounts,
+    totalToolCalls: toolSummary.totalToolCalls,
   };
 }
 
@@ -444,14 +472,26 @@ function applyHelperSnapshot(
 function formatHelperKind(kind: string) {
   switch (kind) {
     case "helper_scout":
-      return "Research Helper";
+      return "Research Agent";
     case "helper_planner":
-      return "Planning Helper";
+      return "Planning Agent";
     case "helper_reviewer":
-      return "Review Helper";
+      return "Review Agent";
     default:
       return kind;
   }
+}
+
+function formatToolCallCount(count: number) {
+  return `${count} tool call${count === 1 ? "" : "s"}`;
+}
+
+function formatHelperSummary(helper: SurfaceHelperEntry) {
+  return [
+    formatHelperKind(helper.kind),
+    helper.inputSummary,
+    helper.totalToolCalls > 0 ? formatToolCallCount(helper.totalToolCalls) : null,
+  ].filter(Boolean).join(" · ");
 }
 
 function formatHelperToolCounts(toolCounts: Record<string, number>) {
@@ -471,6 +511,21 @@ function isHelperOwnedTool(
   }
 
   return false;
+}
+
+function isRuntimeOrchestrationTool(toolName: string) {
+  return (
+    toolName === "delegate_research"
+    || toolName === "delegate_plan_review"
+    || toolName === "delegate_code_review"
+  );
+}
+
+function isVisibleTimelineTool(
+  tool: SurfaceToolEntry,
+  helperIds: ReadonlySet<string>,
+) {
+  return !isHelperOwnedTool(tool.id, helperIds) && !isRuntimeOrchestrationTool(tool.name);
 }
 
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry) {
@@ -587,7 +642,7 @@ export function RuntimeThreadSurface({
       const nextState = mapSnapshotToRunState(snapshot);
       setMessages(snapshot.messages.map(mapSnapshotMessage));
       setTools((snapshot.toolCalls ?? []).map(mapSnapshotTool));
-      setHelpers((snapshot.helpers ?? []).map(mapSnapshotHelper));
+      setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
       setRunState(nextState);
       setSnapshotReady(true);
@@ -964,7 +1019,7 @@ export function RuntimeThreadSurface({
     [helpers],
   );
   const visibleTools = useMemo(
-    () => tools.filter((tool) => !isHelperOwnedTool(tool.id, helperIds)),
+    () => tools.filter((tool) => isVisibleTimelineTool(tool, helperIds)),
     [helperIds, tools],
   );
   const hasRuntimeArtifacts =
@@ -1229,112 +1284,101 @@ export function RuntimeThreadSurface({
                 return (
                   <Message className="max-w-full" from="assistant" key={entry.key}>
                     <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                      <Queue className="rounded-2xl border border-app-border/24 bg-app-surface/16 p-2 shadow-none">
-                        <QueueSection defaultOpen>
-                          <QueueSectionTrigger>
-                            <QueueSectionLabel count={1} label="Task" />
-                          </QueueSectionTrigger>
-                          <QueueSectionContent>
-                            <div className="mt-2 max-h-40 overflow-y-auto pr-3">
-                              <div className="pr-3">
-                                <ul>
-                                  <QueueItem className="rounded-xl px-3 py-3 hover:bg-app-surface/20">
-                                    <div className="flex min-w-0 items-start gap-3">
-                                      <QueueItemIndicator className="shrink-0" completed={helper.status === "completed"} />
-                                      <div className="min-w-0 flex-1 space-y-2">
-                                        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3 pr-2">
-                                          <QueueItemContent
-                                            className="min-w-0 whitespace-normal break-words line-clamp-none"
-                                            completed={helper.status === "completed"}
-                                          >
-                                            {formatHelperKind(helper.kind)}
-                                          </QueueItemContent>
-                                          <Badge
-                                            className={cn(
-                                              "shrink-0 rounded-full",
-                                              helper.status === "failed"
-                                                ? "bg-app-danger/10 text-app-danger"
-                                                : helper.status === "completed"
-                                                  ? "bg-app-success/10 text-app-success"
-                                                  : "bg-app-info/10 text-app-info",
-                                            )}
-                                            variant="outline"
-                                          >
-                                            {helper.status}
-                                          </Badge>
-                                        </div>
-                                        {helper.inputSummary ? (
-                                          <QueueItemDescription
-                                            className="ml-0 whitespace-pre-wrap break-words"
-                                            completed={helper.status === "completed"}
-                                          >
-                                            {helper.inputSummary}
-                                          </QueueItemDescription>
-                                        ) : null}
-                                        {helper.totalToolCalls > 0 ? (
-                                          <QueueItemDescription className="ml-0" completed={helper.status === "completed"}>
-                                            {`${helper.totalToolCalls} tool calls, ${helper.completedSteps} finished`}
-                                          </QueueItemDescription>
-                                        ) : null}
-                                        {formatHelperToolCounts(helper.toolCounts).length > 0 ? (
-                                          <QueueItemDescription
-                                            className="ml-0 whitespace-pre-wrap break-words"
-                                            completed={helper.status === "completed"}
-                                          >
-                                            {formatHelperToolCounts(helper.toolCounts).join(" · ")}
-                                          </QueueItemDescription>
-                                        ) : null}
-                                        {helper.currentAction ? (
-                                          <QueueItemDescription
-                                            className="ml-0 whitespace-pre-wrap break-words"
-                                            completed={helper.status === "completed"}
-                                          >
-                                            {`Current: ${helper.currentAction}`}
-                                          </QueueItemDescription>
-                                        ) : null}
-                                        {helper.latestMessage ? (
-                                          <QueueItemDescription
-                                            className="ml-0 whitespace-pre-wrap break-words"
-                                            completed={helper.status === "completed"}
-                                          >
-                                            {helper.latestMessage}
-                                          </QueueItemDescription>
-                                        ) : null}
-                                        {helper.recentActions.length > 0 ? (
-                                          <div className="space-y-1">
-                                            {helper.recentActions.slice(-3).map((action, index) => (
-                                              <QueueItemDescription
-                                                className="ml-0 whitespace-pre-wrap break-words"
-                                                completed={helper.status === "completed"}
-                                                key={`${helper.id}-action-${index}`}
-                                              >
-                                                {action}
-                                              </QueueItemDescription>
-                                            ))}
-                                          </div>
-                                        ) : null}
-                                        {helper.summary ? (
-                                          <QueueItemDescription
-                                            className="ml-0 whitespace-pre-wrap break-words"
-                                            completed={helper.status === "completed"}
-                                          >
-                                            {helper.summary}
-                                          </QueueItemDescription>
-                                        ) : null}
-                                        {helper.error ? (
-                                          <QueueItemDescription className="ml-0 whitespace-pre-wrap break-words text-app-danger">
-                                            {helper.error}
-                                          </QueueItemDescription>
-                                        ) : null}
-                                      </div>
-                                    </div>
-                                  </QueueItem>
-                                </ul>
+                      <Collapsible
+                        className="rounded-2xl border border-app-border/24 bg-app-surface/16 shadow-none"
+                        defaultOpen={helper.status !== "completed"}
+                      >
+                        <CollapsibleTrigger
+                          className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-app-surface/20"
+                        >
+                          <BotIcon
+                            className={cn(
+                              "mt-0.5 size-4 shrink-0",
+                              helper.status === "failed"
+                                ? "text-app-danger"
+                                : helper.status === "completed"
+                                  ? "text-app-success"
+                                  : "text-app-info",
+                            )}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p
+                              className={cn(
+                                "truncate text-sm text-app-foreground",
+                                helper.status === "completed" ? "text-app-foreground" : undefined,
+                              )}
+                              title={formatHelperSummary(helper)}
+                            >
+                              {formatHelperSummary(helper)}
+                            </p>
+                          </div>
+                          <Badge
+                            className={cn(
+                              "shrink-0 rounded-full",
+                              helper.status === "failed"
+                                ? "bg-app-danger/10 text-app-danger"
+                                : helper.status === "completed"
+                                  ? "bg-app-success/10 text-app-success"
+                                  : "bg-app-info/10 text-app-info",
+                            )}
+                            variant="outline"
+                          >
+                            {helper.status}
+                          </Badge>
+                          <ChevronDownIcon className="mt-0.5 size-4 shrink-0 text-app-subtle transition-transform data-[state=open]:rotate-180" />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="border-t border-app-border/18 px-4 py-3 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:animate-in data-[state=open]:slide-in-from-top-2">
+                          <div className="max-h-40 space-y-2 overflow-y-auto pr-3">
+                            {formatHelperToolCounts(helper.toolCounts).length > 0 ? (
+                              <p className="whitespace-pre-wrap break-words text-xs text-app-subtle">
+                                {formatHelperToolCounts(helper.toolCounts).join(" · ")}
+                              </p>
+                            ) : null}
+                            {helper.totalToolCalls > 0 && helper.status !== "completed" ? (
+                              <p className="text-xs text-app-subtle">
+                                {`${helper.completedSteps} of ${formatToolCallCount(helper.totalToolCalls)} finished`}
+                              </p>
+                            ) : null}
+                            {helper.inputSummary ? (
+                              <p className="whitespace-pre-wrap break-words text-sm text-app-muted">
+                                {helper.inputSummary}
+                              </p>
+                            ) : null}
+                            {helper.currentAction ? (
+                              <p className="whitespace-pre-wrap break-words text-xs text-app-subtle">
+                                {`Current: ${helper.currentAction}`}
+                              </p>
+                            ) : null}
+                            {helper.latestMessage ? (
+                              <p className="whitespace-pre-wrap break-words text-sm text-app-muted">
+                                {helper.latestMessage}
+                              </p>
+                            ) : null}
+                            {helper.recentActions.length > 0 ? (
+                              <div className="space-y-1">
+                                {helper.recentActions.slice(-3).map((action, index) => (
+                                  <p
+                                    className="whitespace-pre-wrap break-words text-sm text-app-muted"
+                                    key={`${helper.id}-action-${index}`}
+                                  >
+                                    {action}
+                                  </p>
+                                ))}
                               </div>
-                            </div>
-                          </QueueSectionContent>
-                        </QueueSection>
-                      </Queue>
+                            ) : null}
+                            {helper.summary ? (
+                              <p className="whitespace-pre-wrap break-words text-sm text-app-muted">
+                                {helper.summary}
+                              </p>
+                            ) : null}
+                            {helper.error ? (
+                              <p className="whitespace-pre-wrap break-words text-sm text-app-danger">
+                                {helper.error}
+                              </p>
+                            ) : null}
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
                     </MessageContent>
                   </Message>
                 );
