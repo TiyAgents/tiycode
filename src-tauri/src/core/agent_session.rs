@@ -581,6 +581,11 @@ fn handle_agent_event(
                     content.clone()
                 };
 
+                if reasoning.trim().is_empty() {
+                    reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
+                    return;
+                }
+
                 let message_id = ensure_message_id(current_reasoning_message_id);
                 let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
                     run_id: run_id.to_string(),
@@ -1371,5 +1376,50 @@ mod tests {
         assert_eq!(reasoning_events[2].1, "second thought");
         assert_eq!(reasoning_events[0].0, reasoning_events[1].0);
         assert_ne!(reasoning_events[0].0, reasoning_events[2].0);
+    }
+
+    #[test]
+    fn empty_reasoning_blocks_do_not_emit_reasoning_events() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let reasoning_buffer = StdMutex::new(String::new());
+        let partial = sample_partial_assistant_message();
+
+        handle_agent_event(
+            "run-1",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &reasoning_buffer,
+            &AgentEvent::MessageUpdate {
+                message: AgentMessage::Assistant(partial.clone()),
+                assistant_event: Box::new(AssistantMessageEvent::ThinkingStart {
+                    content_index: 0,
+                    partial: partial.clone(),
+                }),
+            },
+        );
+        handle_agent_event(
+            "run-1",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &reasoning_buffer,
+            &AgentEvent::MessageUpdate {
+                message: AgentMessage::Assistant(partial),
+                assistant_event: Box::new(AssistantMessageEvent::ThinkingEnd {
+                    content_index: 0,
+                    content: String::new(),
+                    partial: sample_partial_assistant_message(),
+                }),
+            },
+        );
+
+        let reasoning_events = std::iter::from_fn(|| event_rx.try_recv().ok())
+            .filter(|event| matches!(event, ThreadStreamEvent::ReasoningUpdated { .. }))
+            .collect::<Vec<_>>();
+
+        assert!(reasoning_events.is_empty());
     }
 }

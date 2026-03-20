@@ -436,6 +436,10 @@ function appendOrReplaceMessage(
   return nextMessages;
 }
 
+function isRenderableTimelineMessage(message: SurfaceMessage) {
+  return message.messageType !== "reasoning" || message.content.trim().length > 0;
+}
+
 function updateTool(
   tools: Array<SurfaceToolEntry>,
   toolId: string,
@@ -1351,7 +1355,7 @@ export function RuntimeThreadSurface({
   const timelineEntries = useMemo<Array<TimelineEntry>>(
     () =>
       [
-        ...messages.map((message) => ({
+        ...messages.filter(isRenderableTimelineMessage).map((message) => ({
           kind: "message" as const,
           key: `message:${message.id}`,
           occurredAt: message.createdAt,
