@@ -153,7 +153,7 @@ fn test_plan_mode_allows_read_tools() {
     let read_only_tools = vec![
         "read",
         "list",
-        "grep",
+        "search",
         "git_status",
         "git_diff",
         "git_log",
@@ -447,7 +447,7 @@ async fn test_pending_tool_calls_query() {
         "tc-run",
         "r-pending",
         "t-pending",
-        "grep",
+        "search",
         "running",
     )
     .await;
@@ -629,7 +629,7 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
         "tc-search-relative",
         "r-search-relative",
         "t-search-relative",
-        "grep",
+        "search",
         "requested",
     )
     .await;
@@ -643,7 +643,7 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
                 run_id: "r-search-relative".into(),
                 thread_id: "t-search-relative".into(),
                 tool_call_id: "tc-search-relative".into(),
-                tool_name: "grep".into(),
+                tool_name: "search".into(),
                 tool_input: serde_json::json!({
                     "query": "hello",
                     "directory": "src-tauri",
@@ -679,10 +679,10 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
             panic!("relative workspace directory should not be denied: {reason}");
         }
         ToolGatewayResult::EscalationRequired { reason, .. } => {
-            panic!("grep should not require approval: {reason}");
+            panic!("search should not require approval: {reason}");
         }
         ToolGatewayResult::Cancelled { .. } => {
-            panic!("grep should not be cancelled");
+            panic!("search should not be cancelled");
         }
     }
 }

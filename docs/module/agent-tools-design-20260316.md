@@ -61,7 +61,6 @@ Owned by:
 Recommended v1 tools:
 
 - `agent_research`
-- `agent_plan`
 - `agent_review`
 - `format_final_response`
 - `summarize_helper_result`
@@ -83,7 +82,7 @@ Recommended v1 tools:
 
 - `read`
 - `list`
-- `grep`
+- `search`
 - `write`
 - `patch`
 - `open_workspace_in_app`

@@ -31,7 +31,7 @@ pub async fn execute_tool(
         "write" => filesystem::write_file(input, workspace_path).await,
         "list" => filesystem::list_dir(input, workspace_path).await,
         "find" => filesystem::find_files(input, workspace_path).await,
-        "grep" => search::search_repo(input, workspace_path).await,
+        "search" => search::search_repo(input, workspace_path).await,
         "edit" => edit::edit_file(input, workspace_path).await,
         "patch" => edit::edit_file(input, workspace_path).await,
         "shell" => process::run_command(input, workspace_path).await,

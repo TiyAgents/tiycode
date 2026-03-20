@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 use crate::core::agent_session::ResolvedModelRole;
 use crate::core::executors::ToolOutput;
-use crate::core::subagent::runtime_orchestration::RuntimeOrchestrationTool;
+use crate::core::subagent::runtime_orchestration::{RuntimeOrchestrationTool, SubagentProfile};
 use crate::core::tool_gateway::{
     ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
 };
@@ -25,6 +25,7 @@ pub struct HelperRunRequest {
     pub run_id: String,
     pub thread_id: String,
     pub tool: RuntimeOrchestrationTool,
+    pub helper_profile: Option<SubagentProfile>,
     pub parent_tool_call_id: Option<String>,
     pub task: String,
     pub model_role: ResolvedModelRole,
@@ -86,7 +87,9 @@ impl HelperAgentOrchestrator {
     }
 
     pub async fn run_helper(&self, request: HelperRunRequest) -> Result<HelperRunResult, AppError> {
-        let helper_profile = request.tool.profile();
+        let helper_profile = request
+            .helper_profile
+            .unwrap_or_else(|| request.tool.profile());
         let helper_id = uuid::Uuid::now_v7().to_string();
         let resolved_helper_kind = helper_profile.helper_kind().to_string();
         let escalation_summary = Arc::new(StdMutex::new(None::<String>));
@@ -675,7 +678,7 @@ fn describe_subagent_action(
                 failed_message: format!("Failed listing {path}"),
             }
         }
-        "grep" => {
+        "search" => {
             let query = input
                 .get("query")
                 .and_then(serde_json::Value::as_str)

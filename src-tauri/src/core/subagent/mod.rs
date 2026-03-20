@@ -5,4 +5,6 @@ pub use orchestrator::{
     HelperAgentOrchestrator, HelperRunRequest, HelperRunResult, SubagentActivityStatus,
     SubagentProgressSnapshot,
 };
-pub use runtime_orchestration::{runtime_orchestration_tools, RuntimeOrchestrationTool};
+pub use runtime_orchestration::{
+    runtime_orchestration_tools, RuntimeOrchestrationTool, SubagentProfile,
+};

@@ -11,7 +11,7 @@ fn sample_subagent_snapshot() -> tiy_agent_lib::core::subagent::SubagentProgress
     snapshot.completed_steps = 1;
     snapshot.current_action = Some("reading src-tauri/src/core/agent_session.rs".into());
     snapshot.tool_counts.insert("read".into(), 1);
-    snapshot.tool_counts.insert("grep".into(), 1);
+    snapshot.tool_counts.insert("search".into(), 1);
     snapshot.recent_actions = vec![
         "Started reading src-tauri/src/core/agent_session.rs".into(),
         "Finished reading src-tauri/src/core/agent_session.rs".into(),
@@ -182,13 +182,13 @@ fn test_thread_stream_event_tool_requested_serialization() {
     let event = ThreadStreamEvent::ToolRequested {
         run_id: "run-1".into(),
         tool_call_id: "tc-1".into(),
-        tool_name: "grep".into(),
+        tool_name: "search".into(),
         tool_input: serde_json::json!({"query": "TODO"}),
     };
 
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "tool_requested");
-    assert_eq!(json["tool_name"].as_str().unwrap(), "grep");
+    assert_eq!(json["tool_name"].as_str().unwrap(), "search");
 }
 
 #[test]

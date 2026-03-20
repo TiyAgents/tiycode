@@ -22,12 +22,8 @@ pub fn runtime_orchestration_tools() -> Vec<AgentTool> {
 }
 
 impl RuntimeOrchestrationTool {
-    pub fn all() -> [Self; 3] {
-        [
-            Self::DelegateResearch,
-            Self::DelegatePlanReview,
-            Self::DelegateCodeReview,
-        ]
+    pub fn all() -> [Self; 2] {
+        [Self::DelegateResearch, Self::DelegateCodeReview]
     }
 
     pub fn parse(tool_name: &str) -> Option<Self> {
@@ -42,16 +38,16 @@ impl RuntimeOrchestrationTool {
     pub fn tool_name(self) -> &'static str {
         match self {
             Self::DelegateResearch => "agent_research",
-            Self::DelegatePlanReview => "agent_plan",
+            Self::DelegatePlanReview => "agent_review",
             Self::DelegateCodeReview => "agent_review",
         }
     }
 
     pub fn title(self) -> &'static str {
         match self {
-            Self::DelegateResearch => "Delegate Research",
-            Self::DelegatePlanReview => "Delegate Plan Review",
-            Self::DelegateCodeReview => "Delegate Code Review",
+            Self::DelegateResearch => "Agent Research",
+            Self::DelegatePlanReview => "Agent Review",
+            Self::DelegateCodeReview => "Agent Review",
         }
     }
 
@@ -64,7 +60,7 @@ impl RuntimeOrchestrationTool {
                 "Run a scoped helper agent to review a plan and return a summary."
             }
             Self::DelegateCodeReview => {
-                "Run a scoped helper agent to review code and return a summary."
+                "Run a scoped helper agent to review code, diffs, or plans and return a summary."
             }
         }
     }
@@ -78,15 +74,36 @@ impl RuntimeOrchestrationTool {
     }
 
     pub fn as_agent_tool(self) -> AgentTool {
-        AgentTool::new(
-            self.tool_name(),
-            self.title(),
-            self.description(),
-            serde_json::json!({
+        let parameters = match self {
+            Self::DelegateResearch => serde_json::json!({
                 "type": "object",
                 "properties": { "task": { "type": "string" } },
                 "required": ["task"]
             }),
+            Self::DelegateCodeReview => serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task": { "type": "string" },
+                    "target": {
+                        "type": "string",
+                        "enum": ["plan", "code", "diff"],
+                        "description": "Review focus. Use 'plan' to review an approach before implementation."
+                    }
+                },
+                "required": ["task"]
+            }),
+            Self::DelegatePlanReview => serde_json::json!({
+                "type": "object",
+                "properties": { "task": { "type": "string" } },
+                "required": ["task"]
+            }),
+        };
+
+        AgentTool::new(
+            self.tool_name(),
+            self.title(),
+            self.description(),
+            parameters,
         )
     }
 }
@@ -106,7 +123,7 @@ impl SubagentProfile {
                 "You are an internal scout helper. Your job is to investigate the workspace and gather context for the parent agent.\n\
 Guidelines:\n\
 - Stay strictly read-only. Do not modify any files.\n\
-- Use grep and find to locate relevant code efficiently. Read files to understand implementation details.\n\
+- Use search and find to locate relevant code efficiently. Read files to understand implementation details.\n\
 - Focus on what matters: relevant files, key data structures, dependencies, and patterns.\n\
 - Omit irrelevant noise. If a file is not useful, skip it without comment."
             }
@@ -164,7 +181,7 @@ Guidelines:\n\
                 }),
             ),
             AgentTool::new(
-                "grep",
+                "search",
                 "Search Repo",
                 "Search the current workspace with ripgrep.",
                 serde_json::json!({
@@ -245,7 +262,6 @@ mod tests {
             tool_names,
             vec![
                 "agent_research",
-                "agent_plan",
                 "agent_review"
             ]
         );

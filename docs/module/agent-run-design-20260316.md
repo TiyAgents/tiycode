@@ -88,7 +88,6 @@ Rust should represent helper work as `HelperTask` records managed by
 runtime-owned internal orchestration tools such as:
 
 - `agent_research`
-- `agent_plan`
 - `agent_review`
 
 These tools do not directly perform privileged system work. They hand execution

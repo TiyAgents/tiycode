@@ -1004,7 +1004,7 @@ mod tests {
             &ThreadStreamEvent::ToolRequested {
                 run_id: "run-1".into(),
                 tool_call_id: "tool-1".into(),
-                tool_name: "grep".into(),
+                tool_name: "search".into(),
                 tool_input: serde_json::json!({ "query": "Thought" }),
             }
         ));

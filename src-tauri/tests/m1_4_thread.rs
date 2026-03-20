@@ -449,7 +449,7 @@ async fn test_thread_snapshot_includes_runtime_artifacts_for_visible_runs() {
         "tc-runtime",
         "r-runtime",
         "t-runtime",
-        "grep",
+        "search",
         "completed",
     )
     .await;
@@ -476,7 +476,7 @@ async fn test_thread_snapshot_includes_runtime_artifacts_for_visible_runs() {
     let snapshot = manager.load("t-runtime", None, None).await.unwrap();
 
     assert_eq!(snapshot.tool_calls.len(), 1);
-    assert_eq!(snapshot.tool_calls[0].tool_name, "grep");
+    assert_eq!(snapshot.tool_calls[0].tool_name, "search");
     assert_eq!(snapshot.helpers.len(), 1);
     assert_eq!(snapshot.helpers[0].helper_kind, "helper_scout");
     assert_eq!(snapshot.helpers[0].usage.input_tokens, 120);

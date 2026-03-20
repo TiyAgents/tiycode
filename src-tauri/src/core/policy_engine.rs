@@ -63,7 +63,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "read",
     "list",
     "find",
-    "grep",
+    "search",
     "git_status",
     "git_diff",
     "git_log",
@@ -308,7 +308,7 @@ fn extract_target_path(tool_name: &str, input: &serde_json::Value) -> Option<Str
         }
         "find" => input["path"].as_str().map(|s| s.to_string()),
         "patch" => input["path"].as_str().map(|s| s.to_string()),
-        "grep" => input["directory"].as_str().map(|s| s.to_string()),
+        "search" => input["directory"].as_str().map(|s| s.to_string()),
         _ => None,
     }
 }

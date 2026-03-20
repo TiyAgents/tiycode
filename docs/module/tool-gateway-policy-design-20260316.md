@@ -160,7 +160,7 @@ Examples:
 
 - `read`
 - `list`
-- `grep`
+- `search`
 - `write`
 - `patch`
 - `git_status`

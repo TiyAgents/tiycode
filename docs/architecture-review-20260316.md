@@ -274,7 +274,7 @@ Git 文档定义了 "snapshot + delta" 刷新模式，但存在以下问题：
 
 Index 文档定义了三个 layer（File Tree Cache + Content Inverted Index + Activity Signals），对于 v1 来说：
 
-- **在 Rust 中从零构建倒排索引** 的实现成本不低，且 `ripgrep` 本身已经足够快，直接封装为搜索后端可以覆盖绝大多数 `grep` 场景。
+- **在 Rust 中从零构建倒排索引** 的实现成本不低，且 `ripgrep` 本身已经足够快，直接封装为搜索后端可以覆盖绝大多数 `search` 场景。
 - **Activity Signals** 在 v1 没有真实上游数据源："thread-referenced files"、"recently opened files" 等信号在产品第一阶段都不存在成熟的采集链路。
 
 **建议**

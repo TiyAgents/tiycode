@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::core::subagent::{
     runtime_orchestration_tools, HelperAgentOrchestrator, HelperRunRequest,
-    RuntimeOrchestrationTool,
+    RuntimeOrchestrationTool, SubagentProfile,
 };
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
@@ -447,6 +447,7 @@ impl AgentSession {
             .auxiliary
             .clone()
             .unwrap_or_else(|| self.spec.model_plan.primary.clone());
+        let helper_profile = resolve_helper_profile(tool, tool_input);
 
         let result = self
             .helper_orchestrator
@@ -454,6 +455,7 @@ impl AgentSession {
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
                 tool,
+                helper_profile: Some(helper_profile),
                 parent_tool_call_id: Some(tool_call_id.to_string()),
                 task,
                 model_role: helper_role,
@@ -770,7 +772,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ),
         AgentTool::new(
-            "grep",
+            "search",
             "Search Repo",
             "Search the current workspace with ripgrep.",
             serde_json::json!({
@@ -897,6 +899,25 @@ fn resolve_tool_profile_name(raw_plan: &RuntimeModelPlan, run_mode: &str) -> Str
     match run_mode {
         "plan" => PLAN_READ_ONLY_TOOL_PROFILE.to_string(),
         _ => DEFAULT_FULL_TOOL_PROFILE.to_string(),
+    }
+}
+
+fn resolve_helper_profile(
+    tool: RuntimeOrchestrationTool,
+    tool_input: &serde_json::Value,
+) -> SubagentProfile {
+    match tool {
+        RuntimeOrchestrationTool::DelegateResearch => SubagentProfile::Scout,
+        RuntimeOrchestrationTool::DelegatePlanReview => SubagentProfile::Planner,
+        RuntimeOrchestrationTool::DelegateCodeReview => match tool_input
+            .get("target")
+            .and_then(serde_json::Value::as_str)
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("plan") => SubagentProfile::Planner,
+            _ => SubagentProfile::Reviewer,
+        },
     }
 }
 
@@ -1119,7 +1140,7 @@ You help users by reading files, searching code, editing files, executing comman
         "Guidelines:\n\
 - Read files before editing. Understand existing code before making changes.\n\
 - Use edit for precise, surgical changes. Use write only for new files or complete rewrites.\n\
-- Prefer grep and find over shell for file exploration — they are faster and respect ignore patterns.\n\
+- Prefer search and find over shell for file exploration — they are faster and respect ignore patterns.\n\
 - Be concise in your responses. Show file paths clearly when working with files.\n\
 - When summarizing your actions, describe what you did in plain text — do not re-read or re-cat files to prove your work.\n\
 - Flag risks, destructive operations, or ambiguity before acting. Ask when intent is unclear."
@@ -1140,7 +1161,7 @@ You help users by reading files, searching code, editing files, executing comman
     if run_mode == "plan" {
         parts.push(
             "Plan mode is active.\n\
-- Use only read-only tools: read, list, grep, find, term_status, term_output.\n\
+- Use only read-only tools: read, list, search, find, term_status, term_output.\n\
 - Do NOT use edit, write, or shell unless the user explicitly requests execution.\n\
 - Focus on analysis, explanation, and actionable planning. Identify risks, gaps, and concrete next steps."
                 .to_string(),

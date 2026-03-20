@@ -464,8 +464,8 @@ export class ThreadStream {
 function isRuntimeOrchestrationToolName(toolName: string) {
   return (
     toolName === "agent_research"
-    || toolName === "agent_plan"
     || toolName === "agent_review"
+    || toolName === "agent_plan"
     || toolName === "delegate_research"
     || toolName === "delegate_plan_review"
     || toolName === "delegate_code_review"
