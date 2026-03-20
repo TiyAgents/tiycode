@@ -670,6 +670,7 @@ export function RuntimeThreadSurface({
   const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
   const snapshotLoadRequestRef = useRef(0);
   const streamRef = useRef<ThreadStream | null>(null);
+  const submittingRef = useRef(false);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearScheduledThinkingPhase = useCallback(() => {
@@ -1135,6 +1136,17 @@ export function RuntimeThreadSurface({
       return;
     }
 
+    // Guard against concurrent invocations. The `initialPromptRequest` effect
+    // may re-fire while an `await startRun()` is still in flight because
+    // `runState` hasn't transitioned to "running" yet (it only changes when
+    // the Rust backend sends back a `run_started` event). Without this ref
+    // guard, a second `startRun` invoke reaches Rust where the first run is
+    // already registered in `active_runs`, producing `thread.run.already_active`.
+    if (submittingRef.current) {
+      return;
+    }
+    submittingRef.current = true;
+
     const modelPlan = buildRunModelPlanFromSelection(
       activeAgentProfileId,
       agentProfiles,
@@ -1142,6 +1154,7 @@ export function RuntimeThreadSurface({
     );
 
     if (!modelPlan) {
+      submittingRef.current = false;
       setComposerError("Select an enabled primary model for the current profile before starting a run.");
       return;
     }
@@ -1179,6 +1192,8 @@ export function RuntimeThreadSurface({
     } catch (error) {
       setThinkingPlaceholder(null);
       throw error;
+    } finally {
+      submittingRef.current = false;
     }
   }, [activeAgentProfileId, activeProfile, agentProfiles, providers, runState, showThinkingPlaceholder, threadId]);
 
