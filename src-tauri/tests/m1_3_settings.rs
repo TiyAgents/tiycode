@@ -80,7 +80,7 @@ async fn test_settings_get_all() {
 async fn test_policies_insert_and_get() {
     let pool = test_helpers::setup_test_pool().await;
 
-    let deny_list = r#"[{"tool":"run_command","pattern":"rm -rf"}]"#;
+    let deny_list = r#"[{"tool":"shell","pattern":"rm -rf"}]"#;
     test_helpers::seed_policy(&pool, "deny_list", deny_list).await;
 
     let row = sqlx::query("SELECT value_json FROM policies WHERE key = ?")
@@ -91,7 +91,7 @@ async fn test_policies_insert_and_get() {
 
     let val: serde_json::Value = serde_json::from_str(&row.get::<String, _>("value_json")).unwrap();
     assert!(val.is_array());
-    assert_eq!(val[0]["tool"].as_str().unwrap(), "run_command");
+    assert_eq!(val[0]["tool"].as_str().unwrap(), "shell");
 }
 
 // =========================================================================

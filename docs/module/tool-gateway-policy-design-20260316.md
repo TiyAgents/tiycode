@@ -158,25 +158,25 @@ These do not cross privileged boundaries and may stay inside the sidecar.
 
 Examples:
 
-- `read_file`
-- `list_dir`
-- `search_repo`
-- `write_file`
-- `apply_patch`
+- `read`
+- `list`
+- `grep`
+- `write`
+- `patch`
 - `git_status`
 - `git_diff`
 - `git_log`
-- `run_command`
+- `shell`
 - `create_terminal`
-- `terminal_write`
-- `marketplace_install`
+- `term_write`
+- `market_install`
 - `mcp_call`
 
 These always go through `ToolGateway`.
 
-### `run_command` Is a Special System Tool
+### `shell` Is a Special System Tool
 
-`run_command` expands into arbitrary subprocess execution and therefore needs stricter handling than typed Git or filesystem tools.
+`shell` expands into arbitrary subprocess execution and therefore needs stricter handling than typed Git or filesystem tools.
 
 V1 rules:
 
@@ -216,7 +216,7 @@ tool request
 2. tool existence and schema validity
 3. run-mode restrictions
 4. workspace path normalization and sandbox checks
-5. command normalization and command-specific safety checks for `run_command`
+5. command normalization and command-specific safety checks for `shell`
 6. explicit deny rules
 7. explicit allow rules
 8. approval policy decision
@@ -345,9 +345,9 @@ Each executor should return:
 
 Large outputs should be summarized for hot paths and persisted in raw form only where necessary.
 
-### `run_command` Execution Contract
+### `shell` Execution Contract
 
-The process executor should enforce extra guardrails for `run_command`:
+The process executor should enforce extra guardrails for `shell`:
 
 - enforce timeout and cancellation even if the child process hangs
 - cap stdout and stderr capture size
@@ -359,7 +359,7 @@ The process executor should enforce extra guardrails for `run_command`:
 
 ### Auto-Allow Read Tool
 
-1. sidecar requests `read_file`
+1. sidecar requests `read`
 2. Rust validates path under workspace boundary
 3. `PolicyEngine` returns `AutoAllow`
 4. executor reads file
@@ -368,7 +368,7 @@ The process executor should enforce extra guardrails for `run_command`:
 
 ### Approval-Gated Write Tool
 
-1. sidecar requests `apply_patch`
+1. sidecar requests `patch`
 2. Rust validates target path
 3. `PolicyEngine` returns `RequireApproval`
 4. tool call is persisted as pending
@@ -379,14 +379,14 @@ The process executor should enforce extra guardrails for `run_command`:
 
 ### `Plan` Mode Mutation Attempt
 
-1. sidecar in `plan` mode requests `apply_patch` or another mutating tool
+1. sidecar in `plan` mode requests `patch` or another mutating tool
 2. Rust sees `run_mode = Plan`
 3. `PolicyEngine` returns `Deny` or a special escalation verdict
 4. the run stays in planning flow and surfaces the blocked action clearly
 
 ### Denied Dangerous Command
 
-1. sidecar requests `run_command`
+1. sidecar requests `shell`
 2. command hits deny rule or sandbox violation
 3. Rust marks tool call denied
 4. sidecar receives structured denial result
@@ -426,7 +426,7 @@ Managers such as Git or Marketplace may expose direct user-facing commands, but 
 | plan mode bypasses mutation guard | planning flow mutates local state unexpectedly | evaluate run-mode restrictions before dispatch |
 | stale approval | wrong execution after settings change | re-evaluate policy immediately before dispatch |
 | oversized output | UI and prompt bloat | output digest + pagination or chunking |
-| dangerous shell pattern hidden in `run_command` | unintended arbitrary execution | command normalization + deny matching before dispatch |
+| dangerous shell pattern hidden in `shell` | unintended arbitrary execution | command normalization + deny matching before dispatch |
 | plugin attempts bypass | hidden privileged path | all extension tools routed through gateway |
 | executor crash | incomplete tool state | mark failed and return structured error |
 

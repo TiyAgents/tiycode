@@ -343,7 +343,7 @@ async fn create_new_file(path: &PathBuf, content: &str) -> Result<ToolOutput, Ap
         return Ok(ToolOutput {
             success: false,
             result: serde_json::json!({
-                "error": "File already exists. Use a non-empty old_string to edit, or use write_file to overwrite.",
+                "error": "File already exists. Use a non-empty old_string to edit, or use write to overwrite.",
                 "path": path.to_string_lossy().to_string(),
             }),
         });

@@ -142,29 +142,29 @@ Thread 和 Agent Run 文档反复提到"summary compaction"、"message window ca
 
 **处理结果**：`technical-architecture` §6.1 新增 store 联动约束、启动加载顺序（settings/workspaces bootstrap → workbench 骨架 → 线程按需加载 → 面板懒加载）、流式订阅生命周期规则和断线重连策略。
 
-### 2.3 `run_command` 工具缺少安全边界定义 ✅ 已处理
+### 2.3 `shell` 工具缺少安全边界定义 ✅ 已处理
 
 **所涉文档**：`agent-tools-design`、`tool-gateway-policy-design`
 
 **问题**
 
-Agent Tools 文档列出 `run_command` 为系统工具，但所有模块文档都没有对其安全策略做专项定义。`run_command` 是风险最高的工具，允许任意 shell 命令执行：
+Agent Tools 文档列出 `shell` 为系统工具，但所有模块文档都没有对其安全策略做专项定义。`shell` 是风险最高的工具，允许任意 shell 命令执行：
 
 - 没有定义命令白名单/黑名单策略。
 - 没有定义命令解析和危险命令检测（如 `rm -rf /`、`curl | sh`）。
 - 没有定义执行沙箱隔离方式（是否在受限 shell 中运行？是否限制环境变量继承？）。
 - 没有定义超时和输出截断策略。
-- 没有说明与 Terminal 工具族的关系和区分（`run_command` 是一次性执行并返回结果，还是等价于 `terminal_write_input`？）。
+- 没有说明与 Terminal 工具族的关系和区分（`shell` 是一次性执行并返回结果，还是等价于 `term_write`？）。
 
 **建议**
 
-- 在 Tool Gateway + Policy 文档中增加 `run_command` 安全专节。
-- 定义 `run_command` 为"无交互式一次性命令执行"，区别于 Terminal 的交互式 PTY 会话。
-- 在 PolicyEngine 中为 `run_command` 添加专门的命令解析和匹配逻辑（不能仅依赖通用 allow/deny 规则）。
+- 在 Tool Gateway + Policy 文档中增加 `shell` 安全专节。
+- 定义 `shell` 为"无交互式一次性命令执行"，区别于 Terminal 的交互式 PTY 会话。
+- 在 PolicyEngine 中为 `shell` 添加专门的命令解析和匹配逻辑（不能仅依赖通用 allow/deny 规则）。
 - 强制超时（建议默认 60s，可配置）和输出大小限制。
 - 默认策略建议为 `require-approval`，除非命令匹配用户显式允许的模式。
 
-**处理结果**：`tool-gateway-policy-design` 新增 `run_command Is a Special System Tool` 和 `run_command Execution Contract` 两个专节，定义了非交互式语义、默认 require-approval、命令 deny 前置检查、超时与输出截断、结构化失败类型。`technical-architecture` §9.2 同步补充。
+**处理结果**：`tool-gateway-policy-design` 新增 `shell Is a Special System Tool` 和 `shell Execution Contract` 两个专节，定义了非交互式语义、默认 require-approval、命令 deny 前置检查、超时与输出截断、结构化失败类型。`technical-architecture` §9.2 同步补充。
 
 **遗留 R4（已解决）**：第三轮在 `tool-gateway-policy-design` 补充了 Dangerous-pattern handling 专节，定义了内置硬拒绝列表（`rm -rf /`、`sudo`、`mkfs`、`curl | sh` 等）、argv 归一化优先于原始 shell 文本、用户 `denyList` 可扩展但不可削弱内置拒绝、内置拒绝使用显式归一化谓词而非脆弱的子串匹配。
 
@@ -274,7 +274,7 @@ Git 文档定义了 "snapshot + delta" 刷新模式，但存在以下问题：
 
 Index 文档定义了三个 layer（File Tree Cache + Content Inverted Index + Activity Signals），对于 v1 来说：
 
-- **在 Rust 中从零构建倒排索引** 的实现成本不低，且 `ripgrep` 本身已经足够快，直接封装为搜索后端可以覆盖绝大多数 `search_repo` 场景。
+- **在 Rust 中从零构建倒排索引** 的实现成本不低，且 `ripgrep` 本身已经足够快，直接封装为搜索后端可以覆盖绝大多数 `grep` 场景。
 - **Activity Signals** 在 v1 没有真实上游数据源："thread-referenced files"、"recently opened files" 等信号在产品第一阶段都不存在成熟的采集链路。
 
 **建议**
@@ -439,7 +439,7 @@ ThreadStatus = f(latest_run)
 | R1 | Compaction 阈值缺少参考值 | ✅ | `thread-design` 和 `technical-architecture` §7.3 补充 v1 初始值（消息 >50 / token >32k / 单次 tool 超预算） |
 | R2 | `specta` 应明确为 `tauri-specta` + `schema_version` 策略 | ✅ | `technical-architecture` §8.1 更新为 `tauri-specta`，补充阻断升级策略和 `AppError` 复用 |
 | R3 | 错误模型位置 + `errorCode` 编码规范 | ✅ | §7.4 标题标注"跨层契约"，补充 `<source>.<kind>.<detail>` 格式和示例 |
-| R4 | `run_command` 危险模式匹配规范 | ✅ | `tool-gateway-policy-design` 新增 Dangerous-pattern handling，内置硬拒绝 + argv 归一化 + 用户 denyList 可扩展不可削弱 |
+| R4 | `shell` 危险模式匹配规范 | ✅ | `tool-gateway-policy-design` 新增 Dangerous-pattern handling，内置硬拒绝 + argv 归一化 + 用户 denyList 可扩展不可削弱 |
 | R5/N2 | 错误态 AI Elements 映射 | ✅ | `technical-architecture` §8.2 补充 `tool_failed`、`run_failed`、`run_interrupted` 映射 |
 | R6/N3 | Policy+Audit 原语 + 审计表结构 | ✅ | 新增 `audit_events` 表，`tool-gateway-policy-design` 新增 Shared Primitives 专节，`git-design` 同步 |
 | N1 | Sidecar 协议缺辅助任务方法 | ✅ | `agent-sidecar-design` 和总架构新增 `agent.auxiliary.task`，覆盖 summary 和 seed 生成 |

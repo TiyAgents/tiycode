@@ -91,9 +91,9 @@ state. That means the grouping is allowed to change over time.
 
 Example:
 
-1. `list_dir` is completed
-2. `read_file` is waiting approval
-3. `read_file` is approved and later completed
+1. `list` is completed
+2. `read` is waiting approval
+3. `read` is approved and later completed
 
 While step 2 is waiting approval, it is rendered outside the completed group.
 Once step 3 becomes completed, the timeline is recalculated and the completed

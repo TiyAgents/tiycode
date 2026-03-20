@@ -751,7 +751,7 @@ fn reset_reasoning_state(
 fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
     let mut tools = vec![
         AgentTool::new(
-            "read_file",
+            "read",
             "Read File",
             "Read a file inside the current workspace.",
             serde_json::json!({
@@ -761,7 +761,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ),
         AgentTool::new(
-            "list_dir",
+            "list",
             "List Directory",
             "List files and folders inside the current workspace.",
             serde_json::json!({
@@ -770,7 +770,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ),
         AgentTool::new(
-            "search_repo",
+            "grep",
             "Search Repo",
             "Search the current workspace with ripgrep.",
             serde_json::json!({
@@ -784,7 +784,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ),
         AgentTool::new(
-            "find_files",
+            "find",
             "Find Files",
             "Search for files by glob pattern. Returns matching file paths relative to the workspace. Respects common ignore patterns (.git, node_modules, target). Output is truncated to 1000 results or 100KB.",
             serde_json::json!({
@@ -803,7 +803,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ),
         AgentTool::new(
-            "terminal_get_status",
+            "term_status",
             "Terminal Status",
             "Inspect the current thread terminal status without mutating it.",
             serde_json::json!({
@@ -812,7 +812,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ),
         AgentTool::new(
-            "terminal_get_recent_output",
+            "term_output",
             "Terminal Output",
             "Read the recent terminal output for the current thread.",
             serde_json::json!({
@@ -825,7 +825,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
 
     if profile_name == DEFAULT_FULL_TOOL_PROFILE {
         tools.push(AgentTool::new(
-            "edit_file",
+            "edit",
             "Edit File",
             "Make a targeted edit to a file by specifying the exact text to find and its replacement. \
              The old_string must uniquely identify the text to replace (appear exactly once in the file). \
@@ -852,7 +852,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ));
         tools.push(AgentTool::new(
-            "write_file",
+            "write",
             "Write File",
             "Write or overwrite a file inside the current workspace.",
             serde_json::json!({
@@ -865,7 +865,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ));
         tools.push(AgentTool::new(
-            "run_command",
+            "shell",
             "Run Command",
             "Run a non-interactive shell command inside the current workspace.",
             serde_json::json!({
@@ -1118,8 +1118,8 @@ You help users by reading files, searching code, editing files, executing comman
     parts.push(
         "Guidelines:\n\
 - Read files before editing. Understand existing code before making changes.\n\
-- Use edit_file for precise, surgical changes. Use write_file only for new files or complete rewrites.\n\
-- Prefer search_repo and find_files over run_command for file exploration — they are faster and respect ignore patterns.\n\
+- Use edit for precise, surgical changes. Use write only for new files or complete rewrites.\n\
+- Prefer grep and find over shell for file exploration — they are faster and respect ignore patterns.\n\
 - Be concise in your responses. Show file paths clearly when working with files.\n\
 - When summarizing your actions, describe what you did in plain text — do not re-read or re-cat files to prove your work.\n\
 - Flag risks, destructive operations, or ambiguity before acting. Ask when intent is unclear."
@@ -1140,8 +1140,8 @@ You help users by reading files, searching code, editing files, executing comman
     if run_mode == "plan" {
         parts.push(
             "Plan mode is active.\n\
-- Use only read-only tools: read_file, list_dir, search_repo, find_files, terminal_get_status, terminal_get_recent_output.\n\
-- Do NOT use edit_file, write_file, or run_command unless the user explicitly requests execution.\n\
+- Use only read-only tools: read, list, grep, find, term_status, term_output.\n\
+- Do NOT use edit, write, or shell unless the user explicitly requests execution.\n\
 - Focus on analysis, explanation, and actionable planning. Identify risks, gaps, and concrete next steps."
                 .to_string(),
         );

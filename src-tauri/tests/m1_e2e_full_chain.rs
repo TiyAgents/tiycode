@@ -40,7 +40,7 @@ async fn test_full_workspace_thread_message_chain() {
     .unwrap();
 
     // 6. Record a tool call
-    test_helpers::seed_tool_call(&pool, "tc-e2e", "r-e2e", "t-e2e", "read_file", "completed").await;
+    test_helpers::seed_tool_call(&pool, "tc-e2e", "r-e2e", "t-e2e", "read", "completed").await;
     sqlx::query(
         "UPDATE tool_calls SET tool_input_json = ?, tool_output_json = ? WHERE id = 'tc-e2e'",
     )
@@ -60,7 +60,7 @@ async fn test_full_workspace_thread_message_chain() {
     sqlx::query(
         "INSERT INTO audit_events (id, actor_type, actor_id, source, workspace_id, thread_id, run_id, tool_call_id, action, target_type, target_id, result_json)
          VALUES ('audit-e2e', 'agent', 'sidecar', 'tool_gateway', 'ws-e2e', 't-e2e', 'r-e2e', 'tc-e2e', 'tool_execute', 'tool_call', 'tc-e2e',
-                 '{\"tool\":\"read_file\",\"verdict\":\"auto_allow\"}')",
+                 '{\"tool\":\"read\",\"verdict\":\"auto_allow\"}')",
     )
     .execute(&pool)
     .await
@@ -132,7 +132,7 @@ async fn test_full_approval_flow() {
         "tc-appr",
         "r-appr",
         "t-appr",
-        "write_file",
+        "write",
         "requested",
     )
     .await;
@@ -364,7 +364,7 @@ async fn test_snapshot_recovery_after_crash() {
         "tc-crash",
         "r-crash",
         "t-crash",
-        "read_file",
+        "read",
         "running",
     )
     .await;

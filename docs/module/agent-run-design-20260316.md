@@ -87,9 +87,9 @@ Rust should represent helper work as `HelperTask` records managed by
 `HelperAgentOrchestrator`. The parent agent triggers helper work through
 runtime-owned internal orchestration tools such as:
 
-- `delegate_research`
-- `delegate_plan_review`
-- `delegate_code_review`
+- `agent_research`
+- `agent_plan`
+- `agent_review`
 
 These tools do not directly perform privileged system work. They hand execution
 to the orchestrator, which spins up a helper `tiy-core` agent or standalone loop

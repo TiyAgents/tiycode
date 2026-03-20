@@ -27,20 +27,17 @@ pub async fn execute_tool(
     terminal_manager: Option<&Arc<TerminalManager>>,
 ) -> Result<ToolOutput, AppError> {
     match tool_name {
-        "read_file" => filesystem::read_file(input, workspace_path).await,
-        "write_file" => filesystem::write_file(input, workspace_path).await,
-        "list_dir" => filesystem::list_dir(input, workspace_path).await,
-        "find_files" => filesystem::find_files(input, workspace_path).await,
-        "search_repo" => search::search_repo(input, workspace_path).await,
-        "edit_file" => edit::edit_file(input, workspace_path).await,
-        "run_command" => process::run_command(input, workspace_path).await,
+        "read" => filesystem::read_file(input, workspace_path).await,
+        "write" => filesystem::write_file(input, workspace_path).await,
+        "list" => filesystem::list_dir(input, workspace_path).await,
+        "find" => filesystem::find_files(input, workspace_path).await,
+        "grep" => search::search_repo(input, workspace_path).await,
+        "edit" => edit::edit_file(input, workspace_path).await,
+        "patch" => edit::edit_file(input, workspace_path).await,
+        "shell" => process::run_command(input, workspace_path).await,
         "git_add" | "git_stage" | "git_unstage" | "git_commit" | "git_fetch" | "git_pull"
         | "git_push" => git::execute(tool_name, input, workspace_path).await,
-        "terminal_get_status"
-        | "terminal_get_recent_output"
-        | "terminal_write_input"
-        | "terminal_write"
-        | "terminal_restart" => {
+        "term_status" | "term_output" | "term_write" | "term_restart" | "term_close" => {
             let manager = terminal_manager.ok_or_else(|| {
                 AppError::internal(
                     crate::model::errors::ErrorSource::Terminal,

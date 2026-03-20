@@ -252,7 +252,7 @@ pub async fn list_dir(
 
             if truncated {
                 result["notice"] = serde_json::json!(format!(
-                    "[Showing first {} entries. Use find_files for more targeted search.]",
+                    "[Showing first {} entries. Use find for more targeted search.]",
                     LIST_DIR_MAX_ENTRIES
                 ));
             }

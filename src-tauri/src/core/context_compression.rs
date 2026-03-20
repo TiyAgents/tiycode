@@ -517,8 +517,8 @@ mod tests {
     fn test_cut_point_respects_tool_result_boundary() {
         let messages = vec![
             make_user("Do something"),
-            make_assistant_with_tool_call("read_file"),
-            make_tool_result("read_file", "file contents here"),
+            make_assistant_with_tool_call("read"),
+            make_tool_result("read", "file contents here"),
             make_user("Now do something else"),
             make_assistant("OK, done"),
         ];
@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn test_tool_result_truncation() {
         let big_content = "x".repeat(10_000);
-        let msg = make_tool_result("read_file", &big_content);
+        let msg = make_tool_result("read", &big_content);
 
         let truncated = maybe_truncate_tool_result(msg, true);
         if let AgentMessage::ToolResult(tr) = &truncated {
@@ -560,8 +560,8 @@ mod tests {
     fn test_discard_summary_format() {
         let messages = vec![
             make_user("Help me fix a bug in my code"),
-            make_assistant_with_tool_call("read_file"),
-            make_tool_result("read_file", "contents..."),
+            make_assistant_with_tool_call("read"),
+            make_tool_result("read", "contents..."),
             make_assistant("I found the issue. Let me fix it."),
         ];
 
@@ -570,6 +570,6 @@ mod tests {
         assert!(summary.contains("</context_summary>"));
         assert!(summary.contains("User Requests"));
         assert!(summary.contains("Tools Used"));
-        assert!(summary.contains("read_file"));
+        assert!(summary.contains("read"));
     }
 }

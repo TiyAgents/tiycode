@@ -260,7 +260,7 @@ CREATE TABLE tool_calls (
     id              TEXT PRIMARY KEY,           -- UUID v7
     run_id          TEXT NOT NULL REFERENCES thread_runs(id),
     thread_id       TEXT NOT NULL REFERENCES threads(id),
-    tool_name       TEXT NOT NULL,              -- read_file | write_file | run_command | git_status ...
+    tool_name       TEXT NOT NULL,              -- read | write | shell | git_status ...
     tool_input_json TEXT NOT NULL DEFAULT '{}', -- 工具输入参数（JSON）
     tool_output_json TEXT,                      -- 工具输出结果（JSON）
     status          TEXT NOT NULL DEFAULT 'requested',
@@ -410,8 +410,8 @@ CREATE TABLE policies (
 | `approval_policy` | 审批模式 | `{"mode": "auto"}` / `{"mode": "require_for_mutations"}` |
 | `sandbox_policy` | 沙箱模式 | `{"enabled": false}` |
 | `network_access` | 网络策略 | `{"allowed": true, "blocked_domains": []}` |
-| `allow_list` | 允许规则 | `[{"tool": "read_file", "pattern": "**/*"}]` |
-| `deny_list` | 拒绝规则 | `[{"tool": "run_command", "pattern": "rm -rf *"}]` |
+| `allow_list` | 允许规则 | `[{"tool": "read", "pattern": "**/*"}]` |
+| `deny_list` | 拒绝规则 | `[{"tool": "shell", "pattern": "rm -rf *"}]` |
 | `writable_roots` | 可写目录 | `["/Users/dev/projects"]` |
 
 ---

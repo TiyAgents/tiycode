@@ -32,18 +32,18 @@ impl RuntimeOrchestrationTool {
 
     pub fn parse(tool_name: &str) -> Option<Self> {
         match tool_name {
-            "delegate_research" => Some(Self::DelegateResearch),
-            "delegate_plan_review" => Some(Self::DelegatePlanReview),
-            "delegate_code_review" => Some(Self::DelegateCodeReview),
+            "agent_research" => Some(Self::DelegateResearch),
+            "agent_plan" => Some(Self::DelegatePlanReview),
+            "agent_review" => Some(Self::DelegateCodeReview),
             _ => None,
         }
     }
 
     pub fn tool_name(self) -> &'static str {
         match self {
-            Self::DelegateResearch => "delegate_research",
-            Self::DelegatePlanReview => "delegate_plan_review",
-            Self::DelegateCodeReview => "delegate_code_review",
+            Self::DelegateResearch => "agent_research",
+            Self::DelegatePlanReview => "agent_plan",
+            Self::DelegateCodeReview => "agent_review",
         }
     }
 
@@ -106,7 +106,7 @@ impl SubagentProfile {
                 "You are an internal scout helper. Your job is to investigate the workspace and gather context for the parent agent.\n\
 Guidelines:\n\
 - Stay strictly read-only. Do not modify any files.\n\
-- Use search_repo and find_files to locate relevant code efficiently. Read files to understand implementation details.\n\
+- Use grep and find to locate relevant code efficiently. Read files to understand implementation details.\n\
 - Focus on what matters: relevant files, key data structures, dependencies, and patterns.\n\
 - Omit irrelevant noise. If a file is not useful, skip it without comment."
             }
@@ -132,7 +132,7 @@ Guidelines:\n\
     pub fn helper_tools(self) -> Vec<AgentTool> {
         let mut tools = vec![
             AgentTool::new(
-                "read_file",
+                "read",
                 "Read File",
                 "Read a file inside the current workspace.",
                 serde_json::json!({
@@ -142,7 +142,7 @@ Guidelines:\n\
                 }),
             ),
             AgentTool::new(
-                "list_dir",
+                "list",
                 "List Directory",
                 "List files and folders inside the current workspace.",
                 serde_json::json!({
@@ -151,7 +151,7 @@ Guidelines:\n\
                 }),
             ),
             AgentTool::new(
-                "find_files",
+                "find",
                 "Find Files",
                 "Search for files by glob pattern. Returns matching file paths relative to the workspace.",
                 serde_json::json!({
@@ -164,7 +164,7 @@ Guidelines:\n\
                 }),
             ),
             AgentTool::new(
-                "search_repo",
+                "grep",
                 "Search Repo",
                 "Search the current workspace with ripgrep.",
                 serde_json::json!({
@@ -182,7 +182,7 @@ Guidelines:\n\
         if self == Self::Reviewer {
             tools.extend([
                 AgentTool::new(
-                    "terminal_get_status",
+                    "term_status",
                     "Terminal Status",
                     "Inspect the current thread terminal status without mutating it.",
                     serde_json::json!({
@@ -191,7 +191,7 @@ Guidelines:\n\
                     }),
                 ),
                 AgentTool::new(
-                    "terminal_get_recent_output",
+                    "term_output",
                     "Terminal Output",
                     "Read the recent terminal output for the current thread.",
                     serde_json::json!({
@@ -213,18 +213,18 @@ mod tests {
     #[test]
     fn parses_runtime_orchestration_tools() {
         assert_eq!(
-            RuntimeOrchestrationTool::parse("delegate_research"),
+            RuntimeOrchestrationTool::parse("agent_research"),
             Some(RuntimeOrchestrationTool::DelegateResearch)
         );
         assert_eq!(
-            RuntimeOrchestrationTool::parse("delegate_plan_review"),
+            RuntimeOrchestrationTool::parse("agent_plan"),
             Some(RuntimeOrchestrationTool::DelegatePlanReview)
         );
         assert_eq!(
-            RuntimeOrchestrationTool::parse("delegate_code_review"),
+            RuntimeOrchestrationTool::parse("agent_review"),
             Some(RuntimeOrchestrationTool::DelegateCodeReview)
         );
-        assert_eq!(RuntimeOrchestrationTool::parse("read_file"), None);
+        assert_eq!(RuntimeOrchestrationTool::parse("read"), None);
     }
 
     #[test]
@@ -232,8 +232,8 @@ mod tests {
         let tools = SubagentProfile::Reviewer.helper_tools();
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
-        assert!(tool_names.contains(&"terminal_get_status"));
-        assert!(tool_names.contains(&"terminal_get_recent_output"));
+        assert!(tool_names.contains(&"term_status"));
+        assert!(tool_names.contains(&"term_output"));
     }
 
     #[test]
@@ -244,9 +244,9 @@ mod tests {
         assert_eq!(
             tool_names,
             vec![
-                "delegate_research",
-                "delegate_plan_review",
-                "delegate_code_review"
+                "agent_research",
+                "agent_plan",
+                "agent_review"
             ]
         );
     }

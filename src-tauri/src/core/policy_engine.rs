@@ -41,10 +41,10 @@ pub struct PolicyCheck {
 
 /// Tools that mutate the workspace or system.
 const MUTATING_TOOLS: &[&str] = &[
-    "write_file",
-    "edit_file",
-    "apply_patch",
-    "run_command",
+    "write",
+    "edit",
+    "patch",
+    "shell",
     "git_add",
     "git_stage",
     "git_unstage",
@@ -52,28 +52,27 @@ const MUTATING_TOOLS: &[&str] = &[
     "git_push",
     "git_pull",
     "git_fetch",
-    "terminal_write",
-    "terminal_write_input",
-    "terminal_restart",
-    "terminal_close",
-    "marketplace_install",
+    "term_write",
+    "term_restart",
+    "term_close",
+    "market_install",
 ];
 
 /// Tools that are read-only and generally safe.
 const READ_ONLY_TOOLS: &[&str] = &[
-    "read_file",
-    "list_dir",
-    "find_files",
-    "search_repo",
+    "read",
+    "list",
+    "find",
+    "grep",
     "git_status",
     "git_diff",
     "git_log",
-    "terminal_get_status",
-    "terminal_get_recent_output",
+    "term_status",
+    "term_output",
 ];
 
 // ---------------------------------------------------------------------------
-// Built-in dangerous patterns for run_command
+// Built-in dangerous patterns for shell
 // ---------------------------------------------------------------------------
 
 const DANGEROUS_COMMAND_PATTERNS: &[&str] = &[
@@ -123,8 +122,8 @@ impl PolicyEngine {
     ) -> Result<PolicyCheck, AppError> {
         let mut checked = Vec::new();
 
-        // 1. Built-in dangerous pattern check (run_command only)
-        if tool_name == "run_command" {
+        // 1. Built-in dangerous pattern check (shell only)
+        if tool_name == "shell" {
             checked.push("builtin_dangerous_patterns".to_string());
             if let Some(cmd) = tool_input["command"].as_str() {
                 let cmd_lower = cmd.to_lowercase();
@@ -304,12 +303,12 @@ impl PolicyEngine {
 /// Extract the target file path from tool input for boundary checking.
 fn extract_target_path(tool_name: &str, input: &serde_json::Value) -> Option<String> {
     match tool_name {
-        "read_file" | "write_file" | "edit_file" | "list_dir" => {
+        "read" | "write" | "edit" | "list" => {
             input["path"].as_str().map(|s| s.to_string())
         }
-        "find_files" => input["path"].as_str().map(|s| s.to_string()),
-        "apply_patch" => input["path"].as_str().map(|s| s.to_string()),
-        "search_repo" => input["directory"].as_str().map(|s| s.to_string()),
+        "find" => input["path"].as_str().map(|s| s.to_string()),
+        "patch" => input["path"].as_str().map(|s| s.to_string()),
+        "grep" => input["directory"].as_str().map(|s| s.to_string()),
         _ => None,
     }
 }

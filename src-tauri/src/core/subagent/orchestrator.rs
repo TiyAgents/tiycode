@@ -651,7 +651,7 @@ fn describe_subagent_action(
     input: &serde_json::Value,
 ) -> SubagentActionDescriptor {
     match tool_name {
-        "read_file" => {
+        "read" => {
             let path = input
                 .get("path")
                 .and_then(serde_json::Value::as_str)
@@ -663,7 +663,7 @@ fn describe_subagent_action(
                 failed_message: format!("Failed reading {path}"),
             }
         }
-        "list_dir" => {
+        "list" => {
             let path = input
                 .get("path")
                 .and_then(serde_json::Value::as_str)
@@ -675,7 +675,7 @@ fn describe_subagent_action(
                 failed_message: format!("Failed listing {path}"),
             }
         }
-        "search_repo" => {
+        "grep" => {
             let query = input
                 .get("query")
                 .and_then(serde_json::Value::as_str)
@@ -692,7 +692,7 @@ fn describe_subagent_action(
                 failed_message: format!("Failed searching {directory} for \"{query}\""),
             }
         }
-        "find_files" => {
+        "find" => {
             let pattern = input
                 .get("pattern")
                 .and_then(serde_json::Value::as_str)
@@ -704,13 +704,13 @@ fn describe_subagent_action(
                 failed_message: format!("Failed finding files matching \"{pattern}\""),
             }
         }
-        "terminal_get_status" => SubagentActionDescriptor {
+        "term_status" => SubagentActionDescriptor {
             current_action: "checking terminal status".to_string(),
             started_message: "Inspecting terminal status".to_string(),
             succeeded_message: "Captured terminal status".to_string(),
             failed_message: "Failed to inspect terminal status".to_string(),
         },
-        "terminal_get_recent_output" => SubagentActionDescriptor {
+        "term_output" => SubagentActionDescriptor {
             current_action: "reading recent terminal output".to_string(),
             started_message: "Reading recent terminal output".to_string(),
             succeeded_message: "Captured recent terminal output".to_string(),

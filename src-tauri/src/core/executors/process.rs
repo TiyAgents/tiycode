@@ -4,7 +4,7 @@ use super::truncation::{truncate_tail_bytes, COMMAND_MAX_BYTES, COMMAND_MAX_LINE
 use super::ToolOutput;
 use crate::model::errors::AppError;
 
-/// Default timeout for run_command (60 seconds).
+/// Default timeout for shell (60 seconds).
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 /// Execute a non-interactive, one-shot shell command.

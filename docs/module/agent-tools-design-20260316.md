@@ -60,9 +60,9 @@ Owned by:
 
 Recommended v1 tools:
 
-- `delegate_research`
-- `delegate_plan_review`
-- `delegate_code_review`
+- `agent_research`
+- `agent_plan`
+- `agent_review`
 - `format_final_response`
 - `summarize_helper_result`
 
@@ -81,11 +81,11 @@ Owned by:
 
 Recommended v1 tools:
 
-- `read_file`
-- `list_dir`
-- `search_repo`
-- `write_file`
-- `apply_patch`
+- `read`
+- `list`
+- `grep`
+- `write`
+- `patch`
 - `open_workspace_in_app`
 
 ### Git Tools
@@ -116,10 +116,10 @@ Owned by:
 
 Recommended v1 tools:
 
-- `terminal_get_status`
-- `terminal_get_recent_output`
-- `terminal_write_input`
-- `terminal_restart`
+- `term_status`
+- `term_output`
+- `term_write`
+- `term_restart`
 
 Important constraint:
 
@@ -135,7 +135,7 @@ Owned by:
 
 Recommended v1 tools:
 
-- `marketplace_install`
+- `market_install`
 - `mcp_call`
 
 ## Ownership Matrix

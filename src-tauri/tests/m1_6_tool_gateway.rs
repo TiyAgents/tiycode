@@ -127,9 +127,9 @@ fn test_safe_commands_not_flagged() {
 #[test]
 fn test_plan_mode_blocks_mutating_tools() {
     let mutating_tools = vec![
-        "write_file",
-        "apply_patch",
-        "run_command",
+        "write",
+        "patch",
+        "shell",
         "git_add",
         "git_stage",
         "git_unstage",
@@ -137,8 +137,8 @@ fn test_plan_mode_blocks_mutating_tools() {
         "git_push",
         "git_pull",
         "git_fetch",
-        "terminal_write",
-        "marketplace_install",
+        "term_write",
+        "market_install",
     ];
 
     let run_mode = "plan";
@@ -151,18 +151,18 @@ fn test_plan_mode_blocks_mutating_tools() {
 #[test]
 fn test_plan_mode_allows_read_tools() {
     let read_only_tools = vec![
-        "read_file",
-        "list_dir",
-        "search_repo",
+        "read",
+        "list",
+        "grep",
         "git_status",
         "git_diff",
         "git_log",
     ];
 
     let mutating_tools = vec![
-        "write_file",
-        "apply_patch",
-        "run_command",
+        "write",
+        "patch",
+        "shell",
         "git_add",
         "git_stage",
         "git_unstage",
@@ -170,8 +170,8 @@ fn test_plan_mode_allows_read_tools() {
         "git_push",
         "git_pull",
         "git_fetch",
-        "terminal_write",
-        "marketplace_install",
+        "term_write",
+        "market_install",
     ];
 
     for tool in &read_only_tools {
@@ -229,14 +229,14 @@ async fn test_tool_call_crud() {
     test_helpers::seed_workspace(&pool, "ws-tc", "/tmp/tc").await;
     test_helpers::seed_thread(&pool, "t-tc", "ws-tc").await;
     test_helpers::seed_run(&pool, "r-tc", "t-tc", "running", "default").await;
-    test_helpers::seed_tool_call(&pool, "tc-001", "r-tc", "t-tc", "read_file", "requested").await;
+    test_helpers::seed_tool_call(&pool, "tc-001", "r-tc", "t-tc", "read", "requested").await;
 
     let row = sqlx::query("SELECT tool_name, status FROM tool_calls WHERE id = 'tc-001'")
         .fetch_one(&pool)
         .await
         .unwrap();
 
-    assert_eq!(row.get::<String, _>("tool_name"), "read_file");
+    assert_eq!(row.get::<String, _>("tool_name"), "read");
     assert_eq!(row.get::<String, _>("status"), "requested");
 }
 
@@ -251,7 +251,7 @@ async fn test_tool_call_approval_flow() {
         "tc-appr",
         "r-appr",
         "t-appr",
-        "write_file",
+        "write",
         "waiting_approval",
     )
     .await;
@@ -287,7 +287,7 @@ async fn test_tool_call_rejection() {
         "tc-rej",
         "r-rej",
         "t-rej",
-        "run_command",
+        "shell",
         "waiting_approval",
     )
     .await;
@@ -314,7 +314,7 @@ async fn test_tool_call_completed_with_output() {
     test_helpers::seed_workspace(&pool, "ws-out", "/tmp/out").await;
     test_helpers::seed_thread(&pool, "t-out", "ws-out").await;
     test_helpers::seed_run(&pool, "r-out", "t-out", "running", "default").await;
-    test_helpers::seed_tool_call(&pool, "tc-out", "r-out", "t-out", "read_file", "running").await;
+    test_helpers::seed_tool_call(&pool, "tc-out", "r-out", "t-out", "read", "running").await;
 
     let output = r#"{"content":"fn main() {}"}"#;
     sqlx::query(
@@ -346,11 +346,11 @@ async fn test_tool_call_policy_verdict_stored() {
     test_helpers::seed_thread(&pool, "t-pv", "ws-pv").await;
     test_helpers::seed_run(&pool, "r-pv", "t-pv", "running", "default").await;
 
-    let verdict = r#"{"toolName":"write_file","verdict":{"require_approval":{"reason":"Mutating tool"}},"checkedRules":["builtin","user_deny_list","workspace_boundary"]}"#;
+    let verdict = r#"{"toolName":"write","verdict":{"require_approval":{"reason":"Mutating tool"}},"checkedRules":["builtin","user_deny_list","workspace_boundary"]}"#;
 
     sqlx::query(
         "INSERT INTO tool_calls (id, run_id, thread_id, tool_name, status, policy_verdict_json)
-         VALUES ('tc-pv', 'r-pv', 't-pv', 'write_file', 'waiting_approval', ?)",
+         VALUES ('tc-pv', 'r-pv', 't-pv', 'write', 'waiting_approval', ?)",
     )
     .bind(verdict)
     .execute(&pool)
@@ -364,7 +364,7 @@ async fn test_tool_call_policy_verdict_stored() {
 
     let v: serde_json::Value =
         serde_json::from_str(&row.get::<String, _>("policy_verdict_json")).unwrap();
-    assert_eq!(v["toolName"].as_str().unwrap(), "write_file");
+    assert_eq!(v["toolName"].as_str().unwrap(), "write");
 }
 
 // =========================================================================
@@ -384,7 +384,7 @@ async fn test_audit_event_recording() {
         "tc-audit",
         "r-audit",
         "t-audit",
-        "read_file",
+        "read",
         "completed",
     )
     .await;
@@ -429,7 +429,7 @@ async fn test_pending_tool_calls_query() {
         "tc-req",
         "r-pending",
         "t-pending",
-        "read_file",
+        "read",
         "requested",
     )
     .await;
@@ -438,7 +438,7 @@ async fn test_pending_tool_calls_query() {
         "tc-wait",
         "r-pending",
         "t-pending",
-        "write_file",
+        "write",
         "waiting_approval",
     )
     .await;
@@ -447,7 +447,7 @@ async fn test_pending_tool_calls_query() {
         "tc-run",
         "r-pending",
         "t-pending",
-        "search_repo",
+        "grep",
         "running",
     )
     .await;
@@ -456,7 +456,7 @@ async fn test_pending_tool_calls_query() {
         "tc-done",
         "r-pending",
         "t-pending",
-        "read_file",
+        "read",
         "completed",
     )
     .await;
@@ -517,7 +517,7 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
         "tc-helper-escalate",
         "r-helper-escalate",
         "t-helper-escalate",
-        "write_file",
+        "write",
         "requested",
     )
     .await;
@@ -534,7 +534,7 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
                 run_id: "r-helper-escalate".into(),
                 thread_id: "t-helper-escalate".into(),
                 tool_call_id: "tc-helper-escalate".into(),
-                tool_name: "write_file".into(),
+                tool_name: "write".into(),
                 tool_input: serde_json::json!({
                     "path": readme_path.display().to_string(),
                     "content": "updated by helper",
@@ -629,7 +629,7 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
         "tc-search-relative",
         "r-search-relative",
         "t-search-relative",
-        "search_repo",
+        "grep",
         "requested",
     )
     .await;
@@ -643,7 +643,7 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
                 run_id: "r-search-relative".into(),
                 thread_id: "t-search-relative".into(),
                 tool_call_id: "tc-search-relative".into(),
-                tool_name: "search_repo".into(),
+                tool_name: "grep".into(),
                 tool_input: serde_json::json!({
                     "query": "hello",
                     "directory": "src-tauri",
@@ -679,10 +679,10 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
             panic!("relative workspace directory should not be denied: {reason}");
         }
         ToolGatewayResult::EscalationRequired { reason, .. } => {
-            panic!("search_repo should not require approval: {reason}");
+            panic!("grep should not require approval: {reason}");
         }
         ToolGatewayResult::Cancelled { .. } => {
-            panic!("search_repo should not be cancelled");
+            panic!("grep should not be cancelled");
         }
     }
 }

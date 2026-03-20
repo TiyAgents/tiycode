@@ -13,21 +13,21 @@ pub async fn execute(
     terminal_manager: &Arc<TerminalManager>,
 ) -> Result<ToolOutput, AppError> {
     match tool_name {
-        "terminal_get_status" => {
+        "term_status" => {
             let session = terminal_manager.get_status(thread_id).await?;
             Ok(ToolOutput {
                 success: true,
                 result: serde_json::to_value(session).unwrap_or_else(|_| serde_json::json!({})),
             })
         }
-        "terminal_get_recent_output" => {
+        "term_output" => {
             let output = terminal_manager.get_recent_output(thread_id).await?;
             Ok(ToolOutput {
                 success: true,
                 result: serde_json::json!({ "output": output }),
             })
         }
-        "terminal_write_input" | "terminal_write" => {
+        "term_write" => {
             let data = input["data"]
                 .as_str()
                 .or_else(|| input["input"].as_str())
@@ -47,7 +47,7 @@ pub async fn execute(
                 result: serde_json::to_value(session).unwrap_or_else(|_| serde_json::json!({})),
             })
         }
-        "terminal_restart" => {
+        "term_restart" => {
             let cols = input["cols"].as_u64().map(|value| value as u16);
             let rows = input["rows"].as_u64().map(|value| value as u16);
             let attachment = terminal_manager.restart(thread_id, cols, rows).await?;
@@ -55,6 +55,13 @@ pub async fn execute(
                 success: true,
                 result: serde_json::to_value(attachment.attach.session)
                     .unwrap_or_else(|_| serde_json::json!({})),
+            })
+        }
+        "term_close" => {
+            terminal_manager.close(thread_id).await?;
+            Ok(ToolOutput {
+                success: true,
+                result: serde_json::json!({ "closed": true }),
             })
         }
         _ => Ok(ToolOutput {

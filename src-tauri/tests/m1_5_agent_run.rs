@@ -394,7 +394,7 @@ async fn test_run_helpers_table_persists_collapsed_helper_summary() {
             id, run_id, thread_id, helper_kind, status, model_role, provider_id, model_id,
             input_summary, output_summary
          ) VALUES (
-            'helper-1', 'r-helper', 't-helper', 'delegate_research', 'completed', 'assistant',
+            'helper-1', 'r-helper', 't-helper', 'agent_research', 'completed', 'assistant',
             'prov-helper', 'gpt-4.1-mini', 'Inspect the repository layout', 'Repository layout summarized'
          )",
     )
@@ -409,7 +409,7 @@ async fn test_run_helpers_table_persists_collapsed_helper_summary() {
     .await
     .unwrap();
 
-    assert_eq!(row.get::<String, _>("helper_kind"), "delegate_research");
+    assert_eq!(row.get::<String, _>("helper_kind"), "agent_research");
     assert_eq!(row.get::<String, _>("status"), "completed");
     assert_eq!(
         row.get::<Option<String>, _>("output_summary").unwrap(),

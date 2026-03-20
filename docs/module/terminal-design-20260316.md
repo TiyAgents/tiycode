@@ -408,10 +408,10 @@ Agent access to terminal is structured, not raw.
 
 Recommended terminal tool surface:
 
-- `terminal_get_status`
-- `terminal_get_recent_output`
-- `terminal_write_input`
-- `terminal_restart`
+- `term_status`
+- `term_output`
+- `term_write`
+- `term_restart`
 
 Do not expose:
 
@@ -439,10 +439,10 @@ terminal_list(): Promise<TerminalSessionMeta[]>
 
 Recommended agent-facing tools:
 
-- `terminal_get_status`
-- `terminal_get_recent_output`
-- `terminal_write_input`
-- `terminal_restart`
+- `term_status`
+- `term_output`
+- `term_write`
+- `term_restart`
 
 All agent-facing terminal tools are implemented in Rust and exposed to the sidecar via `ToolGateway`.
 

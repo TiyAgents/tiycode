@@ -10,8 +10,8 @@ fn sample_subagent_snapshot() -> tiy_agent_lib::core::subagent::SubagentProgress
     snapshot.total_tool_calls = 2;
     snapshot.completed_steps = 1;
     snapshot.current_action = Some("reading src-tauri/src/core/agent_session.rs".into());
-    snapshot.tool_counts.insert("read_file".into(), 1);
-    snapshot.tool_counts.insert("search_repo".into(), 1);
+    snapshot.tool_counts.insert("read".into(), 1);
+    snapshot.tool_counts.insert("grep".into(), 1);
     snapshot.recent_actions = vec![
         "Started reading src-tauri/src/core/agent_session.rs".into(),
         "Finished reading src-tauri/src/core/agent_session.rs".into(),
@@ -78,14 +78,14 @@ fn test_thread_stream_event_approval_required_serialization() {
     let event = ThreadStreamEvent::ApprovalRequired {
         run_id: "run-1".into(),
         tool_call_id: "tc-1".into(),
-        tool_name: "write_file".into(),
+        tool_name: "write".into(),
         tool_input: serde_json::json!({"path": "/src/lib.rs", "content": "// new"}),
         reason: "Mutating tool requires approval".into(),
     };
 
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "approval_required");
-    assert_eq!(json["tool_name"].as_str().unwrap(), "write_file");
+    assert_eq!(json["tool_name"].as_str().unwrap(), "write");
     assert_eq!(
         json["reason"].as_str().unwrap(),
         "Mutating tool requires approval"
@@ -182,13 +182,13 @@ fn test_thread_stream_event_tool_requested_serialization() {
     let event = ThreadStreamEvent::ToolRequested {
         run_id: "run-1".into(),
         tool_call_id: "tc-1".into(),
-        tool_name: "search_repo".into(),
+        tool_name: "grep".into(),
         tool_input: serde_json::json!({"query": "TODO"}),
     };
 
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "tool_requested");
-    assert_eq!(json["tool_name"].as_str().unwrap(), "search_repo");
+    assert_eq!(json["tool_name"].as_str().unwrap(), "grep");
 }
 
 #[test]

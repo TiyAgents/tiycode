@@ -18,7 +18,7 @@ It is not yet a semantic vector platform. That can come later.
 
 - provide fast workspace-scoped file discovery
 - avoid overbuilding a custom indexing engine before product demand exists
-- support `search_repo` and related context retrieval tools
+- support `grep` and related context retrieval tools
 - provide a cached project tree view for UI consumers
 - leave a clean extension path for semantic retrieval later
 
@@ -34,7 +34,7 @@ It is not yet a semantic vector platform. That can come later.
 The technical architecture explicitly assigns index construction and repository search to Rust. The system needs indexing for three reasons:
 
 1. the project drawer should not repeatedly walk large directories from the UI
-2. tool calls such as `search_repo` need efficient repository search
+2. tool calls such as `grep` need efficient repository search
 3. future context selection should not rely on brute-force file reads
 
 This makes `IndexManager` a shared internal service for both product UI and agent tooling.
@@ -91,7 +91,7 @@ flowchart LR
   IM --> WM["WorkspaceManager"]
   IM --> FS["Workspace Filesystem"]
   IM --> DB["SQLite / index tables"]
-  IM --> TG["ToolGateway search_repo executor"]
+  IM --> TG["ToolGateway grep executor"]
   ARM["AgentRunManager"] --> TG
 ```
 
@@ -121,7 +121,7 @@ Implementation direction:
 
 Used by:
 
-- `search_repo`
+- `grep`
 - context discovery
 
 ### Layer 3: Activity Signals
@@ -184,7 +184,7 @@ V1 does not require a sophisticated watcher or a persistent content inverted ind
 
 ### Search Semantics
 
-`search_repo` should support:
+`grep` should support:
 
 - plain text matching
 - path filtering
@@ -223,7 +223,7 @@ Important rule:
 3. if cold, Rust returns partial tree or loading state
 4. background scan completes and sends updates
 
-### `search_repo` Tool Call
+### `grep` Tool Call
 
 1. sidecar requests repository search through `ToolGateway`
 2. search executor queries `IndexManager`
