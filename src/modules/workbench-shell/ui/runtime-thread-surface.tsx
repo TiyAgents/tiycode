@@ -3,6 +3,12 @@
 import type { ChatStatus } from "ai";
 import { AlertCircleIcon, BotIcon, ChevronDownIcon, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  CompactCollapsible,
+  CompactCollapsibleContent,
+  CompactCollapsibleFootnote,
+  CompactCollapsibleHeader,
+} from "@/components/ai-elements/compact-collapsible";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Plan, PlanContent, PlanDescription, PlanHeader, PlanTitle, PlanTrigger } from "@/components/ai-elements/plan";
@@ -29,7 +35,6 @@ import type {
   ToolCallDto,
 } from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
-import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/shared/ui/collapsible";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
@@ -513,10 +518,81 @@ function formatHelperSummary(helper: SurfaceHelperEntry) {
   ].filter(Boolean).join(" · ");
 }
 
+function formatHelperStatusLabel(status: SurfaceHelperEntry["status"]) {
+  switch (status) {
+    case "completed":
+      return "done";
+    case "failed":
+      return "failed";
+    default:
+      return "running";
+  }
+}
+
 function formatHelperToolCounts(toolCounts: Record<string, number>) {
   return Object.entries(toolCounts ?? {})
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .map(([toolName, count]) => `${toolName} ${count}`);
+}
+
+function getHelperElapsedSeconds(
+  helper: SurfaceHelperEntry,
+  now = Date.now(),
+) {
+  const startedAt = new Date(helper.startedAt).getTime();
+  const finishedAt = helper.finishedAt ? new Date(helper.finishedAt).getTime() : now;
+
+  if (Number.isNaN(startedAt) || Number.isNaN(finishedAt) || finishedAt < startedAt) {
+    return null;
+  }
+
+  return (finishedAt - startedAt) / 1000;
+}
+
+function formatElapsedSeconds(seconds: number | null) {
+  if (seconds === null) {
+    return null;
+  }
+
+  return `${seconds.toFixed(1)}s elapsed`;
+}
+
+function formatCompactNumber(value: number) {
+  return new Intl.NumberFormat("en", {
+    maximumFractionDigits: 1,
+    notation: "compact",
+  }).format(value);
+}
+
+type HelperExecutionSummaryMetrics = {
+  elapsedText?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  toolUses?: number | null;
+};
+
+function formatExecutionSummary({
+  elapsedText,
+  inputTokens,
+  outputTokens,
+  toolUses,
+}: HelperExecutionSummaryMetrics) {
+  const fragments = [
+    typeof toolUses === "number" && toolUses > 0
+      ? `${toolUses} tool use${toolUses === 1 ? "" : "s"}`
+      : null,
+    elapsedText ?? null,
+    typeof inputTokens === "number" && inputTokens > 0
+      ? `input tokens ${formatCompactNumber(inputTokens)}`
+      : null,
+    typeof outputTokens === "number" && outputTokens > 0
+      ? `output tokens ${formatCompactNumber(outputTokens)}`
+      : null,
+  ].filter(Boolean);
+
+  return fragments.length > 0
+    ? `Execution Summary: ${fragments.join(", ")}`
+    : null;
 }
 
 function isHelperOwnedTool(
@@ -654,6 +730,7 @@ export function RuntimeThreadSurface({
   const [composerError, setComposerError] = useState<string | null>(null);
   const [composerValue, setComposerValue] = useState("");
   const [helpers, setHelpers] = useState<Array<SurfaceHelperEntry>>([]);
+  const [helperOpen, setHelperOpen] = useState<Record<string, boolean>>({});
   const [isLoading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
@@ -667,6 +744,7 @@ export function RuntimeThreadSurface({
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
   const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});
   const [completedToolGroupOpen, setCompletedToolGroupOpen] = useState<Record<string, boolean>>({});
+  const previousHelperStatusesRef = useRef<Record<string, SurfaceHelperEntry["status"]>>({});
   const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
   const snapshotLoadRequestRef = useRef(0);
   const streamRef = useRef<ThreadStream | null>(null);
@@ -1310,6 +1388,50 @@ export function RuntimeThreadSurface({
   }, [visibleTools]);
 
   useEffect(() => {
+    const previousHelperStatuses = previousHelperStatusesRef.current;
+    const nextHelperStatuses = Object.fromEntries(
+      helpers.map((helper) => [helper.id, helper.status]),
+    );
+
+    setHelperOpen((current) => {
+      const next: Record<string, boolean> = {};
+
+      for (const helper of helpers) {
+        const previousStatus = previousHelperStatuses[helper.id];
+        const preferredOpen = helper.status !== "completed";
+
+        if (previousStatus !== helper.status) {
+          next[helper.id] = preferredOpen;
+          continue;
+        }
+
+        if (helper.id in current) {
+          next[helper.id] = current[helper.id];
+          continue;
+        }
+
+        next[helper.id] = preferredOpen;
+      }
+
+      const currentKeys = Object.keys(current);
+      const nextKeys = Object.keys(next);
+      if (currentKeys.length !== nextKeys.length) {
+        return next;
+      }
+
+      for (const key of nextKeys) {
+        if (current[key] !== next[key]) {
+          return next;
+        }
+      }
+
+      return current;
+    });
+
+    previousHelperStatusesRef.current = nextHelperStatuses;
+  }, [helpers]);
+
+  useEffect(() => {
     const nextGroupKeys = new Set(
       presentationEntries
         .filter((entry): entry is Extract<TimelinePresentationEntry, { kind: "tool-group" }> => entry.kind === "tool-group")
@@ -1341,6 +1463,10 @@ export function RuntimeThreadSurface({
 
   const handleCompletedToolGroupOpenChange = useCallback((groupId: string, open: boolean) => {
     setCompletedToolGroupOpen((current) => (current[groupId] === open ? current : { ...current, [groupId]: open }));
+  }, []);
+
+  const handleHelperOpenChange = useCallback((helperId: string, open: boolean) => {
+    setHelperOpen((current) => (current[helperId] === open ? current : { ...current, [helperId]: open }));
   }, []);
 
   const renderToolEntry = useCallback((tool: SurfaceToolEntry, key: string, inset = false) => (
@@ -1507,67 +1633,65 @@ export function RuntimeThreadSurface({
 
               if (entry.kind === "helper") {
                 const { helper } = entry;
+                const helperSummary = formatHelperSummary(helper);
+                const helperToolCounts = formatHelperToolCounts(helper.toolCounts);
+                const executionSummary = formatExecutionSummary({
+                  elapsedText: formatElapsedSeconds(getHelperElapsedSeconds(helper)),
+                  toolUses: helper.totalToolCalls,
+                });
                 return (
                   <Message className="max-w-full" from="assistant" key={entry.key}>
                     <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                      <Collapsible
-                        className="rounded-2xl border border-app-border/24 bg-app-surface/16 shadow-none"
-                        defaultOpen={helper.status !== "completed"}
+                      <CompactCollapsible
+                        onOpenChange={(open) => handleHelperOpenChange(helper.id, open)}
+                        open={helperOpen[helper.id] ?? helper.status !== "completed"}
                       >
-                        <CollapsibleTrigger
-                          className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-app-surface/20"
-                        >
-                          <BotIcon
-                            className={cn(
-                              "mt-0.5 size-4 shrink-0",
-                              helper.status === "failed"
-                                ? "text-app-danger"
-                                : helper.status === "completed"
-                                  ? "text-app-success"
-                                  : "text-app-info",
-                            )}
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p
+                        <CompactCollapsibleHeader
+                          className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground"
+                          trailing={
+                            <span
                               className={cn(
-                                "truncate text-sm text-app-foreground",
-                                helper.status === "completed" ? "text-app-foreground" : undefined,
+                                "shrink-0 text-xs",
+                                helper.status === "failed"
+                                  ? "text-app-danger"
+                                  : helper.status === "completed"
+                                    ? "text-app-subtle"
+                                    : "text-app-info",
                               )}
-                              title={formatHelperSummary(helper)}
                             >
-                              {formatHelperSummary(helper)}
-                            </p>
+                              {formatHelperStatusLabel(helper.status)}
+                            </span>
+                          }
+                        >
+                          <div className="flex min-w-0 items-start gap-3">
+                            <BotIcon
+                              className={cn(
+                                "mt-0.5 size-4 shrink-0",
+                                helper.status === "failed"
+                                  ? "text-app-danger"
+                                  : helper.status === "completed"
+                                    ? "text-app-subtle"
+                                    : "text-app-info",
+                              )}
+                            />
+                            <span
+                              className="truncate text-app-foreground text-sm"
+                              title={helperSummary}
+                            >
+                              {helperSummary}
+                            </span>
                           </div>
-                          <Badge
-                            className={cn(
-                              "shrink-0 rounded-full",
-                              helper.status === "failed"
-                                ? "bg-app-danger/10 text-app-danger"
-                                : helper.status === "completed"
-                                  ? "bg-app-success/10 text-app-success"
-                                  : "bg-app-info/10 text-app-info",
-                            )}
-                            variant="outline"
-                          >
-                            {helper.status}
-                          </Badge>
-                          <ChevronDownIcon className="mt-0.5 size-4 shrink-0 text-app-subtle transition-transform data-[state=open]:rotate-180" />
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="border-t border-app-border/18 px-4 py-3 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:animate-in data-[state=open]:slide-in-from-top-2">
+                        </CompactCollapsibleHeader>
+                        <CompactCollapsibleContent className="pl-7">
                           <div className="max-h-40 space-y-2 overflow-y-auto pr-3">
-                            {formatHelperToolCounts(helper.toolCounts).length > 0 ? (
+                            {helperToolCounts.length > 0 ? (
                               <p className="whitespace-pre-wrap break-words text-xs text-app-subtle">
-                                {formatHelperToolCounts(helper.toolCounts).join(" · ")}
+                                {helperToolCounts.join(" · ")}
                               </p>
                             ) : null}
                             {helper.totalToolCalls > 0 && helper.status !== "completed" ? (
                               <p className="text-xs text-app-subtle">
                                 {`${helper.completedSteps} of ${formatToolCallCount(helper.totalToolCalls)} finished`}
-                              </p>
-                            ) : null}
-                            {helper.inputSummary ? (
-                              <p className="whitespace-pre-wrap break-words text-sm text-app-muted">
-                                {helper.inputSummary}
                               </p>
                             ) : null}
                             {helper.currentAction ? (
@@ -1603,8 +1727,13 @@ export function RuntimeThreadSurface({
                               </p>
                             ) : null}
                           </div>
-                        </CollapsibleContent>
-                      </Collapsible>
+                        </CompactCollapsibleContent>
+                        {executionSummary ? (
+                          <CompactCollapsibleFootnote className="pl-7">
+                            {executionSummary}
+                          </CompactCollapsibleFootnote>
+                        ) : null}
+                      </CompactCollapsible>
                     </MessageContent>
                   </Message>
                 );
