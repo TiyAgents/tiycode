@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::core::subagent::{SubagentActivityStatus, SubagentProgressSnapshot};
 use crate::model::git::GitSnapshotDto;
 use crate::model::terminal::{TerminalSessionDto, TerminalSessionStatus};
+use crate::model::thread::RunUsageDto;
 
 /// Events sent to the frontend for a specific thread.
 /// Consumed by the ThreadStream adapter which maps them to AI Elements.
@@ -52,6 +53,13 @@ pub enum ThreadStreamEvent {
         started_at: String,
         activity: SubagentActivityStatus,
         message: String,
+        snapshot: SubagentProgressSnapshot,
+    },
+    SubagentUsageUpdated {
+        run_id: String,
+        subtask_id: String,
+        helper_kind: String,
+        started_at: String,
         snapshot: SubagentProgressSnapshot,
     },
     SubagentCompleted {
@@ -106,6 +114,12 @@ pub enum ThreadStreamEvent {
         run_id: String,
         thread_id: String,
         title: String,
+    },
+    ThreadUsageUpdated {
+        run_id: String,
+        model_display_name: Option<String>,
+        context_window: Option<String>,
+        usage: RunUsageDto,
     },
     RunCompleted {
         run_id: String,

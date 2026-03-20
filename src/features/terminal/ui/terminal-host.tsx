@@ -36,6 +36,7 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
   const isReplayingRef = useRef(false);
   const [geometry, setGeometry] = useState({ cols: 120, rows: 36 });
   const [isTerminalReady, setTerminalReady] = useState(false);
+  const [isGeometrySettled, setGeometrySettled] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current || terminalRef.current) {
@@ -87,9 +88,25 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
     };
   }, []);
 
+  useEffect(() => {
+    if (!active || !isTerminalReady) {
+      setGeometrySettled(false);
+      return;
+    }
+
+    setGeometrySettled(false);
+    const timeoutId = window.setTimeout(() => {
+      setGeometrySettled(true);
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [active, geometry.cols, geometry.rows, isTerminalReady]);
+
   const terminalApi = useThreadTerminal({
     threadId,
-    active: active && isTerminalReady,
+    active: active && isTerminalReady && isGeometrySettled,
     cols: geometry.cols,
     rows: geometry.rows,
     onReplay: (replay) => {

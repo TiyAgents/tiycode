@@ -1,9 +1,10 @@
 use chrono::Utc;
 use sqlx::QueryBuilder;
 use sqlx::SqlitePool;
+use tiy_core::types::Usage;
 
 use crate::model::errors::AppError;
-use crate::model::thread::RunHelperDto;
+use crate::model::thread::{RunHelperDto, RunUsageDto};
 
 #[derive(sqlx::FromRow)]
 struct RunHelperRow {
@@ -18,6 +19,11 @@ struct RunHelperRow {
     error_summary: Option<String>,
     started_at: String,
     finished_at: Option<String>,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read_tokens: i64,
+    cache_write_tokens: i64,
+    total_tokens: i64,
 }
 
 impl RunHelperRow {
@@ -34,6 +40,13 @@ impl RunHelperRow {
             error_summary: self.error_summary,
             started_at: self.started_at,
             finished_at: self.finished_at,
+            usage: RunUsageDto {
+                input_tokens: self.input_tokens.max(0) as u64,
+                output_tokens: self.output_tokens.max(0) as u64,
+                cache_read_tokens: self.cache_read_tokens.max(0) as u64,
+                cache_write_tokens: self.cache_write_tokens.max(0) as u64,
+                total_tokens: self.total_tokens.max(0) as u64,
+            },
         }
     }
 }
@@ -80,15 +93,23 @@ pub async fn mark_completed(
     pool: &SqlitePool,
     id: &str,
     output_summary: &str,
+    usage: &Usage,
 ) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "UPDATE run_helpers
-         SET status = 'completed', output_summary = ?, finished_at = ?
+         SET status = 'completed', output_summary = ?, finished_at = ?,
+             input_tokens = ?, output_tokens = ?, cache_read_tokens = ?,
+             cache_write_tokens = ?, total_tokens = ?
          WHERE id = ?",
     )
     .bind(output_summary)
     .bind(&now)
+    .bind(i64::try_from(usage.input).unwrap_or(i64::MAX))
+    .bind(i64::try_from(usage.output).unwrap_or(i64::MAX))
+    .bind(i64::try_from(usage.cache_read).unwrap_or(i64::MAX))
+    .bind(i64::try_from(usage.cache_write).unwrap_or(i64::MAX))
+    .bind(i64::try_from(usage.total_tokens).unwrap_or(i64::MAX))
     .bind(id)
     .execute(pool)
     .await?;
@@ -130,7 +151,8 @@ pub async fn list_by_run_ids(
 
     let mut query = QueryBuilder::new(
         "SELECT id, run_id, thread_id, helper_kind, parent_tool_call_id, status,
-                input_summary, output_summary, error_summary, started_at, finished_at
+                input_summary, output_summary, error_summary, started_at, finished_at,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens
          FROM run_helpers
          WHERE run_id IN (",
     );

@@ -4,8 +4,8 @@ use std::sync::Mutex as StdMutex;
 
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tiy_core::agent::{Agent, AgentMessage, AgentToolResult, ToolExecutionMode};
-use tiy_core::types::{ContentBlock, TextContent};
+use tiy_core::agent::{Agent, AgentEvent, AgentMessage, AgentToolResult, ToolExecutionMode};
+use tiy_core::types::{ContentBlock, TextContent, Usage};
 use tokio::sync::Mutex;
 
 use crate::core::agent_session::ResolvedModelRole;
@@ -16,6 +16,7 @@ use crate::core::tool_gateway::{
 };
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
+use crate::model::thread::RunUsageDto;
 use crate::persistence::repo::{run_helper_repo, tool_call_repo};
 
 const MAX_RECENT_ACTIONS: usize = 5;
@@ -53,6 +54,7 @@ pub struct SubagentProgressSnapshot {
     pub current_action: Option<String>,
     pub tool_counts: BTreeMap<String, u32>,
     pub recent_actions: Vec<String>,
+    pub usage: RunUsageDto,
 }
 
 pub struct HelperAgentOrchestrator {
@@ -114,6 +116,10 @@ impl HelperAgentOrchestrator {
             started_at: helper_started_at.clone(),
             snapshot: snapshot_from_progress(&progress_state),
         });
+
+        let helper_context_window = request.model_role.model.context_window.to_string();
+        let helper_model_display_name = request.model_role.model_name.clone();
+        let last_usage = Arc::new(StdMutex::new(None::<Usage>));
 
         let agent = Arc::new(Agent::with_model(request.model_role.model.clone()));
         agent.set_system_prompt(format!(
@@ -340,12 +346,36 @@ Reference specific file paths and code locations where relevant. Skip preamble."
                 .push(Arc::clone(&agent));
         }
 
+        let helper_run_id_for_usage = request.run_id.clone();
+        let helper_id_for_usage = helper_id.clone();
+        let helper_kind_for_usage = resolved_helper_kind.clone();
+        let helper_started_at_for_usage = helper_started_at.clone();
+        let helper_event_tx_for_usage = request.event_tx.clone();
+        let progress_state_for_usage = Arc::clone(&progress_state);
+        let last_usage_ref = Arc::clone(&last_usage);
+        let unsubscribe = agent.subscribe(move |event| {
+            handle_helper_agent_event(
+                &helper_run_id_for_usage,
+                &helper_id_for_usage,
+                &helper_kind_for_usage,
+                &helper_started_at_for_usage,
+                &helper_event_tx_for_usage,
+                &progress_state_for_usage,
+                &last_usage_ref,
+                &helper_context_window,
+                &helper_model_display_name,
+                event,
+            );
+        });
+
         let result = agent.prompt(request.task.clone()).await;
+        unsubscribe();
         self.remove_helper(&request.run_id, &agent).await;
 
         if let Some(summary) = take_escalation_summary(&escalation_summary) {
             let snapshot = snapshot_from_progress(&progress_state);
-            run_helper_repo::mark_completed(&self.pool, &helper_id, &summary).await?;
+            run_helper_repo::mark_completed(&self.pool, &helper_id, &summary, &Usage::default())
+                .await?;
 
             let _ = request.event_tx.send(ThreadStreamEvent::SubagentCompleted {
                 run_id: request.run_id,
@@ -363,9 +393,13 @@ Reference specific file paths and code locations where relevant. Skip preamble."
             Ok(messages) => {
                 let summary = extract_summary(&messages)
                     .unwrap_or_else(|| "Helper completed without a textual summary.".to_string());
+                let usage = extract_usage(&messages).unwrap_or_default();
+                if let Ok(mut progress) = progress_state.lock() {
+                    progress.record_usage(&usage);
+                }
                 let snapshot = snapshot_from_progress(&progress_state);
 
-                run_helper_repo::mark_completed(&self.pool, &helper_id, &summary).await?;
+                run_helper_repo::mark_completed(&self.pool, &helper_id, &summary, &usage).await?;
 
                 let _ = request.event_tx.send(ThreadStreamEvent::SubagentCompleted {
                     run_id: request.run_id,
@@ -455,6 +489,10 @@ impl SubagentProgressState {
             self.snapshot.recent_actions.drain(0..overflow);
         }
     }
+
+    fn record_usage(&mut self, usage: &Usage) {
+        self.snapshot.usage = RunUsageDto::from(*usage);
+    }
 }
 
 fn snapshot_from_progress(
@@ -464,6 +502,117 @@ fn snapshot_from_progress(
         .lock()
         .map(|state| state.snapshot.clone())
         .unwrap_or_default()
+}
+
+fn handle_helper_agent_event(
+    run_id: &str,
+    subtask_id: &str,
+    helper_kind: &str,
+    started_at: &str,
+    event_tx: &tokio::sync::mpsc::UnboundedSender<ThreadStreamEvent>,
+    progress_state: &Arc<StdMutex<SubagentProgressState>>,
+    last_usage: &StdMutex<Option<Usage>>,
+    context_window: &str,
+    model_display_name: &str,
+    event: &AgentEvent,
+) {
+    match event {
+        AgentEvent::MessageUpdate {
+            assistant_event, ..
+        } => {
+            if let Some(partial) = assistant_event.partial_message() {
+                emit_subagent_usage_update_if_changed(
+                    run_id,
+                    subtask_id,
+                    helper_kind,
+                    started_at,
+                    event_tx,
+                    progress_state,
+                    last_usage,
+                    &partial.usage,
+                    context_window,
+                    model_display_name,
+                );
+            }
+        }
+        AgentEvent::MessageEnd { message } => {
+            if let AgentMessage::Assistant(assistant) = message {
+                emit_subagent_usage_update_if_changed(
+                    run_id,
+                    subtask_id,
+                    helper_kind,
+                    started_at,
+                    event_tx,
+                    progress_state,
+                    last_usage,
+                    &assistant.usage,
+                    context_window,
+                    model_display_name,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_subagent_usage_update_if_changed(
+    run_id: &str,
+    subtask_id: &str,
+    helper_kind: &str,
+    started_at: &str,
+    event_tx: &tokio::sync::mpsc::UnboundedSender<ThreadStreamEvent>,
+    progress_state: &Arc<StdMutex<SubagentProgressState>>,
+    last_usage: &StdMutex<Option<Usage>>,
+    usage: &Usage,
+    _context_window: &str,
+    _model_display_name: &str,
+) {
+    let should_emit = if let Ok(mut previous_usage) = last_usage.lock() {
+        if previous_usage.as_ref() == Some(usage) {
+            return;
+        }
+
+        if usage.total_tokens == 0
+            && usage.input == 0
+            && usage.output == 0
+            && usage.cache_read == 0
+            && usage.cache_write == 0
+        {
+            return;
+        }
+
+        *previous_usage = Some(*usage);
+        true
+    } else {
+        usage.total_tokens > 0
+            || usage.input > 0
+            || usage.output > 0
+            || usage.cache_read > 0
+            || usage.cache_write > 0
+    };
+
+    if !should_emit {
+        return;
+    }
+
+    let snapshot = if let Ok(mut progress) = progress_state.lock() {
+        progress.record_usage(usage);
+        progress.snapshot.clone()
+    } else {
+        SubagentProgressSnapshot {
+            usage: RunUsageDto::from(*usage),
+            ..SubagentProgressSnapshot::default()
+        }
+    };
+
+    let _ = event_tx.send(ThreadStreamEvent::SubagentUsageUpdated {
+        run_id: run_id.to_string(),
+        subtask_id: subtask_id.to_string(),
+        helper_kind: helper_kind.to_string(),
+        started_at: started_at.to_string(),
+        snapshot,
+    });
 }
 
 fn emit_subagent_progress<F>(
@@ -586,6 +735,13 @@ fn extract_summary(messages: &[AgentMessage]) -> Option<String> {
                 Some(text)
             }
         }
+        _ => None,
+    })
+}
+
+fn extract_usage(messages: &[AgentMessage]) -> Option<Usage> {
+    messages.iter().rev().find_map(|message| match message {
+        AgentMessage::Assistant(message) => Some(message.usage),
         _ => None,
     })
 }

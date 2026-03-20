@@ -277,6 +277,17 @@ impl AgentRunManager {
             | ThreadStreamEvent::SubagentFailed { .. } => {
                 run_repo::update_status(&self.pool, run_id, "running").await?;
             }
+            ThreadStreamEvent::ThreadUsageUpdated { usage, .. } => {
+                let usage = tiy_core::types::Usage {
+                    input: usage.input_tokens,
+                    output: usage.output_tokens,
+                    cache_read: usage.cache_read_tokens,
+                    cache_write: usage.cache_write_tokens,
+                    total_tokens: usage.total_tokens,
+                    cost: tiy_core::types::UsageCost::default(),
+                };
+                run_repo::update_usage(&self.pool, run_id, &usage).await?;
+            }
             ThreadStreamEvent::RunCompleted { .. } => {
                 self.finish_run(run_id, "completed", None).await?;
             }
@@ -844,6 +855,7 @@ fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> bool {
         event,
         ThreadStreamEvent::RunStarted { .. }
             | ThreadStreamEvent::ReasoningUpdated { .. }
+            | ThreadStreamEvent::ThreadUsageUpdated { .. }
             | ThreadStreamEvent::RunCompleted { .. }
             | ThreadStreamEvent::RunFailed { .. }
             | ThreadStreamEvent::RunCancelled { .. }

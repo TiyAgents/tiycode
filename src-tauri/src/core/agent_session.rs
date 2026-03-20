@@ -21,7 +21,7 @@ use crate::core::tool_gateway::{
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::AgentProfileRecord;
-use crate::model::thread::MessageRecord;
+use crate::model::thread::{MessageRecord, RunUsageDto};
 use crate::persistence::repo::{message_repo, profile_repo, provider_repo, tool_call_repo};
 
 const MESSAGE_HISTORY_LIMIT: i64 = 200;
@@ -185,12 +185,22 @@ impl AgentSession {
     async fn run(self: Arc<Self>) {
         let current_message_id = Arc::new(StdMutex::new(None::<String>));
         let current_reasoning_message_id = Arc::new(StdMutex::new(None::<String>));
+        let last_usage = Arc::new(StdMutex::new(None::<Usage>));
         let reasoning_buffer = Arc::new(StdMutex::new(String::new()));
         let run_id = self.spec.run_id.clone();
         let event_tx = self.event_tx.clone();
+        let context_window = self
+            .spec
+            .model_plan
+            .primary
+            .model
+            .context_window
+            .to_string();
+        let model_display_name = self.spec.model_plan.primary.model_name.clone();
 
         let message_id_ref = Arc::clone(&current_message_id);
         let reasoning_message_id_ref = Arc::clone(&current_reasoning_message_id);
+        let last_usage_ref = Arc::clone(&last_usage);
         let reasoning_ref = Arc::clone(&reasoning_buffer);
         let unsubscribe = self.agent.subscribe(move |event| {
             handle_agent_event(
@@ -198,7 +208,10 @@ impl AgentSession {
                 &event_tx,
                 &message_id_ref,
                 &reasoning_message_id_ref,
+                &last_usage_ref,
                 &reasoning_ref,
+                &context_window,
+                &model_display_name,
                 event,
             );
         });
@@ -543,68 +556,100 @@ fn handle_agent_event(
     event_tx: &mpsc::UnboundedSender<ThreadStreamEvent>,
     current_message_id: &StdMutex<Option<String>>,
     current_reasoning_message_id: &StdMutex<Option<String>>,
+    last_usage: &StdMutex<Option<Usage>>,
     reasoning_buffer: &StdMutex<String>,
+    context_window: &str,
+    model_display_name: &str,
     event: &tiy_core::agent::AgentEvent,
 ) {
     match event {
         tiy_core::agent::AgentEvent::MessageUpdate {
             assistant_event, ..
-        } => match assistant_event.as_ref() {
-            AssistantMessageEvent::TextDelta { delta, .. } => {
-                let message_id = ensure_message_id(current_message_id);
-                let _ = event_tx.send(ThreadStreamEvent::MessageDelta {
-                    run_id: run_id.to_string(),
-                    message_id,
-                    delta: delta.clone(),
-                });
-            }
-            AssistantMessageEvent::ThinkingStart { .. } => {
-                reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
-            }
-            AssistantMessageEvent::ThinkingDelta { delta, .. } => {
-                if let Ok(mut buffer) = reasoning_buffer.lock() {
-                    buffer.push_str(delta);
+        } => {
+            match assistant_event.as_ref() {
+                AssistantMessageEvent::TextDelta { delta, .. } => {
+                    let message_id = ensure_message_id(current_message_id);
+                    let _ = event_tx.send(ThreadStreamEvent::MessageDelta {
+                        run_id: run_id.to_string(),
+                        message_id,
+                        delta: delta.clone(),
+                    });
+                }
+                AssistantMessageEvent::ThinkingStart { .. } => {
+                    reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
+                }
+                AssistantMessageEvent::ThinkingDelta { delta, .. } => {
+                    if let Ok(mut buffer) = reasoning_buffer.lock() {
+                        buffer.push_str(delta);
+                        let message_id = ensure_message_id(current_reasoning_message_id);
+                        let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
+                            run_id: run_id.to_string(),
+                            message_id,
+                            reasoning: buffer.clone(),
+                        });
+                    }
+                }
+                AssistantMessageEvent::ThinkingEnd { content, .. } => {
+                    let reasoning = if let Ok(mut buffer) = reasoning_buffer.lock() {
+                        buffer.clear();
+                        buffer.push_str(content);
+                        buffer.clone()
+                    } else {
+                        content.clone()
+                    };
+
+                    if reasoning.trim().is_empty() {
+                        reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
+                        return;
+                    }
+
                     let message_id = ensure_message_id(current_reasoning_message_id);
                     let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
                         run_id: run_id.to_string(),
                         message_id,
-                        reasoning: buffer.clone(),
+                        reasoning,
                     });
-                }
-            }
-            AssistantMessageEvent::ThinkingEnd { content, .. } => {
-                let reasoning = if let Ok(mut buffer) = reasoning_buffer.lock() {
-                    buffer.clear();
-                    buffer.push_str(content);
-                    buffer.clone()
-                } else {
-                    content.clone()
-                };
-
-                if reasoning.trim().is_empty() {
                     reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
-                    return;
                 }
-
-                let message_id = ensure_message_id(current_reasoning_message_id);
-                let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
-                    run_id: run_id.to_string(),
-                    message_id,
-                    reasoning,
-                });
-                reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
+                _ => {}
             }
-            _ => {}
-        },
+
+            if let Some(partial) = assistant_event.partial_message() {
+                emit_usage_update_if_changed(
+                    run_id,
+                    event_tx,
+                    last_usage,
+                    &partial.usage,
+                    context_window,
+                    model_display_name,
+                );
+            }
+        }
         tiy_core::agent::AgentEvent::MessageEnd { message } => {
             if let AgentMessage::Assistant(assistant) = message {
                 let content = assistant.text_content();
                 if content.is_empty() && assistant.has_tool_calls() {
+                    emit_usage_update_if_changed(
+                        run_id,
+                        event_tx,
+                        last_usage,
+                        &assistant.usage,
+                        context_window,
+                        model_display_name,
+                    );
                     reset_message_id(current_message_id);
                     reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
                     return;
                 }
 
+                emit_usage_update_if_changed(
+                    run_id,
+                    event_tx,
+                    last_usage,
+                    &assistant.usage,
+                    context_window,
+                    model_display_name,
+                );
                 let message_id = take_or_create_message_id(current_message_id);
                 let _ = event_tx.send(ThreadStreamEvent::MessageCompleted {
                     run_id: run_id.to_string(),
@@ -617,6 +662,50 @@ fn handle_agent_event(
         }
         _ => {}
     }
+}
+
+fn emit_usage_update_if_changed(
+    run_id: &str,
+    event_tx: &mpsc::UnboundedSender<ThreadStreamEvent>,
+    last_usage: &StdMutex<Option<Usage>>,
+    usage: &Usage,
+    context_window: &str,
+    model_display_name: &str,
+) {
+    let should_emit = if let Ok(mut previous_usage) = last_usage.lock() {
+        if previous_usage.as_ref() == Some(usage) {
+            return;
+        }
+
+        if usage.total_tokens == 0
+            && usage.input == 0
+            && usage.output == 0
+            && usage.cache_read == 0
+            && usage.cache_write == 0
+        {
+            return;
+        }
+
+        *previous_usage = Some(*usage);
+        true
+    } else {
+        usage.total_tokens > 0
+            || usage.input > 0
+            || usage.output > 0
+            || usage.cache_read > 0
+            || usage.cache_write > 0
+    };
+
+    if !should_emit {
+        return;
+    }
+
+    let _ = event_tx.send(ThreadStreamEvent::ThreadUsageUpdated {
+        run_id: run_id.to_string(),
+        model_display_name: Some(model_display_name.to_string()),
+        context_window: Some(context_window.to_string()),
+        usage: RunUsageDto::from(*usage),
+    });
 }
 
 fn ensure_message_id(current_message_id: &StdMutex<Option<String>>) -> String {
@@ -1175,18 +1264,20 @@ mod tests {
     use super::{
         build_profile_response_prompt_parts, handle_agent_event,
         normalize_profile_response_language, normalize_profile_response_style,
-        response_style_system_instruction, runtime_security_config,
-        standard_tool_timeout, ProfileResponseStyle, STANDARD_TOOL_TIMEOUT_SECS,
-        SUBAGENT_TOOL_TIMEOUT_SECS,
+        response_style_system_instruction, runtime_security_config, standard_tool_timeout,
+        ProfileResponseStyle, STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::sync::Mutex as StdMutex;
 
-    use tokio::sync::mpsc;
     use tiy_core::agent::{AgentEvent, AgentMessage};
     use tiy_core::types::{Api, AssistantMessage, AssistantMessageEvent, Provider};
+    use tokio::sync::mpsc;
 
     use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::AgentProfileRecord;
+
+    const TEST_CONTEXT_WINDOW: &str = "128000";
+    const TEST_MODEL_DISPLAY_NAME: &str = "GPT Test";
 
     fn sample_profile() -> AgentProfileRecord {
         AgentProfileRecord {
@@ -1214,6 +1305,28 @@ mod tests {
             .model("gpt-test")
             .build()
             .expect("partial assistant message")
+    }
+
+    fn handle_test_agent_event(
+        run_id: &str,
+        event_tx: &mpsc::UnboundedSender<ThreadStreamEvent>,
+        current_message_id: &StdMutex<Option<String>>,
+        current_reasoning_message_id: &StdMutex<Option<String>>,
+        last_usage: &StdMutex<Option<tiy_core::types::Usage>>,
+        reasoning_buffer: &StdMutex<String>,
+        event: &AgentEvent,
+    ) {
+        handle_agent_event(
+            run_id,
+            event_tx,
+            current_message_id,
+            current_reasoning_message_id,
+            last_usage,
+            reasoning_buffer,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            event,
+        );
     }
 
     #[test]
@@ -1280,14 +1393,16 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let current_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiy_core::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let partial = sample_partial_assistant_message();
 
-        handle_agent_event(
+        handle_test_agent_event(
             "run-1",
             &event_tx,
             &current_message_id,
             &current_reasoning_message_id,
+            &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
                 message: AgentMessage::Assistant(partial.clone()),
@@ -1297,11 +1412,12 @@ mod tests {
                 }),
             },
         );
-        handle_agent_event(
+        handle_test_agent_event(
             "run-1",
             &event_tx,
             &current_message_id,
             &current_reasoning_message_id,
+            &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
                 message: AgentMessage::Assistant(partial.clone()),
@@ -1312,11 +1428,12 @@ mod tests {
                 }),
             },
         );
-        handle_agent_event(
+        handle_test_agent_event(
             "run-1",
             &event_tx,
             &current_message_id,
             &current_reasoning_message_id,
+            &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
                 message: AgentMessage::Assistant(partial.clone()),
@@ -1327,11 +1444,12 @@ mod tests {
                 }),
             },
         );
-        handle_agent_event(
+        handle_test_agent_event(
             "run-1",
             &event_tx,
             &current_message_id,
             &current_reasoning_message_id,
+            &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
                 message: AgentMessage::Assistant(partial.clone()),
@@ -1341,11 +1459,12 @@ mod tests {
                 }),
             },
         );
-        handle_agent_event(
+        handle_test_agent_event(
             "run-1",
             &event_tx,
             &current_message_id,
             &current_reasoning_message_id,
+            &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
                 message: AgentMessage::Assistant(partial.clone()),
@@ -1383,14 +1502,16 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let current_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiy_core::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let partial = sample_partial_assistant_message();
 
-        handle_agent_event(
+        handle_test_agent_event(
             "run-1",
             &event_tx,
             &current_message_id,
             &current_reasoning_message_id,
+            &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
                 message: AgentMessage::Assistant(partial.clone()),
@@ -1400,11 +1521,12 @@ mod tests {
                 }),
             },
         );
-        handle_agent_event(
+        handle_test_agent_event(
             "run-1",
             &event_tx,
             &current_message_id,
             &current_reasoning_message_id,
+            &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
                 message: AgentMessage::Assistant(partial),
@@ -1421,5 +1543,56 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(reasoning_events.is_empty());
+    }
+
+    #[test]
+    fn message_end_emits_usage_updates_once_per_change() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiy_core::types::Usage>);
+        let reasoning_buffer = StdMutex::new(String::new());
+        let assistant = AssistantMessage::builder()
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .model("gpt-test")
+            .usage(tiy_core::types::Usage::from_tokens(256, 32))
+            .build()
+            .expect("assistant message with usage");
+
+        handle_test_agent_event(
+            "run-usage",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &reasoning_buffer,
+            &AgentEvent::MessageEnd {
+                message: AgentMessage::Assistant(assistant.clone()),
+            },
+        );
+        handle_test_agent_event(
+            "run-usage",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &reasoning_buffer,
+            &AgentEvent::MessageEnd {
+                message: AgentMessage::Assistant(assistant),
+            },
+        );
+
+        let usage_events = std::iter::from_fn(|| event_rx.try_recv().ok())
+            .filter_map(|event| match event {
+                ThreadStreamEvent::ThreadUsageUpdated { usage, .. } => Some(usage),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(usage_events.len(), 1);
+        assert_eq!(usage_events[0].input_tokens, 256);
+        assert_eq!(usage_events[0].output_tokens, 32);
+        assert_eq!(usage_events[0].total_tokens, 288);
     }
 }

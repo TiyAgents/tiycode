@@ -18,6 +18,7 @@
 import { threadStartRun, threadCancelRun, toolApprovalRespond } from "@/services/bridge";
 import type {
   RunModelPlanDto,
+  RunUsageDto,
   SubagentActivityStatus,
   SubagentProgressSnapshot,
 } from "@/shared/types/api";
@@ -100,6 +101,14 @@ export type HelperEvent =
       snapshot: SubagentProgressSnapshot;
     }
   | {
+      kind: "usage";
+      runId: string;
+      subtaskId: string;
+      helperKind: string;
+      startedAt: string;
+      snapshot: SubagentProgressSnapshot;
+    }
+  | {
       kind: "completed";
       runId: string;
       subtaskId: string;
@@ -124,6 +133,13 @@ export type ThreadTitleEvent = {
   title: string;
 };
 
+export type UsageEvent = {
+  runId: string;
+  modelDisplayName: string | null;
+  contextWindow: string | null;
+  usage: RunUsageDto;
+};
+
 // ---------------------------------------------------------------------------
 // ThreadStream class
 // ---------------------------------------------------------------------------
@@ -139,6 +155,7 @@ export class ThreadStream {
   onQueue: ((event: QueueEvent) => void) | null = null;
   onHelperEvent: ((event: HelperEvent) => void) | null = null;
   onThreadTitle: ((event: ThreadTitleEvent) => void) | null = null;
+  onUsage: ((event: UsageEvent) => void) | null = null;
   onError: ((error: string, runId: string) => void) | null = null;
   onRawEvent: ((event: ThreadStreamEvent) => void) | null = null;
 
@@ -289,6 +306,17 @@ export class ThreadStream {
         });
         break;
 
+      case "subagent_usage_updated":
+        this.onHelperEvent?.({
+          kind: "usage",
+          runId: event.runId,
+          subtaskId: event.subtaskId,
+          helperKind: event.helperKind,
+          startedAt: event.startedAt,
+          snapshot: event.snapshot,
+        });
+        break;
+
       case "subagent_completed":
         this.onHelperEvent?.({
           kind: "completed",
@@ -397,6 +425,15 @@ export class ThreadStream {
           runId: event.runId,
           threadId: event.threadId,
           title: event.title,
+        });
+        break;
+
+      case "thread_usage_updated":
+        this.onUsage?.({
+          runId: event.runId,
+          modelDisplayName: event.modelDisplayName,
+          contextWindow: event.contextWindow,
+          usage: event.usage,
         });
         break;
 

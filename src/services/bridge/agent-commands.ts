@@ -1,6 +1,7 @@
 import { invoke, isTauri, Channel } from "@tauri-apps/api/core";
 import type {
   RunModelPlanDto,
+  RunUsageDto,
   SubagentActivityStatus,
   SubagentProgressSnapshot,
   ThreadStreamEvent,
@@ -99,6 +100,47 @@ function readSnapshot(
         : Array.isArray(value?.recent_actions)
           ? value.recent_actions.filter((entry): entry is string => typeof entry === "string")
           : [],
+    usage:
+      value && typeof value.usage === "object" && value.usage
+        ? {
+            inputTokens:
+              typeof (value.usage as Record<string, unknown>).inputTokens === "number"
+                ? ((value.usage as Record<string, unknown>).inputTokens as number)
+                : typeof (value.usage as Record<string, unknown>).input_tokens === "number"
+                  ? ((value.usage as Record<string, unknown>).input_tokens as number)
+                  : 0,
+            outputTokens:
+              typeof (value.usage as Record<string, unknown>).outputTokens === "number"
+                ? ((value.usage as Record<string, unknown>).outputTokens as number)
+                : typeof (value.usage as Record<string, unknown>).output_tokens === "number"
+                  ? ((value.usage as Record<string, unknown>).output_tokens as number)
+                  : 0,
+            cacheReadTokens:
+              typeof (value.usage as Record<string, unknown>).cacheReadTokens === "number"
+                ? ((value.usage as Record<string, unknown>).cacheReadTokens as number)
+                : typeof (value.usage as Record<string, unknown>).cache_read_tokens === "number"
+                  ? ((value.usage as Record<string, unknown>).cache_read_tokens as number)
+                  : 0,
+            cacheWriteTokens:
+              typeof (value.usage as Record<string, unknown>).cacheWriteTokens === "number"
+                ? ((value.usage as Record<string, unknown>).cacheWriteTokens as number)
+                : typeof (value.usage as Record<string, unknown>).cache_write_tokens === "number"
+                  ? ((value.usage as Record<string, unknown>).cache_write_tokens as number)
+                  : 0,
+            totalTokens:
+              typeof (value.usage as Record<string, unknown>).totalTokens === "number"
+                ? ((value.usage as Record<string, unknown>).totalTokens as number)
+                : typeof (value.usage as Record<string, unknown>).total_tokens === "number"
+                  ? ((value.usage as Record<string, unknown>).total_tokens as number)
+                  : 0,
+          }
+        : {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 0,
+          },
   };
 }
 
@@ -108,6 +150,42 @@ function readActivity(
   snakeKey: string,
 ): SubagentActivityStatus {
   return readValue(event, camelKey, snakeKey) as SubagentActivityStatus;
+}
+
+function readUsage(event: RawThreadStreamEvent): RunUsageDto {
+  const value = readValue(event, "usage", "usage") as Record<string, unknown> | null | undefined;
+  return {
+    inputTokens:
+      typeof value?.inputTokens === "number"
+        ? value.inputTokens
+        : typeof value?.input_tokens === "number"
+          ? value.input_tokens
+          : 0,
+    outputTokens:
+      typeof value?.outputTokens === "number"
+        ? value.outputTokens
+        : typeof value?.output_tokens === "number"
+          ? value.output_tokens
+          : 0,
+    cacheReadTokens:
+      typeof value?.cacheReadTokens === "number"
+        ? value.cacheReadTokens
+        : typeof value?.cache_read_tokens === "number"
+          ? value.cache_read_tokens
+          : 0,
+    cacheWriteTokens:
+      typeof value?.cacheWriteTokens === "number"
+        ? value.cacheWriteTokens
+        : typeof value?.cache_write_tokens === "number"
+          ? value.cache_write_tokens
+          : 0,
+    totalTokens:
+      typeof value?.totalTokens === "number"
+        ? value.totalTokens
+        : typeof value?.total_tokens === "number"
+          ? value.total_tokens
+          : 0,
+  };
 }
 
 function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStreamEvent {
@@ -169,6 +247,15 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         startedAt: readRequiredString(rawEvent, "startedAt", "started_at"),
         activity: readActivity(rawEvent, "activity", "activity"),
         message: readRequiredString(rawEvent, "message", "message"),
+        snapshot: readSnapshot(rawEvent, "snapshot", "snapshot"),
+      };
+    case "subagent_usage_updated":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        subtaskId: readRequiredString(rawEvent, "subtaskId", "subtask_id"),
+        helperKind: readRequiredString(rawEvent, "helperKind", "helper_kind"),
+        startedAt: readRequiredString(rawEvent, "startedAt", "started_at"),
         snapshot: readSnapshot(rawEvent, "snapshot", "snapshot"),
       };
     case "subagent_completed":
@@ -241,6 +328,14 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         threadId: readRequiredString(rawEvent, "threadId", "thread_id"),
         title: readRequiredString(rawEvent, "title", "title"),
+      };
+    case "thread_usage_updated":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        modelDisplayName: readOptionalString(rawEvent, "modelDisplayName", "model_display_name"),
+        contextWindow: readOptionalString(rawEvent, "contextWindow", "context_window"),
+        usage: readUsage(rawEvent),
       };
     case "run_completed":
     case "run_cancelled":

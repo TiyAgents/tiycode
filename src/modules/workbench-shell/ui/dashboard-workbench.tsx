@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -18,6 +18,7 @@ import { useLanguage, type LanguagePreference } from "@/app/providers/language-p
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
 import { useMarketplaceController } from "@/modules/marketplace-center/model/use-marketplace-controller";
 import { MarketplaceOverlay } from "@/modules/marketplace-center/ui/marketplace-overlay";
+import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
 import { useSettingsController, type SettingsCategory } from "@/modules/settings-center/model/use-settings-controller";
 import { AI_ELEMENTS_THREAD_TITLE } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
@@ -35,8 +36,6 @@ import {
 } from "@/services/bridge";
 import type { RunState } from "@/services/thread-stream";
 import {
-  CONTEXT_WINDOW_INFO,
-  CONTEXT_WINDOW_USAGE_DETAIL,
   DEFAULT_TERMINAL_HEIGHT,
   DRAWER_LIST_LABEL_CLASS,
   DRAWER_LIST_ROW_CLASS,
@@ -78,7 +77,7 @@ import type {
 } from "@/modules/workbench-shell/model/types";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
-import { RuntimeThreadSurface } from "@/modules/workbench-shell/ui/runtime-thread-surface";
+import { RuntimeThreadSurface, type ThreadContextUsage } from "@/modules/workbench-shell/ui/runtime-thread-surface";
 import {
   GitDiffPreviewPanel,
   GitPanel,
@@ -209,6 +208,63 @@ function getInvokeErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function parseTokenCount(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.replace(/[^\d]/g, "");
+  if (!normalized) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatCompactTokenCount(value: number) {
+  return new Intl.NumberFormat("en", {
+    maximumFractionDigits: 1,
+    notation: "compact",
+  }).format(value);
+}
+
+function buildThreadContextBadgeData(options: {
+  fallbackContextWindow: string | null;
+  fallbackModelDisplayName: string | null;
+  runtimeUsage: ThreadContextUsage | null;
+}) {
+  const contextWindow =
+    parseTokenCount(options.runtimeUsage?.contextWindow) ?? parseTokenCount(options.fallbackContextWindow);
+  const totalTokens = options.runtimeUsage?.totalTokens ?? 0;
+  const inputTokens = options.runtimeUsage?.inputTokens ?? 0;
+  const outputTokens = options.runtimeUsage?.outputTokens ?? 0;
+  const cacheReadTokens = options.runtimeUsage?.cacheReadTokens ?? 0;
+  const cacheWriteTokens = options.runtimeUsage?.cacheWriteTokens ?? 0;
+  const usageRatio = contextWindow && contextWindow > 0
+    ? Math.min(totalTokens / contextWindow, 1)
+    : 0;
+  const usedPercent = contextWindow && contextWindow > 0
+    ? Math.min(Math.round((totalTokens / contextWindow) * 100), 100)
+    : 0;
+  const leftPercent = Math.max(0, 100 - usedPercent);
+
+  return {
+    contextWindow,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    leftPercent,
+    modelDisplayName: options.runtimeUsage?.modelDisplayName ?? options.fallbackModelDisplayName,
+    totalTokens,
+    usageRatio,
+    usedLabel: formatCompactTokenCount(totalTokens),
+    totalLabel: contextWindow ? formatCompactTokenCount(contextWindow) : "N/A",
+    usedPercent,
+  };
+}
+
 export function DashboardWorkbench() {
   const { data } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
@@ -290,6 +346,7 @@ export function DashboardWorkbench() {
     prompt: string;
     threadId: string;
   } | null>(null);
+  const [runtimeContextUsage, setRuntimeContextUsage] = useState<ThreadContextUsage | null>(null);
   const [terminalWorkspaceBindings, setTerminalWorkspaceBindings] = useState<Record<string, string>>({});
   const [defaultWorkspaceId, setDefaultWorkspaceId] = useState<string | null>(null);
   const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(
@@ -329,6 +386,21 @@ export function DashboardWorkbench() {
   const isOverlayOpen = activeOverlay !== null;
   const isMacOS = data?.platform === "macos" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Mac"));
   const isWindows = data?.platform === "windows" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Windows"));
+  const selectedRunModelPlan = useMemo(
+    () => buildRunModelPlanFromSelection(activeAgentProfileId, agentProfiles, providers),
+    [activeAgentProfileId, agentProfiles, providers],
+  );
+  const contextBadge = useMemo(
+    () => buildThreadContextBadgeData({
+      fallbackContextWindow: selectedRunModelPlan?.primary?.contextWindow ?? null,
+      fallbackModelDisplayName:
+        selectedRunModelPlan?.primary?.modelDisplayName
+        ?? selectedRunModelPlan?.primary?.modelId
+        ?? null,
+      runtimeUsage: runtimeContextUsage,
+    }),
+    [runtimeContextUsage, selectedRunModelPlan],
+  );
 
   const setSidebarOpen = (nextState: boolean | ((current: boolean) => boolean)) => {
     setPanelVisibilityState((current) => ({
@@ -371,6 +443,12 @@ export function DashboardWorkbench() {
       };
     });
   };
+
+  useEffect(() => {
+    if (isNewThreadMode || !resolvedTerminalThreadId) {
+      setRuntimeContextUsage(null);
+    }
+  }, [isNewThreadMode, resolvedTerminalThreadId]);
 
   const getMaxTerminalHeight = () => {
     if (typeof window === "undefined") {
@@ -1740,23 +1818,36 @@ export function DashboardWorkbench() {
                             >
                               <span
                                 className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-primary/12"
-                                style={{ width: `${CONTEXT_WINDOW_INFO.usageRatio * 100}%` }}
+                                style={{ width: `${contextBadge.usageRatio * 100}%` }}
                               />
                               <span className="relative inline-flex items-center gap-1.5 px-2 py-0.5">
-                                <span className="text-app-subtle">{CONTEXT_WINDOW_INFO.label}</span>
+                                <span className="text-app-subtle">Context</span>
                                 <span className="font-semibold text-app-foreground">
-                                  {CONTEXT_WINDOW_INFO.used} / {CONTEXT_WINDOW_INFO.total}
+                                  {contextBadge.usedLabel} / {contextBadge.totalLabel}
                                 </span>
                               </span>
                             </span>
                             <div className="pointer-events-none absolute left-1/2 top-[calc(100%+0.5rem)] z-20 w-max min-w-[190px] -translate-x-1/2 translate-y-1 rounded-xl border border-app-border bg-app-menu px-3 py-2 text-center opacity-0 shadow-[0_14px_32px_rgba(15,23,42,0.14)] transition-[opacity,transform] duration-150 group-hover/context-window:translate-y-0 group-hover/context-window:opacity-100 group-focus-within/context-window:translate-y-0 group-focus-within/context-window:opacity-100 dark:shadow-[0_16px_36px_rgba(0,0,0,0.38)]">
                               <p className="whitespace-nowrap text-[11px] font-semibold text-app-foreground">
-                                {CONTEXT_WINDOW_USAGE_DETAIL.usedPercent}% used
-                                <span className="font-normal text-app-subtle"> ({CONTEXT_WINDOW_USAGE_DETAIL.leftPercent}% left)</span>
+                                {contextBadge.usedPercent}% used
+                                <span className="font-normal text-app-subtle"> ({contextBadge.leftPercent}% left)</span>
+                              </p>
+                              {contextBadge.modelDisplayName ? (
+                                <p className="mt-1 whitespace-nowrap text-[11px] text-app-subtle">
+                                  {contextBadge.modelDisplayName}
+                                </p>
+                              ) : null}
+                              <p className="mt-1 whitespace-nowrap text-[11px] text-app-muted">
+                                {contextBadge.usedLabel} / {contextBadge.totalLabel} tokens used
                               </p>
                               <p className="mt-1 whitespace-nowrap text-[11px] text-app-muted">
-                                {CONTEXT_WINDOW_INFO.used} / {CONTEXT_WINDOW_INFO.total} tokens used
+                                In {formatCompactTokenCount(contextBadge.inputTokens)} · Out {formatCompactTokenCount(contextBadge.outputTokens)}
                               </p>
+                              {contextBadge.cacheReadTokens > 0 || contextBadge.cacheWriteTokens > 0 ? (
+                                <p className="mt-1 whitespace-nowrap text-[11px] text-app-subtle">
+                                  Cache R {formatCompactTokenCount(contextBadge.cacheReadTokens)} · W {formatCompactTokenCount(contextBadge.cacheWriteTokens)}
+                                </p>
+                              ) : null}
                             </div>
                           </div>
                           <button
@@ -1781,6 +1872,7 @@ export function DashboardWorkbench() {
                         onConsumeInitialPrompt={(id) => {
                           setPendingThreadRun((current) => (current?.id === id ? null : current));
                         }}
+                        onContextUsageChange={setRuntimeContextUsage}
                         onRunStateChange={handleRuntimeThreadRunStateChange}
                         onSelectAgentProfile={setActiveAgentProfile}
                         onThreadTitleChange={handleRuntimeThreadTitleChange}
@@ -1871,6 +1963,7 @@ export function DashboardWorkbench() {
                 <ThreadTerminalPanel
                   threadId={resolvedTerminalThreadId}
                   threadTitle={activeThread?.name ?? AI_ELEMENTS_THREAD_TITLE}
+                  active={!isTerminalCollapsed}
                   bootstrapError={terminalBootstrapError}
                   isPendingThread={isNewThreadMode}
                   idleMessage={newThreadTerminalIdleMessage}

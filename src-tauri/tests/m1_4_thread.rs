@@ -330,7 +330,26 @@ async fn test_thread_snapshot_includes_runtime_artifacts_for_visible_runs() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-runtime", "/tmp/runtime").await;
     test_helpers::seed_thread(&pool, "t-runtime", "ws-runtime").await;
-    test_helpers::seed_run(&pool, "r-runtime", "t-runtime", "completed", "default").await;
+
+    sqlx::query(
+        "INSERT INTO thread_runs (
+            id, thread_id, run_mode, status, effective_model_plan_json,
+            input_tokens, output_tokens, total_tokens
+         )
+         VALUES (
+            'r-runtime',
+            't-runtime',
+            'default',
+            'completed',
+            '{\"primary\":{\"modelDisplayName\":\"GPT-4.1\",\"contextWindow\":\"128000\"}}',
+            512,
+            96,
+            608
+         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     sqlx::query(
         "INSERT INTO messages (id, thread_id, run_id, role, content_markdown, message_type, status)
@@ -362,6 +381,15 @@ async fn test_thread_snapshot_includes_runtime_artifacts_for_visible_runs() {
     )
     .await;
 
+    sqlx::query(
+        "UPDATE run_helpers
+         SET input_tokens = 120, output_tokens = 24, total_tokens = 144
+         WHERE id = 'rh-runtime'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let manager = ThreadManager::new(pool);
     let snapshot = manager.load("t-runtime", None, None).await.unwrap();
 
@@ -369,6 +397,30 @@ async fn test_thread_snapshot_includes_runtime_artifacts_for_visible_runs() {
     assert_eq!(snapshot.tool_calls[0].tool_name, "search_repo");
     assert_eq!(snapshot.helpers.len(), 1);
     assert_eq!(snapshot.helpers[0].helper_kind, "helper_scout");
+    assert_eq!(snapshot.helpers[0].usage.input_tokens, 120);
+    assert_eq!(snapshot.helpers[0].usage.output_tokens, 24);
+    assert_eq!(snapshot.helpers[0].usage.total_tokens, 144);
+    assert_eq!(
+        snapshot
+            .latest_run
+            .as_ref()
+            .and_then(|run| run.model_display_name.as_deref()),
+        Some("GPT-4.1")
+    );
+    assert_eq!(
+        snapshot
+            .latest_run
+            .as_ref()
+            .and_then(|run| run.context_window.as_deref()),
+        Some("128000")
+    );
+    assert_eq!(
+        snapshot
+            .latest_run
+            .as_ref()
+            .map(|run| run.usage.total_tokens),
+        Some(608)
+    );
     assert!(
         snapshot
             .messages

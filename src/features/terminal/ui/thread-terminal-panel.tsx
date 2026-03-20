@@ -9,6 +9,7 @@ import { Button } from "@/shared/ui/button";
 type ThreadTerminalPanelProps = {
   threadId: string | null;
   threadTitle: string | null;
+  active: boolean;
   bootstrapError?: string | null;
   isPendingThread?: boolean;
   idleMessage?: string;
@@ -18,6 +19,7 @@ type ThreadTerminalPanelProps = {
 export function ThreadTerminalPanel({
   threadId,
   threadTitle,
+  active,
   bootstrapError,
   isPendingThread = false,
   idleMessage,
@@ -83,7 +85,7 @@ export function ThreadTerminalPanel({
           key={`${threadId ?? "pending"}:${isPendingThread ? "new" : "bound"}`}
           ref={terminalHostRef}
           threadId={threadId}
-          active
+          active={active}
           bootstrapError={bootstrapError}
           idleMessage={
             isPendingThread

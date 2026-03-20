@@ -146,16 +146,25 @@ export function useThreadTerminal({
   }, [active, threadId]);
 
   useEffect(() => {
-    if (!active || !threadId || !sessionId || !isTauri()) {
+    if (!active || !threadId || !sessionId || !session || !isTauri()) {
       return;
     }
 
-    void terminalClient.resize(threadId, cols, rows).catch((resizeError) => {
-      const message =
-        resizeError instanceof Error ? resizeError.message : String(resizeError);
-      setError(message);
-    });
-  }, [active, cols, rows, sessionId, threadId]);
+    if (session.cols === cols && session.rows === rows) {
+      return;
+    }
+
+    void terminalClient
+      .resize(threadId, cols, rows)
+      .then(() => {
+        terminalStore.setSessionMeta(threadId, { cols, rows });
+      })
+      .catch((resizeError) => {
+        const message =
+          resizeError instanceof Error ? resizeError.message : String(resizeError);
+        setError(message);
+      });
+  }, [active, cols, rows, session, sessionId, threadId]);
 
   const actions = useMemo(
     () => ({

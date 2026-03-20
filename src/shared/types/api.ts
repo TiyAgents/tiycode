@@ -247,8 +247,19 @@ export interface RunSummaryDto {
   runMode: RunMode;
   status: RunStatus;
   modelId: string | null;
+  modelDisplayName: string | null;
+  contextWindow: string | null;
   errorMessage: string | null;
   startedAt: string;
+  usage: RunUsageDto;
+}
+
+export interface RunUsageDto {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
 }
 
 export interface ToolCallDto {
@@ -276,6 +287,7 @@ export interface RunHelperDto {
   errorSummary: string | null;
   startedAt: string;
   finishedAt: string | null;
+  usage: RunUsageDto;
 }
 
 export interface ThreadSnapshotDto {
@@ -307,6 +319,7 @@ export interface SubagentProgressSnapshot {
   currentAction: string | null;
   toolCounts: Record<string, number>;
   recentActions: string[];
+  usage: RunUsageDto;
 }
 
 export type ThreadStreamEvent =
@@ -337,6 +350,14 @@ export type ThreadStreamEvent =
       startedAt: string;
       activity: SubagentActivityStatus;
       message: string;
+      snapshot: SubagentProgressSnapshot;
+    }
+  | {
+      type: "subagent_usage_updated";
+      runId: string;
+      subtaskId: string;
+      helperKind: string;
+      startedAt: string;
       snapshot: SubagentProgressSnapshot;
     }
   | {
@@ -387,6 +408,13 @@ export type ThreadStreamEvent =
     }
   | { type: "tool_failed"; runId: string; toolCallId: string; error: string }
   | { type: "thread_title_updated"; runId: string; threadId: string; title: string }
+  | {
+      type: "thread_usage_updated";
+      runId: string;
+      modelDisplayName: string | null;
+      contextWindow: string | null;
+      usage: RunUsageDto;
+    }
   | { type: "run_completed"; runId: string }
   | { type: "run_failed"; runId: string; error: string }
   | { type: "run_cancelled"; runId: string }

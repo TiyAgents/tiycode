@@ -4,6 +4,7 @@
 //! useful for testing repo and manager layers without touching disk.
 #![allow(dead_code)]
 
+use chrono::SecondsFormat;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::str::FromStr;
 
@@ -95,14 +96,16 @@ pub async fn seed_run(
     status: &str,
     run_mode: &str,
 ) {
+    let now = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
     sqlx::query(
-        "INSERT INTO thread_runs (id, thread_id, run_mode, status)
-         VALUES (?, ?, ?, ?)",
+        "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at)
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(run_id)
     .bind(thread_id)
     .bind(run_mode)
     .bind(status)
+    .bind(&now)
     .execute(pool)
     .await
     .expect("failed to seed run");

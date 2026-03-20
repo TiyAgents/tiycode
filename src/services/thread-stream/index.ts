@@ -9,5 +9,6 @@ export type {
   QueueEvent,
   HelperEvent,
   ThreadTitleEvent,
+  UsageEvent,
 } from "./thread-stream";
 export type { ThreadStreamEvent } from "./types";

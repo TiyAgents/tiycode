@@ -26,9 +26,11 @@ import {
   type RunState,
   type ThreadStreamEvent,
   type ThreadTitleEvent,
+  type UsageEvent,
 } from "@/services/thread-stream";
 import type {
   MessageDto,
+  RunSummaryDto,
   RunHelperDto,
   SubagentProgressSnapshot,
   ThreadSnapshotDto,
@@ -88,6 +90,8 @@ type SurfaceToolEntry = {
 };
 
 type SurfaceHelperEntry = {
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   completedSteps: number;
   currentAction?: string | null;
   error?: string;
@@ -103,6 +107,9 @@ type SurfaceHelperEntry = {
   summary?: string | null;
   toolCounts: Record<string, number>;
   totalToolCalls: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
 };
 
 type TimelineEntry =
@@ -162,12 +169,24 @@ type RuntimeThreadSurfaceProps = {
   agentProfiles: ReadonlyArray<AgentProfile>;
   initialPromptRequest?: InitialPromptRequest | null;
   onConsumeInitialPrompt?: (id: string) => void;
+  onContextUsageChange?: (usage: ThreadContextUsage | null) => void;
   onRunStateChange?: (state: RunState) => void;
   onSelectAgentProfile: (id: string) => void;
   onThreadTitleChange?: (threadId: string, title: string) => void;
   providers: ReadonlyArray<ProviderEntry>;
   threadId: string | null;
   threadTitle: string;
+};
+
+export type ThreadContextUsage = {
+  contextWindow: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  modelDisplayName: string | null;
+  runId: string;
 };
 
 type TimelineRole = SurfaceMessage["role"];
@@ -292,6 +311,8 @@ function mapSnapshotHelper(
   const toolSummary = buildSnapshotHelperToolSummary(helper.id, toolCalls);
 
   return {
+    cacheReadTokens: helper.usage.cacheReadTokens,
+    cacheWriteTokens: helper.usage.cacheWriteTokens,
     completedSteps: toolSummary.completedSteps,
     currentAction: null,
     error: helper.errorSummary ?? undefined,
@@ -307,6 +328,9 @@ function mapSnapshotHelper(
     summary: helper.outputSummary,
     toolCounts: toolSummary.toolCounts,
     totalToolCalls: toolSummary.totalToolCalls,
+    totalTokens: helper.usage.totalTokens,
+    inputTokens: helper.usage.inputTokens,
+    outputTokens: helper.usage.outputTokens,
   };
 }
 
@@ -349,6 +373,23 @@ function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
 
 function getLatestVisibleRun(snapshot: ThreadSnapshotDto) {
   return snapshot.activeRun ?? snapshot.latestRun;
+}
+
+function mapRunSummaryToContextUsage(run: RunSummaryDto | null): ThreadContextUsage | null {
+  if (!run) {
+    return null;
+  }
+
+  return {
+    contextWindow: run.contextWindow,
+    inputTokens: run.usage.inputTokens,
+    outputTokens: run.usage.outputTokens,
+    cacheReadTokens: run.usage.cacheReadTokens,
+    cacheWriteTokens: run.usage.cacheWriteTokens,
+    totalTokens: run.usage.totalTokens,
+    modelDisplayName: run.modelDisplayName,
+    runId: run.id,
+  };
 }
 
 function getSnapshotRuntimeError(snapshot: ThreadSnapshotDto): SurfaceRuntimeError | null {
@@ -488,14 +529,28 @@ function applyHelperSnapshot(
   snapshot: SubagentProgressSnapshot,
 ): Pick<
   SurfaceHelperEntry,
-  "completedSteps" | "currentAction" | "recentActions" | "toolCounts" | "totalToolCalls"
+  | "cacheReadTokens"
+  | "cacheWriteTokens"
+  | "completedSteps"
+  | "currentAction"
+  | "inputTokens"
+  | "outputTokens"
+  | "recentActions"
+  | "toolCounts"
+  | "totalToolCalls"
+  | "totalTokens"
 > {
   return {
+    cacheReadTokens: snapshot.usage.cacheReadTokens ?? 0,
+    cacheWriteTokens: snapshot.usage.cacheWriteTokens ?? 0,
     completedSteps: snapshot.completedSteps ?? 0,
     currentAction: snapshot.currentAction ?? null,
+    inputTokens: snapshot.usage.inputTokens ?? 0,
+    outputTokens: snapshot.usage.outputTokens ?? 0,
     recentActions: snapshot.recentActions ?? [],
     toolCounts: snapshot.toolCounts ?? {},
     totalToolCalls: snapshot.totalToolCalls ?? 0,
+    totalTokens: snapshot.usage.totalTokens ?? 0,
   };
 }
 
@@ -668,6 +723,8 @@ function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
   switch (event.type) {
     case "run_started":
     case "reasoning_updated":
+    case "subagent_usage_updated":
+    case "thread_usage_updated":
       return false;
     default:
       return true;
@@ -741,6 +798,7 @@ export function RuntimeThreadSurface({
   agentProfiles,
   initialPromptRequest = null,
   onConsumeInitialPrompt,
+  onContextUsageChange,
   onRunStateChange,
   onSelectAgentProfile,
   onThreadTitleChange,
@@ -774,6 +832,7 @@ export function RuntimeThreadSurface({
   const snapshotLoadRequestRef = useRef(0);
   const streamRef = useRef<ThreadStream | null>(null);
   const submittingRef = useRef(false);
+  const handledInitialPromptRequestIdRef = useRef<string | null>(null);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearScheduledThinkingPhase = useCallback(() => {
@@ -853,6 +912,7 @@ export function RuntimeThreadSurface({
       setMessages([]);
       setLoadError(null);
       setLoading(false);
+      onContextUsageChange?.(null);
       setRuntimeError(null);
       setRunState("idle");
       setSnapshotReady(true);
@@ -880,6 +940,7 @@ export function RuntimeThreadSurface({
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
       setRunState(nextState);
+      onContextUsageChange?.(mapRunSummaryToContextUsage(getLatestVisibleRun(snapshot)));
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
       if (snapshot.thread.title.trim()) {
@@ -893,6 +954,7 @@ export function RuntimeThreadSurface({
 
       const message = error instanceof Error ? error.message : String(error);
       setLoadError(message);
+      onContextUsageChange?.(null);
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
     } finally {
@@ -900,7 +962,7 @@ export function RuntimeThreadSurface({
         setLoading(false);
       }
     }
-  }, [clearScheduledThinkingPhase, onRunStateChange, onThreadTitleChange, threadId]);
+  }, [clearScheduledThinkingPhase, onContextUsageChange, onRunStateChange, onThreadTitleChange, threadId]);
 
   useEffect(() => {
     setComposerError(null);
@@ -1016,6 +1078,19 @@ export function RuntimeThreadSurface({
       onThreadTitleChange?.(event.threadId, event.title);
     };
 
+    stream.onUsage = (event: UsageEvent) => {
+      onContextUsageChange?.({
+        contextWindow: event.contextWindow,
+        inputTokens: event.usage.inputTokens,
+        outputTokens: event.usage.outputTokens,
+        cacheReadTokens: event.usage.cacheReadTokens,
+        cacheWriteTokens: event.usage.cacheWriteTokens,
+        totalTokens: event.usage.totalTokens,
+        modelDisplayName: event.modelDisplayName,
+        runId: event.runId,
+      });
+    };
+
     stream.onHelperEvent = (event: HelperEvent) => {
       if (event.kind === "completed" || event.kind === "failed") {
         scheduleThinkingPhase(event.runId);
@@ -1052,6 +1127,20 @@ export function RuntimeThreadSurface({
               status: entry?.status ?? "running",
               summary: entry?.summary,
               totalToolCalls: event.snapshot.totalToolCalls,
+            }));
+          case "usage":
+            return updateHelper(current, event.subtaskId, (entry) => ({
+              ...entry,
+              ...applyHelperSnapshot(event.snapshot),
+              finishedAt: entry?.finishedAt ?? null,
+              id: event.subtaskId,
+              inputSummary: entry?.inputSummary,
+              kind: event.helperKind,
+              latestMessage: entry?.latestMessage,
+              runId: event.runId,
+              startedAt: entry?.startedAt ?? event.startedAt,
+              status: entry?.status ?? "running",
+              summary: entry?.summary,
             }));
           case "completed":
             return updateHelper(current, event.subtaskId, (_entry) => ({
@@ -1234,6 +1323,7 @@ export function RuntimeThreadSurface({
     completeThinkingPhase,
     loadSnapshot,
     onRunStateChange,
+    onContextUsageChange,
     onThreadTitleChange,
     scheduleThinkingPhase,
     threadId,
@@ -1319,16 +1409,21 @@ export function RuntimeThreadSurface({
   useEffect(() => {
     const isCurrentThreadSnapshotReady =
       snapshotReady && snapshotThreadId === threadId;
+    const initialPromptRequestId = initialPromptRequest?.id ?? null;
 
     if (
       !initialPromptRequest
       || !isCurrentThreadSnapshotReady
       || runState === "running"
       || runState === "waiting_approval"
+      || handledInitialPromptRequestIdRef.current === initialPromptRequestId
     ) {
       return;
     }
 
+    // Parent state clears this request asynchronously, so mark it handled
+    // before awaiting to keep effect re-runs from starting the same run twice.
+    handledInitialPromptRequestIdRef.current = initialPromptRequestId;
     void submitPrompt(initialPromptRequest.prompt)
       .finally(() => {
         onConsumeInitialPrompt?.(initialPromptRequest.id);
@@ -1700,6 +1795,8 @@ export function RuntimeThreadSurface({
                 const helperToolCounts = formatHelperToolCounts(helper.toolCounts);
                 const executionSummary = formatExecutionSummary({
                   elapsedText: formatElapsedSeconds(getHelperElapsedSeconds(helper)),
+                  inputTokens: helper.inputTokens,
+                  outputTokens: helper.outputTokens,
                   toolUses: helper.totalToolCalls,
                 });
                 return (

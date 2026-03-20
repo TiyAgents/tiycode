@@ -132,6 +132,28 @@ impl From<MessageRecord> for MessageDto {
 // RunSummary — lightweight run info for snapshots
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunUsageDto {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub total_tokens: u64,
+}
+
+impl From<tiy_core::types::Usage> for RunUsageDto {
+    fn from(value: tiy_core::types::Usage) -> Self {
+        Self {
+            input_tokens: value.input,
+            output_tokens: value.output,
+            cache_read_tokens: value.cache_read,
+            cache_write_tokens: value.cache_write,
+            total_tokens: value.total_tokens,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunSummaryDto {
@@ -140,8 +162,11 @@ pub struct RunSummaryDto {
     pub run_mode: String,
     pub status: String,
     pub model_id: Option<String>,
+    pub model_display_name: Option<String>,
+    pub context_window: Option<String>,
     pub error_message: Option<String>,
     pub started_at: String,
+    pub usage: RunUsageDto,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -173,6 +198,7 @@ pub struct RunHelperDto {
     pub error_summary: Option<String>,
     pub started_at: String,
     pub finished_at: Option<String>,
+    pub usage: RunUsageDto,
 }
 
 // ---------------------------------------------------------------------------
