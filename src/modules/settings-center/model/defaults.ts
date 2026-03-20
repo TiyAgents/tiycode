@@ -24,8 +24,7 @@ Input priority:
 2. If no staged files exist, generate the commit message using all modified, added, and deleted files in the working tree.
 
 Language rule:
-- If the command arguments contain --language=chinese, output the entire commit message in Simplified Chinese.
-- Otherwise, output the entire commit message in English.
+- Output the entire commit message in the configured commit message language.
 - Do not mix languages within the same message.
 
 Output rule:
