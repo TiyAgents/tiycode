@@ -54,13 +54,13 @@ impl RuntimeOrchestrationTool {
     pub fn description(self) -> &'static str {
         match self {
             Self::DelegateResearch => {
-                "Run a scoped helper agent to investigate a question and return a summary."
+                "Investigate unfamiliar or cross-file areas before acting. Use this to gather evidence, relevant files, dependencies, and architecture context, then return a concise summary to the parent agent."
             }
             Self::DelegatePlanReview => {
-                "Run a scoped helper agent to review a plan and return a summary."
+                "Review a proposed implementation plan before coding. Focus on risks, missing steps, edge cases, and better sequencing, then return concise recommendations to the parent agent."
             }
             Self::DelegateCodeReview => {
-                "Run a scoped helper agent to review code, diffs, or plans and return a summary."
+                "Review a plan, code change, or diff and return risks, regressions, gaps, and concrete follow-ups. Use target='plan' before implementation and target='code' or 'diff' after implementation."
             }
         }
     }
@@ -77,24 +77,37 @@ impl RuntimeOrchestrationTool {
         let parameters = match self {
             Self::DelegateResearch => serde_json::json!({
                 "type": "object",
-                "properties": { "task": { "type": "string" } },
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "What to investigate. Include the user goal, suspected files or subsystems, and the kind of evidence you want back."
+                    }
+                },
                 "required": ["task"]
             }),
             Self::DelegateCodeReview => serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "task": { "type": "string" },
+                    "task": {
+                        "type": "string",
+                        "description": "What to review. Summarize the plan, code, or diff, and call out the main risks or questions to check."
+                    },
                     "target": {
                         "type": "string",
                         "enum": ["plan", "code", "diff"],
-                        "description": "Review focus. Use 'plan' to review an approach before implementation."
+                        "description": "Review focus. Use 'plan' before implementation. Use 'code' or 'diff' after implementation. If omitted, review defaults to code-level review."
                     }
                 },
                 "required": ["task"]
             }),
             Self::DelegatePlanReview => serde_json::json!({
                 "type": "object",
-                "properties": { "task": { "type": "string" } },
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "What plan to review and what risks or concerns to stress-test."
+                    }
+                },
                 "required": ["task"]
             }),
         };

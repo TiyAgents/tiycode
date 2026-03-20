@@ -324,6 +324,8 @@ async fn test_build_session_spec_resolves_primary_model_and_profile_prompt() {
     assert!(spec
         .system_prompt
         .contains("Always answer in concise engineering prose."));
+    assert!(spec.system_prompt.contains("Use agent_research"));
+    assert!(spec.system_prompt.contains("Use agent_review with target='plan'"));
     assert_eq!(spec.history_messages.len(), 1);
 }
 
