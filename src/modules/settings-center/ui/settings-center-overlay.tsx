@@ -2465,7 +2465,10 @@ function ProviderSettingsPanel({
       return;
     }
 
-    onUpdateProvider(selectedProvider.id, { apiKey: value });
+    onUpdateProvider(selectedProvider.id, {
+      apiKey: value,
+      enabled: true,
+    });
   };
 
   const handleUpdateModel = (modelId: string, patch: Partial<ProviderModel>) => {
