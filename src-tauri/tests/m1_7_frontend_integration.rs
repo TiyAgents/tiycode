@@ -216,6 +216,7 @@ fn test_thread_stream_event_subagent_events_serialization() {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
         helper_kind: "helper_scout".into(),
+        started_at: "2026-03-20T00:00:00Z".into(),
         snapshot: sample_subagent_snapshot(),
     };
     let json = serde_json::to_value(&event).unwrap();
@@ -228,6 +229,7 @@ fn test_thread_stream_event_subagent_events_serialization() {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
         helper_kind: "helper_scout".into(),
+        started_at: "2026-03-20T00:00:00Z".into(),
         activity: tiy_agent_lib::core::subagent::SubagentActivityStatus::Started,
         message: "Reading src-tauri/src/core/agent_session.rs".into(),
         snapshot: sample_subagent_snapshot(),
@@ -245,6 +247,7 @@ fn test_thread_stream_event_subagent_events_serialization() {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
         helper_kind: "helper_planner".into(),
+        started_at: "2026-03-20T00:00:00Z".into(),
         summary: Some("Analysis complete".into()),
         snapshot: sample_subagent_snapshot(),
     };
@@ -258,6 +261,7 @@ fn test_thread_stream_event_subagent_events_serialization() {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
         helper_kind: "helper_reviewer".into(),
+        started_at: "2026-03-20T00:00:00Z".into(),
         error: "timeout".into(),
         snapshot: sample_subagent_snapshot(),
     };
@@ -306,12 +310,14 @@ fn test_all_events_have_type_field() {
             run_id: "r".into(),
             subtask_id: "s".into(),
             helper_kind: "helper_scout".into(),
+            started_at: "2026-03-20T00:00:00Z".into(),
             snapshot: sample_subagent_snapshot(),
         },
         ThreadStreamEvent::SubagentProgress {
             run_id: "r".into(),
             subtask_id: "s".into(),
             helper_kind: "helper_scout".into(),
+            started_at: "2026-03-20T00:00:00Z".into(),
             activity: tiy_agent_lib::core::subagent::SubagentActivityStatus::Started,
             message: "Reading foo".into(),
             snapshot: sample_subagent_snapshot(),
@@ -320,6 +326,7 @@ fn test_all_events_have_type_field() {
             run_id: "r".into(),
             subtask_id: "s".into(),
             helper_kind: "helper_planner".into(),
+            started_at: "2026-03-20T00:00:00Z".into(),
             summary: None,
             snapshot: sample_subagent_snapshot(),
         },
@@ -327,6 +334,7 @@ fn test_all_events_have_type_field() {
             run_id: "r".into(),
             subtask_id: "s".into(),
             helper_kind: "helper_reviewer".into(),
+            started_at: "2026-03-20T00:00:00Z".into(),
             error: "e".into(),
             snapshot: sample_subagent_snapshot(),
         },

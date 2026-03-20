@@ -215,6 +215,11 @@ impl AgentRunManager {
         run_id: &str,
         event: ThreadStreamEvent,
     ) -> Result<(), AppError> {
+        if should_complete_reasoning_for_event(&event) {
+            self.complete_active_reasoning_message(run_id, "completed")
+                .await?;
+        }
+
         match &event {
             ThreadStreamEvent::RunStarted { .. } => {
                 run_repo::update_status(&self.pool, run_id, "running").await?;
@@ -367,29 +372,39 @@ impl AgentRunManager {
         run_id: &str,
         requested_message_id: &str,
     ) -> Result<String, AppError> {
-        let mut runs = self.active_runs.lock().await;
-        let run = runs.get_mut(run_id).ok_or_else(|| {
-            AppError::internal(
-                ErrorSource::Thread,
-                "active run not found for reasoning event",
-            )
-        })?;
-
-        if let Some(existing) = run.reasoning_message_id.clone() {
-            return Ok(existing);
-        }
-
         let message_id = if requested_message_id.trim().is_empty() {
             uuid::Uuid::now_v7().to_string()
         } else {
             requested_message_id.to_string()
         };
 
+        let (thread_id, previous_message_id) = {
+            let mut runs = self.active_runs.lock().await;
+            let run = runs.get_mut(run_id).ok_or_else(|| {
+                AppError::internal(
+                    ErrorSource::Thread,
+                    "active run not found for reasoning event",
+                )
+            })?;
+
+            if let Some(existing) = run.reasoning_message_id.clone() {
+                if existing == message_id {
+                    return Ok(existing);
+                }
+            }
+
+            (run.thread_id.clone(), run.reasoning_message_id.take())
+        };
+
+        if let Some(previous_message_id) = previous_message_id {
+            message_repo::update_status(&self.pool, &previous_message_id, "completed").await?;
+        }
+
         message_repo::insert(
             &self.pool,
             &MessageRecord {
                 id: message_id.clone(),
-                thread_id: run.thread_id.clone(),
+                thread_id,
                 run_id: Some(run_id.to_string()),
                 role: "assistant".to_string(),
                 content_markdown: String::new(),
@@ -401,8 +416,38 @@ impl AgentRunManager {
         )
         .await?;
 
+        let mut runs = self.active_runs.lock().await;
+        let run = runs.get_mut(run_id).ok_or_else(|| {
+            AppError::internal(
+                ErrorSource::Thread,
+                "active run not found after inserting reasoning event",
+            )
+        })?;
         run.reasoning_message_id = Some(message_id.clone());
         Ok(message_id)
+    }
+
+    async fn complete_active_reasoning_message(
+        &self,
+        run_id: &str,
+        status: &str,
+    ) -> Result<(), AppError> {
+        let reasoning_message_id = {
+            let mut runs = self.active_runs.lock().await;
+            let run = runs.get_mut(run_id).ok_or_else(|| {
+                AppError::internal(
+                    ErrorSource::Thread,
+                    "active run not found while completing reasoning event",
+                )
+            })?;
+            run.reasoning_message_id.take()
+        };
+
+        if let Some(reasoning_message_id) = reasoning_message_id {
+            message_repo::update_status(&self.pool, &reasoning_message_id, status).await?;
+        }
+
+        Ok(())
     }
 
     async fn finish_run(
@@ -794,6 +839,18 @@ fn collapse_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> bool {
+    !matches!(
+        event,
+        ThreadStreamEvent::RunStarted { .. }
+            | ThreadStreamEvent::ReasoningUpdated { .. }
+            | ThreadStreamEvent::RunCompleted { .. }
+            | ThreadStreamEvent::RunFailed { .. }
+            | ThreadStreamEvent::RunCancelled { .. }
+            | ThreadStreamEvent::RunInterrupted { .. }
+    )
+}
+
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     let truncated: String = value.chars().take(max_chars).collect();
     if value.chars().count() > max_chars {
@@ -838,9 +895,11 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_title_prompt, collapse_whitespace, normalize_generated_title, truncate_chars,
+        build_title_prompt, collapse_whitespace, normalize_generated_title,
+        should_complete_reasoning_for_event, truncate_chars,
     };
     use crate::core::agent_session::ProfileResponseStyle;
+    use crate::ipc::frontend_channels::ThreadStreamEvent;
 
     #[test]
     fn normalize_generated_title_strips_prefixes_and_wrappers() {
@@ -876,5 +935,30 @@ mod tests {
 
         assert!(prompt.contains("Write the title in Japanese."));
         assert!(prompt.contains("signals the user's goal or decision focus clearly"));
+    }
+
+    #[test]
+    fn reasoning_completion_helper_keeps_only_live_reasoning_events_open() {
+        assert!(!should_complete_reasoning_for_event(
+            &ThreadStreamEvent::RunStarted {
+                run_id: "run-1".into(),
+                run_mode: "default".into(),
+            }
+        ));
+        assert!(!should_complete_reasoning_for_event(
+            &ThreadStreamEvent::ReasoningUpdated {
+                run_id: "run-1".into(),
+                message_id: "reasoning-1".into(),
+                reasoning: "Inspecting".into(),
+            }
+        ));
+        assert!(should_complete_reasoning_for_event(
+            &ThreadStreamEvent::ToolRequested {
+                run_id: "run-1".into(),
+                tool_call_id: "tool-1".into(),
+                tool_name: "search_repo".into(),
+                tool_input: serde_json::json!({ "query": "Thought" }),
+            }
+        ));
     }
 }
