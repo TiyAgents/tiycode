@@ -157,6 +157,7 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         subtaskId: readRequiredString(rawEvent, "subtaskId", "subtask_id"),
         helperKind: readRequiredString(rawEvent, "helperKind", "helper_kind"),
+        startedAt: readRequiredString(rawEvent, "startedAt", "started_at"),
         snapshot: readSnapshot(rawEvent, "snapshot", "snapshot"),
       };
     case "subagent_progress":
@@ -165,6 +166,7 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         subtaskId: readRequiredString(rawEvent, "subtaskId", "subtask_id"),
         helperKind: readRequiredString(rawEvent, "helperKind", "helper_kind"),
+        startedAt: readRequiredString(rawEvent, "startedAt", "started_at"),
         activity: readActivity(rawEvent, "activity", "activity"),
         message: readRequiredString(rawEvent, "message", "message"),
         snapshot: readSnapshot(rawEvent, "snapshot", "snapshot"),
@@ -175,6 +177,7 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         subtaskId: readRequiredString(rawEvent, "subtaskId", "subtask_id"),
         helperKind: readRequiredString(rawEvent, "helperKind", "helper_kind"),
+        startedAt: readRequiredString(rawEvent, "startedAt", "started_at"),
         summary: readOptionalString(rawEvent, "summary", "summary"),
         snapshot: readSnapshot(rawEvent, "snapshot", "snapshot"),
       };
@@ -184,6 +187,7 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         subtaskId: readRequiredString(rawEvent, "subtaskId", "subtask_id"),
         helperKind: readRequiredString(rawEvent, "helperKind", "helper_kind"),
+        startedAt: readRequiredString(rawEvent, "startedAt", "started_at"),
         error: readRequiredString(rawEvent, "error", "error"),
         snapshot: readSnapshot(rawEvent, "snapshot", "snapshot"),
       };

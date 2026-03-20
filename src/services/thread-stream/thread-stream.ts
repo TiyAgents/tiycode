@@ -86,6 +86,7 @@ export type HelperEvent =
       runId: string;
       subtaskId: string;
       helperKind: string;
+      startedAt: string;
       snapshot: SubagentProgressSnapshot;
     }
   | {
@@ -93,6 +94,7 @@ export type HelperEvent =
       runId: string;
       subtaskId: string;
       helperKind: string;
+      startedAt: string;
       activity: SubagentActivityStatus;
       message: string;
       snapshot: SubagentProgressSnapshot;
@@ -102,6 +104,7 @@ export type HelperEvent =
       runId: string;
       subtaskId: string;
       helperKind: string;
+      startedAt: string;
       summary?: string | null;
       snapshot: SubagentProgressSnapshot;
     }
@@ -110,6 +113,7 @@ export type HelperEvent =
       runId: string;
       subtaskId: string;
       helperKind: string;
+      startedAt: string;
       error: string;
       snapshot: SubagentProgressSnapshot;
     };
@@ -260,6 +264,7 @@ export class ThreadStream {
           runId: event.runId,
           subtaskId: event.subtaskId,
           helperKind: event.helperKind,
+          startedAt: event.startedAt,
           snapshot: event.snapshot,
         });
         break;
@@ -270,6 +275,7 @@ export class ThreadStream {
           runId: event.runId,
           subtaskId: event.subtaskId,
           helperKind: event.helperKind,
+          startedAt: event.startedAt,
           activity: event.activity,
           message: event.message,
           snapshot: event.snapshot,
@@ -282,6 +288,7 @@ export class ThreadStream {
           runId: event.runId,
           subtaskId: event.subtaskId,
           helperKind: event.helperKind,
+          startedAt: event.startedAt,
           summary: event.summary,
           snapshot: event.snapshot,
         });
@@ -293,6 +300,7 @@ export class ThreadStream {
           runId: event.runId,
           subtaskId: event.subtaskId,
           helperKind: event.helperKind,
+          startedAt: event.startedAt,
           error: event.error,
           snapshot: event.snapshot,
         });

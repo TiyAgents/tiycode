@@ -326,6 +326,7 @@ export type ThreadStreamEvent =
       runId: string;
       subtaskId: string;
       helperKind: string;
+      startedAt: string;
       snapshot: SubagentProgressSnapshot;
     }
   | {
@@ -333,6 +334,7 @@ export type ThreadStreamEvent =
       runId: string;
       subtaskId: string;
       helperKind: string;
+      startedAt: string;
       activity: SubagentActivityStatus;
       message: string;
       snapshot: SubagentProgressSnapshot;
@@ -342,6 +344,7 @@ export type ThreadStreamEvent =
       runId: string;
       subtaskId: string;
       helperKind: string;
+      startedAt: string;
       summary: string | null;
       snapshot: SubagentProgressSnapshot;
     }
@@ -350,6 +353,7 @@ export type ThreadStreamEvent =
       runId: string;
       subtaskId: string;
       helperKind: string;
+      startedAt: string;
       error: string;
       snapshot: SubagentProgressSnapshot;
     }

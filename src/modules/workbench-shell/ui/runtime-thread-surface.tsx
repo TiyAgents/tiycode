@@ -1,12 +1,12 @@
 "use client";
 
 import type { ChatStatus } from "ai";
-import { AlertCircleIcon, BotIcon, RefreshCcwIcon, SparklesIcon } from "lucide-react";
+import { AlertCircleIcon, BotIcon, ChevronDownIcon, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Plan, PlanContent, PlanDescription, PlanHeader, PlanTitle, PlanTrigger } from "@/components/ai-elements/plan";
-import { Queue, QueueItem, QueueItemContent, QueueItemDescription, QueueItemIndicator, QueueList, QueueSection, QueueSectionContent, QueueSectionLabel, QueueSectionTrigger } from "@/components/ai-elements/queue";
+import { Queue, QueueItem, QueueItemContent, QueueItemDescription, QueueItemIndicator, QueueSection, QueueSectionContent, QueueSectionLabel, QueueSectionTrigger } from "@/components/ai-elements/queue";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "@/components/ai-elements/confirmation";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
@@ -24,6 +24,7 @@ import type {
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/shared/ui/collapsible";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 
@@ -459,6 +460,19 @@ function formatHelperToolCounts(toolCounts: Record<string, number>) {
     .map(([toolName, count]) => `${toolName} ${count}`);
 }
 
+function isHelperOwnedTool(
+  toolId: string,
+  helperIds: ReadonlySet<string>,
+) {
+  for (const helperId of helperIds) {
+    if (toolId.startsWith(`${helperId}:`)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry) {
   const timestampOrder = left.occurredAt.localeCompare(right.occurredAt);
   if (timestampOrder !== 0) {
@@ -537,12 +551,18 @@ export function RuntimeThreadSurface({
   const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
   const [runState, setRunState] = useState<RunState>("idle");
   const [snapshotReady, setSnapshotReady] = useState(false);
+  const [snapshotThreadId, setSnapshotThreadId] = useState<string | null>(null);
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
   const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});
+  const [completedToolGroupOpen, setCompletedToolGroupOpen] = useState<Record<string, boolean>>({});
   const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
+  const snapshotLoadRequestRef = useRef(0);
   const streamRef = useRef<ThreadStream | null>(null);
 
   const loadSnapshot = useCallback(async () => {
+    const requestId = snapshotLoadRequestRef.current + 1;
+    snapshotLoadRequestRef.current = requestId;
+
     if (!threadId) {
       setMessages([]);
       setLoadError(null);
@@ -550,6 +570,7 @@ export function RuntimeThreadSurface({
       setRuntimeError(null);
       setRunState("idle");
       setSnapshotReady(true);
+      setSnapshotThreadId(null);
       onRunStateChange?.("idle");
       return;
     }
@@ -559,6 +580,10 @@ export function RuntimeThreadSurface({
 
     try {
       const snapshot = await threadLoad(threadId);
+      if (snapshotLoadRequestRef.current !== requestId) {
+        return;
+      }
+
       const nextState = mapSnapshotToRunState(snapshot);
       setMessages(snapshot.messages.map(mapSnapshotMessage));
       setTools((snapshot.toolCalls ?? []).map(mapSnapshotTool));
@@ -566,13 +591,21 @@ export function RuntimeThreadSurface({
       setRuntimeError(getSnapshotRuntimeError(snapshot));
       setRunState(nextState);
       setSnapshotReady(true);
+      setSnapshotThreadId(threadId);
       onRunStateChange?.(nextState);
     } catch (error) {
+      if (snapshotLoadRequestRef.current !== requestId) {
+        return;
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       setLoadError(message);
       setSnapshotReady(true);
+      setSnapshotThreadId(threadId);
     } finally {
-      setLoading(false);
+      if (snapshotLoadRequestRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }, [onRunStateChange, threadId]);
 
@@ -586,6 +619,7 @@ export function RuntimeThreadSurface({
     setRuntimeError(null);
     setRunState("idle");
     setSnapshotReady(false);
+    setSnapshotThreadId(null);
     setTools([]);
     void loadSnapshot();
   }, [loadSnapshot]);
@@ -671,7 +705,7 @@ export function RuntimeThreadSurface({
               kind: event.helperKind,
               latestMessage: undefined,
               runId: event.runId,
-              startedAt: entry?.startedAt ?? new Date().toISOString(),
+              startedAt: entry?.startedAt ?? event.startedAt,
               status: "running",
               summary: entry?.summary,
               totalToolCalls: event.snapshot.totalToolCalls,
@@ -686,7 +720,7 @@ export function RuntimeThreadSurface({
               kind: event.helperKind,
               latestMessage: event.message,
               runId: event.runId,
-              startedAt: entry?.startedAt ?? new Date().toISOString(),
+              startedAt: entry?.startedAt ?? event.startedAt,
               status: entry?.status ?? "running",
               summary: entry?.summary,
               totalToolCalls: event.snapshot.totalToolCalls,
@@ -701,7 +735,7 @@ export function RuntimeThreadSurface({
               kind: event.helperKind,
               latestMessage: undefined,
               runId: event.runId,
-              startedAt: _entry?.startedAt ?? new Date().toISOString(),
+              startedAt: _entry?.startedAt ?? event.startedAt,
               status: "completed",
               summary: event.summary,
               totalToolCalls: event.snapshot.totalToolCalls,
@@ -716,7 +750,7 @@ export function RuntimeThreadSurface({
               kind: event.helperKind,
               latestMessage: undefined,
               runId: event.runId,
-              startedAt: _entry?.startedAt ?? new Date().toISOString(),
+              startedAt: _entry?.startedAt ?? event.startedAt,
               status: "failed",
               summary: undefined,
               totalToolCalls: event.snapshot.totalToolCalls,
@@ -905,7 +939,15 @@ export function RuntimeThreadSurface({
   }, [activeAgentProfileId, activeProfile, agentProfiles, providers, runState, threadId]);
 
   useEffect(() => {
-    if (!initialPromptRequest || !snapshotReady) {
+    const isCurrentThreadSnapshotReady =
+      snapshotReady && snapshotThreadId === threadId;
+
+    if (
+      !initialPromptRequest
+      || !isCurrentThreadSnapshotReady
+      || runState === "running"
+      || runState === "waiting_approval"
+    ) {
       return;
     }
 
@@ -913,16 +955,24 @@ export function RuntimeThreadSurface({
       .finally(() => {
         onConsumeInitialPrompt?.(initialPromptRequest.id);
       });
-  }, [initialPromptRequest, onConsumeInitialPrompt, snapshotReady, submitPrompt]);
+  }, [initialPromptRequest, onConsumeInitialPrompt, runState, snapshotReady, snapshotThreadId, submitPrompt, threadId]);
 
   const composerStatus: ChatStatus =
     runState === "running" || runState === "waiting_approval" ? "streaming" : "ready";
+  const helperIds = useMemo(
+    () => new Set(helpers.map((helper) => helper.id)),
+    [helpers],
+  );
+  const visibleTools = useMemo(
+    () => tools.filter((tool) => !isHelperOwnedTool(tool.id, helperIds)),
+    [helperIds, tools],
+  );
   const hasRuntimeArtifacts =
     Boolean(runtimeError)
     || Boolean(planArtifact)
     || Boolean(queueArtifact)
     || helpers.length > 0
-    || tools.length > 0;
+    || visibleTools.length > 0;
   const formattedPlan = planArtifact ? formatPlan(planArtifact) : null;
   const timelineEntries = useMemo<Array<TimelineEntry>>(
     () =>
@@ -939,14 +989,14 @@ export function RuntimeThreadSurface({
           occurredAt: helper.startedAt,
           helper,
         })),
-        ...tools.map((tool) => ({
+        ...visibleTools.map((tool) => ({
           kind: "tool" as const,
           key: `tool:${tool.id}`,
           occurredAt: tool.startedAt,
           tool,
         })),
       ].sort(compareTimelineEntries),
-    [helpers, messages, tools],
+    [helpers, messages, visibleTools],
   );
   const presentationEntries = useMemo<Array<TimelinePresentationEntry>>(
     () => groupCompletedToolEntries(timelineEntries),
@@ -955,12 +1005,12 @@ export function RuntimeThreadSurface({
 
   useEffect(() => {
     const previousToolStates = previousToolStatesRef.current;
-    const nextToolStates = Object.fromEntries(tools.map((tool) => [tool.id, tool.state]));
+    const nextToolStates = Object.fromEntries(visibleTools.map((tool) => [tool.id, tool.state]));
 
     setCompletedToolOpen((current) => {
       const next: Record<string, boolean> = {};
 
-      for (const tool of tools) {
+      for (const tool of visibleTools) {
         const previousState = previousToolStates[tool.id];
 
         if (previousState !== tool.state) {
@@ -992,7 +1042,23 @@ export function RuntimeThreadSurface({
     });
 
     previousToolStatesRef.current = nextToolStates;
-  }, [tools]);
+  }, [visibleTools]);
+
+  useEffect(() => {
+    const nextGroupKeys = new Set(
+      presentationEntries
+        .filter((entry): entry is Extract<TimelinePresentationEntry, { kind: "tool-group" }> => entry.kind === "tool-group")
+        .map((entry) => entry.key),
+    );
+
+    setCompletedToolGroupOpen((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([key]) => nextGroupKeys.has(key)),
+      );
+
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [presentationEntries]);
 
   const handleSubmit = useCallback(async (message: PromptInputMessage) => {
     const prompt = buildPromptText(message);
@@ -1007,6 +1073,80 @@ export function RuntimeThreadSurface({
   const handleCompletedToolOpenChange = useCallback((toolId: string, open: boolean) => {
     setCompletedToolOpen((current) => (current[toolId] === open ? current : { ...current, [toolId]: open }));
   }, []);
+
+  const handleCompletedToolGroupOpenChange = useCallback((groupId: string, open: boolean) => {
+    setCompletedToolGroupOpen((current) => (current[groupId] === open ? current : { ...current, [groupId]: open }));
+  }, []);
+
+  const renderToolEntry = useCallback((tool: SurfaceToolEntry, key: string, inset = false) => (
+    <Message className="max-w-full" from="assistant" key={key}>
+      <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+        <Tool
+          className={cn(
+            "rounded-2xl border border-app-border/28 bg-app-surface/24 shadow-none",
+            inset ? "mb-0 rounded-xl bg-app-surface/18" : undefined,
+          )}
+          onOpenChange={(open) => {
+            if (tool.state !== "output-available") {
+              return;
+            }
+
+            handleCompletedToolOpenChange(tool.id, open);
+          }}
+          open={tool.state !== "output-available" ? true : (completedToolOpen[tool.id] ?? false)}
+        >
+          <ToolHeader state={tool.state} title={tool.name} toolName={tool.name} type="dynamic-tool" />
+          <ToolContent>
+            {tool.input !== undefined ? <ToolInput input={tool.input} /> : null}
+
+            <Confirmation approval={tool.approval} state={tool.state}>
+              <ConfirmationTitle>
+                <ConfirmationRequest>
+                  This tool requires approval before continuing the run.
+                </ConfirmationRequest>
+                <ConfirmationAccepted>
+                  <span>{getApprovalReason(tool.approval) || "Approval granted. Execution resumed."}</span>
+                </ConfirmationAccepted>
+                <ConfirmationRejected>
+                  <span>{tool.error || getApprovalReason(tool.approval) || "Approval denied."}</span>
+                </ConfirmationRejected>
+              </ConfirmationTitle>
+
+              <ConfirmationActions>
+                <ConfirmationAction
+                  onClick={() => {
+                    if (!streamRef.current?.runId) {
+                      return;
+                    }
+
+                    void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, false);
+                  }}
+                  variant="outline"
+                >
+                  Reject
+                </ConfirmationAction>
+                <ConfirmationAction
+                  onClick={() => {
+                    if (!streamRef.current?.runId) {
+                      return;
+                    }
+
+                    void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, true);
+                  }}
+                >
+                  Approve
+                </ConfirmationAction>
+              </ConfirmationActions>
+            </Confirmation>
+
+            {tool.state === "output-available" || tool.state === "output-denied" || tool.state === "output-error" ? (
+              <ToolOutput errorText={tool.state === "output-available" ? undefined : tool.error} output={tool.result} />
+            ) : null}
+          </ToolContent>
+        </Tool>
+      </MessageContent>
+    </Message>
+  ), [completedToolOpen, handleCompletedToolOpenChange]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">
@@ -1092,79 +1232,106 @@ export function RuntimeThreadSurface({
                       <Queue className="rounded-2xl border border-app-border/24 bg-app-surface/16 p-2 shadow-none">
                         <QueueSection defaultOpen>
                           <QueueSectionTrigger>
-                            <QueueSectionLabel count={1} label="Helper Task" />
+                            <QueueSectionLabel count={1} label="Task" />
                           </QueueSectionTrigger>
                           <QueueSectionContent>
-                            <QueueList>
-                              <QueueItem>
-                                <div className="flex items-start gap-3">
-                                  <QueueItemIndicator completed={helper.status === "completed"} />
-                                  <QueueItemContent completed={helper.status === "completed"}>
-                                    {formatHelperKind(helper.kind)}
-                                  </QueueItemContent>
-                                  <Badge
-                                    className={cn(
-                                      "ml-auto rounded-full",
-                                      helper.status === "failed"
-                                        ? "bg-app-danger/10 text-app-danger"
-                                        : helper.status === "completed"
-                                          ? "bg-app-success/10 text-app-success"
-                                          : "bg-app-info/10 text-app-info",
-                                    )}
-                                    variant="outline"
-                                  >
-                                    {helper.status}
-                                  </Badge>
-                                </div>
-                                {helper.inputSummary ? (
-                                  <QueueItemDescription completed={helper.status === "completed"}>
-                                    {helper.inputSummary}
-                                  </QueueItemDescription>
-                                ) : null}
-                                {helper.totalToolCalls > 0 ? (
-                                  <QueueItemDescription completed={helper.status === "completed"}>
-                                    {`${helper.totalToolCalls} tool calls, ${helper.completedSteps} finished`}
-                                  </QueueItemDescription>
-                                ) : null}
-                                {formatHelperToolCounts(helper.toolCounts).length > 0 ? (
-                                  <QueueItemDescription completed={helper.status === "completed"}>
-                                    {formatHelperToolCounts(helper.toolCounts).join(" · ")}
-                                  </QueueItemDescription>
-                                ) : null}
-                                {helper.currentAction ? (
-                                  <QueueItemDescription completed={helper.status === "completed"}>
-                                    {`Current: ${helper.currentAction}`}
-                                  </QueueItemDescription>
-                                ) : null}
-                                {helper.latestMessage ? (
-                                  <QueueItemDescription completed={helper.status === "completed"}>
-                                    {helper.latestMessage}
-                                  </QueueItemDescription>
-                                ) : null}
-                                {helper.recentActions.length > 0 ? (
-                                  <div className="space-y-1">
-                                    {helper.recentActions.slice(-3).map((action, index) => (
-                                      <QueueItemDescription
-                                        completed={helper.status === "completed"}
-                                        key={`${helper.id}-action-${index}`}
-                                      >
-                                        {action}
-                                      </QueueItemDescription>
-                                    ))}
-                                  </div>
-                                ) : null}
-                                {helper.summary ? (
-                                  <QueueItemDescription completed={helper.status === "completed"}>
-                                    {helper.summary}
-                                  </QueueItemDescription>
-                                ) : null}
-                                {helper.error ? (
-                                  <QueueItemDescription className="text-app-danger">
-                                    {helper.error}
-                                  </QueueItemDescription>
-                                ) : null}
-                              </QueueItem>
-                            </QueueList>
+                            <div className="mt-2 max-h-40 overflow-y-auto pr-3">
+                              <div className="pr-3">
+                                <ul>
+                                  <QueueItem className="rounded-xl px-3 py-3 hover:bg-app-surface/20">
+                                    <div className="flex min-w-0 items-start gap-3">
+                                      <QueueItemIndicator className="shrink-0" completed={helper.status === "completed"} />
+                                      <div className="min-w-0 flex-1 space-y-2">
+                                        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3 pr-2">
+                                          <QueueItemContent
+                                            className="min-w-0 whitespace-normal break-words line-clamp-none"
+                                            completed={helper.status === "completed"}
+                                          >
+                                            {formatHelperKind(helper.kind)}
+                                          </QueueItemContent>
+                                          <Badge
+                                            className={cn(
+                                              "shrink-0 rounded-full",
+                                              helper.status === "failed"
+                                                ? "bg-app-danger/10 text-app-danger"
+                                                : helper.status === "completed"
+                                                  ? "bg-app-success/10 text-app-success"
+                                                  : "bg-app-info/10 text-app-info",
+                                            )}
+                                            variant="outline"
+                                          >
+                                            {helper.status}
+                                          </Badge>
+                                        </div>
+                                        {helper.inputSummary ? (
+                                          <QueueItemDescription
+                                            className="ml-0 whitespace-pre-wrap break-words"
+                                            completed={helper.status === "completed"}
+                                          >
+                                            {helper.inputSummary}
+                                          </QueueItemDescription>
+                                        ) : null}
+                                        {helper.totalToolCalls > 0 ? (
+                                          <QueueItemDescription className="ml-0" completed={helper.status === "completed"}>
+                                            {`${helper.totalToolCalls} tool calls, ${helper.completedSteps} finished`}
+                                          </QueueItemDescription>
+                                        ) : null}
+                                        {formatHelperToolCounts(helper.toolCounts).length > 0 ? (
+                                          <QueueItemDescription
+                                            className="ml-0 whitespace-pre-wrap break-words"
+                                            completed={helper.status === "completed"}
+                                          >
+                                            {formatHelperToolCounts(helper.toolCounts).join(" · ")}
+                                          </QueueItemDescription>
+                                        ) : null}
+                                        {helper.currentAction ? (
+                                          <QueueItemDescription
+                                            className="ml-0 whitespace-pre-wrap break-words"
+                                            completed={helper.status === "completed"}
+                                          >
+                                            {`Current: ${helper.currentAction}`}
+                                          </QueueItemDescription>
+                                        ) : null}
+                                        {helper.latestMessage ? (
+                                          <QueueItemDescription
+                                            className="ml-0 whitespace-pre-wrap break-words"
+                                            completed={helper.status === "completed"}
+                                          >
+                                            {helper.latestMessage}
+                                          </QueueItemDescription>
+                                        ) : null}
+                                        {helper.recentActions.length > 0 ? (
+                                          <div className="space-y-1">
+                                            {helper.recentActions.slice(-3).map((action, index) => (
+                                              <QueueItemDescription
+                                                className="ml-0 whitespace-pre-wrap break-words"
+                                                completed={helper.status === "completed"}
+                                                key={`${helper.id}-action-${index}`}
+                                              >
+                                                {action}
+                                              </QueueItemDescription>
+                                            ))}
+                                          </div>
+                                        ) : null}
+                                        {helper.summary ? (
+                                          <QueueItemDescription
+                                            className="ml-0 whitespace-pre-wrap break-words"
+                                            completed={helper.status === "completed"}
+                                          >
+                                            {helper.summary}
+                                          </QueueItemDescription>
+                                        ) : null}
+                                        {helper.error ? (
+                                          <QueueItemDescription className="ml-0 whitespace-pre-wrap break-words text-app-danger">
+                                            {helper.error}
+                                          </QueueItemDescription>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </QueueItem>
+                                </ul>
+                              </div>
+                            </div>
                           </QueueSectionContent>
                         </QueueSection>
                       </Queue>
@@ -1177,106 +1344,39 @@ export function RuntimeThreadSurface({
                 return (
                   <Message className="max-w-full" from="assistant" key={entry.key}>
                     <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                      <Tool
-                        className="rounded-2xl border border-app-border/28 bg-app-surface/24 shadow-none"
-                        defaultOpen={false}
+                      <Collapsible
+                        onOpenChange={(open) => handleCompletedToolGroupOpenChange(entry.key, open)}
+                        open={completedToolGroupOpen[entry.key] ?? false}
                       >
-                        <ToolHeader
-                          state="output-available"
-                          title={`Tools × ${entry.tools.length}`}
-                          toolName="tools"
-                          type="dynamic-tool"
-                        />
-                        <ToolContent className="space-y-3">
+                        <CollapsibleTrigger
+                          className={cn(
+                            "flex w-full items-center gap-2 text-sm text-app-subtle transition-colors hover:text-app-foreground",
+                            completedToolGroupOpen[entry.key] ? "text-app-foreground" : undefined,
+                          )}
+                        >
+                          <WrenchIcon className="size-4 shrink-0" />
+                          <span className="font-medium">{`Tools × ${entry.tools.length}`}</span>
+                          <span className="text-app-muted">Completed tool results</span>
+                          <ChevronDownIcon
+                            className={cn(
+                              "ml-auto size-4 shrink-0 transition-transform",
+                              completedToolGroupOpen[entry.key] ? "rotate-180" : undefined,
+                            )}
+                          />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="space-y-3 pt-3 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:animate-in data-[state=open]:slide-in-from-top-2">
                           {entry.tools.map((tool) => (
-                            <div
-                              className="space-y-3 rounded-xl border border-app-border/24 bg-app-surface/18 p-3"
-                              key={tool.id}
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-app-foreground">{tool.name}</span>
-                                <Badge className="rounded-full bg-app-success/10 text-app-success" variant="outline">
-                                  completed
-                                </Badge>
-                              </div>
-                              {tool.input !== undefined ? <ToolInput input={tool.input} /> : null}
-                              <ToolOutput errorText={undefined} output={tool.result} />
-                            </div>
+                            renderToolEntry(tool, `${entry.key}:${tool.id}`, true)
                           ))}
-                        </ToolContent>
-                      </Tool>
+                        </CollapsibleContent>
+                      </Collapsible>
                     </MessageContent>
                   </Message>
                 );
               }
 
               const { tool } = entry;
-              return (
-                <Message className="max-w-full" from="assistant" key={entry.key}>
-                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                    <Tool
-                      className="rounded-2xl border border-app-border/28 bg-app-surface/24 shadow-none"
-                      onOpenChange={(open) => {
-                        if (tool.state !== "output-available") {
-                          return;
-                        }
-
-                        handleCompletedToolOpenChange(tool.id, open);
-                      }}
-                      open={tool.state !== "output-available" ? true : (completedToolOpen[tool.id] ?? false)}
-                    >
-                      <ToolHeader state={tool.state} title={tool.name} toolName={tool.name} type="dynamic-tool" />
-                      <ToolContent>
-                        {tool.input !== undefined ? <ToolInput input={tool.input} /> : null}
-
-                        <Confirmation approval={tool.approval} state={tool.state}>
-                          <ConfirmationTitle>
-                            <ConfirmationRequest>
-                              This tool requires approval before continuing the run.
-                            </ConfirmationRequest>
-                            <ConfirmationAccepted>
-                              <span>{getApprovalReason(tool.approval) || "Approval granted. Execution resumed."}</span>
-                            </ConfirmationAccepted>
-                            <ConfirmationRejected>
-                              <span>{tool.error || getApprovalReason(tool.approval) || "Approval denied."}</span>
-                            </ConfirmationRejected>
-                          </ConfirmationTitle>
-
-                          <ConfirmationActions>
-                            <ConfirmationAction
-                              onClick={() => {
-                                if (!streamRef.current?.runId) {
-                                  return;
-                                }
-
-                                void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, false);
-                              }}
-                              variant="outline"
-                            >
-                              Reject
-                            </ConfirmationAction>
-                            <ConfirmationAction
-                              onClick={() => {
-                                if (!streamRef.current?.runId) {
-                                  return;
-                                }
-
-                                void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, true);
-                              }}
-                            >
-                              Approve
-                            </ConfirmationAction>
-                          </ConfirmationActions>
-                        </Confirmation>
-
-                        {tool.state === "output-available" || tool.state === "output-denied" || tool.state === "output-error" ? (
-                          <ToolOutput errorText={tool.state === "output-available" ? undefined : tool.error} output={tool.result} />
-                        ) : null}
-                      </ToolContent>
-                    </Tool>
-                  </MessageContent>
-                </Message>
-              );
+              return renderToolEntry(tool, entry.key);
             })}
 
             {formattedPlan ? (

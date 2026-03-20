@@ -90,7 +90,7 @@ impl HelperAgentOrchestrator {
         let escalation_summary = Arc::new(StdMutex::new(None::<String>));
         let progress_state = Arc::new(StdMutex::new(SubagentProgressState::default()));
 
-        run_helper_repo::insert(
+        let helper_started_at = run_helper_repo::insert(
             &self.pool,
             &run_helper_repo::RunHelperInsert {
                 id: helper_id.clone(),
@@ -111,6 +111,7 @@ impl HelperAgentOrchestrator {
             run_id: request.run_id.clone(),
             subtask_id: helper_id.clone(),
             helper_kind: resolved_helper_kind.clone(),
+            started_at: helper_started_at.clone(),
             snapshot: snapshot_from_progress(&progress_state),
         });
 
@@ -143,6 +144,7 @@ impl HelperAgentOrchestrator {
         let helper_kind = resolved_helper_kind.clone();
         let helper_id_for_tools = helper_id.clone();
         let helper_id_for_events = helper_id.clone();
+        let helper_started_at_for_events = helper_started_at.clone();
         let helper_agent = Arc::clone(&agent);
         let escalation_summary_ref = Arc::clone(&escalation_summary);
         let progress_state_ref = Arc::clone(&progress_state);
@@ -163,6 +165,7 @@ impl HelperAgentOrchestrator {
             let progress_state_ref = Arc::clone(&progress_state_ref);
             let progress_event_tx = progress_event_tx.clone();
             let helper_id_for_events = helper_id_for_events.clone();
+            let helper_started_at_for_events = helper_started_at_for_events.clone();
 
             async move {
                 let action = describe_subagent_action(&tool_name, &tool_input);
@@ -171,6 +174,7 @@ impl HelperAgentOrchestrator {
                     &helper_run_id,
                     &helper_id_for_events,
                     &helper_kind,
+                    &helper_started_at_for_events,
                     SubagentActivityStatus::Started,
                     &progress_state_ref,
                     action.started_message.clone(),
@@ -195,6 +199,7 @@ impl HelperAgentOrchestrator {
                         &helper_run_id,
                         &helper_id_for_events,
                         &helper_kind,
+                        &helper_started_at_for_events,
                         SubagentActivityStatus::Failed,
                         &progress_state_ref,
                         format!("{} ({error})", action.failed_message),
@@ -244,6 +249,7 @@ impl HelperAgentOrchestrator {
                                 &helper_run_id,
                                 &helper_id_for_events,
                                 &helper_kind,
+                                &helper_started_at_for_events,
                                 activity,
                                 &progress_state_ref,
                                 message,
@@ -257,6 +263,7 @@ impl HelperAgentOrchestrator {
                                 &helper_run_id,
                                 &helper_id_for_events,
                                 &helper_kind,
+                                &helper_started_at_for_events,
                                 SubagentActivityStatus::Failed,
                                 &progress_state_ref,
                                 format!("{} ({reason})", action.failed_message),
@@ -274,6 +281,7 @@ impl HelperAgentOrchestrator {
                                 &helper_run_id,
                                 &helper_id_for_events,
                                 &helper_kind,
+                                &helper_started_at_for_events,
                                 SubagentActivityStatus::Failed,
                                 &progress_state_ref,
                                 format!("{} ({reason})", action.failed_message),
@@ -291,6 +299,7 @@ impl HelperAgentOrchestrator {
                                 &helper_run_id,
                                 &helper_id_for_events,
                                 &helper_kind,
+                                &helper_started_at_for_events,
                                 SubagentActivityStatus::Failed,
                                 &progress_state_ref,
                                 "Helper tool execution cancelled".to_string(),
@@ -309,6 +318,7 @@ impl HelperAgentOrchestrator {
                             &helper_run_id,
                             &helper_id_for_events,
                             &helper_kind,
+                            &helper_started_at_for_events,
                             SubagentActivityStatus::Failed,
                             &progress_state_ref,
                             format!("{} ({error})", action.failed_message),
@@ -339,6 +349,7 @@ impl HelperAgentOrchestrator {
                 run_id: request.run_id,
                 subtask_id: helper_id,
                 helper_kind: resolved_helper_kind.clone(),
+                started_at: helper_started_at.clone(),
                 summary: Some(summary.clone()),
                 snapshot: snapshot.clone(),
             });
@@ -358,6 +369,7 @@ impl HelperAgentOrchestrator {
                     run_id: request.run_id,
                     subtask_id: helper_id,
                     helper_kind: resolved_helper_kind,
+                    started_at: helper_started_at.clone(),
                     summary: Some(summary.clone()),
                     snapshot: snapshot.clone(),
                 });
@@ -379,6 +391,7 @@ impl HelperAgentOrchestrator {
                     run_id: request.run_id,
                     subtask_id: helper_id,
                     helper_kind: resolved_helper_kind,
+                    started_at: helper_started_at,
                     error: error.to_string(),
                     snapshot,
                 });
@@ -456,6 +469,7 @@ fn emit_subagent_progress<F>(
     run_id: &str,
     subtask_id: &str,
     helper_kind: &str,
+    started_at: &str,
     activity: SubagentActivityStatus,
     progress_state: &Arc<StdMutex<SubagentProgressState>>,
     message: String,
@@ -474,6 +488,7 @@ fn emit_subagent_progress<F>(
         run_id: run_id.to_string(),
         subtask_id: subtask_id.to_string(),
         helper_kind: helper_kind.to_string(),
+        started_at: started_at.to_string(),
         activity,
         message,
         snapshot,

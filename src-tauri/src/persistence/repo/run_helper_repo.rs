@@ -51,7 +51,7 @@ pub struct RunHelperInsert {
     pub input_summary: Option<String>,
 }
 
-pub async fn insert(pool: &SqlitePool, helper: &RunHelperInsert) -> Result<(), AppError> {
+pub async fn insert(pool: &SqlitePool, helper: &RunHelperInsert) -> Result<String, AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT INTO run_helpers (
@@ -73,7 +73,7 @@ pub async fn insert(pool: &SqlitePool, helper: &RunHelperInsert) -> Result<(), A
     .execute(pool)
     .await?;
 
-    Ok(())
+    Ok(now)
 }
 
 pub async fn mark_completed(
