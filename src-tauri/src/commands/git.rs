@@ -628,11 +628,11 @@ async fn build_commit_message_prompt(
     };
     let effective_prompt = normalize_commit_message_prompt(prompt);
     let runtime_language_rules = format!(
-        "Runtime language control:\n- Configured commit message language: {language}\n- Output the entire commit message in {language}.\n- Treat this runtime language control as higher priority than any conflicting language instructions inside the base prompt.\n- Ignore any legacy --language examples in the base prompt when they conflict with this runtime language control.\n- Do not mix languages within the same message."
+        "Runtime language control:\n- Configured commit message language: {language}\n- Output the entire commit message in {language}.\n- Treat this runtime language control as higher priority than any conflicting language instructions inside the base prompt.\n- Do not mix languages within the same message."
     );
 
     Ok(format!(
-        "{runtime_language_rules}\n\nBase prompt:\n{effective_prompt}\n\nGit context:\n- Workspace: {}\n- Input source: {source_label}{file_count_note}\n\nChanged files:\n{change_summary}\n\nDetailed diffs:\n{}",
+        "# {runtime_language_rules}\n\n# Base prompt:\n\n{effective_prompt}\n\n# Git context:\n- Workspace: {}\n- Input source: {source_label}{file_count_note}\n\n# Changed files:\n{change_summary}\n\n# Detailed diffs:\n```{}```",
         workspace.canonical_path,
         rendered_diffs.join("\n\n")
     ))
