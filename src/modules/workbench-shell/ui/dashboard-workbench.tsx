@@ -91,7 +91,9 @@ import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-
 import { WorkbenchTopBar } from "@/modules/workbench-shell/ui/workbench-top-bar";
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 import { cn } from "@/shared/lib/utils";
+import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
+import { terminalStore } from "@/features/terminal/model/terminal-store";
 
 const NEW_THREAD_TERMINAL_KEY_SUFFIX = "__new_thread__";
 const UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY = "__new_thread_pending__";
@@ -171,44 +173,6 @@ function mapRunStateToWorkbenchThreadStatus(state: RunState | "idle"): Workbench
     default:
       return "completed";
   }
-}
-
-function getInvokeErrorMessage(error: unknown, fallback: string) {
-  if (typeof error === "string" && error.trim().length > 0) {
-    return error;
-  }
-
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-
-  if (typeof error === "object" && error !== null) {
-    const userMessage = Reflect.get(error, "userMessage");
-    if (typeof userMessage === "string" && userMessage.trim().length > 0) {
-      return userMessage;
-    }
-
-    const message = Reflect.get(error, "message");
-    if (typeof message === "string" && message.trim().length > 0) {
-      return message;
-    }
-
-    const detail = Reflect.get(error, "detail");
-    if (typeof detail === "string" && detail.trim().length > 0) {
-      return detail;
-    }
-
-    try {
-      const serialized = JSON.stringify(error);
-      if (serialized && serialized !== "{}") {
-        return serialized;
-      }
-    } catch {
-      // no-op
-    }
-  }
-
-  return fallback;
 }
 
 function parseTokenCount(value: string | null | undefined) {
@@ -570,7 +534,7 @@ export function DashboardWorkbench() {
           return;
         }
 
-        const message = error instanceof Error ? error.message : String(error);
+        const message = getInvokeErrorMessage(error, "工作区初始化失败");
         setTerminalBootstrapError(message);
       });
 
@@ -656,7 +620,7 @@ export function DashboardWorkbench() {
             return;
           }
 
-          const message = refreshError instanceof Error ? refreshError.message : String(refreshError);
+          const message = getInvokeErrorMessage(refreshError, "刷新工作区列表失败");
           setTerminalBootstrapError(message);
         });
       })
@@ -665,7 +629,7 @@ export function DashboardWorkbench() {
           return;
         }
 
-        const message = error instanceof Error ? error.message : String(error);
+        const message = getInvokeErrorMessage(error, "添加工作区失败");
         setTerminalBootstrapError(message);
       });
 
@@ -699,7 +663,7 @@ export function DashboardWorkbench() {
           return;
         }
 
-        const message = error instanceof Error ? error.message : String(error);
+        const message = getInvokeErrorMessage(error, "更新默认工作区失败");
         setTerminalBootstrapError(message);
       });
 
@@ -750,7 +714,7 @@ export function DashboardWorkbench() {
           return;
         }
 
-        const message = error instanceof Error ? error.message : String(error);
+        const message = getInvokeErrorMessage(error, "准备新线程失败");
         setTerminalBootstrapError(message);
       });
 
@@ -1042,7 +1006,7 @@ export function DashboardWorkbench() {
     );
 
     void syncWorkspaceSidebar().catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = getInvokeErrorMessage(error, "刷新线程列表失败");
       setTerminalBootstrapError(message);
     });
   }, [syncWorkspaceSidebar]);
@@ -1067,6 +1031,7 @@ export function DashboardWorkbench() {
         }
 
         const isDeletingActiveThread = activeThread?.id === threadId;
+        terminalStore.removeSession(threadId);
 
         setWorkspaces((current) => {
           const next = current.map((workspace) => ({
@@ -1099,7 +1064,7 @@ export function DashboardWorkbench() {
           setComposerError(null);
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = getInvokeErrorMessage(error, "删除线程失败");
         setTerminalBootstrapError(message);
       } finally {
         setDeletingThreadId(null);
@@ -1163,7 +1128,7 @@ export function DashboardWorkbench() {
             await threadUpdateTitle(persistedThreadId, nextThreadName);
           }
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = getInvokeErrorMessage(error, "创建线程失败");
           setComposerError(message);
           return;
         }

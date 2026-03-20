@@ -5,6 +5,7 @@ import type {
   TerminalSessionDto,
   TerminalStreamEvent,
 } from "@/shared/types/api";
+import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { terminalClient } from "@/features/terminal/api/terminal-client";
 import { terminalStore, useTerminalStore } from "@/features/terminal/model/terminal-store";
 
@@ -127,8 +128,7 @@ export function useThreadTerminal({
         if (cancelled) {
           return;
         }
-        const message =
-          attachError instanceof Error ? attachError.message : String(attachError);
+        const message = getInvokeErrorMessage(attachError, "Terminal 连接失败。");
         setError(message);
       })
       .finally(() => {
@@ -160,8 +160,7 @@ export function useThreadTerminal({
         terminalStore.setSessionMeta(threadId, { cols, rows });
       })
       .catch((resizeError) => {
-        const message =
-          resizeError instanceof Error ? resizeError.message : String(resizeError);
+        const message = getInvokeErrorMessage(resizeError, "Terminal 尺寸同步失败。");
         setError(message);
       });
   }, [active, cols, rows, session, sessionId, threadId]);

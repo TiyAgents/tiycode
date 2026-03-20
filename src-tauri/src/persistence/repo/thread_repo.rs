@@ -146,7 +146,7 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("DELETE FROM thread_runs WHERE thread_id = ?")
+    sqlx::query("DELETE FROM messages WHERE thread_id = ?")
         .bind(id)
         .execute(&mut *tx)
         .await?;
@@ -156,12 +156,12 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("DELETE FROM messages WHERE thread_id = ?")
+    sqlx::query("DELETE FROM terminal_sessions WHERE thread_id = ?")
         .bind(id)
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("DELETE FROM terminal_sessions WHERE thread_id = ?")
+    sqlx::query("DELETE FROM thread_runs WHERE thread_id = ?")
         .bind(id)
         .execute(&mut *tx)
         .await?;

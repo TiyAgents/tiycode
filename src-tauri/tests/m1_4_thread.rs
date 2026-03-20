@@ -118,6 +118,88 @@ async fn test_thread_delete() {
     assert!(row.is_none());
 }
 
+#[tokio::test]
+async fn test_thread_delete_cascades_runtime_records() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-del-cascade", "/tmp/del-cascade").await;
+    test_helpers::seed_thread(&pool, "t-del-cascade", "ws-del-cascade").await;
+    test_helpers::seed_run(&pool, "r-del-cascade", "t-del-cascade", "completed", "default").await;
+    test_helpers::seed_message(
+        &pool,
+        "m-del-cascade",
+        "t-del-cascade",
+        "assistant",
+        "Cascade me",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tool-del-cascade",
+        "r-del-cascade",
+        "t-del-cascade",
+        "read_file",
+        "completed",
+    )
+    .await;
+    test_helpers::seed_run_helper(
+        &pool,
+        "helper-del-cascade",
+        "r-del-cascade",
+        "t-del-cascade",
+        "review",
+        "completed",
+    )
+    .await;
+
+    sqlx::query("UPDATE messages SET run_id = 'r-del-cascade' WHERE id = 'm-del-cascade'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let manager = ThreadManager::new(pool.clone());
+    manager
+        .delete("t-del-cascade")
+        .await
+        .expect("thread delete should succeed");
+
+    let thread_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM threads WHERE id = 't-del-cascade'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let message_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM messages WHERE thread_id = 't-del-cascade'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let run_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM thread_runs WHERE thread_id = 't-del-cascade'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let tool_call_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM tool_calls WHERE thread_id = 't-del-cascade'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let helper_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM run_helpers WHERE thread_id = 't-del-cascade'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(thread_count, 0);
+    assert_eq!(message_count, 0);
+    assert_eq!(run_count, 0);
+    assert_eq!(tool_call_count, 0);
+    assert_eq!(helper_count, 0);
+}
+
 // =========================================================================
 // T1.4.2 — Message persistence
 // =========================================================================

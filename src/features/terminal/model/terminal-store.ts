@@ -67,7 +67,12 @@ export const terminalStore = {
   removeSession(threadId: string) {
     setState((current) => {
       if (!(threadId in current.sessionsByThreadId)) {
-        return current;
+        return current.activeThreadId === threadId
+          ? {
+              ...current,
+              activeThreadId: null,
+            }
+          : current;
       }
 
       const next = { ...current.sessionsByThreadId };
@@ -75,6 +80,7 @@ export const terminalStore = {
 
       return {
         ...current,
+        activeThreadId: current.activeThreadId === threadId ? null : current.activeThreadId,
         sessionsByThreadId: next,
       };
     });
@@ -88,4 +94,3 @@ export function useTerminalStore<T>(selector: (value: TerminalStoreState) => T):
     () => selector(terminalStore.getState()),
   );
 }
-

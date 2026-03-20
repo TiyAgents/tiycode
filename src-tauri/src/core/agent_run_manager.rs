@@ -11,6 +11,7 @@ use tiy_core::types::{
     StreamOptions as TiyStreamOptions, UserMessage,
 };
 use tokio::sync::{mpsc, Mutex};
+use tokio::time::{sleep, Instant};
 
 use crate::core::agent_session::{
     build_session_spec, normalize_profile_response_language, normalize_profile_response_style,
@@ -173,18 +174,24 @@ impl AgentRunManager {
     }
 
     pub async fn cancel_run(&self, thread_id: &str) -> Result<(), AppError> {
+        if self.cancel_run_if_active(thread_id).await? {
+            return Ok(());
+        }
+
+        Err(AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.run.not_active",
+            "No active run for this thread",
+        ))
+    }
+
+    pub async fn cancel_run_if_active(&self, thread_id: &str) -> Result<bool, AppError> {
         let run_id = {
             let mut runs = self.active_runs.lock().await;
-            let run = runs
-                .values_mut()
-                .find(|run| run.thread_id == thread_id)
-                .ok_or_else(|| {
-                    AppError::recoverable(
-                        ErrorSource::Thread,
-                        "thread.run.not_active",
-                        "No active run for this thread",
-                    )
-                })?;
+            let run = runs.values_mut().find(|run| run.thread_id == thread_id);
+            let Some(run) = run else {
+                return Ok(false);
+            };
             run.cancellation_requested = true;
             run.run_id.clone()
         };
@@ -192,7 +199,36 @@ impl AgentRunManager {
         run_repo::update_status(&self.pool, &run_id, "cancelling").await?;
         self.runtime.cancel_session(&run_id).await?;
         tracing::info!(run_id = %run_id, "run cancel requested");
-        Ok(())
+        Ok(true)
+    }
+
+    pub async fn wait_until_thread_inactive(
+        &self,
+        thread_id: &str,
+        timeout: Duration,
+    ) -> Result<(), AppError> {
+        let deadline = Instant::now() + timeout;
+
+        loop {
+            let has_active_run = {
+                let runs = self.active_runs.lock().await;
+                runs.values().any(|run| run.thread_id == thread_id)
+            };
+
+            if !has_active_run {
+                return Ok(());
+            }
+
+            if Instant::now() >= deadline {
+                return Err(AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.run.cancel_timeout",
+                    "Timed out while waiting for the active thread run to stop",
+                ));
+            }
+
+            sleep(Duration::from_millis(50)).await;
+        }
     }
 
     pub fn spawn_runtime_event_loop(

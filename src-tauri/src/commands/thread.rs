@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tauri::State;
 
 use crate::core::app_state::AppState;
@@ -50,6 +52,11 @@ pub async fn thread_update_title(
 
 #[tauri::command]
 pub async fn thread_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    state.agent_run_manager.cancel_run_if_active(&id).await?;
+    state
+        .agent_run_manager
+        .wait_until_thread_inactive(&id, Duration::from_secs(5))
+        .await?;
     state.terminal_manager.close_for_thread(&id).await?;
     state.thread_manager.delete(&id).await
 }

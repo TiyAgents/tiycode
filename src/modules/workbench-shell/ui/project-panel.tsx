@@ -14,6 +14,7 @@ import {
 } from "@/services/bridge";
 import { Input } from "@/shared/ui/input";
 import { cn } from "@/shared/lib/utils";
+import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import {
   DRAWER_LIST_LABEL_CLASS,
   DRAWER_LIST_META_CLASS,
@@ -550,7 +551,7 @@ export function ProjectPanel({
           return;
         }
 
-        const message = error instanceof Error ? error.message : "读取文件树失败";
+        const message = getInvokeErrorMessage(error, "读取文件树失败");
         setTreeState({
           data: null,
           error: message,
@@ -630,7 +631,7 @@ export function ProjectPanel({
           return;
         }
 
-        const message = error instanceof Error ? error.message : "过滤文件失败";
+        const message = getInvokeErrorMessage(error, "过滤文件失败");
         setFilterState({
           data: null,
           error: message,
@@ -642,34 +643,6 @@ export function ProjectPanel({
       cancelled = true;
     };
   }, [currentProject, normalizedFilter, workspaceId]);
-
-  const getOpenErrorMessage = (error: unknown, fallback: string) => {
-    if (typeof error === "string" && error.trim().length > 0) {
-      return error;
-    }
-
-    if (error instanceof Error && error.message.trim().length > 0) {
-      return error.message;
-    }
-
-    if (typeof error === "object" && error !== null) {
-      const message = Reflect.get(error, "message");
-      if (typeof message === "string" && message.trim().length > 0) {
-        return message;
-      }
-
-      try {
-        const serialized = JSON.stringify(error);
-        if (serialized && serialized !== "{}") {
-          return serialized;
-        }
-      } catch {
-        // no-op
-      }
-    }
-
-    return fallback;
-  };
 
   const handleRefreshTree = () => {
     if (!currentProject || !workspaceId || !isTauri() || treeState.isLoading) {
@@ -707,7 +680,7 @@ export function ProjectPanel({
       setOpenMenuOpen(false);
       setOpenError(null);
     } catch (error) {
-      const message = getOpenErrorMessage(error, `Couldn't open in ${app.name}`);
+      const message = getInvokeErrorMessage(error, `Couldn't open in ${app.name}`);
       setOpenError(message);
       if (errorTimeoutRef.current) {
         window.clearTimeout(errorTimeoutRef.current);
@@ -738,7 +711,7 @@ export function ProjectPanel({
       });
       setOpenError(null);
     } catch (error) {
-      const message = getOpenErrorMessage(error, `Couldn't open file in ${preferredOpenApp.name}`);
+      const message = getInvokeErrorMessage(error, `Couldn't open file in ${preferredOpenApp.name}`);
       setOpenError(message);
       if (errorTimeoutRef.current) {
         window.clearTimeout(errorTimeoutRef.current);
@@ -841,7 +814,7 @@ export function ProjectPanel({
         };
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "读取目录内容失败";
+      const message = getInvokeErrorMessage(error, "读取目录内容失败");
       setTreeState((current) => ({
         ...current,
         error: message,
@@ -870,7 +843,7 @@ export function ProjectPanel({
         };
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "继续加载目录内容失败";
+      const message = getInvokeErrorMessage(error, "继续加载目录内容失败");
       setTreeState((current) => ({
         ...current,
         error: message,
@@ -925,7 +898,7 @@ export function ProjectPanel({
       setPendingRevealPath(response.targetPath);
       setFilterValue("");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "无法展开筛选结果路径";
+      const message = getInvokeErrorMessage(error, "无法展开筛选结果路径");
       setFilterState((current) => ({
         ...current,
         error: message,
