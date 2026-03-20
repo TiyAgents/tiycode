@@ -1636,7 +1636,7 @@ export function RuntimeThreadSurface({
                     <Message className="max-w-full" from="assistant">
                       <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
                         <Reasoning
-                          className="w-full bg-transparent px-0 py-0"
+                          className="mb-0 w-full bg-transparent px-0 py-0"
                           defaultOpen={false}
                           isStreaming
                         >
@@ -1657,7 +1657,7 @@ export function RuntimeThreadSurface({
                       <Message className="max-w-full" from="assistant">
                         <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
                           <Reasoning
-                            className="w-full bg-transparent px-0 py-0"
+                            className="mb-0 w-full bg-transparent px-0 py-0"
                             defaultOpen={message.status === "streaming" || runState === "running"}
                             isStreaming={message.status === "streaming"}
                           >
@@ -1820,7 +1820,7 @@ export function RuntimeThreadSurface({
                             <span className="text-app-muted">Completed tool results</span>
                             <ChevronDownIcon
                               className={cn(
-                                "ml-auto size-4 shrink-0 transition-transform",
+                                "size-4 shrink-0 transition-transform",
                                 completedToolGroupOpen[entry.key] ? "rotate-180" : undefined,
                               )}
                             />
