@@ -973,9 +973,13 @@ export function GitPanel({
     (snapshot?.stagedFiles.length ?? 0) +
     (snapshot?.unstagedFiles.length ?? 0) +
     (snapshot?.untrackedFiles.length ?? 0);
+  const hasStagedChanges = (snapshot?.stagedFiles.length ?? 0) > 0;
   const gitCliAvailable = snapshot?.capabilities.gitCliAvailable ?? false;
   const commitDisabled =
-    !gitCliAvailable || pendingAction !== null || commitMessage.trim().length === 0;
+    !gitCliAvailable ||
+    !hasStagedChanges ||
+    pendingAction !== null ||
+    commitMessage.trim().length === 0;
   const commitGeneratorDisabled =
     isMockMode ||
     !workspaceId ||
@@ -1444,6 +1448,10 @@ export function GitPanel({
               title={
                 !gitCliAvailable
                   ? "Git CLI is required"
+                  : !hasStagedChanges
+                    ? "Stage changes before committing"
+                    : commitMessage.trim().length === 0
+                      ? "Write a commit message first"
                   : pendingAction === "commit"
                     ? "Commit in progress"
                     : "Commit staged changes"

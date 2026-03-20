@@ -1323,7 +1323,7 @@ function GeneralSettingsPanel({
           <Textarea
             value={activeProfile.commitMessagePrompt}
             onChange={(event) => onUpdateAgentProfile(activeProfile.id, { commitMessagePrompt: event.target.value })}
-            className="min-h-48"
+            className="h-48 min-h-48 overflow-y-auto [field-sizing:fixed]"
           />
         </div>
       </SettingsSection>
