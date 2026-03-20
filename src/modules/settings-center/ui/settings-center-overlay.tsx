@@ -196,8 +196,8 @@ const RESPONSE_STYLE_OPTIONS: ReadonlyArray<{
   label: string;
   value: PromptResponseStyle;
 }> = [
-  { value: "balanced", label: "Balanced", description: "Clear by default, detailed when needed." },
   { value: "concise", label: "Concise", description: "Short, direct, and low-friction." },
+  { value: "balanced", label: "Balanced", description: "Clear by default, detailed when needed." },
   { value: "guide", label: "Guided", description: "More explanation around tradeoffs and choices." },
 ] as const;
 
