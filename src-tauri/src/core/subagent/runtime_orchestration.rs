@@ -136,6 +136,19 @@ impl SubagentProfile {
                 }),
             ),
             AgentTool::new(
+                "find_files",
+                "Find Files",
+                "Search for files by glob pattern. Returns matching file paths relative to the workspace.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string", "description": "Glob pattern, e.g. '*.ts', '*.json'" },
+                        "path": { "type": "string", "description": "Directory to search in (default: workspace root)" }
+                    },
+                    "required": ["pattern"]
+                }),
+            ),
+            AgentTool::new(
                 "search_repo",
                 "Search Repo",
                 "Search the current workspace with ripgrep.",

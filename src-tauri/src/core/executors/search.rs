@@ -1,3 +1,4 @@
+use super::truncation::{truncate_line, GREP_MAX_LINE_LENGTH, GREP_MAX_MATCHES};
 use super::ToolOutput;
 use crate::core::ripgrep::run_rg;
 use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
@@ -36,7 +37,7 @@ pub async fn search_repo(
 
     let mut args = vec![
         "--json".into(),
-        "--max-count=50".into(),
+        format!("--max-count={}", GREP_MAX_MATCHES).into(),
         "--max-filesize=1M".into(),
         query.into(),
         search_dir.as_os_str().to_os_string(),
@@ -51,14 +52,23 @@ pub async fn search_repo(
             let stdout = String::from_utf8_lossy(&output.stdout);
             let results = parse_rg_json(&stdout, &workspace_root);
 
+            let mut result = serde_json::json!({
+                "query": query,
+                "directory": search_dir.to_string_lossy().to_string(),
+                "results": results,
+                "count": results.len(),
+            });
+
+            if results.len() >= GREP_MAX_MATCHES {
+                result["notice"] = serde_json::json!(format!(
+                    "[{} matches limit reached. Refine your query for more specific results.]",
+                    GREP_MAX_MATCHES
+                ));
+            }
+
             Ok(ToolOutput {
                 success: true,
-                result: serde_json::json!({
-                    "query": query,
-                    "directory": search_dir.to_string_lossy().to_string(),
-                    "results": results,
-                    "count": results.len(),
-                }),
+                result,
             })
         }
         Err(e) => Ok(ToolOutput {
@@ -81,7 +91,10 @@ fn parse_rg_json(output: &str, workspace_root: &std::path::Path) -> Vec<serde_js
                 let data = &entry["data"];
                 let path = data["path"]["text"].as_str().unwrap_or("");
                 let line_number = data["line_number"].as_u64().unwrap_or(0);
-                let line_text = data["lines"]["text"].as_str().unwrap_or("").trim();
+                let raw_line_text = data["lines"]["text"].as_str().unwrap_or("").trim();
+
+                // Truncate long match lines (pi-mono style)
+                let line_text = truncate_line(raw_line_text, GREP_MAX_LINE_LENGTH);
 
                 // Make path relative to workspace for display
                 let display_path = std::path::Path::new(path)

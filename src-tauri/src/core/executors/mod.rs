@@ -1,8 +1,10 @@
+pub mod edit;
 pub mod filesystem;
 pub mod git;
 pub mod process;
 pub mod search;
 pub mod terminal;
+pub mod truncation;
 
 use serde_json::Value;
 use std::sync::Arc;
@@ -28,7 +30,9 @@ pub async fn execute_tool(
         "read_file" => filesystem::read_file(input, workspace_path).await,
         "write_file" => filesystem::write_file(input, workspace_path).await,
         "list_dir" => filesystem::list_dir(input, workspace_path).await,
+        "find_files" => filesystem::find_files(input, workspace_path).await,
         "search_repo" => search::search_repo(input, workspace_path).await,
+        "edit_file" => edit::edit_file(input, workspace_path).await,
         "run_command" => process::run_command(input, workspace_path).await,
         "git_add" | "git_stage" | "git_unstage" | "git_commit" | "git_fetch" | "git_pull"
         | "git_push" => git::execute(tool_name, input, workspace_path).await,

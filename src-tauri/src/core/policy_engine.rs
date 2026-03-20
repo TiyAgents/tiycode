@@ -42,6 +42,7 @@ pub struct PolicyCheck {
 /// Tools that mutate the workspace or system.
 const MUTATING_TOOLS: &[&str] = &[
     "write_file",
+    "edit_file",
     "apply_patch",
     "run_command",
     "git_add",
@@ -62,6 +63,7 @@ const MUTATING_TOOLS: &[&str] = &[
 const READ_ONLY_TOOLS: &[&str] = &[
     "read_file",
     "list_dir",
+    "find_files",
     "search_repo",
     "git_status",
     "git_diff",
@@ -302,7 +304,8 @@ impl PolicyEngine {
 /// Extract the target file path from tool input for boundary checking.
 fn extract_target_path(tool_name: &str, input: &serde_json::Value) -> Option<String> {
     match tool_name {
-        "read_file" | "write_file" | "list_dir" => input["path"].as_str().map(|s| s.to_string()),
+        "read_file" | "write_file" | "edit_file" | "list_dir" => input["path"].as_str().map(|s| s.to_string()),
+        "find_files" => input["path"].as_str().map(|s| s.to_string()),
         "apply_patch" => input["path"].as_str().map(|s| s.to_string()),
         "search_repo" => input["directory"].as_str().map(|s| s.to_string()),
         _ => None,

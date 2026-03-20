@@ -499,6 +499,15 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
     agent.set_transport(spec.model_plan.transport);
     agent.set_security_config(runtime_security_config());
 
+    // Context compression: automatically trim messages to fit the context window.
+    let compression_settings = crate::core::context_compression::CompressionSettings::new(
+        spec.model_plan.primary.model.context_window,
+    );
+    agent.set_transform_context(move |messages| {
+        let settings = compression_settings.clone();
+        async move { crate::core::context_compression::compress_context(messages, &settings) }
+    });
+
     if let Some(api_key) = spec.model_plan.primary.api_key.clone() {
         agent.set_api_key(api_key);
     }
@@ -648,6 +657,25 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ),
         AgentTool::new(
+            "find_files",
+            "Find Files",
+            "Search for files by glob pattern. Returns matching file paths relative to the workspace. Respects common ignore patterns (.git, node_modules, target). Output is truncated to 1000 results or 100KB.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern to match files, e.g. '*.ts', '*.json', '*.spec.ts'"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to search in (default: workspace root)"
+                    }
+                },
+                "required": ["pattern"]
+            }),
+        ),
+        AgentTool::new(
             "terminal_get_status",
             "Terminal Status",
             "Inspect the current thread terminal status without mutating it.",
@@ -669,6 +697,33 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
     tools.extend(runtime_orchestration_tools());
 
     if profile_name == DEFAULT_FULL_TOOL_PROFILE {
+        tools.push(AgentTool::new(
+            "edit_file",
+            "Edit File",
+            "Make a targeted edit to a file by specifying the exact text to find and its replacement. \
+             The old_string must uniquely identify the text to replace (appear exactly once in the file). \
+             Include enough surrounding context in old_string to make it unique. \
+             If old_string is empty, a new file will be created with new_string as content. \
+             Supports fuzzy matching for trailing whitespace and Unicode quote/dash differences.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to the file to edit"
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "The exact text to find and replace. Must match exactly once in the file. Use empty string to create a new file."
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "The replacement text"
+                    }
+                },
+                "required": ["path", "old_string", "new_string"]
+            }),
+        ));
         tools.push(AgentTool::new(
             "write_file",
             "Write File",
@@ -784,9 +839,25 @@ fn effective_api_for_model(model: &Model) -> tiy_core::types::Api {
     }
 }
 
+/// Maximum size for a single tool result sent to the LLM (8 MB).
+/// OpenAI Responses API enforces a 10 MB limit per `input[n].output` field;
+/// this leaves headroom for protocol overhead and JSON escaping.
+const MAX_TOOL_RESULT_SIZE: usize = 8_000_000;
+
 fn agent_tool_result_from_output(output: crate::core::executors::ToolOutput) -> AgentToolResult {
-    let rendered =
-        serde_json::to_string_pretty(&output.result).unwrap_or_else(|_| output.result.to_string());
+    // Use compact JSON (no pretty-print) to reduce whitespace overhead.
+    let mut rendered =
+        serde_json::to_string(&output.result).unwrap_or_else(|_| output.result.to_string());
+
+    // Hard safety cap — truncate if the serialized result is still too large.
+    if rendered.len() > MAX_TOOL_RESULT_SIZE {
+        rendered.truncate(MAX_TOOL_RESULT_SIZE);
+        // Ensure we don't cut in the middle of a multi-byte UTF-8 char
+        while !rendered.is_char_boundary(rendered.len()) {
+            rendered.pop();
+        }
+        rendered.push_str("\n\n[Tool output truncated: exceeded 8MB limit]");
+    }
 
     if output.success {
         AgentToolResult {

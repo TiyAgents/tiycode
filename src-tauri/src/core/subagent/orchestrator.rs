@@ -541,6 +541,18 @@ fn describe_subagent_action(
                 failed_message: format!("Failed searching {directory} for \"{query}\""),
             }
         }
+        "find_files" => {
+            let pattern = input
+                .get("pattern")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("*");
+            SubagentActionDescriptor {
+                current_action: format!("finding files matching \"{pattern}\""),
+                started_message: format!("Finding files matching \"{pattern}\""),
+                succeeded_message: format!("Finished finding files matching \"{pattern}\""),
+                failed_message: format!("Failed finding files matching \"{pattern}\""),
+            }
+        }
         "terminal_get_status" => SubagentActionDescriptor {
             current_action: "checking terminal status".to_string(),
             started_message: "Inspecting terminal status".to_string(),
@@ -602,9 +614,20 @@ fn take_escalation_summary(summary: &Arc<StdMutex<Option<String>>>) -> Option<St
     summary.lock().ok().and_then(|mut slot| slot.take())
 }
 
+/// Maximum size for a single tool result sent to the LLM (8 MB).
+const MAX_TOOL_RESULT_SIZE: usize = 8_000_000;
+
 fn helper_agent_tool_result_from_output(output: ToolOutput) -> AgentToolResult {
-    let rendered =
-        serde_json::to_string_pretty(&output.result).unwrap_or_else(|_| output.result.to_string());
+    let mut rendered =
+        serde_json::to_string(&output.result).unwrap_or_else(|_| output.result.to_string());
+
+    if rendered.len() > MAX_TOOL_RESULT_SIZE {
+        rendered.truncate(MAX_TOOL_RESULT_SIZE);
+        while !rendered.is_char_boundary(rendered.len()) {
+            rendered.pop();
+        }
+        rendered.push_str("\n\n[Tool output truncated: exceeded 8MB limit]");
+    }
 
     if output.success {
         AgentToolResult {

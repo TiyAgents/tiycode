@@ -1,15 +1,15 @@
 use tokio::process::Command;
 
+use super::truncation::{truncate_tail_bytes, COMMAND_MAX_BYTES, COMMAND_MAX_LINES};
 use super::ToolOutput;
 use crate::model::errors::AppError;
 
 /// Default timeout for run_command (60 seconds).
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
-/// Maximum output size (256 KB).
-const MAX_OUTPUT_SIZE: usize = 256_000;
-
 /// Execute a non-interactive, one-shot shell command.
+/// Output is truncated from the tail (keeps the last N lines/bytes) since
+/// the most recent output (errors, final results) is usually most useful.
 /// Input: { "command": "ls -la", "cwd": "/optional/path", "timeout": 30 }
 pub async fn run_command(
     input: &serde_json::Value,
@@ -45,8 +45,10 @@ pub async fn run_command(
     match result {
         Ok(Ok(output)) => {
             let exit_code = output.status.code().unwrap_or(-1);
-            let (stdout, stdout_truncated) = truncate_output(&output.stdout);
-            let (stderr, stderr_truncated) = truncate_output(&output.stderr);
+            let (stdout, stdout_truncated) =
+                truncate_tail_bytes(&output.stdout, COMMAND_MAX_BYTES, COMMAND_MAX_LINES);
+            let (stderr, stderr_truncated) =
+                truncate_tail_bytes(&output.stderr, COMMAND_MAX_BYTES, COMMAND_MAX_LINES);
 
             Ok(ToolOutput {
                 success: output.status.success(),
@@ -74,14 +76,5 @@ pub async fn run_command(
                 "command": command,
             }),
         }),
-    }
-}
-
-fn truncate_output(bytes: &[u8]) -> (String, bool) {
-    let s = String::from_utf8_lossy(bytes);
-    if s.len() > MAX_OUTPUT_SIZE {
-        (s[..MAX_OUTPUT_SIZE].to_string(), true)
-    } else {
-        (s.to_string(), false)
     }
 }
