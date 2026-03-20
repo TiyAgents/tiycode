@@ -36,6 +36,7 @@ fn bundle_ripgrep() -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
 
+    prepare_destination_for_copy(&destination)?;
     fs::copy(&rg_source, &destination)?;
 
     #[cfg(unix)]
@@ -47,6 +48,41 @@ fn bundle_ripgrep() -> io::Result<()> {
     }
 
     println!("cargo:rerun-if-changed={}", rg_source.display());
+    Ok(())
+}
+
+fn prepare_destination_for_copy(destination: &Path) -> io::Result<()> {
+    if !destination.exists() {
+        return Ok(());
+    }
+
+    make_writable_if_needed(destination)?;
+    fs::remove_file(destination)
+}
+
+fn make_writable_if_needed(path: &Path) -> io::Result<()> {
+    let metadata = fs::metadata(path)?;
+    let mut permissions = metadata.permissions();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = permissions.mode();
+        if mode & 0o200 == 0 {
+            permissions.set_mode(mode | 0o200);
+            fs::set_permissions(path, permissions)?;
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if permissions.readonly() {
+            permissions.set_readonly(false);
+            fs::set_permissions(path, permissions)?;
+        }
+    }
+
     Ok(())
 }
 
