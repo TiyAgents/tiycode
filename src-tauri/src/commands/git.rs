@@ -34,69 +34,140 @@ Input priority:
 1. If staged files exist, generate the commit message using only staged changes.
 2. If no staged files exist, generate the commit message using all modified, added, and deleted files in the working tree.
 
-Language rule:
-- Output the entire commit message in the configured commit message language provided below.
-- Do not mix languages within the same message.
+## Conventional Commits Format
 
-Output rule:
-- Output only the final commit message.
-- Do not include explanations, analysis, labels, code fences, or extra text.
-
-Format rules:
-- Default to simple style:
-  <type>[optional scope]: <emoji> <description>
-- Use full style only when the change is complex and needs additional context:
-  <type>[optional scope]: <emoji> <description>
-
-  <body>
-
-  <footer>
-
-Commit type selection:
-- feat: new feature
-- fix: bug fix
-- docs: documentation only
-- style: formatting or style changes only
-- refactor: code restructuring without behavior change
-- perf: performance improvement
-- test: test-related changes
-- chore: maintenance, tooling, dependency updates
-- ci: CI/CD changes
-- build: build system changes
-- revert: revert a previous commit
-
-Writing rules:
-- Use imperative mood and present tense.
-- Keep the subject line concise.
-- Do not end the subject line with a period.
-- Use a meaningful and brief scope when appropriate.
-- Prefer the main change type if multiple unrelated changes exist.
-- If the change is clearly large or needs explanation, include a short body and optional footer.
-
-Conventional Commits Format
-
-Simple Style (Default)
+### Simple Style (Default)
+```
 <type>[optional scope]: <emoji> <description>
+```
+Example: `feat(auth): ✨ add JWT token validation`
 
-Full Style
+### Full Style
+```
 <type>[optional scope]: <emoji> <description>
 
 <body>
 
 <footer>
+```
 
-Commit Types & Emojis
-- feat => ✨
-- fix => 🐛
-- docs => 📝
-- style => 🎨
-- refactor => ♻️
-- perf => ⚡️
-- test => ✅
-- chore => 🔧
-- ci => 👷
-- build => 📦
-- revert => ⏪
+## Commit Types & Emojis
+
+| Type | Emoji | Description | When to Use |
+|------|-------|-------------|-------------|
+| `feat` | ✨ | New feature | Adding new functionality |
+| `fix` | 🐛 | Bug fix | Fixing an issue |
+| `docs` | 📝 | Documentation | Documentation only changes |
+| `style` | 🎨 | Code style | Formatting, missing semi-colons, etc |
+| `refactor` | ♻️ | Code refactoring | Neither fixes bug nor adds feature |
+| `perf` | ⚡️ | Performance | Performance improvements |
+| `test` | ✅ | Testing | Adding missing tests |
+| `chore` | 🔧 | Maintenance | Changes to build process or tools |
+| `ci` | 👷 | CI/CD | Changes to CI configuration |
+| `build` | 📦 | Build system | Changes affecting build system |
+| `revert` | ⏪ | Revert | Reverting previous commit |
+
+## Body Section Guidelines (Full Style)
+
+The body should:
+- Explain **what** changed and **why** (not how)
+- Use bullet points for multiple changes
+- Include motivation for the change
+- Contrast behavior with previous behavior
+- Reference related issues or decisions
+- Be wrapped at 72 characters per line
+
+Good body example:
+```
+Previously, the application allowed unauthenticated access to
+user profile endpoints, creating a security vulnerability.
+
+This commit adds comprehensive authentication middleware that:
+- Validates JWT tokens on all protected routes
+- Implements proper token refresh logic
+- Adds rate limiting to prevent brute force attacks
+- Logs authentication failures for monitoring
+
+The change follows OAuth 2.0 best practices and improves
+overall application security posture.
+```
+
+## Footer Section Guidelines (Full Style)
+
+Footer contains:
+- **Breaking changes**: Start with `BREAKING CHANGE:`
+- **Issue references**: `Closes:`, `Fixes:`, `Refs:`
+- **Review references**: `Reviewed-by:`, `Approved-by:`
+
+Example footers:
+```
+BREAKING CHANGE: rename config.auth to config.authentication
+Closes: #123, #124
+```
+
+## Scope Guidelines
+
+Scope should be:
+- A noun describing the section of codebase
+- Consistent across the project
+- Brief and meaningful
+
+Common scopes:
+- `api`, `auth`, `ui`, `db`, `config`, `deps`
+- Component names: `button`, `modal`, `header`
+- Module names: `parser`, `compiler`, `validator`
+
+## Commit Splitting Strategy
+
+Automatically suggest splitting when detecting:
+1. **Mixed types**: Features + fixes in same commit
+2. **Multiple concerns**: Unrelated changes
+3. **Large scope**: Changes across many modules
+4. **File patterns**: Source + test + docs together
+5. **Dependencies**: Dependency updates mixed with features
+
+## Best Practices
+
+### DO:
+- ✅ Write in present tense, imperative mood ("add" not "added")
+- ✅ Keep first line under 50 characters (72 max)
+- ✅ Capitalize first letter of description
+- ✅ No period at end of subject line
+- ✅ Separate subject from body with blank line
+- ✅ Use body to explain what and why vs. how
+- ✅ Reference issues and breaking changes
+
+### DON'T:
+- ❌ Mix multiple logical changes in one commit
+- ❌ Include implementation details in subject
+- ❌ Use past tense ("added" instead of "add")
+- ❌ Make commits too large to review
+- ❌ Commit broken code (unless WIP)
+- ❌ Include sensitive information
+
+## Examples
+### Full Style Example
+```bash
+feat(auth): ✨ implement OAuth2 authentication flow
+
+Add complete OAuth2 authentication system supporting multiple
+providers (Google, GitHub, Microsoft). The implementation
+follows RFC 6749 specification and includes:
+
+- Authorization code flow with PKCE
+- Refresh token rotation
+- Scope-based permissions
+- Session management with Redis
+- Rate limiting per client
+
+This provides users with secure single sign-on capabilities
+while maintaining backwards compatibility with existing
+JWT authentication.
+
+BREAKING CHANGE: /api/auth endpoints now require client_id parameter
+Closes: #456, #457
+Refs: RFC-6749, RFC-7636
+```
 
 If information is insufficient, make the best reasonable inference from the available changes.
 Return only the commit message."#;
@@ -632,7 +703,7 @@ async fn build_commit_message_prompt(
     );
 
     Ok(format!(
-        "# {runtime_language_rules}\n\n# Base prompt:\n\n{effective_prompt}\n\n# Git context:\n- Workspace: {}\n- Input source: {source_label}{file_count_note}\n\n# Changed files:\n{change_summary}\n\n# Detailed diffs:\n```{}```",
+        "# {runtime_language_rules}\n\n# Base prompt:\n\n{effective_prompt}\n\n# Git context:\n- Workspace: {}\n- Input source: {source_label}{file_count_note}\n\n# Changed files:\n{change_summary}\n\n# Detailed diffs:\n```bash\n{}\n```\n\n",
         workspace.canonical_path,
         rendered_diffs.join("\n\n")
     ))
