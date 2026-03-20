@@ -481,6 +481,11 @@ impl AgentRunManager {
         lightweight_model_role: Option<ResolvedModelRole>,
     ) {
         let Some(model_role) = lightweight_model_role else {
+            tracing::debug!(
+                run_id = %run_id,
+                thread_id = %thread_id,
+                "skipping thread title generation: no lightweight model configured"
+            );
             return;
         };
 
@@ -542,12 +547,22 @@ async fn maybe_generate_thread_title(
     frontend_tx: mpsc::Sender<ThreadStreamEvent>,
 ) -> Result<(), AppError> {
     if message_repo::count_completed_assistant_plain_messages(pool, thread_id).await? != 1 {
+        tracing::debug!(
+            run_id = %run_id,
+            thread_id = %thread_id,
+            "skipping thread title generation: not exactly one completed assistant message"
+        );
         return Ok(());
     }
 
     let Some((user_message, assistant_message)) =
         load_initial_title_context(pool, thread_id).await?
     else {
+        tracing::debug!(
+            run_id = %run_id,
+            thread_id = %thread_id,
+            "skipping thread title generation: could not load initial title context"
+        );
         return Ok(());
     };
 
@@ -573,17 +588,38 @@ async fn maybe_generate_thread_title(
     )
     .await?
     else {
+        tracing::warn!(
+            run_id = %run_id,
+            thread_id = %thread_id,
+            "thread title generation returned empty result (timeout or empty response)"
+        );
         return Ok(());
     };
 
     thread_repo::update_title(pool, thread_id, &title).await?;
-    let _ = frontend_tx
+
+    tracing::info!(
+        run_id = %run_id,
+        thread_id = %thread_id,
+        title = %title,
+        "generated thread title, sending to frontend"
+    );
+
+    if frontend_tx
         .send(ThreadStreamEvent::ThreadTitleUpdated {
             run_id: run_id.to_string(),
             thread_id: thread_id.to_string(),
             title,
         })
-        .await;
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            run_id = %run_id,
+            thread_id = %thread_id,
+            "failed to send ThreadTitleUpdated event: frontend channel closed"
+        );
+    }
 
     Ok(())
 }

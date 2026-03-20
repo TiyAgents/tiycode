@@ -894,7 +894,6 @@ export function RuntimeThreadSurface({
 
     stream.onThreadTitle = (event: ThreadTitleEvent) => {
       onThreadTitleChange?.(event.threadId, event.title);
-      void loadSnapshot();
     };
 
     stream.onHelperEvent = (event: HelperEvent) => {
@@ -1734,7 +1733,27 @@ export function RuntimeThreadSurface({
               return;
             }
 
-            void streamRef.current?.cancelRun(threadId);
+            void streamRef.current?.cancelRun(threadId).then(() => {
+              // Optimistic UI update: immediately reflect the cancellation in
+              // the UI so the user sees instant feedback. The backend has
+              // accepted the cancel request but `RunCancelled` may arrive late
+              // if the agent loop is blocked on a long-running HTTP call.
+              completeThinkingPhase();
+              setRunState("cancelled");
+              onRunStateChange?.("cancelled");
+
+              // Safety net: if the backend event (`run_cancelled`) hasn't
+              // arrived within 5 seconds, force a snapshot reload to reconcile
+              // the UI with the actual backend state.
+              const timer = setTimeout(() => {
+                void loadSnapshot();
+              }, 5_000);
+
+              // If the stream delivers a terminal event before the timeout,
+              // the next `onRunStateChange` + `loadSnapshot` will render the
+              // correct state and this timer becomes a harmless no-op.
+              return () => clearTimeout(timer);
+            });
           }}
           onSubmit={(message) => {
             void handleSubmit(message);

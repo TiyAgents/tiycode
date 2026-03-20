@@ -301,6 +301,7 @@ export function DashboardWorkbench() {
   const overlayContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
+  const syncVersionRef = useRef(0);
 
   const activeThread = getActiveThread(workspaces);
   const selectedProjectWorkspaceId =
@@ -384,10 +385,18 @@ export function DashboardWorkbench() {
   }: {
     preserveSelectedProjectIfMissing?: boolean;
   } = {}) => {
+    const version = ++syncVersionRef.current;
+
     const workspaceEntries = await workspaceList();
     const threadEntries = await Promise.all(
       workspaceEntries.map(async (workspace) => [workspace.id, await threadList(workspace.id, 100)] as const),
     );
+
+    // Discard stale sync results — a newer sync has been initiated while we were fetching.
+    if (syncVersionRef.current !== version) {
+      return;
+    }
+
     const threadsByWorkspaceId = Object.fromEntries(threadEntries);
     const nextProjects = workspaceEntries
       .map((workspace) => buildProjectOptionFromWorkspace(workspace))
