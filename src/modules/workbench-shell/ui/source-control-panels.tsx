@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   gitCommit,
+  gitGenerateCommitMessage,
   gitGetDiff,
   gitGetFileStatus,
   gitGetHistory,
@@ -40,6 +41,7 @@ import type {
   GitMutationResponseDto,
   GitSnapshotDto,
   GitStreamEvent,
+  RunModelPlanDto,
 } from "@/shared/types/api";
 import { Alert, AlertDescription } from "@/shared/ui/alert";
 import {
@@ -78,6 +80,9 @@ type GitPanelProps = {
   currentProject: ProjectOption | null;
   workspaceBootstrapError: string | null;
   layoutResizeSignal: number;
+  commitMessageLanguage: string;
+  commitMessagePrompt: string;
+  commitMessageModelPlan: RunModelPlanDto | null;
   onOpenDiffPreview: (selection: GitDiffSelection) => void;
 };
 
@@ -719,6 +724,9 @@ export function GitPanel({
   currentProject,
   workspaceBootstrapError,
   layoutResizeSignal,
+  commitMessageLanguage,
+  commitMessagePrompt,
+  commitMessageModelPlan,
   onOpenDiffPreview,
 }: GitPanelProps) {
   const isMockMode = !isTauri();
@@ -741,6 +749,7 @@ export function GitPanel({
   const [actionAlert, setActionAlert] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<GitMutationAction | null>(null);
   const [pendingAction, setPendingAction] = useState<GitMutationAction | null>(null);
+  const [isGeneratingCommitMessage, setIsGeneratingCommitMessage] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [isCommitMessageExpanded, setCommitMessageExpanded] = useState(false);
   const [copiedCommitId, setCopiedCommitId] = useState<string | null>(null);
@@ -769,6 +778,7 @@ export function GitPanel({
       setActionAlert(null);
       setConfirmAction(null);
       setPendingAction(null);
+      setIsGeneratingCommitMessage(false);
       setCommitMessage("");
       return;
     }
@@ -782,6 +792,7 @@ export function GitPanel({
       setActionAlert(null);
       setConfirmAction(null);
       setPendingAction(null);
+      setIsGeneratingCommitMessage(false);
       setCommitMessage("");
       return;
     }
@@ -792,6 +803,7 @@ export function GitPanel({
     setActionAlert(null);
     setConfirmAction(null);
     setPendingAction(null);
+    setIsGeneratingCommitMessage(false);
     setCommitMessage("");
 
     void gitGetSnapshot(workspaceId)
@@ -964,6 +976,13 @@ export function GitPanel({
   const gitCliAvailable = snapshot?.capabilities.gitCliAvailable ?? false;
   const commitDisabled =
     !gitCliAvailable || pendingAction !== null || commitMessage.trim().length === 0;
+  const commitGeneratorDisabled =
+    isMockMode ||
+    !workspaceId ||
+    commitMessageModelPlan === null ||
+    totalChanges === 0 ||
+    pendingAction !== null ||
+    isGeneratingCommitMessage;
 
   useLayoutEffect(() => {
     setHistoryHeight((current) => clampHistoryHeight(current));
@@ -1120,6 +1139,33 @@ export function GitPanel({
 
     clearActionAlert();
     setConfirmAction("commit");
+  };
+
+  const handleGenerateCommitMessage = () => {
+    if (commitGeneratorDisabled || !workspaceId || !commitMessageModelPlan) {
+      return;
+    }
+
+    setIsGeneratingCommitMessage(true);
+    clearActionAlert();
+
+    void gitGenerateCommitMessage(
+      workspaceId,
+      commitMessageModelPlan,
+      commitMessageLanguage,
+      commitMessagePrompt,
+    )
+      .then((message) => {
+        setCommitMessage(message);
+        setCommitMessageExpanded(message.includes("\n"));
+      })
+      .catch((nextError) => {
+        const message = formatUiError(nextError, "Failed to generate commit message");
+        showActionAlert(message);
+      })
+      .finally(() => {
+        setIsGeneratingCommitMessage(false);
+      });
   };
 
   const handleRemoteAction = (action: Exclude<GitMutationAction, "commit">) => {
@@ -1365,14 +1411,31 @@ export function GitPanel({
               <button
                 type="button"
                 aria-label="智能生成 Commit Message"
-                title="Commit message generation is not wired yet"
-                disabled
+                title={
+                  isMockMode
+                    ? "Commit message generation is unavailable in mock mode"
+                    : !workspaceId
+                      ? "A workspace is required"
+                      : commitMessageModelPlan === null
+                        ? "Select an enabled lite, assistant, or primary model in the current profile first"
+                        : totalChanges === 0
+                          ? "No changes available to summarize"
+                          : isGeneratingCommitMessage
+                            ? "Generating commit message"
+                            : "Generate a commit message from the current profile"
+                }
+                disabled={commitGeneratorDisabled}
                 className={cn(
-                  "absolute right-1.5 flex size-6 items-center justify-center rounded-md text-app-subtle opacity-60 transition-[top,transform] duration-200",
+                  "absolute right-1.5 flex size-6 items-center justify-center rounded-md text-app-subtle transition-[top,transform] duration-200 disabled:cursor-not-allowed disabled:opacity-60",
                   isCommitMessageExpanded ? "top-3" : "top-1/2 -translate-y-1/2",
                 )}
+                onClick={handleGenerateCommitMessage}
               >
-                <Sparkles className="size-3.5" />
+                {isGeneratingCommitMessage ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="size-3.5" />
+                )}
               </button>
             </div>
             <button

@@ -6,6 +6,7 @@ import type {
   GitMutationResponseDto,
   GitSnapshotDto,
   GitStreamEvent,
+  RunModelPlanDto,
 } from "@/shared/types/api";
 
 const requireTauri = (cmd: string) => {
@@ -100,6 +101,21 @@ export async function gitCommit(
     workspaceId,
     message,
     approved: approved ?? null,
+  });
+}
+
+export async function gitGenerateCommitMessage(
+  workspaceId: string,
+  modelPlan: RunModelPlanDto,
+  language: string,
+  prompt: string,
+): Promise<string> {
+  requireTauri("git_generate_commit_message");
+  return invoke<string>("git_generate_commit_message", {
+    workspaceId,
+    modelPlan,
+    language,
+    prompt,
   });
 }
 

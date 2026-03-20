@@ -371,11 +371,17 @@ pub async fn find_files(
 
             let mut notices = Vec::new();
             if total_count >= truncation::FIND_MAX_RESULTS {
-                notices.push("1000 results limit reached. Refine your pattern for more specific results.".to_string());
+                notices.push(
+                    "1000 results limit reached. Refine your pattern for more specific results."
+                        .to_string(),
+                );
                 result["resultLimitReached"] = serde_json::json!(true);
             }
             if truncated_by_size {
-                notices.push(format!("Output truncated to {}.", format_size(truncation::READ_MAX_BYTES)));
+                notices.push(format!(
+                    "Output truncated to {}.",
+                    format_size(truncation::READ_MAX_BYTES)
+                ));
             }
             if !notices.is_empty() {
                 result["notice"] = serde_json::json!(notices.join(" "));

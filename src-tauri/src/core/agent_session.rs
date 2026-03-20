@@ -1023,13 +1023,13 @@ async fn resolve_model_plan(
         )
     })?;
 
-    let primary = resolve_model_role(pool, primary).await?;
+    let primary = resolve_runtime_model_role(pool, primary).await?;
     let auxiliary = match raw_plan.auxiliary.clone() {
-        Some(role) => Some(resolve_model_role(pool, role).await?),
+        Some(role) => Some(resolve_runtime_model_role(pool, role).await?),
         None => None,
     };
     let lightweight = match raw_plan.lightweight.clone() {
-        Some(role) => Some(resolve_model_role(pool, role).await?),
+        Some(role) => Some(resolve_runtime_model_role(pool, role).await?),
         None => None,
     };
 
@@ -1047,7 +1047,7 @@ async fn resolve_model_plan(
     })
 }
 
-async fn resolve_model_role(
+pub async fn resolve_runtime_model_role(
     pool: &SqlitePool,
     role: RuntimeModelRole,
 ) -> Result<ResolvedModelRole, AppError> {
@@ -1284,8 +1284,10 @@ mod tests {
             id: "profile-1".to_string(),
             name: "Default".to_string(),
             custom_instructions: None,
+            commit_message_prompt: None,
             response_style: Some("balanced".to_string()),
             response_language: Some("English".to_string()),
+            commit_message_language: Some("English".to_string()),
             primary_provider_id: None,
             primary_model_id: None,
             auxiliary_provider_id: None,

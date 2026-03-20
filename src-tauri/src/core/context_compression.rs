@@ -71,9 +71,8 @@ fn estimate_message_tokens(message: &AgentMessage) -> u32 {
                     ContentBlock::Thinking(tc) => estimate_tokens(&tc.thinking),
                     ContentBlock::ToolCall(tc) => {
                         // tool name + JSON args
-                        estimate_tokens(&tc.name)
-                            + estimate_tokens(&tc.arguments.to_string())
-                            + 20 // overhead for tool call framing
+                        estimate_tokens(&tc.name) + estimate_tokens(&tc.arguments.to_string()) + 20
+                        // overhead for tool call framing
                     }
                     ContentBlock::Image(_) => 1000,
                 };
@@ -90,9 +89,7 @@ fn estimate_message_tokens(message: &AgentMessage) -> u32 {
             }
             total + 10 // overhead for tool_call_id, tool_name, etc.
         }
-        AgentMessage::Custom { data, .. } => {
-            estimate_tokens(&data.to_string()) + 10
-        }
+        AgentMessage::Custom { data, .. } => estimate_tokens(&data.to_string()) + 10,
     }
 }
 
@@ -133,7 +130,10 @@ impl CompressionSettings {
 /// 3. Find a "cut point" that preserves the most recent `keep_recent_tokens`.
 /// 4. Truncate old tool results in the discarded region.
 /// 5. Replace discarded messages with a summary marker.
-pub fn compress_context(messages: Vec<AgentMessage>, settings: &CompressionSettings) -> Vec<AgentMessage> {
+pub fn compress_context(
+    messages: Vec<AgentMessage>,
+    settings: &CompressionSettings,
+) -> Vec<AgentMessage> {
     if messages.is_empty() {
         return messages;
     }
@@ -300,9 +300,7 @@ fn maybe_truncate_tool_result(message: AgentMessage, aggressive: bool) -> AgentM
                             }
                             ContentBlock::Text(TextContent::new(format!(
                                 "{}\n\n[Tool output truncated: {} chars → {} chars]",
-                                truncated,
-                                total_chars,
-                                max_chars
+                                truncated, total_chars, max_chars
                             )))
                         }
                         other => other,
@@ -338,7 +336,10 @@ fn generate_discard_summary(messages: &[AgentMessage]) -> String {
                 };
                 // Take first 200 chars as a topic summary
                 let summary = if text.len() > 200 {
-                    format!("{}...", &text[..text.char_indices().nth(200).map_or(text.len(), |(i, _)| i)])
+                    format!(
+                        "{}...",
+                        &text[..text.char_indices().nth(200).map_or(text.len(), |(i, _)| i)]
+                    )
                 } else {
                     text
                 };
@@ -355,7 +356,10 @@ fn generate_discard_summary(messages: &[AgentMessage]) -> String {
                 let text = assistant_msg.text_content();
                 if !text.is_empty() {
                     let brief = if text.len() > 150 {
-                        format!("{}...", &text[..text.char_indices().nth(150).map_or(text.len(), |(i, _)| i)])
+                        format!(
+                            "{}...",
+                            &text[..text.char_indices().nth(150).map_or(text.len(), |(i, _)| i)]
+                        )
                     } else {
                         text
                     };
@@ -378,7 +382,10 @@ fn generate_discard_summary(messages: &[AgentMessage]) -> String {
             summary.push_str(&format!("{}. {}\n", i + 1, topic));
         }
         if user_topics.len() > 5 {
-            summary.push_str(&format!("... and {} more requests\n", user_topics.len() - 5));
+            summary.push_str(&format!(
+                "... and {} more requests\n",
+                user_topics.len() - 5
+            ));
         }
         summary.push('\n');
     }
@@ -405,10 +412,7 @@ fn generate_discard_summary(messages: &[AgentMessage]) -> String {
         summary.push('\n');
     }
 
-    summary.push_str(&format!(
-        "Total messages compressed: {}\n",
-        messages.len()
-    ));
+    summary.push_str(&format!("Total messages compressed: {}\n", messages.len()));
     summary.push_str("</context_summary>");
 
     summary
@@ -459,12 +463,7 @@ mod tests {
     }
 
     fn make_tool_result(tool_name: &str, content: &str) -> AgentMessage {
-        AgentMessage::ToolResult(ToolResultMessage::text(
-            "tc-1",
-            tool_name,
-            content,
-            false,
-        ))
+        AgentMessage::ToolResult(ToolResultMessage::text("tc-1", tool_name, content, false))
     }
 
     fn settings(context_window: u32) -> CompressionSettings {
@@ -481,10 +480,7 @@ mod tests {
 
     #[test]
     fn test_no_compression_when_within_budget() {
-        let messages = vec![
-            make_user("Hello"),
-            make_assistant("Hi there!"),
-        ];
+        let messages = vec![make_user("Hello"), make_assistant("Hi there!")];
         let s = settings(128_000);
         let result = compress_context(messages.clone(), &s);
         assert_eq!(result.len(), messages.len());
@@ -496,7 +492,11 @@ mod tests {
         let mut messages = Vec::new();
         for i in 0..20 {
             messages.push(make_user(&format!("Question {}: {}", i, "x".repeat(500))));
-            messages.push(make_assistant(&format!("Answer {}: {}", i, "y".repeat(500))));
+            messages.push(make_assistant(&format!(
+                "Answer {}: {}",
+                i,
+                "y".repeat(500)
+            )));
         }
 
         // With a tiny budget, compression should kick in
@@ -531,7 +531,11 @@ mod tests {
 
         // The cut should be at 0 or 3 (before the second user message),
         // but never at 1 or 2 (splitting assistant+tool_result pair)
-        assert!(cut == 0 || cut == 3, "Cut point was {}, expected 0 or 3", cut);
+        assert!(
+            cut == 0 || cut == 3,
+            "Cut point was {}, expected 0 or 3",
+            cut
+        );
     }
 
     #[test]
@@ -543,7 +547,10 @@ mod tests {
         if let AgentMessage::ToolResult(tr) = &truncated {
             let text = tr.text_content();
             assert!(text.len() < 10_000, "Should be truncated");
-            assert!(text.contains("[Tool output truncated:"), "Should have truncation marker");
+            assert!(
+                text.contains("[Tool output truncated:"),
+                "Should have truncation marker"
+            );
         } else {
             panic!("Expected ToolResult");
         }

@@ -18,7 +18,10 @@ import { useLanguage, type LanguagePreference } from "@/app/providers/language-p
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
 import { useMarketplaceController } from "@/modules/marketplace-center/model/use-marketplace-controller";
 import { MarketplaceOverlay } from "@/modules/marketplace-center/ui/marketplace-overlay";
-import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
+import {
+  buildProfileModelPlan,
+  buildRunModelPlanFromSelection,
+} from "@/modules/settings-center/model/run-model-plan";
 import { useSettingsController, type SettingsCategory } from "@/modules/settings-center/model/use-settings-controller";
 import { AI_ELEMENTS_THREAD_TITLE } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
@@ -389,6 +392,14 @@ export function DashboardWorkbench() {
   const selectedRunModelPlan = useMemo(
     () => buildRunModelPlanFromSelection(activeAgentProfileId, agentProfiles, providers),
     [activeAgentProfileId, agentProfiles, providers],
+  );
+  const activeAgentProfile = useMemo(
+    () => agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0] ?? null,
+    [activeAgentProfileId, agentProfiles],
+  );
+  const commitMessageModelPlan = useMemo(
+    () => (activeAgentProfile ? buildProfileModelPlan(activeAgentProfile, providers) : null),
+    [activeAgentProfile, providers],
   );
   const contextBadge = useMemo(
     () => buildThreadContextBadgeData({
@@ -1929,6 +1940,9 @@ export function DashboardWorkbench() {
                         currentProject={currentProject}
                         workspaceBootstrapError={terminalBootstrapError}
                         layoutResizeSignal={isTerminalCollapsed ? 0 : terminalHeight}
+                        commitMessageLanguage={activeAgentProfile?.commitMessageLanguage ?? "English"}
+                        commitMessagePrompt={activeAgentProfile?.commitMessagePrompt ?? ""}
+                        commitMessageModelPlan={commitMessageModelPlan}
                         onOpenDiffPreview={setSelectedDiffSelection}
                       />
                     )}

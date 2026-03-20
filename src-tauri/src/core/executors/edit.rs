@@ -112,10 +112,7 @@ pub async fn edit_file(
 
 enum FindResult {
     ExactUnique(usize),
-    FuzzyUnique {
-        offset: usize,
-        matched_text: String,
-    },
+    FuzzyUnique { offset: usize, matched_text: String },
     NotFound,
     MultipleMatches(usize),
 }
@@ -144,9 +141,12 @@ fn find_text(haystack: &str, needle: &str) -> FindResult {
             let norm_end = norm_offset + normalized_needle.len();
 
             // Find the corresponding range in the original text
-            if let Some((orig_start, orig_end)) =
-                map_normalized_range_to_original(haystack, &normalized_haystack, norm_offset, norm_end)
-            {
+            if let Some((orig_start, orig_end)) = map_normalized_range_to_original(
+                haystack,
+                &normalized_haystack,
+                norm_offset,
+                norm_end,
+            ) {
                 let matched_text = haystack[orig_start..orig_end].to_string();
                 FindResult::FuzzyUnique {
                     offset: orig_start,

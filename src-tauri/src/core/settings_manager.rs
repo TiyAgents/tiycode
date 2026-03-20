@@ -1267,8 +1267,10 @@ impl SettingsManager {
             id: uuid::Uuid::now_v7().to_string(),
             name: input.name,
             custom_instructions: input.custom_instructions,
+            commit_message_prompt: input.commit_message_prompt,
             response_style: input.response_style,
             response_language: input.response_language,
+            commit_message_language: input.commit_message_language,
             primary_provider_id: input.primary_provider_id,
             primary_model_id: input.primary_model_id,
             auxiliary_provider_id: input.auxiliary_provider_id,
@@ -1304,8 +1306,14 @@ impl SettingsManager {
             id: id.to_string(),
             name: input.name,
             custom_instructions: input.custom_instructions.or(existing.custom_instructions),
+            commit_message_prompt: input
+                .commit_message_prompt
+                .or(existing.commit_message_prompt),
             response_style: input.response_style.or(existing.response_style),
             response_language: input.response_language.or(existing.response_language),
+            commit_message_language: input
+                .commit_message_language
+                .or(existing.commit_message_language),
             primary_provider_id: input.primary_provider_id.or(existing.primary_provider_id),
             primary_model_id: input.primary_model_id.or(existing.primary_model_id),
             auxiliary_provider_id: input

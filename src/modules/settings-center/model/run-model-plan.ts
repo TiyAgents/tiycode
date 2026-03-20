@@ -91,6 +91,45 @@ export function buildRunModelPlan(
   };
 }
 
+export function buildProfileModelPlan(
+  profile: AgentProfile,
+  providers: ReadonlyArray<ProviderEntry>,
+): RunModelPlanDto | null {
+  const primarySelection = findSelectedEnabledModel(
+    providers,
+    profile.primaryProviderId,
+    profile.primaryModelId,
+  );
+  const auxiliarySelection = findSelectedEnabledModel(
+    providers,
+    profile.assistantProviderId,
+    profile.assistantModelId,
+  );
+  const explicitLightweightSelection = findSelectedEnabledModel(
+    providers,
+    profile.liteProviderId,
+    profile.liteModelId,
+  );
+  const lightweightSelection =
+    explicitLightweightSelection ?? auxiliarySelection ?? primarySelection;
+
+  if (!primarySelection && !auxiliarySelection && !lightweightSelection) {
+    return null;
+  }
+
+  return {
+    profileId: profile.id,
+    profileName: profile.name,
+    primary: primarySelection ? toRunModelPlanRole(primarySelection) : null,
+    auxiliary: auxiliarySelection ? toRunModelPlanRole(auxiliarySelection) : null,
+    lightweight: lightweightSelection ? toRunModelPlanRole(lightweightSelection) : null,
+    toolProfileByMode: {
+      default: "default_full",
+      plan: "plan_read_only",
+    },
+  };
+}
+
 export function buildRunModelPlanFromSelection(
   activeAgentProfileId: string,
   agentProfiles: ReadonlyArray<AgentProfile>,

@@ -128,8 +128,10 @@ export interface AgentProfileDto {
   id: string;
   name: string;
   customInstructions: string | null;
+  commitMessagePrompt: string | null;
   responseStyle: string | null;
   responseLanguage: string | null;
+  commitMessageLanguage: string | null;
   primaryProviderId: string | null;
   primaryModelId: string | null;
   auxiliaryProviderId: string | null;
@@ -144,8 +146,10 @@ export interface AgentProfileDto {
 export interface AgentProfileInput {
   name: string;
   customInstructions?: string;
+  commitMessagePrompt?: string;
   responseStyle?: string;
   responseLanguage?: string;
+  commitMessageLanguage?: string;
   primaryProviderId?: string;
   primaryModelId?: string;
   auxiliaryProviderId?: string;

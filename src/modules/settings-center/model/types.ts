@@ -90,8 +90,10 @@ export type AgentProfile = {
   id: string;
   name: string;
   customInstructions: string;
+  commitMessagePrompt: string;
   responseStyle: PromptResponseStyle;
   responseLanguage: string;
+  commitMessageLanguage: string;
   primaryProviderId: string;
   primaryModelId: string;
   assistantProviderId: string;

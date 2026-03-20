@@ -46,8 +46,13 @@ function parseAgentProfileEntry(raw: Record<string, unknown>): AgentProfile {
     id: typeof raw.id === "string" ? raw.id : crypto.randomUUID(),
     name: typeof raw.name === "string" ? raw.name : "Unnamed",
     customInstructions: typeof raw.customInstructions === "string" ? raw.customInstructions : defaultProfile.customInstructions,
+    commitMessagePrompt: typeof raw.commitMessagePrompt === "string" ? raw.commitMessagePrompt : defaultProfile.commitMessagePrompt,
     responseStyle: isPromptResponseStyle(raw.responseStyle) ? raw.responseStyle : defaultProfile.responseStyle,
     responseLanguage: typeof raw.responseLanguage === "string" ? raw.responseLanguage : defaultProfile.responseLanguage,
+    commitMessageLanguage:
+      typeof raw.commitMessageLanguage === "string"
+        ? raw.commitMessageLanguage
+        : defaultProfile.commitMessageLanguage,
     primaryProviderId: typeof raw.primaryProviderId === "string" ? raw.primaryProviderId : "",
     primaryModelId: typeof raw.primaryModelId === "string" ? raw.primaryModelId : "",
     assistantProviderId: typeof raw.assistantProviderId === "string" ? raw.assistantProviderId : "",

@@ -1,8 +1,8 @@
 pub mod agent_run_manager;
 pub mod agent_session;
 pub mod app_state;
-pub mod context_compression;
 pub mod built_in_agent_runtime;
+pub mod context_compression;
 pub mod executors;
 pub mod git_manager;
 pub mod index_manager;

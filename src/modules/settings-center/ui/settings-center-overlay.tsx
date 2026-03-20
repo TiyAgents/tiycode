@@ -1125,8 +1125,10 @@ function GeneralSettingsPanel({
     onAddAgentProfile({
       name: "New Profile",
       customInstructions: "",
+      commitMessagePrompt: activeProfile.commitMessagePrompt,
       responseStyle: "balanced",
       responseLanguage: "English",
+      commitMessageLanguage: "English",
       primaryProviderId: "",
       primaryModelId: "",
       assistantProviderId: "",
@@ -1250,6 +1252,21 @@ function GeneralSettingsPanel({
           }
         />
         <SectionDivider />
+        <SettingsRow
+          label="Commit message language"
+          description="The language used when the Git panel generates commit messages."
+          control={
+            <Input
+              value={activeProfile.commitMessageLanguage}
+              onChange={(event) => onUpdateAgentProfile(activeProfile.id, {
+                commitMessageLanguage: event.target.value,
+              })}
+              className="w-40 text-[13px]"
+              placeholder="English"
+            />
+          }
+        />
+        <SectionDivider />
         <ModelSelectRow
           label="Primary model"
           description="Handles main tasks including planning, building, and reasoning."
@@ -1295,6 +1312,18 @@ function GeneralSettingsPanel({
             value={activeProfile.customInstructions}
             onChange={(event) => onUpdateAgentProfile(activeProfile.id, { customInstructions: event.target.value })}
             className="min-h-36"
+          />
+        </div>
+        <SectionDivider />
+        <div className="px-4 py-3">
+          <div className="mb-1 text-[13px] font-medium leading-5 text-app-foreground">Commit message prompt</div>
+          <p className="mb-3 text-[12px] leading-5 text-app-muted">
+            Prompt used by the Git panel when generating commit messages for the current profile.
+          </p>
+          <Textarea
+            value={activeProfile.commitMessagePrompt}
+            onChange={(event) => onUpdateAgentProfile(activeProfile.id, { commitMessagePrompt: event.target.value })}
+            className="min-h-48"
           />
         </div>
       </SettingsSection>
