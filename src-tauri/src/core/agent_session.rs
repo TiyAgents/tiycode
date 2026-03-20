@@ -558,6 +558,9 @@ fn handle_agent_event(
                     delta: delta.clone(),
                 });
             }
+            AssistantMessageEvent::ThinkingStart { .. } => {
+                reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
+            }
             AssistantMessageEvent::ThinkingDelta { delta, .. } => {
                 if let Ok(mut buffer) = reasoning_buffer.lock() {
                     buffer.push_str(delta);
@@ -569,6 +572,23 @@ fn handle_agent_event(
                     });
                 }
             }
+            AssistantMessageEvent::ThinkingEnd { content, .. } => {
+                let reasoning = if let Ok(mut buffer) = reasoning_buffer.lock() {
+                    buffer.clear();
+                    buffer.push_str(content);
+                    buffer.clone()
+                } else {
+                    content.clone()
+                };
+
+                let message_id = ensure_message_id(current_reasoning_message_id);
+                let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
+                    run_id: run_id.to_string(),
+                    message_id,
+                    reasoning,
+                });
+                reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
+            }
             _ => {}
         },
         tiy_core::agent::AgentEvent::MessageEnd { message } => {
@@ -576,6 +596,7 @@ fn handle_agent_event(
                 let content = assistant.text_content();
                 if content.is_empty() && assistant.has_tool_calls() {
                     reset_message_id(current_message_id);
+                    reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
                     return;
                 }
 
@@ -586,6 +607,8 @@ fn handle_agent_event(
                     content,
                 });
             }
+
+            reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
         }
         _ => {}
     }
@@ -618,6 +641,16 @@ fn take_or_create_message_id(current_message_id: &StdMutex<Option<String>>) -> S
 fn reset_message_id(current_message_id: &StdMutex<Option<String>>) {
     if let Ok(mut guard) = current_message_id.lock() {
         *guard = None;
+    }
+}
+
+fn reset_reasoning_state(
+    current_reasoning_message_id: &StdMutex<Option<String>>,
+    reasoning_buffer: &StdMutex<String>,
+) {
+    reset_message_id(current_reasoning_message_id);
+    if let Ok(mut buffer) = reasoning_buffer.lock() {
+        buffer.clear();
     }
 }
 
@@ -982,9 +1015,22 @@ async fn build_system_prompt(
     run_mode: &str,
 ) -> Result<String, AppError> {
     let mut parts = vec![
-        "You are Tiy Agent, a coding assistant embedded in the user's desktop workspace."
+        "You are Tiy Agent, an expert coding assistant embedded in the user's desktop workspace. \
+You help users by reading files, searching code, editing files, executing commands, and writing new files."
             .to_string(),
     ];
+
+    // Behavioral guidelines — always present regardless of profile.
+    parts.push(
+        "Guidelines:\n\
+- Read files before editing. Understand existing code before making changes.\n\
+- Use edit_file for precise, surgical changes. Use write_file only for new files or complete rewrites.\n\
+- Prefer search_repo and find_files over run_command for file exploration — they are faster and respect ignore patterns.\n\
+- Be concise in your responses. Show file paths clearly when working with files.\n\
+- When summarizing your actions, describe what you did in plain text — do not re-read or re-cat files to prove your work.\n\
+- Flag risks, destructive operations, or ambiguity before acting. Ask when intent is unclear."
+            .to_string(),
+    );
 
     if let Some(profile_id) = raw_plan.profile_id.as_deref() {
         if let Some(profile) = profile_repo::find_by_id(pool, profile_id).await? {
@@ -999,10 +1045,17 @@ async fn build_system_prompt(
 
     if run_mode == "plan" {
         parts.push(
-            "Plan mode is active. Prefer analysis, explanation, and read-only tooling. Do not use mutating tools unless the user explicitly starts a new execution run."
+            "Plan mode is active.\n\
+- Use only read-only tools: read_file, list_dir, search_repo, find_files, terminal_get_status, terminal_get_recent_output.\n\
+- Do NOT use edit_file, write_file, or run_command unless the user explicitly requests execution.\n\
+- Focus on analysis, explanation, and actionable planning. Identify risks, gaps, and concrete next steps."
                 .to_string(),
         );
     }
+
+    // Append runtime context last so the model always sees current date and working directory.
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    parts.push(format!("Current date: {date}"));
 
     Ok(parts.join("\n\n"))
 }
@@ -1046,13 +1099,13 @@ pub fn normalize_profile_response_style(value: Option<&str>) -> ProfileResponseS
 pub fn response_style_system_instruction(style: ProfileResponseStyle) -> &'static str {
     match style {
         ProfileResponseStyle::Balanced => {
-            "Use a balanced response style: clear by default, and expand when extra detail is useful."
+            "Response style: balanced. Be clear and direct by default. Expand with detail when the topic warrants it, but avoid unnecessary filler."
         }
         ProfileResponseStyle::Concise => {
-            "Use a concise response style: keep answers short, direct, and low-friction."
+            "Response style: concise. Keep answers short and direct. Minimize explanation unless asked. Prefer code and commands over prose. Skip pleasantries."
         }
         ProfileResponseStyle::Guide => {
-            "Use a guided response style: explain tradeoffs, reasoning, and next steps clearly."
+            "Response style: guided. Explain tradeoffs, reasoning, and next steps clearly. Help the user understand why, not just what. Surface alternatives when relevant."
         }
     }
 }
@@ -1115,11 +1168,19 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_profile_response_prompt_parts, normalize_profile_response_language,
-        normalize_profile_response_style, response_style_system_instruction,
-        runtime_security_config, standard_tool_timeout, ProfileResponseStyle,
-        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
+        build_profile_response_prompt_parts, handle_agent_event,
+        normalize_profile_response_language, normalize_profile_response_style,
+        response_style_system_instruction, runtime_security_config,
+        standard_tool_timeout, ProfileResponseStyle, STANDARD_TOOL_TIMEOUT_SECS,
+        SUBAGENT_TOOL_TIMEOUT_SECS,
     };
+    use std::sync::Mutex as StdMutex;
+
+    use tokio::sync::mpsc;
+    use tiy_core::agent::{AgentEvent, AgentMessage};
+    use tiy_core::types::{Api, AssistantMessage, AssistantMessageEvent, Provider};
+
+    use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::AgentProfileRecord;
 
     fn sample_profile() -> AgentProfileRecord {
@@ -1139,6 +1200,15 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
         }
+    }
+
+    fn sample_partial_assistant_message() -> AssistantMessage {
+        AssistantMessage::builder()
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .model("gpt-test")
+            .build()
+            .expect("partial assistant message")
     }
 
     #[test]
@@ -1198,5 +1268,108 @@ mod tests {
             parts[1],
             response_style_system_instruction(ProfileResponseStyle::Concise)
         );
+    }
+
+    #[test]
+    fn reasoning_blocks_reset_message_id_between_thought_segments() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let reasoning_buffer = StdMutex::new(String::new());
+        let partial = sample_partial_assistant_message();
+
+        handle_agent_event(
+            "run-1",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &reasoning_buffer,
+            &AgentEvent::MessageUpdate {
+                message: AgentMessage::Assistant(partial.clone()),
+                assistant_event: Box::new(AssistantMessageEvent::ThinkingStart {
+                    content_index: 0,
+                    partial: partial.clone(),
+                }),
+            },
+        );
+        handle_agent_event(
+            "run-1",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &reasoning_buffer,
+            &AgentEvent::MessageUpdate {
+                message: AgentMessage::Assistant(partial.clone()),
+                assistant_event: Box::new(AssistantMessageEvent::ThinkingDelta {
+                    content_index: 0,
+                    delta: "first thought".to_string(),
+                    partial: partial.clone(),
+                }),
+            },
+        );
+        handle_agent_event(
+            "run-1",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &reasoning_buffer,
+            &AgentEvent::MessageUpdate {
+                message: AgentMessage::Assistant(partial.clone()),
+                assistant_event: Box::new(AssistantMessageEvent::ThinkingEnd {
+                    content_index: 0,
+                    content: "first thought".to_string(),
+                    partial: partial.clone(),
+                }),
+            },
+        );
+        handle_agent_event(
+            "run-1",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &reasoning_buffer,
+            &AgentEvent::MessageUpdate {
+                message: AgentMessage::Assistant(partial.clone()),
+                assistant_event: Box::new(AssistantMessageEvent::ThinkingStart {
+                    content_index: 1,
+                    partial: partial.clone(),
+                }),
+            },
+        );
+        handle_agent_event(
+            "run-1",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &reasoning_buffer,
+            &AgentEvent::MessageUpdate {
+                message: AgentMessage::Assistant(partial.clone()),
+                assistant_event: Box::new(AssistantMessageEvent::ThinkingDelta {
+                    content_index: 1,
+                    delta: "second thought".to_string(),
+                    partial,
+                }),
+            },
+        );
+
+        let events = std::iter::from_fn(|| event_rx.try_recv().ok()).collect::<Vec<_>>();
+        let reasoning_events = events
+            .into_iter()
+            .filter_map(|event| match event {
+                ThreadStreamEvent::ReasoningUpdated {
+                    message_id,
+                    reasoning,
+                    ..
+                } => Some((message_id, reasoning)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(reasoning_events.len(), 3);
+        assert_eq!(reasoning_events[0].1, "first thought");
+        assert_eq!(reasoning_events[1].1, "first thought");
+        assert_eq!(reasoning_events[2].1, "second thought");
+        assert_eq!(reasoning_events[0].0, reasoning_events[1].0);
+        assert_ne!(reasoning_events[0].0, reasoning_events[2].0);
     }
 }

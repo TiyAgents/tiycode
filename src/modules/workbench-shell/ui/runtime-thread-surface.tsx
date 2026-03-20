@@ -170,6 +170,8 @@ type RuntimeThreadSurfaceProps = {
   threadTitle: string;
 };
 
+type TimelineRole = SurfaceMessage["role"];
+
 function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
   return {
     createdAt: message.createdAt ?? new Date().toISOString(),
@@ -711,6 +713,25 @@ function groupCompletedToolEntries(
   return grouped;
 }
 
+function getPresentationEntryRole(entry: TimelinePresentationEntry): TimelineRole {
+  if (entry.kind === "message") {
+    return entry.message.role;
+  }
+
+  return "assistant";
+}
+
+function getRoleSpacingClass(
+  previousRole: TimelineRole | null,
+  currentRole: TimelineRole,
+) {
+  if (!previousRole) {
+    return undefined;
+  }
+
+  return previousRole === currentRole ? "pt-3" : "pt-6";
+}
+
 export function RuntimeThreadSurface({
   activeAgentProfileId,
   agentProfiles,
@@ -952,17 +973,34 @@ export function RuntimeThreadSurface({
       setThinkingPlaceholder(null);
       const reasoningMessageId = event.messageId ?? `reasoning-${event.runId}`;
       setMessages((current) =>
-        appendOrReplaceMessage(current, {
-          createdAt:
-            current.find((entry) => entry.id === reasoningMessageId)?.createdAt
-            ?? new Date().toISOString(),
-          id: reasoningMessageId,
-          messageType: "reasoning",
-          role: "assistant",
-          runId: event.runId,
-          content: event.reasoning,
-          status: "streaming",
-        }),
+        appendOrReplaceMessage(
+          current.map((message) => {
+            if (
+              message.id === reasoningMessageId
+              || message.messageType !== "reasoning"
+              || message.status !== "streaming"
+              || message.runId !== event.runId
+            ) {
+              return message;
+            }
+
+            return {
+              ...message,
+              status: "completed",
+            };
+          }),
+          {
+            createdAt:
+              current.find((entry) => entry.id === reasoningMessageId)?.createdAt
+              ?? new Date().toISOString(),
+            id: reasoningMessageId,
+            messageType: "reasoning",
+            role: "assistant",
+            runId: event.runId,
+            content: event.reasoning,
+            status: "streaming",
+          },
+        ),
       );
     };
 
@@ -1345,6 +1383,16 @@ export function RuntimeThreadSurface({
     () => groupCompletedToolEntries(timelineEntries),
     [timelineEntries],
   );
+  const lastPresentationRole = presentationEntries.length > 0
+    ? getPresentationEntryRole(presentationEntries[presentationEntries.length - 1])
+    : null;
+  const planPreviousRole = lastPresentationRole;
+  const queuePreviousRole: TimelineRole | null = formattedPlan ? "assistant" : lastPresentationRole;
+  const runtimeErrorPreviousRole: TimelineRole | null = queueArtifact
+    ? "assistant"
+    : formattedPlan
+      ? "assistant"
+      : lastPresentationRole;
 
   useEffect(() => {
     const previousToolStates = previousToolStatesRef.current;
@@ -1544,7 +1592,7 @@ export function RuntimeThreadSurface({
       <div className="pointer-events-none absolute left-1/2 top-0 h-56 w-[72rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(120,180,255,0.11),transparent_68%)] blur-3xl" />
       <div className="relative min-h-0 flex-1">
         <Conversation className="size-full">
-          <ConversationContent className="mx-auto w-full max-w-4xl gap-6 px-6 pb-10 pt-8">
+          <ConversationContent className="mx-auto w-full max-w-4xl gap-0 px-6 pb-10 pt-8">
             {isLoading && messages.length === 0 ? (
               <ConversationEmptyState
                 description="Loading thread history and runtime state."
@@ -1575,20 +1623,28 @@ export function RuntimeThreadSurface({
               />
             ) : null}
 
-            {presentationEntries.map((entry) => {
+            {presentationEntries.map((entry, index) => {
+              const currentRole = getPresentationEntryRole(entry);
+              const previousRole = index > 0
+                ? getPresentationEntryRole(presentationEntries[index - 1])
+                : null;
+              const spacingClass = getRoleSpacingClass(previousRole, currentRole);
+
               if (entry.kind === "thinking-placeholder") {
                 return (
-                  <Message className="max-w-full" from="assistant" key={entry.key}>
-                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                      <Reasoning
-                        className="w-full bg-transparent px-0 py-0"
-                        defaultOpen={false}
-                        isStreaming
-                      >
-                        <ReasoningTrigger />
-                      </Reasoning>
-                    </MessageContent>
-                  </Message>
+                  <div className={spacingClass} key={entry.key}>
+                    <Message className="max-w-full" from="assistant">
+                      <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                        <Reasoning
+                          className="w-full bg-transparent px-0 py-0"
+                          defaultOpen={false}
+                          isStreaming
+                        >
+                          <ReasoningTrigger />
+                        </Reasoning>
+                      </MessageContent>
+                    </Message>
+                  </div>
                 );
               }
 
@@ -1597,37 +1653,40 @@ export function RuntimeThreadSurface({
 
                 if (message.messageType === "reasoning") {
                   return (
-                    <Message className="max-w-full" from="assistant" key={entry.key}>
-                      <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                        <Reasoning
-                          className="w-full bg-transparent px-0 py-0"
-                          defaultOpen={message.status === "streaming" || runState === "running"}
-                          isStreaming={message.status === "streaming"}
-                        >
-                          <ReasoningTrigger />
-                          <ReasoningContent>{message.content}</ReasoningContent>
-                        </Reasoning>
-                      </MessageContent>
-                    </Message>
+                    <div className={spacingClass} key={entry.key}>
+                      <Message className="max-w-full" from="assistant">
+                        <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                          <Reasoning
+                            className="w-full bg-transparent px-0 py-0"
+                            defaultOpen={message.status === "streaming" || runState === "running"}
+                            isStreaming={message.status === "streaming"}
+                          >
+                            <ReasoningTrigger />
+                            <ReasoningContent>{message.content}</ReasoningContent>
+                          </Reasoning>
+                        </MessageContent>
+                      </Message>
+                    </div>
                   );
                 }
 
                 return (
-                  <Message
-                    className={message.role === "assistant" ? "max-w-full" : undefined}
-                    from={message.role}
-                    key={entry.key}
-                  >
-                    <MessageContent
-                      className={
-                        message.role === "assistant"
-                          ? "w-full max-w-full bg-transparent px-0 py-0 shadow-none"
-                          : "rounded-2xl bg-app-surface/62 px-4 py-3 shadow-none backdrop-blur-sm"
-                      }
+                  <div className={spacingClass} key={entry.key}>
+                    <Message
+                      className={message.role === "assistant" ? "max-w-full" : undefined}
+                      from={message.role}
                     >
-                      <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
-                    </MessageContent>
-                  </Message>
+                      <MessageContent
+                        className={
+                          message.role === "assistant"
+                            ? "w-full max-w-full bg-transparent px-0 py-0 shadow-none"
+                            : "rounded-2xl bg-app-surface/62 px-4 py-3 shadow-none backdrop-blur-sm"
+                        }
+                      >
+                        <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
+                      </MessageContent>
+                    </Message>
+                  </div>
                 );
               }
 
@@ -1640,203 +1699,217 @@ export function RuntimeThreadSurface({
                   toolUses: helper.totalToolCalls,
                 });
                 return (
-                  <Message className="max-w-full" from="assistant" key={entry.key}>
-                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                      <CompactCollapsible
-                        onOpenChange={(open) => handleHelperOpenChange(helper.id, open)}
-                        open={helperOpen[helper.id] ?? helper.status !== "completed"}
-                      >
-                        <CompactCollapsibleHeader
-                          className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground"
-                          trailing={
-                            <span
-                              className={cn(
-                                "shrink-0 text-xs",
-                                helper.status === "failed"
-                                  ? "text-app-danger"
-                                  : helper.status === "completed"
-                                    ? "text-app-subtle"
-                                    : "text-app-info",
-                              )}
-                            >
-                              {formatHelperStatusLabel(helper.status)}
-                            </span>
-                          }
+                  <div className={spacingClass} key={entry.key}>
+                    <Message className="max-w-full" from="assistant">
+                      <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                        <CompactCollapsible
+                          onOpenChange={(open) => handleHelperOpenChange(helper.id, open)}
+                          open={helperOpen[helper.id] ?? helper.status !== "completed"}
                         >
-                          <div className="flex min-w-0 items-start gap-3">
-                            <BotIcon
-                              className={cn(
-                                "mt-0.5 size-4 shrink-0",
-                                helper.status === "failed"
-                                  ? "text-app-danger"
-                                  : helper.status === "completed"
-                                    ? "text-app-subtle"
-                                    : "text-app-info",
-                              )}
-                            />
-                            <span
-                              className="truncate text-app-foreground text-sm"
-                              title={helperSummary}
-                            >
-                              {helperSummary}
-                            </span>
-                          </div>
-                        </CompactCollapsibleHeader>
-                        <CompactCollapsibleContent className="pl-7">
-                          <div className="max-h-40 space-y-2 overflow-y-auto pr-3">
-                            {helperToolCounts.length > 0 ? (
-                              <p className="whitespace-pre-wrap break-words text-xs text-app-subtle">
-                                {helperToolCounts.join(" · ")}
-                              </p>
-                            ) : null}
-                            {helper.totalToolCalls > 0 && helper.status !== "completed" ? (
-                              <p className="text-xs text-app-subtle">
-                                {`${helper.completedSteps} of ${formatToolCallCount(helper.totalToolCalls)} finished`}
-                              </p>
-                            ) : null}
-                            {helper.currentAction ? (
-                              <p className="whitespace-pre-wrap break-words text-xs text-app-subtle">
-                                {`Current: ${helper.currentAction}`}
-                              </p>
-                            ) : null}
-                            {helper.latestMessage ? (
-                              <p className="whitespace-pre-wrap break-words text-sm text-app-muted">
-                                {helper.latestMessage}
-                              </p>
-                            ) : null}
-                            {helper.recentActions.length > 0 ? (
-                              <div className="space-y-1">
-                                {helper.recentActions.slice(-3).map((action, index) => (
-                                  <p
-                                    className="whitespace-pre-wrap break-words text-sm text-app-muted"
-                                    key={`${helper.id}-action-${index}`}
-                                  >
-                                    {action}
-                                  </p>
-                                ))}
-                              </div>
-                            ) : null}
-                            {helper.summary ? (
-                              <p className="whitespace-pre-wrap break-words text-sm text-app-muted">
-                                {helper.summary}
-                              </p>
-                            ) : null}
-                            {helper.error ? (
-                              <p className="whitespace-pre-wrap break-words text-sm text-app-danger">
-                                {helper.error}
-                              </p>
-                            ) : null}
-                          </div>
-                        </CompactCollapsibleContent>
-                        {executionSummary ? (
-                          <CompactCollapsibleFootnote className="pl-7">
-                            {executionSummary}
-                          </CompactCollapsibleFootnote>
-                        ) : null}
-                      </CompactCollapsible>
-                    </MessageContent>
-                  </Message>
+                          <CompactCollapsibleHeader
+                            className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground"
+                            trailing={
+                              <span
+                                className={cn(
+                                  "shrink-0 text-xs",
+                                  helper.status === "failed"
+                                    ? "text-app-danger"
+                                    : helper.status === "completed"
+                                      ? "text-app-subtle"
+                                      : "text-app-info",
+                                )}
+                              >
+                                {formatHelperStatusLabel(helper.status)}
+                              </span>
+                            }
+                          >
+                            <div className="flex min-w-0 items-start gap-3">
+                              <BotIcon
+                                className={cn(
+                                  "mt-0.5 size-4 shrink-0",
+                                  helper.status === "failed"
+                                    ? "text-app-danger"
+                                    : helper.status === "completed"
+                                      ? "text-app-subtle"
+                                      : "text-app-info",
+                                )}
+                              />
+                              <span
+                                className="truncate text-app-foreground text-sm"
+                                title={helperSummary}
+                              >
+                                {helperSummary}
+                              </span>
+                            </div>
+                          </CompactCollapsibleHeader>
+                          <CompactCollapsibleContent className="pl-7">
+                            <div className="max-h-40 space-y-2 overflow-y-auto pr-3">
+                              {helperToolCounts.length > 0 ? (
+                                <p className="whitespace-pre-wrap break-words text-xs text-app-subtle">
+                                  {helperToolCounts.join(" · ")}
+                                </p>
+                              ) : null}
+                              {helper.totalToolCalls > 0 && helper.status !== "completed" ? (
+                                <p className="text-xs text-app-subtle">
+                                  {`${helper.completedSteps} of ${formatToolCallCount(helper.totalToolCalls)} finished`}
+                                </p>
+                              ) : null}
+                              {helper.currentAction ? (
+                                <p className="whitespace-pre-wrap break-words text-xs text-app-subtle">
+                                  {`Current: ${helper.currentAction}`}
+                                </p>
+                              ) : null}
+                              {helper.latestMessage ? (
+                                <p className="whitespace-pre-wrap break-words text-sm text-app-muted">
+                                  {helper.latestMessage}
+                                </p>
+                              ) : null}
+                              {helper.recentActions.length > 0 ? (
+                                <div className="space-y-1">
+                                  {helper.recentActions.slice(-3).map((action, index) => (
+                                    <p
+                                      className="whitespace-pre-wrap break-words text-sm text-app-muted"
+                                      key={`${helper.id}-action-${index}`}
+                                    >
+                                      {action}
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {helper.summary ? (
+                                <p className="whitespace-pre-wrap break-words text-sm text-app-muted">
+                                  {helper.summary}
+                                </p>
+                              ) : null}
+                              {helper.error ? (
+                                <p className="whitespace-pre-wrap break-words text-sm text-app-danger">
+                                  {helper.error}
+                                </p>
+                              ) : null}
+                            </div>
+                          </CompactCollapsibleContent>
+                          {executionSummary ? (
+                            <CompactCollapsibleFootnote className="pl-7">
+                              {executionSummary}
+                            </CompactCollapsibleFootnote>
+                          ) : null}
+                        </CompactCollapsible>
+                      </MessageContent>
+                    </Message>
+                  </div>
                 );
               }
 
               if (entry.kind === "tool-group") {
                 return (
-                  <Message className="max-w-full" from="assistant" key={entry.key}>
-                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                      <Collapsible
-                        onOpenChange={(open) => handleCompletedToolGroupOpenChange(entry.key, open)}
-                        open={completedToolGroupOpen[entry.key] ?? false}
-                      >
-                        <CollapsibleTrigger
-                          className={cn(
-                            "flex w-full items-center gap-2 text-sm text-app-subtle transition-colors hover:text-app-foreground",
-                            completedToolGroupOpen[entry.key] ? "text-app-foreground" : undefined,
-                          )}
+                  <div className={spacingClass} key={entry.key}>
+                    <Message className="max-w-full" from="assistant">
+                      <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                        <Collapsible
+                          onOpenChange={(open) => handleCompletedToolGroupOpenChange(entry.key, open)}
+                          open={completedToolGroupOpen[entry.key] ?? false}
                         >
-                          <WrenchIcon className="size-4 shrink-0" />
-                          <span className="font-medium">{`Tools × ${entry.tools.length}`}</span>
-                          <span className="text-app-muted">Completed tool results</span>
-                          <ChevronDownIcon
+                          <CollapsibleTrigger
                             className={cn(
-                              "ml-auto size-4 shrink-0 transition-transform",
-                              completedToolGroupOpen[entry.key] ? "rotate-180" : undefined,
+                              "flex w-full items-center gap-2 text-sm text-app-subtle transition-colors hover:text-app-foreground",
+                              completedToolGroupOpen[entry.key] ? "text-app-foreground" : undefined,
                             )}
-                          />
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="space-y-3 pt-3 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:animate-in data-[state=open]:slide-in-from-top-2">
-                          {entry.tools.map((tool) => (
-                            renderToolEntry(tool, `${entry.key}:${tool.id}`, true)
-                          ))}
-                        </CollapsibleContent>
-                      </Collapsible>
-                    </MessageContent>
-                  </Message>
+                          >
+                            <WrenchIcon className="size-4 shrink-0" />
+                            <span className="font-medium">{`Tools × ${entry.tools.length}`}</span>
+                            <span className="text-app-muted">Completed tool results</span>
+                            <ChevronDownIcon
+                              className={cn(
+                                "ml-auto size-4 shrink-0 transition-transform",
+                                completedToolGroupOpen[entry.key] ? "rotate-180" : undefined,
+                              )}
+                            />
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="space-y-3 pt-3 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:animate-in data-[state=open]:slide-in-from-top-2">
+                            {entry.tools.map((tool) => (
+                              renderToolEntry(tool, `${entry.key}:${tool.id}`, true)
+                            ))}
+                          </CollapsibleContent>
+                        </Collapsible>
+                      </MessageContent>
+                    </Message>
+                  </div>
                 );
               }
 
               const { tool } = entry;
-              return renderToolEntry(tool, entry.key);
+              return (
+                <div className={spacingClass} key={entry.key}>
+                  {renderToolEntry(tool, entry.key)}
+                </div>
+              );
             })}
 
             {formattedPlan ? (
-              <Message className="max-w-full" from="assistant">
-                <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                  <Plan className="overflow-hidden rounded-2xl border border-app-border/28 bg-app-surface/28 shadow-none" defaultOpen>
-                    <PlanHeader>
-                      <div className="space-y-3">
-                        <PlanTitle>{formattedPlan.title}</PlanTitle>
-                        <PlanDescription>{formattedPlan.description}</PlanDescription>
-                      </div>
-                      <PlanTrigger />
-                    </PlanHeader>
-                    <PlanContent className="space-y-3">
-                      {formattedPlan.steps.length > 0 ? (
-                        <ol className="space-y-2 text-sm leading-6 text-app-muted">
-                          {formattedPlan.steps.map((step, index) => (
-                            <li className="flex items-start gap-3" key={`${step}-${index}`}>
-                              <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-app-surface-muted text-[11px] font-semibold text-app-foreground ring-1 ring-app-border/45">
-                                {index + 1}
-                              </span>
-                              <span className="whitespace-pre-wrap">{step}</span>
-                            </li>
-                          ))}
-                        </ol>
-                      ) : (
-                        <MessageResponse>{JSON.stringify(planArtifact, null, 2)}</MessageResponse>
-                      )}
-                    </PlanContent>
-                  </Plan>
-                </MessageContent>
-              </Message>
+              <div className={getRoleSpacingClass(planPreviousRole, "assistant")}>
+                <Message className="max-w-full" from="assistant">
+                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                    <Plan className="overflow-hidden rounded-2xl border border-app-border/28 bg-app-surface/28 shadow-none" defaultOpen>
+                      <PlanHeader>
+                        <div className="space-y-3">
+                          <PlanTitle>{formattedPlan.title}</PlanTitle>
+                          <PlanDescription>{formattedPlan.description}</PlanDescription>
+                        </div>
+                        <PlanTrigger />
+                      </PlanHeader>
+                      <PlanContent className="space-y-3">
+                        {formattedPlan.steps.length > 0 ? (
+                          <ol className="space-y-2 text-sm leading-6 text-app-muted">
+                            {formattedPlan.steps.map((step, index) => (
+                              <li className="flex items-start gap-3" key={`${step}-${index}`}>
+                                <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-app-surface-muted text-[11px] font-semibold text-app-foreground ring-1 ring-app-border/45">
+                                  {index + 1}
+                                </span>
+                                <span className="whitespace-pre-wrap">{step}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        ) : (
+                          <MessageResponse>{JSON.stringify(planArtifact, null, 2)}</MessageResponse>
+                        )}
+                      </PlanContent>
+                    </Plan>
+                  </MessageContent>
+                </Message>
+              </div>
             ) : null}
 
             {queueArtifact ? (
-              <Message className="max-w-full" from="assistant">
-                <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                  <Queue className="rounded-2xl border border-app-border/24 bg-app-surface/16 p-2 shadow-none">
-                    <div>
-                      <div className="px-3 py-2 text-sm font-medium text-app-foreground">Runtime Queue</div>
-                      <div className="rounded-xl bg-app-surface/45 px-3 py-3 text-sm text-app-muted">
-                        <MessageResponse>{JSON.stringify(queueArtifact, null, 2)}</MessageResponse>
+              <div className={getRoleSpacingClass(queuePreviousRole, "assistant")}>
+                <Message className="max-w-full" from="assistant">
+                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                    <Queue className="rounded-2xl border border-app-border/24 bg-app-surface/16 p-2 shadow-none">
+                      <div>
+                        <div className="px-3 py-2 text-sm font-medium text-app-foreground">Runtime Queue</div>
+                        <div className="rounded-xl bg-app-surface/45 px-3 py-3 text-sm text-app-muted">
+                          <MessageResponse>{JSON.stringify(queueArtifact, null, 2)}</MessageResponse>
+                        </div>
                       </div>
-                    </div>
-                  </Queue>
-                </MessageContent>
-              </Message>
+                    </Queue>
+                  </MessageContent>
+                </Message>
+              </div>
             ) : null}
 
             {runtimeError ? (
-              <Message className="max-w-full" from="assistant">
-                <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                  <div className="rounded-2xl border border-app-danger/25 bg-app-danger/8 px-4 py-3 text-sm text-app-danger">
-                    <div className="flex items-center gap-2 font-medium">
-                      <AlertCircleIcon className="size-4" />
-                      Last run failed
+              <div className={getRoleSpacingClass(runtimeErrorPreviousRole, "assistant")}>
+                <Message className="max-w-full" from="assistant">
+                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                    <div className="rounded-2xl border border-app-danger/25 bg-app-danger/8 px-4 py-3 text-sm text-app-danger">
+                      <div className="flex items-center gap-2 font-medium">
+                        <AlertCircleIcon className="size-4" />
+                        Last run failed
+                      </div>
+                      <p className="mt-2 whitespace-pre-wrap leading-6 text-app-danger/90">{runtimeError.message}</p>
                     </div>
-                    <p className="mt-2 whitespace-pre-wrap leading-6 text-app-danger/90">{runtimeError.message}</p>
-                  </div>
-                </MessageContent>
-              </Message>
+                  </MessageContent>
+                </Message>
+              </div>
             ) : null}
 
             {!messages.length && !hasRuntimeArtifacts && !isLoading && !loadError ? (

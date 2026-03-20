@@ -13,7 +13,7 @@ export const SETTINGS_STORAGE_SCHEMA_VERSION = 2;
 export const GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY = "general.prevent_sleep_while_running";
 
 const DEFAULT_CUSTOM_INSTRUCTIONS =
-  "You are Tiy Agent, a desktop coding partner. Keep answers crisp, grounded in the local workspace, and explicit about risks before taking action.";
+  "Keep answers grounded in the local workspace. Prefer workspace-aware tools over shell commands for exploration. When a task involves risk or ambiguity, surface it before acting.";
 
 export const DEFAULT_AGENT_PROFILES: Array<AgentProfile> = [{
   id: "default-profile",

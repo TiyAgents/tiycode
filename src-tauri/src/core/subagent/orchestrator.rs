@@ -117,7 +117,9 @@ impl HelperAgentOrchestrator {
 
         let agent = Arc::new(Agent::with_model(request.model_role.model.clone()));
         agent.set_system_prompt(format!(
-            "{}\n\n{}\n\nProduce a concise summary for the parent agent.",
+            "{}\n\n{}\n\nYour output will be consumed by the parent agent, not the user. \
+Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
+Reference specific file paths and code locations where relevant. Skip preamble.",
             request.system_prompt,
             helper_profile.system_prompt()
         ));
