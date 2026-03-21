@@ -140,6 +140,46 @@ async fn test_recover_interrupted_runs() {
     test_helpers::seed_run(&pool, "r-dangling-2", "t-rec", "dispatching", "default").await;
     test_helpers::seed_run(&pool, "r-ok", "t-rec", "completed", "default").await;
 
+    // Create dangling tool calls and run helpers
+    test_helpers::seed_tool_call(&pool, "tc-running", "r-dangling-1", "t-rec", "read", "running")
+        .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-waiting",
+        "r-dangling-1",
+        "t-rec",
+        "write",
+        "waiting_approval",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-completed",
+        "r-ok",
+        "t-rec",
+        "read",
+        "completed",
+    )
+    .await;
+    test_helpers::seed_run_helper(
+        &pool,
+        "h-running",
+        "r-dangling-1",
+        "t-rec",
+        "research",
+        "running",
+    )
+    .await;
+    test_helpers::seed_run_helper(
+        &pool,
+        "h-completed",
+        "r-ok",
+        "t-rec",
+        "research",
+        "completed",
+    )
+    .await;
+
     let manager = ThreadManager::new(pool.clone());
     manager.recover_interrupted_runs().await.unwrap();
 
@@ -172,6 +212,49 @@ async fn test_recover_interrupted_runs() {
         .await
         .unwrap();
     assert_eq!(ok.get::<String, _>("status"), "completed");
+
+    // Verify dangling tool calls are now cancelled
+    let tc_running = sqlx::query("SELECT status, finished_at FROM tool_calls WHERE id = 'tc-running'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(tc_running.get::<String, _>("status"), "cancelled");
+    assert!(tc_running.get::<Option<String>, _>("finished_at").is_some());
+
+    let tc_waiting =
+        sqlx::query("SELECT status, finished_at FROM tool_calls WHERE id = 'tc-waiting'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(tc_waiting.get::<String, _>("status"), "cancelled");
+    assert!(tc_waiting.get::<Option<String>, _>("finished_at").is_some());
+
+    // Verify completed tool call is untouched
+    let tc_ok = sqlx::query("SELECT status FROM tool_calls WHERE id = 'tc-completed'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(tc_ok.get::<String, _>("status"), "completed");
+
+    // Verify dangling run helper is now interrupted
+    let h_running =
+        sqlx::query("SELECT status, error_summary, finished_at FROM run_helpers WHERE id = 'h-running'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(h_running.get::<String, _>("status"), "interrupted");
+    assert_eq!(
+        h_running.get::<Option<String>, _>("error_summary").as_deref(),
+        Some("The app closed before this helper finished. Marked as interrupted on restart.")
+    );
+    assert!(h_running.get::<Option<String>, _>("finished_at").is_some());
+
+    // Verify completed run helper is untouched
+    let h_ok = sqlx::query("SELECT status FROM run_helpers WHERE id = 'h-completed'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(h_ok.get::<String, _>("status"), "completed");
 }
 
 // =========================================================================

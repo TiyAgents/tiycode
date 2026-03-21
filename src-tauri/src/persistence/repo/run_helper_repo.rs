@@ -141,6 +141,25 @@ pub async fn mark_failed(
     Ok(())
 }
 
+/// Mark all non-terminal run helpers as interrupted (crash recovery).
+pub async fn interrupt_active_helpers(pool: &SqlitePool) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "UPDATE run_helpers
+         SET status = 'interrupted',
+             error_summary = COALESCE(
+                 error_summary,
+                 'The app closed before this helper finished. Marked as interrupted on restart.'
+             ),
+             finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE status NOT IN ('completed', 'failed', 'interrupted', 'cancelled')
+           AND finished_at IS NULL",
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
 pub async fn list_by_run_ids(
     pool: &SqlitePool,
     run_ids: &[String],

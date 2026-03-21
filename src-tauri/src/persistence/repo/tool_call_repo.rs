@@ -121,6 +121,21 @@ pub async fn update_approval(
     Ok(())
 }
 
+/// Mark all non-terminal tool calls as cancelled (crash recovery).
+pub async fn interrupt_active_tool_calls(pool: &SqlitePool) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "UPDATE tool_calls
+         SET status = 'cancelled',
+             finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE status NOT IN ('completed', 'failed', 'denied', 'cancelled')
+           AND finished_at IS NULL",
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
 pub async fn list_by_run_ids(
     pool: &SqlitePool,
     run_ids: &[String],

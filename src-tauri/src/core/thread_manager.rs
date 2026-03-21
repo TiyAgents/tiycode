@@ -215,8 +215,15 @@ impl ThreadManager {
         thread_ids.extend(thread_repo::list_ids_with_active_status(&self.pool).await?);
 
         let count = run_repo::interrupt_active_runs(&self.pool).await?;
-        if count > 0 {
-            tracing::warn!(count, "interrupted dangling runs on startup");
+        let tc_count = tool_call_repo::interrupt_active_tool_calls(&self.pool).await?;
+        let helper_count = run_helper_repo::interrupt_active_helpers(&self.pool).await?;
+        if count > 0 || tc_count > 0 || helper_count > 0 {
+            tracing::warn!(
+                runs = count,
+                tool_calls = tc_count,
+                helpers = helper_count,
+                "interrupted dangling runs/tool_calls/helpers on startup"
+            );
         }
 
         for thread_id in thread_ids {
