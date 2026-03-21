@@ -3,6 +3,7 @@
 import type { ChatStatus } from "ai";
 import { AlertCircleIcon, BotIcon, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CodeBlock } from "@/components/ai-elements/code-block";
 import {
   CompactCollapsible,
   CompactCollapsibleContent,
@@ -690,6 +691,16 @@ type ListToolPresentation = {
   path: string;
 };
 
+type CommandOutputToolPresentation = {
+  actionLabel: string;
+  command: string;
+  commandLanguage: "bash" | "log" | "shell";
+  detailLabel: string | null;
+  output: string | null;
+  outputLanguage: "log";
+  summaryLabel: string;
+};
+
 function getFileMutationPresentation(tool: SurfaceToolEntry): FileMutationPresentation | null {
   if (!isFileMutationToolName(tool.name)) {
     return null;
@@ -851,6 +862,335 @@ function getListToolPresentation(tool: SurfaceToolEntry): ListToolPresentation |
     directoryLabel: formatToolScopeLabel(path) ?? path,
     path,
   };
+}
+
+function quoteShellValue(value: string) {
+  if (!value.length) {
+    return "''";
+  }
+
+  if (/^[\w./:@%+=,-]+$/u.test(value)) {
+    return value;
+  }
+
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function formatJoinedArgs(values: ReadonlyArray<string>) {
+  return values.map((value) => quoteShellValue(value)).join(" ");
+}
+
+function getToolDataStringArray(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+}
+
+function joinTextSections(sections: Array<{ label: string; value: string | null | undefined }>) {
+  const normalized = sections
+    .map(({ label, value }) => {
+      const trimmed = value?.trim();
+      return trimmed ? `${label}:\n${trimmed}` : null;
+    })
+    .filter((value): value is string => Boolean(value));
+
+  return normalized.length > 0 ? normalized.join("\n\n") : null;
+}
+
+function summarizeInlineText(value: string | null, fallback: string) {
+  if (!value) {
+    return fallback;
+  }
+
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return fallback;
+  }
+
+  return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
+}
+
+function formatTerminalSessionSummary(record: Record<string, unknown> | null) {
+  if (!record) {
+    return null;
+  }
+
+  const status = getToolDataString(record, "status");
+  const shell = getToolDataString(record, "shell");
+  const cwd = getToolDataString(record, "cwd");
+  const cols = getToolDataNumber(record, "cols");
+  const rows = getToolDataNumber(record, "rows");
+  const exitCode = getToolDataNumber(record, "exitCode");
+
+  return joinTextSections([
+    { label: "status", value: status },
+    { label: "shell", value: shell },
+    { label: "cwd", value: cwd },
+    {
+      label: "size",
+      value:
+        typeof cols === "number" && typeof rows === "number"
+          ? `${cols} x ${rows}`
+          : null,
+    },
+    {
+      label: "exit code",
+      value: typeof exitCode === "number" ? String(exitCode) : null,
+    },
+  ]);
+}
+
+function formatTerminalDetailLabel(record: Record<string, unknown> | null) {
+  if (!record) {
+    return null;
+  }
+
+  const status = getToolDataString(record, "status");
+  const cwd = formatToolScopeLabel(getToolDataString(record, "cwd"));
+
+  return [status, cwd].filter(Boolean).join(" · ") || null;
+}
+
+function getShellToolPresentation(tool: SurfaceToolEntry): CommandOutputToolPresentation | null {
+  if (tool.name !== "shell") {
+    return null;
+  }
+
+  const input = asToolDataRecord(tool.input);
+  const result = asToolDataRecord(tool.result);
+  const command = getToolDataString(result, "command") ?? getToolDataString(input, "command");
+  if (!command) {
+    return null;
+  }
+
+  const stdout = getToolDataString(result, "stdout");
+  const stderr = getToolDataString(result, "stderr");
+  const exitCode = getToolDataNumber(result, "exitCode");
+  const cwd = getToolDataString(input, "cwd");
+  const stdoutTruncated = result?.stdoutTruncated === true;
+  const stderrTruncated = result?.stderrTruncated === true;
+
+  const output = joinTextSections([
+    { label: "stdout", value: stdout },
+    { label: "stderr", value: stderr ?? tool.error },
+    {
+      label: "exit code",
+      value:
+        typeof exitCode === "number" && (exitCode !== 0 || (!stdout && !stderr))
+          ? String(exitCode)
+          : null,
+    },
+    {
+      label: "note",
+      value:
+        stdoutTruncated || stderrTruncated
+          ? "Output was truncated to keep the latest lines visible."
+          : null,
+    },
+  ]);
+
+  return {
+    actionLabel: "Shell",
+    command,
+    commandLanguage: "bash",
+    detailLabel: cwd ? `cwd · ${cwd}` : null,
+    output,
+    outputLanguage: "log",
+    summaryLabel: summarizeInlineText(command, "shell"),
+  };
+}
+
+function buildGitCommand(toolName: string, input: Record<string, unknown> | null) {
+  const paths = getToolDataStringArray(input, "paths");
+
+  switch (toolName) {
+    case "git_add":
+    case "git_stage":
+      return paths.length > 0
+        ? `git add -- ${formatJoinedArgs(paths)}`
+        : "git add";
+    case "git_unstage":
+      return paths.length > 0
+        ? `git restore --staged -- ${formatJoinedArgs(paths)}`
+        : "git restore --staged";
+    case "git_commit": {
+      const message = getToolDataString(input, "message");
+      return message ? `git commit -m ${quoteShellValue(message)}` : "git commit";
+    }
+    case "git_fetch":
+      return "git fetch --prune";
+    case "git_pull":
+      return "git pull --ff-only";
+    case "git_push":
+      return "git push";
+    case "git_status":
+      return "git status --short";
+    case "git_diff":
+      return "git diff";
+    case "git_log":
+      return "git log --oneline";
+    default:
+      return toolName;
+  }
+}
+
+function buildGitFallbackOutput(
+  toolName: string,
+  input: Record<string, unknown> | null,
+  result: Record<string, unknown> | null,
+) {
+  const paths = getToolDataStringArray(result, "paths");
+  const resolvedPaths = paths.length > 0 ? paths : getToolDataStringArray(input, "paths");
+
+  switch (toolName) {
+    case "git_add":
+    case "git_stage":
+      return resolvedPaths.length > 0
+        ? `staged paths:\n${resolvedPaths.join("\n")}`
+        : "Staged changes.";
+    case "git_unstage":
+      return resolvedPaths.length > 0
+        ? `unstaged paths:\n${resolvedPaths.join("\n")}`
+        : "Unstaged changes.";
+    default:
+      return null;
+  }
+}
+
+function getGitToolPresentation(tool: SurfaceToolEntry): CommandOutputToolPresentation | null {
+  if (!tool.name.startsWith("git_")) {
+    return null;
+  }
+
+  const input = asToolDataRecord(tool.input);
+  const result = asToolDataRecord(tool.result);
+  const command = buildGitCommand(tool.name, input);
+  const summary = getToolDataString(result, "summary");
+  const stdout = getToolDataString(result, "stdout");
+  const stderr = getToolDataString(result, "stderr");
+
+  const output =
+    joinTextSections([
+      { label: "summary", value: summary },
+      { label: "stdout", value: stdout },
+      { label: "stderr", value: stderr ?? tool.error },
+    ])
+    ?? buildGitFallbackOutput(tool.name, input, result)
+    ?? tool.error
+    ?? null;
+
+  return {
+    actionLabel: "Git",
+    command,
+    commandLanguage: "bash",
+    detailLabel: summary,
+    output,
+    outputLanguage: "log",
+    summaryLabel: summarizeInlineText(command, tool.name),
+  };
+}
+
+function buildTerminalCommand(tool: SurfaceToolEntry, input: Record<string, unknown> | null) {
+  switch (tool.name) {
+    case "term_write": {
+      const data = getToolDataString(input, "data") ?? getToolDataString(input, "input");
+      return data ?? "term_write";
+    }
+    case "term_restart": {
+      const cols = getToolDataNumber(input, "cols");
+      const rows = getToolDataNumber(input, "rows");
+      const sizeArgs = [
+        typeof cols === "number" ? `--cols ${cols}` : null,
+        typeof rows === "number" ? `--rows ${rows}` : null,
+      ].filter(Boolean);
+      return sizeArgs.length > 0 ? `term_restart ${sizeArgs.join(" ")}` : "term_restart";
+    }
+    default:
+      return tool.name;
+  }
+}
+
+function buildTerminalSummaryLabel(tool: SurfaceToolEntry, command: string) {
+  switch (tool.name) {
+    case "term_write":
+      return summarizeInlineText(command, "terminal input");
+    case "term_output":
+      return "Recent terminal output";
+    case "term_status":
+      return "Terminal status";
+    case "term_restart":
+      return "Restart terminal";
+    case "term_close":
+      return "Close terminal";
+    default:
+      return summarizeInlineText(command, tool.name);
+  }
+}
+
+function buildTerminalOutput(tool: SurfaceToolEntry, result: Record<string, unknown> | null) {
+  if (tool.name === "term_output") {
+    return getToolDataString(result, "output") ?? tool.error ?? null;
+  }
+
+  return formatTerminalSessionSummary(result) ?? tool.error ?? null;
+}
+
+function getTerminalToolPresentation(tool: SurfaceToolEntry): CommandOutputToolPresentation | null {
+  if (!tool.name.startsWith("term_")) {
+    return null;
+  }
+
+  const input = asToolDataRecord(tool.input);
+  const result = asToolDataRecord(tool.result);
+  const command = buildTerminalCommand(tool, input);
+
+  return {
+    actionLabel: "Terminal",
+    command,
+    commandLanguage: tool.name === "term_write" ? "bash" : "shell",
+    detailLabel:
+      formatTerminalDetailLabel(result)
+      ?? formatToolScopeLabel(getToolDataString(input, "cwd")),
+    output: buildTerminalOutput(tool, result),
+    outputLanguage: "log",
+    summaryLabel: buildTerminalSummaryLabel(tool, command),
+  };
+}
+
+function getCommandOutputToolPresentation(tool: SurfaceToolEntry) {
+  return (
+    getShellToolPresentation(tool)
+    ?? getGitToolPresentation(tool)
+    ?? getTerminalToolPresentation(tool)
+  );
+}
+
+function ToolCommandOutputBlocks({
+  presentation,
+}: {
+  presentation: CommandOutputToolPresentation;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+          Command
+        </h4>
+        <CodeBlock code={presentation.command} language={presentation.commandLanguage} />
+      </div>
+      {presentation.output ? (
+        <div className="space-y-1.5">
+          <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+            Output
+          </h4>
+          <CodeBlock code={presentation.output} language={presentation.outputLanguage} />
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function parseDiffStart(value: string | undefined) {
@@ -1999,11 +2339,13 @@ export function RuntimeThreadSurface({
     const readTool = getReadToolPresentation(tool);
     const queryTool = getQueryToolPresentation(tool);
     const listTool = getListToolPresentation(tool);
+    const commandOutputTool = getCommandOutputToolPresentation(tool);
     const approvalTagLabel = getApprovalTagLabel(tool);
     const showStatusLabel = !fileMutation || tool.state !== "output-available";
-    const showGenericInput = !fileMutation && tool.input !== undefined;
+    const showGenericInput = !fileMutation && !commandOutputTool && tool.input !== undefined;
     const showGenericOutput =
       !fileMutation
+      && !commandOutputTool
       && (tool.state === "output-available" || tool.state === "output-denied" || tool.state === "output-error")
       && (tool.result !== undefined || tool.error);
 
@@ -2138,6 +2480,32 @@ export function RuntimeThreadSurface({
                   </div>
                   <p className="truncate text-xs text-app-subtle">{fileMutation.path}</p>
                 </div>
+              ) : commandOutputTool ? (
+                <div className="min-w-0 space-y-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                    <span className="text-app-muted">{commandOutputTool.actionLabel}</span>
+                    <span
+                      className="truncate font-medium text-app-info"
+                      title={commandOutputTool.command}
+                    >
+                      {commandOutputTool.summaryLabel}
+                    </span>
+                    {approvalTagLabel ? (
+                      <span
+                        className={cn(
+                          "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]",
+                          getApprovalTagClass(tool),
+                        )}
+                        title={getApprovalReason(tool.approval) ?? undefined}
+                      >
+                        {approvalTagLabel}
+                      </span>
+                    ) : null}
+                  </div>
+                  {commandOutputTool.detailLabel ? (
+                    <p className="truncate text-xs text-app-subtle">{commandOutputTool.detailLabel}</p>
+                  ) : null}
+                </div>
               ) : (
                 <div className="flex min-w-0 items-start gap-3">
                   <WrenchIcon className={cn("mt-0.5 size-4 shrink-0", getToolStatusClass(tool.state))} />
@@ -2171,38 +2539,6 @@ export function RuntimeThreadSurface({
                             {approvalTagLabel}
                           </span>
                         ) : null}
-                        {tool.state === "approval-requested" ? (
-                          <div className="ml-auto flex items-center gap-1.5">
-                            <ConfirmationAction
-                              className="h-7 px-2.5 text-xs"
-                              onClick={() => {
-                                if (!streamRef.current?.runId) {
-                                  return;
-                                }
-
-                                void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, false);
-                              }}
-                              size="sm"
-                              variant="ghost"
-                            >
-                              Reject
-                            </ConfirmationAction>
-                            <ConfirmationAction
-                              className="h-7 px-2.5 text-xs"
-                              onClick={() => {
-                                if (!streamRef.current?.runId) {
-                                  return;
-                                }
-
-                                void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, true);
-                              }}
-                              size="sm"
-                              variant="outline"
-                            >
-                              Approve
-                            </ConfirmationAction>
-                          </div>
-                        ) : null}
                       </div>
                       <div className="overflow-hidden rounded-b-2xl bg-app-canvas/70">
                         <FileMutationDiffPreview
@@ -2214,6 +2550,10 @@ export function RuntimeThreadSurface({
                   </div>
                 ) : null}
 
+                {commandOutputTool ? (
+                  <ToolCommandOutputBlocks presentation={commandOutputTool} />
+                ) : null}
+
                 {showGenericInput ? (
                   <ToolInput
                     className="space-y-1.5"
@@ -2222,7 +2562,7 @@ export function RuntimeThreadSurface({
                   />
                 ) : null}
 
-                {!fileMutation ? (
+                {!fileMutation && !commandOutputTool && tool.state !== "approval-requested" ? (
                   <Confirmation
                     className={cn(
                       "gap-3 rounded-xl border px-3 py-3 shadow-none",
@@ -2286,6 +2626,39 @@ export function RuntimeThreadSurface({
                     label="Output"
                     output={stringifyToolValue(tool.state === "output-available" ? tool.result : tool.error ?? tool.result)}
                   />
+                ) : null}
+
+                {tool.state === "approval-requested" ? (
+                  <div className="flex justify-end gap-2 pt-1">
+                    <ConfirmationAction
+                      className="h-7 px-2.5 text-xs"
+                      onClick={() => {
+                        if (!streamRef.current?.runId) {
+                          return;
+                        }
+
+                        void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, false);
+                      }}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      Reject
+                    </ConfirmationAction>
+                    <ConfirmationAction
+                      className="h-7 px-2.5 text-xs"
+                      onClick={() => {
+                        if (!streamRef.current?.runId) {
+                          return;
+                        }
+
+                        void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, true);
+                      }}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Approve
+                    </ConfirmationAction>
+                  </div>
                 ) : null}
               </div>
             </CompactCollapsibleContent>
