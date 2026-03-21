@@ -1,0 +1,36 @@
+//! Lightweight global events broadcast via `AppHandle::emit` to all frontend
+//! windows. These are intentionally separate from the per-run `ThreadStreamEvent`
+//! channel so that sidebar and workspace-level UI can react to background thread
+//! lifecycle changes without needing a dedicated stream subscription.
+
+use serde::Serialize;
+
+/// Event name constants used for `AppHandle::emit`.
+pub const THREAD_RUN_STARTED: &str = "thread-run-started";
+pub const THREAD_RUN_FINISHED: &str = "thread-run-finished";
+pub const THREAD_TITLE_UPDATED: &str = "thread-title-updated";
+
+/// Payload emitted when a thread run transitions to the `running` state.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRunStartedPayload {
+    pub thread_id: String,
+    pub run_id: String,
+}
+
+/// Payload emitted when a thread run reaches a terminal state.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRunFinishedPayload {
+    pub thread_id: String,
+    pub run_id: String,
+    pub status: String,
+}
+
+/// Payload emitted after a thread title is generated and persisted.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadTitleUpdatedPayload {
+    pub thread_id: String,
+    pub title: String,
+}

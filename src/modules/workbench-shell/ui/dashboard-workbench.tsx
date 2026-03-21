@@ -7,6 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Boxes,
@@ -219,6 +220,21 @@ function mapRunStateToWorkbenchThreadStatus(
       return "interrupted";
     case "failed":
       return "failed";
+    default:
+      return "completed";
+  }
+}
+
+function mapRunFinishedStatusToThreadStatus(
+  status: string,
+): WorkbenchThreadStatus {
+  switch (status) {
+    case "failed":
+      return "failed";
+    case "interrupted":
+      return "interrupted";
+    case "cancelled":
+      return "interrupted";
     default:
       return "completed";
   }
@@ -767,6 +783,94 @@ export function DashboardWorkbench() {
     },
     [listVisibleWorkspaceThreads],
   );
+
+  // ---------------------------------------------------------------------------
+  // Global Tauri event listeners — react to background thread lifecycle changes
+  // without needing a per-thread stream subscription.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    const unlistenPromises: Array<Promise<UnlistenFn>> = [];
+
+    unlistenPromises.push(
+      listen<{ threadId: string; runId: string }>(
+        "thread-run-started",
+        (event) => {
+          const { threadId } = event.payload;
+
+          setWorkspaces((current) =>
+            current.map((workspace) => ({
+              ...workspace,
+              threads: workspace.threads.map((thread) =>
+                thread.id === threadId
+                  ? { ...thread, status: "running" as const }
+                  : thread,
+              ),
+            })),
+          );
+
+          // Extend the sidebar auto-refresh grace period so the polling
+          // keeps running while background threads are active.
+          sidebarAutoRefreshUntilRef.current =
+            Date.now() + SIDEBAR_AUTO_REFRESH_GRACE_MS;
+        },
+      ),
+    );
+
+    unlistenPromises.push(
+      listen<{ threadId: string; runId: string; status: string }>(
+        "thread-run-finished",
+        (event) => {
+          const { threadId, status } = event.payload;
+          const threadStatus = mapRunFinishedStatusToThreadStatus(status);
+
+          setWorkspaces((current) =>
+            current.map((workspace) => ({
+              ...workspace,
+              threads: workspace.threads.map((thread) =>
+                thread.id === threadId
+                  ? { ...thread, status: threadStatus }
+                  : thread,
+              ),
+            })),
+          );
+
+          // Perform a full sidebar sync to reconcile any missed state
+          // (e.g. title generated shortly after, ordering changes).
+          void syncWorkspaceSidebar().catch(() => {});
+        },
+      ),
+    );
+
+    unlistenPromises.push(
+      listen<{ threadId: string; title: string }>(
+        "thread-title-updated",
+        (event) => {
+          const { threadId, title } = event.payload;
+
+          setWorkspaces((current) =>
+            current.map((workspace) => ({
+              ...workspace,
+              threads: workspace.threads.map((thread) =>
+                thread.id === threadId
+                  ? { ...thread, name: title }
+                  : thread,
+              ),
+            })),
+          );
+        },
+      ),
+    );
+
+    return () => {
+      for (const promise of unlistenPromises) {
+        void promise.then((unlisten) => unlisten());
+      }
+    };
+  }, [syncWorkspaceSidebar]);
 
   useEffect(() => {
     if (!isTauri() || typeof window === "undefined") {

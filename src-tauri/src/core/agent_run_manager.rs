@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
+use tauri::{Emitter, AppHandle};
 use tiy_core::provider::get_provider;
 use tiy_core::types::{
     Context as TiyContext, Message as TiyMessage, OnPayloadFn, StopReason,
@@ -19,6 +20,9 @@ use crate::core::agent_session::{
 };
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
 use crate::core::sleep_manager::SleepManager;
+use crate::ipc::app_events::{
+    self, ThreadRunFinishedPayload, ThreadRunStartedPayload, ThreadTitleUpdatedPayload,
+};
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{MessageRecord, ThreadStatus};
@@ -42,6 +46,7 @@ struct ActiveRun {
 
 pub struct AgentRunManager {
     pool: SqlitePool,
+    app_handle: AppHandle,
     runtime: Arc<BuiltInAgentRuntime>,
     sleep_manager: Arc<SleepManager>,
     active_runs: Arc<Mutex<HashMap<String, ActiveRun>>>,
@@ -50,11 +55,13 @@ pub struct AgentRunManager {
 impl AgentRunManager {
     pub fn new(
         pool: SqlitePool,
+        app_handle: AppHandle,
         runtime: Arc<BuiltInAgentRuntime>,
         sleep_manager: Arc<SleepManager>,
     ) -> Self {
         Self {
             pool,
+            app_handle,
             runtime,
             sleep_manager,
             active_runs: Arc::new(Mutex::new(HashMap::new())),
@@ -358,6 +365,43 @@ impl AgentRunManager {
 
         self.emit(run_id, event.clone()).await;
 
+        // Broadcast global events for lifecycle transitions so that the frontend
+        // sidebar can react even when this thread has no active stream subscription.
+        match &event {
+            ThreadStreamEvent::RunStarted { .. } => {
+                let thread_id = self.get_thread_id(run_id).await;
+                let _ = self.app_handle.emit(
+                    app_events::THREAD_RUN_STARTED,
+                    ThreadRunStartedPayload {
+                        thread_id,
+                        run_id: run_id.to_string(),
+                    },
+                );
+            }
+            ThreadStreamEvent::RunCompleted { .. }
+            | ThreadStreamEvent::RunFailed { .. }
+            | ThreadStreamEvent::RunCancelled { .. }
+            | ThreadStreamEvent::RunInterrupted { .. } => {
+                let thread_id = self.get_thread_id(run_id).await;
+                let status = match &event {
+                    ThreadStreamEvent::RunCompleted { .. } => "completed",
+                    ThreadStreamEvent::RunFailed { .. } => "failed",
+                    ThreadStreamEvent::RunCancelled { .. } => "cancelled",
+                    ThreadStreamEvent::RunInterrupted { .. } => "interrupted",
+                    _ => unreachable!(),
+                };
+                let _ = self.app_handle.emit(
+                    app_events::THREAD_RUN_FINISHED,
+                    ThreadRunFinishedPayload {
+                        thread_id,
+                        run_id: run_id.to_string(),
+                        status: status.to_string(),
+                    },
+                );
+            }
+            _ => {}
+        }
+
         if matches!(
             event,
             ThreadStreamEvent::RunCompleted { .. }
@@ -570,6 +614,7 @@ impl AgentRunManager {
                 profile_id,
                 frontend_tx,
                 lightweight_model_role,
+                self.app_handle.clone(),
             );
         }
 
@@ -583,6 +628,7 @@ impl AgentRunManager {
         profile_id: Option<String>,
         frontend_tx: broadcast::Sender<ThreadStreamEvent>,
         lightweight_model_role: Option<ResolvedModelRole>,
+        app_handle: AppHandle,
     ) {
         let Some(model_role) = lightweight_model_role else {
             tracing::debug!(
@@ -602,6 +648,7 @@ impl AgentRunManager {
                 profile_id,
                 model_role,
                 frontend_tx,
+                app_handle,
             )
             .await
             {
@@ -649,6 +696,7 @@ async fn maybe_generate_thread_title(
     profile_id: Option<String>,
     model_role: ResolvedModelRole,
     frontend_tx: broadcast::Sender<ThreadStreamEvent>,
+    app_handle: AppHandle,
 ) -> Result<(), AppError> {
     if message_repo::count_completed_assistant_plain_messages(pool, thread_id).await? != 1 {
         tracing::debug!(
@@ -707,6 +755,16 @@ async fn maybe_generate_thread_title(
         thread_id = %thread_id,
         title = %title,
         "generated thread title, sending to frontend"
+    );
+
+    // Broadcast a global event so the sidebar can pick up the new title even
+    // when no per-run stream subscription exists (e.g. inactive threads).
+    let _ = app_handle.emit(
+        app_events::THREAD_TITLE_UPDATED,
+        ThreadTitleUpdatedPayload {
+            thread_id: thread_id.to_string(),
+            title: title.clone(),
+        },
     );
 
     if frontend_tx

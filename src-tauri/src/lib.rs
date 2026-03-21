@@ -248,7 +248,7 @@ pub fn run() {
             tracing::info!(db = %db_path.display(), "database ready");
 
             // 5. Construct and manage AppState
-            let state = AppState::new(pool);
+            let state = AppState::new(pool, app.handle().clone());
 
             if let Some(setting) = tauri::async_runtime::block_on(async {
                 state

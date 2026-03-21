@@ -1,5 +1,6 @@
 use sqlx::SqlitePool;
 use std::sync::Arc;
+use tauri::AppHandle;
 
 use crate::core::agent_run_manager::AgentRunManager;
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
@@ -30,7 +31,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: SqlitePool, app_handle: AppHandle) -> Self {
         let workspace_manager = WorkspaceManager::new(pool.clone());
         let settings_manager = SettingsManager::new(pool.clone());
         let thread_manager = ThreadManager::new(pool.clone());
@@ -46,6 +47,7 @@ impl AppState {
         ));
         let agent_run_manager = Arc::new(AgentRunManager::new(
             pool.clone(),
+            app_handle,
             Arc::clone(&built_in_agent_runtime),
             Arc::clone(&sleep_manager),
         ));
