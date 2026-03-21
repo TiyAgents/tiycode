@@ -269,7 +269,10 @@ fn test_thread_stream_event_subagent_events_serialization() {
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_completed");
-    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_plan_reviewer");
+    assert_eq!(
+        json["helper_kind"].as_str().unwrap(),
+        "helper_plan_reviewer"
+    );
     assert_eq!(json["summary"].as_str().unwrap(), "Analysis complete");
 
     // SubagentFailed

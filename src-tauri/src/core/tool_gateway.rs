@@ -328,14 +328,44 @@ impl ToolGateway {
     ) -> Result<ToolOutput, crate::model::errors::AppError> {
         tool_call_repo::update_status(&self.pool, &request.tool_call_id, "running").await?;
 
-        let output = executors::execute_tool(
+        let output = match executors::execute_tool(
             &request.tool_name,
             &request.tool_input,
             &request.workspace_path,
             &request.thread_id,
             Some(&self.terminal_manager),
         )
-        .await?;
+        .await
+        {
+            Ok(output) => output,
+            Err(error) => {
+                let message = error.to_string();
+                let result_json = serde_json::json!({ "error": message }).to_string();
+
+                tool_call_repo::update_result(
+                    &self.pool,
+                    &request.tool_call_id,
+                    &result_json,
+                    "failed",
+                )
+                .await
+                .ok();
+
+                self.write_audit(
+                    &request.run_id,
+                    &request.thread_id,
+                    &request.tool_call_id,
+                    &request.tool_name,
+                    "tool_failed",
+                    policy_json,
+                    &result_json,
+                )
+                .await
+                .ok();
+
+                return Err(error);
+            }
+        };
 
         let result_json = output.result.to_string();
         let status = if output.success {

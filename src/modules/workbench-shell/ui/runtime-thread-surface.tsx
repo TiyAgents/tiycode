@@ -600,6 +600,14 @@ function getToolStatusClass(state: SurfaceToolState) {
   }
 }
 
+function isCompletedToolState(state: SurfaceToolState) {
+  return (
+    state === "output-available"
+    || state === "output-denied"
+    || state === "output-error"
+  );
+}
+
 function stringifyToolValue(value: unknown) {
   if (typeof value === "string") {
     return value;
@@ -650,6 +658,28 @@ function countDiffLineChanges(diff: string) {
   }
 
   return { linesAdded, linesRemoved };
+}
+
+function countTextLines(value: string) {
+  if (!value.length) {
+    return 0;
+  }
+
+  return value.split("\n").length;
+}
+
+function buildInputFallbackDiff(path: string, oldValue: string, newValue: string, created: boolean) {
+  const oldLines = created ? [] : oldValue.split("\n");
+  const newLines = newValue.split("\n");
+  const oldPath = created ? "/dev/null" : path;
+
+  return [
+    `--- ${oldPath}`,
+    `+++ ${path}`,
+    `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+    ...oldLines.map((line) => `-${line}`),
+    ...newLines.map((line) => `+${line}`),
+  ].join("\n");
 }
 
 function isFileMutationToolName(toolName: string) {
@@ -714,11 +744,42 @@ function getFileMutationPresentation(tool: SurfaceToolEntry): FileMutationPresen
     return null;
   }
 
-  const diff = getToolDataString(result, "diff");
+  const oldString = getToolDataString(input, "old_string") ?? "";
+  const newString = getToolDataString(input, "new_string");
+  const inputContent = getToolDataString(input, "content");
+  const created =
+    result?.created === true
+    || ((tool.name === "edit" || tool.name === "patch") && getToolDataString(input, "old_string") === "");
+  const fallbackDiff =
+    tool.name === "edit" || tool.name === "patch"
+      ? newString !== null
+        ? buildInputFallbackDiff(path, oldString, newString, created)
+        : null
+      : null;
+  const diff = getToolDataString(result, "diff") ?? fallbackDiff;
   const derivedDiffCounts = diff ? countDiffLineChanges(diff) : null;
-  const linesAdded = getToolDataNumber(result, "linesAdded") ?? derivedDiffCounts?.linesAdded ?? null;
-  const linesRemoved = getToolDataNumber(result, "linesRemoved") ?? derivedDiffCounts?.linesRemoved ?? null;
-  const created = result?.created === true;
+  const fallbackLinesAdded =
+    tool.name === "edit" || tool.name === "patch"
+      ? newString !== null
+        ? countTextLines(newString)
+        : null
+      : inputContent !== null
+        ? countTextLines(inputContent)
+        : null;
+  const fallbackLinesRemoved =
+    tool.name === "edit" || tool.name === "patch"
+      ? countTextLines(oldString)
+      : created
+        ? 0
+        : null;
+  const linesAdded =
+    getToolDataNumber(result, "linesAdded")
+    ?? derivedDiffCounts?.linesAdded
+    ?? fallbackLinesAdded;
+  const linesRemoved =
+    getToolDataNumber(result, "linesRemoved")
+    ?? derivedDiffCounts?.linesRemoved
+    ?? fallbackLinesRemoved;
   const actionLabel = tool.state === "output-available"
     ? created
       ? "Created"
@@ -729,7 +790,7 @@ function getFileMutationPresentation(tool: SurfaceToolEntry): FileMutationPresen
 
   return {
     actionLabel,
-    contentPreview: getToolDataString(input, "content"),
+    contentPreview: inputContent ?? newString,
     diff,
     fileName: path.split(/[\\/]/).filter(Boolean).pop() ?? path,
     linesAdded,
@@ -1938,18 +1999,24 @@ export function RuntimeThreadSurface({
               state: entry?.state === "approval-requested" ? "approval-requested" : "input-streaming",
             }));
           case "running":
-            return updateTool(current, event.toolCallId, (entry) => ({
-              approval: entry?.approval,
-              error: undefined,
-              finishedAt: entry?.finishedAt ?? null,
-              id: event.toolCallId,
-              input: entry?.input,
-              name: entry?.name ?? "tool",
-              result: undefined,
-              runId: event.runId,
-              startedAt: entry?.startedAt ?? new Date().toISOString(),
-              state: "input-available",
-            }));
+            return updateTool(current, event.toolCallId, (entry) => {
+              if (entry && isCompletedToolState(entry.state)) {
+                return entry;
+              }
+
+              return {
+                approval: entry?.approval,
+                error: undefined,
+                finishedAt: entry?.finishedAt ?? null,
+                id: event.toolCallId,
+                input: entry?.input,
+                name: entry?.name ?? "tool",
+                result: undefined,
+                runId: event.runId,
+                startedAt: entry?.startedAt ?? new Date().toISOString(),
+                state: "input-available",
+              };
+            });
           case "completed":
             return updateTool(current, event.toolCallId, (entry) => ({
               approval: entry?.approval,
@@ -2242,7 +2309,7 @@ export function RuntimeThreadSurface({
         const previousState = previousToolStates[tool.id];
 
         if (previousState !== tool.state) {
-          next[tool.id] = tool.state !== "output-available";
+          next[tool.id] = !isCompletedToolState(tool.state);
           continue;
         }
 
@@ -2251,7 +2318,7 @@ export function RuntimeThreadSurface({
           continue;
         }
 
-        next[tool.id] = tool.state !== "output-available";
+        next[tool.id] = !isCompletedToolState(tool.state);
       }
 
       const currentKeys = Object.keys(current);
@@ -2445,13 +2512,13 @@ export function RuntimeThreadSurface({
         <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
           <CompactCollapsible
             onOpenChange={(open) => {
-              if (tool.state !== "output-available") {
+              if (!isCompletedToolState(tool.state)) {
                 return;
               }
 
               handleCompletedToolOpenChange(tool.id, open);
             }}
-            open={tool.state !== "output-available" ? true : (completedToolOpen[tool.id] ?? false)}
+            open={!isCompletedToolState(tool.state) ? true : (completedToolOpen[tool.id] ?? false)}
           >
             <CompactCollapsibleHeader
               className={cn(

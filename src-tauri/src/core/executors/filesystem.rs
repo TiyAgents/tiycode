@@ -191,7 +191,9 @@ pub async fn write_file(
             success: true,
             result: {
                 let (created, diff) = match previous_content {
-                    Some(ref old_content) => (false, generate_diff(path.as_path(), old_content, content)),
+                    Some(ref old_content) => {
+                        (false, generate_diff(path.as_path(), old_content, content))
+                    }
                     None => (true, generate_diff_new_file(path.as_path(), content)),
                 };
                 let (lines_added, lines_removed) = count_diff_line_changes(&diff);

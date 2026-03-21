@@ -394,9 +394,7 @@ async fn test_build_session_spec_uses_runtime_custom_instructions_when_profile_l
     assert!(spec
         .system_prompt
         .contains("Respond in 简体中文 unless the user explicitly asks for a different language."));
-    assert!(spec
-        .system_prompt
-        .contains("Response style: concise."));
+    assert!(spec.system_prompt.contains("Response style: concise."));
 }
 
 #[tokio::test]
@@ -537,12 +535,7 @@ async fn test_build_session_spec_reads_object_style_approval_policy() {
 
     test_helpers::seed_workspace(&pool, "ws-ctx-object", &workspace_path).await;
     test_helpers::seed_thread(&pool, "t-ctx-object", "ws-ctx-object").await;
-    test_helpers::seed_policy(
-        &pool,
-        "approval_policy",
-        r#"{"mode":"require_all"}"#,
-    )
-    .await;
+    test_helpers::seed_policy(&pool, "approval_policy", r#"{"mode":"require_all"}"#).await;
 
     sqlx::query(
         "INSERT INTO providers (
