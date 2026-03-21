@@ -65,6 +65,18 @@ pub async fn find_by_id(pool: &SqlitePool, id: &str) -> Result<Option<ThreadReco
     Ok(row.map(|r| r.into_record()))
 }
 
+pub async fn list_ids_with_active_status(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT id
+         FROM threads
+         WHERE status IN ('running', 'waiting_approval')",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
 pub async fn insert(pool: &SqlitePool, record: &ThreadRecord) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(

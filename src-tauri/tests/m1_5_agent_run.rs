@@ -11,6 +11,7 @@ use std::fs;
 
 use sqlx::Row;
 use tempfile::tempdir;
+use tiy_agent_lib::core::thread_manager::ThreadManager;
 
 // =========================================================================
 // T1.5.1 — Run lifecycle state machine
@@ -139,27 +140,31 @@ async fn test_recover_interrupted_runs() {
     test_helpers::seed_run(&pool, "r-dangling-2", "t-rec", "dispatching", "default").await;
     test_helpers::seed_run(&pool, "r-ok", "t-rec", "completed", "default").await;
 
-    // Simulate startup recovery: mark all non-terminal runs as interrupted
-    sqlx::query(
-        "UPDATE thread_runs SET status = 'interrupted', finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-         WHERE status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    let manager = ThreadManager::new(pool.clone());
+    manager.recover_interrupted_runs().await.unwrap();
 
     // Verify dangling runs are now interrupted
-    let dangling1 = sqlx::query("SELECT status FROM thread_runs WHERE id = 'r-dangling-1'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let dangling1 =
+        sqlx::query("SELECT status, error_message FROM thread_runs WHERE id = 'r-dangling-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(dangling1.get::<String, _>("status"), "interrupted");
+    assert_eq!(
+        dangling1.get::<Option<String>, _>("error_message").as_deref(),
+        Some("The app closed or the run was terminated before completion. Restarted in interrupted state.")
+    );
 
-    let dangling2 = sqlx::query("SELECT status FROM thread_runs WHERE id = 'r-dangling-2'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let dangling2 =
+        sqlx::query("SELECT status, error_message FROM thread_runs WHERE id = 'r-dangling-2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(dangling2.get::<String, _>("status"), "interrupted");
+    assert_eq!(
+        dangling2.get::<Option<String>, _>("error_message").as_deref(),
+        Some("The app closed or the run was terminated before completion. Restarted in interrupted state.")
+    );
 
     // Verify completed run is untouched
     let ok = sqlx::query("SELECT status FROM thread_runs WHERE id = 'r-ok'")
@@ -335,6 +340,66 @@ async fn test_build_session_spec_resolves_primary_model_and_profile_prompt() {
 }
 
 #[tokio::test]
+async fn test_build_session_spec_uses_runtime_custom_instructions_when_profile_lookup_misses() {
+    use tiy_agent_lib::core::agent_session::build_session_spec;
+
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-runtime-inline", "/tmp/runtime-inline").await;
+    test_helpers::seed_thread(&pool, "t-runtime-inline", "ws-runtime-inline").await;
+
+    sqlx::query(
+        "INSERT INTO providers (
+            id, provider_kind, provider_key, name, protocol_type, base_url,
+            api_key_encrypted, enabled, mapping_locked
+         ) VALUES ('prov-runtime-inline', 'builtin', 'openai', 'OpenAI', 'openai',
+                   'https://api.openai.com/v1', 'sk-test', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let model_plan = serde_json::json!({
+        "profileId": "missing-profile",
+        "profileName": "Missing Profile",
+        "customInstructions": "Always include the user's runtime custom instructions.",
+        "responseLanguage": "简体中文",
+        "responseStyle": "concise",
+        "primary": {
+            "providerId": "prov-runtime-inline",
+            "modelRecordId": "model-record-runtime-inline",
+            "providerType": "openai",
+            "providerName": "OpenAI",
+            "model": "gpt-4.1",
+            "modelId": "gpt-4.1",
+            "modelDisplayName": "GPT-4.1",
+            "baseUrl": "https://api.openai.com/v1"
+        }
+    });
+
+    let spec = build_session_spec(
+        &pool,
+        "run-runtime-inline",
+        "t-runtime-inline",
+        "/tmp/runtime-inline",
+        "default",
+        &model_plan,
+    )
+    .await
+    .unwrap();
+
+    assert!(spec.system_prompt.contains("## Profile Instructions"));
+    assert!(spec
+        .system_prompt
+        .contains("Always include the user's runtime custom instructions."));
+    assert!(spec
+        .system_prompt
+        .contains("Respond in 简体中文 unless the user explicitly asks for a different language."));
+    assert!(spec
+        .system_prompt
+        .contains("Response style: concise."));
+}
+
+#[tokio::test]
 async fn test_build_session_spec_adds_plan_mode_guardrails() {
     use tiy_agent_lib::core::agent_session::build_session_spec;
 
@@ -447,9 +512,7 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
     assert!(spec
         .system_prompt
         .contains("### AGENTS.md\n```md\nAgents instructions"));
-    assert!(!spec
-        .system_prompt
-        .contains("```md\n### AGENTS.md"));
+    assert!(!spec.system_prompt.contains("```md\n### AGENTS.md"));
     assert!(spec.system_prompt.contains("Agents instructions"));
     assert!(!spec.system_prompt.contains("Claude instructions"));
     assert!(spec.system_prompt.contains("## System Environment"));

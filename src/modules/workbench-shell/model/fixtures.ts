@@ -541,4 +541,8 @@ export const THREAD_STATUS_META: Record<
     icon: CircleX,
     label: "错误或失败",
   },
+  interrupted: {
+    icon: CircleX,
+    label: "已中断",
+  },
 };

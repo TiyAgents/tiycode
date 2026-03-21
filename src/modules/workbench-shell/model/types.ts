@@ -1,4 +1,4 @@
-export type ThreadStatus = "running" | "completed" | "needs-reply" | "failed";
+export type ThreadStatus = "running" | "completed" | "needs-reply" | "failed" | "interrupted";
 
 export type ThreadItem = {
   name: string;

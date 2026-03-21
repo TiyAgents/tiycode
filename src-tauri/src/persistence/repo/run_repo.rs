@@ -155,11 +155,29 @@ pub async fn find_latest_by_thread(
     Ok(row.map(map_run_summary))
 }
 
+pub async fn list_thread_ids_with_active_runs(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT thread_id
+         FROM thread_runs
+         WHERE status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled')
+           AND finished_at IS NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
 /// Mark all non-terminal runs for a thread as interrupted (crash recovery).
 pub async fn interrupt_active_runs(pool: &SqlitePool) -> Result<u64, AppError> {
     let result = sqlx::query(
         "UPDATE thread_runs
-         SET status = 'interrupted', finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         SET status = 'interrupted',
+             error_message = COALESCE(
+                 error_message,
+                 'The app closed or the run was terminated before completion. Restarted in interrupted state.'
+             ),
+             finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled')
            AND finished_at IS NULL",
     )

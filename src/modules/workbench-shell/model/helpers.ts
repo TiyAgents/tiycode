@@ -364,8 +364,9 @@ function mapThreadStatus(status: ApiThreadStatus): WorkbenchThreadStatus {
     case "waiting_approval":
       return "needs-reply";
     case "failed":
-    case "interrupted":
       return "failed";
+    case "interrupted":
+      return "interrupted";
     default:
       return "completed";
   }

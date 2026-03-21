@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use sqlx::SqlitePool;
 
 use crate::model::errors::{AppError, ErrorSource};
@@ -205,10 +207,22 @@ impl ThreadManager {
     /// On app startup, mark any dangling active runs as interrupted,
     /// then sync affected thread statuses.
     pub async fn recover_interrupted_runs(&self) -> Result<(), AppError> {
+        let mut thread_ids: HashSet<String> =
+            run_repo::list_thread_ids_with_active_runs(&self.pool)
+                .await?
+                .into_iter()
+                .collect();
+        thread_ids.extend(thread_repo::list_ids_with_active_status(&self.pool).await?);
+
         let count = run_repo::interrupt_active_runs(&self.pool).await?;
         if count > 0 {
             tracing::warn!(count, "interrupted dangling runs on startup");
         }
+
+        for thread_id in thread_ids {
+            self.sync_status(&thread_id).await?;
+        }
+
         Ok(())
     }
 }

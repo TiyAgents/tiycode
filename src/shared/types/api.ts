@@ -179,6 +179,9 @@ export interface RunModelPlanRoleDto {
 export interface RunModelPlanDto {
   profileId?: string | null;
   profileName?: string | null;
+  customInstructions?: string | null;
+  responseStyle?: string | null;
+  responseLanguage?: string | null;
   primary?: RunModelPlanRoleDto | null;
   auxiliary?: RunModelPlanRoleDto | null;
   lightweight?: RunModelPlanRoleDto | null;

@@ -83,6 +83,9 @@ pub struct RuntimeModelRole {
 pub struct RuntimeModelPlan {
     pub profile_id: Option<String>,
     pub profile_name: Option<String>,
+    pub custom_instructions: Option<String>,
+    pub response_style: Option<String>,
+    pub response_language: Option<String>,
     pub primary: Option<RuntimeModelRole>,
     pub auxiliary: Option<RuntimeModelRole>,
     pub lightweight: Option<RuntimeModelRole>,
@@ -1181,26 +1184,69 @@ You help users by reading files, searching code, editing files, executing comman
     parts.push(build_sandbox_permissions_section(pool, run_mode, workspace_path).await?);
     parts.push(build_shell_tooling_guide_section());
 
+    let mut profile_lines = Vec::new();
+    if let Some(custom_instructions) = raw_plan.custom_instructions.as_deref() {
+        let trimmed = custom_instructions.trim();
+        if !trimmed.is_empty() {
+            profile_lines.push(trimmed.to_string());
+        }
+    }
+    let mut profile_response_parts = build_profile_response_prompt_parts_from_runtime(
+        raw_plan.response_language.as_deref(),
+        raw_plan.response_style.as_deref(),
+    );
+    let runtime_has_response_language =
+        normalize_profile_response_language(raw_plan.response_language.as_deref()).is_some();
+    let runtime_has_explicit_response_style = raw_plan
+        .response_style
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+
     if let Some(profile_id) = raw_plan.profile_id.as_deref() {
         if let Some(profile) = profile_repo::find_by_id(pool, profile_id).await? {
-            let mut profile_lines = Vec::new();
-
-            if let Some(custom_instructions) = profile.custom_instructions.as_deref() {
-                let trimmed = custom_instructions.trim();
-                if !trimmed.is_empty() {
-                    profile_lines.push(trimmed.to_string());
+            if profile_lines.is_empty() {
+                if let Some(custom_instructions) = profile.custom_instructions.as_deref() {
+                    let trimmed = custom_instructions.trim();
+                    if !trimmed.is_empty() {
+                        profile_lines.push(trimmed.to_string());
+                    }
                 }
             }
 
-            profile_lines.extend(build_profile_response_prompt_parts(&profile));
+            if !runtime_has_response_language {
+                if let Some(language) =
+                    normalize_profile_response_language(profile.response_language.as_deref())
+                {
+                    profile_response_parts.insert(
+                        0,
+                        format!(
+                            "Respond in {language} unless the user explicitly asks for a different language."
+                        ),
+                    );
+                }
+            }
 
-            if !profile_lines.is_empty() {
-                parts.push(build_prompt_section(
-                    "Profile Instructions",
-                    profile_lines.join("\n"),
-                ));
+            if !runtime_has_explicit_response_style {
+                profile_response_parts = build_profile_response_prompt_parts_from_runtime(
+                    if runtime_has_response_language {
+                        raw_plan.response_language.as_deref()
+                    } else {
+                        profile.response_language.as_deref()
+                    },
+                    profile.response_style.as_deref(),
+                );
             }
         }
+    }
+
+    profile_lines.extend(profile_response_parts);
+
+    if !profile_lines.is_empty() {
+        parts.push(build_prompt_section(
+            "Profile Instructions",
+            profile_lines.join("\n"),
+        ));
     }
 
     if run_mode == "plan" {
@@ -1464,21 +1510,27 @@ fn executable_candidates(command: &str) -> Vec<OsString> {
 }
 
 pub fn build_profile_response_prompt_parts(profile: &AgentProfileRecord) -> Vec<String> {
+    build_profile_response_prompt_parts_from_runtime(
+        profile.response_language.as_deref(),
+        profile.response_style.as_deref(),
+    )
+}
+
+fn build_profile_response_prompt_parts_from_runtime(
+    response_language: Option<&str>,
+    response_style: Option<&str>,
+) -> Vec<String> {
     let mut parts = Vec::new();
 
-    if let Some(language) =
-        normalize_profile_response_language(profile.response_language.as_deref())
-    {
+    if let Some(language) = normalize_profile_response_language(response_language) {
         parts.push(format!(
             "Respond in {language} unless the user explicitly asks for a different language."
         ));
     }
 
     parts.push(
-        response_style_system_instruction(normalize_profile_response_style(
-            profile.response_style.as_deref(),
-        ))
-        .to_string(),
+        response_style_system_instruction(normalize_profile_response_style(response_style))
+            .to_string(),
     );
 
     parts

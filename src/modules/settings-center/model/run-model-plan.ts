@@ -81,6 +81,9 @@ export function buildRunModelPlan(
   return {
     profileId: profile.id,
     profileName: profile.name,
+    customInstructions: profile.customInstructions || null,
+    responseStyle: profile.responseStyle || null,
+    responseLanguage: profile.responseLanguage || null,
     primary: toRunModelPlanRole(primarySelection),
     auxiliary: auxiliarySelection ? toRunModelPlanRole(auxiliarySelection) : null,
     lightweight: lightweightSelection ? toRunModelPlanRole(lightweightSelection) : null,
@@ -120,6 +123,9 @@ export function buildProfileModelPlan(
   return {
     profileId: profile.id,
     profileName: profile.name,
+    customInstructions: profile.customInstructions || null,
+    responseStyle: profile.responseStyle || null,
+    responseLanguage: profile.responseLanguage || null,
     primary: primarySelection ? toRunModelPlanRole(primarySelection) : null,
     auxiliary: auxiliarySelection ? toRunModelPlanRole(auxiliarySelection) : null,
     lightweight: lightweightSelection ? toRunModelPlanRole(lightweightSelection) : null,

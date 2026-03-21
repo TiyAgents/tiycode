@@ -167,8 +167,9 @@ function mapRunStateToWorkbenchThreadStatus(state: RunState | "idle"): Workbench
       return "running";
     case "waiting_approval":
       return "needs-reply";
-    case "failed":
     case "interrupted":
+      return "interrupted";
+    case "failed":
       return "failed";
     default:
       return "completed";

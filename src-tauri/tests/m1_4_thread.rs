@@ -518,6 +518,58 @@ async fn test_thread_snapshot_includes_runtime_artifacts_for_visible_runs() {
     );
 }
 
+#[tokio::test]
+async fn test_recover_interrupted_runs_reconciles_thread_statuses() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-rec", "/tmp/rec").await;
+    test_helpers::seed_thread(&pool, "t-active", "ws-rec").await;
+    test_helpers::seed_thread(&pool, "t-stale", "ws-rec").await;
+    test_helpers::seed_thread(&pool, "t-empty", "ws-rec").await;
+
+    sqlx::query(
+        "UPDATE threads
+         SET status = CASE id
+             WHEN 't-active' THEN 'running'
+             WHEN 't-stale' THEN 'running'
+             WHEN 't-empty' THEN 'waiting_approval'
+         END
+         WHERE id IN ('t-active', 't-stale', 't-empty')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    test_helpers::seed_run(&pool, "r-active", "t-active", "running", "default").await;
+    test_helpers::seed_run(&pool, "r-stale", "t-stale", "interrupted", "default").await;
+
+    let manager = ThreadManager::new(pool.clone());
+    manager.recover_interrupted_runs().await.unwrap();
+
+    let active_run = sqlx::query("SELECT status FROM thread_runs WHERE id = 'r-active'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(active_run.get::<String, _>("status"), "interrupted");
+
+    let active_thread = sqlx::query("SELECT status FROM threads WHERE id = 't-active'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(active_thread.get::<String, _>("status"), "interrupted");
+
+    let stale_thread = sqlx::query("SELECT status FROM threads WHERE id = 't-stale'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stale_thread.get::<String, _>("status"), "interrupted");
+
+    let empty_thread = sqlx::query("SELECT status FROM threads WHERE id = 't-empty'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(empty_thread.get::<String, _>("status"), "idle");
+}
+
 // =========================================================================
 // T1.4.6 — Message metadata JSON storage
 // =========================================================================

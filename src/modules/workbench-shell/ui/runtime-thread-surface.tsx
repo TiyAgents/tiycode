@@ -394,16 +394,18 @@ function mapRunSummaryToContextUsage(run: RunSummaryDto | null): ThreadContextUs
 
 function getSnapshotRuntimeError(snapshot: ThreadSnapshotDto): SurfaceRuntimeError | null {
   const run = getLatestVisibleRun(snapshot);
-  if (!run?.errorMessage) {
+  if (!run) {
     return null;
   }
 
-  if (run.status !== "failed" && run.status !== "denied") {
+  if (run.status !== "failed" && run.status !== "denied" && run.status !== "interrupted") {
     return null;
   }
 
   return {
-    message: run.errorMessage,
+    message:
+      run.errorMessage
+      ?? "The app closed or the run was terminated before completion. This thread was restored as interrupted.",
     runId: run.id,
   };
 }
@@ -2004,11 +2006,11 @@ export function RuntimeThreadSurface({
               <div className={getRoleSpacingClass(runtimeErrorPreviousRole, "assistant")}>
                 <Message className="max-w-full" from="assistant">
                   <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                    <div className="rounded-2xl border border-app-danger/25 bg-app-danger/8 px-4 py-3 text-sm text-app-danger">
-                      <div className="flex items-center gap-2 font-medium">
-                        <AlertCircleIcon className="size-4" />
-                        Last run failed
-                      </div>
+                      <div className="rounded-2xl border border-app-danger/25 bg-app-danger/8 px-4 py-3 text-sm text-app-danger">
+                        <div className="flex items-center gap-2 font-medium">
+                          <AlertCircleIcon className="size-4" />
+                        {runState === "interrupted" ? "Last run interrupted" : "Last run failed"}
+                        </div>
                       <p className="mt-2 whitespace-pre-wrap leading-6 text-app-danger/90">{runtimeError.message}</p>
                     </div>
                   </MessageContent>
