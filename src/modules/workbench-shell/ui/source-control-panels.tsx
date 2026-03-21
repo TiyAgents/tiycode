@@ -1333,6 +1333,19 @@ export function GitPanel({
         <DialogContent
           showCloseButton={false}
           className="max-w-md rounded-2xl border-app-border bg-app-surface p-5"
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.nativeEvent.isComposing) {
+              return;
+            }
+
+            if (!confirmAction) {
+              return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            executeConfirmedAction(confirmAction);
+          }}
         >
           <DialogHeader className="gap-2 text-left">
             <DialogTitle className="text-base font-semibold text-app-foreground">
@@ -1359,6 +1372,7 @@ export function GitPanel({
                   executeConfirmedAction(confirmAction);
                 }
               }}
+              autoFocus
             >
               Confirm
             </Button>
