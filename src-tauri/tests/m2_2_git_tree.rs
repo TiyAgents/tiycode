@@ -31,7 +31,7 @@ async fn test_git_overlay_reports_non_repo_workspace() {
 }
 
 #[tokio::test]
-async fn test_git_overlay_marks_tracked_untracked_and_ignored_nodes() {
+async fn test_git_overlay_marks_only_non_clean_tree_states() {
     let tmp = tempfile::tempdir().expect("should create tempdir");
     let root = tmp.path();
 
@@ -72,8 +72,8 @@ async fn test_git_overlay_marks_tracked_untracked_and_ignored_nodes() {
 
     assert_eq!(
         find_git_state(&tree, "src"),
-        Some(GitFileState::Tracked),
-        "tracked directory should be marked as tracked"
+        None,
+        "clean tracked directories should not receive overlay state"
     );
     assert_eq!(
         find_git_state(&tree, "notes.md"),
@@ -161,14 +161,72 @@ async fn test_git_overlay_marks_modified_files_and_ancestors() {
     tree.apply_git_overlay(&overlay.states);
 
     assert_eq!(
-        find_git_state(&tree, "src/main.rs"),
-        Some(GitFileState::Modified),
-        "modified tracked file should be marked as modified"
-    );
-    assert_eq!(
         find_git_state(&tree, "src"),
         Some(GitFileState::Modified),
         "ancestor directories should surface modified descendants"
+    );
+
+    let children = IndexManager::new()
+        .get_children(&root.to_string_lossy(), "src", None, None)
+        .await
+        .expect("should load modified directory children");
+    let mut overlay_root = tiy_agent_lib::core::index_manager::FileTreeNode {
+        name: "src".to_string(),
+        path: "src".to_string(),
+        is_dir: true,
+        is_expandable: true,
+        children_has_more: children.has_more,
+        children_next_offset: children.next_offset,
+        git_state: None,
+        children: Some(children.children),
+    };
+
+    overlay_root.apply_git_overlay(&overlay.states);
+
+    assert_eq!(
+        find_git_state(&overlay_root, "src/main.rs"),
+        Some(GitFileState::Modified),
+        "modified tracked file should be marked once its parent directory is loaded"
+    );
+}
+
+#[tokio::test]
+async fn test_git_refresh_invalidates_cached_overlay() {
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let root = tmp.path();
+
+    std::fs::create_dir_all(root.join("src")).expect("should create src directory");
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("should write tracked file");
+
+    let repo = Repository::init(root).expect("should init repository");
+    commit_selected(&repo, &["src/main.rs"], "initial commit");
+
+    std::fs::write(root.join("notes.md"), "# draft\n").expect("should write untracked file");
+
+    let manager = GitManager::new();
+    let overlay = manager
+        .get_workspace_overlay(&root.to_string_lossy())
+        .await
+        .expect("overlay lookup should succeed");
+    assert_eq!(
+        overlay.states.get("notes.md"),
+        Some(&GitFileState::Untracked),
+        "initial overlay should surface the untracked file"
+    );
+
+    commit_selected(&repo, &["notes.md"], "track notes");
+    manager
+        .refresh("workspace-1", &root.to_string_lossy())
+        .await
+        .expect("refresh should invalidate cached overlay state");
+
+    let refreshed_overlay = manager
+        .get_workspace_overlay(&root.to_string_lossy())
+        .await
+        .expect("overlay lookup should succeed after refresh");
+    assert!(
+        !refreshed_overlay.states.contains_key("notes.md"),
+        "clean tracked files should disappear once refresh invalidates the overlay cache"
     );
 }
 

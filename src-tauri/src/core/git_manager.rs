@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use git2::{
     BranchType, Delta, Diff, DiffFindOptions, DiffOptions, Patch, Repository, Sort, Status,
     StatusOptions,
 };
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::core::executors::git as git_executor;
 use crate::ipc::frontend_channels::GitStreamEvent;
@@ -21,11 +22,18 @@ use crate::model::git::{
 const DEFAULT_HISTORY_LIMIT: usize = 24;
 const MAX_DIFF_LINES: usize = 1200;
 const GIT_STREAM_BUFFER: usize = 32;
+const OVERLAY_CACHE_TTL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceGitOverlay {
     pub repo_available: bool,
     pub states: HashMap<String, GitFileState>,
+}
+
+#[derive(Debug, Clone)]
+struct OverlayCacheEntry {
+    built_at: Instant,
+    overlay: Arc<WorkspaceGitOverlay>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,12 +53,14 @@ struct SnapshotParts {
 #[derive(Clone)]
 pub struct GitManager {
     streams: Arc<Mutex<HashMap<String, broadcast::Sender<GitStreamEvent>>>>,
+    overlay_cache: Arc<RwLock<HashMap<String, OverlayCacheEntry>>>,
 }
 
 impl GitManager {
     pub fn new() -> Self {
         Self {
             streams: Arc::new(Mutex::new(HashMap::new())),
+            overlay_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -64,6 +74,8 @@ impl GitManager {
         workspace_id: &str,
         workspace_path: &str,
     ) -> Result<GitSnapshotDto, AppError> {
+        self.invalidate_workspace_overlay(workspace_path).await;
+
         let sender = self.get_or_create_sender(workspace_id).await;
         let _ = sender.send(GitStreamEvent::RefreshStarted {
             workspace_id: workspace_id.to_string(),
@@ -84,17 +96,36 @@ impl GitManager {
     pub async fn get_workspace_overlay(
         &self,
         workspace_path: &str,
-    ) -> Result<WorkspaceGitOverlay, AppError> {
+    ) -> Result<Arc<WorkspaceGitOverlay>, AppError> {
         let workspace_root = canonicalize_workspace(workspace_path);
+        let cache_key = workspace_root.to_string_lossy().to_string();
 
-        tokio::task::spawn_blocking(move || collect_workspace_overlay(&workspace_root))
-            .await
-            .map_err(|error| {
-                AppError::internal(
-                    ErrorSource::Git,
-                    format!("Git overlay task failed: {error}"),
-                )
-            })?
+        if let Some(cached) = self.overlay_cache.read().await.get(&cache_key) {
+            if cached.built_at.elapsed() < OVERLAY_CACHE_TTL {
+                return Ok(Arc::clone(&cached.overlay));
+            }
+        }
+
+        let overlay = Arc::new(
+            tokio::task::spawn_blocking(move || collect_workspace_overlay(&workspace_root))
+                .await
+                .map_err(|error| {
+                    AppError::internal(
+                        ErrorSource::Git,
+                        format!("Git overlay task failed: {error}"),
+                    )
+                })??,
+        );
+
+        self.overlay_cache.write().await.insert(
+            cache_key,
+            OverlayCacheEntry {
+                built_at: Instant::now(),
+                overlay: Arc::clone(&overlay),
+            },
+        );
+
+        Ok(overlay)
     }
 
     pub async fn get_snapshot(
@@ -288,6 +319,13 @@ impl GitManager {
         streams.insert(workspace_id.to_string(), sender.clone());
         sender
     }
+
+    async fn invalidate_workspace_overlay(&self, workspace_path: &str) {
+        let cache_key = canonicalize_workspace(workspace_path)
+            .to_string_lossy()
+            .to_string();
+        self.overlay_cache.write().await.remove(&cache_key);
+    }
 }
 
 fn build_snapshot(
@@ -392,9 +430,10 @@ fn collect_workspace_overlay(workspace_root: &Path) -> Result<WorkspaceGitOverla
     options
         .include_untracked(true)
         .include_ignored(true)
-        .include_unmodified(true)
         .recurse_untracked_dirs(true)
-        .recurse_ignored_dirs(true);
+        // Mark ignored directories themselves, but avoid walking every entry inside
+        // huge ignored trees like node_modules during TreeView bootstrap.
+        .recurse_ignored_dirs(false);
 
     let statuses = repo.statuses(Some(&mut options)).map_err(|error| {
         AppError::recoverable(
@@ -420,25 +459,6 @@ fn collect_workspace_overlay(workspace_root: &Path) -> Result<WorkspaceGitOverla
         let state = map_overlay_status(entry.status());
 
         merge_state_with_ancestors(&mut states, &key, state);
-    }
-
-    let index = repo.index().map_err(|error| {
-        AppError::recoverable(
-            ErrorSource::Git,
-            "git.index.read_failed",
-            format!("Unable to read Git index: {error}"),
-        )
-    })?;
-
-    for entry in index.iter() {
-        let repo_relative_path = String::from_utf8_lossy(entry.path.as_ref()).to_string();
-        let absolute_path = repo_root.join(&repo_relative_path);
-        let Ok(workspace_relative_path) = absolute_path.strip_prefix(workspace_root) else {
-            continue;
-        };
-
-        let key = workspace_relative_path.to_string_lossy().to_string();
-        merge_state_with_ancestors(&mut states, &key, GitFileState::Tracked);
     }
 
     Ok(WorkspaceGitOverlay {

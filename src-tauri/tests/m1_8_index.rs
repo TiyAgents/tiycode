@@ -90,7 +90,7 @@ async fn test_file_tree_hides_only_reserved_entries() {
 }
 
 #[tokio::test]
-async fn test_file_tree_loads_shallow_levels_and_defers_deep_branches() {
+async fn test_file_tree_loads_root_level_only_and_defers_nested_branches() {
     use tiy_agent_lib::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
@@ -106,11 +106,25 @@ async fn test_file_tree_loads_shallow_levels_and_defers_deep_branches() {
         .as_ref()
         .and_then(|children| children.iter().find(|child| child.path == "src"))
         .expect("src should be present");
-    let components = src
+
+    assert!(
+        src.is_expandable,
+        "root-level directories should still be expandable placeholders"
+    );
+    assert!(
+        src.children.is_none(),
+        "initial tree should defer child directory materialization"
+    );
+
+    let src_children = manager
+        .get_children(&base.to_string_lossy(), "src", None, None)
+        .await
+        .expect("should load root-level directory children on demand");
+    let components = src_children
         .children
-        .as_ref()
-        .and_then(|children| children.iter().find(|child| child.path == "src/components"))
-        .expect("second level dir should be preloaded");
+        .iter()
+        .find(|child| child.path == "src/components")
+        .expect("second level dir should materialize after expansion");
 
     assert!(
         components.is_expandable,
@@ -118,7 +132,7 @@ async fn test_file_tree_loads_shallow_levels_and_defers_deep_branches() {
     );
     assert!(
         components.children.is_none(),
-        "second-level directories should defer deeper descendants"
+        "second-level directories should still defer deeper descendants"
     );
 
     let loaded_children = manager
@@ -348,16 +362,14 @@ async fn test_filter_files_finds_deep_paths_beyond_loaded_tree() {
     .unwrap();
 
     let tree = manager.get_tree(&base.to_string_lossy()).await.unwrap();
-    let src_components = tree
+    let src = tree
         .children
         .as_ref()
         .and_then(|children| children.iter().find(|child| child.path == "src"))
-        .and_then(|src| src.children.as_ref())
-        .and_then(|children| children.iter().find(|child| child.path == "src/components"))
-        .expect("src/components should be part of shallow tree");
+        .expect("src should be part of the root tree");
     assert!(
-        src_components.children.is_none(),
-        "deep files should not be eagerly loaded into the tree"
+        src.children.is_none(),
+        "nested directories should stay unloaded until expansion"
     );
 
     let response = manager
@@ -398,10 +410,8 @@ async fn test_reveal_path_materializes_new_file_in_loaded_directory() {
         .and_then(|children| children.iter().find(|child| child.path == "src"))
         .expect("src should be present in the initial tree");
     assert!(
-        src.children
-            .as_ref()
-            .is_some_and(|children| children.iter().all(|child| child.path != "src/new.ts")),
-        "new file should not exist in the initial tree snapshot"
+        src.children.is_none(),
+        "initial tree should leave nested directory contents unloaded"
     );
 
     std::fs::write(base.join("src/new.ts"), "export const fresh = true;\n").unwrap();
@@ -489,13 +499,12 @@ async fn test_reveal_path_pages_until_large_directory_target_is_found() {
         .and_then(|children| children.iter().find(|child| child.path == "large"))
         .expect("large directory should be present");
     assert!(
-        large.children_has_more,
-        "large directory should still be paged in the initial tree"
+        large.is_expandable,
+        "large directories should still advertise expandability in the initial tree"
     );
-    assert_eq!(
-        large.children.as_ref().map(Vec::len),
-        Some(200),
-        "initial tree should only preload the first page for large directories"
+    assert!(
+        large.children.is_none(),
+        "initial tree should not preload paged directory entries"
     );
 
     let reveal = manager

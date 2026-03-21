@@ -44,8 +44,8 @@ const TREE_LAZY_ONLY_DIRS: &[&str] = &[
     "__pycache__",
 ];
 
-/// Load root + first two visible levels eagerly. Deeper levels load on demand.
-const INITIAL_LOADED_DEPTH: usize = 2;
+/// Keep first paint to the root listing; child directories load when expanded.
+const INITIAL_LOADED_DEPTH: usize = 0;
 
 /// Cache workspace file manifests briefly so repeated filter input stays fast.
 const MANIFEST_TTL: Duration = Duration::from_secs(2);
