@@ -60,7 +60,6 @@ const addKeysToTokens = (lines: ThemedToken[][]): KeyedLine[] =>
 // Token rendering component
 const TokenSpan = ({ token }: { token: ThemedToken }) => (
   <span
-    className="dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]"
     style={
       {
         backgroundColor: token.bgColor,
@@ -82,10 +81,11 @@ const LINE_NUMBER_CLASSES = cn(
   "before:content-[counter(line)]",
   "before:inline-block",
   "before:[counter-increment:line]",
-  "before:w-8",
+  "before:w-7",
   "before:mr-4",
   "before:text-right",
-  "before:text-muted-foreground/50",
+  "before:text-[11px]",
+  "before:text-app-subtle/65",
   "before:font-mono",
   "before:select-none"
 );
@@ -257,10 +257,9 @@ const CodeBlockBody = memo(
   }) => {
     const preStyle = useMemo(
       () => ({
-        backgroundColor: tokenized.bg,
         color: tokenized.fg,
       }),
-      [tokenized.bg, tokenized.fg]
+      [tokenized.fg]
     );
 
     const keyedLines = useMemo(
@@ -271,7 +270,7 @@ const CodeBlockBody = memo(
     return (
       <pre
         className={cn(
-          "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)] m-0 p-4 text-sm",
+          "m-0 bg-transparent px-4 pb-4 text-[13px] leading-6 sm:text-sm",
           className
         )}
         style={preStyle}
@@ -309,9 +308,10 @@ export const CodeBlockContainer = ({
 }: HTMLAttributes<HTMLDivElement> & { language: string }) => (
   <div
     className={cn(
-      "group relative w-full overflow-hidden rounded-md border bg-background text-foreground",
+      "group/code relative w-full overflow-hidden rounded-[calc(var(--radius)+0.35rem)] border border-[var(--app-code-border)] bg-[var(--app-code-panel)] text-[var(--app-foreground)] shadow-[0_20px_44px_-34px_rgba(15,23,42,0.42)]",
       className
     )}
+    data-code-block=""
     data-language={language}
     style={{
       containIntrinsicSize: "auto 200px",
@@ -329,7 +329,7 @@ export const CodeBlockHeader = ({
 }: HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      "flex items-center justify-between border-b bg-muted/80 px-3 py-2 text-muted-foreground text-xs",
+      "flex items-center justify-between gap-3 px-4 pt-3 pb-1.5 text-[11px] text-app-subtle",
       className
     )}
     {...props}
@@ -343,7 +343,13 @@ export const CodeBlockTitle = ({
   className,
   ...props
 }: HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex items-center gap-2", className)} {...props}>
+  <div
+    className={cn(
+      "flex min-w-0 items-center gap-2 uppercase tracking-[0.18em]",
+      className
+    )}
+    {...props}
+  >
     {children}
   </div>
 );
@@ -353,7 +359,10 @@ export const CodeBlockFilename = ({
   className,
   ...props
 }: HTMLAttributes<HTMLSpanElement>) => (
-  <span className={cn("font-mono", className)} {...props}>
+  <span
+    className={cn("truncate font-mono lowercase tracking-[0.12em]", className)}
+    {...props}
+  >
     {children}
   </span>
 );
@@ -364,7 +373,10 @@ export const CodeBlockActions = ({
   ...props
 }: HTMLAttributes<HTMLDivElement>) => (
   <div
-    className={cn("-my-1 -mr-1 flex items-center gap-2", className)}
+    className={cn(
+      "flex items-center gap-1 opacity-45 transition-all duration-200 group-hover/code:opacity-100 group-focus-within/code:opacity-100",
+      className
+    )}
     {...props}
   >
     {children}
@@ -375,10 +387,12 @@ export const CodeBlockContent = ({
   code,
   language,
   showLineNumbers = false,
+  withHeader = false,
 }: {
   code: string;
   language: BundledLanguage;
   showLineNumbers?: boolean;
+  withHeader?: boolean;
 }) => {
   // Memoized raw tokens for immediate display
   const rawTokens = useMemo(() => createRawTokens(code), [code]);
@@ -420,7 +434,11 @@ export const CodeBlockContent = ({
 
   return (
     <div className="relative overflow-auto">
-      <CodeBlockBody showLineNumbers={showLineNumbers} tokenized={tokenized} />
+      <CodeBlockBody
+        className={withHeader ? "pt-1" : "pt-4"}
+        showLineNumbers={showLineNumbers}
+        tokenized={tokenized}
+      />
     </div>
   );
 };
@@ -434,15 +452,28 @@ export const CodeBlock = ({
   ...props
 }: CodeBlockProps) => {
   const contextValue = useMemo(() => ({ code }), [code]);
+  const hasCustomChrome = children != null;
 
   return (
     <CodeBlockContext.Provider value={contextValue}>
       <CodeBlockContainer className={className} language={language} {...props}>
-        {children}
+        {hasCustomChrome ? (
+          children
+        ) : (
+          <CodeBlockHeader>
+            <CodeBlockTitle>
+              <CodeBlockFilename>{language}</CodeBlockFilename>
+            </CodeBlockTitle>
+            <CodeBlockActions>
+              <CodeBlockCopyButton aria-label="Copy code" />
+            </CodeBlockActions>
+          </CodeBlockHeader>
+        )}
         <CodeBlockContent
           code={code}
           language={language}
           showLineNumbers={showLineNumbers}
+          withHeader={true}
         />
       </CodeBlockContainer>
     </CodeBlockContext.Provider>
@@ -499,9 +530,16 @@ export const CodeBlockCopyButton = ({
 
   return (
     <Button
-      className={cn("shrink-0", className)}
+      aria-label={props["aria-label"] ?? (isCopied ? "Copied" : "Copy code")}
+      className={cn(
+        "size-7 shrink-0 rounded-full border border-transparent bg-transparent text-app-subtle shadow-none transition-all hover:border-[var(--app-code-border)] hover:bg-[var(--app-code-button)] hover:text-app-foreground focus-visible:border-[var(--app-code-border-strong)] focus-visible:bg-[var(--app-code-button)]",
+        isCopied &&
+          "border-[var(--app-code-border)] bg-[var(--app-code-button)] text-app-foreground",
+        className
+      )}
       onClick={copyToClipboard}
-      size="icon"
+      size="icon-sm"
+      type="button"
       variant="ghost"
       {...props}
     >
@@ -526,7 +564,7 @@ export const CodeBlockLanguageSelectorTrigger = ({
 }: CodeBlockLanguageSelectorTriggerProps) => (
   <SelectTrigger
     className={cn(
-      "h-7 border-none bg-transparent px-2 text-xs shadow-none",
+      "h-7 rounded-full border-[var(--app-code-border)] bg-transparent px-2.5 text-[11px] uppercase tracking-[0.14em] text-app-subtle shadow-none hover:bg-[var(--app-code-button)] hover:text-app-foreground",
       className
     )}
     size="sm"

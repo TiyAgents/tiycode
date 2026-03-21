@@ -121,9 +121,7 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
     <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
       Parameters
     </h4>
-    <div className="rounded-md bg-muted/50">
-      <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
-    </div>
+    <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
   </div>
 );
 
@@ -142,14 +140,28 @@ export const ToolOutput = ({
     return null;
   }
 
+  const hasCodeBlockOutput =
+    (typeof output === "object" && !isValidElement(output)) ||
+    typeof output === "string";
+
   let Output = <div>{output as ReactNode}</div>;
 
   if (typeof output === "object" && !isValidElement(output)) {
     Output = (
-      <CodeBlock code={JSON.stringify(output, null, 2)} language="json" />
+      <CodeBlock
+        className={errorText ? "border-app-danger/20 bg-app-danger/6" : undefined}
+        code={JSON.stringify(output, null, 2)}
+        language="json"
+      />
     );
   } else if (typeof output === "string") {
-    Output = <CodeBlock code={output} language="json" />;
+    Output = (
+      <CodeBlock
+        className={errorText ? "border-app-danger/20 bg-app-danger/6" : undefined}
+        code={output}
+        language="json"
+      />
+    );
   }
 
   return (
@@ -159,10 +171,13 @@ export const ToolOutput = ({
       </h4>
       <div
         className={cn(
-          "overflow-x-auto rounded-md text-xs [&_table]:w-full",
-          errorText
+          "overflow-x-auto text-xs [&_table]:w-full",
+          !hasCodeBlockOutput &&
+            errorText
             ? "bg-destructive/10 text-destructive"
-            : "bg-muted/50 text-foreground"
+            : !hasCodeBlockOutput
+              ? "rounded-md bg-muted/50 text-foreground"
+              : undefined
         )}
       >
         {errorText && <div>{errorText}</div>}

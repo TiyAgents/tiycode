@@ -2270,19 +2270,15 @@ export function RuntimeThreadSurface({
                     )}>
                       {tool.state === "output-available" ? "Output" : "Error"}
                     </p>
-                    <div
-                      className={cn(
-                        "overflow-hidden rounded-xl ring-1",
+                    <CodeBlock
+                      className={
                         tool.state === "output-available"
-                          ? "bg-app-surface/20 ring-app-border/18"
-                          : "bg-app-danger/6 text-app-danger ring-app-danger/18",
-                      )}
-                    >
-                      <CodeBlock
-                        code={stringifyToolValue(tool.state === "output-available" ? tool.result : tool.error ?? tool.result)}
-                        language="json"
-                      />
-                    </div>
+                          ? undefined
+                          : "border-app-danger/20 bg-app-danger/6"
+                      }
+                      code={stringifyToolValue(tool.state === "output-available" ? tool.result : tool.error ?? tool.result)}
+                      language="json"
+                    />
                   </div>
                 ) : null}
               </div>
