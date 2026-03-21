@@ -15,16 +15,14 @@ pub const TERM_PANEL_USAGE_NOTE: &str =
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeOrchestrationTool {
-    DelegateResearch,
-    DelegatePlanReview,
-    DelegateCodeReview,
+    Explore,
+    Review,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubagentProfile {
-    Scout,
-    Planner,
-    Reviewer,
+    Explore,
+    Review,
 }
 
 pub fn runtime_orchestration_tools() -> Vec<AgentTool> {
@@ -36,89 +34,72 @@ pub fn runtime_orchestration_tools() -> Vec<AgentTool> {
 
 impl RuntimeOrchestrationTool {
     pub fn all() -> [Self; 2] {
-        [Self::DelegateResearch, Self::DelegateCodeReview]
+        [Self::Explore, Self::Review]
     }
 
     pub fn parse(tool_name: &str) -> Option<Self> {
         match tool_name {
-            "agent_research" => Some(Self::DelegateResearch),
-            "agent_plan" => Some(Self::DelegatePlanReview),
-            "agent_review" => Some(Self::DelegateCodeReview),
+            "agent_explore" => Some(Self::Explore),
+            "agent_review" => Some(Self::Review),
             _ => None,
         }
     }
 
     pub fn tool_name(self) -> &'static str {
         match self {
-            Self::DelegateResearch => "agent_research",
-            Self::DelegatePlanReview => "agent_review",
-            Self::DelegateCodeReview => "agent_review",
+            Self::Explore => "agent_explore",
+            Self::Review => "agent_review",
         }
     }
 
     pub fn title(self) -> &'static str {
         match self {
-            Self::DelegateResearch => "Agent Research",
-            Self::DelegatePlanReview => "Agent Review",
-            Self::DelegateCodeReview => "Agent Review",
+            Self::Explore => "Agent Explore",
+            Self::Review => "Agent Review",
         }
     }
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::DelegateResearch => {
-                "Investigate unfamiliar or cross-file areas before acting. Use this to gather evidence, relevant files, dependencies, and architecture context, then return a concise summary to the parent agent."
+            Self::Explore => {
+                "Explore unfamiliar or cross-file areas before acting. Use this for current-state analysis, fact-finding, code reading, architecture summaries, and evidence gathering, then return a concise summary to the parent agent."
             }
-            Self::DelegatePlanReview => {
-                "Review a proposed implementation plan before coding. Focus on risks, missing steps, edge cases, and better sequencing, then return concise recommendations to the parent agent."
-            }
-            Self::DelegateCodeReview => {
-                "Review a plan, code change, or diff and return risks, regressions, gaps, and concrete follow-ups. Use target='plan' before implementation and target='code' or 'diff' after implementation."
+            Self::Review => {
+                "Review an implemented code change or diff and return risks, regressions, gaps, and concrete follow-ups. Use this after implementation to stress-test the work."
             }
         }
     }
 
     pub fn profile(self) -> SubagentProfile {
         match self {
-            Self::DelegateResearch => SubagentProfile::Scout,
-            Self::DelegatePlanReview => SubagentProfile::Planner,
-            Self::DelegateCodeReview => SubagentProfile::Reviewer,
+            Self::Explore => SubagentProfile::Explore,
+            Self::Review => SubagentProfile::Review,
         }
     }
 
     pub fn as_agent_tool(self) -> AgentTool {
         let parameters = match self {
-            Self::DelegateResearch => serde_json::json!({
+            Self::Explore => serde_json::json!({
                 "type": "object",
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "What to investigate. Include the user goal, suspected files or subsystems, and the kind of evidence you want back."
+                        "description": "What to explore or analyze. Include the user goal, suspected files or subsystems, and the kind of evidence, explanation, or current-state summary you want back."
                     }
                 },
                 "required": ["task"]
             }),
-            Self::DelegateCodeReview => serde_json::json!({
+            Self::Review => serde_json::json!({
                 "type": "object",
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "What to review. Summarize the plan, code, or diff, and call out the main risks or questions to check."
+                        "description": "What to review. Summarize the implemented code or diff and call out the main risks or questions to check."
                     },
                     "target": {
                         "type": "string",
-                        "enum": ["plan", "code", "diff"],
-                        "description": "Review focus. Use 'plan' before implementation. Use 'code' or 'diff' after implementation. If omitted, review defaults to code-level review."
-                    }
-                },
-                "required": ["task"]
-            }),
-            Self::DelegatePlanReview => serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "task": {
-                        "type": "string",
-                        "description": "What plan to review and what risks or concerns to stress-test."
+                        "enum": ["code", "diff"],
+                        "description": "Review focus. Use 'code' for the current implementation or 'diff' for a patch-oriented pass. If omitted, review defaults to code-level review."
                     }
                 },
                 "required": ["task"]
@@ -137,32 +118,23 @@ impl RuntimeOrchestrationTool {
 impl SubagentProfile {
     pub fn helper_kind(self) -> &'static str {
         match self {
-            Self::Scout => "helper_scout",
-            Self::Planner => "helper_plan_reviewer",
-            Self::Reviewer => "helper_reviewer",
+            Self::Explore => "helper_explore",
+            Self::Review => "helper_review",
         }
     }
 
     pub fn system_prompt(self) -> &'static str {
         match self {
-            Self::Scout => {
-                "You are an internal scout helper. Your job is to investigate the workspace and gather context for the parent agent.\n\
+            Self::Explore => {
+                "You are an internal explore helper. Your job is to investigate the workspace and gather context for the parent agent.\n\
 Guidelines:\n\
 - Stay strictly read-only. Do not modify any files.\n\
 - Use search and find to locate relevant code efficiently. Read files to understand implementation details.\n\
 - Focus on what matters: relevant files, key data structures, dependencies, and patterns.\n\
 - Omit irrelevant noise. If a file is not useful, skip it without comment."
             }
-            Self::Planner => {
-                "You are an internal planning helper. Your job is to analyze context and produce an actionable plan for the parent agent.\n\
-Guidelines:\n\
-- Stay strictly read-only. Do not modify any files.\n\
-- Inspect relevant files to understand the current state before planning.\n\
-- Identify risks, edge cases, and gaps in the proposed approach.\n\
-- Return a concrete, ordered list of next steps. Each step should name specific files and functions to change."
-            }
-            Self::Reviewer => {
-                "You are an internal review helper. Your job is to evaluate code or plans and provide constructive feedback.\n\
+            Self::Review => {
+                "You are an internal review helper. Your job is to evaluate implemented code or diffs and provide constructive feedback.\n\
 Guidelines:\n\
 - Stay strictly read-only. Do not modify any files.\n\
 - Use repository inspection tools. Check the current thread's Terminal panel output when it directly supports the review.\n\
@@ -235,7 +207,7 @@ Guidelines:\n\
             ),
         ];
 
-        if self == Self::Reviewer {
+        if self == Self::Review {
             tools.extend([
                 AgentTool::new(
                     "term_status",
@@ -269,23 +241,19 @@ mod tests {
     #[test]
     fn parses_runtime_orchestration_tools() {
         assert_eq!(
-            RuntimeOrchestrationTool::parse("agent_research"),
-            Some(RuntimeOrchestrationTool::DelegateResearch)
-        );
-        assert_eq!(
-            RuntimeOrchestrationTool::parse("agent_plan"),
-            Some(RuntimeOrchestrationTool::DelegatePlanReview)
+            RuntimeOrchestrationTool::parse("agent_explore"),
+            Some(RuntimeOrchestrationTool::Explore)
         );
         assert_eq!(
             RuntimeOrchestrationTool::parse("agent_review"),
-            Some(RuntimeOrchestrationTool::DelegateCodeReview)
+            Some(RuntimeOrchestrationTool::Review)
         );
         assert_eq!(RuntimeOrchestrationTool::parse("read"), None);
     }
 
     #[test]
     fn reviewer_profile_includes_terminal_tools() {
-        let tools = SubagentProfile::Reviewer.helper_tools();
+        let tools = SubagentProfile::Review.helper_tools();
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
         assert!(tool_names.contains(&"term_status"));
@@ -294,7 +262,7 @@ mod tests {
 
     #[test]
     fn reviewer_terminal_tool_descriptions_clarify_terminal_panel_scope() {
-        let tools = SubagentProfile::Reviewer.helper_tools();
+        let tools = SubagentProfile::Review.helper_tools();
         let status_tool = tools
             .iter()
             .find(|tool| tool.name == "term_status")
@@ -319,6 +287,6 @@ mod tests {
         let tools = runtime_orchestration_tools();
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
-        assert_eq!(tool_names, vec!["agent_research", "agent_review"]);
+        assert_eq!(tool_names, vec!["agent_explore", "agent_review"]);
     }
 }

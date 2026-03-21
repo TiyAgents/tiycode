@@ -141,8 +141,15 @@ async fn test_recover_interrupted_runs() {
     test_helpers::seed_run(&pool, "r-ok", "t-rec", "completed", "default").await;
 
     // Create dangling tool calls and run helpers
-    test_helpers::seed_tool_call(&pool, "tc-running", "r-dangling-1", "t-rec", "read", "running")
-        .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-running",
+        "r-dangling-1",
+        "t-rec",
+        "read",
+        "running",
+    )
+    .await;
     test_helpers::seed_tool_call(
         &pool,
         "tc-waiting",
@@ -152,21 +159,13 @@ async fn test_recover_interrupted_runs() {
         "waiting_approval",
     )
     .await;
-    test_helpers::seed_tool_call(
-        &pool,
-        "tc-completed",
-        "r-ok",
-        "t-rec",
-        "read",
-        "completed",
-    )
-    .await;
+    test_helpers::seed_tool_call(&pool, "tc-completed", "r-ok", "t-rec", "read", "completed").await;
     test_helpers::seed_run_helper(
         &pool,
         "h-running",
         "r-dangling-1",
         "t-rec",
-        "research",
+        "helper_explore",
         "running",
     )
     .await;
@@ -175,7 +174,7 @@ async fn test_recover_interrupted_runs() {
         "h-completed",
         "r-ok",
         "t-rec",
-        "research",
+        "helper_explore",
         "completed",
     )
     .await;
@@ -214,10 +213,11 @@ async fn test_recover_interrupted_runs() {
     assert_eq!(ok.get::<String, _>("status"), "completed");
 
     // Verify dangling tool calls are now cancelled
-    let tc_running = sqlx::query("SELECT status, finished_at FROM tool_calls WHERE id = 'tc-running'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let tc_running =
+        sqlx::query("SELECT status, finished_at FROM tool_calls WHERE id = 'tc-running'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(tc_running.get::<String, _>("status"), "cancelled");
     assert!(tc_running.get::<Option<String>, _>("finished_at").is_some());
 
@@ -237,14 +237,17 @@ async fn test_recover_interrupted_runs() {
     assert_eq!(tc_ok.get::<String, _>("status"), "completed");
 
     // Verify dangling run helper is now interrupted
-    let h_running =
-        sqlx::query("SELECT status, error_summary, finished_at FROM run_helpers WHERE id = 'h-running'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let h_running = sqlx::query(
+        "SELECT status, error_summary, finished_at FROM run_helpers WHERE id = 'h-running'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(h_running.get::<String, _>("status"), "interrupted");
     assert_eq!(
-        h_running.get::<Option<String>, _>("error_summary").as_deref(),
+        h_running
+            .get::<Option<String>, _>("error_summary")
+            .as_deref(),
         Some("The app closed before this helper finished. Marked as interrupted on restart.")
     );
     assert!(h_running.get::<Option<String>, _>("finished_at").is_some());
@@ -415,10 +418,13 @@ async fn test_build_session_spec_resolves_primary_model_and_profile_prompt() {
     assert!(spec
         .system_prompt
         .contains("Always answer in concise engineering prose."));
-    assert!(spec.system_prompt.contains("Use agent_research"));
+    assert!(spec.system_prompt.contains("Use agent_explore"));
     assert!(spec
         .system_prompt
-        .contains("Use agent_review with target='plan'"));
+        .contains("Use update_plan to publish the current implementation plan"));
+    assert!(spec
+        .system_prompt
+        .contains("Do not use update_plan for pure analysis"));
     assert_eq!(spec.history_messages.len(), 1);
 }
 
@@ -533,6 +539,12 @@ async fn test_build_session_spec_adds_plan_mode_guardrails() {
 
     assert_eq!(spec.tool_profile_name, "plan_read_only");
     assert!(spec.system_prompt.contains("Plan mode is active."));
+    assert!(spec
+        .system_prompt
+        .contains("Once you publish a plan with update_plan"));
+    assert!(spec
+        .system_prompt
+        .contains("pause for user approval"));
 }
 
 #[tokio::test]
@@ -670,7 +682,7 @@ async fn test_run_helpers_table_persists_collapsed_helper_summary() {
             id, run_id, thread_id, helper_kind, status, model_role, provider_id, model_id,
             input_summary, output_summary
          ) VALUES (
-            'helper-1', 'r-helper', 't-helper', 'agent_research', 'completed', 'assistant',
+            'helper-1', 'r-helper', 't-helper', 'helper_explore', 'completed', 'assistant',
             'prov-helper', 'gpt-4.1-mini', 'Inspect the repository layout', 'Repository layout summarized'
          )",
     )
@@ -685,7 +697,7 @@ async fn test_run_helpers_table_persists_collapsed_helper_summary() {
     .await
     .unwrap();
 
-    assert_eq!(row.get::<String, _>("helper_kind"), "agent_research");
+    assert_eq!(row.get::<String, _>("helper_kind"), "helper_explore");
     assert_eq!(row.get::<String, _>("status"), "completed");
     assert_eq!(
         row.get::<Option<String>, _>("output_summary").unwrap(),

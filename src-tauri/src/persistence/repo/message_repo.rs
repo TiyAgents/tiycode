@@ -32,6 +32,21 @@ impl MessageRow {
     }
 }
 
+pub async fn find_by_id(pool: &SqlitePool, id: &str) -> Result<Option<MessageRecord>, AppError> {
+    let row = sqlx::query_as::<_, MessageRow>(
+        "SELECT id, thread_id, run_id, role, content_markdown, message_type,
+                status, metadata_json, created_at
+         FROM messages
+         WHERE id = ?
+         LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(MessageRow::into_record))
+}
+
 /// Load recent messages for a thread using cursor-based pagination.
 /// `before_id` is the UUID v7 cursor — returns messages older than this ID.
 pub async fn list_recent(
@@ -139,6 +154,19 @@ pub async fn append_content(pool: &SqlitePool, id: &str, delta: &str) -> Result<
 pub async fn replace_content(pool: &SqlitePool, id: &str, content: &str) -> Result<(), AppError> {
     sqlx::query("UPDATE messages SET content_markdown = ? WHERE id = ?")
         .bind(content)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_metadata(
+    pool: &SqlitePool,
+    id: &str,
+    metadata_json: Option<&str>,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE messages SET metadata_json = ? WHERE id = ?")
+        .bind(metadata_json)
         .bind(id)
         .execute(pool)
         .await?;

@@ -112,6 +112,24 @@ pub async fn set_error_message(
     Ok(())
 }
 
+pub async fn find_effective_model_plan_json(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<String>, AppError> {
+    let value = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT effective_model_plan_json
+         FROM thread_runs
+         WHERE id = ?
+         LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+
+    Ok(value)
+}
+
 /// Find the currently active (non-terminal) run for a thread.
 pub async fn find_active_by_thread(
     pool: &SqlitePool,
@@ -123,7 +141,7 @@ pub async fn find_active_by_thread(
                 cache_read_tokens, cache_write_tokens, total_tokens
          FROM thread_runs
          WHERE thread_id = ?
-           AND status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled')
+           AND status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled', 'waiting_approval')
          ORDER BY started_at DESC
          LIMIT 1",
     )
@@ -160,6 +178,7 @@ pub async fn list_thread_ids_with_active_runs(pool: &SqlitePool) -> Result<Vec<S
         "SELECT DISTINCT thread_id
          FROM thread_runs
          WHERE status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled')
+           AND status != 'waiting_approval'
            AND finished_at IS NULL",
     )
     .fetch_all(pool)
@@ -179,6 +198,7 @@ pub async fn interrupt_active_runs(pool: &SqlitePool) -> Result<u64, AppError> {
              ),
              finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled')
+           AND status != 'waiting_approval'
            AND finished_at IS NULL",
     )
     .execute(pool)

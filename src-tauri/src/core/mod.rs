@@ -6,6 +6,7 @@ pub mod context_compression;
 pub mod executors;
 pub mod git_manager;
 pub mod index_manager;
+pub mod plan_checkpoint;
 pub mod policy_engine;
 pub mod ripgrep;
 pub mod settings_manager;

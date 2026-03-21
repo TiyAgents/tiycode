@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 use tokio::fs;
 
-use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
+use crate::core::workspace_paths::{
+    canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
+};
 use crate::model::errors::{AppError, ErrorSource};
 
 use super::ToolOutput;
@@ -37,8 +39,9 @@ use super::ToolOutput;
 pub async fn edit_file(
     input: &serde_json::Value,
     workspace_path: &str,
+    writable_roots: &[String],
 ) -> Result<ToolOutput, AppError> {
-    let path = resolve_required_path(input, workspace_path)?;
+    let path = resolve_required_path(input, workspace_path, writable_roots)?;
     let old_string = input["old_string"].as_str().ok_or_else(|| {
         AppError::recoverable(
             ErrorSource::Tool,
@@ -509,6 +512,7 @@ fn strip_bom(content: &str) -> &str {
 fn resolve_required_path(
     input: &serde_json::Value,
     workspace_path: &str,
+    writable_roots: &[String],
 ) -> Result<PathBuf, AppError> {
     let raw = input["path"].as_str().ok_or_else(|| {
         AppError::recoverable(
@@ -523,9 +527,11 @@ fn resolve_required_path(
         ErrorSource::Tool,
         "tool.workspace.not_directory",
     )?;
+    let additional_roots = normalize_additional_roots(writable_roots);
 
-    resolve_path_within_workspace(
+    resolve_path_within_roots(
         &workspace_root,
+        &additional_roots,
         raw,
         ErrorSource::Tool,
         "tool.path.outside_workspace",

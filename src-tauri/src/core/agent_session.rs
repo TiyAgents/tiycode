@@ -19,6 +19,10 @@ use crate::core::subagent::{
     TERM_OUTPUT_TOOL_DESCRIPTION, TERM_PANEL_USAGE_NOTE, TERM_RESTART_TOOL_DESCRIPTION,
     TERM_STATUS_TOOL_DESCRIPTION, TERM_WRITE_TOOL_DESCRIPTION,
 };
+use crate::core::plan_checkpoint::{
+    approval_prompt_markdown, build_approval_prompt_metadata, build_plan_artifact_from_tool_input,
+    build_plan_message_metadata, plan_markdown,
+};
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
 };
@@ -129,6 +133,7 @@ pub struct AgentSessionSpec {
     pub system_prompt: String,
     pub history_messages: Vec<MessageRecord>,
     pub model_plan: ResolvedRuntimeModelPlan,
+    pub initial_prompt: Option<String>,
 }
 
 pub async fn build_session_spec(
@@ -155,6 +160,7 @@ pub async fn build_session_spec(
         system_prompt,
         history_messages,
         model_plan: resolved_plan,
+        initial_prompt: None,
     })
 }
 
@@ -166,6 +172,7 @@ pub struct AgentSession {
     event_tx: mpsc::UnboundedSender<ThreadStreamEvent>,
     agent: Arc<Agent>,
     cancel_requested: Arc<AtomicBool>,
+    checkpoint_requested: AtomicBool,
     abort_signal: tiy_core::agent::AbortSignal,
 }
 
@@ -189,6 +196,7 @@ impl AgentSession {
                 event_tx,
                 agent,
                 cancel_requested: Arc::new(AtomicBool::new(false)),
+                checkpoint_requested: AtomicBool::new(false),
                 abort_signal: tiy_core::agent::AbortSignal::new(),
             }
         })
@@ -246,13 +254,21 @@ impl AgentSession {
             run_mode: self.spec.run_mode.clone(),
         });
 
-        let result = self.agent.continue_().await;
+        let result = if let Some(prompt) = self.spec.initial_prompt.clone() {
+            self.agent.prompt(prompt).await
+        } else {
+            self.agent.continue_().await
+        };
         unsubscribe();
 
         match result {
             Ok(_) => {
                 if self.cancel_requested.load(Ordering::SeqCst) {
                     let _ = self.event_tx.send(ThreadStreamEvent::RunCancelled {
+                        run_id: self.spec.run_id.clone(),
+                    });
+                } else if self.checkpoint_requested.load(Ordering::SeqCst) {
+                    let _ = self.event_tx.send(ThreadStreamEvent::RunCheckpointed {
                         run_id: self.spec.run_id.clone(),
                     });
                 } else {
@@ -264,6 +280,10 @@ impl AgentSession {
             Err(error) => {
                 if self.cancel_requested.load(Ordering::SeqCst) {
                     let _ = self.event_tx.send(ThreadStreamEvent::RunCancelled {
+                        run_id: self.spec.run_id.clone(),
+                    });
+                } else if self.checkpoint_requested.load(Ordering::SeqCst) {
+                    let _ = self.event_tx.send(ThreadStreamEvent::RunCheckpointed {
                         run_id: self.spec.run_id.clone(),
                     });
                 } else {
@@ -282,6 +302,10 @@ impl AgentSession {
         tool_call_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
+        if tool_name == "update_plan" {
+            return self.execute_plan_checkpoint(tool_input).await;
+        }
+
         let insert_result = tool_call_repo::insert(
             &self.pool,
             &tool_call_repo::ToolCallInsert {
@@ -466,20 +490,8 @@ impl AgentSession {
             return agent_error_result("missing helper task");
         }
 
-        let helper_role = self
-            .spec
-            .model_plan
-            .auxiliary
-            .clone()
-            .unwrap_or_else(|| self.spec.model_plan.primary.clone());
-        let helper_profile = resolve_helper_profile(tool, tool_input);
-
-        if is_plan_review_request(tool, tool_input) {
-            let _ = self.event_tx.send(ThreadStreamEvent::PlanUpdated {
-                run_id: self.spec.run_id.clone(),
-                plan: build_plan_artifact_from_task(&task),
-            });
-        }
+        let helper_role = resolve_helper_model_role(&self.spec.model_plan, tool);
+        let helper_profile = resolve_helper_profile(tool);
 
         let result = self
             .helper_orchestrator
@@ -489,7 +501,7 @@ impl AgentSession {
                 tool,
                 helper_profile: Some(helper_profile),
                 parent_tool_call_id: Some(tool_call_id.to_string()),
-                task,
+                task: task.clone(),
                 model_role: helper_role,
                 system_prompt: self.spec.system_prompt.clone(),
                 workspace_path: self.spec.workspace_path.clone(),
@@ -531,6 +543,92 @@ impl AgentSession {
                 agent_error_result(error.to_string())
             }
         }
+    }
+
+    async fn execute_plan_checkpoint(&self, tool_input: &serde_json::Value) -> AgentToolResult {
+        let plan_revision = match self.next_plan_revision().await {
+            Ok(revision) => revision,
+            Err(error) => return agent_error_result(error.to_string()),
+        };
+        let artifact = build_plan_artifact_from_tool_input(tool_input, plan_revision);
+        let plan_message_id = uuid::Uuid::now_v7().to_string();
+        let approval_message_id = uuid::Uuid::now_v7().to_string();
+        let plan_metadata =
+            build_plan_message_metadata(artifact.clone(), &self.spec.run_id, &self.spec.run_mode);
+        let approval_metadata =
+            build_approval_prompt_metadata(artifact.plan_revision, &plan_message_id);
+
+        let plan_message = MessageRecord {
+            id: plan_message_id.clone(),
+            thread_id: self.spec.thread_id.clone(),
+            run_id: Some(self.spec.run_id.clone()),
+            role: "assistant".to_string(),
+            content_markdown: plan_markdown(&plan_metadata),
+            message_type: "plan".to_string(),
+            status: "completed".to_string(),
+            metadata_json: serde_json::to_string(&plan_metadata).ok(),
+            created_at: String::new(),
+        };
+        let approval_message = MessageRecord {
+            id: approval_message_id.clone(),
+            thread_id: self.spec.thread_id.clone(),
+            run_id: Some(self.spec.run_id.clone()),
+            role: "assistant".to_string(),
+            content_markdown: approval_prompt_markdown(&artifact),
+            message_type: "approval_prompt".to_string(),
+            status: "completed".to_string(),
+            metadata_json: serde_json::to_string(&approval_metadata).ok(),
+            created_at: String::new(),
+        };
+
+        if let Err(error) = message_repo::insert(&self.pool, &plan_message).await {
+            return agent_error_result(format!("failed to persist plan message: {error}"));
+        }
+        if let Err(error) = message_repo::insert(&self.pool, &approval_message).await {
+            return agent_error_result(format!("failed to persist approval prompt: {error}"));
+        }
+
+        let _ = self.event_tx.send(ThreadStreamEvent::PlanUpdated {
+            run_id: self.spec.run_id.clone(),
+            plan: serde_json::to_value(&artifact).unwrap_or_else(|_| serde_json::json!({})),
+        });
+
+        self.checkpoint_requested.store(true, Ordering::SeqCst);
+        self.abort_signal.cancel();
+        self.agent.abort();
+
+        AgentToolResult {
+            content: vec![ContentBlock::Text(TextContent::new(
+                "Implementation plan published. Waiting for approval before execution.",
+            ))],
+            details: Some(serde_json::json!({
+                "planMessageId": plan_message_id,
+                "approvalMessageId": approval_message_id,
+                "plan": artifact,
+            })),
+        }
+    }
+
+    async fn next_plan_revision(&self) -> Result<u32, AppError> {
+        let messages = message_repo::list_recent(&self.pool, &self.spec.thread_id, None, 256).await?;
+        let next = messages
+            .iter()
+            .filter(|message| message.message_type == "plan")
+            .filter_map(|message| {
+                message
+                    .metadata_json
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                    .and_then(|value| {
+                        value
+                            .get("planRevision")
+                            .and_then(serde_json::Value::as_u64)
+                            .and_then(|value| u32::try_from(value).ok())
+                    })
+            })
+            .max()
+            .unwrap_or(0);
+        Ok(next.saturating_add(1))
     }
 }
 
@@ -887,6 +985,52 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                 "properties": {}
             }),
         ),
+        AgentTool::new(
+            "update_plan",
+            "Update Plan",
+            "Publish the current implementation plan and pause before execution. Use this when the main agent has enough context to present a concrete pre-implementation plan for user approval.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string" },
+                    "summary": { "type": "string" },
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "oneOf": [
+                                { "type": "string" },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "string" },
+                                        "title": { "type": "string" },
+                                        "description": { "type": "string" },
+                                        "status": { "type": "string" },
+                                        "files": {
+                                            "type": "array",
+                                            "items": { "type": "string" }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "risks": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "openQuestions": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "needsContextResetOption": { "type": "boolean" },
+                    "plan": {
+                        "type": "object",
+                        "description": "Optional nested plan payload. If provided, the runtime reads planning fields from this object."
+                    }
+                }
+            }),
+        ),
     ];
     tools.extend(runtime_orchestration_tools());
 
@@ -1009,122 +1153,28 @@ fn resolve_tool_profile_name(raw_plan: &RuntimeModelPlan, run_mode: &str) -> Str
     }
 }
 
-fn resolve_helper_profile(
+fn resolve_helper_profile(tool: RuntimeOrchestrationTool) -> SubagentProfile {
+    match tool {
+        RuntimeOrchestrationTool::Explore => SubagentProfile::Explore,
+        RuntimeOrchestrationTool::Review => SubagentProfile::Review,
+    }
+}
+
+fn resolve_helper_model_role(
+    model_plan: &ResolvedRuntimeModelPlan,
     tool: RuntimeOrchestrationTool,
-    tool_input: &serde_json::Value,
-) -> SubagentProfile {
+) -> ResolvedModelRole {
     match tool {
-        RuntimeOrchestrationTool::DelegateResearch => SubagentProfile::Scout,
-        RuntimeOrchestrationTool::DelegatePlanReview => SubagentProfile::Planner,
-        RuntimeOrchestrationTool::DelegateCodeReview => match tool_input
-            .get("target")
-            .and_then(serde_json::Value::as_str)
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("plan") => SubagentProfile::Planner,
-            _ => SubagentProfile::Reviewer,
-        },
+        RuntimeOrchestrationTool::Explore | RuntimeOrchestrationTool::Review => {
+            model_plan
+                .auxiliary
+                .clone()
+                .unwrap_or_else(|| model_plan.primary.clone())
+        }
     }
 }
 
-fn is_plan_review_request(tool: RuntimeOrchestrationTool, tool_input: &serde_json::Value) -> bool {
-    match tool {
-        RuntimeOrchestrationTool::DelegatePlanReview => true,
-        RuntimeOrchestrationTool::DelegateCodeReview => tool_input
-            .get("target")
-            .and_then(serde_json::Value::as_str)
-            .map(|value| value.trim().eq_ignore_ascii_case("plan"))
-            .unwrap_or(false),
-        RuntimeOrchestrationTool::DelegateResearch => false,
-    }
-}
-
-fn strip_plan_step_prefix(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    for prefix in ["- ", "* ", "• "] {
-        if let Some(rest) = trimmed.strip_prefix(prefix) {
-            let step = rest.trim();
-            if !step.is_empty() {
-                return Some(step.to_string());
-            }
-        }
-    }
-
-    let digit_prefix_len = trimmed.chars().take_while(|ch| ch.is_ascii_digit()).count();
-    if digit_prefix_len > 0 {
-        let remainder = trimmed[digit_prefix_len..].trim_start();
-        if let Some(rest) = remainder
-            .strip_prefix('.')
-            .or_else(|| remainder.strip_prefix(')'))
-        {
-            let step = rest.trim();
-            if !step.is_empty() {
-                return Some(step.to_string());
-            }
-        }
-    }
-
-    if let Some(rest) = trimmed.strip_prefix("Step ") {
-        let digit_count = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
-        if digit_count > 0 {
-            let remainder = rest[digit_count..].trim_start();
-            if let Some(content) = remainder
-                .strip_prefix(':')
-                .or_else(|| remainder.strip_prefix('-'))
-            {
-                let step = content.trim();
-                if !step.is_empty() {
-                    return Some(step.to_string());
-                }
-            }
-        }
-    }
-
-    None
-}
-
-fn build_plan_artifact_from_task(task: &str) -> serde_json::Value {
-    let trimmed = task.trim();
-    let mut steps = Vec::<String>::new();
-    let mut description_lines = Vec::<String>::new();
-
-    for line in trimmed.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if let Some(step) = strip_plan_step_prefix(line) {
-            steps.push(step);
-            continue;
-        }
-
-        if steps.is_empty() {
-            description_lines.push(line.to_string());
-        } else {
-            steps.push(line.to_string());
-        }
-    }
-
-    if steps.is_empty() && !trimmed.is_empty() {
-        steps.push(trimmed.to_string());
-    }
-
-    let description = if description_lines.is_empty() {
-        "Reviewing the proposed implementation plan before coding.".to_string()
-    } else {
-        description_lines.join(" ")
-    };
-
-    serde_json::json!({
-        "title": "Plan Under Review",
-        "description": description,
-        "steps": steps,
-    })
-}
-
-fn convert_history_messages(messages: &[MessageRecord], model: &Model) -> Vec<AgentMessage> {
+pub(crate) fn convert_history_messages(messages: &[MessageRecord], model: &Model) -> Vec<AgentMessage> {
     messages
         .iter()
         .filter(|message| message.message_type == "plain_message")
@@ -1348,9 +1398,13 @@ You help users by reading files, searching code, editing files, executing comman
 - Prefer search and find over shell for file exploration — they are faster and respect ignore patterns.\n\
 - For search, omit wildcard-only filePattern values such as `*` or `**/*`; leaving filePattern unset already searches the full selected directory.\n\
 - Delegate proactively on substantial work. When the task is cross-file, unfamiliar, risky, or likely to benefit from a second pass, use a helper instead of doing all exploration and review yourself.\n\
-- Use agent_research to investigate unfamiliar areas, collect evidence, map dependencies, or gather the right files before choosing an implementation.\n\
-- Use agent_review with target='plan' to stress-test an implementation approach before coding, and with target='code' or target='diff' to review completed work for regressions, edge cases, and consistency.\n\
-- Recommended flow for non-trivial tasks: agent_research -> form a plan -> agent_review(target='plan') -> implement -> agent_review(target='code' or 'diff').\n\
+- Use agent_explore to investigate unfamiliar areas, collect evidence, map dependencies, explain the current state, or gather the right files before choosing an implementation.\n\
+- For complex tasks, briefly confirm your understanding of the goal, scope, or constraints before publishing an implementation plan.\n\
+- Use update_plan to publish the current implementation plan once the intended change is clear.\n\
+- Do not use update_plan for pure analysis, architecture explanation, current-state summaries, or information gathering with no concrete implementation to plan.\n\
+- In default mode, if the task is complex or risky enough to benefit from explicit pre-implementation approval, publish a plan with update_plan before making changes.\n\
+- Use agent_review after implementation with target='code' or target='diff' to check regressions, edge cases, and consistency.\n\
+- Recommended flow for non-trivial tasks: agent_explore -> confirm goal -> update_plan -> wait for approval -> implement -> agent_review(target='code' or 'diff').\n\
 - Skip delegation only when the task is small, obvious, and isolated enough that extra helper work would not pay off.\n\
 - Match the active response style when deciding answer length and explanation depth. Show file paths clearly when working with files.\n\
 - When summarizing your actions, describe what you did in plain text — do not re-read or re-cat files to prove your work.\n\
@@ -1481,8 +1535,11 @@ fn run_mode_prompt_body(run_mode: &str) -> String {
     match run_mode {
         "plan" => format!(
             "Plan mode is active.\n\
-- Use only read-only tools: read, list, search, find, term_status, term_output.\n\
+- Use only read-only tools plus update_plan: read, list, search, find, term_status, term_output, update_plan.\n\
 - {TERM_PANEL_USAGE_NOTE}\n\
+- Use agent_explore for read-only investigation and current-state analysis.\n\
+- Use update_plan only for the formal pre-implementation plan, not for general analysis or explanation.\n\
+- Once you publish a plan with update_plan, the run will pause for user approval before any implementation can begin.\n\
 - Do NOT use edit, write, or shell unless the user explicitly requests execution.\n\
 - Focus on analysis, explanation, and actionable planning. Identify risks, gaps, and concrete next steps."
         ),
@@ -1490,6 +1547,7 @@ fn run_mode_prompt_body(run_mode: &str) -> String {
             "Default execution mode is active.\n\
 - Use the configured tool profile, subject to policy, approvals, and workspace boundaries.\n\
 - {TERM_PANEL_USAGE_NOTE}\n\
+- If the task is complex enough that implementation should pause for review first, publish an implementation plan with update_plan before making changes.\n\
 - Prefer the smallest sufficient action that moves the task forward."
         ),
     }
@@ -1852,23 +1910,25 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_plan_artifact_from_task, build_profile_response_prompt_parts, build_prompt_section,
+        build_profile_response_prompt_parts, build_prompt_section,
         collect_workspace_instruction_snippet, final_response_structure_system_instruction,
-        handle_agent_event, is_plan_review_request, normalize_profile_response_language,
-        normalize_profile_response_style, resolve_helper_profile,
-        response_style_system_instruction, run_mode_prompt_body, runtime_security_config,
-        runtime_tools_for_profile, standard_tool_timeout, ProfileResponseStyle,
-        DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE, STANDARD_TOOL_TIMEOUT_SECS,
-        SUBAGENT_TOOL_TIMEOUT_SECS,
+        handle_agent_event, normalize_profile_response_language, normalize_profile_response_style,
+        resolve_helper_model_role, resolve_helper_profile, response_style_system_instruction,
+        run_mode_prompt_body, runtime_security_config, runtime_tools_for_profile,
+        standard_tool_timeout, ProfileResponseStyle, ResolvedModelRole, ResolvedRuntimeModelPlan,
+        RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE,
+        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
     use std::sync::Mutex as StdMutex;
 
     use tempfile::tempdir;
     use tiy_core::agent::{AgentEvent, AgentMessage};
+    use tiy_core::thinking::ThinkingLevel;
     use tiy_core::types::{Api, AssistantMessage, AssistantMessageEvent, Provider};
     use tokio::sync::mpsc;
 
+    use crate::core::plan_checkpoint::build_plan_artifact_from_tool_input;
     use crate::core::subagent::{RuntimeOrchestrationTool, SubagentProfile};
     use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::AgentProfileRecord;
@@ -1904,6 +1964,45 @@ mod tests {
             .model("gpt-test")
             .build()
             .expect("partial assistant message")
+    }
+
+    fn sample_resolved_model_role(model_id: &str) -> ResolvedModelRole {
+        let model = tiy_core::types::Model::builder()
+            .id(model_id)
+            .name(model_id)
+            .provider(Provider::OpenAI)
+            .base_url("https://api.openai.com/v1")
+            .context_window(128_000)
+            .max_tokens(32_000)
+            .input(vec![tiy_core::types::InputType::Text])
+            .cost(tiy_core::types::Cost::default())
+            .build()
+            .expect("sample resolved model");
+
+        ResolvedModelRole {
+            provider_id: format!("provider-{model_id}"),
+            model_record_id: format!("record-{model_id}"),
+            model_id: model_id.to_string(),
+            model_name: model_id.to_string(),
+            provider_type: "openai".to_string(),
+            provider_name: "OpenAI".to_string(),
+            api_key: Some("sk-test".to_string()),
+            provider_options: None,
+            model,
+        }
+    }
+
+    fn sample_resolved_runtime_model_plan(
+        auxiliary: Option<ResolvedModelRole>,
+    ) -> ResolvedRuntimeModelPlan {
+        ResolvedRuntimeModelPlan {
+            raw: RuntimeModelPlan::default(),
+            primary: sample_resolved_model_role("primary-model"),
+            auxiliary,
+            lightweight: None,
+            thinking_level: ThinkingLevel::Off,
+            transport: tiy_core::types::Transport::Sse,
+        }
     }
 
     fn handle_test_agent_event(
@@ -2034,6 +2133,8 @@ mod tests {
         let default_prompt = run_mode_prompt_body("default");
 
         assert!(plan_prompt.contains("embedded Terminal panel"));
+        assert!(plan_prompt.contains("update_plan"));
+        assert!(plan_prompt.contains("pause for user approval"));
         assert!(plan_prompt.contains("do not inspect your own runtime"));
         assert!(default_prompt.contains("embedded Terminal panel"));
         assert!(default_prompt.contains("do not inspect your own runtime"));
@@ -2317,43 +2418,80 @@ mod tests {
     }
 
     #[test]
-    fn plan_review_request_detection_matches_review_targets() {
-        assert!(is_plan_review_request(
-            RuntimeOrchestrationTool::DelegatePlanReview,
-            &serde_json::json!({ "task": "Review this plan" }),
-        ));
-        assert!(is_plan_review_request(
-            RuntimeOrchestrationTool::DelegateCodeReview,
-            &serde_json::json!({ "task": "Review this plan", "target": "plan" }),
-        ));
-        assert!(!is_plan_review_request(
-            RuntimeOrchestrationTool::DelegateCodeReview,
-            &serde_json::json!({ "task": "Review this diff", "target": "diff" }),
-        ));
+    fn helper_profiles_match_explore_and_review_tools() {
+        assert_eq!(
+            resolve_helper_profile(RuntimeOrchestrationTool::Explore),
+            SubagentProfile::Explore,
+        );
+        assert_eq!(
+            resolve_helper_profile(RuntimeOrchestrationTool::Review),
+            SubagentProfile::Review,
+        );
     }
 
     #[test]
-    fn plan_review_target_uses_planning_helper_profile() {
-        assert_eq!(
-            resolve_helper_profile(
-                RuntimeOrchestrationTool::DelegateCodeReview,
-                &serde_json::json!({ "task": "Review this plan", "target": "plan" }),
-            ),
-            SubagentProfile::Planner,
-        );
+    fn update_plan_tool_is_available_in_both_runtime_profiles() {
+        for profile in [DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE] {
+            let tools = runtime_tools_for_profile(profile);
+            let tool_names: Vec<&str> = tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect();
+
+            assert!(tool_names.contains(&"update_plan"));
+        }
+    }
+
+    #[test]
+    fn explore_and_review_use_auxiliary_model_when_available() {
+        let model_plan =
+            sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
+
+        let explore_role =
+            resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Explore);
+        let review_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Review);
+
+        assert_eq!(explore_role.model_id, "assistant-model");
+        assert_eq!(review_role.model_id, "assistant-model");
+    }
+
+    #[test]
+    fn explore_and_review_fallback_to_primary_without_auxiliary_model() {
+        let model_plan = sample_resolved_runtime_model_plan(None);
+
+        let explore_role =
+            resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Explore);
+        let review_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Review);
+
+        assert_eq!(explore_role.model_id, "primary-model");
+        assert_eq!(review_role.model_id, "primary-model");
+    }
+
+    #[test]
+    fn plan_mode_prompt_mentions_waiting_for_approval_after_update_plan() {
+        let prompt = run_mode_prompt_body("plan");
+
+        assert!(prompt.contains("Once you publish a plan with update_plan"));
+        assert!(prompt.contains("pause for user approval"));
     }
 
     #[test]
     fn build_plan_artifact_extracts_numbered_steps() {
-        let artifact = build_plan_artifact_from_task(
-            "Review this plan before coding.\n1. Update runtime-thread-surface.\n2. Validate typecheck.",
+        let artifact = build_plan_artifact_from_tool_input(
+            &serde_json::json!({
+                "title": "Implementation Plan",
+                "summary": "Produce the implementation plan.",
+                "steps": [
+                    "Update runtime-thread-surface.",
+                    { "title": "Validate typecheck." }
+                ]
+            }),
+            3,
         );
 
-        assert_eq!(artifact["title"].as_str(), Some("Plan Under Review"));
-        assert_eq!(
-            artifact["steps"][0].as_str(),
-            Some("Update runtime-thread-surface.")
-        );
-        assert_eq!(artifact["steps"][1].as_str(), Some("Validate typecheck."));
+        assert_eq!(artifact.title, "Implementation Plan");
+        assert_eq!(artifact.plan_revision, 3);
+        assert_eq!(artifact.steps[0].title, "Update runtime-thread-surface.");
+        assert_eq!(artifact.steps[1].title, "Validate typecheck.");
     }
 }

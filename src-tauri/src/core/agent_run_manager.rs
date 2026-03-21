@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
-use tauri::{Emitter, AppHandle};
+use tauri::{AppHandle, Emitter};
 use tiy_core::provider::get_provider;
 use tiy_core::types::{
     Context as TiyContext, Message as TiyMessage, OnPayloadFn, StopReason,
@@ -15,10 +15,17 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::time::{sleep, Instant};
 
 use crate::core::agent_session::{
-    build_session_spec, normalize_profile_response_language, normalize_profile_response_style,
-    ProfileResponseStyle, ResolvedModelRole,
+    build_session_spec, convert_history_messages, normalize_profile_response_language,
+    normalize_profile_response_style, ProfileResponseStyle, ResolvedModelRole,
 };
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
+use crate::core::context_compression::summarize_messages;
+use crate::core::plan_checkpoint::{
+    ApprovalPromptMetadata, PlanApprovalAction, PlanMessageMetadata,
+    IMPLEMENTATION_PLAN_APPROVAL_KIND,
+    IMPLEMENTATION_PLAN_APPROVED_STATE, IMPLEMENTATION_PLAN_PENDING_STATE,
+    IMPLEMENTATION_PLAN_SUPERSEDED_STATE,
+};
 use crate::core::sleep_manager::SleepManager;
 use crate::ipc::app_events::{
     self, ThreadRunFinishedPayload, ThreadRunStartedPayload, ThreadTitleUpdatedPayload,
@@ -42,6 +49,13 @@ struct ActiveRun {
     streaming_message_id: Option<String>,
     reasoning_message_id: Option<String>,
     cancellation_requested: bool,
+}
+
+#[derive(Default)]
+struct StartRunOptions {
+    history_override: Option<Vec<MessageRecord>>,
+    initial_prompt: Option<String>,
+    persist_user_message: bool,
 }
 
 pub struct AgentRunManager {
@@ -77,6 +91,34 @@ impl AgentRunManager {
         provider_id: Option<String>,
         model_id: Option<String>,
         model_plan: serde_json::Value,
+    ) -> Result<(String, broadcast::Receiver<ThreadStreamEvent>), AppError> {
+        self.expire_pending_plan_approval(thread_id).await?;
+        self.start_run_with_options(
+            thread_id,
+            prompt,
+            run_mode,
+            profile_id,
+            provider_id,
+            model_id,
+            model_plan,
+            StartRunOptions {
+                persist_user_message: true,
+                ..StartRunOptions::default()
+            },
+        )
+        .await
+    }
+
+    async fn start_run_with_options(
+        self: &Arc<Self>,
+        thread_id: &str,
+        prompt: &str,
+        run_mode: &str,
+        profile_id: Option<String>,
+        provider_id: Option<String>,
+        model_id: Option<String>,
+        model_plan: serde_json::Value,
+        options: StartRunOptions,
     ) -> Result<(String, broadcast::Receiver<ThreadStreamEvent>), AppError> {
         let thread = thread_repo::find_by_id(&self.pool, thread_id)
             .await?
@@ -118,18 +160,20 @@ impl AgentRunManager {
         self.sleep_manager.set_has_active_runs(true).await;
 
         let start_result = async {
-            let user_message = MessageRecord {
-                id: uuid::Uuid::now_v7().to_string(),
-                thread_id: thread_id.to_string(),
-                run_id: None,
-                role: "user".to_string(),
-                content_markdown: prompt.to_string(),
-                message_type: "plain_message".to_string(),
-                status: "completed".to_string(),
-                metadata_json: None,
-                created_at: String::new(),
-            };
-            message_repo::insert(&self.pool, &user_message).await?;
+            if options.persist_user_message {
+                let user_message = MessageRecord {
+                    id: uuid::Uuid::now_v7().to_string(),
+                    thread_id: thread_id.to_string(),
+                    run_id: None,
+                    role: "user".to_string(),
+                    content_markdown: prompt.to_string(),
+                    message_type: "plain_message".to_string(),
+                    status: "completed".to_string(),
+                    metadata_json: None,
+                    created_at: String::new(),
+                };
+                message_repo::insert(&self.pool, &user_message).await?;
+            }
             thread_repo::touch_active(&self.pool, thread_id).await?;
 
             run_repo::insert(
@@ -156,6 +200,11 @@ impl AgentRunManager {
                 &model_plan,
             )
             .await?;
+            let mut spec = spec;
+            if let Some(history_override) = options.history_override {
+                spec.history_messages = history_override;
+            }
+            spec.initial_prompt = options.initial_prompt;
 
             {
                 let mut runs = self.active_runs.lock().await;
@@ -178,6 +227,100 @@ impl AgentRunManager {
         }
 
         Ok((run_id, frontend_rx))
+    }
+
+    pub async fn execute_approved_plan(
+        self: &Arc<Self>,
+        thread_id: &str,
+        approval_message_id: &str,
+        action: PlanApprovalAction,
+    ) -> Result<(String, broadcast::Receiver<ThreadStreamEvent>), AppError> {
+        let (approval_message, approval_metadata) = self
+            .load_latest_pending_plan_approval(thread_id, Some(approval_message_id))
+            .await?;
+
+        let plan_message = message_repo::find_by_id(&self.pool, &approval_metadata.plan_message_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.plan_approval.plan_missing",
+                    "The approved plan message could not be found.",
+                )
+            })?;
+        let mut plan_metadata = parse_message_metadata::<PlanMessageMetadata>(&plan_message)?;
+        let planning_run_id = approval_message.run_id.clone().ok_or_else(|| {
+            AppError::recoverable(
+                ErrorSource::Thread,
+                "thread.plan_approval.run_missing",
+                "The planning run for this approval is missing.",
+            )
+        })?;
+        let model_plan_json = run_repo::find_effective_model_plan_json(&self.pool, &planning_run_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.plan_approval.model_plan_missing",
+                    "The approved plan is missing its runtime model plan.",
+                )
+            })?;
+        let model_plan_value = serde_json::from_str::<serde_json::Value>(&model_plan_json).map_err(
+            |error| {
+                AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.plan_approval.model_plan_invalid",
+                    format!("Failed to parse runtime model plan: {error}"),
+                )
+            },
+        )?;
+        let (profile_id, provider_id, model_id) = extract_run_model_refs(&model_plan_value);
+        let implementation_prompt =
+            build_implementation_handoff_prompt(&plan_metadata, action.clone());
+        let history_override = match action {
+            PlanApprovalAction::ApplyPlan => None,
+            PlanApprovalAction::ApplyPlanWithContextReset => Some(
+                self.build_context_reset_history(thread_id, &plan_message, &model_plan_value)
+                    .await?,
+            ),
+        };
+
+        let result = self
+            .start_run_with_options(
+                thread_id,
+                "",
+                "default",
+                profile_id,
+                provider_id,
+                model_id,
+                model_plan_value,
+                StartRunOptions {
+                    history_override,
+                    initial_prompt: Some(implementation_prompt),
+                    persist_user_message: false,
+                },
+            )
+            .await?;
+
+        let mut approval_metadata = approval_metadata;
+        approval_metadata.state = IMPLEMENTATION_PLAN_APPROVED_STATE.to_string();
+        approval_metadata.approved_action = Some(action);
+        message_repo::update_metadata(
+            &self.pool,
+            &approval_message.id,
+            serde_json::to_string(&approval_metadata).ok().as_deref(),
+        )
+        .await?;
+
+        plan_metadata.approval_state = IMPLEMENTATION_PLAN_APPROVED_STATE.to_string();
+        message_repo::update_metadata(
+            &self.pool,
+            &plan_message.id,
+            serde_json::to_string(&plan_metadata).ok().as_deref(),
+        )
+        .await?;
+
+        Ok(result)
     }
 
     pub async fn subscribe_run(
@@ -248,6 +391,126 @@ impl AgentRunManager {
 
             sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    async fn expire_pending_plan_approval(&self, thread_id: &str) -> Result<(), AppError> {
+        let Some((approval_message, mut approval_metadata)) =
+            self.find_latest_pending_plan_approval(thread_id).await?
+        else {
+            return Ok(());
+        };
+
+        approval_metadata.state = IMPLEMENTATION_PLAN_SUPERSEDED_STATE.to_string();
+        message_repo::update_metadata(
+            &self.pool,
+            &approval_message.id,
+            serde_json::to_string(&approval_metadata).ok().as_deref(),
+        )
+        .await?;
+
+        if let Some(plan_message) =
+            message_repo::find_by_id(&self.pool, &approval_metadata.plan_message_id).await?
+        {
+            let mut plan_metadata = parse_message_metadata::<PlanMessageMetadata>(&plan_message)?;
+            plan_metadata.approval_state = IMPLEMENTATION_PLAN_SUPERSEDED_STATE.to_string();
+            message_repo::update_metadata(
+                &self.pool,
+                &plan_message.id,
+                serde_json::to_string(&plan_metadata).ok().as_deref(),
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn build_context_reset_history(
+        &self,
+        thread_id: &str,
+        plan_message: &MessageRecord,
+        model_plan_value: &serde_json::Value,
+    ) -> Result<Vec<MessageRecord>, AppError> {
+        let model = build_session_spec(
+            &self.pool,
+            "plan-reset-preview",
+            thread_id,
+            "",
+            "default",
+            model_plan_value,
+        )
+        .await?
+        .model_plan
+        .primary
+        .model;
+        let pre_plan_messages =
+            message_repo::list_recent(&self.pool, thread_id, Some(&plan_message.id), 1024).await?;
+        let summary = if pre_plan_messages.is_empty() {
+            "<context_summary>\nNo earlier plain-message context was available before this plan.\n</context_summary>"
+                .to_string()
+        } else {
+            let history = convert_history_messages(&pre_plan_messages, &model);
+            summarize_messages(&history)
+        };
+
+        Ok(vec![MessageRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            thread_id: thread_id.to_string(),
+            run_id: None,
+            role: "user".to_string(),
+            content_markdown: summary,
+            message_type: "plain_message".to_string(),
+            status: "completed".to_string(),
+            metadata_json: None,
+            created_at: String::new(),
+        }])
+    }
+
+    async fn find_latest_pending_plan_approval(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<(MessageRecord, ApprovalPromptMetadata)>, AppError> {
+        let messages = message_repo::list_recent(&self.pool, thread_id, None, 128).await?;
+        for message in messages.into_iter().rev() {
+            if message.message_type != "approval_prompt" {
+                continue;
+            }
+            let Ok(metadata) = parse_message_metadata::<ApprovalPromptMetadata>(&message) else {
+                continue;
+            };
+            if metadata.kind == IMPLEMENTATION_PLAN_APPROVAL_KIND
+                && metadata.state == IMPLEMENTATION_PLAN_PENDING_STATE
+            {
+                return Ok(Some((message, metadata)));
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn load_latest_pending_plan_approval(
+        &self,
+        thread_id: &str,
+        requested_message_id: Option<&str>,
+    ) -> Result<(MessageRecord, ApprovalPromptMetadata), AppError> {
+        let Some((message, metadata)) = self.find_latest_pending_plan_approval(thread_id).await? else {
+            return Err(AppError::recoverable(
+                ErrorSource::Thread,
+                "thread.plan_approval.not_found",
+                "No pending implementation-plan approval was found for this thread.",
+            ));
+        };
+
+        if let Some(requested_message_id) = requested_message_id {
+            if message.id != requested_message_id {
+                return Err(AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.plan_approval.stale_revision",
+                    "This approval request is no longer current. Please approve the latest plan revision.",
+                ));
+            }
+        }
+
+        Ok((message, metadata))
     }
 
     pub fn spawn_runtime_event_loop(
@@ -343,6 +606,12 @@ impl AgentRunManager {
                 };
                 run_repo::update_usage(&self.pool, run_id, &usage).await?;
             }
+            ThreadStreamEvent::RunCheckpointed { .. } => {
+                run_repo::update_status(&self.pool, run_id, "waiting_approval").await?;
+                let thread_id = self.get_thread_id(run_id).await;
+                thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::WaitingApproval)
+                    .await?;
+            }
             ThreadStreamEvent::RunCompleted { .. } => {
                 self.finish_run(run_id, "completed", None).await?;
             }
@@ -404,7 +673,8 @@ impl AgentRunManager {
 
         if matches!(
             event,
-            ThreadStreamEvent::RunCompleted { .. }
+            ThreadStreamEvent::RunCheckpointed { .. }
+                | ThreadStreamEvent::RunCompleted { .. }
                 | ThreadStreamEvent::RunFailed { .. }
                 | ThreadStreamEvent::RunCancelled { .. }
                 | ThreadStreamEvent::RunInterrupted { .. }
@@ -689,6 +959,68 @@ impl AgentRunManager {
     }
 }
 
+fn parse_message_metadata<T>(message: &MessageRecord) -> Result<T, AppError>
+where
+    T: for<'de> serde::Deserialize<'de>,
+{
+    let raw = message.metadata_json.as_deref().ok_or_else(|| {
+        AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.message.metadata_missing",
+            format!("Message '{}' is missing metadata.", message.id),
+        )
+    })?;
+    serde_json::from_str::<T>(raw).map_err(|error| {
+        AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.message.metadata_invalid",
+            format!("Message '{}' has invalid metadata: {error}", message.id),
+        )
+    })
+}
+
+fn extract_run_string(model_plan: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut current = model_plan;
+
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+
+    current.as_str().map(ToString::to_string)
+}
+
+fn extract_run_model_refs(
+    model_plan: &serde_json::Value,
+) -> (Option<String>, Option<String>, Option<String>) {
+    (
+        extract_run_string(model_plan, &["profileId"]),
+        extract_run_string(model_plan, &["primary", "providerId"]),
+        extract_run_string(model_plan, &["primary", "modelRecordId"])
+            .or_else(|| extract_run_string(model_plan, &["primary", "modelId"])),
+    )
+}
+
+fn build_implementation_handoff_prompt(
+    metadata: &PlanMessageMetadata,
+    action: PlanApprovalAction,
+) -> String {
+    let action_note = match action {
+        PlanApprovalAction::ApplyPlan => {
+            "The user approved this plan for direct implementation."
+        }
+        PlanApprovalAction::ApplyPlanWithContextReset => {
+            "The user approved this plan after clearing the planning conversation from the implementation context."
+        }
+    };
+    let plan_markdown = crate::core::plan_checkpoint::plan_markdown(metadata);
+
+    format!(
+        "Implementation handoff:\n- {action_note}\n- Plan revision: {}\n- Treat the approved plan below as the implementation baseline.\n- If the plan turns out to be invalid or incomplete, pause and return to planning before making a different change.\n\nApproved plan:\n{}",
+        metadata.artifact.plan_revision,
+        plan_markdown
+    )
+}
+
 async fn maybe_generate_thread_title(
     pool: &SqlitePool,
     run_id: &str,
@@ -961,6 +1293,7 @@ fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> bool {
         ThreadStreamEvent::RunStarted { .. }
             | ThreadStreamEvent::ReasoningUpdated { .. }
             | ThreadStreamEvent::ThreadUsageUpdated { .. }
+            | ThreadStreamEvent::RunCheckpointed { .. }
             | ThreadStreamEvent::RunCompleted { .. }
             | ThreadStreamEvent::RunFailed { .. }
             | ThreadStreamEvent::RunCancelled { .. }

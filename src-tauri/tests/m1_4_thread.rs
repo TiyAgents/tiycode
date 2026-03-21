@@ -464,7 +464,7 @@ async fn test_thread_snapshot_includes_runtime_artifacts_for_visible_runs() {
         "rh-runtime",
         "r-runtime",
         "t-runtime",
-        "helper_scout",
+        "helper_explore",
         "completed",
     )
     .await;
@@ -484,7 +484,7 @@ async fn test_thread_snapshot_includes_runtime_artifacts_for_visible_runs() {
     assert_eq!(snapshot.tool_calls.len(), 1);
     assert_eq!(snapshot.tool_calls[0].tool_name, "search");
     assert_eq!(snapshot.helpers.len(), 1);
-    assert_eq!(snapshot.helpers[0].helper_kind, "helper_scout");
+    assert_eq!(snapshot.helpers[0].helper_kind, "helper_explore");
     assert_eq!(snapshot.helpers[0].usage.input_tokens, 120);
     assert_eq!(snapshot.helpers[0].usage.output_tokens, 24);
     assert_eq!(snapshot.helpers[0].usage.total_tokens, 144);

@@ -455,6 +455,7 @@ where
             action.tool_name(),
             input,
             Some(&workspace.canonical_path),
+            &[],
             "default",
         )
         .await?;

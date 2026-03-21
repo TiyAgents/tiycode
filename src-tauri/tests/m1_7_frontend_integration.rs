@@ -136,6 +136,18 @@ fn test_thread_stream_event_run_completed_serialization() {
 }
 
 #[test]
+fn test_thread_stream_event_run_checkpointed_serialization() {
+    use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
+
+    let event = ThreadStreamEvent::RunCheckpointed {
+        run_id: "run-1".into(),
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "run_checkpointed");
+}
+
+#[test]
 fn test_thread_stream_event_run_failed_serialization() {
     use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
 
@@ -218,20 +230,20 @@ fn test_thread_stream_event_subagent_events_serialization() {
     let event = ThreadStreamEvent::SubagentStarted {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
-        helper_kind: "helper_scout".into(),
+        helper_kind: "helper_explore".into(),
         started_at: "2026-03-20T00:00:00Z".into(),
         snapshot: sample_subagent_snapshot(),
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_started");
-    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_scout");
+    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_explore");
     assert_eq!(json["snapshot"]["total_tool_calls"].as_u64().unwrap(), 2);
 
     // SubagentProgress
     let event = ThreadStreamEvent::SubagentProgress {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
-        helper_kind: "helper_scout".into(),
+        helper_kind: "helper_explore".into(),
         started_at: "2026-03-20T00:00:00Z".into(),
         activity: tiy_agent_lib::core::subagent::SubagentActivityStatus::Started,
         message: "Reading src-tauri/src/core/agent_session.rs".into(),
@@ -249,7 +261,7 @@ fn test_thread_stream_event_subagent_events_serialization() {
     let event = ThreadStreamEvent::SubagentUsageUpdated {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
-        helper_kind: "helper_scout".into(),
+        helper_kind: "helper_explore".into(),
         started_at: "2026-03-20T00:00:00Z".into(),
         snapshot: sample_subagent_snapshot(),
     };
@@ -262,31 +274,28 @@ fn test_thread_stream_event_subagent_events_serialization() {
     let event = ThreadStreamEvent::SubagentCompleted {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
-        helper_kind: "helper_plan_reviewer".into(),
+        helper_kind: "helper_review".into(),
         started_at: "2026-03-20T00:00:00Z".into(),
         summary: Some("Analysis complete".into()),
         snapshot: sample_subagent_snapshot(),
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_completed");
-    assert_eq!(
-        json["helper_kind"].as_str().unwrap(),
-        "helper_plan_reviewer"
-    );
+    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_review");
     assert_eq!(json["summary"].as_str().unwrap(), "Analysis complete");
 
     // SubagentFailed
     let event = ThreadStreamEvent::SubagentFailed {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
-        helper_kind: "helper_reviewer".into(),
+        helper_kind: "helper_review".into(),
         started_at: "2026-03-20T00:00:00Z".into(),
         error: "timeout".into(),
         snapshot: sample_subagent_snapshot(),
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_failed");
-    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_reviewer");
+    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_review");
 }
 
 // =========================================================================
@@ -328,14 +337,14 @@ fn test_all_events_have_type_field() {
         ThreadStreamEvent::SubagentStarted {
             run_id: "r".into(),
             subtask_id: "s".into(),
-            helper_kind: "helper_scout".into(),
+            helper_kind: "helper_explore".into(),
             started_at: "2026-03-20T00:00:00Z".into(),
             snapshot: sample_subagent_snapshot(),
         },
         ThreadStreamEvent::SubagentProgress {
             run_id: "r".into(),
             subtask_id: "s".into(),
-            helper_kind: "helper_scout".into(),
+            helper_kind: "helper_explore".into(),
             started_at: "2026-03-20T00:00:00Z".into(),
             activity: tiy_agent_lib::core::subagent::SubagentActivityStatus::Started,
             message: "Reading foo".into(),
@@ -344,14 +353,14 @@ fn test_all_events_have_type_field() {
         ThreadStreamEvent::SubagentUsageUpdated {
             run_id: "r".into(),
             subtask_id: "s".into(),
-            helper_kind: "helper_scout".into(),
+            helper_kind: "helper_explore".into(),
             started_at: "2026-03-20T00:00:00Z".into(),
             snapshot: sample_subagent_snapshot(),
         },
         ThreadStreamEvent::SubagentCompleted {
             run_id: "r".into(),
             subtask_id: "s".into(),
-            helper_kind: "helper_plan_reviewer".into(),
+            helper_kind: "helper_review".into(),
             started_at: "2026-03-20T00:00:00Z".into(),
             summary: None,
             snapshot: sample_subagent_snapshot(),
@@ -359,7 +368,7 @@ fn test_all_events_have_type_field() {
         ThreadStreamEvent::SubagentFailed {
             run_id: "r".into(),
             subtask_id: "s".into(),
-            helper_kind: "helper_reviewer".into(),
+            helper_kind: "helper_review".into(),
             started_at: "2026-03-20T00:00:00Z".into(),
             error: "e".into(),
             snapshot: sample_subagent_snapshot(),
@@ -396,6 +405,7 @@ fn test_all_events_have_type_field() {
             tool_call_id: "t".into(),
             error: "e".into(),
         },
+        ThreadStreamEvent::RunCheckpointed { run_id: "r".into() },
         ThreadStreamEvent::RunCompleted { run_id: "r".into() },
         ThreadStreamEvent::RunFailed {
             run_id: "r".into(),
@@ -415,11 +425,11 @@ fn test_all_events_have_type_field() {
         assert!(!type_val.is_empty(), "Event type should not be empty");
     }
 
-    // Verify total count matches enum variants (21 variants)
+    // Verify total count matches enum variants (22 variants)
     assert_eq!(
         events.len(),
-        21,
-        "Should test all 21 ThreadStreamEvent variants"
+        22,
+        "Should test all 22 ThreadStreamEvent variants"
     );
 }
 

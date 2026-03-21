@@ -125,12 +125,9 @@ impl HelperAgentOrchestrator {
         let last_usage = Arc::new(StdMutex::new(None::<Usage>));
 
         let agent = Arc::new(Agent::with_model(request.model_role.model.clone()));
-        agent.set_system_prompt(format!(
-            "{}\n\n{}\n\nYour output will be consumed by the parent agent, not the user. \
-Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
-Reference specific file paths and code locations where relevant. Skip preamble.",
-            request.system_prompt,
-            helper_profile.system_prompt()
+        agent.set_system_prompt(build_helper_system_prompt(
+            &request.system_prompt,
+            helper_profile,
         ));
         agent.set_tools(helper_profile.helper_tools());
         agent.set_tool_execution(ToolExecutionMode::Sequential);
@@ -749,6 +746,21 @@ fn extract_usage(messages: &[AgentMessage]) -> Option<Usage> {
     })
 }
 
+fn build_helper_system_prompt(
+    parent_system_prompt: &str,
+    helper_profile: SubagentProfile,
+) -> String {
+    format!(
+        "{}\n\n{}\n\nYour output will be consumed by the parent agent, not the user. \
+Follow any response language and response style instructions inherited above unless the parent explicitly overrides them. \
+If the inherited prompt specifies a response language, write your entire output in that language. \
+Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
+Reference specific file paths and code locations where relevant. Skip preamble.",
+        parent_system_prompt,
+        helper_profile.system_prompt()
+    )
+}
+
 fn merge_payload(mut base: serde_json::Value, patch: &serde_json::Value) -> serde_json::Value {
     merge_json_value(&mut base, patch);
     base
@@ -812,5 +824,25 @@ fn helper_agent_error_result(message: impl Into<String>) -> AgentToolResult {
             message.into()
         )))],
         details: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_helper_system_prompt;
+    use crate::core::subagent::SubagentProfile;
+
+    #[test]
+    fn helper_system_prompt_preserves_parent_language_instruction() {
+        let prompt = build_helper_system_prompt(
+            "## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.",
+            SubagentProfile::Explore,
+        );
+
+        assert!(prompt.contains("Respond in 简体中文"));
+        assert!(prompt.contains(
+            "Follow any response language and response style instructions inherited above"
+        ));
+        assert!(prompt.contains("write your entire output in that language"));
     }
 }

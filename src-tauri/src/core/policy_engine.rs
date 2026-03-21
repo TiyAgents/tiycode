@@ -11,7 +11,9 @@
 use serde::Serialize;
 use sqlx::SqlitePool;
 
-use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
+use crate::core::workspace_paths::{
+    canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
+};
 use crate::model::errors::AppError;
 use crate::persistence::repo::settings_repo;
 
@@ -118,6 +120,7 @@ impl PolicyEngine {
         tool_name: &str,
         tool_input: &serde_json::Value,
         workspace_canonical_path: Option<&str>,
+        writable_roots: &[String],
         run_mode: &str,
     ) -> Result<PolicyCheck, AppError> {
         let mut checked = Vec::new();
@@ -172,10 +175,12 @@ impl PolicyEngine {
                 crate::model::errors::ErrorSource::Tool,
                 "tool.workspace.not_directory",
             )?;
+            let additional_roots = allowed_additional_roots(tool_name, writable_roots);
             let target_path = extract_target_path(tool_name, tool_input);
             if let Some(target) = target_path {
-                if let Err(error) = resolve_path_within_workspace(
+                if let Err(error) = resolve_path_within_roots(
                     &workspace_root,
+                    &additional_roots,
                     &target,
                     crate::model::errors::ErrorSource::Tool,
                     "tool.path.outside_workspace",
@@ -307,6 +312,18 @@ impl PolicyEngine {
             None => Ok("require_for_mutations".to_string()),
         }
     }
+}
+
+fn allowed_additional_roots(tool_name: &str, writable_roots: &[String]) -> Vec<std::path::PathBuf> {
+    if tool_uses_writable_roots(tool_name) {
+        normalize_additional_roots(writable_roots)
+    } else {
+        Vec::new()
+    }
+}
+
+fn tool_uses_writable_roots(tool_name: &str) -> bool {
+    matches!(tool_name, "write" | "edit" | "patch")
 }
 
 /// Extract the target file path from tool input for boundary checking.

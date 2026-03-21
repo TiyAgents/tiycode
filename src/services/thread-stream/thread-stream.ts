@@ -17,6 +17,7 @@
 
 import {
   threadCancelRun,
+  threadExecuteApprovedPlan,
   threadStartRun,
   threadSubscribeRun,
   toolApprovalRespond,
@@ -244,6 +245,39 @@ export class ThreadStream {
     } catch (error) {
       const message = extractErrorMessage(error);
       this.onError?.(message, this.currentRunId ?? "");
+      throw error;
+    }
+  }
+
+  async executeApprovedPlan(
+    threadId: string,
+    approvalMessageId: string,
+    action: "apply_plan" | "apply_plan_with_context_reset",
+  ): Promise<string> {
+    try {
+      const runId = await threadExecuteApprovedPlan(
+        threadId,
+        approvalMessageId,
+        action,
+        (event) => {
+          if (this.disposed) {
+            return;
+          }
+          this.handleEvent(event);
+        },
+      );
+
+      if (this.disposed) {
+        return runId;
+      }
+
+      this.currentRunId = runId;
+      return runId;
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      if (!this.disposed) {
+        this.onError?.(message, "");
+      }
       throw error;
     }
   }
@@ -497,6 +531,11 @@ export class ThreadStream {
         });
         break;
 
+      case "run_checkpointed":
+        this.currentRunId = null;
+        this.onRunStateChange?.("waiting_approval", event.runId);
+        break;
+
       case "run_completed":
         this.currentRunId = null;
         this.onRunStateChange?.("completed", event.runId);
@@ -523,12 +562,8 @@ export class ThreadStream {
 
 function isRuntimeOrchestrationToolName(toolName: string) {
   return (
-    toolName === "agent_research"
+    toolName === "agent_explore"
     || toolName === "agent_review"
-    || toolName === "agent_plan"
-    || toolName === "delegate_research"
-    || toolName === "delegate_plan_review"
-    || toolName === "delegate_code_review"
   );
 }
 

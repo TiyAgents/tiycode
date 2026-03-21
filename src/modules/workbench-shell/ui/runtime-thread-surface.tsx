@@ -31,6 +31,7 @@ import {
 } from "@/services/thread-stream";
 import type {
   MessageDto,
+  RunMode,
   RunSummaryDto,
   RunHelperDto,
   SubagentProgressSnapshot,
@@ -46,6 +47,7 @@ type SurfaceMessage = {
   createdAt: string;
   id: string;
   messageType: MessageDto["messageType"];
+  metadata?: unknown | null;
   role: "user" | "assistant" | "system";
   runId: string | null;
   content: string;
@@ -145,6 +147,7 @@ type SurfaceRuntimeError = {
 type InitialPromptRequest = {
   id: string;
   prompt: string;
+  runMode?: RunMode;
 };
 
 type ThinkingPlaceholder = {
@@ -178,6 +181,48 @@ export type ThreadContextUsage = {
   runId: string;
 };
 
+type PlanApprovalAction = "apply_plan" | "apply_plan_with_context_reset";
+
+type PlanStepMetadata = {
+  description?: string;
+  files?: string[];
+  id?: string;
+  status?: string;
+  title?: string;
+};
+
+type PlanMessageMetadata = {
+  approvalState?: string;
+  generatedFromRunId?: string;
+  kind?: string;
+  needsContextResetOption?: boolean;
+  openQuestions?: string[];
+  planRevision?: number;
+  risks?: string[];
+  runModeAtCreation?: string;
+  steps?: PlanStepMetadata[];
+  summary?: string;
+  title?: string;
+};
+
+type FormattedPlan = {
+  approvalState: string | null;
+  openQuestions: string[];
+  planRevision: number | null;
+  risks: string[];
+  steps: string[];
+  summary: string;
+  title: string;
+};
+
+type FormattedApprovalPrompt = {
+  approvedAction: PlanApprovalAction | null;
+  options: Array<{ action: PlanApprovalAction; label: string }>;
+  planMessageId: string | null;
+  planRevision: number | null;
+  state: string;
+};
+
 type TimelineRole = SurfaceMessage["role"];
 
 function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
@@ -185,6 +230,7 @@ function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
     createdAt: message.createdAt ?? new Date().toISOString(),
     id: message.id,
     messageType: message.messageType,
+    metadata: message.metadata,
     role:
       message.role === "user" || message.role === "assistant" || message.role === "system"
         ? message.role
@@ -193,6 +239,191 @@ function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
     content: message.contentMarkdown,
     status: message.status,
   };
+}
+
+function asObjectRecord(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function readStringField(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  return typeof value === "string" ? value : null;
+}
+
+function readNumberField(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  return typeof value === "number" ? value : null;
+}
+
+function readStringArrayField(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+}
+
+function parsePlanMessageMetadata(value: unknown): PlanMessageMetadata | null {
+  const record = asObjectRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const stepEntries = Array.isArray(record.steps)
+    ? record.steps
+        .map<PlanStepMetadata | null>((step) => {
+          if (typeof step === "string") {
+            return { title: step };
+          }
+
+          const stepRecord = asObjectRecord(step);
+          if (!stepRecord) {
+            return null;
+          }
+
+          return {
+            description: readStringField(stepRecord, "description") ?? undefined,
+            files: readStringArrayField(stepRecord, "files"),
+            id: readStringField(stepRecord, "id") ?? undefined,
+            status: readStringField(stepRecord, "status") ?? undefined,
+            title: readStringField(stepRecord, "title") ?? undefined,
+          };
+        })
+        .filter((step): step is PlanStepMetadata => step !== null)
+    : [];
+
+  return {
+    approvalState: readStringField(record, "approvalState") ?? undefined,
+    generatedFromRunId: readStringField(record, "generatedFromRunId") ?? undefined,
+    kind: readStringField(record, "kind") ?? undefined,
+    needsContextResetOption:
+      typeof record.needsContextResetOption === "boolean" ? record.needsContextResetOption : undefined,
+    openQuestions: readStringArrayField(record, "openQuestions"),
+    planRevision: readNumberField(record, "planRevision") ?? undefined,
+    risks: readStringArrayField(record, "risks"),
+    runModeAtCreation: readStringField(record, "runModeAtCreation") ?? undefined,
+    steps: stepEntries,
+    summary: readStringField(record, "summary") ?? undefined,
+    title: readStringField(record, "title") ?? undefined,
+  };
+}
+
+function parseApprovalPromptMetadata(value: unknown): FormattedApprovalPrompt | null {
+  const record = asObjectRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const options = Array.isArray(record.options)
+    ? record.options
+        .map((entry) => {
+          const optionRecord = asObjectRecord(entry);
+          const action = readStringField(optionRecord, "action");
+          const label = readStringField(optionRecord, "label");
+          if (
+            (action !== "apply_plan" && action !== "apply_plan_with_context_reset")
+            || !label
+          ) {
+            return null;
+          }
+
+          return { action, label };
+        })
+        .filter((option): option is { action: PlanApprovalAction; label: string } => Boolean(option))
+    : [];
+
+  return {
+    approvedAction:
+      readStringField(record, "approvedAction") === "apply_plan"
+      || readStringField(record, "approvedAction") === "apply_plan_with_context_reset"
+        ? (readStringField(record, "approvedAction") as PlanApprovalAction)
+        : null,
+    options: options.length > 0
+      ? options
+      : [
+          { action: "apply_plan", label: "按计划实施" },
+          { action: "apply_plan_with_context_reset", label: "清理上下文后按计划实施" },
+        ],
+    planMessageId: readStringField(record, "planMessageId"),
+    planRevision: readNumberField(record, "planRevision"),
+    state: readStringField(record, "state") ?? "pending",
+  };
+}
+
+function formatPlanMetadata(
+  metadata: unknown,
+  fallbackContent?: string,
+): FormattedPlan {
+  const parsed = parsePlanMessageMetadata(metadata);
+  const record = asObjectRecord(metadata);
+  const title = parsed?.title?.trim() || readStringField(record, "title")?.trim() || "Execution Plan";
+  const summary =
+    parsed?.summary?.trim()
+    || readStringField(record, "description")?.trim()
+    || readStringField(record, "overview")?.trim()
+    || fallbackContent?.trim()
+    || "Review the proposed implementation plan before coding.";
+  const stepsSource = parsed?.steps ?? [];
+  const steps = stepsSource
+    .map((step) => {
+      const stepTitle = step.title?.trim();
+      const stepDescription = step.description?.trim();
+      const files = step.files?.filter((file) => file.trim().length > 0) ?? [];
+      if (!stepTitle && !stepDescription && files.length === 0) {
+        return null;
+      }
+
+      const fragments = [stepTitle ?? null, stepDescription ?? null, files.length > 0 ? `(${files.join(", ")})` : null]
+        .filter((fragment): fragment is string => Boolean(fragment));
+      return fragments.join(" — ").replace(" — (", " (");
+    })
+    .filter((step): step is string => Boolean(step));
+
+  return {
+    approvalState: parsed?.approvalState ?? null,
+    openQuestions: parsed?.openQuestions ?? [],
+    planRevision: parsed?.planRevision ?? null,
+    risks: parsed?.risks ?? [],
+    steps,
+    summary,
+    title,
+  };
+}
+
+function deriveSelectedRunMode(snapshot: ThreadSnapshotDto, currentMode: RunMode) {
+  if (
+    snapshot.thread.status === "waiting_approval"
+    && !snapshot.activeRun
+    && snapshot.latestRun?.runMode === "plan"
+  ) {
+    return "plan";
+  }
+
+  if (snapshot.activeRun?.runMode === "default" || snapshot.activeRun?.runMode === "plan") {
+    return snapshot.activeRun.runMode;
+  }
+
+  return currentMode;
+}
+
+function formatApprovalPromptState(state: string, approvedAction: PlanApprovalAction | null) {
+  switch (state) {
+    case "approved":
+      return approvedAction === "apply_plan_with_context_reset"
+        ? "已批准：清理上下文后按计划实施"
+        : approvedAction === "apply_plan"
+          ? "已批准：按计划实施"
+          : "已批准进入实施"
+    case "superseded":
+      return "该计划已被新的规划版本替代。";
+    default:
+      return "等待实施审批";
+  }
 }
 
 function mapSnapshotToolState(tool: ToolCallDto): SurfaceToolState {
@@ -417,43 +648,6 @@ function buildPromptText(message: PromptInputMessage) {
   return [nextText, "Attached files:", attachmentSection].filter(Boolean).join("\n\n");
 }
 
-function formatPlan(plan: unknown) {
-  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
-    return {
-      title: "Execution Plan",
-      description: "Latest plan artifact emitted by the runtime.",
-      steps: [JSON.stringify(plan, null, 2)],
-    };
-  }
-
-  const value = plan as {
-    description?: unknown;
-    overview?: unknown;
-    steps?: unknown;
-    title?: unknown;
-  };
-
-  const rawSteps = Array.isArray(value.steps) ? value.steps : [];
-  const steps = rawSteps.map((step) => {
-    if (typeof step === "string") {
-      return step;
-    }
-
-    return JSON.stringify(step, null, 2);
-  });
-
-  return {
-    title: typeof value.title === "string" && value.title.trim() ? value.title : "Execution Plan",
-    description:
-      typeof value.description === "string" && value.description.trim()
-        ? value.description
-        : typeof value.overview === "string" && value.overview.trim()
-          ? value.overview
-          : "Latest plan artifact emitted by the runtime.",
-    steps,
-  };
-}
-
 function appendOrReplaceMessage(
   messages: Array<SurfaceMessage>,
   nextMessage: SurfaceMessage,
@@ -547,12 +741,9 @@ function applyHelperSnapshot(
 
 function formatHelperKind(kind: string) {
   switch (kind) {
-    case "helper_scout":
-      return "Research Agent";
-    case "helper_planner":
-    case "helper_plan_reviewer":
-      return "Plan Review Agent";
-    case "helper_reviewer":
+    case "helper_explore":
+      return "Explore Agent";
+    case "helper_review":
       return "Review Agent";
     default:
       return kind;
@@ -1543,12 +1734,8 @@ function isHelperOwnedTool(
 
 function isRuntimeOrchestrationTool(toolName: string) {
   return (
-    toolName === "agent_research"
+    toolName === "agent_explore"
     || toolName === "agent_review"
-    || toolName === "agent_plan"
-    || toolName === "delegate_research"
-    || toolName === "delegate_plan_review"
-    || toolName === "delegate_code_review"
   );
 }
 
@@ -1644,15 +1831,16 @@ export function RuntimeThreadSurface({
   );
   const [composerError, setComposerError] = useState<string | null>(null);
   const [composerValue, setComposerValue] = useState("");
+  const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string | null>(null);
   const [helpers, setHelpers] = useState<Array<SurfaceHelperEntry>>([]);
   const [helperOpen, setHelperOpen] = useState<Record<string, boolean>>({});
   const [isLoading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
-  const [planArtifact, setPlanArtifact] = useState<unknown>(null);
   const [queueArtifact, setQueueArtifact] = useState<unknown>(null);
   const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
   const [runState, setRunState] = useState<RunState>("idle");
+  const [selectedRunMode, setSelectedRunMode] = useState<RunMode>("default");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [snapshotThreadId, setSnapshotThreadId] = useState<string | null>(null);
   const [thinkingPlaceholder, setThinkingPlaceholder] = useState<ThinkingPlaceholder | null>(null);
@@ -1746,6 +1934,7 @@ export function RuntimeThreadSurface({
       setLoadError(null);
       setLoading(false);
       onContextUsageChange?.(null);
+      setApprovingPlanMessageId(null);
       setRuntimeError(null);
       setRunState("idle");
       setSnapshotReady(true);
@@ -1769,10 +1958,12 @@ export function RuntimeThreadSurface({
       // Use functional update to ensure we replace the entire list atomically,
       // discarding any local-user optimistic messages that may still be in state.
       setMessages(() => snapshotMessages);
+      setApprovingPlanMessageId(null);
       setTools((snapshot.toolCalls ?? []).map(mapSnapshotTool));
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
       setRunState(nextState);
+      setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
       onContextUsageChange?.(mapRunSummaryToContextUsage(getLatestVisibleRun(snapshot)));
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
@@ -1815,7 +2006,7 @@ export function RuntimeThreadSurface({
     setHelpers([]);
     setLoadError(null);
     setMessages([]);
-    setPlanArtifact(null);
+    setApprovingPlanMessageId(null);
     setQueueArtifact(null);
     setRuntimeError(null);
     setRunState("idle");
@@ -1846,6 +2037,17 @@ export function RuntimeThreadSurface({
     stream.onRawEvent = withActiveStream((event) => {
       if (shouldCompleteThinkingPhase(event)) {
         completeThinkingPhase(event.runId);
+      }
+
+      if (event.type === "run_started") {
+        setApprovingPlanMessageId(null);
+        if (event.runMode === "default" || event.runMode === "plan") {
+          setSelectedRunMode(event.runMode);
+        }
+      }
+
+      if (event.type === "run_checkpointed") {
+        setSelectedRunMode("plan");
       }
     });
 
@@ -1884,9 +2086,7 @@ export function RuntimeThreadSurface({
       );
     });
 
-    stream.onPlan = withActiveStream((event) => {
-      setPlanArtifact(event.plan);
-    });
+    stream.onPlan = withActiveStream((_event) => {});
 
     stream.onReasoning = withActiveStream((event) => {
       clearScheduledThinkingPhase();
@@ -2155,12 +2355,18 @@ export function RuntimeThreadSurface({
         return;
       }
 
+      if (state === "waiting_approval" && !stream.runId) {
+        void loadSnapshot();
+        return;
+      }
+
       if (state === "completed" || state === "failed" || state === "cancelled" || state === "interrupted") {
         void loadSnapshot();
       }
     });
 
     stream.onError = withActiveStream((message, runId) => {
+      setApprovingPlanMessageId(null);
       if (runId) {
         setRuntimeError({
           message,
@@ -2190,7 +2396,7 @@ export function RuntimeThreadSurface({
     threadId,
   ]);
 
-  const submitPrompt = useCallback(async (prompt: string) => {
+  const submitPrompt = useCallback(async (prompt: string, runModeOverride?: RunMode) => {
     if (!threadId) {
       setComposerError("This thread is still preparing. Try again in a moment.");
       return;
@@ -2201,7 +2407,8 @@ export function RuntimeThreadSurface({
       return;
     }
 
-    if (runState === "running" || runState === "waiting_approval") {
+    const activeRunId = streamRef.current?.runId ?? null;
+    if (runState === "running" || (runState === "waiting_approval" && activeRunId)) {
       setComposerError("This thread already has an active run.");
       return;
     }
@@ -2231,7 +2438,6 @@ export function RuntimeThreadSurface({
 
     setComposerError(null);
     setRuntimeError(null);
-    setPlanArtifact(null);
     setQueueArtifact(null);
     const userCreatedAt = new Date().toISOString();
     const localUserMessageId = `local-user-${Date.now()}`;
@@ -2258,25 +2464,32 @@ export function RuntimeThreadSurface({
     showThinkingPlaceholder(null, userCreatedAt);
 
     try {
-      await streamRef.current?.startRun(threadId, prompt, "default", modelPlan);
+      await streamRef.current?.startRun(
+        threadId,
+        prompt,
+        runModeOverride ?? selectedRunMode,
+        modelPlan,
+      );
     } catch (error) {
       setThinkingPlaceholder(null);
       throw error;
     } finally {
       submittingRef.current = false;
     }
-  }, [activeAgentProfileId, activeProfile, agentProfiles, providers, runState, showThinkingPlaceholder, threadId]);
+  }, [activeAgentProfileId, activeProfile, agentProfiles, providers, runState, selectedRunMode, showThinkingPlaceholder, threadId]);
 
   useEffect(() => {
     const isCurrentThreadSnapshotReady =
       snapshotReady && snapshotThreadId === threadId;
     const initialPromptRequestId = initialPromptRequest?.id ?? null;
+    const hasBlockingRun =
+      runState === "running"
+      || (runState === "waiting_approval" && Boolean(streamRef.current?.runId));
 
     if (
       !initialPromptRequest
       || !isCurrentThreadSnapshotReady
-      || runState === "running"
-      || runState === "waiting_approval"
+      || hasBlockingRun
       || handledInitialPromptRequestIdRef.current === initialPromptRequestId
     ) {
       return;
@@ -2285,14 +2498,19 @@ export function RuntimeThreadSurface({
     // Parent state clears this request asynchronously, so mark it handled
     // before awaiting to keep effect re-runs from starting the same run twice.
     handledInitialPromptRequestIdRef.current = initialPromptRequestId;
-    void submitPrompt(initialPromptRequest.prompt)
+    if (initialPromptRequest.runMode) {
+      setSelectedRunMode(initialPromptRequest.runMode);
+    }
+    void submitPrompt(initialPromptRequest.prompt, initialPromptRequest.runMode)
       .finally(() => {
         onConsumeInitialPrompt?.(initialPromptRequest.id);
       });
   }, [initialPromptRequest, onConsumeInitialPrompt, runState, snapshotReady, snapshotThreadId, submitPrompt, threadId]);
 
-  const composerStatus: ChatStatus =
-    runState === "running" || runState === "waiting_approval" ? "streaming" : "ready";
+  const hasLiveRun =
+    runState === "running"
+    || (runState === "waiting_approval" && Boolean(streamRef.current?.runId));
+  const composerStatus: ChatStatus = hasLiveRun ? "streaming" : "ready";
   const helperIds = useMemo(
     () => new Set(helpers.map((helper) => helper.id)),
     [helpers],
@@ -2303,11 +2521,9 @@ export function RuntimeThreadSurface({
   );
   const hasRuntimeArtifacts =
     Boolean(runtimeError)
-    || Boolean(planArtifact)
     || Boolean(queueArtifact)
     || helpers.length > 0
     || visibleTools.length > 0;
-  const formattedPlan = planArtifact ? formatPlan(planArtifact) : null;
   const timelineEntries = useMemo<Array<TimelineEntry>>(
     () =>
       [
@@ -2343,13 +2559,8 @@ export function RuntimeThreadSurface({
   const lastPresentationRole = presentationEntries.length > 0
     ? getPresentationEntryRole(presentationEntries[presentationEntries.length - 1])
     : null;
-  const planPreviousRole = lastPresentationRole;
-  const queuePreviousRole: TimelineRole | null = formattedPlan ? "assistant" : lastPresentationRole;
-  const runtimeErrorPreviousRole: TimelineRole | null = queueArtifact
-    ? "assistant"
-    : formattedPlan
-      ? "assistant"
-      : lastPresentationRole;
+  const queuePreviousRole: TimelineRole | null = lastPresentationRole;
+  const runtimeErrorPreviousRole: TimelineRole | null = queueArtifact ? "assistant" : lastPresentationRole;
 
   useEffect(() => {
     const previousToolStates = previousToolStatesRef.current;
@@ -2453,6 +2664,60 @@ export function RuntimeThreadSurface({
   const handleHelperOpenChange = useCallback((helperId: string, open: boolean) => {
     setHelperOpen((current) => (current[helperId] === open ? current : { ...current, [helperId]: open }));
   }, []);
+
+  const handlePlanApproval = useCallback(async (
+    messageId: string,
+    action: PlanApprovalAction,
+  ) => {
+    if (!threadId || !streamRef.current) {
+      return;
+    }
+
+    setApprovingPlanMessageId(messageId);
+    setComposerError(null);
+    setRuntimeError(null);
+    showThinkingPlaceholder(null, new Date().toISOString());
+
+    try {
+      await streamRef.current.executeApprovedPlan(threadId, messageId, action);
+      setMessages((current) => {
+        const approvalPrompt = parseApprovalPromptMetadata(
+          current.find((message) => message.id === messageId)?.metadata,
+        );
+
+        return current.map((message) => {
+          if (message.id === messageId) {
+            const metadata = asObjectRecord(message.metadata);
+            return {
+              ...message,
+              metadata: {
+                ...(metadata ?? {}),
+                approvedAction: action,
+                state: "approved",
+              },
+            };
+          }
+
+          if (approvalPrompt?.planMessageId && message.id === approvalPrompt.planMessageId) {
+            const metadata = asObjectRecord(message.metadata);
+            return {
+              ...message,
+              metadata: {
+                ...(metadata ?? {}),
+                approvalState: "approved",
+              },
+            };
+          }
+
+          return message;
+        });
+      });
+    } catch {
+      setThinkingPlaceholder(null);
+    } finally {
+      setApprovingPlanMessageId((current) => (current === messageId ? null : current));
+    }
+  }, [showThinkingPlaceholder, threadId]);
 
   const renderToolEntry = useCallback((tool: SurfaceToolEntry, key: string, inset = false) => {
     const fileMutation = getFileMutationPresentation(tool);
@@ -2873,6 +3138,131 @@ export function RuntimeThreadSurface({
                   );
                 }
 
+                if (message.messageType === "plan") {
+                  const formattedPlan = formatPlanMetadata(message.metadata, message.content);
+                  const approvalStateLabel = formattedPlan.approvalState
+                    ? formatApprovalPromptState(formattedPlan.approvalState, null)
+                    : null;
+
+                  return (
+                    <div className={spacingClass} key={entry.key}>
+                      <Message className="max-w-full" from="assistant">
+                        <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                          <Plan className="overflow-hidden rounded-2xl border border-app-border/28 bg-app-surface/28 shadow-none" defaultOpen>
+                            <PlanHeader>
+                              <div className="space-y-3">
+                                <div className="flex flex-wrap items-center gap-2 text-xs text-app-subtle">
+                                  {formattedPlan.planRevision !== null ? (
+                                    <span>{`Plan v${formattedPlan.planRevision}`}</span>
+                                  ) : null}
+                                  {approvalStateLabel ? (
+                                    <span>{approvalStateLabel}</span>
+                                  ) : null}
+                                </div>
+                                <PlanTitle>{formattedPlan.title}</PlanTitle>
+                                <PlanDescription>{formattedPlan.summary}</PlanDescription>
+                              </div>
+                              <PlanTrigger />
+                            </PlanHeader>
+                            <PlanContent className="space-y-4">
+                              {formattedPlan.steps.length > 0 ? (
+                                <ol className="space-y-2 text-sm leading-6 text-app-muted">
+                                  {formattedPlan.steps.map((step, index) => (
+                                    <li className="flex items-start gap-3" key={`${message.id}-step-${index}`}>
+                                      <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-app-surface-muted text-[11px] font-semibold text-app-foreground ring-1 ring-app-border/45">
+                                        {index + 1}
+                                      </span>
+                                      <span className="whitespace-pre-wrap">{step}</span>
+                                    </li>
+                                  ))}
+                                </ol>
+                              ) : (
+                                <MessageResponse>{message.content}</MessageResponse>
+                              )}
+
+                              {formattedPlan.risks.length > 0 ? (
+                                <div className="space-y-2">
+                                  <div className="text-xs font-semibold uppercase tracking-[0.08em] text-app-subtle">
+                                    Risks
+                                  </div>
+                                  <ul className="space-y-1 text-sm leading-6 text-app-muted">
+                                    {formattedPlan.risks.map((risk, index) => (
+                                      <li key={`${message.id}-risk-${index}`}>{`- ${risk}`}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : null}
+
+                              {formattedPlan.openQuestions.length > 0 ? (
+                                <div className="space-y-2">
+                                  <div className="text-xs font-semibold uppercase tracking-[0.08em] text-app-subtle">
+                                    Open Questions
+                                  </div>
+                                  <ul className="space-y-1 text-sm leading-6 text-app-muted">
+                                    {formattedPlan.openQuestions.map((question, index) => (
+                                      <li key={`${message.id}-question-${index}`}>{`- ${question}`}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : null}
+                            </PlanContent>
+                          </Plan>
+                        </MessageContent>
+                      </Message>
+                    </div>
+                  );
+                }
+
+                if (message.messageType === "approval_prompt") {
+                  const approvalPrompt = parseApprovalPromptMetadata(message.metadata);
+                  const approvalState = approvalPrompt?.state ?? "pending";
+                  const approvalOptions = approvalPrompt?.options ?? [
+                    { action: "apply_plan" as const, label: "按计划实施" },
+                    { action: "apply_plan_with_context_reset" as const, label: "清理上下文后按计划实施" },
+                  ];
+                  const disabled =
+                    !threadId
+                    || approvalState !== "pending"
+                    || hasLiveRun
+                    || approvingPlanMessageId === message.id;
+
+                  return (
+                    <div className={spacingClass} key={entry.key}>
+                      <Message className="max-w-full" from="assistant">
+                        <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                          <div className="rounded-2xl border border-app-border/24 bg-app-surface/20 p-4">
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-app-subtle">
+                                {approvalPrompt?.planRevision !== null && approvalPrompt?.planRevision !== undefined ? (
+                                  <span>{`Plan v${approvalPrompt.planRevision}`}</span>
+                                ) : null}
+                                <span>{formatApprovalPromptState(approvalState, approvalPrompt?.approvedAction ?? null)}</span>
+                              </div>
+                              <MessageResponse>{message.content}</MessageResponse>
+                            </div>
+
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              {approvalOptions.map((option) => (
+                                <Button
+                                  disabled={disabled}
+                                  key={`${message.id}-${option.action}`}
+                                  onClick={() => {
+                                    void handlePlanApproval(message.id, option.action);
+                                  }}
+                                  size="sm"
+                                  variant={option.action === "apply_plan" ? "default" : "outline"}
+                                >
+                                  {option.label}
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                        </MessageContent>
+                      </Message>
+                    </div>
+                  );
+                }
+
                 return (
                   <div className={spacingClass} key={entry.key}>
                     <Message
@@ -3013,40 +3403,6 @@ export function RuntimeThreadSurface({
               );
             })}
 
-            {formattedPlan ? (
-              <div className={getRoleSpacingClass(planPreviousRole, "assistant")}>
-                <Message className="max-w-full" from="assistant">
-                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                    <Plan className="overflow-hidden rounded-2xl border border-app-border/28 bg-app-surface/28 shadow-none" defaultOpen>
-                      <PlanHeader>
-                        <div className="space-y-3">
-                          <PlanTitle>{formattedPlan.title}</PlanTitle>
-                          <PlanDescription>{formattedPlan.description}</PlanDescription>
-                        </div>
-                        <PlanTrigger />
-                      </PlanHeader>
-                      <PlanContent className="space-y-3">
-                        {formattedPlan.steps.length > 0 ? (
-                          <ol className="space-y-2 text-sm leading-6 text-app-muted">
-                            {formattedPlan.steps.map((step, index) => (
-                              <li className="flex items-start gap-3" key={`${step}-${index}`}>
-                                <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-app-surface-muted text-[11px] font-semibold text-app-foreground ring-1 ring-app-border/45">
-                                  {index + 1}
-                                </span>
-                                <span className="whitespace-pre-wrap">{step}</span>
-                              </li>
-                            ))}
-                          </ol>
-                        ) : (
-                          <MessageResponse>{JSON.stringify(planArtifact, null, 2)}</MessageResponse>
-                        )}
-                      </PlanContent>
-                    </Plan>
-                  </MessageContent>
-                </Message>
-              </div>
-            ) : null}
-
             {queueArtifact ? (
               <div className={getRoleSpacingClass(queuePreviousRole, "assistant")}>
                 <Message className="max-w-full" from="assistant">
@@ -3097,6 +3453,7 @@ export function RuntimeThreadSurface({
           canSubmitWhenAttachmentsOnly={false}
           error={composerError}
           onErrorMessageChange={setComposerError}
+          onRunModeChange={setSelectedRunMode}
           onSelectAgentProfile={onSelectAgentProfile}
           onStop={() => {
             if (!threadId) {
@@ -3130,6 +3487,9 @@ export function RuntimeThreadSurface({
           }}
           placeholder="Ask Tiy anything, @ to add files, / for commands, $ for skills"
           providers={providers}
+          runMode={selectedRunMode}
+          runModeDisabled={runState === "running" || runState === "waiting_approval"}
+          showRunModeToggle
           status={composerStatus}
           value={composerValue}
           onValueChange={setComposerValue}

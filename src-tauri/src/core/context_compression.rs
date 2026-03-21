@@ -191,6 +191,10 @@ pub fn compress_context(
     result
 }
 
+pub fn summarize_messages(messages: &[AgentMessage]) -> String {
+    generate_discard_summary(messages)
+}
+
 /// Find the cut point index: the first message index where we start keeping messages.
 ///
 /// Walks backwards from the end, accumulating token estimates.

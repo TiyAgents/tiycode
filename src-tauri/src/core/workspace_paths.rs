@@ -29,6 +29,26 @@ pub fn resolve_path_within_workspace(
     outside_code: &str,
     outside_message: impl Into<String>,
 ) -> Result<PathBuf, AppError> {
+    resolve_path_within_roots(
+        workspace_root,
+        &[],
+        raw_path,
+        source,
+        outside_code,
+        outside_message,
+    )
+}
+
+/// Resolve an absolute or relative path against the workspace root and any
+/// additional allowed roots.
+pub fn resolve_path_within_roots(
+    workspace_root: &Path,
+    additional_roots: &[PathBuf],
+    raw_path: &str,
+    source: ErrorSource,
+    outside_code: &str,
+    outside_message: impl Into<String>,
+) -> Result<PathBuf, AppError> {
     let candidate = if raw_path.is_empty() {
         workspace_root.to_path_buf()
     } else {
@@ -41,11 +61,37 @@ pub fn resolve_path_within_workspace(
     };
 
     let resolved = canonicalize_lossy(&candidate);
-    if !resolved.starts_with(workspace_root) {
+    if !path_within_allowed_roots(&resolved, workspace_root, additional_roots) {
         return Err(AppError::recoverable(source, outside_code, outside_message));
     }
 
     Ok(resolved)
+}
+
+/// Normalize persisted writable root strings into canonical path boundaries.
+pub fn normalize_additional_roots(raw_roots: &[String]) -> Vec<PathBuf> {
+    raw_roots
+        .iter()
+        .filter_map(|root| {
+            let trimmed = root.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(canonicalize_lossy(Path::new(trimmed)))
+            }
+        })
+        .collect()
+}
+
+fn path_within_allowed_roots(
+    resolved: &Path,
+    workspace_root: &Path,
+    additional_roots: &[PathBuf],
+) -> bool {
+    resolved.starts_with(workspace_root)
+        || additional_roots
+            .iter()
+            .any(|root| resolved.starts_with(root))
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
@@ -101,7 +147,10 @@ fn normalize_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonicalize_workspace_root, resolve_path_within_workspace};
+    use super::{
+        canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
+        resolve_path_within_workspace,
+    };
     use crate::model::errors::ErrorSource;
 
     #[test]
@@ -177,5 +226,63 @@ mod tests {
         .expect_err("file path should be rejected as workspace");
 
         assert_eq!(error.error_code, "index.path.not_directory");
+    }
+
+    #[test]
+    fn resolves_absolute_paths_inside_additional_writable_root() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let writable_root = tempfile::tempdir().expect("writable root");
+        let workspace_root =
+            std::fs::canonicalize(workspace.path()).expect("workspace should canonicalize");
+        let writable_root_path =
+            std::fs::canonicalize(writable_root.path()).expect("writable root canonicalize");
+
+        let resolved = resolve_path_within_roots(
+            &workspace_root,
+            std::slice::from_ref(&writable_root_path),
+            &writable_root_path.join("notes.txt").to_string_lossy(),
+            ErrorSource::Tool,
+            "tool.path.outside_workspace",
+            "outside workspace",
+        )
+        .expect("absolute path inside writable root should resolve");
+
+        assert_eq!(resolved, writable_root_path.join("notes.txt"));
+    }
+
+    #[test]
+    fn rejects_paths_outside_workspace_and_additional_writable_roots() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let writable_root = tempfile::tempdir().expect("writable root");
+        let outside = tempfile::tempdir().expect("outside");
+        let workspace_root =
+            std::fs::canonicalize(workspace.path()).expect("workspace should canonicalize");
+        let writable_root_path =
+            std::fs::canonicalize(writable_root.path()).expect("writable root canonicalize");
+        let outside_path = outside.path().join("escape.txt");
+
+        let error = resolve_path_within_roots(
+            &workspace_root,
+            std::slice::from_ref(&writable_root_path),
+            &outside_path.to_string_lossy(),
+            ErrorSource::Tool,
+            "tool.path.outside_workspace",
+            "outside workspace",
+        )
+        .expect_err("path outside allowed roots should be rejected");
+
+        assert_eq!(error.error_code, "tool.path.outside_workspace");
+    }
+
+    #[test]
+    fn normalizes_additional_roots_and_drops_empty_entries() {
+        let normalized = normalize_additional_roots(&[
+            "".to_string(),
+            "   ".to_string(),
+            "/tmp/example".to_string(),
+        ]);
+
+        assert_eq!(normalized.len(), 1);
+        assert!(normalized[0].ends_with("example"));
     }
 }

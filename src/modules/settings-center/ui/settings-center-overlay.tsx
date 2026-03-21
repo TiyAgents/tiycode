@@ -1275,7 +1275,7 @@ function GeneralSettingsPanel({
         <SectionDivider />
         <ModelSelectRow
           label="Primary model"
-          description="Handles main tasks including planning, building, and reasoning."
+          description="Handles the main task flow, deep reasoning, and the Plan Agent."
           providerId={activeProfile.primaryProviderId}
           modelRecordId={activeProfile.primaryModelId}
           availableModels={availableModels}
@@ -1287,7 +1287,7 @@ function GeneralSettingsPanel({
         <SectionDivider />
         <ModelSelectRow
           label="Assistant model"
-          description="Supports the primary model with sub-agent tasks and tool calls."
+          description="Supports Explore and Review helper agents, with fallback to Primary when unset."
           providerId={activeProfile.assistantProviderId}
           modelRecordId={activeProfile.assistantModelId}
           availableModels={availableModels}
@@ -1299,7 +1299,7 @@ function GeneralSettingsPanel({
         <SectionDivider />
         <ModelSelectRow
           label="Lite model"
-          description="Lightweight model for title generation and quick summaries."
+          description="Lightweight model for title generation and quick internal summaries."
           providerId={activeProfile.liteProviderId}
           modelRecordId={activeProfile.liteModelId}
           availableModels={availableModels}

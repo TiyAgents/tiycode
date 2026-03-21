@@ -23,17 +23,18 @@ pub async fn execute_tool(
     tool_name: &str,
     input: &Value,
     workspace_path: &str,
+    writable_roots: &[String],
     thread_id: &str,
     terminal_manager: Option<&Arc<TerminalManager>>,
 ) -> Result<ToolOutput, AppError> {
     match tool_name {
         "read" => filesystem::read_file(input, workspace_path).await,
-        "write" => filesystem::write_file(input, workspace_path).await,
+        "write" => filesystem::write_file(input, workspace_path, writable_roots).await,
         "list" => filesystem::list_dir(input, workspace_path).await,
         "find" => filesystem::find_files(input, workspace_path).await,
         "search" => search::search_repo(input, workspace_path).await,
-        "edit" => edit::edit_file(input, workspace_path).await,
-        "patch" => edit::edit_file(input, workspace_path).await,
+        "edit" => edit::edit_file(input, workspace_path, writable_roots).await,
+        "patch" => edit::edit_file(input, workspace_path, writable_roots).await,
         "shell" => process::run_command(input, workspace_path).await,
         "git_add" | "git_stage" | "git_unstage" | "git_commit" | "git_fetch" | "git_pull"
         | "git_push" => git::execute(tool_name, input, workspace_path).await,

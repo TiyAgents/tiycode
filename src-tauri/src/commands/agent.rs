@@ -2,6 +2,7 @@ use tauri::{ipc::Channel, State};
 use tokio::sync::broadcast;
 
 use crate::core::app_state::AppState;
+use crate::core::plan_checkpoint::PlanApprovalAction;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::AppError;
 
@@ -90,6 +91,36 @@ pub async fn thread_subscribe_run(
 
     forward_thread_stream_events(event_rx, on_event);
     Ok(Some(run_id))
+}
+
+#[tauri::command]
+pub async fn thread_execute_approved_plan(
+    state: State<'_, AppState>,
+    thread_id: String,
+    approval_message_id: String,
+    action: String,
+    on_event: Channel<ThreadStreamEvent>,
+) -> Result<String, AppError> {
+    let action = match action.as_str() {
+        "apply_plan" => PlanApprovalAction::ApplyPlan,
+        "apply_plan_with_context_reset" => PlanApprovalAction::ApplyPlanWithContextReset,
+        other => {
+            return Err(AppError::recoverable(
+                crate::model::errors::ErrorSource::Thread,
+                "thread.plan_approval.invalid_action",
+                format!("Unsupported plan approval action '{other}'"),
+            ));
+        }
+    };
+
+    let (run_id, event_rx) = state
+        .agent_run_manager
+        .clone()
+        .execute_approved_plan(&thread_id, &approval_message_id, action)
+        .await?;
+
+    forward_thread_stream_events(event_rx, on_event);
+    Ok(run_id)
 }
 
 #[cfg(test)]

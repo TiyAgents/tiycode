@@ -422,6 +422,7 @@ export type ThreadStreamEvent =
       contextWindow: string | null;
       usage: RunUsageDto;
     }
+  | { type: "run_checkpointed"; runId: string }
   | { type: "run_completed"; runId: string }
   | { type: "run_failed"; runId: string; error: string }
   | { type: "run_cancelled"; runId: string }

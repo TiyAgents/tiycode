@@ -16,7 +16,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::core::executors::{self, ToolOutput};
 use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
 use crate::core::terminal_manager::TerminalManager;
-use crate::persistence::repo::{audit_repo, tool_call_repo};
+use crate::persistence::repo::{audit_repo, settings_repo, tool_call_repo};
 
 /// Request context for a single tool execution.
 #[derive(Debug, Clone)]
@@ -111,12 +111,14 @@ impl ToolGateway {
         FA: FnMut(ApprovalRequest),
         FR: FnMut(),
     {
+        let writable_roots = self.load_writable_roots().await?;
         let check = self
             .policy_engine
             .evaluate(
                 &request.tool_name,
                 &request.tool_input,
                 Some(&request.workspace_path),
+                &writable_roots,
                 &request.run_mode,
             )
             .await?;
@@ -327,11 +329,13 @@ impl ToolGateway {
         policy_json: &str,
     ) -> Result<ToolOutput, crate::model::errors::AppError> {
         tool_call_repo::update_status(&self.pool, &request.tool_call_id, "running").await?;
+        let writable_roots = self.load_writable_roots().await?;
 
         let output = match executors::execute_tool(
             &request.tool_name,
             &request.tool_input,
             &request.workspace_path,
+            &writable_roots,
             &request.thread_id,
             Some(&self.terminal_manager),
         )
@@ -397,6 +401,13 @@ impl ToolGateway {
         Ok(output)
     }
 
+    async fn load_writable_roots(&self) -> Result<Vec<String>, crate::model::errors::AppError> {
+        let record = settings_repo::policy_get(&self.pool, "writable_roots").await?;
+        Ok(record
+            .map(|record| parse_writable_roots(&record.value_json))
+            .unwrap_or_default())
+    }
+
     async fn write_audit(
         &self,
         run_id: &str,
@@ -426,4 +437,20 @@ impl ToolGateway {
         )
         .await
     }
+}
+
+fn parse_writable_roots(value_json: &str) -> Vec<String> {
+    let parsed: serde_json::Value = serde_json::from_str(value_json).unwrap_or_default();
+    parsed
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.get("path").and_then(serde_json::Value::as_str))
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }

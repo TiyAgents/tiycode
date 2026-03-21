@@ -135,7 +135,13 @@ async fn test_policy_allow_list_pattern_must_match() {
     let engine = PolicyEngine::new(pool);
 
     let matched = engine
-        .evaluate("shell", &json!({ "command": "npm test" }), None, "default")
+        .evaluate(
+            "shell",
+            &json!({ "command": "npm test" }),
+            None,
+            &[],
+            "default",
+        )
         .await
         .unwrap();
     assert!(matches!(matched.verdict, PolicyVerdict::AutoAllow));
@@ -145,6 +151,7 @@ async fn test_policy_allow_list_pattern_must_match() {
             "shell",
             &json!({ "command": "cargo test" }),
             None,
+            &[],
             "default",
         )
         .await
@@ -252,6 +259,48 @@ fn test_workspace_boundary_check() {
             "Path '{path}' should be OUTSIDE workspace boundary"
         );
     }
+}
+
+#[tokio::test]
+async fn test_policy_allows_mutating_paths_in_writable_roots() {
+    let pool = test_helpers::setup_test_pool().await;
+    let engine = PolicyEngine::new(pool);
+    let workspace = tempfile::tempdir().expect("workspace");
+
+    let writable_root = tempfile::tempdir().expect("writable root");
+    let writable_roots = vec![writable_root.path().to_string_lossy().to_string()];
+
+    let write_check = engine
+        .evaluate(
+            "write",
+            &json!({ "path": writable_root.path().join("notes.txt").to_string_lossy().to_string() }),
+            Some(workspace.path().to_string_lossy().as_ref()),
+            &writable_roots,
+            "default",
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !matches!(write_check.verdict, PolicyVerdict::Deny { .. }),
+        "mutating path inside writable root should not be denied"
+    );
+
+    let read_check = engine
+        .evaluate(
+            "read",
+            &json!({ "path": writable_root.path().join("notes.txt").to_string_lossy().to_string() }),
+            Some(workspace.path().to_string_lossy().as_ref()),
+            &writable_roots,
+            "default",
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(read_check.verdict, PolicyVerdict::Deny { .. }),
+        "read tool should still be restricted to the workspace boundary"
+    );
 }
 
 // =========================================================================
@@ -596,7 +645,10 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
 
     match outcome.result {
         ToolGatewayResult::EscalationRequired { reason, .. } => {
-            assert!(reason.contains("Approval required"), "unexpected escalation reason: {reason}");
+            assert!(
+                reason.contains("Approval required"),
+                "unexpected escalation reason: {reason}"
+            );
         }
         other => panic!(
             "expected escalation_required outcome, got {:?}",

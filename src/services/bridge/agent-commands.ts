@@ -337,6 +337,7 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         contextWindow: readOptionalString(rawEvent, "contextWindow", "context_window"),
         usage: readUsage(rawEvent),
       };
+    case "run_checkpointed":
     case "run_completed":
     case "run_cancelled":
     case "run_interrupted":
@@ -404,6 +405,27 @@ export async function threadSubscribeRun(
 
   return invoke<string | null>("thread_subscribe_run", {
     threadId,
+    onEvent: channel,
+  });
+}
+
+export async function threadExecuteApprovedPlan(
+  threadId: string,
+  approvalMessageId: string,
+  action: "apply_plan" | "apply_plan_with_context_reset",
+  onEvent: (event: ThreadStreamEvent) => void,
+): Promise<string> {
+  requireTauri("thread_execute_approved_plan");
+
+  const channel = new Channel<RawThreadStreamEvent>();
+  channel.onmessage = (event) => {
+    onEvent(coerceThreadStreamEvent(event));
+  };
+
+  return invoke<string>("thread_execute_approved_plan", {
+    threadId,
+    approvalMessageId,
+    action,
     onEvent: channel,
   });
 }

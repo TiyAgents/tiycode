@@ -121,6 +121,9 @@ pub enum ThreadStreamEvent {
         context_window: Option<String>,
         usage: RunUsageDto,
     },
+    RunCheckpointed {
+        run_id: String,
+    },
     RunCompleted {
         run_id: String,
     },

@@ -40,7 +40,7 @@ import {
 import { AI_ELEMENTS_THREAD_TITLE } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
 import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
-import type { ThreadSummaryDto, WorkspaceDto } from "@/shared/types/api";
+import type { RunMode, ThreadSummaryDto, WorkspaceDto } from "@/shared/types/api";
 import {
   threadCreate,
   threadDelete,
@@ -402,8 +402,10 @@ export function DashboardWorkbench() {
   const [pendingThreadRun, setPendingThreadRun] = useState<{
     id: string;
     prompt: string;
+    runMode: RunMode;
     threadId: string;
   } | null>(null);
+  const [newThreadRunMode, setNewThreadRunMode] = useState<RunMode>("default");
   const [runtimeContextUsage, setRuntimeContextUsage] =
     useState<ThreadContextUsage | null>(null);
   const [terminalWorkspaceBindings, setTerminalWorkspaceBindings] = useState<
@@ -1743,11 +1745,13 @@ export function DashboardWorkbench() {
           setPendingThreadRun({
             id: nextPendingRunId,
             prompt: promptText,
+            runMode: newThreadRunMode,
             threadId: persistedThreadId,
           });
         }
 
         setNewThreadMode(false);
+        setNewThreadRunMode("default");
         setComposerValue("");
         setComposerError(null);
       })();
@@ -2434,11 +2438,14 @@ export function DashboardWorkbench() {
                             canSubmitWhenAttachmentsOnly={false}
                             error={composerError}
                             onErrorMessageChange={setComposerError}
+                            onRunModeChange={setNewThreadRunMode}
                             onSelectAgentProfile={setActiveAgentProfile}
                             onStop={() => undefined}
                             onSubmit={handleComposerSubmit}
                             placeholder="Ask Tiy anything, @ to add files, / for commands, $ for skills"
                             providers={providers}
+                            runMode={newThreadRunMode}
+                            showRunModeToggle
                             status="ready"
                             value={composerValue}
                             onValueChange={setComposerValue}

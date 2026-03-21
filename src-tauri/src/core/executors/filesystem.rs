@@ -2,7 +2,10 @@ use std::path::Path;
 
 use tokio::fs;
 
-use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
+use crate::core::workspace_paths::{
+    canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
+    resolve_path_within_workspace,
+};
 use crate::model::errors::{AppError, ErrorSource};
 
 use super::edit::{count_diff_line_changes, generate_diff, generate_diff_new_file};
@@ -35,7 +38,7 @@ pub async fn read_file(
     input: &serde_json::Value,
     workspace_path: &str,
 ) -> Result<ToolOutput, AppError> {
-    let path = resolve_required_path(input, workspace_path)?;
+    let path = resolve_required_path(input, workspace_path, &[])?;
     let offset = read_positive_integer(input, "offset").unwrap_or(1);
     let limit = read_positive_integer(input, "limit");
 
@@ -234,8 +237,9 @@ async fn read_image_file(path: &Path) -> Result<ToolOutput, AppError> {
 pub async fn write_file(
     input: &serde_json::Value,
     workspace_path: &str,
+    writable_roots: &[String],
 ) -> Result<ToolOutput, AppError> {
-    let path = resolve_required_path(input, workspace_path)?;
+    let path = resolve_required_path(input, workspace_path, writable_roots)?;
     let content = input["content"].as_str().ok_or_else(|| {
         AppError::recoverable(
             ErrorSource::Tool,
@@ -533,6 +537,7 @@ pub async fn find_files(
 fn resolve_required_path(
     input: &serde_json::Value,
     workspace_path: &str,
+    writable_roots: &[String],
 ) -> Result<std::path::PathBuf, AppError> {
     let raw = input["path"].as_str().ok_or_else(|| {
         AppError::recoverable(
@@ -547,9 +552,11 @@ fn resolve_required_path(
         ErrorSource::Tool,
         "tool.workspace.not_directory",
     )?;
+    let additional_roots = normalize_additional_roots(writable_roots);
 
-    resolve_path_within_workspace(
+    resolve_path_within_roots(
         &workspace_root,
+        &additional_roots,
         raw,
         ErrorSource::Tool,
         "tool.path.outside_workspace",
@@ -589,7 +596,7 @@ fn shell_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_files, list_dir, read_file};
+    use super::{find_files, list_dir, read_file, write_file};
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -672,5 +679,29 @@ mod tests {
         assert_eq!(output.result["resultLimitReached"].as_bool(), Some(true));
         let results = output.result["results"].as_str().unwrap_or_default();
         assert_eq!(results.lines().count(), 2);
+    }
+
+    #[tokio::test]
+    async fn write_file_allows_paths_in_configured_writable_root() {
+        let workspace = tempdir().expect("workspace");
+        let writable_root = tempdir().expect("writable root");
+        let target_path = writable_root.path().join("notes.txt");
+
+        let output = write_file(
+            &serde_json::json!({
+                "path": target_path.to_string_lossy().to_string(),
+                "content": "hello writable root",
+            }),
+            workspace.path().to_string_lossy().as_ref(),
+            &[writable_root.path().to_string_lossy().to_string()],
+        )
+        .await
+        .expect("write file");
+
+        assert!(output.success);
+        let written = tokio::fs::read_to_string(&target_path)
+            .await
+            .expect("written content");
+        assert_eq!(written, "hello writable root");
     }
 }
