@@ -1,4 +1,5 @@
 use tauri::{ipc::Channel, State};
+use tokio::sync::broadcast;
 
 use crate::core::app_state::AppState;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
@@ -25,6 +26,25 @@ fn extract_run_model_refs(
     )
 }
 
+fn forward_thread_stream_events(
+    mut event_rx: broadcast::Receiver<ThreadStreamEvent>,
+    on_event: Channel<ThreadStreamEvent>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match event_rx.recv().await {
+                Ok(event) => {
+                    if on_event.send(event).is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            }
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn thread_start_run(
     state: State<'_, AppState>,
@@ -38,7 +58,7 @@ pub async fn thread_start_run(
     let model_plan = model_plan.unwrap_or_default();
     let (profile_id, provider_id, model_id) = extract_run_model_refs(&model_plan);
 
-    let (run_id, mut event_rx) = state
+    let (run_id, event_rx) = state
         .agent_run_manager
         .clone()
         .start_run(
@@ -53,15 +73,23 @@ pub async fn thread_start_run(
         .await?;
 
     // Forward events from the internal channel to the Tauri Channel
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            if on_event.send(event).is_err() {
-                break;
-            }
-        }
-    });
+    forward_thread_stream_events(event_rx, on_event);
 
     Ok(run_id)
+}
+
+#[tauri::command]
+pub async fn thread_subscribe_run(
+    state: State<'_, AppState>,
+    thread_id: String,
+    on_event: Channel<ThreadStreamEvent>,
+) -> Result<Option<String>, AppError> {
+    let Some((run_id, event_rx)) = state.agent_run_manager.subscribe_run(&thread_id).await? else {
+        return Ok(None);
+    };
+
+    forward_thread_stream_events(event_rx, on_event);
+    Ok(Some(run_id))
 }
 
 #[cfg(test)]

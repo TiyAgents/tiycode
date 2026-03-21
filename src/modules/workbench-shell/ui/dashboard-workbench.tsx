@@ -115,6 +115,8 @@ const NEW_THREAD_TERMINAL_KEY_SUFFIX = "__new_thread__";
 const UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY = "__new_thread_pending__";
 const DEFAULT_TERMINAL_COLLAPSED = true;
 const WORKSPACE_THREAD_PAGE_SIZE = 10;
+const SIDEBAR_AUTO_REFRESH_INTERVAL_MS = 2_000;
+const SIDEBAR_AUTO_REFRESH_GRACE_MS = 20_000;
 
 function buildInitialWorkspaceThreadDisplayCounts() {
   return Object.fromEntries(
@@ -423,6 +425,8 @@ export function DashboardWorkbench() {
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
   const syncVersionRef = useRef(0);
+  const sidebarAutoRefreshUntilRef = useRef(0);
+  const sidebarSyncInFlightRef = useRef(false);
   const workspaceThreadDisplayCountsRef = useRef<Record<string, number>>(
     isTauri() ? {} : buildInitialWorkspaceThreadDisplayCounts(),
   );
@@ -510,6 +514,16 @@ export function DashboardWorkbench() {
         runtimeUsage: runtimeContextUsage,
       }),
     [runtimeContextUsage, selectedRunModelPlan],
+  );
+  const hasSidebarLiveThreads = useMemo(
+    () =>
+      workspaces.some((workspace) =>
+        workspace.threads.some(
+          (thread) =>
+            thread.status === "running" || thread.status === "needs-reply",
+        ),
+      ),
+    [workspaces],
   );
 
   useEffect(() => {
@@ -753,6 +767,47 @@ export function DashboardWorkbench() {
     },
     [listVisibleWorkspaceThreads],
   );
+
+  useEffect(() => {
+    if (!isTauri() || typeof window === "undefined") {
+      return;
+    }
+
+    if (hasSidebarLiveThreads) {
+      sidebarAutoRefreshUntilRef.current =
+        Date.now() + SIDEBAR_AUTO_REFRESH_GRACE_MS;
+    }
+
+    const shouldPoll =
+      hasSidebarLiveThreads ||
+      Date.now() < sidebarAutoRefreshUntilRef.current;
+
+    if (!shouldPoll) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      const withinGrace = Date.now() < sidebarAutoRefreshUntilRef.current;
+      if (!hasSidebarLiveThreads && !withinGrace) {
+        window.clearInterval(interval);
+        return;
+      }
+
+      if (sidebarSyncInFlightRef.current) {
+        return;
+      }
+
+      sidebarSyncInFlightRef.current = true;
+      void syncWorkspaceSidebar().catch((error) => {
+        const message = getInvokeErrorMessage(error, "刷新线程列表失败");
+        setTerminalBootstrapError(message);
+      }).finally(() => {
+        sidebarSyncInFlightRef.current = false;
+      });
+    }, SIDEBAR_AUTO_REFRESH_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [hasSidebarLiveThreads, syncWorkspaceSidebar]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2378,6 +2433,7 @@ export function DashboardWorkbench() {
                       <RuntimeThreadSurface
                         activeAgentProfileId={activeAgentProfileId}
                         agentProfiles={agentProfiles}
+                        key={resolvedTerminalThreadId ?? "runtime-thread-surface"}
                         initialPromptRequest={
                           pendingThreadRun &&
                           pendingThreadRun.threadId === resolvedTerminalThreadId

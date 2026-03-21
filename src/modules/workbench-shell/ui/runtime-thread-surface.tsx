@@ -1655,6 +1655,7 @@ export function RuntimeThreadSurface({
   const snapshotLoadRequestRef = useRef(0);
   const streamRef = useRef<ThreadStream | null>(null);
   const submittingRef = useRef(false);
+  const subscribingRef = useRef(false);
   const handledInitialPromptRequestIdRef = useRef<string | null>(null);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1731,6 +1732,7 @@ export function RuntimeThreadSurface({
     snapshotLoadRequestRef.current = requestId;
 
     if (!threadId) {
+      subscribingRef.current = false;
       clearScheduledThinkingPhase();
       setMessages([]);
       setLoadError(null);
@@ -1766,6 +1768,18 @@ export function RuntimeThreadSurface({
       onContextUsageChange?.(mapRunSummaryToContextUsage(getLatestVisibleRun(snapshot)));
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
+      if (
+        (nextState === "running" || nextState === "waiting_approval")
+        && streamRef.current
+        && !streamRef.current.runId
+        && !subscribingRef.current
+      ) {
+        subscribingRef.current = true;
+        void streamRef.current.subscribe(threadId)
+          .finally(() => {
+            subscribingRef.current = false;
+          });
+      }
       if (snapshot.thread.title.trim()) {
         onThreadTitleChange?.(snapshot.thread.id, snapshot.thread.title.trim());
       }
@@ -1788,6 +1802,7 @@ export function RuntimeThreadSurface({
   }, [clearScheduledThinkingPhase, onContextUsageChange, onRunStateChange, onThreadTitleChange, threadId]);
 
   useEffect(() => {
+    subscribingRef.current = false;
     setComposerError(null);
     setHelpers([]);
     setLoadError(null);
@@ -1811,14 +1826,22 @@ export function RuntimeThreadSurface({
     }
 
     const stream = new ThreadStream();
+    const withActiveStream = <Args extends unknown[]>(
+      handler: (...args: Args) => void,
+    ) => (...args: Args) => {
+      if (streamRef.current !== stream) {
+        return;
+      }
+      handler(...args);
+    };
 
-    stream.onRawEvent = (event) => {
+    stream.onRawEvent = withActiveStream((event) => {
       if (shouldCompleteThinkingPhase(event)) {
         completeThinkingPhase(event.runId);
       }
-    };
+    });
 
-    stream.onMessage = (event) => {
+    stream.onMessage = withActiveStream((event) => {
       if (event.kind === "delta") {
         setMessages((current) =>
           appendOrReplaceMessage(current, {
@@ -1851,13 +1874,13 @@ export function RuntimeThreadSurface({
           status: "completed",
         }),
       );
-    };
+    });
 
-    stream.onPlan = (event) => {
+    stream.onPlan = withActiveStream((event) => {
       setPlanArtifact(event.plan);
-    };
+    });
 
-    stream.onReasoning = (event) => {
+    stream.onReasoning = withActiveStream((event) => {
       clearScheduledThinkingPhase();
       setThinkingPlaceholder(null);
       const reasoningMessageId = event.messageId ?? `reasoning-${event.runId}`;
@@ -1891,17 +1914,17 @@ export function RuntimeThreadSurface({
           },
         ),
       );
-    };
+    });
 
-    stream.onQueue = (event: QueueEvent) => {
+    stream.onQueue = withActiveStream((event: QueueEvent) => {
       setQueueArtifact(event.queue);
-    };
+    });
 
-    stream.onThreadTitle = (event: ThreadTitleEvent) => {
+    stream.onThreadTitle = withActiveStream((event: ThreadTitleEvent) => {
       onThreadTitleChange?.(event.threadId, event.title);
-    };
+    });
 
-    stream.onUsage = (event: UsageEvent) => {
+    stream.onUsage = withActiveStream((event: UsageEvent) => {
       onContextUsageChange?.({
         contextWindow: event.contextWindow,
         inputTokens: event.usage.inputTokens,
@@ -1912,9 +1935,9 @@ export function RuntimeThreadSurface({
         modelDisplayName: event.modelDisplayName,
         runId: event.runId,
       });
-    };
+    });
 
-    stream.onHelperEvent = (event: HelperEvent) => {
+    stream.onHelperEvent = withActiveStream((event: HelperEvent) => {
       if (event.kind === "completed" || event.kind === "failed") {
         scheduleThinkingPhase(event.runId);
       }
@@ -1997,9 +2020,9 @@ export function RuntimeThreadSurface({
             }));
         }
       });
-    };
+    });
 
-    stream.onToolEvent = (event) => {
+    stream.onToolEvent = withActiveStream((event) => {
       if (event.kind === "completed" || event.kind === "failed") {
         scheduleThinkingPhase(event.runId);
       }
@@ -2071,9 +2094,9 @@ export function RuntimeThreadSurface({
           }
         }
       });
-    };
+    });
 
-    stream.onApproval = (event) => {
+    stream.onApproval = withActiveStream((event) => {
       if (event.kind === "resolved" && event.approved) {
         scheduleThinkingPhase(event.runId);
       }
@@ -2106,9 +2129,9 @@ export function RuntimeThreadSurface({
           state: event.kind === "required" ? "approval-requested" : "approval-responded",
         })),
       );
-    };
+    });
 
-    stream.onRunStateChange = (state, runId) => {
+    stream.onRunStateChange = withActiveStream((state, runId) => {
       setRunState(state);
       onRunStateChange?.(state);
 
@@ -2127,9 +2150,9 @@ export function RuntimeThreadSurface({
       if (state === "completed" || state === "failed" || state === "cancelled" || state === "interrupted") {
         void loadSnapshot();
       }
-    };
+    });
 
-    stream.onError = (message, runId) => {
+    stream.onError = withActiveStream((message, runId) => {
       if (runId) {
         setRuntimeError({
           message,
@@ -2139,13 +2162,14 @@ export function RuntimeThreadSurface({
       }
 
       setComposerError(message);
-    };
+    });
 
     streamRef.current = stream;
     return () => {
-      clearScheduledThinkingPhase();
-      stream.reset();
       streamRef.current = null;
+      subscribingRef.current = false;
+      clearScheduledThinkingPhase();
+      stream.dispose();
     };
   }, [
     clearScheduledThinkingPhase,

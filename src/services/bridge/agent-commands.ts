@@ -391,6 +391,23 @@ export async function threadStartRun(
   });
 }
 
+export async function threadSubscribeRun(
+  threadId: string,
+  onEvent: (event: ThreadStreamEvent) => void,
+): Promise<string | null> {
+  requireTauri("thread_subscribe_run");
+
+  const channel = new Channel<RawThreadStreamEvent>();
+  channel.onmessage = (event) => {
+    onEvent(coerceThreadStreamEvent(event));
+  };
+
+  return invoke<string | null>("thread_subscribe_run", {
+    threadId,
+    onEvent: channel,
+  });
+}
+
 export async function threadCancelRun(threadId: string): Promise<void> {
   requireTauri("thread_cancel_run");
   return invoke("thread_cancel_run", { threadId });

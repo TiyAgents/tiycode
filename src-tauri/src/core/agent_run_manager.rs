@@ -10,7 +10,7 @@ use tiy_core::types::{
     Context as TiyContext, Message as TiyMessage, OnPayloadFn, StopReason,
     StreamOptions as TiyStreamOptions, UserMessage,
 };
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::time::{sleep, Instant};
 
 use crate::core::agent_session::{
@@ -33,7 +33,7 @@ struct ActiveRun {
     thread_id: String,
     profile_id: Option<String>,
     run_mode: String,
-    frontend_tx: mpsc::Sender<ThreadStreamEvent>,
+    frontend_tx: broadcast::Sender<ThreadStreamEvent>,
     lightweight_model_role: Option<ResolvedModelRole>,
     streaming_message_id: Option<String>,
     reasoning_message_id: Option<String>,
@@ -70,7 +70,7 @@ impl AgentRunManager {
         provider_id: Option<String>,
         model_id: Option<String>,
         model_plan: serde_json::Value,
-    ) -> Result<(String, mpsc::Receiver<ThreadStreamEvent>), AppError> {
+    ) -> Result<(String, broadcast::Receiver<ThreadStreamEvent>), AppError> {
         let thread = thread_repo::find_by_id(&self.pool, thread_id)
             .await?
             .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
@@ -80,7 +80,7 @@ impl AgentRunManager {
             .map(|workspace| workspace.canonical_path)
             .unwrap_or_default();
 
-        let (frontend_tx, frontend_rx) = mpsc::channel::<ThreadStreamEvent>(128);
+        let (frontend_tx, frontend_rx) = broadcast::channel::<ThreadStreamEvent>(128);
         let run_id = uuid::Uuid::now_v7().to_string();
 
         {
@@ -171,6 +171,18 @@ impl AgentRunManager {
         }
 
         Ok((run_id, frontend_rx))
+    }
+
+    pub async fn subscribe_run(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<(String, broadcast::Receiver<ThreadStreamEvent>)>, AppError> {
+        let runs = self.active_runs.lock().await;
+        let Some(run) = runs.values().find(|run| run.thread_id == thread_id) else {
+            return Ok(None);
+        };
+
+        Ok(Some((run.run_id.clone(), run.frontend_tx.subscribe())))
     }
 
     pub async fn cancel_run(&self, thread_id: &str) -> Result<(), AppError> {
@@ -367,7 +379,7 @@ impl AgentRunManager {
         };
 
         if let Some(frontend_tx) = frontend_tx {
-            let _ = frontend_tx.send(event).await;
+            let _ = frontend_tx.send(event);
         }
     }
 
@@ -569,7 +581,7 @@ impl AgentRunManager {
         run_id: String,
         thread_id: String,
         profile_id: Option<String>,
-        frontend_tx: mpsc::Sender<ThreadStreamEvent>,
+        frontend_tx: broadcast::Sender<ThreadStreamEvent>,
         lightweight_model_role: Option<ResolvedModelRole>,
     ) {
         let Some(model_role) = lightweight_model_role else {
@@ -636,7 +648,7 @@ async fn maybe_generate_thread_title(
     thread_id: &str,
     profile_id: Option<String>,
     model_role: ResolvedModelRole,
-    frontend_tx: mpsc::Sender<ThreadStreamEvent>,
+    frontend_tx: broadcast::Sender<ThreadStreamEvent>,
 ) -> Result<(), AppError> {
     if message_repo::count_completed_assistant_plain_messages(pool, thread_id).await? != 1 {
         tracing::debug!(
@@ -703,7 +715,6 @@ async fn maybe_generate_thread_title(
             thread_id: thread_id.to_string(),
             title,
         })
-        .await
         .is_err()
     {
         tracing::warn!(

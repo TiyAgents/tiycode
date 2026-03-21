@@ -140,8 +140,11 @@ async fn test_git_overlay_does_not_bubble_ignored_state_to_parent_directories() 
     std::fs::create_dir_all(root.join("src/target")).expect("should create nested directories");
     std::fs::write(root.join(".gitignore"), "src/target/\n").expect("should write .gitignore");
     std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("should write tracked file");
-    std::fs::write(root.join("src/target/generated.rs"), "pub fn generated() {}\n")
-        .expect("should write ignored generated file");
+    std::fs::write(
+        root.join("src/target/generated.rs"),
+        "pub fn generated() {}\n",
+    )
+    .expect("should write ignored generated file");
 
     let repo = Repository::init(root).expect("should init repository");
     commit_selected(&repo, &[".gitignore", "src/main.rs"], "initial commit");

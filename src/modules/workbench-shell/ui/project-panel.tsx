@@ -567,7 +567,7 @@ export function ProjectPanel({
     return () => {
       cancelled = true;
     };
-  }, [currentProject, workspaceId, treeReloadVersion]);
+  }, [projectPath, workspaceId, treeReloadVersion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -642,7 +642,7 @@ export function ProjectPanel({
     return () => {
       cancelled = true;
     };
-  }, [currentProject, normalizedFilter, workspaceId]);
+  }, [projectPath, normalizedFilter, workspaceId]);
 
   const handleRefreshTree = () => {
     if (!currentProject || !workspaceId || !isTauri() || treeState.isLoading) {

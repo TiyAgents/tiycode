@@ -204,6 +204,7 @@ pub fn run() {
             commands::thread::thread_add_message,
             // Agent Run
             commands::agent::thread_start_run,
+            commands::agent::thread_subscribe_run,
             commands::agent::thread_cancel_run,
             commands::agent::tool_approval_respond,
             // Index

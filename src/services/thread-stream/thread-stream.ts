@@ -15,7 +15,12 @@
  *   await stream.startRun(threadId, prompt);
  */
 
-import { threadStartRun, threadCancelRun, toolApprovalRespond } from "@/services/bridge";
+import {
+  threadCancelRun,
+  threadStartRun,
+  threadSubscribeRun,
+  toolApprovalRespond,
+} from "@/services/bridge";
 import type {
   RunModelPlanDto,
   RunUsageDto,
@@ -161,6 +166,7 @@ export class ThreadStream {
 
   private currentRunId: string | null = null;
   private hiddenToolCallIds = new Set<string>();
+  private disposed = false;
 
   get runId() {
     return this.currentRunId;
@@ -181,14 +187,50 @@ export class ThreadStream {
   ): Promise<string> {
     try {
       const runId = await threadStartRun(threadId, prompt, (event) => {
+        if (this.disposed) {
+          return;
+        }
         this.handleEvent(event);
       }, runMode, modelPlan);
+
+      if (this.disposed) {
+        return runId;
+      }
+      this.currentRunId = runId;
+      return runId;
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      if (!this.disposed) {
+        this.onError?.(message, "");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Subscribe to an already-running thread so a remounted surface can resume
+   * receiving live updates after loading the persisted snapshot.
+   */
+  async subscribe(threadId: string): Promise<string | null> {
+    try {
+      const runId = await threadSubscribeRun(threadId, (event) => {
+        if (this.disposed) {
+          return;
+        }
+        this.handleEvent(event);
+      });
+
+      if (this.disposed) {
+        return runId;
+      }
 
       this.currentRunId = runId;
       return runId;
     } catch (error) {
       const message = extractErrorMessage(error);
-      this.onError?.(message, "");
+      if (!this.disposed) {
+        this.onError?.(message, "");
+      }
       throw error;
     }
   }
@@ -231,11 +273,35 @@ export class ThreadStream {
     this.hiddenToolCallIds.clear();
   }
 
+  /**
+   * Permanently stop delivering events to this stream instance.
+   */
+  dispose() {
+    this.disposed = true;
+    this.reset();
+    this.onMessage = null;
+    this.onToolEvent = null;
+    this.onApproval = null;
+    this.onRunStateChange = null;
+    this.onPlan = null;
+    this.onReasoning = null;
+    this.onQueue = null;
+    this.onHelperEvent = null;
+    this.onThreadTitle = null;
+    this.onUsage = null;
+    this.onError = null;
+    this.onRawEvent = null;
+  }
+
   // -----------------------------------------------------------------------
   // Event routing — maps ThreadStreamEvent to typed callbacks
   // -----------------------------------------------------------------------
 
   private handleEvent(event: ThreadStreamEvent) {
+    if (this.disposed) {
+      return;
+    }
+
     // Forward raw event if anyone is listening
     this.onRawEvent?.(event);
 
