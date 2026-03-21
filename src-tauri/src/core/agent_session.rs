@@ -1414,7 +1414,8 @@ You help users by reading files, searching code, editing files, executing comman
 - Use update_plan to publish the current implementation plan once the intended change is clear.\n\
 - Do not use update_plan for pure analysis, architecture explanation, current-state summaries, or information gathering with no concrete implementation to plan.\n\
 - In default mode, if the task is complex or risky enough to benefit from explicit pre-implementation approval, publish a plan with update_plan before making changes.\n\
-- Use agent_review after implementation with target='code' or target='diff' to check regressions, edge cases, and consistency.\n\
+- Use agent_review after implementation with target='code' or target='diff' to check regressions, edge cases, and consistency. The review helper is responsible for running the necessary type-check and test commands and returning the verification results alongside the code review findings.\n\
+- After agent_review completes, treat its verification output as the default source of truth for post-implementation type-check and test status. Do not rerun the same verification commands yourself unless the helper explicitly could not run them, reported inconclusive results, or the user asked you to double-check.\n\
 - Recommended flow for non-trivial tasks: agent_explore -> confirm goal -> update_plan -> wait for approval -> implement -> agent_review(target='code' or 'diff').\n\
 - Skip delegation only when the task is small, obvious, and isolated enough that extra helper work would not pay off.\n\
 - Match the active response style when deciding answer length and explanation depth. Show file paths clearly when working with files.\n\
@@ -1921,7 +1922,7 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_profile_response_prompt_parts, build_prompt_section,
+        build_profile_response_prompt_parts, build_prompt_section, build_system_prompt,
         collect_workspace_instruction_snippet, final_response_structure_system_instruction,
         handle_agent_event, normalize_profile_response_language, normalize_profile_response_style,
         resolve_helper_model_role, resolve_helper_profile, response_style_system_instruction,
@@ -1943,6 +1944,7 @@ mod tests {
     use crate::core::subagent::{RuntimeOrchestrationTool, SubagentProfile};
     use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::AgentProfileRecord;
+    use crate::persistence::init_database;
 
     const TEST_CONTEXT_WINDOW: &str = "128000";
     const TEST_MODEL_DISPLAY_NAME: &str = "GPT Test";
@@ -2218,6 +2220,32 @@ mod tests {
 
         assert_eq!(snippet.file_name, "AGENTS.md");
         assert_eq!(snippet.content, "Agents instructions");
+    }
+
+    #[tokio::test]
+    async fn system_prompt_delegates_post_implementation_verification_to_review_helper() {
+        let temp_dir = tempdir().expect("temp dir");
+        let workspace_root = temp_dir.path().join("workspace");
+        fs::create_dir(&workspace_root).expect("workspace dir");
+
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+
+        let prompt = build_system_prompt(
+            &pool,
+            &RuntimeModelPlan::default(),
+            workspace_root.to_string_lossy().as_ref(),
+            "default",
+        )
+        .await
+        .expect("system prompt");
+
+        assert!(prompt.contains(
+            "review helper is responsible for running the necessary type-check and test commands"
+        ));
+        assert!(prompt.contains(
+            "Do not rerun the same verification commands yourself unless the helper explicitly could not run them"
+        ));
     }
 
     #[test]

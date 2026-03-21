@@ -65,7 +65,7 @@ impl RuntimeOrchestrationTool {
                 "Explore unfamiliar or cross-file areas before acting. Use this for current-state analysis, fact-finding, code reading, architecture summaries, and evidence gathering, then return a concise summary to the parent agent."
             }
             Self::Review => {
-                "Review an implemented code change or diff and return risks, regressions, gaps, and concrete follow-ups. Use this after implementation to stress-test the work."
+                "Review an implemented code change or diff, run the necessary type-check and test commands, and return risks, regressions, verification results, and concrete follow-ups. Use this after implementation to stress-test the work."
             }
         }
     }
@@ -94,7 +94,7 @@ impl RuntimeOrchestrationTool {
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "What to review. Summarize the implemented code or diff and call out the main risks or questions to check."
+                        "description": "What to review. Summarize the implemented code or diff, call out the main risks or questions to check, and mention any project-specific type-check or test commands the helper should prioritize."
                     },
                     "target": {
                         "type": "string",
@@ -142,8 +142,9 @@ Guidelines:\n\
 - Distinguish critical issues from suggestions. Be specific: reference file paths and line ranges.\n\
 \n\
 Verification:\n\
-- After reviewing code or diffs, run the project's type-check and test commands using the shell tool (e.g. `npm run typecheck`, `cargo test`, or whatever the project uses). This is mandatory, not optional.\n\
+- After reviewing code or diffs, determine the necessary project type-check and test commands, then run them with the shell tool (e.g. `npm run typecheck`, `cargo test`, or whatever the project uses). This is mandatory, not optional.\n\
 - If the workspace instructions or project config indicate specific build/test commands, prefer those.\n\
+- Treat this verification work as part of your core responsibility so the parent agent does not need to duplicate it by default.\n\
 - If the shell tool is unavailable or a command is rejected by the approval policy, explicitly state in your summary that manual verification is still needed and list the exact commands the parent agent should run.\n\
 \n\
 Return format:\n\
@@ -151,6 +152,7 @@ Return format:\n\
 - Lead with an overall verdict: PASS, FAIL, or NEEDS ATTENTION.\n\
 - Section 1 — Review findings: critical issues, warnings, and suggestions with file paths and line ranges.\n\
 - Section 2 — Verification results: for each command run, state the command, whether it passed or failed, and quote key error output (truncated if long). If verification was skipped, say so and list the commands that need manual execution.\n\
+- Section 3 — Parent agent follow-up: say `none` when verification is complete and the parent agent does not need to rerun the same type-check or test commands. Otherwise list the exact remaining verification commands, why they still need manual execution, and any other action the parent agent should take.\n\
 - Keep the summary concise. The parent agent needs actionable signal, not exhaustive logs."
             }
         }
@@ -314,5 +316,27 @@ mod tests {
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
         assert_eq!(tool_names, vec!["agent_explore", "agent_review"]);
+    }
+
+    #[test]
+    fn agent_review_tool_description_mentions_verification_ownership() {
+        let tool = RuntimeOrchestrationTool::Review.as_agent_tool();
+        let task_description = tool.parameters["properties"]["task"]["description"]
+            .as_str()
+            .expect("task description should exist");
+
+        assert!(tool.description.contains("type-check and test commands"));
+        assert!(tool.description.contains("verification results"));
+        assert!(task_description.contains("type-check or test commands"));
+    }
+
+    #[test]
+    fn review_helper_prompt_requires_parent_follow_up_summary() {
+        let prompt = SubagentProfile::Review.system_prompt();
+
+        assert!(prompt.contains("This is mandatory, not optional"));
+        assert!(prompt.contains("parent agent does not need to duplicate it by default"));
+        assert!(prompt.contains("Section 3 — Parent agent follow-up"));
+        assert!(prompt.contains("does not need to rerun the same type-check or test commands"));
     }
 }
