@@ -1,7 +1,7 @@
 "use client";
 
 import type { ChatStatus } from "ai";
-import { AlertCircleIcon, BotIcon, ChevronDownIcon, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
+import { AlertCircleIcon, BotIcon, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CompactCollapsible,
@@ -38,7 +38,6 @@ import type {
 } from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/shared/ui/collapsible";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 
@@ -135,17 +134,6 @@ type TimelineEntry =
       key: string;
       occurredAt: string;
       helper: SurfaceHelperEntry;
-    };
-
-type ToolTimelineEntry = Extract<TimelineEntry, { kind: "tool" }>;
-
-type TimelinePresentationEntry =
-  | TimelineEntry
-  | {
-      kind: "tool-group";
-      key: string;
-      occurredAt: string;
-      tools: SurfaceToolEntry[];
     };
 
 type SurfaceRuntimeError = {
@@ -1168,50 +1156,7 @@ function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
   }
 }
 
-function isCompletedToolEntry(entry: TimelineEntry): entry is ToolTimelineEntry {
-  return entry.kind === "tool" && entry.tool.state === "output-available";
-}
-
-function groupCompletedToolEntries(
-  entries: Array<TimelineEntry>,
-): Array<TimelinePresentationEntry> {
-  const grouped: Array<TimelinePresentationEntry> = [];
-  let completedBuffer: Array<ToolTimelineEntry> = [];
-
-  const flushCompletedBuffer = () => {
-    if (completedBuffer.length === 0) {
-      return;
-    }
-
-    if (completedBuffer.length === 1) {
-      grouped.push(completedBuffer[0]);
-    } else {
-      grouped.push({
-        kind: "tool-group",
-        key: `tool-group:${completedBuffer.map((entry) => entry.tool.id).join(":")}`,
-        occurredAt: completedBuffer[0].occurredAt,
-        tools: completedBuffer.map((entry) => entry.tool),
-      });
-    }
-
-    completedBuffer = [];
-  };
-
-  for (const entry of entries) {
-    if (isCompletedToolEntry(entry)) {
-      completedBuffer.push(entry);
-      continue;
-    }
-
-    flushCompletedBuffer();
-    grouped.push(entry);
-  }
-
-  flushCompletedBuffer();
-  return grouped;
-}
-
-function getPresentationEntryRole(entry: TimelinePresentationEntry): TimelineRole {
+function getPresentationEntryRole(entry: TimelineEntry): TimelineRole {
   if (entry.kind === "message") {
     return entry.message.role;
   }
@@ -1263,7 +1208,6 @@ export function RuntimeThreadSurface({
   const [thinkingPlaceholder, setThinkingPlaceholder] = useState<ThinkingPlaceholder | null>(null);
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
   const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});
-  const [completedToolGroupOpen, setCompletedToolGroupOpen] = useState<Record<string, boolean>>({});
   const previousHelperStatusesRef = useRef<Record<string, SurfaceHelperEntry["status"]>>({});
   const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
   const snapshotLoadRequestRef = useRef(0);
@@ -1915,10 +1859,7 @@ export function RuntimeThreadSurface({
       ].sort(compareTimelineEntries),
     [helpers, messages, thinkingPlaceholder, visibleTools],
   );
-  const presentationEntries = useMemo<Array<TimelinePresentationEntry>>(
-    () => groupCompletedToolEntries(timelineEntries),
-    [timelineEntries],
-  );
+  const presentationEntries = timelineEntries;
   const lastPresentationRole = presentationEntries.length > 0
     ? getPresentationEntryRole(presentationEntries[presentationEntries.length - 1])
     : null;
@@ -2015,22 +1956,6 @@ export function RuntimeThreadSurface({
     previousHelperStatusesRef.current = nextHelperStatuses;
   }, [helpers]);
 
-  useEffect(() => {
-    const nextGroupKeys = new Set(
-      presentationEntries
-        .filter((entry): entry is Extract<TimelinePresentationEntry, { kind: "tool-group" }> => entry.kind === "tool-group")
-        .map((entry) => entry.key),
-    );
-
-    setCompletedToolGroupOpen((current) => {
-      const next = Object.fromEntries(
-        Object.entries(current).filter(([key]) => nextGroupKeys.has(key)),
-      );
-
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
-    });
-  }, [presentationEntries]);
-
   const handleSubmit = useCallback(async (message: PromptInputMessage) => {
     const prompt = buildPromptText(message);
     if (!prompt) {
@@ -2043,10 +1968,6 @@ export function RuntimeThreadSurface({
 
   const handleCompletedToolOpenChange = useCallback((toolId: string, open: boolean) => {
     setCompletedToolOpen((current) => (current[toolId] === open ? current : { ...current, [toolId]: open }));
-  }, []);
-
-  const handleCompletedToolGroupOpenChange = useCallback((groupId: string, open: boolean) => {
-    setCompletedToolGroupOpen((current) => (current[groupId] === open ? current : { ...current, [groupId]: open }));
   }, []);
 
   const handleHelperOpenChange = useCallback((helperId: string, open: boolean) => {
@@ -2580,43 +2501,6 @@ export function RuntimeThreadSurface({
                             </CompactCollapsibleFootnote>
                           ) : null}
                         </CompactCollapsible>
-                      </MessageContent>
-                    </Message>
-                  </div>
-                );
-              }
-
-              if (entry.kind === "tool-group") {
-                return (
-                  <div className={spacingClass} key={entry.key}>
-                    <Message className="max-w-full" from="assistant">
-                      <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                        <Collapsible
-                          onOpenChange={(open) => handleCompletedToolGroupOpenChange(entry.key, open)}
-                          open={completedToolGroupOpen[entry.key] ?? false}
-                        >
-                          <CollapsibleTrigger
-                            className={cn(
-                              "flex w-full items-center gap-2 text-sm text-app-subtle transition-colors hover:text-app-foreground",
-                              completedToolGroupOpen[entry.key] ? "text-app-foreground" : undefined,
-                            )}
-                          >
-                            <WrenchIcon className="size-4 shrink-0" />
-                            <span className="font-medium">{`Tools × ${entry.tools.length}`}</span>
-                            <span className="text-app-muted">Completed tool results</span>
-                            <ChevronDownIcon
-                              className={cn(
-                                "size-4 shrink-0 transition-transform",
-                                completedToolGroupOpen[entry.key] ? "rotate-180" : undefined,
-                              )}
-                            />
-                          </CollapsibleTrigger>
-                          <CollapsibleContent className="space-y-3 pt-3 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:animate-in data-[state=open]:slide-in-from-top-2">
-                            {entry.tools.map((tool) => (
-                              renderToolEntry(tool, `${entry.key}:${tool.id}`, true)
-                            ))}
-                          </CollapsibleContent>
-                        </Collapsible>
                       </MessageContent>
                     </Message>
                   </div>
