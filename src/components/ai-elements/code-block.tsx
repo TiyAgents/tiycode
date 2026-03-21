@@ -329,7 +329,7 @@ export const CodeBlockHeader = ({
 }: HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      "flex items-start justify-between gap-3 px-4 pt-3 pb-0.5 text-app-subtle",
+      "flex items-center justify-between gap-3 px-4 pt-3 pb-0.5 text-app-subtle",
       className
     )}
     {...props}
