@@ -15,6 +15,7 @@ import { Message, MessageContent, MessageResponse } from "@/components/ai-elemen
 import { Plan, PlanContent, PlanDescription, PlanHeader, PlanTitle, PlanTrigger } from "@/components/ai-elements/plan";
 import { Queue } from "@/components/ai-elements/queue";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
+import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "@/components/ai-elements/confirmation";
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
@@ -1649,7 +1650,17 @@ function FileMutationDiffPreview({
 
 function formatHelperSummary(helper: SurfaceHelperEntry) {
   return [
-    formatHelperKind(helper.kind),
+    formatHelperName(helper),
+    formatHelperDetailSummary(helper),
+  ].filter(Boolean).join(" · ");
+}
+
+function formatHelperName(helper: SurfaceHelperEntry) {
+  return formatHelperKind(helper.kind);
+}
+
+function formatHelperDetailSummary(helper: SurfaceHelperEntry) {
+  return [
     helper.inputSummary,
     helper.totalToolCalls > 0 ? formatToolCallCount(helper.totalToolCalls) : null,
   ].filter(Boolean).join(" · ");
@@ -3311,6 +3322,8 @@ export function RuntimeThreadSurface({
 
               if (entry.kind === "helper") {
                 const { helper } = entry;
+                const helperName = formatHelperName(helper);
+                const helperDetailSummary = formatHelperDetailSummary(helper);
                 const helperSummary = formatHelperSummary(helper);
                 const helperToolCounts = formatHelperToolCounts(helper.toolCounts);
                 const executionSummary = formatExecutionSummary({
@@ -3356,10 +3369,22 @@ export function RuntimeThreadSurface({
                                 )}
                               />
                               <span
-                                className="truncate text-app-foreground text-sm"
+                                className="block truncate text-app-foreground text-sm"
                                 title={helperSummary}
                               >
-                                {helperSummary}
+                                {helper.status === "running" ? (
+                                  <Shimmer as="span" className="align-baseline" duration={1}>
+                                    {helperName}
+                                  </Shimmer>
+                                ) : (
+                                  helperName
+                                )}
+                                {helperDetailSummary ? (
+                                  <span className="text-app-subtle">
+                                    {" · "}
+                                    {helperDetailSummary}
+                                  </span>
+                                ) : null}
                               </span>
                             </div>
                           </CompactCollapsibleHeader>
