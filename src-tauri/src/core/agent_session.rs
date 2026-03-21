@@ -1336,6 +1336,10 @@ You help users by reading files, searching code, editing files, executing comman
 - When summarizing your actions, describe what you did in plain text — do not re-read or re-cat files to prove your work.\n\
 - Flag risks, destructive operations, or ambiguity before acting. Ask when intent is unclear.",
         ),
+        build_prompt_section(
+            "Final Response Structure",
+            final_response_structure_system_instruction(),
+        ),
     ];
 
     if let Some(section) = build_project_context_section(workspace_path) {
@@ -1435,6 +1439,22 @@ You help users by reading files, searching code, editing files, executing comman
 
 fn build_prompt_section(title: &str, body: impl AsRef<str>) -> String {
     format!("## {title}\n{}", body.as_ref())
+}
+
+fn final_response_structure_system_instruction() -> &'static str {
+    "For conclusion-oriented replies, choose a structure that matches the task instead of forcing one template for every situation.\n\
+- Keep the outer Markdown layout disciplined: use at most two heading levels in one reply, avoid turning every sub-point into its own heading, and prefer short sections with lists underneath over a long chain of peer headers.\n\
+- When the reply is more than a very small update, prefer a clearly structured Markdown presentation instead of one dense block of prose.\n\
+- Use short Markdown section headers for the main sections only. Put supporting detail inside numbered lists or flat bullet lists rather than promoting each detail to a new heading.\n\
+- Use numbered lists for ordered reasons, changes, or options. Use flat bullet lists for evidence, verification items, or supporting facts.\n\
+- Use emphasis or inline code sparingly to highlight the key conclusion, the recommended option, commands, file paths, settings, or identifiers that the user should notice quickly. Do not overload the reply with inline code formatting.\n\
+- For simple tasks, you may compress the structure into a short paragraph or a short flat list, but keep a clear top-down order.\n\
+- Use one of these default patterns:\n\
+  - Debug or problem analysis: conclusion -> causes 1, 2, and 3 if relevant -> evidence tied to each cause -> recommendation options 1, 2, and 3 with a recommended option.\n\
+  - Code change or result report: outcome -> key changes 1, 2, and 3 if relevant -> verification or evidence -> next steps, risks, or follow-up recommendation.\n\
+  - Comparison or decision support: recommendation -> options 1, 2, and 3 -> tradeoffs and evidence -> clearly state the recommended option and why.\n\
+  - Direct explanation or question answering: direct answer -> key points 1, 2, and 3 if relevant -> examples or evidence when helpful -> next step only if it adds value.\n\
+- Do not force explicit headings on every reply unless the task benefits from a more structured presentation."
 }
 
 fn run_mode_prompt_body(run_mode: &str) -> String {
@@ -1812,13 +1832,14 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_plan_artifact_from_task, build_profile_response_prompt_parts,
-        collect_workspace_instruction_snippet, handle_agent_event, is_plan_review_request,
-        normalize_profile_response_language, normalize_profile_response_style,
-        resolve_helper_profile, response_style_system_instruction, run_mode_prompt_body,
-        runtime_security_config, runtime_tools_for_profile, standard_tool_timeout,
-        ProfileResponseStyle, DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE,
-        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
+        build_plan_artifact_from_task, build_profile_response_prompt_parts, build_prompt_section,
+        collect_workspace_instruction_snippet, final_response_structure_system_instruction,
+        handle_agent_event, is_plan_review_request, normalize_profile_response_language,
+        normalize_profile_response_style, resolve_helper_profile,
+        response_style_system_instruction, run_mode_prompt_body, runtime_security_config,
+        runtime_tools_for_profile, standard_tool_timeout, ProfileResponseStyle,
+        DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE, STANDARD_TOOL_TIMEOUT_SECS,
+        SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
     use std::sync::Mutex as StdMutex;
@@ -1957,6 +1978,34 @@ mod tests {
         assert!(concise.contains("hard default"));
         assert!(guide.contains("tradeoffs"));
         assert!(guide.contains("recommended next steps"));
+    }
+
+    #[test]
+    fn final_response_structure_instruction_matches_task_types_and_markdown_hierarchy() {
+        let instruction = final_response_structure_system_instruction();
+
+        assert!(instruction.contains("at most two heading levels"));
+        assert!(instruction.contains("avoid turning every sub-point into its own heading"));
+        assert!(instruction.contains("Debug or problem analysis"));
+        assert!(instruction.contains("Code change or result report"));
+        assert!(instruction.contains("Comparison or decision support"));
+        assert!(instruction.contains("Direct explanation or question answering"));
+        assert!(instruction.contains("structured Markdown presentation"));
+        assert!(instruction.contains("Do not overload the reply with inline code formatting"));
+    }
+
+    #[test]
+    fn final_response_structure_section_is_distinct_from_response_style_rules() {
+        let section = build_prompt_section(
+            "Final Response Structure",
+            final_response_structure_system_instruction(),
+        );
+        let balanced = response_style_system_instruction(ProfileResponseStyle::Balanced);
+
+        assert!(section.starts_with("## Final Response Structure"));
+        assert!(section.contains("For simple tasks, you may compress the structure"));
+        assert!(balanced.contains("compact but complete answer"));
+        assert!(!balanced.contains("reason 1, 2, and 3"));
     }
 
     #[test]
