@@ -422,9 +422,6 @@ export class ThreadStream {
         break;
 
       case "approval_required":
-        if (this.hiddenToolCallIds.has(event.toolCallId)) {
-          break;
-        }
         this.onRunStateChange?.("waiting_approval", event.runId);
         this.onApproval?.({
           kind: "required",
@@ -437,9 +434,6 @@ export class ThreadStream {
         break;
 
       case "approval_resolved":
-        if (this.hiddenToolCallIds.has(event.toolCallId)) {
-          break;
-        }
         this.onRunStateChange?.("running", event.runId);
         this.onApproval?.({
           kind: "resolved",
