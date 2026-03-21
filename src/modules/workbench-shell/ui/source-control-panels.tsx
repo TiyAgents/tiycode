@@ -779,7 +779,7 @@ export function GitPanel({
       setConfirmAction(null);
       setPendingAction(null);
       setIsGeneratingCommitMessage(false);
-      setCommitMessage("");
+      resetCommitMessage();
       return;
     }
 
@@ -793,7 +793,7 @@ export function GitPanel({
       setConfirmAction(null);
       setPendingAction(null);
       setIsGeneratingCommitMessage(false);
-      setCommitMessage("");
+      resetCommitMessage();
       return;
     }
 
@@ -804,7 +804,7 @@ export function GitPanel({
     setConfirmAction(null);
     setPendingAction(null);
     setIsGeneratingCommitMessage(false);
-    setCommitMessage("");
+    resetCommitMessage();
 
     void gitGetSnapshot(workspaceId)
       .then(async (nextSnapshot) => {
@@ -1015,6 +1015,11 @@ export function GitPanel({
     setConfirmAction(null);
   };
 
+  const resetCommitMessage = () => {
+    setCommitMessage("");
+    setCommitMessageExpanded(false);
+  };
+
   const showActionAlert = (message: string) => {
     setActionAlert(message);
     if (typeof window === "undefined") {
@@ -1050,7 +1055,7 @@ export function GitPanel({
 
       applyMutationResponse(response);
       if (action === "commit") {
-        setCommitMessage("");
+        resetCommitMessage();
       }
     } catch (nextError) {
       const message = formatUiError(nextError, `${gitActionLabel(action)} failed`);
@@ -1201,7 +1206,7 @@ export function GitPanel({
             return nextSnapshot;
           });
           clearActionAlert();
-          setCommitMessage("");
+          resetCommitMessage();
         } catch (nextError) {
           const message = formatUiError(nextError, "Commit failed");
           showActionAlert(message);
