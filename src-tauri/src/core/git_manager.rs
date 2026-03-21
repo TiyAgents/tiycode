@@ -458,7 +458,11 @@ fn collect_workspace_overlay(workspace_root: &Path) -> Result<WorkspaceGitOverla
         let key = workspace_relative_path.to_string_lossy().to_string();
         let state = map_overlay_status(entry.status());
 
-        merge_state_with_ancestors(&mut states, &key, state);
+        if state == GitFileState::Ignored {
+            merge_state(&mut states, key, state);
+        } else {
+            merge_state_with_ancestors(&mut states, &key, state);
+        }
     }
 
     Ok(WorkspaceGitOverlay {

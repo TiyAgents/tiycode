@@ -133,6 +133,61 @@ async fn test_git_overlay_bubbles_untracked_state_above_tracked_ancestors() {
 }
 
 #[tokio::test]
+async fn test_git_overlay_does_not_bubble_ignored_state_to_parent_directories() {
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let root = tmp.path();
+
+    std::fs::create_dir_all(root.join("src/target")).expect("should create nested directories");
+    std::fs::write(root.join(".gitignore"), "src/target/\n").expect("should write .gitignore");
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("should write tracked file");
+    std::fs::write(root.join("src/target/generated.rs"), "pub fn generated() {}\n")
+        .expect("should write ignored generated file");
+
+    let repo = Repository::init(root).expect("should init repository");
+    commit_selected(&repo, &[".gitignore", "src/main.rs"], "initial commit");
+
+    let mut tree = IndexManager::new()
+        .get_tree(&root.to_string_lossy())
+        .await
+        .expect("tree scan should succeed");
+    let overlay = GitManager::new()
+        .get_workspace_overlay(&root.to_string_lossy())
+        .await
+        .expect("overlay lookup should succeed");
+
+    tree.apply_git_overlay(&overlay.states);
+
+    assert_eq!(
+        find_git_state(&tree, "src"),
+        None,
+        "ignored descendants should not gray out the whole parent directory"
+    );
+
+    let children = IndexManager::new()
+        .get_children(&root.to_string_lossy(), "src", None, None)
+        .await
+        .expect("should load src children");
+    let mut overlay_root = tiy_agent_lib::core::index_manager::FileTreeNode {
+        name: "src".to_string(),
+        path: "src".to_string(),
+        is_dir: true,
+        is_expandable: true,
+        children_has_more: children.has_more,
+        children_next_offset: children.next_offset,
+        git_state: None,
+        children: Some(children.children),
+    };
+
+    overlay_root.apply_git_overlay(&overlay.states);
+
+    assert_eq!(
+        find_git_state(&overlay_root, "src/target"),
+        Some(GitFileState::Ignored),
+        "the ignored child directory itself should still be marked as ignored"
+    );
+}
+
+#[tokio::test]
 async fn test_git_overlay_marks_modified_files_and_ancestors() {
     let tmp = tempfile::tempdir().expect("should create tempdir");
     let root = tmp.path();
