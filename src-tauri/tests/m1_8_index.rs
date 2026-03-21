@@ -296,6 +296,41 @@ async fn test_search_repo_no_results() {
 }
 
 #[tokio::test]
+async fn test_search_repo_respects_global_max_results() {
+    use tiy_agent_lib::core::index_manager::IndexManager;
+
+    let manager = IndexManager::new();
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+    std::fs::write(base.join("a.rs"), "fn a() { println!(\"hello\"); }\n").unwrap();
+    std::fs::write(base.join("b.rs"), "fn b() { println!(\"hello\"); }\n").unwrap();
+    std::fs::write(base.join("c.rs"), "fn c() { println!(\"hello\"); }\n").unwrap();
+
+    let result = manager
+        .search(&base.to_string_lossy(), "hello", None, Some(1))
+        .await;
+
+    match result {
+        Ok(response) => {
+            assert_eq!(
+                response.results.len(),
+                1,
+                "preview should honor max_results"
+            );
+            assert_eq!(response.count, 1, "count should match the returned preview");
+        }
+        Err(e) => {
+            let err_msg = format!("{e}");
+            assert!(
+                err_msg.contains("not found") || err_msg.contains("No such file"),
+                "If search fails, it should be because ripgrep is not installed: {e}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_filter_files_finds_deep_paths_beyond_loaded_tree() {
     use tiy_agent_lib::core::index_manager::IndexManager;
 
