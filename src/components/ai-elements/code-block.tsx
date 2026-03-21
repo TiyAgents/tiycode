@@ -313,11 +313,7 @@ export const CodeBlockContainer = ({
     )}
     data-code-block=""
     data-language={language}
-    style={{
-      containIntrinsicSize: "auto 200px",
-      contentVisibility: "auto",
-      ...style,
-    }}
+    style={style}
     {...props}
   />
 );

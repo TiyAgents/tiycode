@@ -222,12 +222,15 @@
 
 @layer components {
   [data-streamdown="code-block"] {
+    position: relative;
     gap: 0 !important;
     margin-block: 1rem !important;
     overflow: hidden;
     border-radius: calc(var(--radius) + 0.1rem) !important;
     border-color: var(--app-code-border) !important;
     background: var(--app-code-panel) !important;
+    contain-intrinsic-size: auto !important;
+    content-visibility: visible !important;
     padding: 0 !important;
     box-shadow: none !important;
   }
@@ -249,13 +252,30 @@
     white-space: nowrap;
   }
 
+  [data-streamdown="code-block"] > div:nth-child(2) {
+    position: absolute !important;
+    top: 0.65rem;
+    right: 0.75rem;
+    z-index: 2;
+    margin: 0 !important;
+    display: block !important;
+    height: 0 !important;
+    width: auto !important;
+    overflow: visible !important;
+    pointer-events: none !important;
+  }
+
   [data-streamdown="code-block"] [data-streamdown="code-block-actions"] {
     border: 0 !important;
     background: transparent !important;
+    display: flex !important;
+    align-items: center;
+    justify-content: flex-end;
     padding: 0 !important;
     opacity: 0.34;
     transform: none;
     transition: opacity 180ms ease;
+    pointer-events: auto !important;
   }
 
   [data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"],
