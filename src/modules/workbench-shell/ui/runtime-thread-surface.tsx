@@ -9,13 +9,13 @@ import {
   CompactCollapsibleFootnote,
   CompactCollapsibleHeader,
 } from "@/components/ai-elements/compact-collapsible";
+import { CodeBlock } from "@/components/ai-elements/code-block";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Plan, PlanContent, PlanDescription, PlanHeader, PlanTitle, PlanTrigger } from "@/components/ai-elements/plan";
 import { Queue } from "@/components/ai-elements/queue";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "@/components/ai-elements/confirmation";
-import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
 import type { AgentProfile, ProviderEntry } from "@/modules/settings-center/model/types";
 import { threadLoad } from "@/services/bridge";
@@ -571,6 +571,438 @@ function formatHelperKind(kind: string) {
 
 function formatToolCallCount(count: number) {
   return `${count} tool call${count === 1 ? "" : "s"}`;
+}
+
+function formatToolStatusLabel(state: SurfaceToolState) {
+  switch (state) {
+    case "approval-requested":
+      return "approval";
+    case "approval-responded":
+      return "approved";
+    case "input-available":
+      return "running";
+    case "input-streaming":
+      return "pending";
+    case "output-available":
+      return "done";
+    case "output-denied":
+      return "denied";
+    case "output-error":
+      return "error";
+  }
+}
+
+function getToolStatusClass(state: SurfaceToolState) {
+  switch (state) {
+    case "approval-requested":
+      return "text-app-warning";
+    case "approval-responded":
+      return "text-app-info";
+    case "input-available":
+    case "input-streaming":
+      return "text-app-info";
+    case "output-denied":
+    case "output-error":
+      return "text-app-danger";
+    case "output-available":
+    default:
+      return "text-app-subtle";
+  }
+}
+
+function stringifyToolValue(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function asToolDataRecord(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function getToolDataString(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  return typeof value === "string" ? value : null;
+}
+
+function getToolDataNumber(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  return typeof value === "number" ? value : null;
+}
+
+function countDiffLineChanges(diff: string) {
+  let linesAdded = 0;
+  let linesRemoved = 0;
+
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++ ") || line.startsWith("--- ") || line.startsWith("@@ ")) {
+      continue;
+    }
+
+    if (line.startsWith("+")) {
+      linesAdded += 1;
+      continue;
+    }
+
+    if (line.startsWith("-")) {
+      linesRemoved += 1;
+    }
+  }
+
+  return { linesAdded, linesRemoved };
+}
+
+function isFileMutationToolName(toolName: string) {
+  return toolName === "edit" || toolName === "patch" || toolName === "write";
+}
+
+type FileMutationPresentation = {
+  actionLabel: string;
+  contentPreview: string | null;
+  diff: string | null;
+  fileName: string;
+  linesAdded: number | null;
+  linesRemoved: number | null;
+  path: string;
+};
+
+type DiffPreviewRow = {
+  kind: "add" | "context" | "hunk" | "remove";
+  lineNumber: number | null;
+  text: string;
+};
+
+type ReadToolPresentation = {
+  fileName: string;
+  path: string;
+  rangeLabel: string;
+};
+
+type QueryToolPresentation = {
+  actionLabel: "Find" | "Search";
+  countLabel: string | null;
+  primaryLabel: string;
+  scopeLabel: string | null;
+};
+
+type ListToolPresentation = {
+  countLabel: string | null;
+  directoryLabel: string;
+  path: string;
+};
+
+function getFileMutationPresentation(tool: SurfaceToolEntry): FileMutationPresentation | null {
+  if (!isFileMutationToolName(tool.name)) {
+    return null;
+  }
+
+  const input = asToolDataRecord(tool.input);
+  const result = asToolDataRecord(tool.result);
+  const path = getToolDataString(result, "path") ?? getToolDataString(input, "path");
+
+  if (!path) {
+    return null;
+  }
+
+  const diff = getToolDataString(result, "diff");
+  const derivedDiffCounts = diff ? countDiffLineChanges(diff) : null;
+  const linesAdded = getToolDataNumber(result, "linesAdded") ?? derivedDiffCounts?.linesAdded ?? null;
+  const linesRemoved = getToolDataNumber(result, "linesRemoved") ?? derivedDiffCounts?.linesRemoved ?? null;
+  const created = result?.created === true;
+  const actionLabel = tool.state === "output-available"
+    ? created
+      ? "Created"
+      : "Edited"
+    : tool.name === "write"
+      ? "Writing"
+      : "Editing";
+
+  return {
+    actionLabel,
+    contentPreview: getToolDataString(input, "content"),
+    diff,
+    fileName: path.split(/[\\/]/).filter(Boolean).pop() ?? path,
+    linesAdded,
+    linesRemoved,
+    path,
+  };
+}
+
+function getReadToolPresentation(tool: SurfaceToolEntry): ReadToolPresentation | null {
+  if (tool.name !== "read") {
+    return null;
+  }
+
+  const input = asToolDataRecord(tool.input);
+  const result = asToolDataRecord(tool.result);
+  const path = getToolDataString(result, "path") ?? getToolDataString(input, "path");
+
+  if (!path) {
+    return null;
+  }
+
+  const shownLines = getToolDataNumber(result, "shownLines");
+  const lineCount = getToolDataNumber(result, "lineCount");
+  const endLine = shownLines ?? lineCount;
+  const rangeLabel = endLine && endLine > 0 ? `[1-${endLine}]` : "[1-…]";
+
+  return {
+    fileName: path.split(/[\\/]/).filter(Boolean).pop() ?? path,
+    path,
+    rangeLabel,
+  };
+}
+
+function formatToolScopeLabel(scope: string | null) {
+  if (!scope) {
+    return null;
+  }
+
+  const normalized = scope.replace(/\\/g, "/").replace(/\/$/, "");
+  if (!normalized) {
+    return null;
+  }
+
+  const leaf = normalized.split("/").filter(Boolean).pop();
+  return leaf ?? normalized;
+}
+
+function getQueryToolPresentation(tool: SurfaceToolEntry): QueryToolPresentation | null {
+  const input = asToolDataRecord(tool.input);
+  const result = asToolDataRecord(tool.result);
+
+  if (tool.name === "find") {
+    const pattern = getToolDataString(input, "pattern") ?? getToolDataString(result, "pattern");
+    if (!pattern) {
+      return null;
+    }
+
+    const count = getToolDataNumber(result, "count");
+    const scope = formatToolScopeLabel(
+      getToolDataString(result, "directory") ?? getToolDataString(input, "path"),
+    );
+
+    return {
+      actionLabel: "Find",
+      countLabel: typeof count === "number" ? `${count} result${count === 1 ? "" : "s"}` : null,
+      primaryLabel: pattern,
+      scopeLabel: scope,
+    };
+  }
+
+  if (tool.name === "search") {
+    const query = getToolDataString(input, "query") ?? getToolDataString(result, "query");
+    if (!query) {
+      return null;
+    }
+
+    const count = getToolDataNumber(result, "count");
+    const scope = formatToolScopeLabel(
+      getToolDataString(result, "directory") ?? getToolDataString(input, "directory"),
+    );
+    const filePattern = getToolDataString(input, "filePattern");
+
+    return {
+      actionLabel: "Search",
+      countLabel: typeof count === "number" ? `${count} match${count === 1 ? "" : "es"}` : null,
+      primaryLabel: filePattern ? `${query} · ${filePattern}` : query,
+      scopeLabel: scope,
+    };
+  }
+
+  return null;
+}
+
+function getListToolPresentation(tool: SurfaceToolEntry): ListToolPresentation | null {
+  if (tool.name !== "list") {
+    return null;
+  }
+
+  const input = asToolDataRecord(tool.input);
+  const result = asToolDataRecord(tool.result);
+  const path = getToolDataString(result, "path") ?? getToolDataString(input, "path");
+
+  if (!path) {
+    return null;
+  }
+
+  const count = getToolDataNumber(result, "count");
+
+  return {
+    countLabel: typeof count === "number" ? `${count} item${count === 1 ? "" : "s"}` : null,
+    directoryLabel: formatToolScopeLabel(path) ?? path,
+    path,
+  };
+}
+
+function parseDiffStart(value: string | undefined) {
+  if (!value) {
+    return 0;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildDiffPreviewRows(diff: string): Array<DiffPreviewRow> {
+  const rows: Array<DiffPreviewRow> = [];
+  let oldLine = 0;
+  let newLine = 0;
+
+  for (const line of diff.split("\n")) {
+    if (!line) {
+      continue;
+    }
+
+    if (line.startsWith("--- ") || line.startsWith("+++ ")) {
+      continue;
+    }
+
+    if (line.startsWith("@@")) {
+      const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      oldLine = parseDiffStart(match?.[1]);
+      newLine = parseDiffStart(match?.[2]);
+      rows.push({
+        kind: "hunk",
+        lineNumber: null,
+        text: line,
+      });
+      continue;
+    }
+
+    if (line.startsWith("+")) {
+      rows.push({
+        kind: "add",
+        lineNumber: newLine || null,
+        text: line.slice(1),
+      });
+      newLine += 1;
+      continue;
+    }
+
+    if (line.startsWith("-")) {
+      rows.push({
+        kind: "remove",
+        lineNumber: oldLine || null,
+        text: line.slice(1),
+      });
+      oldLine += 1;
+      continue;
+    }
+
+    if (line.startsWith(" ")) {
+      rows.push({
+        kind: "context",
+        lineNumber: newLine || null,
+        text: line.slice(1),
+      });
+      oldLine += 1;
+      newLine += 1;
+    }
+  }
+
+  return rows;
+}
+
+function buildPlainPreviewRows(content: string): Array<DiffPreviewRow> {
+  return content.split("\n").map((line, index) => ({
+    kind: "context",
+    lineNumber: index + 1,
+    text: line,
+  }));
+}
+
+function getApprovalTagLabel(tool: SurfaceToolEntry) {
+  if (tool.state === "approval-requested") {
+    return "Approval";
+  }
+
+  if (isApprovalDenied(tool.approval)) {
+    return "Denied";
+  }
+
+  if (tool.approval && "approved" in tool.approval && tool.approval.approved) {
+    return "Approved";
+  }
+
+  return null;
+}
+
+function getApprovalTagClass(tool: SurfaceToolEntry) {
+  if (tool.state === "approval-requested") {
+    return "border-app-warning/24 bg-app-warning/10 text-app-warning";
+  }
+
+  if (isApprovalDenied(tool.approval)) {
+    return "border-app-danger/24 bg-app-danger/10 text-app-danger";
+  }
+
+  return "border-app-success/24 bg-app-success/10 text-app-success";
+}
+
+function FileMutationDiffPreview({
+  contentPreview,
+  diff,
+}: {
+  contentPreview: string | null;
+  diff: string | null;
+}) {
+  const rows = useMemo(
+    () => (diff ? buildDiffPreviewRows(diff) : buildPlainPreviewRows(contentPreview ?? "")),
+    [contentPreview, diff],
+  );
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="max-h-[22rem] overflow-auto overscroll-contain bg-app-drawer font-mono text-[12px] leading-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {rows.map((row, index) => (
+        <div
+          className={cn(
+            "grid grid-cols-[56px_1fr] border-b border-app-border/55",
+            row.kind === "add"
+              ? "bg-app-success/10"
+              : row.kind === "remove"
+                ? "bg-app-danger/10"
+                : row.kind === "hunk"
+                  ? "bg-app-surface-muted/55"
+                  : "bg-transparent",
+          )}
+          key={`${row.kind}-${row.lineNumber ?? "h"}-${index}`}
+        >
+          <span className="select-none border-r border-app-border/60 px-3 text-right text-app-subtle">
+            {row.lineNumber ?? ""}
+          </span>
+          <span
+            className={cn(
+              "overflow-x-auto whitespace-pre px-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+              row.kind === "add"
+                ? "text-app-success"
+                : row.kind === "remove"
+                  ? "text-app-danger"
+                  : row.kind === "hunk"
+                    ? "text-app-subtle"
+                    : "text-app-foreground",
+            )}
+          >
+            {row.text || " "}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function formatHelperSummary(helper: SurfaceHelperEntry) {
@@ -1621,75 +2053,323 @@ export function RuntimeThreadSurface({
     setHelperOpen((current) => (current[helperId] === open ? current : { ...current, [helperId]: open }));
   }, []);
 
-  const renderToolEntry = useCallback((tool: SurfaceToolEntry, key: string, inset = false) => (
-    <Message className="max-w-full" from="assistant" key={key}>
-      <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-        <Tool
-          className={cn(
-            "rounded-2xl border border-app-border/28 bg-app-surface/24 shadow-none",
-            inset ? "mb-0 rounded-xl bg-app-surface/18" : undefined,
-          )}
-          onOpenChange={(open) => {
-            if (tool.state !== "output-available") {
-              return;
-            }
+  const renderToolEntry = useCallback((tool: SurfaceToolEntry, key: string, inset = false) => {
+    const fileMutation = getFileMutationPresentation(tool);
+    const readTool = getReadToolPresentation(tool);
+    const queryTool = getQueryToolPresentation(tool);
+    const listTool = getListToolPresentation(tool);
+    const approvalTagLabel = getApprovalTagLabel(tool);
+    const showStatusLabel = !fileMutation || tool.state !== "output-available";
+    const showGenericInput = !fileMutation && tool.input !== undefined;
+    const showGenericOutput =
+      !fileMutation
+      && (tool.state === "output-available" || tool.state === "output-denied" || tool.state === "output-error")
+      && (tool.result !== undefined || tool.error);
 
-            handleCompletedToolOpenChange(tool.id, open);
-          }}
-          open={tool.state !== "output-available" ? true : (completedToolOpen[tool.id] ?? false)}
-        >
-          <ToolHeader state={tool.state} title={tool.name} toolName={tool.name} type="dynamic-tool" />
-          <ToolContent>
-            {tool.input !== undefined ? <ToolInput input={tool.input} /> : null}
+    if (readTool) {
+      return (
+        <Message className="max-w-full" from="assistant" key={key}>
+          <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+            <div
+              className={cn(
+                "flex w-full items-start justify-between gap-3 text-left",
+                inset ? "pl-0" : undefined,
+              )}
+            >
+              <div className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                <span className="text-app-muted">Read</span>
+                <span className="truncate font-medium text-app-info" title={readTool.path}>
+                  {readTool.fileName}
+                </span>
+                <span className="shrink-0 font-mono text-[12px] text-app-subtle">
+                  {readTool.rangeLabel}
+                </span>
+              </div>
+              <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
+                {formatToolStatusLabel(tool.state)}
+              </span>
+            </div>
+          </MessageContent>
+        </Message>
+      );
+    }
 
-            <Confirmation approval={tool.approval} state={tool.state}>
-              <ConfirmationTitle>
-                <ConfirmationRequest>
-                  This tool requires approval before continuing the run.
-                </ConfirmationRequest>
-                <ConfirmationAccepted>
-                  <span>{getApprovalReason(tool.approval) || "Approval granted. Execution resumed."}</span>
-                </ConfirmationAccepted>
-                <ConfirmationRejected>
-                  <span>{tool.error || getApprovalReason(tool.approval) || "Approval denied."}</span>
-                </ConfirmationRejected>
-              </ConfirmationTitle>
+    if (queryTool) {
+      return (
+        <Message className="max-w-full" from="assistant" key={key}>
+          <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+            <div
+              className={cn(
+                "flex w-full items-start justify-between gap-3 text-left",
+                inset ? "pl-0" : undefined,
+              )}
+            >
+              <div className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                <span className="text-app-muted">{queryTool.actionLabel}</span>
+                <span className="truncate font-medium text-app-info" title={queryTool.primaryLabel}>
+                  {queryTool.primaryLabel}
+                </span>
+                {queryTool.scopeLabel ? (
+                  <span className="shrink-0 text-app-subtle">{`in ${queryTool.scopeLabel}`}</span>
+                ) : null}
+                {queryTool.countLabel ? (
+                  <span className="shrink-0 font-mono text-[12px] text-app-subtle">
+                    {queryTool.countLabel}
+                  </span>
+                ) : null}
+              </div>
+              <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
+                {formatToolStatusLabel(tool.state)}
+              </span>
+            </div>
+          </MessageContent>
+        </Message>
+      );
+    }
 
-              <ConfirmationActions>
-                <ConfirmationAction
-                  onClick={() => {
-                    if (!streamRef.current?.runId) {
-                      return;
-                    }
+    if (listTool) {
+      return (
+        <Message className="max-w-full" from="assistant" key={key}>
+          <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+            <div
+              className={cn(
+                "flex w-full items-start justify-between gap-3 text-left",
+                inset ? "pl-0" : undefined,
+              )}
+            >
+              <div className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                <span className="text-app-muted">List</span>
+                <span className="truncate font-medium text-app-info" title={listTool.path}>
+                  {listTool.directoryLabel}
+                </span>
+                {listTool.countLabel ? (
+                  <span className="shrink-0 font-mono text-[12px] text-app-subtle">
+                    {listTool.countLabel}
+                  </span>
+                ) : null}
+              </div>
+              <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
+                {formatToolStatusLabel(tool.state)}
+              </span>
+            </div>
+          </MessageContent>
+        </Message>
+      );
+    }
 
-                    void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, false);
-                  }}
-                  variant="outline"
-                >
-                  Reject
-                </ConfirmationAction>
-                <ConfirmationAction
-                  onClick={() => {
-                    if (!streamRef.current?.runId) {
-                      return;
-                    }
+    return (
+      <Message className="max-w-full" from="assistant" key={key}>
+        <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+          <CompactCollapsible
+            onOpenChange={(open) => {
+              if (tool.state !== "output-available") {
+                return;
+              }
 
-                    void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, true);
-                  }}
-                >
-                  Approve
-                </ConfirmationAction>
-              </ConfirmationActions>
-            </Confirmation>
+              handleCompletedToolOpenChange(tool.id, open);
+            }}
+            open={tool.state !== "output-available" ? true : (completedToolOpen[tool.id] ?? false)}
+          >
+            <CompactCollapsibleHeader
+              className={cn(
+                "items-start gap-3 text-left text-app-subtle hover:text-app-foreground",
+                inset ? "pl-0" : undefined,
+              )}
+              trailing={showStatusLabel ? (
+                <span className={cn("shrink-0 text-xs", getToolStatusClass(tool.state))}>
+                  {formatToolStatusLabel(tool.state)}
+                </span>
+              ) : null}
+            >
+              {fileMutation ? (
+                <div className="min-w-0 space-y-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                    <span className="text-app-muted">{fileMutation.actionLabel}</span>
+                    <span className="truncate font-medium text-app-info" title={fileMutation.path}>
+                      {fileMutation.fileName}
+                    </span>
+                    {typeof fileMutation.linesAdded === "number" && fileMutation.linesAdded > 0 ? (
+                      <span className="shrink-0 font-medium text-app-success">{`+${fileMutation.linesAdded}`}</span>
+                    ) : null}
+                    {typeof fileMutation.linesRemoved === "number" && fileMutation.linesRemoved > 0 ? (
+                      <span className="shrink-0 font-medium text-app-danger">{`-${fileMutation.linesRemoved}`}</span>
+                    ) : null}
+                  </div>
+                  <p className="truncate text-xs text-app-subtle">{fileMutation.path}</p>
+                </div>
+              ) : (
+                <div className="flex min-w-0 items-start gap-3">
+                  <WrenchIcon className={cn("mt-0.5 size-4 shrink-0", getToolStatusClass(tool.state))} />
+                  <span className="truncate text-app-foreground text-sm" title={tool.name}>
+                    {tool.name}
+                  </span>
+                </div>
+              )}
+            </CompactCollapsibleHeader>
+            <CompactCollapsibleContent className={fileMutation ? "pl-0" : "pl-7"}>
+              <div className="space-y-3">
+                {fileMutation ? (
+                  <div className="space-y-3">
+                    <div className="rounded-2xl border border-app-border/18 bg-app-surface/16 shadow-none">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-b border-app-border/14 px-4 py-3">
+                        <span className="text-[15px] font-semibold text-app-foreground">{fileMutation.fileName}</span>
+                        {typeof fileMutation.linesAdded === "number" && fileMutation.linesAdded > 0 ? (
+                          <span className="text-sm font-medium text-app-success">{`+${fileMutation.linesAdded}`}</span>
+                        ) : null}
+                        {typeof fileMutation.linesRemoved === "number" && fileMutation.linesRemoved > 0 ? (
+                          <span className="text-sm font-medium text-app-danger">{`-${fileMutation.linesRemoved}`}</span>
+                        ) : null}
+                        {approvalTagLabel ? (
+                          <span
+                            className={cn(
+                              "ml-auto inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]",
+                              getApprovalTagClass(tool),
+                            )}
+                            title={getApprovalReason(tool.approval) ?? undefined}
+                          >
+                            {approvalTagLabel}
+                          </span>
+                        ) : null}
+                        {tool.state === "approval-requested" ? (
+                          <div className="ml-auto flex items-center gap-1.5">
+                            <ConfirmationAction
+                              className="h-7 px-2.5 text-xs"
+                              onClick={() => {
+                                if (!streamRef.current?.runId) {
+                                  return;
+                                }
 
-            {tool.state === "output-available" || tool.state === "output-denied" || tool.state === "output-error" ? (
-              <ToolOutput errorText={tool.state === "output-available" ? undefined : tool.error} output={tool.result} />
-            ) : null}
-          </ToolContent>
-        </Tool>
-      </MessageContent>
-    </Message>
-  ), [completedToolOpen, handleCompletedToolOpenChange]);
+                                void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, false);
+                              }}
+                              size="sm"
+                              variant="ghost"
+                            >
+                              Reject
+                            </ConfirmationAction>
+                            <ConfirmationAction
+                              className="h-7 px-2.5 text-xs"
+                              onClick={() => {
+                                if (!streamRef.current?.runId) {
+                                  return;
+                                }
+
+                                void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, true);
+                              }}
+                              size="sm"
+                              variant="outline"
+                            >
+                              Approve
+                            </ConfirmationAction>
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="overflow-hidden rounded-b-2xl bg-app-canvas/70">
+                        <FileMutationDiffPreview
+                          contentPreview={fileMutation.contentPreview}
+                          diff={fileMutation.diff}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {showGenericInput ? (
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-app-subtle">
+                      Input
+                    </p>
+                    <div className="overflow-hidden rounded-xl bg-app-surface/20 ring-1 ring-app-border/18">
+                      <CodeBlock code={stringifyToolValue(tool.input)} language="json" />
+                    </div>
+                  </div>
+                ) : null}
+
+                {!fileMutation ? (
+                  <Confirmation
+                    className={cn(
+                      "gap-3 rounded-xl border px-3 py-3 shadow-none",
+                      isApprovalDenied(tool.approval)
+                        ? "border-app-danger/18 bg-app-danger/6"
+                        : "border-app-border/18 bg-app-surface/14",
+                    )}
+                    approval={tool.approval}
+                    state={tool.state}
+                  >
+                    <ConfirmationTitle className="text-sm text-app-muted">
+                      <ConfirmationRequest>
+                        This tool requires approval before continuing the run.
+                      </ConfirmationRequest>
+                      <ConfirmationAccepted>
+                        <span>{getApprovalReason(tool.approval) || "Approval granted. Execution resumed."}</span>
+                      </ConfirmationAccepted>
+                      <ConfirmationRejected>
+                        <span>{tool.error || getApprovalReason(tool.approval) || "Approval denied."}</span>
+                      </ConfirmationRejected>
+                    </ConfirmationTitle>
+
+                    <ConfirmationActions className="justify-start self-auto pt-1">
+                      <ConfirmationAction
+                        className="h-7 px-2.5 text-xs"
+                        onClick={() => {
+                          if (!streamRef.current?.runId) {
+                            return;
+                          }
+
+                          void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, false);
+                        }}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        Reject
+                      </ConfirmationAction>
+                      <ConfirmationAction
+                        className="h-7 px-2.5 text-xs"
+                        onClick={() => {
+                          if (!streamRef.current?.runId) {
+                            return;
+                          }
+
+                          void streamRef.current.respondToApproval(tool.id, streamRef.current.runId, true);
+                        }}
+                        size="sm"
+                        variant="outline"
+                      >
+                        Approve
+                      </ConfirmationAction>
+                    </ConfirmationActions>
+                  </Confirmation>
+                ) : null}
+
+                {showGenericOutput ? (
+                  <div className="space-y-1.5">
+                    <p className={cn(
+                      "text-[11px] font-medium uppercase tracking-[0.18em]",
+                      tool.state === "output-available" ? "text-app-subtle" : "text-app-danger",
+                    )}>
+                      {tool.state === "output-available" ? "Output" : "Error"}
+                    </p>
+                    <div
+                      className={cn(
+                        "overflow-hidden rounded-xl ring-1",
+                        tool.state === "output-available"
+                          ? "bg-app-surface/20 ring-app-border/18"
+                          : "bg-app-danger/6 text-app-danger ring-app-danger/18",
+                      )}
+                    >
+                      <CodeBlock
+                        code={stringifyToolValue(tool.state === "output-available" ? tool.result : tool.error ?? tool.result)}
+                        language="json"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </CompactCollapsibleContent>
+          </CompactCollapsible>
+        </MessageContent>
+      </Message>
+    );
+  }, [completedToolOpen, handleCompletedToolOpenChange]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">

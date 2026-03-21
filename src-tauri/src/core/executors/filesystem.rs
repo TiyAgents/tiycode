@@ -5,6 +5,7 @@ use tokio::fs;
 use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
 use crate::model::errors::{AppError, ErrorSource};
 
+use super::edit::{count_diff_line_changes, generate_diff, generate_diff_new_file};
 use super::truncation::{
     self, format_size, truncate_head, LIST_DIR_MAX_ENTRIES, READ_MAX_BYTES, READ_MAX_LINES,
 };
@@ -183,13 +184,27 @@ pub async fn write_file(
         })?;
     }
 
+    let previous_content = fs::read_to_string(&path).await.ok();
+
     match fs::write(&path, content).await {
         Ok(()) => Ok(ToolOutput {
             success: true,
-            result: serde_json::json!({
-                "path": path.to_string_lossy().to_string(),
-                "bytesWritten": content.len(),
-            }),
+            result: {
+                let (created, diff) = match previous_content {
+                    Some(ref old_content) => (false, generate_diff(path.as_path(), old_content, content)),
+                    None => (true, generate_diff_new_file(path.as_path(), content)),
+                };
+                let (lines_added, lines_removed) = count_diff_line_changes(&diff);
+
+                serde_json::json!({
+                    "path": path.to_string_lossy().to_string(),
+                    "bytesWritten": content.len(),
+                    "created": created,
+                    "diff": diff,
+                    "linesAdded": lines_added,
+                    "linesRemoved": lines_removed,
+                })
+            },
         }),
         Err(e) => Ok(ToolOutput {
             success: false,

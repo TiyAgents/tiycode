@@ -7,7 +7,7 @@
 //! - Unified diff generation for the LLM to understand what changed.
 //! - BOM (byte-order mark) handling.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tokio::fs;
 
@@ -390,7 +390,7 @@ async fn create_new_file(path: &PathBuf, content: &str) -> Result<ToolOutput, Ap
 // ---------------------------------------------------------------------------
 
 /// Generate a unified diff string between old and new content.
-fn generate_diff(path: &PathBuf, old_content: &str, new_content: &str) -> String {
+pub(super) fn generate_diff(path: &Path, old_content: &str, new_content: &str) -> String {
     let path_str = path.to_string_lossy();
     let old_lines: Vec<&str> = old_content.lines().collect();
     let new_lines: Vec<&str> = new_content.lines().collect();
@@ -458,7 +458,7 @@ fn generate_diff(path: &PathBuf, old_content: &str, new_content: &str) -> String
 }
 
 /// Generate a diff for a newly created file.
-fn generate_diff_new_file(path: &PathBuf, content: &str) -> String {
+pub(super) fn generate_diff_new_file(path: &Path, content: &str) -> String {
     let path_str = path.to_string_lossy();
     let lines: Vec<&str> = content.lines().collect();
     let mut diff = String::new();
@@ -469,6 +469,28 @@ fn generate_diff_new_file(path: &PathBuf, content: &str) -> String {
         diff.push_str(&format!("+{line}\n"));
     }
     diff
+}
+
+pub(super) fn count_diff_line_changes(diff: &str) -> (usize, usize) {
+    let mut lines_added = 0usize;
+    let mut lines_removed = 0usize;
+
+    for line in diff.lines() {
+        if line.starts_with("+++ ") || line.starts_with("--- ") || line.starts_with("@@ ") {
+            continue;
+        }
+
+        if line.starts_with('+') {
+            lines_added += 1;
+            continue;
+        }
+
+        if line.starts_with('-') {
+            lines_removed += 1;
+        }
+    }
+
+    (lines_added, lines_removed)
 }
 
 // ---------------------------------------------------------------------------
@@ -584,5 +606,21 @@ mod tests {
         let diff = generate_diff(&path, old, new);
         assert!(diff.contains("-line2"));
         assert!(diff.contains("+line2_modified"));
+    }
+
+    #[test]
+    fn test_count_diff_line_changes() {
+        let diff = "\
+--- /test/file.rs
++++ /test/file.rs
+@@ -1,2 +1,2 @@
+ line1
+-line2
++line2_updated";
+
+        let (lines_added, lines_removed) = count_diff_line_changes(diff);
+
+        assert_eq!(lines_added, 1);
+        assert_eq!(lines_removed, 1);
     }
 }
