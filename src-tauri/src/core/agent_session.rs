@@ -787,20 +787,36 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
         AgentTool::new(
             "read",
             "Read File",
-            "Read a file inside the current workspace.",
+            "Read a file inside the current workspace. Supports optional offset/limit windowing for large files and returns a truncated preview when the selected range exceeds safety limits.",
             serde_json::json!({
                 "type": "object",
-                "properties": { "path": { "type": "string" } },
+                "properties": {
+                    "path": { "type": "string" },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Optional 1-indexed line number to start reading from."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Optional maximum number of lines to read from the offset."
+                    }
+                },
                 "required": ["path"]
             }),
         ),
         AgentTool::new(
             "list",
             "List Directory",
-            "List files and folders inside the current workspace.",
+            "List files and folders inside the current workspace. Supports an optional preview limit for large directories.",
             serde_json::json!({
                 "type": "object",
-                "properties": { "path": { "type": "string" } }
+                "properties": {
+                    "path": { "type": "string" },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Optional maximum number of entries to return. Defaults to 500 and is capped for safety."
+                    }
+                }
             }),
         ),
         AgentTool::new(
@@ -833,7 +849,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
         AgentTool::new(
             "find",
             "Find Files",
-            "Search for files by glob pattern. Returns matching file paths relative to the workspace. Respects common ignore patterns (.git, node_modules, target). Output is truncated to 1000 results or 100KB.",
+            "Search for files by glob pattern. Returns matching file paths relative to the workspace. Respects common ignore patterns (.git, node_modules, target). Supports an optional preview limit and truncates output to 1000 results or 100KB.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -844,6 +860,10 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                     "path": {
                         "type": "string",
                         "description": "Directory to search in (default: workspace root)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Optional maximum number of matches to preview. Defaults to 1000 and is capped for safety."
                     }
                 },
                 "required": ["pattern"]
@@ -2037,6 +2057,39 @@ mod tests {
         assert!(!tool_names.contains(&"term_write"));
         assert!(!tool_names.contains(&"term_restart"));
         assert!(!tool_names.contains(&"term_close"));
+    }
+
+    #[test]
+    fn runtime_file_tools_expose_window_and_limit_parameters() {
+        let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
+
+        let read_tool = tools
+            .iter()
+            .find(|tool| tool.name == "read")
+            .expect("read tool should exist");
+        let list_tool = tools
+            .iter()
+            .find(|tool| tool.name == "list")
+            .expect("list tool should exist");
+        let find_tool = tools
+            .iter()
+            .find(|tool| tool.name == "find")
+            .expect("find tool should exist");
+
+        let read_properties = read_tool.parameters["properties"]
+            .as_object()
+            .expect("read properties should be object");
+        let list_properties = list_tool.parameters["properties"]
+            .as_object()
+            .expect("list properties should be object");
+        let find_properties = find_tool.parameters["properties"]
+            .as_object()
+            .expect("find properties should be object");
+
+        assert!(read_properties.contains_key("offset"));
+        assert!(read_properties.contains_key("limit"));
+        assert!(list_properties.contains_key("limit"));
+        assert!(find_properties.contains_key("limit"));
     }
 
     #[test]

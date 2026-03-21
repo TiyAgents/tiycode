@@ -7,7 +7,8 @@ use crate::model::errors::{AppError, ErrorSource};
 
 use super::edit::{count_diff_line_changes, generate_diff, generate_diff_new_file};
 use super::truncation::{
-    self, format_size, truncate_head, LIST_DIR_MAX_ENTRIES, READ_MAX_BYTES, READ_MAX_LINES,
+    self, format_size, truncate_head, FIND_MAX_RESULTS, LIST_DIR_MAX_ENTRIES, READ_MAX_BYTES,
+    READ_MAX_LINES,
 };
 use super::ToolOutput;
 
@@ -25,12 +26,18 @@ const IMAGE_MAX_BYTES: usize = 10 * 1024 * 1024;
 /// For image files (jpg/jpeg/png/gif/webp): reads binary content and returns
 /// a base64-encoded data URL, matching pi-mono's image support.
 ///
-/// Input: { "path": "/absolute/path" }
+/// Input: {
+///   "path": "/absolute/path",
+///   "offset": 1,   // optional, 1-indexed line offset
+///   "limit": 100   // optional, max lines to read from offset
+/// }
 pub async fn read_file(
     input: &serde_json::Value,
     workspace_path: &str,
 ) -> Result<ToolOutput, AppError> {
     let path = resolve_required_path(input, workspace_path)?;
+    let offset = read_positive_integer(input, "offset").unwrap_or(1);
+    let limit = read_positive_integer(input, "limit");
 
     // Check if this is an image file
     if is_image_file(&path) {
@@ -39,29 +46,92 @@ pub async fn read_file(
 
     match fs::read_to_string(&path).await {
         Ok(content) => {
-            let total_lines = content.lines().count();
+            let all_lines: Vec<&str> = content.split('\n').collect();
+            let total_lines = all_lines.len();
             let total_bytes = content.len();
+            let start_line_index = offset.saturating_sub(1);
+
+            if start_line_index >= total_lines && total_lines > 0 {
+                return Ok(ToolOutput {
+                    success: false,
+                    result: serde_json::json!({
+                        "error": format!(
+                            "Offset {} is beyond end of file ({} lines total)",
+                            offset, total_lines
+                        ),
+                        "path": path.to_string_lossy().to_string(),
+                    }),
+                });
+            }
+
+            let end_line_index = limit
+                .map(|line_limit| start_line_index.saturating_add(line_limit).min(total_lines))
+                .unwrap_or(total_lines);
+            let selected_content = if start_line_index >= total_lines {
+                String::new()
+            } else {
+                all_lines[start_line_index..end_line_index].join("\n")
+            };
 
             let (output_content, truncated) =
-                truncate_head(&content, READ_MAX_BYTES, READ_MAX_LINES);
+                truncate_head(&selected_content, READ_MAX_BYTES, READ_MAX_LINES);
+            let shown_lines = output_content.lines().count();
+            let start_line_display = if total_lines == 0 {
+                0
+            } else {
+                start_line_index + 1
+            };
+            let end_line_display = if shown_lines == 0 {
+                start_line_display.saturating_sub(1)
+            } else {
+                start_line_index + shown_lines
+            };
 
             let mut result = serde_json::json!({
                 "path": path.to_string_lossy().to_string(),
                 "content": output_content,
                 "lineCount": total_lines,
                 "truncated": truncated,
+                "offset": start_line_display,
             });
 
+            if let Some(line_limit) = limit {
+                result["limit"] = serde_json::json!(line_limit);
+            }
+
             if truncated {
-                let shown_lines = output_content.lines().count();
                 result["totalBytes"] = serde_json::json!(total_bytes);
                 result["shownLines"] = serde_json::json!(shown_lines);
-                result["notice"] = serde_json::json!(format!(
-                    "[Showing first {} lines of {}. Total size: {}. File was truncated.]",
-                    shown_lines,
-                    total_lines,
-                    format_size(total_bytes)
-                ));
+                let next_offset = end_line_display.saturating_add(1);
+                let notice = if shown_lines == 0 && !selected_content.is_empty() {
+                    format!(
+                        "[The selected range starts with a line that exceeds {}. Narrow the read window or use shell for a byte-level slice.]",
+                        format_size(READ_MAX_BYTES)
+                    )
+                } else {
+                    format!(
+                        "[Showing lines {}-{} of {}. Total size: {}. Use offset={} to continue.]",
+                        start_line_display,
+                        end_line_display,
+                        total_lines,
+                        format_size(total_bytes),
+                        next_offset
+                    )
+                };
+                result["notice"] = serde_json::json!(notice);
+            } else if let Some(line_limit) = limit {
+                if end_line_index < total_lines {
+                    let remaining = total_lines - end_line_index;
+                    result["shownLines"] = serde_json::json!(shown_lines);
+                    result["notice"] = serde_json::json!(format!(
+                        "[{} more lines in file. Use offset={} to continue.]",
+                        remaining,
+                        end_line_index + 1
+                    ));
+                } else {
+                    result["shownLines"] = serde_json::json!(shown_lines);
+                    result["limit"] = serde_json::json!(line_limit);
+                }
             }
 
             Ok(ToolOutput {
@@ -219,18 +289,26 @@ pub async fn write_file(
 }
 
 /// List directory contents.
-/// Input: { "path": "/absolute/path" }
+/// Input: { "path": "/absolute/path", "limit": 100 }
 pub async fn list_dir(
     input: &serde_json::Value,
     workspace_path: &str,
 ) -> Result<ToolOutput, AppError> {
     let path = resolve_path_or_workspace_root(input, workspace_path)?;
+    let effective_limit = read_positive_integer(input, "limit")
+        .unwrap_or(LIST_DIR_MAX_ENTRIES)
+        .min(LIST_DIR_MAX_ENTRIES);
 
     match fs::read_dir(&path).await {
         Ok(mut entries) => {
             let mut items = Vec::new();
             let mut truncated = false;
             while let Ok(Some(entry)) = entries.next_entry().await {
+                if items.len() >= effective_limit {
+                    truncated = true;
+                    break;
+                }
+
                 let name = entry.file_name().to_string_lossy().to_string();
                 let file_type = entry.file_type().await.ok();
                 let is_dir = file_type.as_ref().map(|t| t.is_dir()).unwrap_or(false);
@@ -246,11 +324,6 @@ pub async fn list_dir(
                     "name": display_name,
                     "isDir": is_dir,
                 }));
-
-                if items.len() >= LIST_DIR_MAX_ENTRIES {
-                    truncated = true;
-                    break;
-                }
             }
 
             // Sort alphabetically (matching pi-mono's ls tool)
@@ -265,13 +338,23 @@ pub async fn list_dir(
                 "items": items,
                 "count": items.len(),
                 "truncated": truncated,
+                "limit": effective_limit,
             });
 
             if truncated {
-                result["notice"] = serde_json::json!(format!(
-                    "[Showing first {} entries. Use find for more targeted search.]",
-                    LIST_DIR_MAX_ENTRIES
-                ));
+                let notice = if effective_limit < LIST_DIR_MAX_ENTRIES {
+                    format!(
+                        "[Showing first {} entries. Use limit={} for more, or use find for more targeted search.]",
+                        effective_limit,
+                        (effective_limit * 2).min(LIST_DIR_MAX_ENTRIES)
+                    )
+                } else {
+                    format!(
+                        "[Showing first {} entries. Use find for more targeted search.]",
+                        LIST_DIR_MAX_ENTRIES
+                    )
+                };
+                result["notice"] = serde_json::json!(notice);
             }
 
             Ok(ToolOutput {
@@ -290,7 +373,7 @@ pub async fn list_dir(
 }
 
 /// Find files by glob pattern using the `find` command.
-/// Input: { "pattern": "*.rs", "path": "optional/subdir" }
+/// Input: { "pattern": "*.rs", "path": "optional/subdir", "limit": 100 }
 pub async fn find_files(
     input: &serde_json::Value,
     workspace_path: &str,
@@ -308,6 +391,9 @@ pub async fn find_files(
         ErrorSource::Tool,
         "tool.workspace.not_directory",
     )?;
+    let effective_limit = read_positive_integer(input, "limit")
+        .unwrap_or(FIND_MAX_RESULTS)
+        .min(FIND_MAX_RESULTS);
 
     let search_dir = match input["path"].as_str() {
         Some(raw) => resolve_path_within_workspace(
@@ -322,11 +408,13 @@ pub async fn find_files(
 
     // Use `find` on Unix or fall back to walkdir-style approach via shell
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let quoted_dir = shell_quote(&search_dir.to_string_lossy());
+    let quoted_pattern = shell_quote(pattern);
 
     // Build a find command that respects .gitignore-like patterns
     // We use `find` with `-name` for the glob pattern, excluding common directories
     let find_command = format!(
-        "find {} -name '{}' \
+        "find {} -name {} \
          -not -path '*/.git/*' \
          -not -path '*/node_modules/*' \
          -not -path '*/target/*' \
@@ -334,9 +422,10 @@ pub async fn find_files(
          -not -path '*/.next/*' \
          -not -path '*/dist/*' \
          -not -path '*/.DS_Store' \
-         2>/dev/null | head -n 1000",
-        search_dir.to_string_lossy(),
-        pattern,
+         2>/dev/null | head -n {}",
+        quoted_dir,
+        quoted_pattern,
+        effective_limit.saturating_add(1),
     );
 
     let result = tokio::time::timeout(
@@ -360,7 +449,7 @@ pub async fn find_files(
 
             // Make paths relative to workspace root
             let workspace_prefix = workspace_root.to_string_lossy();
-            let relative_paths: Vec<String> = raw_paths
+            let mut relative_paths: Vec<String> = raw_paths
                 .iter()
                 .map(|p| {
                     let trimmed = p.trim();
@@ -371,6 +460,11 @@ pub async fn find_files(
                     }
                 })
                 .collect();
+
+            let result_limit_reached = relative_paths.len() > effective_limit;
+            if result_limit_reached {
+                relative_paths.truncate(effective_limit);
+            }
 
             let total_count = relative_paths.len();
             let result_text = relative_paths.join("\n");
@@ -384,14 +478,24 @@ pub async fn find_files(
                 "directory": search_dir.to_string_lossy().to_string(),
                 "results": output_text,
                 "count": total_count,
+                "limit": effective_limit,
             });
 
             let mut notices = Vec::new();
-            if total_count >= truncation::FIND_MAX_RESULTS {
-                notices.push(
-                    "1000 results limit reached. Refine your pattern for more specific results."
-                        .to_string(),
-                );
+            if result_limit_reached {
+                let notice = if effective_limit < FIND_MAX_RESULTS {
+                    format!(
+                        "{} results limit reached. Use limit={} for more, or refine your pattern.",
+                        effective_limit,
+                        (effective_limit * 2).min(FIND_MAX_RESULTS)
+                    )
+                } else {
+                    format!(
+                        "{} results limit reached. Refine your pattern for more specific results.",
+                        FIND_MAX_RESULTS
+                    )
+                };
+                notices.push(notice);
                 result["resultLimitReached"] = serde_json::json!(true);
             }
             if truncated_by_size {
@@ -472,5 +576,101 @@ fn resolve_path_or_workspace_root(
             format!("Path '{}' is outside workspace boundary", raw),
         ),
         None => Ok(workspace_root),
+    }
+}
+
+fn read_positive_integer(input: &serde_json::Value, key: &str) -> Option<usize> {
+    input[key].as_i64().map(|value| value.max(1) as usize)
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_files, list_dir, read_file};
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn read_file_supports_offset_and_limit_windows() {
+        let temp_dir = tempdir().expect("temp dir");
+        let workspace = temp_dir.path();
+        let file_path = workspace.join("notes.txt");
+        let content = (1..=6)
+            .map(|index| format!("Line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&file_path, content).expect("write file");
+
+        let output = read_file(
+            &serde_json::json!({
+                "path": "notes.txt",
+                "offset": 3,
+                "limit": 2,
+            }),
+            workspace.to_string_lossy().as_ref(),
+        )
+        .await
+        .expect("read file");
+
+        assert!(output.success);
+        assert_eq!(output.result["content"].as_str(), Some("Line 3\nLine 4"));
+        assert_eq!(output.result["offset"].as_u64(), Some(3));
+        assert_eq!(output.result["limit"].as_u64(), Some(2));
+        let notice = output.result["notice"].as_str().unwrap_or_default();
+        assert!(notice.contains("2 more lines"));
+        assert!(notice.contains("offset=5"));
+    }
+
+    #[tokio::test]
+    async fn list_dir_respects_limit_parameter() {
+        let temp_dir = tempdir().expect("temp dir");
+        let workspace = temp_dir.path();
+        std::fs::write(workspace.join("a.txt"), "a").expect("write a");
+        std::fs::write(workspace.join("b.txt"), "b").expect("write b");
+        std::fs::write(workspace.join("c.txt"), "c").expect("write c");
+
+        let output = list_dir(
+            &serde_json::json!({
+                "limit": 2,
+            }),
+            workspace.to_string_lossy().as_ref(),
+        )
+        .await
+        .expect("list dir");
+
+        assert!(output.success);
+        assert_eq!(output.result["count"].as_u64(), Some(2));
+        assert_eq!(output.result["limit"].as_u64(), Some(2));
+        assert_eq!(output.result["truncated"].as_bool(), Some(true));
+        let notice = output.result["notice"].as_str().unwrap_or_default();
+        assert!(notice.contains("limit=4") || notice.contains("limit=500"));
+    }
+
+    #[tokio::test]
+    async fn find_files_respects_limit_parameter() {
+        let temp_dir = tempdir().expect("temp dir");
+        let workspace = temp_dir.path();
+        std::fs::write(workspace.join("a.rs"), "fn a() {}\n").expect("write a");
+        std::fs::write(workspace.join("b.rs"), "fn b() {}\n").expect("write b");
+        std::fs::write(workspace.join("c.rs"), "fn c() {}\n").expect("write c");
+
+        let output = find_files(
+            &serde_json::json!({
+                "pattern": "*.rs",
+                "limit": 2,
+            }),
+            workspace.to_string_lossy().as_ref(),
+        )
+        .await
+        .expect("find files");
+
+        assert!(output.success);
+        assert_eq!(output.result["count"].as_u64(), Some(2));
+        assert_eq!(output.result["limit"].as_u64(), Some(2));
+        assert_eq!(output.result["resultLimitReached"].as_bool(), Some(true));
+        let results = output.result["results"].as_str().unwrap_or_default();
+        assert_eq!(results.lines().count(), 2);
     }
 }
