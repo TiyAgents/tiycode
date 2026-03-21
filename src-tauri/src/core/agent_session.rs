@@ -1240,12 +1240,13 @@ fn build_project_context_section(workspace_path: &str) -> Option<String> {
         "Workspace instruction file found at the workspace root. Follow it when relevant."
             .to_string();
     body.push_str("\n\n");
-    body.push_str(&format!("### {}", snippet.file_name));
-    body.push('\n');
+    body.push_str(&format!("### {}\n", snippet.file_name));
+    body.push_str("```md\n");
     body.push_str(&snippet.content);
     if snippet.truncated {
         body.push_str("\n[Truncated for prompt size.]");
     }
+    body.push_str("\n```");
 
     Some(build_prompt_section(
         "Project Context (workspace instructions)",

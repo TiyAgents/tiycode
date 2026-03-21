@@ -444,6 +444,12 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
         .system_prompt
         .contains("## Project Context (workspace instructions)"));
     assert!(spec.system_prompt.contains("### AGENTS.md"));
+    assert!(spec
+        .system_prompt
+        .contains("### AGENTS.md\n```md\nAgents instructions"));
+    assert!(!spec
+        .system_prompt
+        .contains("```md\n### AGENTS.md"));
     assert!(spec.system_prompt.contains("Agents instructions"));
     assert!(!spec.system_prompt.contains("Claude instructions"));
     assert!(spec.system_prompt.contains("## System Environment"));
