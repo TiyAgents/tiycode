@@ -379,15 +379,8 @@ async fn test_audit_event_recording() {
     test_helpers::seed_workspace(&pool, "ws-audit", "/tmp/audit").await;
     test_helpers::seed_thread(&pool, "t-audit", "ws-audit").await;
     test_helpers::seed_run(&pool, "r-audit", "t-audit", "running", "default").await;
-    test_helpers::seed_tool_call(
-        &pool,
-        "tc-audit",
-        "r-audit",
-        "t-audit",
-        "read",
-        "completed",
-    )
-    .await;
+    test_helpers::seed_tool_call(&pool, "tc-audit", "r-audit", "t-audit", "read", "completed")
+        .await;
 
     // Verify audit_events table accepts records with correct schema
     sqlx::query(

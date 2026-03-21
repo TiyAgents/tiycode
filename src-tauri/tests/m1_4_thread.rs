@@ -123,7 +123,14 @@ async fn test_thread_delete_cascades_runtime_records() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-del-cascade", "/tmp/del-cascade").await;
     test_helpers::seed_thread(&pool, "t-del-cascade", "ws-del-cascade").await;
-    test_helpers::seed_run(&pool, "r-del-cascade", "t-del-cascade", "completed", "default").await;
+    test_helpers::seed_run(
+        &pool,
+        "r-del-cascade",
+        "t-del-cascade",
+        "completed",
+        "default",
+    )
+    .await;
     test_helpers::seed_message(
         &pool,
         "m-del-cascade",
@@ -162,12 +169,11 @@ async fn test_thread_delete_cascades_runtime_records() {
         .await
         .expect("thread delete should succeed");
 
-    let thread_count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM threads WHERE id = 't-del-cascade'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let thread_count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM threads WHERE id = 't-del-cascade'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let message_count = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM messages WHERE thread_id = 't-del-cascade'",
     )

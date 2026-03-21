@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 
@@ -22,7 +24,9 @@ use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::AgentProfileRecord;
 use crate::model::thread::{MessageRecord, RunUsageDto};
-use crate::persistence::repo::{message_repo, profile_repo, provider_repo, tool_call_repo};
+use crate::persistence::repo::{
+    message_repo, profile_repo, provider_repo, settings_repo, tool_call_repo,
+};
 
 const MESSAGE_HISTORY_LIMIT: i64 = 200;
 const DEFAULT_CONTEXT_WINDOW: u32 = 128_000;
@@ -31,6 +35,22 @@ const DEFAULT_FULL_TOOL_PROFILE: &str = "default_full";
 const PLAN_READ_ONLY_TOOL_PROFILE: &str = "plan_read_only";
 const STANDARD_TOOL_TIMEOUT_SECS: u64 = 120;
 const SUBAGENT_TOOL_TIMEOUT_SECS: u64 = 300;
+const WORKSPACE_INSTRUCTION_FILE_NAMES: &[&str] = &["AGENTS.md", "CLAUDE.md", "AGENT.MD"];
+const WORKSPACE_INSTRUCTION_MAX_CHARS: usize = 1_500;
+const SHELL_GUIDE_TOOL_NAMES: &[&str] = &["python3", "python", "node", "npm", "uv", "git", "rg"];
+
+#[derive(Debug, Clone)]
+struct WorkspaceInstructionSnippet {
+    file_name: &'static str,
+    content: String,
+    truncated: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ToolAvailability {
+    name: &'static str,
+    path: Option<PathBuf>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfileResponseStyle {
@@ -119,7 +139,7 @@ pub async fn build_session_spec(
     let resolved_plan = resolve_model_plan(pool, raw_plan.clone()).await?;
     let history_messages =
         message_repo::list_recent(pool, thread_id, None, MESSAGE_HISTORY_LIMIT).await?;
-    let system_prompt = build_system_prompt(pool, &raw_plan, run_mode).await?;
+    let system_prompt = build_system_prompt(pool, &raw_plan, workspace_path, run_mode).await?;
 
     Ok(AgentSessionSpec {
         run_id: run_id.to_string(),
@@ -1127,17 +1147,18 @@ pub async fn resolve_runtime_model_role(
 async fn build_system_prompt(
     pool: &SqlitePool,
     raw_plan: &RuntimeModelPlan,
+    workspace_path: &str,
     run_mode: &str,
 ) -> Result<String, AppError> {
     let mut parts = vec![
-        "You are Tiy Agent, an expert working assistant embedded in the user's desktop workspace. \
-You help users by reading files, searching code, editing files, executing commands, and writing new files."
-            .to_string(),
-    ];
-
-    // Behavioral guidelines — always present regardless of profile.
-    parts.push(
-        "Guidelines:\n\
+        build_prompt_section(
+            "Role",
+            "You are Tiy Agent, an expert working assistant embedded in the user's desktop workspace.\n\
+You help users by reading files, searching code, editing files, executing commands, and writing new files.",
+        ),
+        build_prompt_section(
+            "Behavioral Guidelines",
+            "Guidelines:\n\
 - Read files before editing. Understand existing code before making changes.\n\
 - Use edit for precise, surgical changes. Use write only for new files or complete rewrites.\n\
 - Prefer search and find over shell for file exploration — they are faster and respect ignore patterns.\n\
@@ -1148,36 +1169,297 @@ You help users by reading files, searching code, editing files, executing comman
 - Skip delegation only when the task is small, obvious, and isolated enough that extra helper work would not pay off.\n\
 - Be concise in your responses. Show file paths clearly when working with files.\n\
 - When summarizing your actions, describe what you did in plain text — do not re-read or re-cat files to prove your work.\n\
-- Flag risks, destructive operations, or ambiguity before acting. Ask when intent is unclear."
-            .to_string(),
-    );
+- Flag risks, destructive operations, or ambiguity before acting. Ask when intent is unclear.",
+        ),
+    ];
+
+    if let Some(section) = build_project_context_section(workspace_path) {
+        parts.push(section);
+    }
+
+    parts.push(build_system_environment_section());
+    parts.push(build_sandbox_permissions_section(pool, run_mode, workspace_path).await?);
+    parts.push(build_shell_tooling_guide_section());
 
     if let Some(profile_id) = raw_plan.profile_id.as_deref() {
         if let Some(profile) = profile_repo::find_by_id(pool, profile_id).await? {
+            let mut profile_lines = Vec::new();
+
             if let Some(custom_instructions) = profile.custom_instructions.as_deref() {
-                if !custom_instructions.trim().is_empty() {
-                    parts.push(custom_instructions.to_string());
+                let trimmed = custom_instructions.trim();
+                if !trimmed.is_empty() {
+                    profile_lines.push(trimmed.to_string());
                 }
             }
-            parts.extend(build_profile_response_prompt_parts(&profile));
+
+            profile_lines.extend(build_profile_response_prompt_parts(&profile));
+
+            if !profile_lines.is_empty() {
+                parts.push(build_prompt_section(
+                    "Profile Instructions",
+                    profile_lines.join("\n"),
+                ));
+            }
         }
     }
 
     if run_mode == "plan" {
-        parts.push(
+        parts.push(build_prompt_section(
+            "Run Mode",
             "Plan mode is active.\n\
 - Use only read-only tools: read, list, search, find, term_status, term_output.\n\
 - Do NOT use edit, write, or shell unless the user explicitly requests execution.\n\
-- Focus on analysis, explanation, and actionable planning. Identify risks, gaps, and concrete next steps."
-                .to_string(),
-        );
+- Focus on analysis, explanation, and actionable planning. Identify risks, gaps, and concrete next steps.",
+        ));
+    } else {
+        parts.push(build_prompt_section(
+            "Run Mode",
+            "Default execution mode is active.\n\
+- Use the configured tool profile, subject to policy, approvals, and workspace boundaries.\n\
+- Prefer the smallest sufficient action that moves the task forward.",
+        ));
     }
 
     // Append runtime context last so the model always sees current date and working directory.
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    parts.push(format!("Current date: {date}"));
+    parts.push(build_prompt_section(
+        "Runtime Context",
+        format!("Current date: {date}\nWorkspace path: {workspace_path}"),
+    ));
 
     Ok(parts.join("\n\n"))
+}
+
+fn build_prompt_section(title: &str, body: impl AsRef<str>) -> String {
+    format!("## {title}\n{}", body.as_ref())
+}
+
+fn build_project_context_section(workspace_path: &str) -> Option<String> {
+    let snippet = collect_workspace_instruction_snippet(workspace_path)?;
+    let mut body =
+        "Workspace instruction file found at the workspace root. Follow it when relevant."
+            .to_string();
+    body.push_str("\n\n");
+    body.push_str(&format!("### {}", snippet.file_name));
+    body.push('\n');
+    body.push_str(&snippet.content);
+    if snippet.truncated {
+        body.push_str("\n[Truncated for prompt size.]");
+    }
+
+    Some(build_prompt_section(
+        "Project Context (workspace instructions)",
+        body,
+    ))
+}
+
+async fn build_sandbox_permissions_section(
+    pool: &SqlitePool,
+    run_mode: &str,
+    workspace_path: &str,
+) -> Result<String, AppError> {
+    let approval_policy = settings_repo::policy_get(pool, "approval_policy")
+        .await?
+        .and_then(|record| serde_json::from_str::<String>(&record.value_json).ok())
+        .unwrap_or_else(|| "require_for_mutations".to_string());
+
+    let run_mode_line = if run_mode == "plan" {
+        "Plan mode is active, so mutating tools are blocked."
+    } else {
+        "Default mode is active, so tool use follows the configured approval policy."
+    };
+
+    Ok(build_prompt_section(
+        "Sandbox & Permissions",
+        format!(
+            "- Effective runtime sandbox: workspace-scoped tool execution with policy checks.\n- Workspace boundary: file and path-aware tools are restricted to the current workspace (`{workspace_path}`).\n- Approval policy: {approval_policy}.\n- Read-only tools are generally auto-allowed; mutating tools may require approval.\n- {run_mode_line}\n- Outer host sandbox metadata is not exposed here; rely on these effective runtime constraints."
+        ),
+    ))
+}
+
+fn collect_workspace_instruction_snippet(
+    workspace_path: &str,
+) -> Option<WorkspaceInstructionSnippet> {
+    let workspace_root = Path::new(workspace_path);
+    if !workspace_root.is_dir() {
+        return None;
+    }
+
+    WORKSPACE_INSTRUCTION_FILE_NAMES
+        .iter()
+        .find_map(|file_name| {
+            let path = workspace_root.join(file_name);
+            if !path.is_file() {
+                return None;
+            }
+
+            let raw = std::fs::read(&path).ok()?;
+            let content = normalize_prompt_doc_content(&String::from_utf8_lossy(&raw));
+            if content.is_empty() {
+                return None;
+            }
+
+            let (content, truncated) = truncate_chars(&content, WORKSPACE_INSTRUCTION_MAX_CHARS);
+            Some(WorkspaceInstructionSnippet {
+                file_name,
+                content,
+                truncated,
+            })
+        })
+}
+
+fn normalize_prompt_doc_content(value: &str) -> String {
+    value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> (String, bool) {
+    let char_count = value.chars().count();
+    if char_count <= max_chars {
+        return (value.to_string(), false);
+    }
+
+    let truncated = value.chars().take(max_chars).collect::<String>();
+    (truncated.trim_end().to_string(), true)
+}
+
+fn build_system_environment_section() -> String {
+    let shell = current_shell();
+    let tool_lines = detect_shell_tools()
+        .into_iter()
+        .map(|tool| match tool.path {
+            Some(path) => format!("- {}: available at {}", tool.name, path.display()),
+            None => format!("- {}: not found on PATH", tool.name),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    build_prompt_section(
+        "System Environment",
+        format!(
+            "- Operating system: {}\n- Architecture: {}\n- Default shell: {}\n- Common CLI tools:\n{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            shell,
+            tool_lines
+        ),
+    )
+}
+
+fn build_shell_tooling_guide_section() -> String {
+    let tool_lookup = detect_shell_tools()
+        .into_iter()
+        .map(|tool| (tool.name, tool.path.is_some()))
+        .collect::<HashMap<_, _>>();
+
+    let python_hint = if tool_lookup.get("python3").copied().unwrap_or(false) {
+        "Prefer `python3` for Python commands in shell examples."
+    } else if tool_lookup.get("python").copied().unwrap_or(false) {
+        "Use `python` for Python commands in shell examples."
+    } else {
+        "Do not assume Python is available; verify before proposing Python shell commands."
+    };
+
+    let node_hint = if tool_lookup.get("node").copied().unwrap_or(false)
+        || tool_lookup.get("npm").copied().unwrap_or(false)
+    {
+        "Node tooling is available. Prefer `npm` scripts when the workspace defines them."
+    } else {
+        "Do not assume Node tooling is available; verify before proposing Node shell commands."
+    };
+
+    let uv_hint = if tool_lookup.get("uv").copied().unwrap_or(false) {
+        "Use `uv` for lightweight Python environment and script execution when that fits the task."
+    } else {
+        "Do not assume `uv` is available."
+    };
+
+    let rg_hint = if tool_lookup.get("rg").copied().unwrap_or(false) {
+        "Prefer `rg` for text search and file discovery before broader shell commands."
+    } else {
+        "If `rg` is unavailable, fall back to the built-in search and find tools before broad shell scans."
+    };
+
+    let git_hint = if tool_lookup.get("git").copied().unwrap_or(false) {
+        "Use `git` for repo status, diff, and history checks when repository context matters."
+    } else {
+        "Do not assume `git` is available in shell commands."
+    };
+
+    build_prompt_section(
+        "Shell Tooling Guide",
+        format!(
+            "- Shell commands run through the user's default shell (`{}`).\n- Prefer workspace-aware tools (`read`, `list`, `search`, `find`, `edit`) before shell when they fit.\n- {}\n- {}\n- {}\n- {}\n- {}",
+            current_shell(),
+            rg_hint,
+            python_hint,
+            node_hint,
+            uv_hint,
+            git_hint
+        ),
+    )
+}
+
+fn current_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+}
+
+fn detect_shell_tools() -> Vec<ToolAvailability> {
+    SHELL_GUIDE_TOOL_NAMES
+        .iter()
+        .map(|name| ToolAvailability {
+            name,
+            path: find_command_on_path(name),
+        })
+        .collect()
+}
+
+fn find_command_on_path(command: &str) -> Option<PathBuf> {
+    let path_value = std::env::var_os("PATH")?;
+    let candidates = executable_candidates(command);
+
+    for directory in std::env::split_paths(&path_value) {
+        for candidate in &candidates {
+            let path = directory.join(candidate);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+fn executable_candidates(command: &str) -> Vec<OsString> {
+    #[cfg(target_os = "windows")]
+    {
+        if Path::new(command).extension().is_some() {
+            return vec![OsString::from(command)];
+        }
+
+        let pathext =
+            std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+        let mut candidates = vec![OsString::from(command)];
+
+        for ext in pathext.to_string_lossy().split(';') {
+            let trimmed = ext.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            candidates.push(OsString::from(format!("{command}{trimmed}")));
+        }
+
+        candidates
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        vec![OsString::from(command)]
+    }
 }
 
 pub fn build_profile_response_prompt_parts(profile: &AgentProfileRecord) -> Vec<String> {
@@ -1288,13 +1570,15 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_profile_response_prompt_parts, handle_agent_event,
-        normalize_profile_response_language, normalize_profile_response_style,
+        build_profile_response_prompt_parts, collect_workspace_instruction_snippet,
+        handle_agent_event, normalize_profile_response_language, normalize_profile_response_style,
         response_style_system_instruction, runtime_security_config, standard_tool_timeout,
         ProfileResponseStyle, STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
+    use std::fs;
     use std::sync::Mutex as StdMutex;
 
+    use tempfile::tempdir;
     use tiy_core::agent::{AgentEvent, AgentMessage};
     use tiy_core::types::{Api, AssistantMessage, AssistantMessageEvent, Provider};
     use tokio::sync::mpsc;
@@ -1414,6 +1698,22 @@ mod tests {
             parts[1],
             response_style_system_instruction(ProfileResponseStyle::Concise)
         );
+    }
+
+    #[test]
+    fn workspace_instruction_snippet_uses_priority_order() {
+        let temp_dir = tempdir().expect("temp dir");
+        let root = temp_dir.path();
+
+        fs::write(root.join("CLAUDE.md"), "Claude instructions").expect("write claude");
+        fs::write(root.join("AGENT.MD"), "Agent instructions").expect("write agent");
+        fs::write(root.join("AGENTS.md"), "Agents instructions").expect("write agents");
+
+        let snippet = collect_workspace_instruction_snippet(root.to_string_lossy().as_ref())
+            .expect("workspace instruction snippet");
+
+        assert_eq!(snippet.file_name, "AGENTS.md");
+        assert_eq!(snippet.content, "Agents instructions");
     }
 
     #[test]

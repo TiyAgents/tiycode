@@ -303,9 +303,7 @@ impl PolicyEngine {
 /// Extract the target file path from tool input for boundary checking.
 fn extract_target_path(tool_name: &str, input: &serde_json::Value) -> Option<String> {
     match tool_name {
-        "read" | "write" | "edit" | "list" => {
-            input["path"].as_str().map(|s| s.to_string())
-        }
+        "read" | "write" | "edit" | "list" => input["path"].as_str().map(|s| s.to_string()),
         "find" => input["path"].as_str().map(|s| s.to_string()),
         "patch" => input["path"].as_str().map(|s| s.to_string()),
         "search" => input["directory"].as_str().map(|s| s.to_string()),

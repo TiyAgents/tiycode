@@ -271,12 +271,6 @@ mod tests {
         let tools = runtime_orchestration_tools();
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
-        assert_eq!(
-            tool_names,
-            vec![
-                "agent_research",
-                "agent_review"
-            ]
-        );
+        assert_eq!(tool_names, vec!["agent_research", "agent_review"]);
     }
 }

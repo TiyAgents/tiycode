@@ -127,15 +127,7 @@ async fn test_full_approval_flow() {
     test_helpers::seed_run(&pool, "r-appr", "t-appr", "running", "default").await;
 
     // 1. Tool requested
-    test_helpers::seed_tool_call(
-        &pool,
-        "tc-appr",
-        "r-appr",
-        "t-appr",
-        "write",
-        "requested",
-    )
-    .await;
+    test_helpers::seed_tool_call(&pool, "tc-appr", "r-appr", "t-appr", "write", "requested").await;
 
     // 2. Policy evaluates → require approval
     sqlx::query(
@@ -359,15 +351,7 @@ async fn test_snapshot_recovery_after_crash() {
     test_helpers::seed_thread(&pool, "t-crash", "ws-crash").await;
     test_helpers::seed_message(&pool, "m-c1", "t-crash", "user", "Help me").await;
     test_helpers::seed_run(&pool, "r-crash", "t-crash", "running", "default").await;
-    test_helpers::seed_tool_call(
-        &pool,
-        "tc-crash",
-        "r-crash",
-        "t-crash",
-        "read",
-        "running",
-    )
-    .await;
+    test_helpers::seed_tool_call(&pool, "tc-crash", "r-crash", "t-crash", "read", "running").await;
 
     // Simulate crash recovery: mark dangling runs as interrupted
     sqlx::query(

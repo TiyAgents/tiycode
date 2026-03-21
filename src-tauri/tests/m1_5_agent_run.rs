@@ -7,7 +7,10 @@
 
 mod test_helpers;
 
+use std::fs;
+
 use sqlx::Row;
+use tempfile::tempdir;
 
 // =========================================================================
 // T1.5.1 — Run lifecycle state machine
@@ -325,7 +328,9 @@ async fn test_build_session_spec_resolves_primary_model_and_profile_prompt() {
         .system_prompt
         .contains("Always answer in concise engineering prose."));
     assert!(spec.system_prompt.contains("Use agent_research"));
-    assert!(spec.system_prompt.contains("Use agent_review with target='plan'"));
+    assert!(spec
+        .system_prompt
+        .contains("Use agent_review with target='plan'"));
     assert_eq!(spec.history_messages.len(), 1);
 }
 
@@ -382,6 +387,72 @@ async fn test_build_session_spec_adds_plan_mode_guardrails() {
 
     assert_eq!(spec.tool_profile_name, "plan_read_only");
     assert!(spec.system_prompt.contains("Plan mode is active."));
+}
+
+#[tokio::test]
+async fn test_build_session_spec_includes_structured_runtime_context_sections() {
+    use tiy_agent_lib::core::agent_session::build_session_spec;
+
+    let pool = test_helpers::setup_test_pool().await;
+    let temp_dir = tempdir().unwrap();
+    let workspace_path = temp_dir.path().to_string_lossy().to_string();
+
+    fs::write(temp_dir.path().join("CLAUDE.md"), "Claude instructions").unwrap();
+    fs::write(temp_dir.path().join("AGENTS.md"), "Agents instructions").unwrap();
+
+    test_helpers::seed_workspace(&pool, "ws-ctx", &workspace_path).await;
+    test_helpers::seed_thread(&pool, "t-ctx", "ws-ctx").await;
+    test_helpers::seed_message(&pool, "m-ctx", "t-ctx", "user", "Inspect the setup").await;
+    test_helpers::seed_policy(&pool, "approval_policy", r#""require_all""#).await;
+
+    sqlx::query(
+        "INSERT INTO providers (
+            id, provider_kind, provider_key, name, protocol_type, base_url,
+            api_key_encrypted, enabled, mapping_locked
+         ) VALUES ('prov-ctx', 'builtin', 'openai', 'OpenAI', 'openai',
+                   'https://api.openai.com/v1', 'sk-test', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let model_plan = serde_json::json!({
+        "primary": {
+            "providerId": "prov-ctx",
+            "modelRecordId": "model-record-ctx",
+            "providerType": "openai",
+            "providerName": "OpenAI",
+            "model": "gpt-4.1-mini",
+            "modelId": "gpt-4.1-mini",
+            "modelDisplayName": "GPT-4.1 Mini",
+            "baseUrl": "https://api.openai.com/v1"
+        }
+    });
+
+    let spec = build_session_spec(
+        &pool,
+        "run-ctx",
+        "t-ctx",
+        &workspace_path,
+        "default",
+        &model_plan,
+    )
+    .await
+    .unwrap();
+
+    assert!(spec
+        .system_prompt
+        .contains("## Project Context (workspace instructions)"));
+    assert!(spec.system_prompt.contains("### AGENTS.md"));
+    assert!(spec.system_prompt.contains("Agents instructions"));
+    assert!(!spec.system_prompt.contains("Claude instructions"));
+    assert!(spec.system_prompt.contains("## System Environment"));
+    assert!(spec.system_prompt.contains("## Sandbox & Permissions"));
+    assert!(spec.system_prompt.contains("Approval policy: require_all."));
+    assert!(spec.system_prompt.contains("## Shell Tooling Guide"));
+    assert!(spec
+        .system_prompt
+        .contains(&format!("Workspace path: {workspace_path}")));
 }
 
 #[tokio::test]
