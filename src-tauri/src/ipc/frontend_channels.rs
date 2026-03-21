@@ -127,6 +127,11 @@ pub enum ThreadStreamEvent {
     RunCompleted {
         run_id: String,
     },
+    RunLimitReached {
+        run_id: String,
+        error: String,
+        max_turns: usize,
+    },
     RunFailed {
         run_id: String,
         error: String,

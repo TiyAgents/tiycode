@@ -345,6 +345,13 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         type: rawEvent.type,
         runId: readRequiredString(rawEvent, "runId", "run_id"),
       };
+    case "run_limit_reached":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        error: readRequiredString(rawEvent, "error", "error"),
+        maxTurns: Number(readValue(rawEvent, "maxTurns", "max_turns") ?? 0),
+      };
     case "run_failed":
       return {
         type: rawEvent.type,

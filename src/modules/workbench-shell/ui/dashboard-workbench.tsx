@@ -215,6 +215,7 @@ function mapRunStateToWorkbenchThreadStatus(
     case "running":
       return "running";
     case "waiting_approval":
+    case "limit_reached":
       return "needs-reply";
     case "interrupted":
       return "interrupted";
@@ -235,6 +236,8 @@ function mapRunFinishedStatusToThreadStatus(
       return "interrupted";
     case "cancelled":
       return "interrupted";
+    case "limit_reached":
+      return "needs-reply";
     default:
       return "completed";
   }

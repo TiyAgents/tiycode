@@ -125,6 +125,7 @@ impl HelperAgentOrchestrator {
         let last_usage = Arc::new(StdMutex::new(None::<Usage>));
 
         let agent = Arc::new(Agent::with_model(request.model_role.model.clone()));
+        agent.set_max_turns(crate::desktop_agent_max_turns!());
         agent.set_system_prompt(build_helper_system_prompt(
             &request.system_prompt,
             helper_profile,
@@ -716,6 +717,23 @@ fn describe_subagent_action(
             succeeded_message: "Captured recent thread Terminal panel output".to_string(),
             failed_message: "Failed reading recent thread Terminal panel output".to_string(),
         },
+        "shell" => {
+            let command = input
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("command");
+            let short_command = if command.len() > 60 {
+                format!("{}…", &command[..57])
+            } else {
+                command.to_string()
+            };
+            SubagentActionDescriptor {
+                current_action: format!("running `{short_command}`"),
+                started_message: format!("Running `{short_command}`"),
+                succeeded_message: format!("Finished running `{short_command}`"),
+                failed_message: format!("Failed running `{short_command}`"),
+            }
+        }
         _ => SubagentActionDescriptor {
             current_action: format!("running {tool_name}"),
             started_message: format!("Running {tool_name}"),

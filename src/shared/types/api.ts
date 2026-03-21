@@ -196,6 +196,7 @@ export type ThreadStatus =
   | "idle"
   | "running"
   | "waiting_approval"
+  | "needs_reply"
   | "interrupted"
   | "failed"
   | "archived";
@@ -231,6 +232,7 @@ export type RunStatus =
   | "waiting_tool_result"
   | "cancelling"
   | "completed"
+  | "limit_reached"
   | "failed"
   | "denied"
   | "interrupted"
@@ -424,6 +426,7 @@ export type ThreadStreamEvent =
     }
   | { type: "run_checkpointed"; runId: string }
   | { type: "run_completed"; runId: string }
+  | { type: "run_limit_reached"; runId: string; error: string; maxTurns: number }
   | { type: "run_failed"; runId: string; error: string }
   | { type: "run_cancelled"; runId: string }
   | { type: "run_interrupted"; runId: string };

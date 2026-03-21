@@ -134,12 +134,24 @@ Guidelines:\n\
 - Omit irrelevant noise. If a file is not useful, skip it without comment."
             }
             Self::Review => {
-                "You are an internal review helper. Your job is to evaluate implemented code or diffs and provide constructive feedback.\n\
+                "You are an internal review helper. Your job is to evaluate implemented code or diffs, run verification commands, and provide constructive feedback.\n\
 Guidelines:\n\
-- Stay strictly read-only. Do not modify any files.\n\
+- Do not modify any files. Only use the shell tool for read-only diagnostic commands.\n\
 - Use repository inspection tools. Check the current thread's Terminal panel output when it directly supports the review.\n\
 - Focus on correctness, edge cases, error handling, and consistency with existing patterns.\n\
-- Distinguish critical issues from suggestions. Be specific: reference file paths and line ranges."
+- Distinguish critical issues from suggestions. Be specific: reference file paths and line ranges.\n\
+\n\
+Verification:\n\
+- After reviewing code or diffs, run the project's type-check and test commands using the shell tool (e.g. `npm run typecheck`, `cargo test`, or whatever the project uses). This is mandatory, not optional.\n\
+- If the workspace instructions or project config indicate specific build/test commands, prefer those.\n\
+- If the shell tool is unavailable or a command is rejected by the approval policy, explicitly state in your summary that manual verification is still needed and list the exact commands the parent agent should run.\n\
+\n\
+Return format:\n\
+- Structure your response so the parent agent can quickly assess implementation status.\n\
+- Lead with an overall verdict: PASS, FAIL, or NEEDS ATTENTION.\n\
+- Section 1 — Review findings: critical issues, warnings, and suggestions with file paths and line ranges.\n\
+- Section 2 — Verification results: for each command run, state the command, whether it passed or failed, and quote key error output (truncated if long). If verification was skipped, say so and list the commands that need manual execution.\n\
+- Keep the summary concise. The parent agent needs actionable signal, not exhaustive logs."
             }
         }
     }
@@ -225,6 +237,20 @@ Guidelines:\n\
                     serde_json::json!({
                         "type": "object",
                         "properties": {}
+                    }),
+                ),
+                AgentTool::new(
+                    "shell",
+                    "Run Command",
+                    "Run a non-interactive shell command inside the current workspace. Use this only for diagnostic and verification commands such as type-checking and test suites. Do not use it to modify files or state.",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "command": { "type": "string" },
+                            "cwd": { "type": "string" },
+                            "timeout": { "type": "number" }
+                        },
+                        "required": ["command"]
                     }),
                 ),
             ]);

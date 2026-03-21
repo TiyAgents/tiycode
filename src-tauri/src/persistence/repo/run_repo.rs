@@ -58,7 +58,7 @@ pub async fn insert(pool: &SqlitePool, r: &RunInsert) -> Result<(), AppError> {
 pub async fn update_status(pool: &SqlitePool, id: &str, status: &str) -> Result<(), AppError> {
     let is_terminal = matches!(
         status,
-        "completed" | "failed" | "denied" | "interrupted" | "cancelled"
+        "completed" | "failed" | "denied" | "interrupted" | "cancelled" | "limit_reached"
     );
 
     if is_terminal {
@@ -141,7 +141,7 @@ pub async fn find_active_by_thread(
                 cache_read_tokens, cache_write_tokens, total_tokens
          FROM thread_runs
          WHERE thread_id = ?
-           AND status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled', 'waiting_approval')
+           AND status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled', 'limit_reached', 'waiting_approval')
          ORDER BY started_at DESC
          LIMIT 1",
     )
@@ -178,6 +178,7 @@ pub async fn list_thread_ids_with_active_runs(pool: &SqlitePool) -> Result<Vec<S
         "SELECT DISTINCT thread_id
          FROM thread_runs
          WHERE status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled')
+           AND status != 'limit_reached'
            AND status != 'waiting_approval'
            AND finished_at IS NULL",
     )
@@ -197,7 +198,7 @@ pub async fn interrupt_active_runs(pool: &SqlitePool) -> Result<u64, AppError> {
                  'The app closed or the run was terminated before completion. Restarted in interrupted state.'
              ),
              finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled')
+         WHERE status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled', 'limit_reached')
            AND status != 'waiting_approval'
            AND finished_at IS NULL",
     )

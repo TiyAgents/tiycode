@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 use sqlx::SqlitePool;
-use tiy_core::agent::{Agent, AgentMessage, AgentTool, AgentToolResult, ToolExecutionMode};
+use tiy_core::agent::{
+    Agent, AgentError, AgentMessage, AgentTool, AgentToolResult, ToolExecutionMode,
+};
 use tiy_core::thinking::ThinkingLevel;
 use tiy_core::types::{
     AssistantMessage, AssistantMessageEvent, ContentBlock, Cost, InputType, Model, Provider,
@@ -13,15 +15,15 @@ use tiy_core::types::{
 };
 use tokio::sync::mpsc;
 
+use crate::core::plan_checkpoint::{
+    approval_prompt_markdown, build_approval_prompt_metadata, build_plan_artifact_from_tool_input,
+    build_plan_message_metadata, plan_markdown,
+};
 use crate::core::subagent::{
     runtime_orchestration_tools, HelperAgentOrchestrator, HelperRunRequest,
     RuntimeOrchestrationTool, SubagentProfile, TERM_CLOSE_TOOL_DESCRIPTION,
     TERM_OUTPUT_TOOL_DESCRIPTION, TERM_PANEL_USAGE_NOTE, TERM_RESTART_TOOL_DESCRIPTION,
     TERM_STATUS_TOOL_DESCRIPTION, TERM_WRITE_TOOL_DESCRIPTION,
-};
-use crate::core::plan_checkpoint::{
-    approval_prompt_markdown, build_approval_prompt_metadata, build_plan_artifact_from_tool_input,
-    build_plan_message_metadata, plan_markdown,
 };
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
@@ -186,6 +188,7 @@ impl AgentSession {
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak_self| {
             let agent = Arc::new(Agent::with_model(spec.model_plan.primary.model.clone()));
+            agent.set_max_turns(crate::desktop_agent_max_turns!());
             configure_agent(&agent, &spec, weak_self.clone());
 
             Self {
@@ -285,6 +288,12 @@ impl AgentSession {
                 } else if self.checkpoint_requested.load(Ordering::SeqCst) {
                     let _ = self.event_tx.send(ThreadStreamEvent::RunCheckpointed {
                         run_id: self.spec.run_id.clone(),
+                    });
+                } else if let AgentError::MaxTurnsReached(max_turns) = &error {
+                    let _ = self.event_tx.send(ThreadStreamEvent::RunLimitReached {
+                        run_id: self.spec.run_id.clone(),
+                        error: error.to_string(),
+                        max_turns: *max_turns,
                     });
                 } else {
                     let _ = self.event_tx.send(ThreadStreamEvent::RunFailed {
@@ -610,7 +619,8 @@ impl AgentSession {
     }
 
     async fn next_plan_revision(&self) -> Result<u32, AppError> {
-        let messages = message_repo::list_recent(&self.pool, &self.spec.thread_id, None, 256).await?;
+        let messages =
+            message_repo::list_recent(&self.pool, &self.spec.thread_id, None, 256).await?;
         let next = messages
             .iter()
             .filter(|message| message.message_type == "plan")
@@ -1165,16 +1175,17 @@ fn resolve_helper_model_role(
     tool: RuntimeOrchestrationTool,
 ) -> ResolvedModelRole {
     match tool {
-        RuntimeOrchestrationTool::Explore | RuntimeOrchestrationTool::Review => {
-            model_plan
-                .auxiliary
-                .clone()
-                .unwrap_or_else(|| model_plan.primary.clone())
-        }
+        RuntimeOrchestrationTool::Explore | RuntimeOrchestrationTool::Review => model_plan
+            .auxiliary
+            .clone()
+            .unwrap_or_else(|| model_plan.primary.clone()),
     }
 }
 
-pub(crate) fn convert_history_messages(messages: &[MessageRecord], model: &Model) -> Vec<AgentMessage> {
+pub(crate) fn convert_history_messages(
+    messages: &[MessageRecord],
+    model: &Model,
+) -> Vec<AgentMessage> {
     messages
         .iter()
         .filter(|message| message.message_type == "plain_message")
@@ -2433,10 +2444,7 @@ mod tests {
     fn update_plan_tool_is_available_in_both_runtime_profiles() {
         for profile in [DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE] {
             let tools = runtime_tools_for_profile(profile);
-            let tool_names: Vec<&str> = tools
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect();
+            let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
             assert!(tool_names.contains(&"update_plan"));
         }

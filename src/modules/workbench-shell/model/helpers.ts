@@ -362,6 +362,7 @@ function mapThreadStatus(status: ApiThreadStatus): WorkbenchThreadStatus {
     case "running":
       return "running";
     case "waiting_approval":
+    case "needs_reply":
       return "needs-reply";
     case "failed":
       return "failed";

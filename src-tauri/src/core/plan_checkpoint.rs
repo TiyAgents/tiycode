@@ -111,7 +111,9 @@ pub fn build_approval_prompt_metadata(
             },
             PlanApprovalOption {
                 action: PlanApprovalAction::ApplyPlanWithContextReset,
-                label: PlanApprovalAction::ApplyPlanWithContextReset.label().to_string(),
+                label: PlanApprovalAction::ApplyPlanWithContextReset
+                    .label()
+                    .to_string(),
             },
         ],
         expires_on_new_user_message: true,
@@ -187,7 +189,12 @@ pub fn build_plan_artifact_from_tool_input(
         .to_string();
 
     let summary = root
-        .and_then(|value| value.get("summary").or_else(|| value.get("description")).or_else(|| value.get("overview")))
+        .and_then(|value| {
+            value
+                .get("summary")
+                .or_else(|| value.get("description"))
+                .or_else(|| value.get("overview"))
+        })
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -216,9 +223,11 @@ pub fn build_plan_artifact_from_tool_input(
         });
 
     let risks = read_string_list(root.and_then(|value| value.get("risks")));
-    let open_questions = read_string_list(
-        root.and_then(|value| value.get("openQuestions").or_else(|| value.get("open_questions"))),
-    );
+    let open_questions = read_string_list(root.and_then(|value| {
+        value
+            .get("openQuestions")
+            .or_else(|| value.get("open_questions"))
+    }));
     let needs_context_reset_option = root
         .and_then(|value| value.get("needsContextResetOption"))
         .and_then(serde_json::Value::as_bool)
@@ -237,7 +246,11 @@ pub fn build_plan_artifact_from_tool_input(
 }
 
 fn parse_step(step: &serde_json::Value, index: usize) -> Option<PlanStep> {
-    if let Some(value) = step.as_str().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(value) = step
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         return Some(PlanStep {
             id: format!("step-{}", index + 1),
             title: value.to_string(),
@@ -341,7 +354,10 @@ mod tests {
         assert_eq!(artifact.plan_revision, 3);
         assert_eq!(artifact.steps.len(), 2);
         assert_eq!(artifact.steps[0].title, "Remove helper plan tool");
-        assert_eq!(artifact.steps[1].files, vec!["src-tauri/src/core/agent_run_manager.rs"]);
+        assert_eq!(
+            artifact.steps[1].files,
+            vec!["src-tauri/src/core/agent_run_manager.rs"]
+        );
     }
 
     #[test]
@@ -354,7 +370,8 @@ mod tests {
             1,
         );
         let metadata = build_plan_message_metadata(artifact.clone(), "run-1", "plan");
-        let parsed = parse_plan_message_metadata(&serde_json::to_value(&metadata).unwrap()).unwrap();
+        let parsed =
+            parse_plan_message_metadata(&serde_json::to_value(&metadata).unwrap()).unwrap();
         assert_eq!(parsed.artifact, artifact);
 
         let approval = build_approval_prompt_metadata(artifact.plan_revision, "msg-plan");
@@ -362,7 +379,10 @@ mod tests {
             parse_approval_prompt_metadata(&serde_json::to_value(&approval).unwrap()).unwrap();
         assert_eq!(parsed_approval.plan_revision, 1);
         assert_eq!(parsed_approval.options.len(), 2);
-        assert_eq!(parsed_approval.options[0].action, PlanApprovalAction::ApplyPlan);
+        assert_eq!(
+            parsed_approval.options[0].action,
+            PlanApprovalAction::ApplyPlan
+        );
         assert!(approval_prompt_markdown(&artifact).contains("Implement checkpoint"));
     }
 }

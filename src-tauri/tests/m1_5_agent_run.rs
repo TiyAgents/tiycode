@@ -125,6 +125,35 @@ async fn test_run_cancellation() {
     assert_eq!(row.get::<String, _>("status"), "cancelled");
 }
 
+#[tokio::test]
+async fn test_limit_reached_run_syncs_thread_to_needs_reply() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-limit", "/tmp/limit").await;
+    test_helpers::seed_thread(&pool, "t-limit", "ws-limit").await;
+    test_helpers::seed_run(&pool, "r-limit", "t-limit", "running", "default").await;
+
+    sqlx::query(
+        "UPDATE thread_runs
+         SET status = 'limit_reached',
+             error_message = 'Agent reached the maximum turn limit (25) before producing a final response',
+             finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE id = 'r-limit'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let manager = ThreadManager::new(pool.clone());
+    manager.sync_status("t-limit").await.unwrap();
+
+    let row = sqlx::query("SELECT status FROM threads WHERE id = 't-limit'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(row.get::<String, _>("status"), "needs_reply");
+}
+
 // =========================================================================
 // T1.5.2 — Crash recovery (interrupted runs)
 // =========================================================================
@@ -542,9 +571,7 @@ async fn test_build_session_spec_adds_plan_mode_guardrails() {
     assert!(spec
         .system_prompt
         .contains("Once you publish a plan with update_plan"));
-    assert!(spec
-        .system_prompt
-        .contains("pause for user approval"));
+    assert!(spec.system_prompt.contains("pause for user approval"));
 }
 
 #[tokio::test]

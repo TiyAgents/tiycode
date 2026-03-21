@@ -5,11 +5,12 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ThreadStatus {
     Idle,
     Running,
     WaitingApproval,
+    NeedsReply,
     Interrupted,
     Failed,
     Archived,
@@ -21,6 +22,7 @@ impl ThreadStatus {
             Self::Idle => "idle",
             Self::Running => "running",
             Self::WaitingApproval => "waiting_approval",
+            Self::NeedsReply => "needs_reply",
             Self::Interrupted => "interrupted",
             Self::Failed => "failed",
             Self::Archived => "archived",
@@ -32,6 +34,7 @@ impl ThreadStatus {
             "idle" => Self::Idle,
             "running" => Self::Running,
             "waiting_approval" => Self::WaitingApproval,
+            "needs_reply" => Self::NeedsReply,
             "interrupted" => Self::Interrupted,
             "failed" => Self::Failed,
             "archived" => Self::Archived,

@@ -22,9 +22,8 @@ use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
 use crate::core::context_compression::summarize_messages;
 use crate::core::plan_checkpoint::{
     ApprovalPromptMetadata, PlanApprovalAction, PlanMessageMetadata,
-    IMPLEMENTATION_PLAN_APPROVAL_KIND,
-    IMPLEMENTATION_PLAN_APPROVED_STATE, IMPLEMENTATION_PLAN_PENDING_STATE,
-    IMPLEMENTATION_PLAN_SUPERSEDED_STATE,
+    IMPLEMENTATION_PLAN_APPROVAL_KIND, IMPLEMENTATION_PLAN_APPROVED_STATE,
+    IMPLEMENTATION_PLAN_PENDING_STATE, IMPLEMENTATION_PLAN_SUPERSEDED_STATE,
 };
 use crate::core::sleep_manager::SleepManager;
 use crate::ipc::app_events::{
@@ -256,24 +255,24 @@ impl AgentRunManager {
                 "The planning run for this approval is missing.",
             )
         })?;
-        let model_plan_json = run_repo::find_effective_model_plan_json(&self.pool, &planning_run_id)
-            .await?
-            .ok_or_else(|| {
-                AppError::recoverable(
-                    ErrorSource::Thread,
-                    "thread.plan_approval.model_plan_missing",
-                    "The approved plan is missing its runtime model plan.",
-                )
-            })?;
-        let model_plan_value = serde_json::from_str::<serde_json::Value>(&model_plan_json).map_err(
-            |error| {
+        let model_plan_json =
+            run_repo::find_effective_model_plan_json(&self.pool, &planning_run_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::recoverable(
+                        ErrorSource::Thread,
+                        "thread.plan_approval.model_plan_missing",
+                        "The approved plan is missing its runtime model plan.",
+                    )
+                })?;
+        let model_plan_value = serde_json::from_str::<serde_json::Value>(&model_plan_json)
+            .map_err(|error| {
                 AppError::recoverable(
                     ErrorSource::Thread,
                     "thread.plan_approval.model_plan_invalid",
                     format!("Failed to parse runtime model plan: {error}"),
                 )
-            },
-        )?;
+            })?;
         let (profile_id, provider_id, model_id) = extract_run_model_refs(&model_plan_value);
         let implementation_prompt =
             build_implementation_handoff_prompt(&plan_metadata, action.clone());
@@ -492,7 +491,8 @@ impl AgentRunManager {
         thread_id: &str,
         requested_message_id: Option<&str>,
     ) -> Result<(MessageRecord, ApprovalPromptMetadata), AppError> {
-        let Some((message, metadata)) = self.find_latest_pending_plan_approval(thread_id).await? else {
+        let Some((message, metadata)) = self.find_latest_pending_plan_approval(thread_id).await?
+        else {
             return Err(AppError::recoverable(
                 ErrorSource::Thread,
                 "thread.plan_approval.not_found",
@@ -615,6 +615,10 @@ impl AgentRunManager {
             ThreadStreamEvent::RunCompleted { .. } => {
                 self.finish_run(run_id, "completed", None).await?;
             }
+            ThreadStreamEvent::RunLimitReached { error, .. } => {
+                self.finish_run(run_id, "limit_reached", Some(error))
+                    .await?;
+            }
             ThreadStreamEvent::RunFailed { error, .. } => {
                 self.finish_run(run_id, "failed", Some(error)).await?;
             }
@@ -648,12 +652,14 @@ impl AgentRunManager {
                 );
             }
             ThreadStreamEvent::RunCompleted { .. }
+            | ThreadStreamEvent::RunLimitReached { .. }
             | ThreadStreamEvent::RunFailed { .. }
             | ThreadStreamEvent::RunCancelled { .. }
             | ThreadStreamEvent::RunInterrupted { .. } => {
                 let thread_id = self.get_thread_id(run_id).await;
                 let status = match &event {
                     ThreadStreamEvent::RunCompleted { .. } => "completed",
+                    ThreadStreamEvent::RunLimitReached { .. } => "limit_reached",
                     ThreadStreamEvent::RunFailed { .. } => "failed",
                     ThreadStreamEvent::RunCancelled { .. } => "cancelled",
                     ThreadStreamEvent::RunInterrupted { .. } => "interrupted",
@@ -675,6 +681,7 @@ impl AgentRunManager {
             event,
             ThreadStreamEvent::RunCheckpointed { .. }
                 | ThreadStreamEvent::RunCompleted { .. }
+                | ThreadStreamEvent::RunLimitReached { .. }
                 | ThreadStreamEvent::RunFailed { .. }
                 | ThreadStreamEvent::RunCancelled { .. }
                 | ThreadStreamEvent::RunInterrupted { .. }
@@ -872,6 +879,7 @@ impl AgentRunManager {
 
         let thread_status = match status {
             "failed" | "denied" => ThreadStatus::Failed,
+            "limit_reached" => ThreadStatus::NeedsReply,
             "interrupted" => ThreadStatus::Interrupted,
             _ => ThreadStatus::Idle,
         };
@@ -1295,6 +1303,7 @@ fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> bool {
             | ThreadStreamEvent::ThreadUsageUpdated { .. }
             | ThreadStreamEvent::RunCheckpointed { .. }
             | ThreadStreamEvent::RunCompleted { .. }
+            | ThreadStreamEvent::RunLimitReached { .. }
             | ThreadStreamEvent::RunFailed { .. }
             | ThreadStreamEvent::RunCancelled { .. }
             | ThreadStreamEvent::RunInterrupted { .. }

@@ -66,6 +66,7 @@ export type RunState =
   | "idle"
   | "running"
   | "waiting_approval"
+  | "limit_reached"
   | "completed"
   | "failed"
   | "cancelled"
@@ -539,6 +540,12 @@ export class ThreadStream {
       case "run_completed":
         this.currentRunId = null;
         this.onRunStateChange?.("completed", event.runId);
+        break;
+
+      case "run_limit_reached":
+        this.currentRunId = null;
+        this.onRunStateChange?.("limit_reached", event.runId);
+        this.onError?.(event.error, event.runId);
         break;
 
       case "run_failed":
