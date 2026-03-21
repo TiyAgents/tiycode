@@ -1,6 +1,16 @@
 import type { ChatStatus, FileUIPart } from "ai";
-import { Bot, CheckIcon, FileIcon, ImageIcon, PaperclipIcon, XIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import {
+  Bot,
+  BracesIcon,
+  CheckIcon,
+  FileCodeIcon,
+  FileIcon,
+  FileTextIcon,
+  ImageIcon,
+  PaperclipIcon,
+  XIcon,
+} from "lucide-react";
+import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
 import {
   ModelSelector,
   ModelSelectorContent,
@@ -29,14 +39,17 @@ import {
   getProfilePrimaryModelLabel,
 } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import type { AgentProfile, ProviderEntry } from "@/modules/settings-center/model/types";
+import type { RunMode } from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { ModelBrandIcon } from "@/shared/ui/model-brand-icon";
+import { Switch } from "@/shared/ui/switch";
 
 type ComposerAttachment = {
   id: string;
   mediaType?: string;
   name: string;
+  url?: string;
 };
 
 type WorkbenchPromptComposerProps = {
@@ -45,11 +58,15 @@ type WorkbenchPromptComposerProps = {
   canSubmitWhenAttachmentsOnly?: boolean;
   error?: string | null;
   onErrorMessageChange?: (message: string | null) => void;
+  onRunModeChange?: (mode: RunMode) => void;
   onSelectAgentProfile: (id: string) => void;
   onStop: () => void;
   onSubmit: (message: PromptInputMessage) => void;
   placeholder: string;
   providers: ReadonlyArray<ProviderEntry>;
+  runMode?: RunMode;
+  runModeDisabled?: boolean;
+  showRunModeToggle?: boolean;
   status: ChatStatus;
   suggestions?: ReadonlyArray<string>;
   textareaClassName?: string;
@@ -57,15 +74,121 @@ type WorkbenchPromptComposerProps = {
   onValueChange: (value: string) => void;
 };
 
-function getAttachmentGlyph(mediaType?: string) {
+function getFileExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+function getExtensionColor(ext: string): string {
+  const colorMap: Record<string, string> = {
+    pdf: "bg-red-500/15 text-red-400",
+    md: "bg-purple-500/15 text-purple-400",
+    json: "bg-yellow-500/15 text-yellow-400",
+    ts: "bg-blue-500/15 text-blue-400",
+    tsx: "bg-blue-500/15 text-blue-400",
+    txt: "bg-gray-500/15 text-gray-400",
+    png: "bg-emerald-500/15 text-emerald-400",
+    jpg: "bg-emerald-500/15 text-emerald-400",
+    jpeg: "bg-emerald-500/15 text-emerald-400",
+    gif: "bg-emerald-500/15 text-emerald-400",
+    webp: "bg-emerald-500/15 text-emerald-400",
+    svg: "bg-emerald-500/15 text-emerald-400",
+  };
+  return colorMap[ext] || "bg-gray-500/15 text-gray-400";
+}
+
+function getAttachmentGlyph(mediaType?: string, name?: string) {
+  const ext = name ? getFileExtension(name) : "";
+
   if (mediaType?.startsWith("image/")) {
     return <ImageIcon className="size-3.5" />;
+  }
+  if (mediaType === "application/pdf" || ext === "pdf") {
+    return <FileTextIcon className="size-3.5" />;
+  }
+  if (mediaType === "text/markdown" || ext === "md") {
+    return <FileCodeIcon className="size-3.5" />;
+  }
+  if (mediaType === "application/json" || ext === "json") {
+    return <BracesIcon className="size-3.5" />;
+  }
+  if (ext === "ts" || ext === "tsx") {
+    return <FileCodeIcon className="size-3.5" />;
+  }
+  if (mediaType === "text/plain" || ext === "txt") {
+    return <FileTextIcon className="size-3.5" />;
   }
 
   return <FileIcon className="size-3.5" />;
 }
 
-function AttachmentChip({
+function isImageAttachment(attachment: ComposerAttachment): boolean {
+  return Boolean(attachment.mediaType?.startsWith("image/"));
+}
+
+function AttachmentImageCard({
+  attachment,
+  onRemove,
+  compact = false,
+}: {
+  attachment: ComposerAttachment;
+  onRemove?: (id: string) => void;
+  compact?: boolean;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+
+  const handleImgError = (event: SyntheticEvent<HTMLImageElement>) => {
+    event.currentTarget.style.display = "none";
+    setImgFailed(true);
+  };
+
+  return (
+    <div
+      className={cn(
+        "group relative overflow-hidden rounded-xl border border-app-border/45 bg-app-surface/60",
+        compact ? "h-[52px] w-[52px]" : "h-[120px] w-[160px]",
+      )}
+    >
+      {attachment.url && !imgFailed ? (
+        <img
+          alt={attachment.name}
+          className="size-full object-cover"
+          decoding="async"
+          onError={handleImgError}
+          src={attachment.url}
+        />
+      ) : (
+        <div className="flex size-full items-center justify-center bg-app-surface-muted/60">
+          <ImageIcon className={cn(compact ? "size-5" : "size-8", "text-app-subtle")} />
+        </div>
+      )}
+      {/* Filename overlay (message mode, non-compact) */}
+      {!onRemove && !compact ? (
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-2 pb-1.5 pt-4">
+          <span className="block truncate text-[11px] font-medium text-white/90">
+            {attachment.name}
+          </span>
+        </div>
+      ) : null}
+      {/* Remove button (composer mode) */}
+      {onRemove ? (
+        <button
+          aria-label={`移除附件 ${attachment.name}`}
+          className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/50 text-white/90 opacity-0 backdrop-blur-sm transition group-hover:opacity-100"
+          onClick={(event) => {
+            event.preventDefault();
+            onRemove(attachment.id);
+          }}
+          type="button"
+        >
+          <XIcon className="size-3" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function AttachmentFileCard({
   attachment,
   onRemove,
   tone = "message",
@@ -74,19 +197,37 @@ function AttachmentChip({
   onRemove?: (id: string) => void;
   tone?: "composer" | "message";
 }) {
+  const ext = getFileExtension(attachment.name);
+
   return (
     <div
       className={cn(
-        "inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium",
+        "inline-flex max-w-[220px] items-center gap-2.5 rounded-xl border px-3 py-2 text-xs font-medium",
         tone === "composer"
           ? "border-app-border/55 bg-app-surface-muted/80 text-app-foreground"
           : "border-app-border/45 bg-app-surface/60 text-app-muted",
       )}
     >
-      <span className={cn("shrink-0", tone === "composer" ? "text-app-foreground" : "text-app-subtle")}>
-        {getAttachmentGlyph(attachment.mediaType)}
-      </span>
-      <span className="truncate">{attachment.name}</span>
+      {/* Extension badge + icon */}
+      <div className="flex shrink-0 items-center gap-1.5">
+        {ext ? (
+          <span
+            className={cn(
+              "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none",
+              getExtensionColor(ext),
+            )}
+          >
+            {ext}
+          </span>
+        ) : (
+          <span className={cn("shrink-0", tone === "composer" ? "text-app-foreground" : "text-app-subtle")}>
+            {getAttachmentGlyph(attachment.mediaType, attachment.name)}
+          </span>
+        )}
+      </div>
+      {/* Filename */}
+      <span className="min-w-0 truncate">{attachment.name}</span>
+      {/* Remove button */}
       {onRemove ? (
         <button
           aria-label={`移除附件 ${attachment.name}`}
@@ -104,6 +245,23 @@ function AttachmentChip({
   );
 }
 
+function AttachmentCard({
+  attachment,
+  onRemove,
+  compact = false,
+  tone = "message",
+}: {
+  attachment: ComposerAttachment;
+  onRemove?: (id: string) => void;
+  compact?: boolean;
+  tone?: "composer" | "message";
+}) {
+  if (isImageAttachment(attachment)) {
+    return <AttachmentImageCard attachment={attachment} compact={compact} onRemove={onRemove} />;
+  }
+  return <AttachmentFileCard attachment={attachment} onRemove={onRemove} tone={tone} />;
+}
+
 function ComposerAttachmentHeader() {
   const attachments = usePromptInputAttachments();
 
@@ -119,12 +277,14 @@ function ComposerAttachmentHeader() {
           {attachments.files.length} 个附件
         </Badge>
         {attachments.files.map((attachment) => (
-          <AttachmentChip
+          <AttachmentCard
             attachment={{
               id: attachment.id,
               mediaType: attachment.mediaType,
               name: attachment.filename?.trim() || "未命名附件",
+              url: attachment.url,
             }}
+            compact
             key={attachment.id}
             onRemove={attachments.remove}
             tone="composer"
@@ -274,11 +434,44 @@ function ProfileSelectorItem({
   );
 }
 
+function RunModeToggle({
+  disabled = false,
+  onChange,
+  runMode,
+}: {
+  disabled?: boolean;
+  onChange: (mode: RunMode) => void;
+  runMode: RunMode;
+}) {
+  const checked = runMode === "plan";
+
+  return (
+    <div className="inline-flex items-center gap-2">
+      <Switch
+        aria-label="Toggle plan mode"
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={(nextChecked) => onChange(nextChecked ? "plan" : "default")}
+        size="sm"
+      />
+      <span
+        className={cn(
+          "min-w-[6.75rem] text-left text-sm font-medium",
+          checked ? "text-app-info" : "text-app-muted",
+        )}
+      >
+        {checked ? "Plan mode" : "Default mode"}
+      </span>
+    </div>
+  );
+}
+
 export function mapComposerAttachments(files: Array<FileUIPart>) {
   return files.map((file, index) => ({
     id: file.url || `${file.filename || "attachment"}-${index}`,
     mediaType: file.mediaType,
     name: file.filename?.trim() || `附件 ${index + 1}`,
+    url: file.url,
   }));
 }
 
@@ -291,11 +484,27 @@ export function ComposerMessageAttachments({
     return null;
   }
 
+  const imageAttachments = attachments.filter((a) => isImageAttachment(a));
+  const fileAttachments = attachments.filter((a) => !isImageAttachment(a));
+
   return (
-    <div className="mb-3 flex flex-wrap gap-2">
-      {attachments.map((attachment) => (
-        <AttachmentChip attachment={attachment} key={attachment.id} />
-      ))}
+    <div className="mb-3 flex flex-col gap-2">
+      {/* Image attachments — grid layout */}
+      {imageAttachments.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {imageAttachments.map((attachment) => (
+            <AttachmentCard attachment={attachment} key={attachment.id} />
+          ))}
+        </div>
+      ) : null}
+      {/* File attachments — inline chips */}
+      {fileAttachments.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {fileAttachments.map((attachment) => (
+            <AttachmentCard attachment={attachment} key={attachment.id} />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -306,11 +515,15 @@ export function WorkbenchPromptComposer({
   canSubmitWhenAttachmentsOnly = true,
   error,
   onErrorMessageChange,
+  onRunModeChange = () => undefined,
   onSelectAgentProfile,
   onStop,
   onSubmit,
   placeholder,
   providers,
+  runMode = "default",
+  runModeDisabled = false,
+  showRunModeToggle = false,
   status,
   suggestions,
   textareaClassName,
@@ -364,39 +577,52 @@ export function WorkbenchPromptComposer({
               <ComposerAttachmentTrigger />
 
               {activeProfile ? (
-                canSwitchProfiles ? (
-                  <ModelSelector onOpenChange={setProfileSelectorOpen} open={isProfileSelectorOpen}>
-                    <ModelSelectorTrigger asChild>
-                      <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" size="sm">
-                        <ProfileInlineIdentity badge={false} profile={activeProfile} providers={providers} showModel={false} />
-                      </PromptInputButton>
-                    </ModelSelectorTrigger>
-                    <ModelSelectorContent title="Profile Selector">
-                      <ModelSelectorInput placeholder="Search profiles..." />
-                      <ModelSelectorList>
-                        <ModelSelectorEmpty>未找到可用的 profile。</ModelSelectorEmpty>
-                        <ModelSelectorGroup heading="Agent Profiles">
-                          {agentProfiles.map((profile) => (
-                            <ProfileSelectorItem
-                              isActive={profile.id === activeAgentProfileId}
-                              key={profile.id}
-                              onSelect={() => {
-                                onSelectAgentProfile(profile.id);
-                                setProfileSelectorOpen(false);
-                              }}
-                              profile={profile}
-                              providers={providers}
-                            />
-                          ))}
-                        </ModelSelectorGroup>
-                      </ModelSelectorList>
-                    </ModelSelectorContent>
-                  </ModelSelector>
-                ) : (
-                  <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" disabled size="sm">
-                    <ProfileInlineIdentity badge={false} muted profile={activeProfile} providers={providers} showModel={false} />
-                  </PromptInputButton>
-                )
+                <div className="flex items-center gap-2">
+                  {canSwitchProfiles ? (
+                    <ModelSelector onOpenChange={setProfileSelectorOpen} open={isProfileSelectorOpen}>
+                      <ModelSelectorTrigger asChild>
+                        <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" size="sm">
+                          <ProfileInlineIdentity badge={false} profile={activeProfile} providers={providers} showModel={false} />
+                        </PromptInputButton>
+                      </ModelSelectorTrigger>
+                      <ModelSelectorContent title="Profile Selector">
+                        <ModelSelectorInput placeholder="Search profiles..." />
+                        <ModelSelectorList>
+                          <ModelSelectorEmpty>未找到可用的 profile。</ModelSelectorEmpty>
+                          <ModelSelectorGroup heading="Agent Profiles">
+                            {agentProfiles.map((profile) => (
+                              <ProfileSelectorItem
+                                isActive={profile.id === activeAgentProfileId}
+                                key={profile.id}
+                                onSelect={() => {
+                                  onSelectAgentProfile(profile.id);
+                                  setProfileSelectorOpen(false);
+                                }}
+                                profile={profile}
+                                providers={providers}
+                              />
+                            ))}
+                          </ModelSelectorGroup>
+                        </ModelSelectorList>
+                      </ModelSelectorContent>
+                    </ModelSelector>
+                  ) : (
+                    <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" disabled size="sm">
+                      <ProfileInlineIdentity badge={false} muted profile={activeProfile} providers={providers} showModel={false} />
+                    </PromptInputButton>
+                  )}
+
+                  {showRunModeToggle ? (
+                    <>
+                      <span aria-hidden="true" className="h-4 w-px bg-app-border/55" />
+                      <RunModeToggle
+                        disabled={runModeDisabled}
+                        onChange={onRunModeChange}
+                        runMode={runMode}
+                      />
+                    </>
+                  ) : null}
+                </div>
               ) : null}
             </PromptInputTools>
 
