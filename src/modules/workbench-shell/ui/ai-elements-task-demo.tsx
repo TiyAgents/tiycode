@@ -346,7 +346,7 @@ export function AiElementsTaskDemo({
                   我会把这次重构收束成一条真实的任务线程，让每个 AI Elements 组件都在同一条会话里承担明确职责。
                 </MessageResponse>
 
-                <Plan className="mt-5 overflow-hidden rounded-2xl border border-app-border/28 bg-app-surface/28 shadow-none" defaultOpen>
+                <Plan className="mt-5 overflow-hidden rounded-2xl border border-app-border/28 bg-app-surface/28 shadow-none">
                   <PlanHeader>
                     <div className="space-y-3">
                       <PlanTitle>{AI_ELEMENTS_PLAN.title}</PlanTitle>

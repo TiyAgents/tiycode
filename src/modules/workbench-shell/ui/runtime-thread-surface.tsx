@@ -570,6 +570,8 @@ function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
         return "failed";
       case "cancelled":
         return "cancelled";
+      case "limit_reached":
+        return "limit_reached";
       case "interrupted":
         return "interrupted";
       default:
@@ -582,6 +584,8 @@ function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
       return "running";
     case "waiting_approval":
       return "waiting_approval";
+    case "needs_reply":
+      return "limit_reached";
     case "failed":
       return "failed";
     case "interrupted":
@@ -618,14 +622,23 @@ function getSnapshotRuntimeError(snapshot: ThreadSnapshotDto): SurfaceRuntimeErr
     return null;
   }
 
-  if (run.status !== "failed" && run.status !== "denied" && run.status !== "interrupted") {
+  if (
+    run.status !== "failed"
+    && run.status !== "denied"
+    && run.status !== "interrupted"
+    && run.status !== "limit_reached"
+  ) {
     return null;
   }
 
   return {
     message:
       run.errorMessage
-      ?? "The app closed or the run was terminated before completion. This thread was restored as interrupted.",
+      ?? (
+        run.status === "limit_reached"
+          ? "The agent hit its maximum tool/turn budget before it could produce a final reply. Continue the thread to let it pick up from the latest tool results."
+          : "The app closed or the run was terminated before completion. This thread was restored as interrupted."
+      ),
     runId: run.id,
   };
 }
@@ -1787,6 +1800,7 @@ function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
     case "reasoning_updated":
     case "subagent_usage_updated":
     case "thread_usage_updated":
+    case "plan_updated":
       return false;
     default:
       return true;
@@ -2347,7 +2361,13 @@ export function RuntimeThreadSurface({
         setRuntimeError(null);
       }
 
-      if (state === "completed" || state === "failed" || state === "cancelled" || state === "interrupted") {
+      if (
+        state === "completed"
+        || state === "failed"
+        || state === "cancelled"
+        || state === "interrupted"
+        || state === "limit_reached"
+      ) {
         completeThinkingPhase(runId);
       }
 
@@ -2360,7 +2380,13 @@ export function RuntimeThreadSurface({
         return;
       }
 
-      if (state === "completed" || state === "failed" || state === "cancelled" || state === "interrupted") {
+      if (
+        state === "completed"
+        || state === "failed"
+        || state === "cancelled"
+        || state === "interrupted"
+        || state === "limit_reached"
+      ) {
         void loadSnapshot();
       }
     });
@@ -3148,7 +3174,7 @@ export function RuntimeThreadSurface({
                     <div className={spacingClass} key={entry.key}>
                       <Message className="max-w-full" from="assistant">
                         <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                          <Plan className="overflow-hidden rounded-2xl border border-app-border/28 bg-app-surface/28 shadow-none" defaultOpen>
+                          <Plan className="overflow-hidden rounded-2xl border border-app-border/28 bg-app-surface/28 shadow-none">
                             <PlanHeader>
                               <div className="space-y-3">
                                 <div className="flex flex-wrap items-center gap-2 text-xs text-app-subtle">
@@ -3427,7 +3453,11 @@ export function RuntimeThreadSurface({
                       <div className="rounded-2xl border border-app-danger/25 bg-app-danger/8 px-4 py-3 text-sm text-app-danger">
                         <div className="flex items-center gap-2 font-medium">
                           <AlertCircleIcon className="size-4" />
-                        {runState === "interrupted" ? "Last run interrupted" : "Last run failed"}
+                        {runState === "interrupted"
+                          ? "Last run interrupted"
+                          : runState === "limit_reached"
+                            ? "Run paused at turn limit"
+                            : "Last run failed"}
                         </div>
                       <p className="mt-2 whitespace-pre-wrap leading-6 text-app-danger/90">{runtimeError.message}</p>
                     </div>
