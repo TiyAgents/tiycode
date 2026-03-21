@@ -515,6 +515,9 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
     assert!(!spec.system_prompt.contains("```md\n### AGENTS.md"));
     assert!(spec.system_prompt.contains("Agents instructions"));
     assert!(!spec.system_prompt.contains("Claude instructions"));
+    assert!(spec.system_prompt.contains(
+        "Before taking tool actions or making substantive changes, send a brief, friendly reply"
+    ));
     assert!(spec.system_prompt.contains("## System Environment"));
     assert!(spec.system_prompt.contains("## Sandbox & Permissions"));
     assert!(spec.system_prompt.contains("Approval policy: require_all."));

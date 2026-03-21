@@ -549,7 +549,8 @@ function formatHelperKind(kind: string) {
     case "helper_scout":
       return "Research Agent";
     case "helper_planner":
-      return "Planning Agent";
+    case "helper_plan_reviewer":
+      return "Plan Review Agent";
     case "helper_reviewer":
       return "Review Agent";
     default:

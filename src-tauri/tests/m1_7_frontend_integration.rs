@@ -262,14 +262,14 @@ fn test_thread_stream_event_subagent_events_serialization() {
     let event = ThreadStreamEvent::SubagentCompleted {
         run_id: "run-1".into(),
         subtask_id: "sub-1".into(),
-        helper_kind: "helper_planner".into(),
+        helper_kind: "helper_plan_reviewer".into(),
         started_at: "2026-03-20T00:00:00Z".into(),
         summary: Some("Analysis complete".into()),
         snapshot: sample_subagent_snapshot(),
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "subagent_completed");
-    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_planner");
+    assert_eq!(json["helper_kind"].as_str().unwrap(), "helper_plan_reviewer");
     assert_eq!(json["summary"].as_str().unwrap(), "Analysis complete");
 
     // SubagentFailed
@@ -348,7 +348,7 @@ fn test_all_events_have_type_field() {
         ThreadStreamEvent::SubagentCompleted {
             run_id: "r".into(),
             subtask_id: "s".into(),
-            helper_kind: "helper_planner".into(),
+            helper_kind: "helper_plan_reviewer".into(),
             started_at: "2026-03-20T00:00:00Z".into(),
             summary: None,
             snapshot: sample_subagent_snapshot(),

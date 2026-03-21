@@ -125,7 +125,7 @@ impl SubagentProfile {
     pub fn helper_kind(self) -> &'static str {
         match self {
             Self::Scout => "helper_scout",
-            Self::Planner => "helper_planner",
+            Self::Planner => "helper_plan_reviewer",
             Self::Reviewer => "helper_reviewer",
         }
     }

@@ -472,6 +472,13 @@ impl AgentSession {
             .unwrap_or_else(|| self.spec.model_plan.primary.clone());
         let helper_profile = resolve_helper_profile(tool, tool_input);
 
+        if is_plan_review_request(tool, tool_input) {
+            let _ = self.event_tx.send(ThreadStreamEvent::PlanUpdated {
+                run_id: self.spec.run_id.clone(),
+                plan: build_plan_artifact_from_task(&task),
+            });
+        }
+
         let result = self
             .helper_orchestrator
             .run_helper(HelperRunRequest {
@@ -944,6 +951,102 @@ fn resolve_helper_profile(
     }
 }
 
+fn is_plan_review_request(
+    tool: RuntimeOrchestrationTool,
+    tool_input: &serde_json::Value,
+) -> bool {
+    match tool {
+        RuntimeOrchestrationTool::DelegatePlanReview => true,
+        RuntimeOrchestrationTool::DelegateCodeReview => tool_input
+            .get("target")
+            .and_then(serde_json::Value::as_str)
+            .map(|value| value.trim().eq_ignore_ascii_case("plan"))
+            .unwrap_or(false),
+        RuntimeOrchestrationTool::DelegateResearch => false,
+    }
+}
+
+fn strip_plan_step_prefix(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    for prefix in ["- ", "* ", "• "] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let step = rest.trim();
+            if !step.is_empty() {
+                return Some(step.to_string());
+            }
+        }
+    }
+
+    let digit_prefix_len = trimmed
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .count();
+    if digit_prefix_len > 0 {
+        let remainder = trimmed[digit_prefix_len..].trim_start();
+        if let Some(rest) = remainder.strip_prefix('.').or_else(|| remainder.strip_prefix(')')) {
+            let step = rest.trim();
+            if !step.is_empty() {
+                return Some(step.to_string());
+            }
+        }
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("Step ") {
+        let digit_count = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
+        if digit_count > 0 {
+            let remainder = rest[digit_count..].trim_start();
+            if let Some(content) = remainder.strip_prefix(':').or_else(|| remainder.strip_prefix('-')) {
+                let step = content.trim();
+                if !step.is_empty() {
+                    return Some(step.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn build_plan_artifact_from_task(task: &str) -> serde_json::Value {
+    let trimmed = task.trim();
+    let mut steps = Vec::<String>::new();
+    let mut description_lines = Vec::<String>::new();
+
+    for line in trimmed.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(step) = strip_plan_step_prefix(line) {
+            steps.push(step);
+            continue;
+        }
+
+        if steps.is_empty() {
+            description_lines.push(line.to_string());
+        } else {
+            steps.push(line.to_string());
+        }
+    }
+
+    if steps.is_empty() && !trimmed.is_empty() {
+        steps.push(trimmed.to_string());
+    }
+
+    let description = if description_lines.is_empty() {
+        "Reviewing the proposed implementation plan before coding.".to_string()
+    } else {
+        description_lines.join(" ")
+    };
+
+    serde_json::json!({
+        "title": "Plan Under Review",
+        "description": description,
+        "steps": steps,
+    })
+}
+
 fn convert_history_messages(messages: &[MessageRecord], model: &Model) -> Vec<AgentMessage> {
     messages
         .iter()
@@ -1162,6 +1265,7 @@ You help users by reading files, searching code, editing files, executing comman
         build_prompt_section(
             "Behavioral Guidelines",
             "Guidelines:\n\
+- Before taking tool actions or making substantive changes, send a brief, friendly reply that acknowledges the request and states the next step you are about to take.\n\
 - Read files before editing. Understand existing code before making changes.\n\
 - Use edit for precise, surgical changes. Use write only for new files or complete rewrites.\n\
 - Prefer search and find over shell for file exploration — they are faster and respect ignore patterns.\n\
@@ -1637,10 +1741,12 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_profile_response_prompt_parts, collect_workspace_instruction_snippet,
-        handle_agent_event, normalize_profile_response_language, normalize_profile_response_style,
-        response_style_system_instruction, runtime_security_config, standard_tool_timeout,
-        ProfileResponseStyle, STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
+        build_plan_artifact_from_task, build_profile_response_prompt_parts,
+        collect_workspace_instruction_snippet, handle_agent_event, is_plan_review_request,
+        normalize_profile_response_language, normalize_profile_response_style,
+        resolve_helper_profile, response_style_system_instruction, runtime_security_config,
+        standard_tool_timeout, ProfileResponseStyle, STANDARD_TOOL_TIMEOUT_SECS,
+        SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
     use std::sync::Mutex as StdMutex;
@@ -1651,6 +1757,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use crate::ipc::frontend_channels::ThreadStreamEvent;
+    use crate::core::subagent::{RuntimeOrchestrationTool, SubagentProfile};
     use crate::model::provider::AgentProfileRecord;
 
     const TEST_CONTEXT_WINDOW: &str = "128000";
@@ -1989,5 +2096,43 @@ mod tests {
         assert_eq!(usage_events[0].input_tokens, 256);
         assert_eq!(usage_events[0].output_tokens, 32);
         assert_eq!(usage_events[0].total_tokens, 288);
+    }
+
+    #[test]
+    fn plan_review_request_detection_matches_review_targets() {
+        assert!(is_plan_review_request(
+            RuntimeOrchestrationTool::DelegatePlanReview,
+            &serde_json::json!({ "task": "Review this plan" }),
+        ));
+        assert!(is_plan_review_request(
+            RuntimeOrchestrationTool::DelegateCodeReview,
+            &serde_json::json!({ "task": "Review this plan", "target": "plan" }),
+        ));
+        assert!(!is_plan_review_request(
+            RuntimeOrchestrationTool::DelegateCodeReview,
+            &serde_json::json!({ "task": "Review this diff", "target": "diff" }),
+        ));
+    }
+
+    #[test]
+    fn plan_review_target_uses_planning_helper_profile() {
+        assert_eq!(
+            resolve_helper_profile(
+                RuntimeOrchestrationTool::DelegateCodeReview,
+                &serde_json::json!({ "task": "Review this plan", "target": "plan" }),
+            ),
+            SubagentProfile::Planner,
+        );
+    }
+
+    #[test]
+    fn build_plan_artifact_extracts_numbered_steps() {
+        let artifact = build_plan_artifact_from_task(
+            "Review this plan before coding.\n1. Update runtime-thread-surface.\n2. Validate typecheck.",
+        );
+
+        assert_eq!(artifact["title"].as_str(), Some("Plan Under Review"));
+        assert_eq!(artifact["steps"][0].as_str(), Some("Update runtime-thread-surface."));
+        assert_eq!(artifact["steps"][1].as_str(), Some("Validate typecheck."));
     }
 }
