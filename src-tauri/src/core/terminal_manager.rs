@@ -470,7 +470,7 @@ impl TerminalManager {
             .await
             .ok_or_else(|| AppError::not_found(ErrorSource::Terminal, "terminal session"))?;
 
-        Ok(session.recent_output())
+        Ok(sanitize_terminal_output_for_agent(&session.recent_output()))
     }
 
     async fn get_session(&self, thread_id: &str) -> Option<Arc<TerminalSessionRuntime>> {
@@ -727,6 +727,88 @@ fn flush_utf8_tail(pending: &mut Vec<u8>) -> Option<String> {
     Some(chunk)
 }
 
+fn sanitize_terminal_output_for_agent(raw: &str) -> String {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut output = String::with_capacity(raw.len());
+    let mut index = 0;
+
+    while index < chars.len() {
+        match chars[index] {
+            '\u{1b}' => {
+                index += 1;
+                if index >= chars.len() {
+                    break;
+                }
+
+                match chars[index] {
+                    '[' => {
+                        index += 1;
+                        while index < chars.len() {
+                            let ch = chars[index];
+                            index += 1;
+                            if ('@'..='~').contains(&ch) {
+                                break;
+                            }
+                        }
+                    }
+                    ']' => {
+                        index += 1;
+                        while index < chars.len() {
+                            match chars[index] {
+                                '\u{7}' => {
+                                    index += 1;
+                                    break;
+                                }
+                                '\u{1b}' if chars.get(index + 1).copied() == Some('\\') => {
+                                    index += 2;
+                                    break;
+                                }
+                                _ => {
+                                    index += 1;
+                                }
+                            }
+                        }
+                    }
+                    'P' | 'X' | '^' | '_' => {
+                        index += 1;
+                        while index < chars.len() {
+                            if chars[index] == '\u{1b}'
+                                && chars.get(index + 1).copied() == Some('\\')
+                            {
+                                index += 2;
+                                break;
+                            }
+                            index += 1;
+                        }
+                    }
+                    '(' | ')' | '*' | '+' | '-' | '.' | '/' => {
+                        index += 2;
+                    }
+                    _ => {
+                        index += 1;
+                    }
+                }
+            }
+            '\u{8}' => {
+                output.pop();
+                index += 1;
+            }
+            '\r' => {
+                index += 1;
+            }
+            ch if ch.is_control() && ch != '\n' && ch != '\t' => {
+                index += 1;
+            }
+            ch => {
+                output.push(ch);
+                index += 1;
+            }
+        }
+    }
+
+    output
+}
+
 fn resolve_shell() -> String {
     std::env::var("SHELL")
         .ok()
@@ -746,7 +828,8 @@ fn resolve_shell() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_utf8_chunk, flush_utf8_tail, trim_replay_to_last_screen_reset, ReplayBuffer,
+        decode_utf8_chunk, flush_utf8_tail, sanitize_terminal_output_for_agent,
+        trim_replay_to_last_screen_reset, ReplayBuffer,
     };
 
     #[test]
@@ -794,5 +877,23 @@ mod tests {
 
         assert!(resets_screen);
         assert_eq!(trimmed, "\u{1b}[H\u{1b}[2Jsuffix");
+    }
+
+    #[test]
+    fn sanitize_terminal_output_for_agent_strips_ansi_and_osc_sequences() {
+        let raw = "\u{1b}[0m\u{1b}[49mhello\u{1b}[39m\n\u{1b}]1;whoami\u{7}whoami\njorben\r\n";
+
+        let sanitized = sanitize_terminal_output_for_agent(raw);
+
+        assert_eq!(sanitized, "hello\nwhoami\njorben\n");
+    }
+
+    #[test]
+    fn sanitize_terminal_output_for_agent_applies_backspaces() {
+        let raw = "abc\u{8}\u{8}Z\n";
+
+        let sanitized = sanitize_terminal_output_for_agent(raw);
+
+        assert_eq!(sanitized, "aZ\n");
     }
 }
