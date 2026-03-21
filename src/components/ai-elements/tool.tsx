@@ -114,12 +114,18 @@ export const ToolContent = ({ className, ...props }: ToolContentProps) => (
 
 export type ToolInputProps = ComponentProps<"div"> & {
   input: ToolPart["input"];
+  label?: string;
 };
 
-export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
+export const ToolInput = ({
+  className,
+  input,
+  label = "Parameters",
+  ...props
+}: ToolInputProps) => (
   <div className={cn("space-y-2 overflow-hidden", className)} {...props}>
     <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-      Parameters
+      {label}
     </h4>
     <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
   </div>
@@ -128,12 +134,16 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
 export type ToolOutputProps = ComponentProps<"div"> & {
   output: ToolPart["output"];
   errorText: ToolPart["errorText"];
+  errorLabel?: string;
+  label?: string;
 };
 
 export const ToolOutput = ({
   className,
   output,
   errorText,
+  errorLabel = "Error",
+  label = "Result",
   ...props
 }: ToolOutputProps) => {
   if (!(output || errorText)) {
@@ -167,7 +177,7 @@ export const ToolOutput = ({
   return (
     <div className={cn("space-y-2", className)} {...props}>
       <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-        {errorText ? "Error" : "Result"}
+        {errorText ? errorLabel : label}
       </h4>
       <div
         className={cn(

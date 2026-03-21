@@ -82,10 +82,10 @@ const LINE_NUMBER_CLASSES = cn(
   "before:inline-block",
   "before:[counter-increment:line]",
   "before:w-7",
-  "before:mr-4",
+  "before:mr-3.5",
   "before:text-right",
   "before:text-[11px]",
-  "before:text-app-subtle/65",
+  "before:text-app-subtle/55",
   "before:font-mono",
   "before:select-none"
 );
@@ -270,7 +270,7 @@ const CodeBlockBody = memo(
     return (
       <pre
         className={cn(
-          "m-0 bg-transparent px-4 pb-4 text-[13px] leading-6 sm:text-sm",
+          "m-0 bg-transparent px-4 pb-3.5 text-[13px] leading-[1.72] sm:text-sm",
           className
         )}
         style={preStyle}
@@ -308,7 +308,7 @@ export const CodeBlockContainer = ({
 }: HTMLAttributes<HTMLDivElement> & { language: string }) => (
   <div
     className={cn(
-      "group/code relative w-full overflow-hidden rounded-[calc(var(--radius)+0.35rem)] border border-[var(--app-code-border)] bg-[var(--app-code-panel)] text-[var(--app-foreground)] shadow-[0_20px_44px_-34px_rgba(15,23,42,0.42)]",
+      "group/code relative w-full overflow-hidden rounded-[calc(var(--radius)+0.1rem)] border border-[var(--app-code-border)] bg-[var(--app-code-panel)] text-[var(--app-foreground)] shadow-none",
       className
     )}
     data-code-block=""
@@ -329,7 +329,7 @@ export const CodeBlockHeader = ({
 }: HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      "flex items-center justify-between gap-3 px-4 pt-3 pb-1.5 text-[11px] text-app-subtle",
+      "flex items-start justify-between gap-3 px-4 pt-3 pb-0.5 text-app-subtle",
       className
     )}
     {...props}
@@ -345,7 +345,7 @@ export const CodeBlockTitle = ({
 }: HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      "flex min-w-0 items-center gap-2 uppercase tracking-[0.18em]",
+      "flex min-w-0 items-center gap-2",
       className
     )}
     {...props}
@@ -360,7 +360,10 @@ export const CodeBlockFilename = ({
   ...props
 }: HTMLAttributes<HTMLSpanElement>) => (
   <span
-    className={cn("truncate font-mono lowercase tracking-[0.12em]", className)}
+    className={cn(
+      "truncate font-mono text-[12px] lowercase tracking-[0.18em] text-app-subtle/90",
+      className
+    )}
     {...props}
   >
     {children}
@@ -374,7 +377,7 @@ export const CodeBlockActions = ({
 }: HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      "flex items-center gap-1 opacity-45 transition-all duration-200 group-hover/code:opacity-100 group-focus-within/code:opacity-100",
+      "flex items-center gap-1 opacity-35 transition-all duration-200 group-hover/code:opacity-100 group-focus-within/code:opacity-100",
       className
     )}
     {...props}
@@ -435,7 +438,7 @@ export const CodeBlockContent = ({
   return (
     <div className="relative overflow-auto">
       <CodeBlockBody
-        className={withHeader ? "pt-1" : "pt-4"}
+        className={withHeader ? "pt-0" : "pt-3"}
         showLineNumbers={showLineNumbers}
         tokenized={tokenized}
       />
@@ -532,9 +535,9 @@ export const CodeBlockCopyButton = ({
     <Button
       aria-label={props["aria-label"] ?? (isCopied ? "Copied" : "Copy code")}
       className={cn(
-        "size-7 shrink-0 rounded-full border border-transparent bg-transparent text-app-subtle shadow-none transition-all hover:border-[var(--app-code-border)] hover:bg-[var(--app-code-button)] hover:text-app-foreground focus-visible:border-[var(--app-code-border-strong)] focus-visible:bg-[var(--app-code-button)]",
+        "size-7 shrink-0 rounded-md border border-transparent bg-transparent text-app-subtle/85 shadow-none transition-all hover:bg-[var(--app-code-button)] hover:text-app-foreground focus-visible:bg-[var(--app-code-button)]",
         isCopied &&
-          "border-[var(--app-code-border)] bg-[var(--app-code-button)] text-app-foreground",
+          "bg-[var(--app-code-button)] text-app-foreground",
         className
       )}
       onClick={copyToClipboard}
@@ -562,9 +565,9 @@ export const CodeBlockLanguageSelectorTrigger = ({
   className,
   ...props
 }: CodeBlockLanguageSelectorTriggerProps) => (
-  <SelectTrigger
-    className={cn(
-      "h-7 rounded-full border-[var(--app-code-border)] bg-transparent px-2.5 text-[11px] uppercase tracking-[0.14em] text-app-subtle shadow-none hover:bg-[var(--app-code-button)] hover:text-app-foreground",
+    <SelectTrigger
+      className={cn(
+      "h-7 rounded-md border-transparent bg-transparent px-2 text-[12px] lowercase tracking-[0.08em] text-app-subtle shadow-none hover:bg-[var(--app-code-button)] hover:text-app-foreground",
       className
     )}
     size="sm"

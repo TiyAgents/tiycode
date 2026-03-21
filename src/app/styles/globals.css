@@ -225,20 +225,20 @@
     gap: 0 !important;
     margin-block: 1rem !important;
     overflow: hidden;
-    border-radius: calc(var(--radius) + 0.35rem) !important;
+    border-radius: calc(var(--radius) + 0.1rem) !important;
     border-color: var(--app-code-border) !important;
     background: var(--app-code-panel) !important;
     padding: 0 !important;
-    box-shadow: 0 20px 44px -34px rgba(15, 23, 42, 0.42);
+    box-shadow: none !important;
   }
 
   [data-streamdown="code-block-header"] {
     min-height: 0 !important;
-    padding: 0.875rem 1rem 0.375rem !important;
-    color: var(--app-subtle) !important;
-    font-size: 11px !important;
+    padding: 0.875rem 1rem 0.125rem !important;
+    color: color-mix(in oklab, var(--app-subtle) 90%, transparent) !important;
+    font-size: 12px !important;
     letter-spacing: 0.18em;
-    text-transform: uppercase;
+    text-transform: lowercase;
   }
 
   [data-streamdown="code-block-header"] span {
@@ -248,31 +248,30 @@
   }
 
   [data-streamdown="code-block"] [data-streamdown="code-block-actions"] {
-    border-color: var(--app-code-border) !important;
-    background: color-mix(in oklab, var(--app-code-panel-muted) 84%, transparent) !important;
-    opacity: 0.42;
-    transform: translateY(-2px);
-    transition: opacity 180ms ease, transform 180ms ease;
+    border: 0 !important;
+    background: transparent !important;
+    padding: 0 !important;
+    opacity: 0.34;
+    transform: none;
+    transition: opacity 180ms ease;
   }
 
   [data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"],
   [data-streamdown="code-block"]:focus-within [data-streamdown="code-block-actions"] {
     opacity: 1;
-    transform: translateY(0);
   }
 
   [data-streamdown="code-block"] [data-streamdown="code-block-actions"] button {
     height: 1.75rem;
     width: 1.75rem;
-    border: 1px solid transparent;
-    border-radius: 999px;
-    color: var(--app-subtle);
-    transition: border-color 180ms ease, background-color 180ms ease, color 180ms ease;
+    border: 0 !important;
+    border-radius: 0.5rem;
+    color: color-mix(in oklab, var(--app-subtle) 88%, transparent);
+    transition: background-color 180ms ease, color 180ms ease;
   }
 
   [data-streamdown="code-block"] [data-streamdown="code-block-actions"] button:hover,
   [data-streamdown="code-block"] [data-streamdown="code-block-actions"] button:focus-visible {
-    border-color: var(--app-code-border);
     background: var(--app-code-button);
     color: var(--app-foreground);
   }
@@ -286,14 +285,15 @@
   [data-streamdown="code-block-body"] pre {
     margin: 0 !important;
     background: transparent !important;
-    padding: 0 1rem 1rem !important;
+    padding: 0 1rem 0.875rem !important;
     font-size: 13px;
-    line-height: 1.7;
+    line-height: 1.72;
   }
 
   [data-streamdown="code-block-body"] pre code > span::before {
     width: 1.75rem !important;
-    color: color-mix(in oklab, var(--app-subtle) 68%, transparent) !important;
+    margin-right: 0.875rem !important;
+    color: color-mix(in oklab, var(--app-subtle) 58%, transparent) !important;
     font-size: 11px !important;
   }
 }

@@ -9,12 +9,12 @@ import {
   CompactCollapsibleFootnote,
   CompactCollapsibleHeader,
 } from "@/components/ai-elements/compact-collapsible";
-import { CodeBlock } from "@/components/ai-elements/code-block";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Plan, PlanContent, PlanDescription, PlanHeader, PlanTitle, PlanTrigger } from "@/components/ai-elements/plan";
 import { Queue } from "@/components/ai-elements/queue";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
+import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "@/components/ai-elements/confirmation";
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
 import type { AgentProfile, ProviderEntry } from "@/modules/settings-center/model/types";
@@ -766,6 +766,25 @@ function formatToolScopeLabel(scope: string | null) {
   return leaf ?? normalized;
 }
 
+function normalizeSearchFilePatternLabel(pattern: string | null): string | null {
+  if (!pattern) {
+    return null;
+  }
+
+  const trimmed = pattern.trim();
+  if (
+    trimmed === "*"
+    || trimmed === "**"
+    || trimmed === "**/*"
+    || trimmed === "./*"
+    || trimmed === "./**/*"
+  ) {
+    return null;
+  }
+
+  return trimmed;
+}
+
 function getQueryToolPresentation(tool: SurfaceToolEntry): QueryToolPresentation | null {
   const input = asToolDataRecord(tool.input);
   const result = asToolDataRecord(tool.result);
@@ -799,7 +818,7 @@ function getQueryToolPresentation(tool: SurfaceToolEntry): QueryToolPresentation
     const scope = formatToolScopeLabel(
       getToolDataString(result, "directory") ?? getToolDataString(input, "directory"),
     );
-    const filePattern = getToolDataString(input, "filePattern");
+    const filePattern = normalizeSearchFilePatternLabel(getToolDataString(input, "filePattern"));
 
     return {
       actionLabel: "Search",
@@ -2196,14 +2215,11 @@ export function RuntimeThreadSurface({
                 ) : null}
 
                 {showGenericInput ? (
-                  <div className="space-y-1.5">
-                    <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-app-subtle">
-                      Input
-                    </p>
-                    <div className="overflow-hidden rounded-xl bg-app-surface/20 ring-1 ring-app-border/18">
-                      <CodeBlock code={stringifyToolValue(tool.input)} language="json" />
-                    </div>
-                  </div>
+                  <ToolInput
+                    className="space-y-1.5"
+                    input={tool.input}
+                    label="Input"
+                  />
                 ) : null}
 
                 {!fileMutation ? (
@@ -2263,23 +2279,13 @@ export function RuntimeThreadSurface({
                 ) : null}
 
                 {showGenericOutput ? (
-                  <div className="space-y-1.5">
-                    <p className={cn(
-                      "text-[11px] font-medium uppercase tracking-[0.18em]",
-                      tool.state === "output-available" ? "text-app-subtle" : "text-app-danger",
-                    )}>
-                      {tool.state === "output-available" ? "Output" : "Error"}
-                    </p>
-                    <CodeBlock
-                      className={
-                        tool.state === "output-available"
-                          ? undefined
-                          : "border-app-danger/20 bg-app-danger/6"
-                      }
-                      code={stringifyToolValue(tool.state === "output-available" ? tool.result : tool.error ?? tool.result)}
-                      language="json"
-                    />
-                  </div>
+                  <ToolOutput
+                    className="space-y-1.5"
+                    errorLabel="Error"
+                    errorText={tool.state === "output-available" ? undefined : tool.error}
+                    label="Output"
+                    output={stringifyToolValue(tool.state === "output-available" ? tool.result : tool.error ?? tool.result)}
+                  />
                 ) : null}
               </div>
             </CompactCollapsibleContent>
