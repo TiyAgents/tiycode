@@ -816,8 +816,16 @@ function getReadToolPresentation(tool: SurfaceToolEntry): ReadToolPresentation |
 
   const shownLines = getToolDataNumber(result, "shownLines");
   const lineCount = getToolDataNumber(result, "lineCount");
-  const endLine = shownLines ?? lineCount;
-  const rangeLabel = endLine && endLine > 0 ? `[1-${endLine}]` : "[1-…]";
+  const startLine = getToolDataNumber(result, "offset") ?? 1;
+
+  let rangeLabel: string;
+  if (shownLines && shownLines > 0) {
+    rangeLabel = `[${startLine}-${startLine + shownLines - 1}]`;
+  } else if (lineCount && lineCount > 0) {
+    rangeLabel = `[${startLine}-${lineCount}]`;
+  } else {
+    rangeLabel = `[${startLine}-…]`;
+  }
 
   return {
     fileName: path.split(/[\\/]/).filter(Boolean).pop() ?? path,
