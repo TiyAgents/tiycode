@@ -596,7 +596,7 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
 
     match outcome.result {
         ToolGatewayResult::EscalationRequired { reason, .. } => {
-            assert!(reason.contains("requiring approval"));
+            assert!(reason.contains("Approval required"), "unexpected escalation reason: {reason}");
         }
         other => panic!(
             "expected escalation_required outcome, got {:?}",
