@@ -29,7 +29,7 @@ const PROVIDER_SCHEMA_VERSION_KEY: &str = "providers.schema_version";
 const PROVIDER_SCHEMA_VERSION: u32 = 3;
 const TIY_CATALOG_SNAPSHOT_FILE: &str = "catalog.json";
 const PROVIDER_MODEL_TEST_PROMPT: &str = "Ping from Tiy Agent.";
-const PROVIDER_MODEL_TEST_MAX_TOKENS: u32 = 8;
+const PROVIDER_MODEL_TEST_MIN_MAX_TOKENS: u32 = 16;
 const PROVIDER_MODEL_TEST_CONTEXT_WINDOW_FALLBACK: u32 = 8_192;
 const PROVIDER_MODEL_TEST_MAX_OUTPUT_TOKENS_FALLBACK: u32 = 4_096;
 const PROVIDER_MODEL_TEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -400,7 +400,7 @@ fn build_provider_model_test_request(
 
     let options = TiyStreamOptions {
         temperature: None,
-        max_tokens: Some(PROVIDER_MODEL_TEST_MAX_TOKENS),
+        max_tokens: Some(PROVIDER_MODEL_TEST_MIN_MAX_TOKENS),
         api_key: provider.api_key_encrypted.clone(),
         base_url: normalize_optional_string(Some(provider.base_url.clone())),
         headers: parse_custom_headers_map(provider.custom_headers_json.as_deref()),
@@ -1583,7 +1583,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_model_test_request_uses_ping_prompt_and_max_tokens_limit() {
+    fn provider_model_test_request_uses_ping_prompt_and_protocol_safe_max_tokens_limit() {
         let provider = ProviderRecord {
             id: "provider-1".to_string(),
             provider_kind: ProviderKind::Builtin,
@@ -1618,7 +1618,7 @@ mod tests {
         assert!(!request.unsupported);
         assert_eq!(
             request.options.max_tokens,
-            Some(PROVIDER_MODEL_TEST_MAX_TOKENS)
+            Some(PROVIDER_MODEL_TEST_MIN_MAX_TOKENS)
         );
         assert_eq!(request.model.max_tokens, 16_384);
         assert_eq!(request.model.context_window, 128_000);
