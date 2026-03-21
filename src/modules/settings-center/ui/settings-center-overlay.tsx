@@ -1,5 +1,7 @@
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   ArrowLeft,
   Brain,
@@ -31,9 +33,10 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
+import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { matchProviderIcon } from "@/shared/lib/llm-brand-matcher";
 import type { ProviderModelConnectionTestResultDto } from "@/shared/types/api";
 import type { SystemMetadata } from "@/shared/types/system";
@@ -126,7 +129,6 @@ type SettingsCenterOverlayProps = {
     modelId: string,
   ) => Promise<ProviderModelConnectionTestResultDto>;
   onUpdateProvider: (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => void;
-  onUpdateWorkspace: (id: string, patch: Partial<Omit<WorkspaceEntry, "id">>) => void;
   onUpdateWritableRoot: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
 };
 
@@ -236,6 +238,11 @@ const MINIMAX_BASE_URL_OPTIONS = [
   "https://api.minimaxi.com/anthropic",
 ] as const;
 
+function deriveWorkspaceNameFromPath(path: string) {
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments.length > 0 ? segments[segments.length - 1] : "New Workspace";
+}
+
 export function SettingsCenterOverlay({
   activeCategory,
   agentProfiles,
@@ -286,7 +293,6 @@ export function SettingsCenterOverlay({
   onFetchProviderModels,
   onTestProviderModelConnection,
   onUpdateProvider,
-  onUpdateWorkspace,
   onUpdateWritableRoot,
 }: SettingsCenterOverlayProps) {
   const activeMeta = CATEGORY_META.find((category) => category.key === activeCategory) ?? CATEGORY_META[1];
@@ -420,11 +426,11 @@ export function SettingsCenterOverlay({
                 {activeCategory === "workspace" ? (
                   <WorkspaceSettingsPanel
                     description={activeMeta.description}
+                    systemMetadata={systemMetadata}
                     workspaces={workspaces}
                     onAddWorkspace={onAddWorkspace}
                     onRemoveWorkspace={onRemoveWorkspace}
                     onSetDefaultWorkspace={onSetDefaultWorkspace}
-                    onUpdateWorkspace={onUpdateWorkspace}
                   />
                 ) : null}
 
@@ -3301,43 +3307,86 @@ function getDisplayInitial(value?: string) {
 
 function WorkspaceSettingsPanel({
   description,
+  systemMetadata,
   workspaces,
   onAddWorkspace,
   onRemoveWorkspace,
   onSetDefaultWorkspace,
-  onUpdateWorkspace,
 }: {
   description: string;
+  systemMetadata: SystemMetadata | null;
   workspaces: Array<WorkspaceEntry>;
   onAddWorkspace: (entry: Omit<WorkspaceEntry, "id">) => void;
   onRemoveWorkspace: (id: string) => void;
   onSetDefaultWorkspace: (id: string) => void;
-  onUpdateWorkspace: (id: string, patch: Partial<Omit<WorkspaceEntry, "id">>) => void;
 }) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-
-  const handleStartEdit = (workspace: WorkspaceEntry) => {
-    setEditingId(workspace.id);
-    setEditName(workspace.name);
-  };
-
-  const handleConfirmEdit = () => {
-    if (editingId && editName.trim()) {
-      onUpdateWorkspace(editingId, { name: editName.trim() });
-    }
-    setEditingId(null);
-    setEditName("");
-  };
+  const [activeOpenWorkspaceId, setActiveOpenWorkspaceId] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
+  const isMacOS = systemMetadata?.platform === "macos"
+    || (typeof navigator !== "undefined" && navigator.userAgent.includes("Mac"));
+  const isWindows = systemMetadata?.platform === "windows"
+    || (typeof navigator !== "undefined" && navigator.userAgent.includes("Windows"));
+  const openWorkspaceLabel = isWindows ? "Open in Explorer" : isMacOS ? "Open in Finder" : "Open folder";
 
   const handleAddWorkspace = () => {
-    onAddWorkspace({
-      name: "New Workspace",
-      path: "/Users/jorben/Documents/Codespace/new-project",
-      isDefault: false,
-      isGit: false,
-      autoWorkTree: false,
+    if (!isTauri()) {
+      onAddWorkspace({
+        name: "New Workspace",
+        path: "/Users/jorben/Documents/Codespace/new-project",
+        isDefault: false,
+        isGit: false,
+        autoWorkTree: false,
+      });
+      return;
+    }
+
+    void open({
+      directory: true,
+      multiple: false,
+      title: "Choose workspace folder",
+    }).then((selectedPath) => {
+      if (typeof selectedPath !== "string") {
+        return;
+      }
+
+      onAddWorkspace({
+        name: deriveWorkspaceNameFromPath(selectedPath),
+        path: selectedPath,
+        isDefault: false,
+        isGit: false,
+        autoWorkTree: false,
+      });
     });
+  };
+
+  const handleOpenWorkspace = (workspace: WorkspaceEntry) => {
+    if (!isTauri() || !workspace.path || activeOpenWorkspaceId) {
+      return;
+    }
+
+    const appId = isWindows ? "explorer" : "finder";
+
+    void (async () => {
+      setActiveOpenWorkspaceId(workspace.id);
+
+      try {
+        if (isWindows || isMacOS) {
+          await invoke("open_workspace_in_app", {
+            targetPath: workspace.path,
+            appId,
+            appPath: null,
+          });
+        } else {
+          await openPath(workspace.path);
+        }
+
+        setOpenError(null);
+      } catch (error) {
+        setOpenError(getInvokeErrorMessage(error, `Couldn't open ${workspace.name}`));
+      } finally {
+        setActiveOpenWorkspaceId(null);
+      }
+    })();
   };
 
   return (
@@ -3357,6 +3406,12 @@ function WorkspaceSettingsPanel({
           </button>
         }
       >
+        {openError ? (
+          <div className="border-b border-app-border bg-app-surface-muted px-4 py-2 text-[12px] text-red-500">
+            {openError}
+          </div>
+        ) : null}
+
         {workspaces.length === 0 ? (
           <div className="px-4 py-8 text-center">
             <p className="text-[13px] text-app-muted">No workspaces configured.</p>
@@ -3374,39 +3429,21 @@ function WorkspaceSettingsPanel({
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  {editingId === workspace.id ? (
-                    <input
-                      type="text"
-                      value={editName}
-                      onChange={(event) => setEditName(event.target.value)}
-                      onBlur={handleConfirmEdit}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") handleConfirmEdit();
-                        if (event.key === "Escape") {
-                          setEditingId(null);
-                          setEditName("");
-                        }
-                      }}
-                      autoFocus
-                      className="h-7 w-full rounded-md border border-app-border-strong bg-app-surface-muted px-2 text-[13px] font-medium text-app-foreground outline-none"
-                    />
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <span className="text-[13px] font-medium text-app-foreground">{workspace.name}</span>
-                      {workspace.isDefault ? (
-                        <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
-                          <Star className="size-2.5 fill-current" />
-                          Default
-                        </span>
-                      ) : null}
-                      {workspace.isGit ? (
-                        <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
-                          <GitBranch className="size-2.5" />
-                          Git
-                        </span>
-                      ) : null}
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] font-medium text-app-foreground">{workspace.name}</span>
+                    {workspace.isDefault ? (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
+                        <Star className="size-2.5 fill-current" />
+                        Default
+                      </span>
+                    ) : null}
+                    {workspace.isGit ? (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
+                        <GitBranch className="size-2.5" />
+                        Git
+                      </span>
+                    ) : null}
+                  </div>
                   <p className="mt-0.5 truncate text-[12px] text-app-subtle" title={workspace.path}>
                     {workspace.path}
                   </p>
@@ -3422,13 +3459,9 @@ function WorkspaceSettingsPanel({
                   />
                   <WorkspaceActionButton
                     icon={FolderOpen}
-                    label="Open in finder"
-                    onClick={() => {}}
-                  />
-                  <WorkspaceActionButton
-                    icon={Pencil}
-                    label="Rename"
-                    onClick={() => handleStartEdit(workspace)}
+                    label={activeOpenWorkspaceId === workspace.id ? "Opening folder" : openWorkspaceLabel}
+                    disabled={activeOpenWorkspaceId === workspace.id}
+                    onClick={() => handleOpenWorkspace(workspace)}
                   />
                   <WorkspaceActionButton
                     icon={Trash2}
@@ -3448,12 +3481,14 @@ function WorkspaceSettingsPanel({
 function WorkspaceActionButton({
   active,
   className,
+  disabled,
   icon: Icon,
   label,
   onClick,
 }: {
   active?: boolean;
   className?: string;
+  disabled?: boolean;
   icon: typeof Star;
   label: string;
   onClick: () => void;
@@ -3463,8 +3498,10 @@ function WorkspaceActionButton({
       type="button"
       title={label}
       aria-label={label}
+      disabled={disabled}
       className={cn(
         "flex size-7 items-center justify-center rounded-md transition-colors",
+        disabled && "cursor-not-allowed opacity-50",
         active
           ? "text-app-foreground"
           : "text-app-subtle hover:bg-app-surface-hover hover:text-app-foreground",

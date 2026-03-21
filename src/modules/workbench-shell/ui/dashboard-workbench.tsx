@@ -254,7 +254,6 @@ export function DashboardWorkbench() {
     updateGeneralPreference,
     addWorkspace,
     removeWorkspace,
-    updateWorkspace,
     setDefaultWorkspace,
     addProvider,
     removeProvider,
@@ -2014,7 +2013,6 @@ export function DashboardWorkbench() {
           onUpdateProvider={updateProvider}
           onFetchProviderModels={fetchProviderModels}
           onTestProviderModelConnection={testProviderModelConnection}
-          onUpdateWorkspace={updateWorkspace}
           onUpdateWritableRoot={updateWritableRoot}
         />
       ) : null}

@@ -24,6 +24,7 @@ import type {
   WritableRootEntry,
 } from "@/modules/settings-center/model/types";
 import type {
+  WorkspaceDto,
   ProviderModelConnectionTestResultDto,
   ProviderSettingsDto,
 } from "@/shared/types/api";
@@ -44,6 +45,10 @@ import {
   providerSettingsUpsertBuiltin,
   settingsGet,
   settingsSet,
+  workspaceAdd,
+  workspaceList,
+  workspaceRemove,
+  workspaceSetDefault,
 } from "@/services/bridge";
 
 export * from "@/modules/settings-center/model/types";
@@ -277,6 +282,17 @@ function mapProviderDto(provider: ProviderSettingsDto): ProviderEntry {
   };
 }
 
+function mapWorkspaceDto(workspace: WorkspaceDto): WorkspaceEntry {
+  return {
+    id: workspace.id,
+    name: workspace.name,
+    path: workspace.path,
+    isDefault: workspace.isDefault,
+    isGit: workspace.isGit,
+    autoWorkTree: workspace.autoWorkTree,
+  };
+}
+
 export function useSettingsController() {
   const storedSettingsRef = useRef<SettingsState>(readStoredSettings());
   const [settings, setSettings] = useState<SettingsState>(() => storedSettingsRef.current);
@@ -308,12 +324,13 @@ export function useSettingsController() {
 
     async function hydrateDbBackedSettings() {
       try {
-        const [providers, catalog, policies, profiles, activeProfileSetting, migrationSetting] =
+        const [providers, catalog, policies, profiles, workspaceEntries, activeProfileSetting, migrationSetting] =
           await Promise.all([
             providerSettingsGetAll(),
             providerCatalogList(),
             policyGetAll(),
             profileList(),
+            workspaceList(),
             settingsGet(ACTIVE_AGENT_PROFILE_SETTING_KEY),
             settingsGet(DB_BACKED_SETTINGS_MIGRATION_KEY),
           ]);
@@ -412,6 +429,7 @@ export function useSettingsController() {
         setProviderCatalog(mappedCatalog);
         setSettings((current) => ({
           ...current,
+          workspaces: workspaceEntries.map(mapWorkspaceDto),
           providers: mappedProviders,
           policy: resolvedPolicy,
           agentProfiles: mappedProfiles.length > 0 ? mappedProfiles : DEFAULT_AGENT_PROFILES,
@@ -855,39 +873,87 @@ export function useSettingsController() {
   };
 
   const addWorkspace = (entry: Omit<WorkspaceEntry, "id">) => {
-    setSettings((current) => ({
-      ...current,
-      workspaces: [
-        ...current.workspaces,
-        { ...entry, id: crypto.randomUUID() },
-      ],
-    }));
+    if (!isTauri()) {
+      setSettings((current) => ({
+        ...current,
+        workspaces: [
+          ...current.workspaces,
+          { ...entry, id: crypto.randomUUID() },
+        ],
+      }));
+      return;
+    }
+
+    void workspaceAdd(entry.path, entry.name)
+      .then(async (workspace) => {
+        if (entry.isDefault) {
+          await workspaceSetDefault(workspace.id);
+        }
+
+        setSettings((current) => ({
+          ...current,
+          workspaces: current.workspaces
+            .map((currentWorkspace) => ({
+              ...currentWorkspace,
+              isDefault: entry.isDefault ? false : currentWorkspace.isDefault,
+            }))
+            .concat({
+              ...mapWorkspaceDto(workspace),
+              isDefault: entry.isDefault,
+            }),
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to add workspace", error);
+      });
   };
 
   const removeWorkspace = (id: string) => {
-    setSettings((current) => ({
-      ...current,
-      workspaces: current.workspaces.filter((workspace) => workspace.id !== id),
-    }));
-  };
+    if (!isTauri()) {
+      setSettings((current) => ({
+        ...current,
+        workspaces: current.workspaces.filter((workspace) => workspace.id !== id),
+      }));
+      return;
+    }
 
-  const updateWorkspace = (id: string, patch: Partial<Omit<WorkspaceEntry, "id">>) => {
-    setSettings((current) => ({
-      ...current,
-      workspaces: current.workspaces.map((workspace) =>
-        workspace.id === id ? { ...workspace, ...patch } : workspace,
-      ),
-    }));
+    void workspaceRemove(id)
+      .then(() => {
+        setSettings((current) => ({
+          ...current,
+          workspaces: current.workspaces.filter((workspace) => workspace.id !== id),
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to remove workspace", error);
+      });
   };
 
   const setDefaultWorkspace = (id: string) => {
-    setSettings((current) => ({
-      ...current,
-      workspaces: current.workspaces.map((workspace) => ({
-        ...workspace,
-        isDefault: workspace.id === id,
-      })),
-    }));
+    if (!isTauri()) {
+      setSettings((current) => ({
+        ...current,
+        workspaces: current.workspaces.map((workspace) => ({
+          ...workspace,
+          isDefault: workspace.id === id,
+        })),
+      }));
+      return;
+    }
+
+    void workspaceSetDefault(id)
+      .then(() => {
+        setSettings((current) => ({
+          ...current,
+          workspaces: current.workspaces.map((workspace) => ({
+            ...workspace,
+            isDefault: workspace.id === id,
+          })),
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to set default workspace", error);
+      });
   };
 
   const addProvider = (entry: Omit<ProviderEntry, "id">) => {
@@ -1097,7 +1163,6 @@ export function useSettingsController() {
     updateGeneralPreference,
     addWorkspace,
     removeWorkspace,
-    updateWorkspace,
     setDefaultWorkspace,
     addProvider,
     removeProvider,
