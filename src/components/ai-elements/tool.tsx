@@ -115,19 +115,25 @@ export const ToolContent = ({ className, ...props }: ToolContentProps) => (
 export type ToolInputProps = ComponentProps<"div"> & {
   input: ToolPart["input"];
   label?: string;
+  codeBlockContentClassName?: string;
 };
 
 export const ToolInput = ({
   className,
   input,
   label = "Parameters",
+  codeBlockContentClassName,
   ...props
 }: ToolInputProps) => (
   <div className={cn("space-y-2 overflow-hidden", className)} {...props}>
     <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
       {label}
     </h4>
-    <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
+    <CodeBlock
+      code={JSON.stringify(input, null, 2)}
+      contentClassName={codeBlockContentClassName}
+      language="json"
+    />
   </div>
 );
 
@@ -136,6 +142,7 @@ export type ToolOutputProps = ComponentProps<"div"> & {
   errorText: ToolPart["errorText"];
   errorLabel?: string;
   label?: string;
+  codeBlockContentClassName?: string;
 };
 
 export const ToolOutput = ({
@@ -144,6 +151,7 @@ export const ToolOutput = ({
   errorText,
   errorLabel = "Error",
   label = "Result",
+  codeBlockContentClassName,
   ...props
 }: ToolOutputProps) => {
   if (!(output || errorText)) {
@@ -161,6 +169,7 @@ export const ToolOutput = ({
       <CodeBlock
         className={errorText ? "border-app-danger/20 bg-app-danger/6" : undefined}
         code={JSON.stringify(output, null, 2)}
+        contentClassName={codeBlockContentClassName}
         language="json"
       />
     );
@@ -169,6 +178,7 @@ export const ToolOutput = ({
       <CodeBlock
         className={errorText ? "border-app-danger/20 bg-app-danger/6" : undefined}
         code={output}
+        contentClassName={codeBlockContentClassName}
         language="json"
       />
     );

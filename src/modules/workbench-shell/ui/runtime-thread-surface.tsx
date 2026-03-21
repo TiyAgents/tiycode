@@ -1235,6 +1235,9 @@ function getCommandOutputToolPresentation(tool: SurfaceToolEntry) {
   );
 }
 
+const TOOL_DETAIL_CODE_BLOCK_CONTENT_CLASS =
+  "max-h-[min(50vh,28rem)] overscroll-contain";
+
 function ToolCommandOutputBlocks({
   presentation,
 }: {
@@ -1247,7 +1250,11 @@ function ToolCommandOutputBlocks({
           <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
             Command
           </h4>
-          <CodeBlock code={presentation.command} language={presentation.commandLanguage} />
+          <CodeBlock
+            code={presentation.command}
+            contentClassName={TOOL_DETAIL_CODE_BLOCK_CONTENT_CLASS}
+            language={presentation.commandLanguage}
+          />
         </div>
       ) : null}
       {presentation.output ? (
@@ -1257,7 +1264,11 @@ function ToolCommandOutputBlocks({
               Output
             </h4>
           ) : null}
-          <CodeBlock code={presentation.output} language={presentation.outputLanguage} />
+          <CodeBlock
+            code={presentation.output}
+            contentClassName={TOOL_DETAIL_CODE_BLOCK_CONTENT_CLASS}
+            language={presentation.outputLanguage}
+          />
         </div>
       ) : null}
     </div>
@@ -2592,7 +2603,7 @@ export function RuntimeThreadSurface({
                 </div>
               )}
             </CompactCollapsibleHeader>
-            <CompactCollapsibleContent className={fileMutation ? "pl-0" : "pl-7"}>
+            <CompactCollapsibleContent className="pl-0">
               <div className="space-y-3">
                 {fileMutation ? (
                   <div className="space-y-3">
@@ -2634,6 +2645,7 @@ export function RuntimeThreadSurface({
                 {showGenericInput ? (
                   <ToolInput
                     className="space-y-1.5"
+                    codeBlockContentClassName={TOOL_DETAIL_CODE_BLOCK_CONTENT_CLASS}
                     input={tool.input}
                     label="Input"
                   />
@@ -2698,6 +2710,7 @@ export function RuntimeThreadSurface({
                 {showGenericOutput ? (
                   <ToolOutput
                     className="space-y-1.5"
+                    codeBlockContentClassName={TOOL_DETAIL_CODE_BLOCK_CONTENT_CLASS}
                     errorLabel="Error"
                     errorText={tool.state === "output-available" ? undefined : tool.error}
                     label="Output"
@@ -2902,7 +2915,7 @@ export function RuntimeThreadSurface({
                               </span>
                             </div>
                           </CompactCollapsibleHeader>
-                          <CompactCollapsibleContent className="pl-7">
+                          <CompactCollapsibleContent className="pl-0">
                             <div className="max-h-40 space-y-2 overflow-y-auto pr-3">
                               {helperToolCounts.length > 0 ? (
                                 <p className="whitespace-pre-wrap break-words text-xs text-app-subtle">
@@ -2949,7 +2962,7 @@ export function RuntimeThreadSurface({
                             </div>
                           </CompactCollapsibleContent>
                           {executionSummary ? (
-                            <CompactCollapsibleFootnote className="pl-7">
+                            <CompactCollapsibleFootnote className="pl-0">
                               {executionSummary}
                             </CompactCollapsibleFootnote>
                           ) : null}
