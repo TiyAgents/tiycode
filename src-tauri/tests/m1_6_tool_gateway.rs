@@ -141,7 +141,12 @@ async fn test_policy_allow_list_pattern_must_match() {
     assert!(matches!(matched.verdict, PolicyVerdict::AutoAllow));
 
     let unmatched = engine
-        .evaluate("shell", &json!({ "command": "cargo test" }), None, "default")
+        .evaluate(
+            "shell",
+            &json!({ "command": "cargo test" }),
+            None,
+            "default",
+        )
         .await
         .unwrap();
     assert!(matches!(
@@ -706,6 +711,116 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
         }
         ToolGatewayResult::Cancelled { .. } => {
             panic!("search should not be cancelled");
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
+    use tiy_agent_lib::core::terminal_manager::TerminalManager;
+    use tiy_agent_lib::core::tool_gateway::{
+        ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
+    };
+
+    let pool = test_helpers::setup_test_pool().await;
+    let workspace_root =
+        std::env::temp_dir().join(format!("tiy-search-wildcard-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::write(
+        workspace_root.join("first.rs"),
+        "fn first() { println!(\"hello\"); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workspace_root.join("second.ts"),
+        "export const second = 'hello';\n",
+    )
+    .unwrap();
+    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+
+    test_helpers::seed_workspace(
+        &pool,
+        "ws-search-wildcard",
+        workspace_root.to_str().unwrap(),
+    )
+    .await;
+    test_helpers::seed_thread(&pool, "t-search-wildcard", "ws-search-wildcard").await;
+    test_helpers::seed_run(
+        &pool,
+        "r-search-wildcard",
+        "t-search-wildcard",
+        "running",
+        "default",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-search-wildcard",
+        "r-search-wildcard",
+        "t-search-wildcard",
+        "search",
+        "requested",
+    )
+    .await;
+
+    let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+    let gateway = ToolGateway::new(pool, terminal_manager);
+
+    let outcome = gateway
+        .execute_tool_call(
+            ToolExecutionRequest {
+                run_id: "r-search-wildcard".into(),
+                thread_id: "t-search-wildcard".into(),
+                tool_call_id: "tc-search-wildcard".into(),
+                tool_name: "search".into(),
+                tool_input: serde_json::json!({
+                    "query": "hello",
+                    "filePattern": "*",
+                    "maxResults": 1,
+                }),
+                workspace_path: workspace_root.display().to_string(),
+                run_mode: "default".into(),
+            },
+            tiy_core::agent::AbortSignal::new(),
+            ToolExecutionOptions::default(),
+            |_| {},
+            || {},
+        )
+        .await
+        .unwrap();
+
+    match outcome.result {
+        ToolGatewayResult::Executed { output, .. } => {
+            if !output.success {
+                let error = output.result["error"].as_str().unwrap_or_default();
+                assert!(
+                    error.contains("ripgrep"),
+                    "unexpected search failure: {error}"
+                );
+                return;
+            }
+
+            assert_eq!(output.result["shownCount"].as_u64(), Some(1));
+            assert_eq!(output.result["truncated"].as_bool(), Some(true));
+            assert!(
+                output.result["count"].as_u64().unwrap_or_default() >= 2,
+                "wildcard-only filePattern should be ignored so search spans both files"
+            );
+
+            let notice = output.result["notice"].as_str().unwrap_or_default();
+            assert!(
+                notice.contains("Ignored filePattern '*'"),
+                "expected wildcard normalization notice, got: {notice}"
+            );
+        }
+        ToolGatewayResult::Denied { reason, .. } => {
+            panic!("wildcard file pattern search should not be denied: {reason}");
+        }
+        ToolGatewayResult::EscalationRequired { reason, .. } => {
+            panic!("wildcard file pattern search should not require approval: {reason}");
+        }
+        ToolGatewayResult::Cancelled { .. } => {
+            panic!("wildcard file pattern search should not be cancelled");
         }
     }
 }

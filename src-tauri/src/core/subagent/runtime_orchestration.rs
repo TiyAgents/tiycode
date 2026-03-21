@@ -196,13 +196,26 @@ Guidelines:\n\
             AgentTool::new(
                 "search",
                 "Search Repo",
-                "Search the current workspace with ripgrep.",
+                "Search the current workspace with ripgrep. Results are preview-limited for safety; omit wildcard-only filePattern values like '*' or '**/*'.",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "query": { "type": "string" },
-                        "directory": { "type": "string" },
-                        "filePattern": { "type": "string" }
+                        "query": {
+                            "type": "string",
+                            "description": "Search term or regex."
+                        },
+                        "directory": {
+                            "type": "string",
+                            "description": "Directory to search in (default: workspace root)."
+                        },
+                        "filePattern": {
+                            "type": "string",
+                            "description": "Optional glob filter such as '*.rs' or 'src/**/*.ts'. Omit it to search all files; do not pass '*' or '**/*'."
+                        },
+                        "maxResults": {
+                            "type": "integer",
+                            "description": "Optional preview limit for returned matches. Defaults to 100 and is capped for context safety."
+                        }
                     },
                     "required": ["query"]
                 }),

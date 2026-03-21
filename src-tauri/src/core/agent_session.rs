@@ -804,13 +804,26 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
         AgentTool::new(
             "search",
             "Search Repo",
-            "Search the current workspace with ripgrep.",
+            "Search the current workspace with ripgrep. Results are preview-limited for safety; omit wildcard-only filePattern values like '*' or '**/*'.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string" },
-                    "directory": { "type": "string" },
-                    "filePattern": { "type": "string" }
+                    "query": {
+                        "type": "string",
+                        "description": "Search term or regex."
+                    },
+                    "directory": {
+                        "type": "string",
+                        "description": "Directory to search in (default: workspace root)."
+                    },
+                    "filePattern": {
+                        "type": "string",
+                        "description": "Optional glob filter such as '*.rs' or 'src/**/*.ts'. Omit it to search all files; do not pass '*' or '**/*'."
+                    },
+                    "maxResults": {
+                        "type": "integer",
+                        "description": "Optional preview limit for returned matches. Defaults to 100 and is capped for context safety."
+                    }
                 },
                 "required": ["query"]
             }),
@@ -951,10 +964,7 @@ fn resolve_helper_profile(
     }
 }
 
-fn is_plan_review_request(
-    tool: RuntimeOrchestrationTool,
-    tool_input: &serde_json::Value,
-) -> bool {
+fn is_plan_review_request(tool: RuntimeOrchestrationTool, tool_input: &serde_json::Value) -> bool {
     match tool {
         RuntimeOrchestrationTool::DelegatePlanReview => true,
         RuntimeOrchestrationTool::DelegateCodeReview => tool_input
@@ -977,13 +987,13 @@ fn strip_plan_step_prefix(line: &str) -> Option<String> {
         }
     }
 
-    let digit_prefix_len = trimmed
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .count();
+    let digit_prefix_len = trimmed.chars().take_while(|ch| ch.is_ascii_digit()).count();
     if digit_prefix_len > 0 {
         let remainder = trimmed[digit_prefix_len..].trim_start();
-        if let Some(rest) = remainder.strip_prefix('.').or_else(|| remainder.strip_prefix(')')) {
+        if let Some(rest) = remainder
+            .strip_prefix('.')
+            .or_else(|| remainder.strip_prefix(')'))
+        {
             let step = rest.trim();
             if !step.is_empty() {
                 return Some(step.to_string());
@@ -995,7 +1005,10 @@ fn strip_plan_step_prefix(line: &str) -> Option<String> {
         let digit_count = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
         if digit_count > 0 {
             let remainder = rest[digit_count..].trim_start();
-            if let Some(content) = remainder.strip_prefix(':').or_else(|| remainder.strip_prefix('-')) {
+            if let Some(content) = remainder
+                .strip_prefix(':')
+                .or_else(|| remainder.strip_prefix('-'))
+            {
                 let step = content.trim();
                 if !step.is_empty() {
                     return Some(step.to_string());
@@ -1269,6 +1282,7 @@ You help users by reading files, searching code, editing files, executing comman
 - Read files before editing. Understand existing code before making changes.\n\
 - Use edit for precise, surgical changes. Use write only for new files or complete rewrites.\n\
 - Prefer search and find over shell for file exploration — they are faster and respect ignore patterns.\n\
+- For search, omit wildcard-only filePattern values such as `*` or `**/*`; leaving filePattern unset already searches the full selected directory.\n\
 - Delegate proactively on substantial work. When the task is cross-file, unfamiliar, risky, or likely to benefit from a second pass, use a helper instead of doing all exploration and review yourself.\n\
 - Use agent_research to investigate unfamiliar areas, collect evidence, map dependencies, or gather the right files before choosing an implementation.\n\
 - Use agent_review with target='plan' to stress-test an implementation approach before coding, and with target='code' or target='diff' to review completed work for regressions, edge cases, and consistency.\n\
@@ -1756,8 +1770,8 @@ mod tests {
     use tiy_core::types::{Api, AssistantMessage, AssistantMessageEvent, Provider};
     use tokio::sync::mpsc;
 
-    use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::core::subagent::{RuntimeOrchestrationTool, SubagentProfile};
+    use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::AgentProfileRecord;
 
     const TEST_CONTEXT_WINDOW: &str = "128000";
@@ -2132,7 +2146,10 @@ mod tests {
         );
 
         assert_eq!(artifact["title"].as_str(), Some("Plan Under Review"));
-        assert_eq!(artifact["steps"][0].as_str(), Some("Update runtime-thread-surface."));
+        assert_eq!(
+            artifact["steps"][0].as_str(),
+            Some("Update runtime-thread-surface.")
+        );
         assert_eq!(artifact["steps"][1].as_str(), Some("Validate typecheck."));
     }
 }

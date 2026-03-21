@@ -375,7 +375,8 @@ impl IndexManager {
             ));
         }
 
-        let limit = max_results.unwrap_or(50);
+        let limit = max_results.unwrap_or(50).max(1);
+        let normalized_file_pattern = normalize_search_file_pattern(file_pattern);
 
         let mut args = vec![
             "--json".into(),
@@ -385,7 +386,7 @@ impl IndexManager {
             query.into(),
             workspace_path.into(),
         ];
-        if let Some(pattern) = file_pattern {
+        if let Some(pattern) = normalized_file_pattern {
             args.push("--glob".into());
             args.push(pattern.into());
         }
@@ -400,8 +401,26 @@ impl IndexManager {
             )
         })?;
 
+        if !output.status.success() && output.status.code() != Some(1) {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let message = stderr.trim();
+
+            return Err(AppError::recoverable(
+                ErrorSource::Index,
+                "index.search.rg_failed",
+                if message.is_empty() {
+                    format!("ripgrep search failed with status {}", output.status)
+                } else {
+                    format!("ripgrep search failed: {message}")
+                },
+            ));
+        }
+
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let results = parse_rg_json(&stdout, workspace_path);
+        let mut results = parse_rg_json(&stdout, workspace_path);
+        if results.len() > limit {
+            results.truncate(limit);
+        }
         let count = results.len();
 
         Ok(SearchResponse {
@@ -977,4 +996,13 @@ fn parse_rg_json(output: &str, workspace_path: &str) -> Vec<SearchResult> {
     }
 
     results
+}
+
+fn normalize_search_file_pattern(file_pattern: Option<&str>) -> Option<&str> {
+    let trimmed = file_pattern?.trim();
+    if trimmed.is_empty() || matches!(trimmed, "*" | "**" | "**/*" | "./*" | "./**/*") {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
