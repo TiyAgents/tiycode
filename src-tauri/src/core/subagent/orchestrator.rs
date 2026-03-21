@@ -708,16 +708,16 @@ fn describe_subagent_action(
             }
         }
         "term_status" => SubagentActionDescriptor {
-            current_action: "checking terminal status".to_string(),
-            started_message: "Inspecting terminal status".to_string(),
-            succeeded_message: "Captured terminal status".to_string(),
-            failed_message: "Failed to inspect terminal status".to_string(),
+            current_action: "checking the thread Terminal panel status".to_string(),
+            started_message: "Inspecting the thread Terminal panel status".to_string(),
+            succeeded_message: "Captured the thread Terminal panel status".to_string(),
+            failed_message: "Failed to inspect the thread Terminal panel status".to_string(),
         },
         "term_output" => SubagentActionDescriptor {
-            current_action: "reading recent terminal output".to_string(),
-            started_message: "Reading recent terminal output".to_string(),
-            succeeded_message: "Captured recent terminal output".to_string(),
-            failed_message: "Failed reading recent terminal output".to_string(),
+            current_action: "reading recent thread Terminal panel output".to_string(),
+            started_message: "Reading recent thread Terminal panel output".to_string(),
+            succeeded_message: "Captured recent thread Terminal panel output".to_string(),
+            failed_message: "Failed reading recent thread Terminal panel output".to_string(),
         },
         _ => SubagentActionDescriptor {
             current_action: format!("running {tool_name}"),

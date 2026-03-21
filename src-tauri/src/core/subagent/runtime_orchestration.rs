@@ -1,5 +1,18 @@
 use tiy_core::agent::AgentTool;
 
+pub const TERM_STATUS_TOOL_DESCRIPTION: &str =
+    "Inspect the status of the desktop app's embedded Terminal panel session for the current thread. Use this to check that panel's session state without mutating it. It does not inspect the agent runtime, CLI process, or host shell outside the panel.";
+pub const TERM_OUTPUT_TOOL_DESCRIPTION: &str =
+    "Read recent buffered output from the desktop app's embedded Terminal panel session for the current thread. Use this to inspect logs, prompts, or command results already shown in that panel. It does not read the agent runtime's own stdout/stderr or any shell outside the panel.";
+pub const TERM_WRITE_TOOL_DESCRIPTION: &str =
+    "Send input to the desktop app's embedded Terminal panel session for the current thread. Use this only to continue or control that panel's persistent session; do not use it as a replacement for one-shot shell execution.";
+pub const TERM_RESTART_TOOL_DESCRIPTION: &str =
+    "Restart the desktop app's embedded Terminal panel session for the current thread, optionally with new terminal dimensions. Use this when that panel session needs a clean restart; it does not restart the agent runtime itself.";
+pub const TERM_CLOSE_TOOL_DESCRIPTION: &str =
+    "Close the desktop app's embedded Terminal panel session for the current thread. Use this only to stop that panel's persistent session; it does not stop the agent runtime or close the desktop app.";
+pub const TERM_PANEL_USAGE_NOTE: &str =
+    "term_status and term_output refer to the desktop app's embedded Terminal panel for the current thread. Use them only for that panel's session state and recent buffered output; they do not inspect your own runtime, CLI session, or host shell outside the panel.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeOrchestrationTool {
     DelegateResearch,
@@ -152,7 +165,7 @@ Guidelines:\n\
                 "You are an internal review helper. Your job is to evaluate code or plans and provide constructive feedback.\n\
 Guidelines:\n\
 - Stay strictly read-only. Do not modify any files.\n\
-- Use repository inspection tools. Check terminal output when it directly supports the review.\n\
+- Use repository inspection tools. Check the current thread's Terminal panel output when it directly supports the review.\n\
 - Focus on correctness, edge cases, error handling, and consistency with existing patterns.\n\
 - Distinguish critical issues from suggestions. Be specific: reference file paths and line ranges."
             }
@@ -227,7 +240,7 @@ Guidelines:\n\
                 AgentTool::new(
                     "term_status",
                     "Terminal Status",
-                    "Inspect the current thread terminal status without mutating it.",
+                    TERM_STATUS_TOOL_DESCRIPTION,
                     serde_json::json!({
                         "type": "object",
                         "properties": {}
@@ -236,7 +249,7 @@ Guidelines:\n\
                 AgentTool::new(
                     "term_output",
                     "Terminal Output",
-                    "Read the recent terminal output for the current thread.",
+                    TERM_OUTPUT_TOOL_DESCRIPTION,
                     serde_json::json!({
                         "type": "object",
                         "properties": {}
@@ -277,6 +290,28 @@ mod tests {
 
         assert!(tool_names.contains(&"term_status"));
         assert!(tool_names.contains(&"term_output"));
+    }
+
+    #[test]
+    fn reviewer_terminal_tool_descriptions_clarify_terminal_panel_scope() {
+        let tools = SubagentProfile::Reviewer.helper_tools();
+        let status_tool = tools
+            .iter()
+            .find(|tool| tool.name == "term_status")
+            .expect("term_status tool");
+        let output_tool = tools
+            .iter()
+            .find(|tool| tool.name == "term_output")
+            .expect("term_output tool");
+
+        assert!(status_tool.description.contains("Terminal panel"));
+        assert!(status_tool
+            .description
+            .contains("does not inspect the agent runtime"));
+        assert!(output_tool.description.contains("Terminal panel"));
+        assert!(output_tool
+            .description
+            .contains("does not read the agent runtime"));
     }
 
     #[test]

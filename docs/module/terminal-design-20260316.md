@@ -413,6 +413,15 @@ Recommended terminal tool surface:
 - `term_write`
 - `term_restart`
 
+Intended usage:
+
+- `term_status`: inspect whether the current thread's Terminal panel session exists, is attached, or is running
+- `term_output`: inspect recent buffered output that already belongs to that Terminal panel
+- `term_write`: send input into that Terminal panel's active PTY session
+- `term_restart`: restart the Terminal panel session for the current thread
+
+These tools operate on the desktop app's embedded Terminal panel, not on the agent runtime's own CLI process.
+
 Do not expose:
 
 - direct PTY ownership
@@ -445,6 +454,7 @@ Recommended agent-facing tools:
 - `term_restart`
 
 All agent-facing terminal tools are implemented in Rust and exposed to the sidecar via `ToolGateway`.
+They are thread-scoped Terminal panel tools, not generic process-inspection tools for the sidecar itself.
 
 ## Interaction Design
 

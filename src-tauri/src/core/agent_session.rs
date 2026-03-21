@@ -15,7 +15,9 @@ use tokio::sync::mpsc;
 
 use crate::core::subagent::{
     runtime_orchestration_tools, HelperAgentOrchestrator, HelperRunRequest,
-    RuntimeOrchestrationTool, SubagentProfile,
+    RuntimeOrchestrationTool, SubagentProfile, TERM_CLOSE_TOOL_DESCRIPTION,
+    TERM_OUTPUT_TOOL_DESCRIPTION, TERM_PANEL_USAGE_NOTE, TERM_RESTART_TOOL_DESCRIPTION,
+    TERM_STATUS_TOOL_DESCRIPTION, TERM_WRITE_TOOL_DESCRIPTION,
 };
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
@@ -850,7 +852,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
         AgentTool::new(
             "term_status",
             "Terminal Status",
-            "Inspect the current thread terminal status without mutating it.",
+            TERM_STATUS_TOOL_DESCRIPTION,
             serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -859,7 +861,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
         AgentTool::new(
             "term_output",
             "Terminal Output",
-            "Read the recent terminal output for the current thread.",
+            TERM_OUTPUT_TOOL_DESCRIPTION,
             serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -921,6 +923,48 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                     "timeout": { "type": "number" }
                 },
                 "required": ["command"]
+            }),
+        ));
+        tools.push(AgentTool::new(
+            "term_write",
+            "Terminal Write",
+            TERM_WRITE_TOOL_DESCRIPTION,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "type": "string",
+                        "description": "Input to send to the current thread's Terminal panel session."
+                    }
+                },
+                "required": ["data"]
+            }),
+        ));
+        tools.push(AgentTool::new(
+            "term_restart",
+            "Terminal Restart",
+            TERM_RESTART_TOOL_DESCRIPTION,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "cols": {
+                        "type": "integer",
+                        "description": "Optional terminal width in columns for the restarted Terminal panel session."
+                    },
+                    "rows": {
+                        "type": "integer",
+                        "description": "Optional terminal height in rows for the restarted Terminal panel session."
+                    }
+                }
+            }),
+        ));
+        tools.push(AgentTool::new(
+            "term_close",
+            "Terminal Close",
+            TERM_CLOSE_TOOL_DESCRIPTION,
+            serde_json::json!({
+                "type": "object",
+                "properties": {}
             }),
         ));
     }
@@ -1370,17 +1414,12 @@ You help users by reading files, searching code, editing files, executing comman
     if run_mode == "plan" {
         parts.push(build_prompt_section(
             "Run Mode",
-            "Plan mode is active.\n\
-- Use only read-only tools: read, list, search, find, term_status, term_output.\n\
-- Do NOT use edit, write, or shell unless the user explicitly requests execution.\n\
-- Focus on analysis, explanation, and actionable planning. Identify risks, gaps, and concrete next steps.",
+            run_mode_prompt_body(run_mode),
         ));
     } else {
         parts.push(build_prompt_section(
             "Run Mode",
-            "Default execution mode is active.\n\
-- Use the configured tool profile, subject to policy, approvals, and workspace boundaries.\n\
-- Prefer the smallest sufficient action that moves the task forward.",
+            run_mode_prompt_body(run_mode),
         ));
     }
 
@@ -1396,6 +1435,24 @@ You help users by reading files, searching code, editing files, executing comman
 
 fn build_prompt_section(title: &str, body: impl AsRef<str>) -> String {
     format!("## {title}\n{}", body.as_ref())
+}
+
+fn run_mode_prompt_body(run_mode: &str) -> String {
+    match run_mode {
+        "plan" => format!(
+            "Plan mode is active.\n\
+- Use only read-only tools: read, list, search, find, term_status, term_output.\n\
+- {TERM_PANEL_USAGE_NOTE}\n\
+- Do NOT use edit, write, or shell unless the user explicitly requests execution.\n\
+- Focus on analysis, explanation, and actionable planning. Identify risks, gaps, and concrete next steps."
+        ),
+        _ => format!(
+            "Default execution mode is active.\n\
+- Use the configured tool profile, subject to policy, approvals, and workspace boundaries.\n\
+- {TERM_PANEL_USAGE_NOTE}\n\
+- Prefer the smallest sufficient action that moves the task forward."
+        ),
+    }
 }
 
 fn build_project_context_section(workspace_path: &str) -> Option<String> {
@@ -1758,9 +1815,10 @@ mod tests {
         build_plan_artifact_from_task, build_profile_response_prompt_parts,
         collect_workspace_instruction_snippet, handle_agent_event, is_plan_review_request,
         normalize_profile_response_language, normalize_profile_response_style,
-        resolve_helper_profile, response_style_system_instruction, runtime_security_config,
-        standard_tool_timeout, ProfileResponseStyle, STANDARD_TOOL_TIMEOUT_SECS,
-        SUBAGENT_TOOL_TIMEOUT_SECS,
+        resolve_helper_profile, response_style_system_instruction, run_mode_prompt_body,
+        runtime_security_config, runtime_tools_for_profile, standard_tool_timeout,
+        ProfileResponseStyle, DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE,
+        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
     use std::sync::Mutex as StdMutex;
@@ -1886,6 +1944,37 @@ mod tests {
             parts[1],
             response_style_system_instruction(ProfileResponseStyle::Concise)
         );
+    }
+
+    #[test]
+    fn run_mode_prompt_clarifies_terminal_panel_scope() {
+        let plan_prompt = run_mode_prompt_body("plan");
+        let default_prompt = run_mode_prompt_body("default");
+
+        assert!(plan_prompt.contains("embedded Terminal panel"));
+        assert!(plan_prompt.contains("do not inspect your own runtime"));
+        assert!(default_prompt.contains("embedded Terminal panel"));
+        assert!(default_prompt.contains("do not inspect your own runtime"));
+    }
+
+    #[test]
+    fn default_full_profile_exposes_mutating_terminal_tools() {
+        let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
+        let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+
+        assert!(tool_names.contains(&"term_write"));
+        assert!(tool_names.contains(&"term_restart"));
+        assert!(tool_names.contains(&"term_close"));
+    }
+
+    #[test]
+    fn plan_read_only_profile_does_not_expose_mutating_terminal_tools() {
+        let tools = runtime_tools_for_profile(PLAN_READ_ONLY_TOOL_PROFILE);
+        let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+
+        assert!(!tool_names.contains(&"term_write"));
+        assert!(!tool_names.contains(&"term_restart"));
+        assert!(!tool_names.contains(&"term_close"));
     }
 
     #[test]

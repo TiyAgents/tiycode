@@ -182,6 +182,7 @@ V1 rules:
 
 - treat it as non-interactive, one-shot command execution
 - do not use it as a proxy for writing to an existing terminal session
+- keep `term_*` separate: those tools operate on the desktop workbench Terminal panel attached to the current thread, rather than spawning a new one-shot subprocess
 - require normalized request fields such as `command`, `args`, `cwd`, `timeoutMs`, and output limits
 - default to `RequireApproval` unless a specific allow rule matches
 - run command-pattern deny checks before normal allow/deny matching completes

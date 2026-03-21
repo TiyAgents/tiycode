@@ -729,6 +729,8 @@ type CommandOutputToolPresentation = {
   output: string | null;
   outputLanguage: "log";
   summaryLabel: string;
+  showCommandBlock?: boolean;
+  showOutputLabel?: boolean;
 };
 
 function getFileMutationPresentation(tool: SurfaceToolEntry): FileMutationPresentation | null {
@@ -1218,6 +1220,10 @@ function getTerminalToolPresentation(tool: SurfaceToolEntry): CommandOutputToolP
     output: buildTerminalOutput(tool, result),
     outputLanguage: "log",
     summaryLabel: buildTerminalSummaryLabel(tool, command),
+    showCommandBlock:
+      tool.name !== "term_status" && tool.name !== "term_output" && tool.name !== "term_close",
+    showOutputLabel:
+      tool.name !== "term_status" && tool.name !== "term_output" && tool.name !== "term_close",
   };
 }
 
@@ -1236,17 +1242,21 @@ function ToolCommandOutputBlocks({
 }) {
   return (
     <div className="space-y-3">
-      <div className="space-y-1.5">
-        <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-          Command
-        </h4>
-        <CodeBlock code={presentation.command} language={presentation.commandLanguage} />
-      </div>
-      {presentation.output ? (
+      {presentation.showCommandBlock !== false ? (
         <div className="space-y-1.5">
           <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-            Output
+            Command
           </h4>
+          <CodeBlock code={presentation.command} language={presentation.commandLanguage} />
+        </div>
+      ) : null}
+      {presentation.output ? (
+        <div className="space-y-1.5">
+          {presentation.showOutputLabel !== false ? (
+            <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+              Output
+            </h4>
+          ) : null}
           <CodeBlock code={presentation.output} language={presentation.outputLanguage} />
         </div>
       ) : null}

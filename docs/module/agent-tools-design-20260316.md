@@ -113,6 +113,13 @@ Owned by:
 - `TerminalManager`
 - executed through `ToolGateway`
 
+Scope and intent:
+
+- `term_*` targets the desktop workbench's embedded Terminal panel, scoped to the current thread
+- use these tools to inspect or control that persistent thread terminal session
+- do not treat them as introspection of the agent's own CLI/runtime process
+- `shell` remains a separate one-shot command executor and is not equivalent to `term_write`
+
 Recommended v1 tools:
 
 - `term_status`
