@@ -198,9 +198,9 @@ const RESPONSE_STYLE_OPTIONS: ReadonlyArray<{
   label: string;
   value: PromptResponseStyle;
 }> = [
-  { value: "concise", label: "Concise", description: "Short, direct, and low-friction." },
-  { value: "balanced", label: "Balanced", description: "Clear by default, detailed when needed." },
-  { value: "guide", label: "Guided", description: "More explanation around tradeoffs and choices." },
+  { value: "concise", label: "Concise", description: "Very short, answer-first replies with minimal explanation." },
+  { value: "balanced", label: "Balanced", description: "Compact by default, with extra detail only when it helps." },
+  { value: "guide", label: "Guided", description: "Explanatory replies with reasoning, tradeoffs, and next steps." },
 ] as const;
 
 const APPROVAL_POLICY_OPTIONS: ReadonlyArray<{

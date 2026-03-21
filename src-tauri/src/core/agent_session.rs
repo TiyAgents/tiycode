@@ -1332,7 +1332,7 @@ You help users by reading files, searching code, editing files, executing comman
 - Use agent_review with target='plan' to stress-test an implementation approach before coding, and with target='code' or target='diff' to review completed work for regressions, edge cases, and consistency.\n\
 - Recommended flow for non-trivial tasks: agent_research -> form a plan -> agent_review(target='plan') -> implement -> agent_review(target='code' or 'diff').\n\
 - Skip delegation only when the task is small, obvious, and isolated enough that extra helper work would not pay off.\n\
-- Be concise in your responses. Show file paths clearly when working with files.\n\
+- Match the active response style when deciding answer length and explanation depth. Show file paths clearly when working with files.\n\
 - When summarizing your actions, describe what you did in plain text — do not re-read or re-cat files to prove your work.\n\
 - Flag risks, destructive operations, or ambiguity before acting. Ask when intent is unclear.",
         ),
@@ -1743,13 +1743,13 @@ pub fn normalize_profile_response_style(value: Option<&str>) -> ProfileResponseS
 pub fn response_style_system_instruction(style: ProfileResponseStyle) -> &'static str {
     match style {
         ProfileResponseStyle::Balanced => {
-            "Response style: balanced. Be clear and direct by default. Expand with detail when the topic warrants it, but avoid unnecessary filler."
+            "Response style: balanced. Default to a compact but complete answer. Lead with the answer or outcome first. Use a short paragraph or a short flat list when that makes the reply clearer. Add explanation when it materially helps understanding, but avoid over-explaining routine details."
         }
         ProfileResponseStyle::Concise => {
-            "Response style: concise. Keep answers short and direct. Minimize explanation unless asked. Prefer code and commands over prose. Skip pleasantries."
+            "Response style: concise. Treat brevity as a hard default. Lead with the answer, result, or next action immediately. Keep the final response to 1-3 short sentences or a very short flat list unless the user explicitly asks for more detail. Do not include background, reasoning, summaries, or pleasantries unless they are required for correctness. Prefer code, commands, and direct facts over prose."
         }
         ProfileResponseStyle::Guide => {
-            "Response style: guided. Explain tradeoffs, reasoning, and next steps clearly. Help the user understand why, not just what. Surface alternatives when relevant."
+            "Response style: guided. Lead with the answer, then explain the reasoning, tradeoffs, and recommended next steps clearly. Be intentionally explanatory when that helps the user learn or make a decision. Surface relevant alternatives, caveats, or examples when useful."
         }
     }
 }
@@ -1944,6 +1944,19 @@ mod tests {
             parts[1],
             response_style_system_instruction(ProfileResponseStyle::Concise)
         );
+    }
+
+    #[test]
+    fn response_style_instructions_have_stronger_behavioral_separation() {
+        let balanced = response_style_system_instruction(ProfileResponseStyle::Balanced);
+        let concise = response_style_system_instruction(ProfileResponseStyle::Concise);
+        let guide = response_style_system_instruction(ProfileResponseStyle::Guide);
+
+        assert!(balanced.contains("compact but complete answer"));
+        assert!(concise.contains("1-3 short sentences"));
+        assert!(concise.contains("hard default"));
+        assert!(guide.contains("tradeoffs"));
+        assert!(guide.contains("recommended next steps"));
     }
 
     #[test]
