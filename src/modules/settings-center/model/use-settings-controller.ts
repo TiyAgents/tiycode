@@ -1,9 +1,12 @@
 import { isTauri } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  DEFAULT_AGENT_PROFILES,
+  DEFAULT_POLICY_SETTINGS,
   GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
 } from "@/modules/settings-center/model/defaults";
 import {
+  persistLocalUiSettings,
   persistSettings,
   readStoredSettings,
 } from "@/modules/settings-center/model/settings-storage";
@@ -25,6 +28,12 @@ import type {
   ProviderSettingsDto,
 } from "@/shared/types/api";
 import {
+  policyGetAll,
+  policySet,
+  profileCreate,
+  profileDelete,
+  profileList,
+  profileUpdate,
   providerCatalogList,
   providerModelTestConnection,
   providerSettingsCreateCustom,
@@ -33,10 +42,212 @@ import {
   providerSettingsGetAll,
   providerSettingsUpdateCustom,
   providerSettingsUpsertBuiltin,
+  settingsGet,
   settingsSet,
 } from "@/services/bridge";
 
 export * from "@/modules/settings-center/model/types";
+
+const ACTIVE_AGENT_PROFILE_SETTING_KEY = "active_profile_id";
+const DB_BACKED_SETTINGS_MIGRATION_KEY = "settings.db_backed_sources_v1";
+
+function mapProfileDto(profile: import("@/shared/types/api").AgentProfileDto): AgentProfile {
+  const defaultProfile = DEFAULT_AGENT_PROFILES[0];
+
+  return {
+    id: profile.id,
+    name: profile.name,
+    customInstructions: profile.customInstructions ?? defaultProfile.customInstructions,
+    commitMessagePrompt: profile.commitMessagePrompt ?? defaultProfile.commitMessagePrompt,
+    responseStyle: (profile.responseStyle as AgentProfile["responseStyle"] | null) ?? defaultProfile.responseStyle,
+    responseLanguage: profile.responseLanguage ?? defaultProfile.responseLanguage,
+    commitMessageLanguage: profile.commitMessageLanguage ?? defaultProfile.commitMessageLanguage,
+    primaryProviderId: profile.primaryProviderId ?? "",
+    primaryModelId: profile.primaryModelId ?? "",
+    assistantProviderId: profile.auxiliaryProviderId ?? "",
+    assistantModelId: profile.auxiliaryModelId ?? "",
+    liteProviderId: profile.lightweightProviderId ?? "",
+    liteModelId: profile.lightweightModelId ?? "",
+  };
+}
+
+function toProfileInput(profile: Omit<AgentProfile, "id">, isDefault?: boolean) {
+  return {
+    name: profile.name,
+    customInstructions: profile.customInstructions,
+    commitMessagePrompt: profile.commitMessagePrompt,
+    responseStyle: profile.responseStyle,
+    responseLanguage: profile.responseLanguage,
+    commitMessageLanguage: profile.commitMessageLanguage,
+    primaryProviderId: profile.primaryProviderId || undefined,
+    primaryModelId: profile.primaryModelId || undefined,
+    auxiliaryProviderId: profile.assistantProviderId || undefined,
+    auxiliaryModelId: profile.assistantModelId || undefined,
+    lightweightProviderId: profile.liteProviderId || undefined,
+    lightweightModelId: profile.liteModelId || undefined,
+    ...(typeof isDefault === "boolean" ? { isDefault } : {}),
+  };
+}
+
+function mapApprovalPolicyFromDb(value: unknown): PolicySettings["approvalPolicy"] {
+  if (typeof value === "string") {
+    if (value === "require_all") return "untrusted";
+    if (value === "auto") return "never";
+    return "on-request";
+  }
+
+  if (value && typeof value === "object" && "mode" in value) {
+    return mapApprovalPolicyFromDb((value as { mode?: unknown }).mode);
+  }
+
+  return DEFAULT_POLICY_SETTINGS.approvalPolicy;
+}
+
+function mapApprovalPolicyToDb(value: PolicySettings["approvalPolicy"]) {
+  const mode = value === "untrusted"
+    ? "require_all"
+    : value === "never"
+      ? "auto"
+      : "require_for_mutations";
+
+  return { mode };
+}
+
+function mapSandboxPolicyFromDb(value: unknown): PolicySettings["sandboxPolicy"] {
+  if (value === "read-only" || value === "workspace-write" || value === "full-access") {
+    return value;
+  }
+
+  if (value && typeof value === "object") {
+    const mode = (value as { mode?: unknown }).mode;
+    if (mode === "read-only" || mode === "workspace-write" || mode === "full-access") {
+      return mode;
+    }
+  }
+
+  return DEFAULT_POLICY_SETTINGS.sandboxPolicy;
+}
+
+function mapNetworkAccessFromDb(value: unknown): PolicySettings["networkAccess"] {
+  if (value === "ask" || value === "block" || value === "allow") {
+    return value;
+  }
+
+  if (value && typeof value === "object") {
+    const mode = (value as { mode?: unknown }).mode;
+    if (mode === "ask" || mode === "block" || mode === "allow") {
+      return mode;
+    }
+
+    if ((value as { allowed?: unknown }).allowed === true) {
+      return "allow";
+    }
+
+    if ((value as { allowed?: unknown }).allowed === false) {
+      return "block";
+    }
+  }
+
+  return DEFAULT_POLICY_SETTINGS.networkAccess;
+}
+
+function mapPatternEntriesFromDb(value: unknown): Array<PatternEntry> {
+  if (!Array.isArray(value)) {
+    return DEFAULT_POLICY_SETTINGS.allowList;
+  }
+
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+
+    const record = entry as { id?: unknown; pattern?: unknown };
+    if (typeof record.pattern !== "string") {
+      return [];
+    }
+
+    return [{
+      id: typeof record.id === "string" ? record.id : crypto.randomUUID(),
+      pattern: record.pattern,
+    }];
+  });
+}
+
+function mapWritableRootsFromDb(value: unknown): Array<WritableRootEntry> {
+  if (!Array.isArray(value)) {
+    return DEFAULT_POLICY_SETTINGS.writableRoots;
+  }
+
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+
+    const record = entry as { id?: unknown; path?: unknown };
+    if (typeof record.path !== "string") {
+      return [];
+    }
+
+    return [{
+      id: typeof record.id === "string" ? record.id : crypto.randomUUID(),
+      path: record.path,
+    }];
+  });
+}
+
+function mapPoliciesFromDtos(policyDtos: Array<import("@/shared/types/api").SettingDto>): PolicySettings {
+  const policyByKey = new Map(policyDtos.map((entry) => [entry.key, entry.value]));
+
+  return {
+    approvalPolicy: mapApprovalPolicyFromDb(policyByKey.get("approval_policy")),
+    allowList: mapPatternEntriesFromDb(policyByKey.get("allow_list")),
+    denyList: mapPatternEntriesFromDb(policyByKey.get("deny_list")),
+    sandboxPolicy: mapSandboxPolicyFromDb(policyByKey.get("sandbox_policy")),
+    networkAccess: mapNetworkAccessFromDb(policyByKey.get("network_access")),
+    writableRoots: mapWritableRootsFromDb(policyByKey.get("writable_roots")),
+  };
+}
+
+async function persistPolicyState(policy: PolicySettings) {
+  await Promise.all([
+    policySet("approval_policy", JSON.stringify(mapApprovalPolicyToDb(policy.approvalPolicy))),
+    policySet("allow_list", JSON.stringify(policy.allowList.map((entry) => ({
+      id: entry.id,
+      tool: "*",
+      pattern: entry.pattern,
+    })))),
+    policySet("deny_list", JSON.stringify(policy.denyList.map((entry) => ({
+      id: entry.id,
+      tool: "*",
+      pattern: entry.pattern,
+    })))),
+    policySet("sandbox_policy", JSON.stringify({ mode: policy.sandboxPolicy })),
+    policySet("network_access", JSON.stringify({ mode: policy.networkAccess })),
+    policySet("writable_roots", JSON.stringify(policy.writableRoots)),
+  ]);
+}
+
+function isDefaultPolicyState(policy: PolicySettings) {
+  return (
+    policy.approvalPolicy === DEFAULT_POLICY_SETTINGS.approvalPolicy
+    && policy.sandboxPolicy === DEFAULT_POLICY_SETTINGS.sandboxPolicy
+    && policy.networkAccess === DEFAULT_POLICY_SETTINGS.networkAccess
+    && policy.allowList.length === 0
+    && policy.denyList.length === 0
+    && policy.writableRoots.length === 0
+  );
+}
+
+function resolveActiveProfileId(
+  profiles: ReadonlyArray<AgentProfile>,
+  activeProfileId: unknown,
+) {
+  if (typeof activeProfileId === "string" && profiles.some((profile) => profile.id === activeProfileId)) {
+    return activeProfileId;
+  }
+
+  return profiles[0]?.id ?? DEFAULT_AGENT_PROFILES[0]?.id ?? "default-profile";
+}
 
 function mapProviderDto(provider: ProviderSettingsDto): ProviderEntry {
   return {
@@ -67,43 +278,161 @@ function mapProviderDto(provider: ProviderSettingsDto): ProviderEntry {
 }
 
 export function useSettingsController() {
-  const [settings, setSettings] = useState<SettingsState>(() => readStoredSettings());
+  const storedSettingsRef = useRef<SettingsState>(readStoredSettings());
+  const [settings, setSettings] = useState<SettingsState>(() => storedSettingsRef.current);
   const [providerCatalog, setProviderCatalog] = useState<Array<ProviderCatalogEntry>>([]);
+  const [backendHydrated, setBackendHydrated] = useState(!isTauri());
+  const settingsRef = useRef(settings);
+
+  settingsRef.current = settings;
 
   useEffect(() => {
+    if (!backendHydrated) {
+      return;
+    }
+
+    if (isTauri()) {
+      persistLocalUiSettings(settings);
+      return;
+    }
+
     persistSettings(settings);
-  }, [settings]);
+  }, [backendHydrated, settings]);
 
   useEffect(() => {
     if (!isTauri()) {
       return;
     }
 
-    void providerSettingsGetAll()
-      .then((providers) => {
-        setSettings((current) => ({
-          ...current,
-          providers: providers.map(mapProviderDto),
-        }));
-      })
-      .catch((error) => {
-        console.warn("Failed to load provider settings", error);
-      });
+    let cancelled = false;
 
-    void providerCatalogList()
-      .then((catalog) => {
-        setProviderCatalog(catalog.map((entry) => ({
+    async function hydrateDbBackedSettings() {
+      try {
+        const [providers, catalog, policies, profiles, activeProfileSetting, migrationSetting] =
+          await Promise.all([
+            providerSettingsGetAll(),
+            providerCatalogList(),
+            policyGetAll(),
+            profileList(),
+            settingsGet(ACTIVE_AGENT_PROFILE_SETTING_KEY),
+            settingsGet(DB_BACKED_SETTINGS_MIGRATION_KEY),
+          ]);
+
+        const mappedProviders = providers.map(mapProviderDto);
+        const mappedCatalog = catalog.map((entry) => ({
           providerKey: entry.providerKey as ProviderCatalogEntry["providerKey"],
           providerType: entry.providerType as ProviderCatalogEntry["providerType"],
           displayName: entry.displayName,
           builtin: entry.builtin,
           supportsCustom: entry.supportsCustom,
           defaultBaseUrl: entry.defaultBaseUrl,
-        })));
-      })
-      .catch((error) => {
-        console.warn("Failed to load provider catalog", error);
-      });
+        }));
+
+        let mappedProfiles = profiles.map(mapProfileDto);
+        const localProfiles = storedSettingsRef.current.agentProfiles.length > 0
+          ? storedSettingsRef.current.agentProfiles
+          : DEFAULT_AGENT_PROFILES;
+        const migrated = migrationSetting?.value === true;
+
+        if (!migrated && mappedProfiles.length === 0) {
+          const activeLocalProfileId = storedSettingsRef.current.activeAgentProfileId;
+          const profileIdMap = new Map<string, string>();
+          const createdProfiles = [];
+
+          for (const profile of localProfiles) {
+            const created = await profileCreate(
+              toProfileInput(
+                {
+                  name: profile.name,
+                  customInstructions: profile.customInstructions,
+                  commitMessagePrompt: profile.commitMessagePrompt,
+                  responseStyle: profile.responseStyle,
+                  responseLanguage: profile.responseLanguage,
+                  commitMessageLanguage: profile.commitMessageLanguage,
+                  primaryProviderId: profile.primaryProviderId,
+                  primaryModelId: profile.primaryModelId,
+                  assistantProviderId: profile.assistantProviderId,
+                  assistantModelId: profile.assistantModelId,
+                  liteProviderId: profile.liteProviderId,
+                  liteModelId: profile.liteModelId,
+                },
+                profile.id === activeLocalProfileId,
+              ),
+            );
+
+            profileIdMap.set(profile.id, created.id);
+            createdProfiles.push(mapProfileDto(created));
+          }
+
+          mappedProfiles = createdProfiles;
+          const migratedActiveProfileId = resolveActiveProfileId(
+            createdProfiles,
+            profileIdMap.get(activeLocalProfileId),
+          );
+          await settingsSet(
+            ACTIVE_AGENT_PROFILE_SETTING_KEY,
+            JSON.stringify(migratedActiveProfileId),
+          );
+        }
+
+        const mappedPolicy = mapPoliciesFromDtos(policies);
+        const shouldMigrateLocalPolicy =
+          !migrated
+          && isDefaultPolicyState(mappedPolicy)
+          && !isDefaultPolicyState(storedSettingsRef.current.policy);
+
+        if (shouldMigrateLocalPolicy) {
+          await persistPolicyState(storedSettingsRef.current.policy);
+        }
+
+        const resolvedPolicy = shouldMigrateLocalPolicy
+          ? storedSettingsRef.current.policy
+          : mappedPolicy;
+
+        const resolvedActiveProfileId = resolveActiveProfileId(
+          mappedProfiles,
+          activeProfileSetting?.value,
+        );
+
+        if (mappedProfiles.length > 0 && activeProfileSetting?.value !== resolvedActiveProfileId) {
+          await settingsSet(
+            ACTIVE_AGENT_PROFILE_SETTING_KEY,
+            JSON.stringify(resolvedActiveProfileId),
+          );
+        }
+
+        if (!migrated) {
+          await settingsSet(DB_BACKED_SETTINGS_MIGRATION_KEY, "true");
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setProviderCatalog(mappedCatalog);
+        setSettings((current) => ({
+          ...current,
+          providers: mappedProviders,
+          policy: resolvedPolicy,
+          agentProfiles: mappedProfiles.length > 0 ? mappedProfiles : DEFAULT_AGENT_PROFILES,
+          activeAgentProfileId: mappedProfiles.length > 0
+            ? resolvedActiveProfileId
+            : DEFAULT_AGENT_PROFILES[0]?.id ?? "default-profile",
+        }));
+      } catch (error) {
+        console.warn("Failed to hydrate DB-backed settings", error);
+      } finally {
+        if (!cancelled) {
+          setBackendHydrated(true);
+        }
+      }
+    }
+
+    void hydrateDbBackedSettings();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -140,21 +469,63 @@ export function useSettingsController() {
   };
 
   const addAgentProfile = (entry: Omit<AgentProfile, "id">) => {
-    const id = crypto.randomUUID();
-    setSettings((current) => ({
-      ...current,
-      agentProfiles: [...current.agentProfiles, { ...entry, id }],
-      activeAgentProfileId: id,
-    }));
+    if (!isTauri()) {
+      const id = crypto.randomUUID();
+      setSettings((current) => ({
+        ...current,
+        agentProfiles: [...current.agentProfiles, { ...entry, id }],
+        activeAgentProfileId: id,
+      }));
+      return;
+    }
+
+    void profileCreate(toProfileInput(entry, false))
+      .then(async (profile) => {
+        const mapped = mapProfileDto(profile);
+        await settingsSet(ACTIVE_AGENT_PROFILE_SETTING_KEY, JSON.stringify(mapped.id));
+        setSettings((current) => ({
+          ...current,
+          agentProfiles: [...current.agentProfiles, mapped],
+          activeAgentProfileId: mapped.id,
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to create profile", error);
+      });
   };
 
   const removeAgentProfile = (id: string) => {
-    setSettings((current) => {
-      const remaining = current.agentProfiles.filter((p) => p.id !== id);
-      if (remaining.length === 0) return current;
-      const activeId = current.activeAgentProfileId === id ? remaining[0].id : current.activeAgentProfileId;
-      return { ...current, agentProfiles: remaining, activeAgentProfileId: activeId };
-    });
+    if (!isTauri()) {
+      setSettings((current) => {
+        const remaining = current.agentProfiles.filter((p) => p.id !== id);
+        if (remaining.length === 0) return current;
+        const activeId = current.activeAgentProfileId === id ? remaining[0].id : current.activeAgentProfileId;
+        return { ...current, agentProfiles: remaining, activeAgentProfileId: activeId };
+      });
+      return;
+    }
+
+    const current = settingsRef.current;
+    const remaining = current.agentProfiles.filter((profile) => profile.id !== id);
+    if (remaining.length === 0) {
+      return;
+    }
+
+    void profileDelete(id)
+      .then(async () => {
+        const nextActiveId = current.activeAgentProfileId === id
+          ? remaining[0].id
+          : current.activeAgentProfileId;
+        await settingsSet(ACTIVE_AGENT_PROFILE_SETTING_KEY, JSON.stringify(nextActiveId));
+        setSettings((latest) => ({
+          ...latest,
+          agentProfiles: latest.agentProfiles.filter((profile) => profile.id !== id),
+          activeAgentProfileId: nextActiveId,
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to delete profile", error);
+      });
   };
 
   const updateAgentProfile = (id: string, patch: Partial<Omit<AgentProfile, "id">>) => {
@@ -164,44 +535,147 @@ export function useSettingsController() {
         p.id === id ? { ...p, ...patch } : p,
       ),
     }));
+
+    if (!isTauri()) {
+      return;
+    }
+
+    const currentProfile = settingsRef.current.agentProfiles.find((profile) => profile.id === id);
+    if (!currentProfile) {
+      return;
+    }
+
+    const nextProfile = { ...currentProfile, ...patch };
+
+    void profileUpdate(id, toProfileInput({
+      name: nextProfile.name,
+      customInstructions: nextProfile.customInstructions,
+      commitMessagePrompt: nextProfile.commitMessagePrompt,
+      responseStyle: nextProfile.responseStyle,
+      responseLanguage: nextProfile.responseLanguage,
+      commitMessageLanguage: nextProfile.commitMessageLanguage,
+      primaryProviderId: nextProfile.primaryProviderId,
+      primaryModelId: nextProfile.primaryModelId,
+      assistantProviderId: nextProfile.assistantProviderId,
+      assistantModelId: nextProfile.assistantModelId,
+      liteProviderId: nextProfile.liteProviderId,
+      liteModelId: nextProfile.liteModelId,
+    }))
+      .then((profile) => {
+        const mapped = mapProfileDto(profile);
+        setSettings((current) => ({
+          ...current,
+          agentProfiles: current.agentProfiles.map((entry) =>
+            entry.id === id ? mapped : entry,
+          ),
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to update profile", error);
+      });
   };
 
   const setActiveAgentProfile = (id: string) => {
     setSettings((current) => ({ ...current, activeAgentProfileId: id }));
+
+    if (!isTauri()) {
+      return;
+    }
+
+    void settingsSet(ACTIVE_AGENT_PROFILE_SETTING_KEY, JSON.stringify(id)).catch((error) => {
+      console.warn("Failed to persist active profile", error);
+    });
   };
 
   const duplicateAgentProfile = (id: string) => {
+    if (!isTauri()) {
+      setSettings((current) => {
+        const source = current.agentProfiles.find((p) => p.id === id);
+        if (!source) return current;
+        const newId = crypto.randomUUID();
+        const copy: AgentProfile = { ...source, id: newId, name: `${source.name} Copy` };
+        return {
+          ...current,
+          agentProfiles: [...current.agentProfiles, copy],
+          activeAgentProfileId: newId,
+        };
+      });
+      return;
+    }
+
+    const source = settingsRef.current.agentProfiles.find((profile) => profile.id === id);
+    if (!source) {
+      return;
+    }
+
+    void profileCreate(toProfileInput({
+      name: `${source.name} Copy`,
+      customInstructions: source.customInstructions,
+      commitMessagePrompt: source.commitMessagePrompt,
+      responseStyle: source.responseStyle,
+      responseLanguage: source.responseLanguage,
+      commitMessageLanguage: source.commitMessageLanguage,
+      primaryProviderId: source.primaryProviderId,
+      primaryModelId: source.primaryModelId,
+      assistantProviderId: source.assistantProviderId,
+      assistantModelId: source.assistantModelId,
+      liteProviderId: source.liteProviderId,
+      liteModelId: source.liteModelId,
+    }))
+      .then(async (profile) => {
+        const mapped = mapProfileDto(profile);
+        await settingsSet(ACTIVE_AGENT_PROFILE_SETTING_KEY, JSON.stringify(mapped.id));
+        setSettings((current) => ({
+          ...current,
+          agentProfiles: [...current.agentProfiles, mapped],
+          activeAgentProfileId: mapped.id,
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to duplicate profile", error);
+      });
+  };
+
+  const updatePolicySetting = <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => {
     setSettings((current) => {
-      const source = current.agentProfiles.find((p) => p.id === id);
-      if (!source) return current;
-      const newId = crypto.randomUUID();
-      const copy: AgentProfile = { ...source, id: newId, name: `${source.name} Copy` };
+      const nextPolicy = {
+        ...current.policy,
+        [key]: value,
+      };
+
+      if (isTauri()) {
+        void persistPolicyState(nextPolicy).catch((error) => {
+          console.warn("Failed to update policy setting", error);
+        });
+      }
+
       return {
         ...current,
-        agentProfiles: [...current.agentProfiles, copy],
-        activeAgentProfileId: newId,
+        policy: nextPolicy,
       };
     });
   };
 
-  const updatePolicySetting = <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => {
-    setSettings((current) => ({
-      ...current,
-      policy: {
-        ...current.policy,
-        [key]: value,
-      },
-    }));
-  };
-
   const addAllowEntry = (entry: Omit<PatternEntry, "id">) => {
+    const nextEntry = { ...entry, id: crypto.randomUUID() };
+
     setSettings((current) => ({
       ...current,
       policy: {
         ...current.policy,
-        allowList: [...current.policy.allowList, { ...entry, id: crypto.randomUUID() }],
+        allowList: [...current.policy.allowList, nextEntry],
       },
     }));
+
+    if (isTauri()) {
+      const nextPolicy = {
+        ...settingsRef.current.policy,
+        allowList: [...settingsRef.current.policy.allowList, nextEntry],
+      };
+      void persistPolicyState(nextPolicy).catch((error) => {
+        console.warn("Failed to add allow list entry", error);
+      });
+    }
   };
 
   const removeAllowEntry = (id: string) => {
@@ -212,6 +686,16 @@ export function useSettingsController() {
         allowList: current.policy.allowList.filter((entry) => entry.id !== id),
       },
     }));
+
+    if (isTauri()) {
+      const nextPolicy = {
+        ...settingsRef.current.policy,
+        allowList: settingsRef.current.policy.allowList.filter((entry) => entry.id !== id),
+      };
+      void persistPolicyState(nextPolicy).catch((error) => {
+        console.warn("Failed to remove allow list entry", error);
+      });
+    }
   };
 
   const updateAllowEntry = (id: string, patch: Partial<Omit<PatternEntry, "id">>) => {
@@ -224,16 +708,40 @@ export function useSettingsController() {
         ),
       },
     }));
+
+    if (isTauri()) {
+      const nextPolicy = {
+        ...settingsRef.current.policy,
+        allowList: settingsRef.current.policy.allowList.map((entry) =>
+          entry.id === id ? { ...entry, ...patch } : entry,
+        ),
+      };
+      void persistPolicyState(nextPolicy).catch((error) => {
+        console.warn("Failed to update allow list entry", error);
+      });
+    }
   };
 
   const addDenyEntry = (entry: Omit<PatternEntry, "id">) => {
+    const nextEntry = { ...entry, id: crypto.randomUUID() };
+
     setSettings((current) => ({
       ...current,
       policy: {
         ...current.policy,
-        denyList: [...current.policy.denyList, { ...entry, id: crypto.randomUUID() }],
+        denyList: [...current.policy.denyList, nextEntry],
       },
     }));
+
+    if (isTauri()) {
+      const nextPolicy = {
+        ...settingsRef.current.policy,
+        denyList: [...settingsRef.current.policy.denyList, nextEntry],
+      };
+      void persistPolicyState(nextPolicy).catch((error) => {
+        console.warn("Failed to add deny list entry", error);
+      });
+    }
   };
 
   const removeDenyEntry = (id: string) => {
@@ -244,6 +752,16 @@ export function useSettingsController() {
         denyList: current.policy.denyList.filter((entry) => entry.id !== id),
       },
     }));
+
+    if (isTauri()) {
+      const nextPolicy = {
+        ...settingsRef.current.policy,
+        denyList: settingsRef.current.policy.denyList.filter((entry) => entry.id !== id),
+      };
+      void persistPolicyState(nextPolicy).catch((error) => {
+        console.warn("Failed to remove deny list entry", error);
+      });
+    }
   };
 
   const updateDenyEntry = (id: string, patch: Partial<Omit<PatternEntry, "id">>) => {
@@ -256,16 +774,40 @@ export function useSettingsController() {
         ),
       },
     }));
+
+    if (isTauri()) {
+      const nextPolicy = {
+        ...settingsRef.current.policy,
+        denyList: settingsRef.current.policy.denyList.map((entry) =>
+          entry.id === id ? { ...entry, ...patch } : entry,
+        ),
+      };
+      void persistPolicyState(nextPolicy).catch((error) => {
+        console.warn("Failed to update deny list entry", error);
+      });
+    }
   };
 
   const addWritableRoot = (entry: Omit<WritableRootEntry, "id">) => {
+    const nextEntry = { ...entry, id: crypto.randomUUID() };
+
     setSettings((current) => ({
       ...current,
       policy: {
         ...current.policy,
-        writableRoots: [...current.policy.writableRoots, { ...entry, id: crypto.randomUUID() }],
+        writableRoots: [...current.policy.writableRoots, nextEntry],
       },
     }));
+
+    if (isTauri()) {
+      const nextPolicy = {
+        ...settingsRef.current.policy,
+        writableRoots: [...settingsRef.current.policy.writableRoots, nextEntry],
+      };
+      void persistPolicyState(nextPolicy).catch((error) => {
+        console.warn("Failed to add writable root", error);
+      });
+    }
   };
 
   const removeWritableRoot = (id: string) => {
@@ -276,6 +818,16 @@ export function useSettingsController() {
         writableRoots: current.policy.writableRoots.filter((entry) => entry.id !== id),
       },
     }));
+
+    if (isTauri()) {
+      const nextPolicy = {
+        ...settingsRef.current.policy,
+        writableRoots: settingsRef.current.policy.writableRoots.filter((entry) => entry.id !== id),
+      };
+      void persistPolicyState(nextPolicy).catch((error) => {
+        console.warn("Failed to remove writable root", error);
+      });
+    }
   };
 
   const updateWritableRoot = (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => {
@@ -288,6 +840,18 @@ export function useSettingsController() {
         ),
       },
     }));
+
+    if (isTauri()) {
+      const nextPolicy = {
+        ...settingsRef.current.policy,
+        writableRoots: settingsRef.current.policy.writableRoots.map((entry) =>
+          entry.id === id ? { ...entry, ...patch } : entry,
+        ),
+      };
+      void persistPolicyState(nextPolicy).catch((error) => {
+        console.warn("Failed to update writable root", error);
+      });
+    }
   };
 
   const addWorkspace = (entry: Omit<WorkspaceEntry, "id">) => {

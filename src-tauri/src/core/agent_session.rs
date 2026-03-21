@@ -30,13 +30,13 @@ use crate::persistence::repo::{
 
 const MESSAGE_HISTORY_LIMIT: i64 = 200;
 const DEFAULT_CONTEXT_WINDOW: u32 = 128_000;
-const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 16_384;
+const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32_000;
 const DEFAULT_FULL_TOOL_PROFILE: &str = "default_full";
 const PLAN_READ_ONLY_TOOL_PROFILE: &str = "plan_read_only";
 const STANDARD_TOOL_TIMEOUT_SECS: u64 = 120;
-const SUBAGENT_TOOL_TIMEOUT_SECS: u64 = 300;
+const SUBAGENT_TOOL_TIMEOUT_SECS: u64 = 600;
 const WORKSPACE_INSTRUCTION_FILE_NAMES: &[&str] = &["AGENTS.md", "CLAUDE.md", "AGENT.MD"];
-const WORKSPACE_INSTRUCTION_MAX_CHARS: usize = 1_500;
+const WORKSPACE_INSTRUCTION_MAX_CHARS: usize = 12_800;
 const SHELL_GUIDE_TOOL_NAMES: &[&str] = &["python3", "python", "node", "npm", "uv", "git", "rg"];
 
 #[derive(Debug, Clone)]
@@ -1307,7 +1307,7 @@ async fn build_sandbox_permissions_section(
 ) -> Result<String, AppError> {
     let approval_policy = settings_repo::policy_get(pool, "approval_policy")
         .await?
-        .and_then(|record| serde_json::from_str::<String>(&record.value_json).ok())
+        .map(|record| parse_approval_policy_mode(&record.value_json))
         .unwrap_or_else(|| "require_for_mutations".to_string());
 
     let run_mode_line = if run_mode == "plan" {
@@ -1322,6 +1322,20 @@ async fn build_sandbox_permissions_section(
             "- Effective runtime sandbox: workspace-scoped tool execution with policy checks.\n- Workspace boundary: file and path-aware tools are restricted to the current workspace (`{workspace_path}`).\n- Approval policy: {approval_policy}.\n- Read-only tools are generally auto-allowed; mutating tools may require approval.\n- {run_mode_line}\n- Outer host sandbox metadata is not exposed here; rely on these effective runtime constraints."
         ),
     ))
+}
+
+fn parse_approval_policy_mode(value_json: &str) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(value_json).unwrap_or_default();
+
+    if let Some(value) = parsed.as_str() {
+        return value.to_string();
+    }
+
+    parsed
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("require_for_mutations")
+        .to_string()
 }
 
 fn collect_workspace_instruction_snippet(

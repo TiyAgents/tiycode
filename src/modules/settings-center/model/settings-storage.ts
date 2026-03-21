@@ -189,3 +189,17 @@ export function persistSettings(settings: SettingsState) {
     providers: [],
   }));
 }
+
+export function persistLocalUiSettings(settings: SettingsState) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({
+    schemaVersion: SETTINGS_STORAGE_SCHEMA_VERSION,
+    general: settings.general,
+    workspaces: settings.workspaces,
+    commands: settings.commands,
+    providers: [],
+  }));
+}

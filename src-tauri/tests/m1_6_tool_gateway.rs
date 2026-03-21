@@ -9,9 +9,11 @@
 
 mod test_helpers;
 
+use serde_json::json;
 use sqlx::Row;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tiy_agent_lib::core::policy_engine::{PolicyEngine, PolicyVerdict};
 
 // =========================================================================
 // T1.6.1 — Dangerous command hard deny
@@ -118,6 +120,34 @@ fn test_safe_commands_not_flagged() {
             "Command '{cmd}' should NOT match dangerous patterns"
         );
     }
+}
+
+#[tokio::test]
+async fn test_policy_allow_list_pattern_must_match() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_policy(
+        &pool,
+        "allow_list",
+        r#"[{"tool":"shell","pattern":"npm test"}]"#,
+    )
+    .await;
+
+    let engine = PolicyEngine::new(pool);
+
+    let matched = engine
+        .evaluate("shell", &json!({ "command": "npm test" }), None, "default")
+        .await
+        .unwrap();
+    assert!(matches!(matched.verdict, PolicyVerdict::AutoAllow));
+
+    let unmatched = engine
+        .evaluate("shell", &json!({ "command": "cargo test" }), None, "default")
+        .await
+        .unwrap();
+    assert!(matches!(
+        unmatched.verdict,
+        PolicyVerdict::RequireApproval { .. }
+    ));
 }
 
 // =========================================================================

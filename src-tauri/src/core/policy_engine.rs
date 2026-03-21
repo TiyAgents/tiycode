@@ -214,6 +214,11 @@ impl PolicyEngine {
             for rule in &allow_list {
                 if let Some(tool) = rule["tool"].as_str() {
                     if tool == tool_name || tool == "*" {
+                        let pattern = rule["pattern"].as_str().unwrap_or("");
+                        if !pattern.is_empty() && !input_matches_pattern(tool_input, pattern) {
+                            continue;
+                        }
+
                         return Ok(PolicyCheck {
                             tool_name: tool_name.to_string(),
                             verdict: PolicyVerdict::AutoAllow,
@@ -290,10 +295,14 @@ impl PolicyEngine {
             Some(r) => {
                 let val: serde_json::Value =
                     serde_json::from_str(&r.value_json).unwrap_or_default();
-                Ok(val["mode"]
-                    .as_str()
-                    .unwrap_or("require_for_mutations")
-                    .to_string())
+                if let Some(mode) = val.as_str() {
+                    Ok(mode.to_string())
+                } else {
+                    Ok(val["mode"]
+                        .as_str()
+                        .unwrap_or("require_for_mutations")
+                        .to_string())
+                }
             }
             None => Ok("require_for_mutations".to_string()),
         }

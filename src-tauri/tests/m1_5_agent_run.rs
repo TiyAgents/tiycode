@@ -525,6 +525,61 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
 }
 
 #[tokio::test]
+async fn test_build_session_spec_reads_object_style_approval_policy() {
+    use tiy_agent_lib::core::agent_session::build_session_spec;
+
+    let pool = test_helpers::setup_test_pool().await;
+    let temp_dir = tempdir().unwrap();
+    let workspace_path = temp_dir.path().to_string_lossy().to_string();
+
+    test_helpers::seed_workspace(&pool, "ws-ctx-object", &workspace_path).await;
+    test_helpers::seed_thread(&pool, "t-ctx-object", "ws-ctx-object").await;
+    test_helpers::seed_policy(
+        &pool,
+        "approval_policy",
+        r#"{"mode":"require_all"}"#,
+    )
+    .await;
+
+    sqlx::query(
+        "INSERT INTO providers (
+            id, provider_kind, provider_key, name, protocol_type, base_url,
+            api_key_encrypted, enabled, mapping_locked
+         ) VALUES ('prov-ctx-object', 'builtin', 'openai', 'OpenAI', 'openai',
+                   'https://api.openai.com/v1', 'sk-test', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let model_plan = serde_json::json!({
+        "primary": {
+            "providerId": "prov-ctx-object",
+            "modelRecordId": "model-record-ctx-object",
+            "providerType": "openai",
+            "providerName": "OpenAI",
+            "model": "gpt-4.1-mini",
+            "modelId": "gpt-4.1-mini",
+            "modelDisplayName": "GPT-4.1 Mini",
+            "baseUrl": "https://api.openai.com/v1"
+        }
+    });
+
+    let spec = build_session_spec(
+        &pool,
+        "run-ctx-object",
+        "t-ctx-object",
+        &workspace_path,
+        "default",
+        &model_plan,
+    )
+    .await
+    .unwrap();
+
+    assert!(spec.system_prompt.contains("Approval policy: require_all."));
+}
+
+#[tokio::test]
 async fn test_run_helpers_table_persists_collapsed_helper_summary() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-helper", "/tmp/helper").await;
