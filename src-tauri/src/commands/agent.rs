@@ -206,3 +206,25 @@ pub async fn tool_approval_respond(
 
     Ok(())
 }
+
+#[tauri::command]
+pub async fn tool_clarify_respond(
+    state: State<'_, AppState>,
+    tool_call_id: String,
+    response: serde_json::Value,
+) -> Result<(), AppError> {
+    let found = state
+        .tool_gateway
+        .resolve_clarification(&tool_call_id, response)
+        .await?;
+
+    if !found {
+        return Err(AppError::recoverable(
+            crate::model::errors::ErrorSource::Tool,
+            "tool.clarify.not_found",
+            format!("No pending clarification was found for tool call '{tool_call_id}'"),
+        ));
+    }
+
+    Ok(())
+}

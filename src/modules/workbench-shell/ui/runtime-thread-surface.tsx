@@ -58,6 +58,7 @@ type SurfaceMessage = {
 type SurfaceToolState =
   | "approval-requested"
   | "approval-responded"
+  | "clarify-requested"
   | "input-streaming"
   | "input-available"
   | "output-available"
@@ -197,7 +198,6 @@ type PlanMessageMetadata = {
   generatedFromRunId?: string;
   kind?: string;
   needsContextResetOption?: boolean;
-  openQuestions?: string[];
   planRevision?: number;
   risks?: string[];
   runModeAtCreation?: string;
@@ -208,7 +208,6 @@ type PlanMessageMetadata = {
 
 type FormattedPlan = {
   approvalState: string | null;
-  openQuestions: string[];
   planRevision: number | null;
   risks: string[];
   steps: string[];
@@ -222,6 +221,19 @@ type FormattedApprovalPrompt = {
   planMessageId: string | null;
   planRevision: number | null;
   state: string;
+};
+
+type ClarifyOption = {
+  description: string;
+  id: string;
+  label: string;
+  recommended: boolean;
+};
+
+type ClarifyPrompt = {
+  header: string | null;
+  options: ClarifyOption[];
+  question: string;
 };
 
 type TimelineRole = SurfaceMessage["role"];
@@ -304,7 +316,6 @@ function parsePlanMessageMetadata(value: unknown): PlanMessageMetadata | null {
     kind: readStringField(record, "kind") ?? undefined,
     needsContextResetOption:
       typeof record.needsContextResetOption === "boolean" ? record.needsContextResetOption : undefined,
-    openQuestions: readStringArrayField(record, "openQuestions"),
     planRevision: readNumberField(record, "planRevision") ?? undefined,
     risks: readStringArrayField(record, "risks"),
     runModeAtCreation: readStringField(record, "runModeAtCreation") ?? undefined,
@@ -356,6 +367,48 @@ function parseApprovalPromptMetadata(value: unknown): FormattedApprovalPrompt | 
   };
 }
 
+function parseClarifyPrompt(value: unknown): ClarifyPrompt | null {
+  const record = asObjectRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const question = readStringField(record, "question")?.trim();
+  if (!question) {
+    return null;
+  }
+
+  const options = Array.isArray(record.options)
+    ? record.options
+        .map((entry, index) => {
+          const optionRecord = asObjectRecord(entry);
+          const label = readStringField(optionRecord, "label")?.trim();
+          const description = readStringField(optionRecord, "description")?.trim();
+          if (!label || !description) {
+            return null;
+          }
+
+          return {
+            description,
+            id: readStringField(optionRecord, "id")?.trim() || `option-${index + 1}`,
+            label,
+            recommended: optionRecord?.recommended === true,
+          };
+        })
+        .filter((option): option is ClarifyOption => option !== null)
+    : [];
+
+  if (options.length < 2) {
+    return null;
+  }
+
+  return {
+    header: readStringField(record, "header")?.trim() || null,
+    options,
+    question,
+  };
+}
+
 function formatPlanMetadata(
   metadata: unknown,
   fallbackContent?: string,
@@ -387,7 +440,6 @@ function formatPlanMetadata(
 
   return {
     approvalState: parsed?.approvalState ?? null,
-    openQuestions: parsed?.openQuestions ?? [],
     planRevision: parsed?.planRevision ?? null,
     risks: parsed?.risks ?? [],
     steps,
@@ -431,6 +483,8 @@ function mapSnapshotToolState(tool: ToolCallDto): SurfaceToolState {
   switch (tool.status) {
     case "waiting_approval":
       return "approval-requested";
+    case "waiting_clarification":
+      return "clarify-requested";
     case "approved":
       return "approval-responded";
     case "running":
@@ -560,6 +614,8 @@ function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
     switch (snapshot.activeRun.status) {
       case "waiting_approval":
         return "waiting_approval";
+      case "needs_reply":
+        return "needs_reply";
       case "created":
       case "dispatching":
       case "running":
@@ -586,7 +642,7 @@ function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
     case "waiting_approval":
       return "waiting_approval";
     case "needs_reply":
-      return "limit_reached";
+      return snapshot.latestRun?.status === "limit_reached" ? "limit_reached" : "needs_reply";
     case "failed":
       return "failed";
     case "interrupted":
@@ -774,6 +830,8 @@ function formatToolStatusLabel(state: SurfaceToolState) {
       return "approval";
     case "approval-responded":
       return "approved";
+    case "clarify-requested":
+      return "reply";
     case "input-available":
       return "running";
     case "input-streaming":
@@ -790,6 +848,7 @@ function formatToolStatusLabel(state: SurfaceToolState) {
 function getToolStatusClass(state: SurfaceToolState) {
   switch (state) {
     case "approval-requested":
+    case "clarify-requested":
       return "text-app-warning";
     case "approval-responded":
       return "text-app-info";
@@ -1767,6 +1826,10 @@ function isVisibleTimelineTool(
   tool: SurfaceToolEntry,
   helperIds: ReadonlySet<string>,
 ) {
+  if (tool.name === "clarify") {
+    return tool.state === "clarify-requested";
+  }
+
   return !isHelperOwnedTool(tool.id, helperIds) && !isRuntimeOrchestrationTool(tool.name);
 }
 
@@ -1814,6 +1877,7 @@ function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
     case "subagent_usage_updated":
     case "thread_usage_updated":
     case "plan_updated":
+    case "clarify_resolved":
       return false;
     default:
       return true;
@@ -1950,6 +2014,32 @@ export function RuntimeThreadSurface({
     finalizeReasoningForRun(runId);
   }, [clearScheduledThinkingPhase, finalizeReasoningForRun]);
 
+  const appendOptimisticUserMessage = useCallback((content: string) => {
+    const userCreatedAt = new Date().toISOString();
+    const localUserMessageId = `local-user-${Date.now()}`;
+
+    setMessages((current) => {
+      const withoutStaleLocal = current.filter(
+        (entry) => !(entry.role === "user" && entry.id.startsWith("local-user-")),
+      );
+
+      return [
+        ...withoutStaleLocal,
+        {
+          createdAt: userCreatedAt,
+          id: localUserMessageId,
+          messageType: "plain_message",
+          role: "user",
+          runId: null,
+          content,
+          status: "completed",
+        },
+      ];
+    });
+
+    showThinkingPlaceholder(null, userCreatedAt);
+  }, [showThinkingPlaceholder]);
+
   const loadSnapshot = useCallback(async () => {
     const requestId = snapshotLoadRequestRef.current + 1;
     snapshotLoadRequestRef.current = requestId;
@@ -1995,7 +2085,7 @@ export function RuntimeThreadSurface({
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
       if (
-        (nextState === "running" || nextState === "waiting_approval")
+        (nextState === "running" || nextState === "waiting_approval" || nextState === "needs_reply")
         && streamRef.current
         && !streamRef.current.runId
         && !subscribingRef.current
@@ -2289,6 +2379,32 @@ export function RuntimeThreadSurface({
               startedAt: entry?.startedAt ?? new Date().toISOString(),
               state: entry?.state === "approval-requested" ? "approval-requested" : "input-streaming",
             }));
+          case "clarify-required":
+            return updateTool(current, event.toolCallId, (entry) => ({
+              approval: entry?.approval,
+              error: undefined,
+              finishedAt: null,
+              id: event.toolCallId,
+              input: event.toolInput ?? entry?.input,
+              name: event.toolName ?? entry?.name ?? "tool",
+              result: undefined,
+              runId: event.runId,
+              startedAt: entry?.startedAt ?? new Date().toISOString(),
+              state: "clarify-requested",
+            }));
+          case "clarify-resolved":
+            return updateTool(current, event.toolCallId, (entry) => ({
+              approval: entry?.approval,
+              error: undefined,
+              finishedAt: new Date().toISOString(),
+              id: event.toolCallId,
+              input: entry?.input,
+              name: entry?.name ?? "tool",
+              result: event.response,
+              runId: event.runId,
+              startedAt: entry?.startedAt ?? new Date().toISOString(),
+              state: "output-available",
+            }));
           case "running":
             return updateTool(current, event.toolCallId, (entry) => {
               if (entry && isCompletedToolState(entry.state)) {
@@ -2382,7 +2498,7 @@ export function RuntimeThreadSurface({
       setRunState(state);
       onRunStateChange?.(state);
 
-      if (state === "running" || state === "waiting_approval") {
+      if (state === "running" || state === "waiting_approval" || state === "needs_reply") {
         setRuntimeError(null);
       }
 
@@ -2400,7 +2516,7 @@ export function RuntimeThreadSurface({
         return;
       }
 
-      if (state === "waiting_approval" && !stream.runId) {
+      if ((state === "waiting_approval" || state === "needs_reply") && !stream.runId) {
         void loadSnapshot();
         return;
       }
@@ -2464,6 +2580,11 @@ export function RuntimeThreadSurface({
       return;
     }
 
+    if (runState === "needs_reply" && activeRunId) {
+      setComposerError("Reply to the pending question before starting a new run.");
+      return;
+    }
+
     // Guard against concurrent invocations. The `initialPromptRequest` effect
     // may re-fire while an `await startRun()` is still in flight because
     // `runState` hasn't transitioned to "running" yet (it only changes when
@@ -2490,29 +2611,7 @@ export function RuntimeThreadSurface({
     setComposerError(null);
     setRuntimeError(null);
     setQueueArtifact(null);
-    const userCreatedAt = new Date().toISOString();
-    const localUserMessageId = `local-user-${Date.now()}`;
-
-    setMessages((current) => {
-      // Remove any previous local-user optimistic messages to avoid duplicates
-      // when a snapshot load races with this insertion.
-      const withoutStaleLocal = current.filter(
-        (entry) => !(entry.role === "user" && entry.id.startsWith("local-user-")),
-      );
-      return [
-        ...withoutStaleLocal,
-        {
-          createdAt: userCreatedAt,
-          id: localUserMessageId,
-          messageType: "plain_message",
-          role: "user",
-          runId: null,
-          content: prompt,
-          status: "completed",
-        },
-      ];
-    });
-    showThinkingPlaceholder(null, userCreatedAt);
+    appendOptimisticUserMessage(prompt);
 
     try {
       await streamRef.current?.startRun(
@@ -2527,7 +2626,28 @@ export function RuntimeThreadSurface({
     } finally {
       submittingRef.current = false;
     }
-  }, [activeAgentProfileId, activeProfile, agentProfiles, providers, runState, selectedRunMode, showThinkingPlaceholder, threadId]);
+  }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, providers, runState, selectedRunMode, threadId]);
+
+  const respondToClarify = useCallback(async (
+    tool: SurfaceToolEntry,
+    response: Record<string, unknown>,
+    displayText: string,
+  ) => {
+    if (!streamRef.current) {
+      return;
+    }
+
+    setComposerError(null);
+    setRuntimeError(null);
+    setQueueArtifact(null);
+    appendOptimisticUserMessage(displayText);
+
+    try {
+      await streamRef.current.respondToClarify(tool.id, response);
+    } catch {
+      setThinkingPlaceholder(null);
+    }
+  }, [appendOptimisticUserMessage]);
 
   useEffect(() => {
     const isCurrentThreadSnapshotReady =
@@ -2535,7 +2655,7 @@ export function RuntimeThreadSurface({
     const initialPromptRequestId = initialPromptRequest?.id ?? null;
     const hasBlockingRun =
       runState === "running"
-      || (runState === "waiting_approval" && Boolean(streamRef.current?.runId));
+      || ((runState === "waiting_approval" || runState === "needs_reply") && Boolean(streamRef.current?.runId));
 
     if (
       !initialPromptRequest
@@ -2569,6 +2689,13 @@ export function RuntimeThreadSurface({
   const visibleTools = useMemo(
     () => tools.filter((tool) => isVisibleTimelineTool(tool, helperIds)),
     [helperIds, tools],
+  );
+  const pendingClarifyTool = useMemo(
+    () =>
+      tools.find(
+        (tool) => tool.name === "clarify" && tool.state === "clarify-requested",
+      ) ?? null,
+    [tools],
   );
   const hasRuntimeArtifacts =
     Boolean(runtimeError)
@@ -2705,8 +2832,20 @@ export function RuntimeThreadSurface({
     }
 
     setComposerValue("");
+    if (pendingClarifyTool) {
+      await respondToClarify(
+        pendingClarifyTool,
+        {
+          kind: "freeform",
+          text: prompt,
+        },
+        prompt,
+      );
+      return;
+    }
+
     await submitPrompt(prompt);
-  }, [submitPrompt]);
+  }, [pendingClarifyTool, respondToClarify, submitPrompt]);
 
   const handleCompletedToolOpenChange = useCallback((toolId: string, open: boolean) => {
     setCompletedToolOpen((current) => (current[toolId] === open ? current : { ...current, [toolId]: open }));
@@ -2771,6 +2910,7 @@ export function RuntimeThreadSurface({
   }, [showThinkingPlaceholder, threadId]);
 
   const renderToolEntry = useCallback((tool: SurfaceToolEntry, key: string, inset = false) => {
+    const clarifyPrompt = parseClarifyPrompt(tool.input);
     const fileMutation = getFileMutationPresentation(tool);
     const readTool = getReadToolPresentation(tool);
     const queryTool = getQueryToolPresentation(tool);
@@ -2784,6 +2924,83 @@ export function RuntimeThreadSurface({
       && !commandOutputTool
       && (tool.state === "output-available" || tool.state === "output-denied" || tool.state === "output-error")
       && (tool.result !== undefined || tool.error);
+
+    if (tool.name === "clarify" && clarifyPrompt && tool.state === "clarify-requested") {
+      return (
+        <Message className="max-w-full" from="assistant" key={key}>
+          <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+            <div
+              className={cn(
+                "rounded-2xl border border-app-warning/22 bg-app-warning/8 p-4",
+                inset ? "ml-0" : undefined,
+              )}
+            >
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-app-warning">
+                  {clarifyPrompt.header ? (
+                    <span className="rounded-full border border-app-warning/22 bg-app-warning/12 px-2 py-0.5 font-medium">
+                      {clarifyPrompt.header}
+                    </span>
+                  ) : null}
+                  <span>Need your input</span>
+                </div>
+                <p className="text-sm font-medium leading-6 text-app-foreground">
+                  {clarifyPrompt.question}
+                </p>
+              </div>
+
+              <div className="mt-4 grid gap-2">
+                {clarifyPrompt.options.map((option, index) => (
+                  <button
+                    className={cn(
+                      "rounded-xl border px-3 py-3 text-left transition",
+                      option.recommended
+                        ? "border-app-info/28 bg-app-info/8 hover:bg-app-info/12"
+                        : "border-app-border/28 bg-app-surface/18 hover:bg-app-surface/28",
+                    )}
+                    key={`${tool.id}-${option.id}`}
+                    onClick={() => {
+                      void respondToClarify(
+                        tool,
+                        {
+                          kind: "option",
+                          optionId: option.id,
+                          text: option.label,
+                        },
+                        option.label,
+                      );
+                    }}
+                    type="button"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex size-5 items-center justify-center rounded-full border border-app-border/40 text-[11px] font-semibold text-app-subtle">
+                            {index + 1}
+                          </span>
+                          <span className="text-sm font-medium text-app-foreground">
+                            {option.label}
+                          </span>
+                          {option.recommended ? (
+                            <span className="rounded-full border border-app-info/22 bg-app-info/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-app-info">
+                              Recommended
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="text-xs leading-5 text-app-subtle">{option.description}</p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <p className="mt-3 text-xs text-app-subtle">
+                Or type your own reply in the composer below.
+              </p>
+            </div>
+          </MessageContent>
+        </Message>
+      );
+    }
 
     if (readTool) {
       return (
@@ -2999,7 +3216,10 @@ export function RuntimeThreadSurface({
                   />
                 ) : null}
 
-                {!fileMutation && !commandOutputTool && tool.state !== "approval-requested" ? (
+                {!fileMutation
+                && !commandOutputTool
+                && tool.state !== "approval-requested"
+                && tool.state !== "clarify-requested" ? (
                   <Confirmation
                     className={cn(
                       "gap-3 rounded-xl border px-3 py-3 shadow-none",
@@ -3008,7 +3228,7 @@ export function RuntimeThreadSurface({
                         : "border-app-border/18 bg-app-surface/14",
                     )}
                     approval={tool.approval}
-                    state={tool.state}
+                    state={tool.state as "approval-responded" | "input-streaming" | "input-available" | "output-available" | "output-denied" | "output-error"}
                   >
                     <ConfirmationTitle className="text-sm text-app-muted">
                       <ConfirmationRequest>
@@ -3104,7 +3324,7 @@ export function RuntimeThreadSurface({
         </MessageContent>
       </Message>
     );
-  }, [completedToolOpen, handleCompletedToolOpenChange]);
+  }, [completedToolOpen, handleCompletedToolOpenChange, respondToClarify]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">
@@ -3244,18 +3464,6 @@ export function RuntimeThreadSurface({
                                 </div>
                               ) : null}
 
-                              {formattedPlan.openQuestions.length > 0 ? (
-                                <div className="space-y-2">
-                                  <div className="text-xs font-semibold uppercase tracking-[0.08em] text-app-subtle">
-                                    Open Questions
-                                  </div>
-                                  <ul className="space-y-1 text-sm leading-6 text-app-muted">
-                                    {formattedPlan.openQuestions.map((question, index) => (
-                                      <li key={`${message.id}-question-${index}`}>{`- ${question}`}</li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              ) : null}
                             </PlanContent>
                           </Plan>
                         </MessageContent>

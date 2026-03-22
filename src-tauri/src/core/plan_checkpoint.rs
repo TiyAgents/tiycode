@@ -40,7 +40,6 @@ pub struct PlanArtifact {
     pub summary: String,
     pub steps: Vec<PlanStep>,
     pub risks: Vec<String>,
-    pub open_questions: Vec<String>,
     pub plan_revision: u32,
     pub needs_context_reset_option: bool,
 }
@@ -153,14 +152,6 @@ pub fn plan_markdown(metadata: &PlanMessageMetadata) -> String {
         }
     }
 
-    if !artifact.open_questions.is_empty() {
-        lines.push(String::new());
-        lines.push("## Open Questions".to_string());
-        for question in &artifact.open_questions {
-            lines.push(format!("- {}", question));
-        }
-    }
-
     lines.join("\n")
 }
 
@@ -223,11 +214,6 @@ pub fn build_plan_artifact_from_tool_input(
         });
 
     let risks = read_string_list(root.and_then(|value| value.get("risks")));
-    let open_questions = read_string_list(root.and_then(|value| {
-        value
-            .get("openQuestions")
-            .or_else(|| value.get("open_questions"))
-    }));
     let needs_context_reset_option = root
         .and_then(|value| value.get("needsContextResetOption"))
         .and_then(serde_json::Value::as_bool)
@@ -239,7 +225,6 @@ pub fn build_plan_artifact_from_tool_input(
         summary,
         steps,
         risks,
-        open_questions,
         plan_revision,
         needs_context_reset_option,
     }
@@ -345,8 +330,7 @@ mod tests {
                         "files": ["src-tauri/src/core/agent_run_manager.rs"]
                     }
                 ],
-                "risks": ["State drift"],
-                "openQuestions": ["Need a new event?"]
+                "risks": ["State drift"]
             }),
             3,
         );

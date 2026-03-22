@@ -17,7 +17,10 @@ use crate::core::executors::{self, ToolOutput};
 use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
 use crate::core::terminal_manager::TerminalManager;
 use crate::core::workspace_paths::parse_writable_roots;
-use crate::persistence::repo::{audit_repo, settings_repo, tool_call_repo};
+use crate::model::thread::MessageRecord;
+use crate::persistence::repo::{
+    audit_repo, message_repo, settings_repo, thread_repo, tool_call_repo,
+};
 
 /// Request context for a single tool execution.
 #[derive(Debug, Clone)]
@@ -86,6 +89,12 @@ pub struct ToolGateway {
     policy_engine: PolicyEngine,
     terminal_manager: Arc<TerminalManager>,
     pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    pending_clarifications: Arc<Mutex<HashMap<String, PendingClarification>>>,
+}
+
+struct PendingClarification {
+    sender: oneshot::Sender<serde_json::Value>,
+    thread_id: String,
 }
 
 impl ToolGateway {
@@ -96,6 +105,7 @@ impl ToolGateway {
             policy_engine,
             terminal_manager,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+            pending_clarifications: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -322,6 +332,157 @@ impl ToolGateway {
         } else {
             Ok(false)
         }
+    }
+
+    pub async fn request_clarification<FR>(
+        &self,
+        request: ToolExecutionRequest,
+        abort_signal: AbortSignal,
+        mut on_input_required: FR,
+    ) -> Result<ToolOutput, crate::model::errors::AppError>
+    where
+        FR: FnMut(),
+    {
+        tool_call_repo::update_status(&self.pool, &request.tool_call_id, "waiting_clarification")
+            .await?;
+
+        self.write_audit(
+            &request.run_id,
+            &request.thread_id,
+            &request.tool_call_id,
+            &request.tool_name,
+            "tool_clarification_requested",
+            "{}",
+            &request.tool_input.to_string(),
+        )
+        .await?;
+
+        let (response_tx, response_rx) = oneshot::channel::<serde_json::Value>();
+        {
+            let mut pending = self.pending_clarifications.lock().await;
+            pending.insert(
+                request.tool_call_id.clone(),
+                PendingClarification {
+                    sender: response_tx,
+                    thread_id: request.thread_id.clone(),
+                },
+            );
+        }
+
+        on_input_required();
+
+        let response = tokio::select! {
+            _ = abort_signal.cancelled() => None,
+            result = response_rx => result.ok(),
+        };
+
+        {
+            let mut pending = self.pending_clarifications.lock().await;
+            pending.remove(&request.tool_call_id);
+        }
+
+        match response {
+            Some(response) => {
+                tool_call_repo::update_result(
+                    &self.pool,
+                    &request.tool_call_id,
+                    &response.to_string(),
+                    "completed",
+                )
+                .await?;
+
+                self.write_audit(
+                    &request.run_id,
+                    &request.thread_id,
+                    &request.tool_call_id,
+                    &request.tool_name,
+                    "tool_clarification_resolved",
+                    "{}",
+                    &response.to_string(),
+                )
+                .await?;
+
+                Ok(ToolOutput {
+                    success: true,
+                    result: response,
+                })
+            }
+            None => {
+                tool_call_repo::update_status(&self.pool, &request.tool_call_id, "cancelled")
+                    .await?;
+
+                self.write_audit(
+                    &request.run_id,
+                    &request.thread_id,
+                    &request.tool_call_id,
+                    &request.tool_name,
+                    "tool_cancelled",
+                    "{}",
+                    "{}",
+                )
+                .await?;
+
+                Err(crate::model::errors::AppError::recoverable(
+                    crate::model::errors::ErrorSource::Tool,
+                    "tool.clarification.cancelled",
+                    "Clarification request was cancelled before a reply arrived",
+                ))
+            }
+        }
+    }
+
+    /// Resolve a pending clarification request. Returns `true` when a waiter was found.
+    pub async fn resolve_clarification(
+        &self,
+        tool_call_id: &str,
+        response: serde_json::Value,
+    ) -> Result<bool, crate::model::errors::AppError> {
+        let pending = {
+            let mut pending = self.pending_clarifications.lock().await;
+            pending.remove(tool_call_id)
+        };
+
+        let Some(pending) = pending else {
+            return Ok(false);
+        };
+
+        if let Some(response_text) = response
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let message = MessageRecord {
+                id: uuid::Uuid::now_v7().to_string(),
+                thread_id: pending.thread_id.clone(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: response_text.to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                created_at: String::new(),
+            };
+
+            if let Err(error) = message_repo::insert(&self.pool, &message).await {
+                tracing::warn!(
+                    tool_call_id = %tool_call_id,
+                    error = %error,
+                    "failed to persist clarification response message"
+                );
+            } else if let Err(error) =
+                thread_repo::touch_active(&self.pool, &pending.thread_id).await
+            {
+                tracing::warn!(
+                    thread_id = %pending.thread_id,
+                    error = %error,
+                    "failed to touch thread after clarification response"
+                );
+            }
+        }
+
+        let _ = pending.sender.send(response);
+        Ok(true)
     }
 
     async fn execute_and_audit(

@@ -330,6 +330,13 @@ fn test_all_events_have_type_field() {
             run_id: "r".into(),
             dropped_events: 3,
         },
+        ThreadStreamEvent::RunRetrying {
+            run_id: "r".into(),
+            attempt: 1,
+            max_attempts: 3,
+            delay_ms: 500,
+            reason: "retry".into(),
+        },
         ThreadStreamEvent::MessageDelta {
             run_id: "r".into(),
             message_id: "m".into(),
@@ -339,6 +346,11 @@ fn test_all_events_have_type_field() {
             run_id: "r".into(),
             message_id: "m".into(),
             content: "c".into(),
+        },
+        ThreadStreamEvent::MessageDiscarded {
+            run_id: "r".into(),
+            message_id: "m".into(),
+            reason: "discarded".into(),
         },
         ThreadStreamEvent::PlanUpdated {
             run_id: "r".into(),
@@ -405,10 +417,30 @@ fn test_all_events_have_type_field() {
             tool_input: serde_json::json!({}),
             reason: "r".into(),
         },
+        ThreadStreamEvent::ClarifyRequired {
+            run_id: "r".into(),
+            tool_call_id: "t".into(),
+            tool_name: "clarify".into(),
+            tool_input: serde_json::json!({
+                "question": "Pick one",
+                "options": [
+                    { "label": "A", "description": "option a" },
+                    { "label": "B", "description": "option b" }
+                ]
+            }),
+        },
         ThreadStreamEvent::ApprovalResolved {
             run_id: "r".into(),
             tool_call_id: "t".into(),
             approved: true,
+        },
+        ThreadStreamEvent::ClarifyResolved {
+            run_id: "r".into(),
+            tool_call_id: "t".into(),
+            response: serde_json::json!({
+                "kind": "option",
+                "text": "A"
+            }),
         },
         ThreadStreamEvent::ToolRunning {
             run_id: "r".into(),
@@ -424,8 +456,30 @@ fn test_all_events_have_type_field() {
             tool_call_id: "t".into(),
             error: "e".into(),
         },
+        ThreadStreamEvent::ThreadTitleUpdated {
+            run_id: "r".into(),
+            thread_id: "thread-1".into(),
+            title: "Updated".into(),
+        },
+        ThreadStreamEvent::ThreadUsageUpdated {
+            run_id: "r".into(),
+            model_display_name: Some("GPT-5".into()),
+            context_window: Some("128000".into()),
+            usage: tiy_agent_lib::model::thread::RunUsageDto {
+                input_tokens: 10,
+                output_tokens: 12,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                total_tokens: 22,
+            },
+        },
         ThreadStreamEvent::RunCheckpointed { run_id: "r".into() },
         ThreadStreamEvent::RunCompleted { run_id: "r".into() },
+        ThreadStreamEvent::RunLimitReached {
+            run_id: "r".into(),
+            error: "limit".into(),
+            max_turns: 256,
+        },
         ThreadStreamEvent::RunFailed {
             run_id: "r".into(),
             error: "e".into(),
@@ -444,11 +498,11 @@ fn test_all_events_have_type_field() {
         assert!(!type_val.is_empty(), "Event type should not be empty");
     }
 
-    // Verify total count matches enum variants (22 variants)
+    // Verify total count matches enum variants (30 variants)
     assert_eq!(
         events.len(),
-        22,
-        "Should test all 22 ThreadStreamEvent variants"
+        30,
+        "Should test all 30 ThreadStreamEvent variants"
     );
 }
 

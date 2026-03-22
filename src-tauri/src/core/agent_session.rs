@@ -46,6 +46,7 @@ const SUBAGENT_TOOL_TIMEOUT_SECS: u64 = 600;
 const WORKSPACE_INSTRUCTION_FILE_NAMES: &[&str] = &["AGENTS.md", "CLAUDE.md", "AGENT.MD"];
 const WORKSPACE_INSTRUCTION_MAX_CHARS: usize = 12_800;
 const SHELL_GUIDE_TOOL_NAMES: &[&str] = &["python3", "python", "node", "npm", "uv", "git", "rg"];
+const CLARIFY_TOOL_NAME: &str = "clarify";
 
 #[derive(Debug, Clone)]
 struct WorkspaceInstructionSnippet {
@@ -321,6 +322,12 @@ impl AgentSession {
             return self.execute_plan_checkpoint(tool_input).await;
         }
 
+        if tool_name == CLARIFY_TOOL_NAME {
+            return self
+                .execute_clarify_request(tool_name, tool_call_id, tool_input)
+                .await;
+        }
+
         let insert_result = tool_call_repo::insert(
             &self.pool,
             &tool_call_repo::ToolCallInsert {
@@ -468,6 +475,97 @@ impl AgentSession {
                         agent_error_result(message)
                     }
                 }
+            }
+            Err(error) => {
+                let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                    run_id: self.spec.run_id.clone(),
+                    tool_call_id: tool_call_id.to_string(),
+                    error: error.to_string(),
+                });
+                agent_error_result(error.to_string())
+            }
+        }
+    }
+
+    async fn execute_clarify_request(
+        &self,
+        tool_name: &str,
+        tool_call_id: &str,
+        tool_input: &serde_json::Value,
+    ) -> AgentToolResult {
+        if let Err(error) = validate_clarify_input(tool_input) {
+            let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                run_id: self.spec.run_id.clone(),
+                tool_call_id: tool_call_id.to_string(),
+                error: error.clone(),
+            });
+            return agent_error_result(error);
+        }
+
+        if let Err(error) = tool_call_repo::insert(
+            &self.pool,
+            &tool_call_repo::ToolCallInsert {
+                id: tool_call_id.to_string(),
+                run_id: self.spec.run_id.clone(),
+                thread_id: self.spec.thread_id.clone(),
+                tool_name: tool_name.to_string(),
+                tool_input_json: tool_input.to_string(),
+                status: "requested".to_string(),
+            },
+        )
+        .await
+        {
+            return agent_error_result(format!("failed to persist tool call: {error}"));
+        }
+
+        let _ = self.event_tx.send(ThreadStreamEvent::ToolRequested {
+            run_id: self.spec.run_id.clone(),
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            tool_input: tool_input.clone(),
+        });
+
+        let request = ToolExecutionRequest {
+            run_id: self.spec.run_id.clone(),
+            thread_id: self.spec.thread_id.clone(),
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            tool_input: tool_input.clone(),
+            workspace_path: self.spec.workspace_path.clone(),
+            run_mode: self.spec.run_mode.clone(),
+        };
+
+        match self
+            .tool_gateway
+            .request_clarification(request, self.abort_signal.clone(), {
+                let event_tx = self.event_tx.clone();
+                let run_id = self.spec.run_id.clone();
+                let tool_call_id = tool_call_id.to_string();
+                let tool_name = tool_name.to_string();
+                let tool_input = tool_input.clone();
+                move || {
+                    let _ = event_tx.send(ThreadStreamEvent::ClarifyRequired {
+                        run_id: run_id.clone(),
+                        tool_call_id: tool_call_id.clone(),
+                        tool_name: tool_name.clone(),
+                        tool_input: tool_input.clone(),
+                    });
+                }
+            })
+            .await
+        {
+            Ok(output) => {
+                let _ = self.event_tx.send(ThreadStreamEvent::ClarifyResolved {
+                    run_id: self.spec.run_id.clone(),
+                    tool_call_id: tool_call_id.to_string(),
+                    response: output.result.clone(),
+                });
+                let _ = self.event_tx.send(ThreadStreamEvent::ToolCompleted {
+                    run_id: self.spec.run_id.clone(),
+                    tool_call_id: tool_call_id.to_string(),
+                    result: output.result.clone(),
+                });
+                agent_tool_result_from_output(output)
             }
             Err(error) => {
                 let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
@@ -1045,6 +1143,40 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ),
         AgentTool::new(
+            CLARIFY_TOOL_NAME,
+            "Clarify",
+            "Ask the user one concise clarifying question when you need a missing requirement, preference, or decision before continuing. Offer 2-3 short suggested options when possible, mark the recommended option, and keep the wording brief.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "header": {
+                        "type": "string",
+                        "description": "Optional short label for the UI, ideally 12 characters or fewer."
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "A single concise question for the user."
+                    },
+                    "options": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 5,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string" },
+                                "label": { "type": "string" },
+                                "description": { "type": "string" },
+                                "recommended": { "type": "boolean" }
+                            },
+                            "required": ["label", "description"]
+                        }
+                    }
+                },
+                "required": ["question", "options"]
+            }),
+        ),
+        AgentTool::new(
             "update_plan",
             "Update Plan",
             "Publish the current implementation plan and pause before execution. Use this when the main agent has enough context to present a concrete pre-implementation plan for user approval.",
@@ -1075,10 +1207,6 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                         }
                     },
                     "risks": {
-                        "type": "array",
-                        "items": { "type": "string" }
-                    },
-                    "openQuestions": {
                         "type": "array",
                         "items": { "type": "string" }
                     },
@@ -1372,6 +1500,57 @@ fn agent_error_result(message: impl Into<String>) -> AgentToolResult {
     }
 }
 
+fn validate_clarify_input(value: &serde_json::Value) -> Result<(), String> {
+    let Some(question) = value.get("question").and_then(serde_json::Value::as_str) else {
+        return Err("clarify requires a non-empty question".to_string());
+    };
+
+    if question.trim().is_empty() {
+        return Err("clarify requires a non-empty question".to_string());
+    }
+
+    let Some(options) = value.get("options").and_then(serde_json::Value::as_array) else {
+        return Err("clarify requires 2 to 5 options".to_string());
+    };
+
+    if !(2..=5).contains(&options.len()) {
+        return Err("clarify requires 2 to 5 options".to_string());
+    }
+
+    let recommended_count = options
+        .iter()
+        .filter(|option| {
+            option
+                .get("recommended")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        })
+        .count();
+
+    if recommended_count > 1 {
+        return Err("clarify may mark at most one option as recommended".to_string());
+    }
+
+    for option in options {
+        let label = option
+            .get("label")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let description = option
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        if label.is_none() || description.is_none() {
+            return Err("clarify options must include non-empty label and description".to_string());
+        }
+    }
+
+    Ok(())
+}
+
 async fn resolve_model_plan(
     pool: &SqlitePool,
     raw_plan: RuntimeModelPlan,
@@ -1487,6 +1666,7 @@ You help users by reading files, searching code, editing files, executing comman
 - Delegate proactively on substantial work. When the task is cross-file, unfamiliar, risky, or likely to benefit from a second pass, use a helper instead of doing all exploration and review yourself.\n\
 - Use agent_explore to investigate unfamiliar areas, collect evidence, map dependencies, explain the current state, or gather the right files before choosing an implementation.\n\
 - For complex tasks, briefly confirm your understanding of the goal, scope, or constraints before publishing an implementation plan.\n\
+- When a requirement, user preference, or execution choice is still ambiguous, use clarify instead of guessing. Ask one concise question at a time, offer 2-3 short options when helpful, and mark the recommended option.\n\
 - Use update_plan to publish the current implementation plan once the intended change is clear.\n\
 - Do not use update_plan for pure analysis, architecture explanation, current-state summaries, or information gathering with no concrete implementation to plan.\n\
 - In default mode, if the task is complex or risky enough to benefit from explicit pre-implementation approval, publish a plan with update_plan before making changes.\n\
@@ -1623,10 +1803,12 @@ fn run_mode_prompt_body(run_mode: &str) -> String {
     match run_mode {
         "plan" => format!(
             "Plan mode is active.\n\
-- Use only read-only tools plus update_plan: read, list, search, find, term_status, term_output, update_plan.\n\
+- Use only read-only tools plus clarify and update_plan: read, list, search, find, term_status, term_output, clarify, update_plan.\n\
 - {TERM_PANEL_USAGE_NOTE}\n\
 - Use agent_explore for read-only investigation and current-state analysis.\n\
+- If key implementation details are still unclear, use clarify for one concise clarifying question before publishing a plan. Offer 2-3 short options when helpful, then wait for the answer before continuing.\n\
 - Use update_plan only for the formal pre-implementation plan, not for general analysis or explanation.\n\
+- Do not include unresolved questions or TODO-style placeholders inside update_plan. Publish the plan only after the open decisions needed for implementation have been confirmed.\n\
 - Once you publish a plan with update_plan, the run will pause for user approval before any implementation can begin.\n\
 - Do NOT use edit, write, or shell unless the user explicitly requests execution.\n\
 - Focus on analysis, explanation, and actionable planning. Identify risks, gaps, and concrete next steps."
@@ -2699,6 +2881,20 @@ mod tests {
     }
 
     #[test]
+    fn update_plan_tool_schema_no_longer_exposes_open_questions() {
+        let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
+        let update_plan = tools
+            .iter()
+            .find(|tool| tool.name == "update_plan")
+            .expect("update_plan tool should exist");
+        let properties = update_plan.parameters["properties"]
+            .as_object()
+            .expect("update_plan properties should be object");
+
+        assert!(!properties.contains_key("openQuestions"));
+    }
+
+    #[test]
     fn explore_and_review_use_auxiliary_model_when_available() {
         let model_plan =
             sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
@@ -2727,6 +2923,8 @@ mod tests {
     fn plan_mode_prompt_mentions_waiting_for_approval_after_update_plan() {
         let prompt = run_mode_prompt_body("plan");
 
+        assert!(prompt.contains("clarify"));
+        assert!(prompt.contains("Do not include unresolved questions"));
         assert!(prompt.contains("Once you publish a plan with update_plan"));
         assert!(prompt.contains("pause for user approval"));
     }

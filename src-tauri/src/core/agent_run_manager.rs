@@ -592,7 +592,18 @@ impl AgentRunManager {
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::WaitingApproval)
                     .await?;
             }
+            ThreadStreamEvent::ClarifyRequired { .. } => {
+                run_repo::update_status(&self.pool, run_id, "needs_reply").await?;
+                let thread_id = self.get_thread_id(run_id).await;
+                thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::NeedsReply)
+                    .await?;
+            }
             ThreadStreamEvent::ApprovalResolved { .. } => {
+                run_repo::update_status(&self.pool, run_id, "running").await?;
+                let thread_id = self.get_thread_id(run_id).await;
+                thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
+            }
+            ThreadStreamEvent::ClarifyResolved { .. } => {
                 run_repo::update_status(&self.pool, run_id, "running").await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;

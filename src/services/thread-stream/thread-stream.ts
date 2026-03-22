@@ -21,6 +21,7 @@ import {
   threadStartRun,
   threadSubscribeRun,
   toolApprovalRespond,
+  toolClarifyRespond,
 } from "@/services/bridge";
 import type {
   RunModelPlanDto,
@@ -43,13 +44,20 @@ export type MessageEvent = {
 };
 
 export type ToolEvent = {
-  kind: "requested" | "running" | "completed" | "failed";
+  kind:
+    | "requested"
+    | "running"
+    | "completed"
+    | "failed"
+    | "clarify-required"
+    | "clarify-resolved";
   runId: string;
   toolCallId: string;
   toolName?: string;
   toolInput?: unknown;
   result?: unknown;
   error?: string;
+  response?: unknown;
 };
 
 export type ApprovalEvent = {
@@ -66,6 +74,7 @@ export type RunState =
   | "idle"
   | "running"
   | "waiting_approval"
+  | "needs_reply"
   | "limit_reached"
   | "completed"
   | "failed"
@@ -300,6 +309,19 @@ export class ThreadStream {
     }
   }
 
+  async respondToClarify(
+    toolCallId: string,
+    response: unknown,
+  ): Promise<void> {
+    try {
+      await toolClarifyRespond(toolCallId, response);
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      this.onError?.(message, this.currentRunId ?? "");
+      throw error;
+    }
+  }
+
   /**
    * Reset stream state (e.g. when switching threads).
    */
@@ -479,6 +501,17 @@ export class ThreadStream {
         });
         break;
 
+      case "clarify_required":
+        this.onRunStateChange?.("needs_reply", event.runId);
+        this.onToolEvent?.({
+          kind: "clarify-required",
+          runId: event.runId,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          toolInput: event.toolInput,
+        });
+        break;
+
       case "approval_resolved":
         this.onRunStateChange?.("running", event.runId);
         this.onApproval?.({
@@ -486,6 +519,17 @@ export class ThreadStream {
           runId: event.runId,
           toolCallId: event.toolCallId,
           approved: event.approved,
+        });
+        break;
+
+      case "clarify_resolved":
+        this.onRunStateChange?.("running", event.runId);
+        this.onToolEvent?.({
+          kind: "clarify-resolved",
+          runId: event.runId,
+          toolCallId: event.toolCallId,
+          response: event.response,
+          result: event.response,
         });
         break;
 

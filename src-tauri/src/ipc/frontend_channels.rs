@@ -107,10 +107,21 @@ pub enum ThreadStreamEvent {
         tool_input: serde_json::Value,
         reason: String,
     },
+    ClarifyRequired {
+        run_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        tool_input: serde_json::Value,
+    },
     ApprovalResolved {
         run_id: String,
         tool_call_id: String,
         approved: bool,
+    },
+    ClarifyResolved {
+        run_id: String,
+        tool_call_id: String,
+        response: serde_json::Value,
     },
     ToolRunning {
         run_id: String,

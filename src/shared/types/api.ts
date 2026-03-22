@@ -229,6 +229,7 @@ export type RunStatus =
   | "dispatching"
   | "running"
   | "waiting_approval"
+  | "needs_reply"
   | "waiting_tool_result"
   | "cancelling"
   | "completed"
@@ -418,10 +419,23 @@ export type ThreadStreamEvent =
       reason: string;
     }
   | {
+      type: "clarify_required";
+      runId: string;
+      toolCallId: string;
+      toolName: string;
+      toolInput: unknown;
+    }
+  | {
       type: "approval_resolved";
       runId: string;
       toolCallId: string;
       approved: boolean;
+    }
+  | {
+      type: "clarify_resolved";
+      runId: string;
+      toolCallId: string;
+      response: unknown;
     }
   | { type: "tool_running"; runId: string; toolCallId: string }
   | {

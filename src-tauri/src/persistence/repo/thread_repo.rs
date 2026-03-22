@@ -69,7 +69,7 @@ pub async fn list_ids_with_active_status(pool: &SqlitePool) -> Result<Vec<String
     let rows = sqlx::query_scalar::<_, String>(
         "SELECT id
          FROM threads
-         WHERE status IN ('running', 'waiting_approval')",
+         WHERE status IN ('running', 'waiting_approval', 'needs_reply')",
     )
     .fetch_all(pool)
     .await?;

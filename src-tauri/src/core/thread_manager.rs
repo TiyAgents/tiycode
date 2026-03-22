@@ -243,6 +243,7 @@ fn derive_thread_status(latest_run: Option<&RunSummaryDto>) -> ThreadStatus {
                 ThreadStatus::Running
             }
             "waiting_approval" => ThreadStatus::WaitingApproval,
+            "needs_reply" => ThreadStatus::NeedsReply,
             "limit_reached" => ThreadStatus::NeedsReply,
             "interrupted" => ThreadStatus::Interrupted,
             "failed" | "denied" => ThreadStatus::Failed,

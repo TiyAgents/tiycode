@@ -208,6 +208,7 @@ pub fn run() {
             commands::agent::thread_execute_approved_plan,
             commands::agent::thread_cancel_run,
             commands::agent::tool_approval_respond,
+            commands::agent::tool_clarify_respond,
             // Index
             commands::index::index_get_tree,
             commands::index::index_get_children,

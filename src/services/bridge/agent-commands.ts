@@ -317,12 +317,27 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         toolInput: readValue(rawEvent, "toolInput", "tool_input"),
         reason: readRequiredString(rawEvent, "reason", "reason"),
       };
+    case "clarify_required":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        toolCallId: readRequiredString(rawEvent, "toolCallId", "tool_call_id"),
+        toolName: readRequiredString(rawEvent, "toolName", "tool_name"),
+        toolInput: readValue(rawEvent, "toolInput", "tool_input"),
+      };
     case "approval_resolved":
       return {
         type: rawEvent.type,
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         toolCallId: readRequiredString(rawEvent, "toolCallId", "tool_call_id"),
         approved: readBoolean(rawEvent, "approved", "approved"),
+      };
+    case "clarify_resolved":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        toolCallId: readRequiredString(rawEvent, "toolCallId", "tool_call_id"),
+        response: readValue(rawEvent, "response", "response"),
       };
     case "tool_running":
       return {
@@ -471,4 +486,12 @@ export async function toolApprovalRespond(
 ): Promise<void> {
   requireTauri("tool_approval_respond");
   return invoke("tool_approval_respond", { toolCallId, runId, approved });
+}
+
+export async function toolClarifyRespond(
+  toolCallId: string,
+  response: unknown,
+): Promise<void> {
+  requireTauri("tool_clarify_respond");
+  return invoke("tool_clarify_respond", { toolCallId, response });
 }
