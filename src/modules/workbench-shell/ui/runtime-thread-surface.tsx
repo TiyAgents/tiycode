@@ -2077,10 +2077,6 @@ export function RuntimeThreadSurface({
         void loadSnapshot();
       }
 
-      if (event.type === "run_checkpointed") {
-        setSelectedRunMode("plan");
-      }
-
       if (event.type === "message_discarded") {
         setMessages((current) =>
           current.map((message) => (
