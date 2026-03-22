@@ -52,7 +52,7 @@ type SurfaceMessage = {
   role: "user" | "assistant" | "system";
   runId: string | null;
   content: string;
-  status: "streaming" | "completed" | "failed";
+  status: "streaming" | "completed" | "failed" | "discarded";
 };
 
 type SurfaceToolState =
@@ -1808,6 +1808,8 @@ function getTimelineEntryKindOrder(entry: TimelineEntry) {
 function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
   switch (event.type) {
     case "run_started":
+    case "stream_resync_required":
+    case "run_retrying":
     case "reasoning_updated":
     case "subagent_usage_updated":
     case "thread_usage_updated":
@@ -2071,8 +2073,22 @@ export function RuntimeThreadSurface({
         }
       }
 
+      if (event.type === "stream_resync_required") {
+        void loadSnapshot();
+      }
+
       if (event.type === "run_checkpointed") {
         setSelectedRunMode("plan");
+      }
+
+      if (event.type === "message_discarded") {
+        setMessages((current) =>
+          current.map((message) => (
+            message.id === event.messageId
+              ? { ...message, status: "discarded" }
+              : message
+          )),
+        );
       }
     });
 
@@ -3315,7 +3331,20 @@ export function RuntimeThreadSurface({
                             : "rounded-2xl bg-app-surface/62 px-4 py-3 shadow-none backdrop-blur-sm"
                         }
                       >
-                        <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
+                        {message.role === "assistant" && message.status === "discarded" ? (
+                          <div className="rounded-2xl border border-app-warning/22 bg-app-warning/10 px-4 py-3 text-app-foreground">
+                            <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-app-warning/12 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-app-warning">
+                              <RefreshCcwIcon className="size-3.5" />
+                              Discarded
+                            </div>
+                            <MessageResponse>{message.content}</MessageResponse>
+                            <p className="mt-3 text-xs leading-5 text-app-warning/90">
+                              This partial response was dropped from model history after the stream ended before protocol completion.
+                            </p>
+                          </div>
+                        ) : (
+                          <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
+                        )}
                       </MessageContent>
                     </Message>
                   </div>

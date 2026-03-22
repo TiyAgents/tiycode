@@ -16,6 +16,17 @@ pub enum ThreadStreamEvent {
         run_id: String,
         run_mode: String,
     },
+    StreamResyncRequired {
+        run_id: String,
+        dropped_events: u64,
+    },
+    RunRetrying {
+        run_id: String,
+        attempt: usize,
+        max_attempts: usize,
+        delay_ms: u64,
+        reason: String,
+    },
     MessageDelta {
         run_id: String,
         message_id: String,
@@ -25,6 +36,11 @@ pub enum ThreadStreamEvent {
         run_id: String,
         message_id: String,
         content: String,
+    },
+    MessageDiscarded {
+        run_id: String,
+        message_id: String,
+        reason: String,
     },
     PlanUpdated {
         run_id: String,

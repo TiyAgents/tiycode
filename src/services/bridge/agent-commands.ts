@@ -196,6 +196,21 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         runMode: readRequiredString(rawEvent, "runMode", "run_mode"),
       };
+    case "stream_resync_required":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        droppedEvents: Number(readValue(rawEvent, "droppedEvents", "dropped_events") ?? 0),
+      };
+    case "run_retrying":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        attempt: Number(readValue(rawEvent, "attempt", "attempt") ?? 0),
+        maxAttempts: Number(readValue(rawEvent, "maxAttempts", "max_attempts") ?? 0),
+        delayMs: Number(readValue(rawEvent, "delayMs", "delay_ms") ?? 0),
+        reason: readRequiredString(rawEvent, "reason", "reason"),
+      };
     case "message_delta":
       return {
         type: rawEvent.type,
@@ -209,6 +224,13 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         messageId: readRequiredString(rawEvent, "messageId", "message_id"),
         content: readRequiredString(rawEvent, "content", "content"),
+      };
+    case "message_discarded":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        messageId: readRequiredString(rawEvent, "messageId", "message_id"),
+        reason: readRequiredString(rawEvent, "reason", "reason"),
       };
     case "plan_updated":
       return {

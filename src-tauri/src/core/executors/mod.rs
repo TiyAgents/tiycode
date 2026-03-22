@@ -28,11 +28,11 @@ pub async fn execute_tool(
     terminal_manager: Option<&Arc<TerminalManager>>,
 ) -> Result<ToolOutput, AppError> {
     match tool_name {
-        "read" => filesystem::read_file(input, workspace_path).await,
+        "read" => filesystem::read_file(input, workspace_path, writable_roots).await,
         "write" => filesystem::write_file(input, workspace_path, writable_roots).await,
-        "list" => filesystem::list_dir(input, workspace_path).await,
-        "find" => filesystem::find_files(input, workspace_path).await,
-        "search" => search::search_repo(input, workspace_path).await,
+        "list" => filesystem::list_dir(input, workspace_path, writable_roots).await,
+        "find" => filesystem::find_files(input, workspace_path, writable_roots).await,
+        "search" => search::search_repo(input, workspace_path, writable_roots).await,
         "edit" => edit::edit_file(input, workspace_path, writable_roots).await,
         "patch" => edit::edit_file(input, workspace_path, writable_roots).await,
         "shell" => process::run_command(input, workspace_path).await,

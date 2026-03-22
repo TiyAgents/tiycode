@@ -37,6 +37,7 @@ use crate::persistence::repo::{message_repo, profile_repo, run_repo, thread_repo
 const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(12);
 const TITLE_GENERATION_MAX_TOKENS: u32 = 32;
 const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
+const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
 
 struct ActiveRun {
     run_id: String,
@@ -128,7 +129,8 @@ impl AgentRunManager {
             .map(|workspace| workspace.canonical_path)
             .unwrap_or_default();
 
-        let (frontend_tx, frontend_rx) = broadcast::channel::<ThreadStreamEvent>(128);
+        let (frontend_tx, frontend_rx) =
+            broadcast::channel::<ThreadStreamEvent>(FRONTEND_EVENT_BUFFER_SIZE);
         let run_id = uuid::Uuid::now_v7().to_string();
 
         {
@@ -544,6 +546,9 @@ impl AgentRunManager {
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
             }
+            ThreadStreamEvent::RunRetrying { .. } => {
+                run_repo::update_status(&self.pool, run_id, "running").await?;
+            }
             ThreadStreamEvent::MessageDelta {
                 message_id, delta, ..
             } => {
@@ -563,6 +568,9 @@ impl AgentRunManager {
                 if let Some(run) = runs.get_mut(run_id) {
                     run.streaming_message_id = None;
                 }
+            }
+            ThreadStreamEvent::MessageDiscarded { message_id, .. } => {
+                message_repo::update_status(&self.pool, message_id, "discarded").await?;
             }
             ThreadStreamEvent::ReasoningUpdated {
                 message_id,

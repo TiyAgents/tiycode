@@ -16,6 +16,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::core::executors::{self, ToolOutput};
 use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
 use crate::core::terminal_manager::TerminalManager;
+use crate::core::workspace_paths::parse_writable_roots;
 use crate::persistence::repo::{audit_repo, settings_repo, tool_call_repo};
 
 /// Request context for a single tool execution.
@@ -437,20 +438,4 @@ impl ToolGateway {
         )
         .await
     }
-}
-
-fn parse_writable_roots(value_json: &str) -> Vec<String> {
-    let parsed: serde_json::Value = serde_json::from_str(value_json).unwrap_or_default();
-    parsed
-        .as_array()
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| entry.get("path").and_then(serde_json::Value::as_str))
-                .map(str::trim)
-                .filter(|path| !path.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
 }

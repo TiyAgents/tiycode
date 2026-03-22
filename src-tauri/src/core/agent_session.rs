@@ -149,8 +149,11 @@ pub async fn build_session_spec(
     let raw_plan: RuntimeModelPlan =
         serde_json::from_value(model_plan_value.clone()).unwrap_or_default();
     let resolved_plan = resolve_model_plan(pool, raw_plan.clone()).await?;
-    let history_messages =
-        message_repo::list_recent(pool, thread_id, None, MESSAGE_HISTORY_LIMIT).await?;
+    let history_messages = message_repo::list_recent(pool, thread_id, None, MESSAGE_HISTORY_LIMIT)
+        .await?
+        .into_iter()
+        .filter(|message| message.status != "discarded")
+        .collect();
     let system_prompt = build_system_prompt(pool, &raw_plan, workspace_path, run_mode).await?;
 
     Ok(AgentSessionSpec {
@@ -220,6 +223,7 @@ impl AgentSession {
 
     async fn run(self: Arc<Self>) {
         let current_message_id = Arc::new(StdMutex::new(None::<String>));
+        let last_completed_message_id = Arc::new(StdMutex::new(None::<String>));
         let current_reasoning_message_id = Arc::new(StdMutex::new(None::<String>));
         let last_usage = Arc::new(StdMutex::new(None::<Usage>));
         let reasoning_buffer = Arc::new(StdMutex::new(String::new()));
@@ -235,6 +239,7 @@ impl AgentSession {
         let model_display_name = self.spec.model_plan.primary.model_name.clone();
 
         let message_id_ref = Arc::clone(&current_message_id);
+        let last_completed_message_id_ref = Arc::clone(&last_completed_message_id);
         let reasoning_message_id_ref = Arc::clone(&current_reasoning_message_id);
         let last_usage_ref = Arc::clone(&last_usage);
         let reasoning_ref = Arc::clone(&reasoning_buffer);
@@ -243,6 +248,7 @@ impl AgentSession {
                 &run_id,
                 &event_tx,
                 &message_id_ref,
+                &last_completed_message_id_ref,
                 &reasoning_message_id_ref,
                 &last_usage_ref,
                 &reasoning_ref,
@@ -697,6 +703,7 @@ fn handle_agent_event(
     run_id: &str,
     event_tx: &mpsc::UnboundedSender<ThreadStreamEvent>,
     current_message_id: &StdMutex<Option<String>>,
+    last_completed_message_id: &StdMutex<Option<String>>,
     current_reasoning_message_id: &StdMutex<Option<String>>,
     last_usage: &StdMutex<Option<Usage>>,
     reasoning_buffer: &StdMutex<String>,
@@ -705,6 +712,20 @@ fn handle_agent_event(
     event: &tiy_core::agent::AgentEvent,
 ) {
     match event {
+        tiy_core::agent::AgentEvent::TurnRetrying {
+            attempt,
+            max_attempts,
+            delay_ms,
+            reason,
+        } => {
+            let _ = event_tx.send(ThreadStreamEvent::RunRetrying {
+                run_id: run_id.to_string(),
+                attempt: *attempt,
+                max_attempts: *max_attempts,
+                delay_ms: *delay_ms,
+                reason: reason.clone(),
+            });
+        }
         tiy_core::agent::AgentEvent::MessageUpdate {
             assistant_event, ..
         } => {
@@ -793,6 +814,7 @@ fn handle_agent_event(
                     model_display_name,
                 );
                 let message_id = take_or_create_message_id(current_message_id);
+                set_last_completed_message_id(last_completed_message_id, Some(message_id.clone()));
                 let _ = event_tx.send(ThreadStreamEvent::MessageCompleted {
                     run_id: run_id.to_string(),
                     message_id,
@@ -801,6 +823,15 @@ fn handle_agent_event(
             }
 
             reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
+        }
+        tiy_core::agent::AgentEvent::MessageDiscarded { reason, .. } => {
+            if let Some(message_id) = read_last_completed_message_id(last_completed_message_id) {
+                let _ = event_tx.send(ThreadStreamEvent::MessageDiscarded {
+                    run_id: run_id.to_string(),
+                    message_id,
+                    reason: reason.clone(),
+                });
+            }
         }
         _ => {}
     }
@@ -878,6 +909,24 @@ fn reset_message_id(current_message_id: &StdMutex<Option<String>>) {
     if let Ok(mut guard) = current_message_id.lock() {
         *guard = None;
     }
+}
+
+fn set_last_completed_message_id(
+    last_completed_message_id: &StdMutex<Option<String>>,
+    value: Option<String>,
+) {
+    if let Ok(mut guard) = last_completed_message_id.lock() {
+        *guard = value;
+    }
+}
+
+fn read_last_completed_message_id(
+    last_completed_message_id: &StdMutex<Option<String>>,
+) -> Option<String> {
+    last_completed_message_id
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
 }
 
 fn reset_reasoning_state(
@@ -1617,10 +1666,17 @@ async fn build_sandbox_permissions_section(
     run_mode: &str,
     workspace_path: &str,
 ) -> Result<String, AppError> {
+    use crate::core::workspace_paths::parse_writable_roots;
+
     let approval_policy = settings_repo::policy_get(pool, "approval_policy")
         .await?
         .map(|record| parse_approval_policy_mode(&record.value_json))
         .unwrap_or_else(|| "require_for_mutations".to_string());
+
+    let writable_roots: Vec<String> = settings_repo::policy_get(pool, "writable_roots")
+        .await?
+        .map(|record| parse_writable_roots(&record.value_json))
+        .unwrap_or_default();
 
     let run_mode_line = if run_mode == "plan" {
         "Plan mode is active, so mutating tools are blocked."
@@ -1628,11 +1684,30 @@ async fn build_sandbox_permissions_section(
         "Default mode is active, so tool use follows the configured approval policy."
     };
 
+    let mut lines = vec![
+        "- Effective runtime sandbox: workspace-scoped tool execution with policy checks.".to_string(),
+        format!("- Workspace boundary: file and path-aware tools are restricted to the current workspace (`{workspace_path}`)."),
+        format!("- Approval policy: {approval_policy}."),
+        "- Read-only tools are generally auto-allowed; mutating tools may require approval.".to_string(),
+        format!("- {run_mode_line}"),
+    ];
+
+    if !writable_roots.is_empty() {
+        let roots_display: Vec<String> = writable_roots
+            .iter()
+            .map(|root| format!("`{root}`"))
+            .collect();
+        lines.push(format!(
+            "- Additional writable roots: {}. File tools (read, write, edit, list, find, search) can operate on files under these paths in addition to the workspace.",
+            roots_display.join(", ")
+        ));
+    }
+
+    lines.push("- Outer host sandbox metadata is not exposed here; rely on these effective runtime constraints.".to_string());
+
     Ok(build_prompt_section(
         "Sandbox & Permissions",
-        format!(
-            "- Effective runtime sandbox: workspace-scoped tool execution with policy checks.\n- Workspace boundary: file and path-aware tools are restricted to the current workspace (`{workspace_path}`).\n- Approval policy: {approval_policy}.\n- Read-only tools are generally auto-allowed; mutating tools may require approval.\n- {run_mode_line}\n- Outer host sandbox metadata is not exposed here; rely on these effective runtime constraints."
-        ),
+        lines.join("\n"),
     ))
 }
 
@@ -2076,10 +2151,12 @@ mod tests {
         reasoning_buffer: &StdMutex<String>,
         event: &AgentEvent,
     ) {
+        let last_completed_message_id = StdMutex::new(None::<String>);
         handle_agent_event(
             run_id,
             event_tx,
             current_message_id,
+            &last_completed_message_id,
             current_reasoning_message_id,
             last_usage,
             reasoning_buffer,
@@ -2503,6 +2580,100 @@ mod tests {
         assert_eq!(usage_events[0].input_tokens, 256);
         assert_eq!(usage_events[0].output_tokens, 32);
         assert_eq!(usage_events[0].total_tokens, 288);
+    }
+
+    #[test]
+    fn turn_retrying_event_emits_runtime_retry_notice() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let last_completed_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiy_core::types::Usage>);
+        let reasoning_buffer = StdMutex::new(String::new());
+
+        handle_agent_event(
+            "run-retry",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &reasoning_buffer,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &AgentEvent::TurnRetrying {
+                attempt: 1,
+                max_attempts: 3,
+                delay_ms: 1_000,
+                reason: "Incomplete anthropic stream: missing message_stop".to_string(),
+            },
+        );
+
+        let events = std::iter::from_fn(|| event_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(matches!(
+            events.as_slice(),
+            [ThreadStreamEvent::RunRetrying {
+                run_id,
+                attempt: 1,
+                max_attempts: 3,
+                delay_ms: 1_000,
+                reason,
+            }] if run_id == "run-retry" && reason.contains("Incomplete anthropic stream")
+        ));
+    }
+
+    #[test]
+    fn message_discarded_reuses_last_completed_assistant_message_id() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let last_completed_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiy_core::types::Usage>);
+        let reasoning_buffer = StdMutex::new(String::new());
+        let assistant = sample_partial_assistant_message();
+
+        handle_agent_event(
+            "run-discard",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &reasoning_buffer,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &AgentEvent::MessageEnd {
+                message: AgentMessage::Assistant(assistant.clone()),
+            },
+        );
+        handle_agent_event(
+            "run-discard",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &reasoning_buffer,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &AgentEvent::MessageDiscarded {
+                message: AgentMessage::Assistant(assistant),
+                reason: "Incomplete anthropic stream: missing message_stop".to_string(),
+            },
+        );
+
+        let events = std::iter::from_fn(|| event_rx.try_recv().ok()).collect::<Vec<_>>();
+        let completed_message_id = events.iter().find_map(|event| match event {
+            ThreadStreamEvent::MessageCompleted { message_id, .. } => Some(message_id.clone()),
+            _ => None,
+        });
+        let discarded_message_id = events.iter().find_map(|event| match event {
+            ThreadStreamEvent::MessageDiscarded { message_id, .. } => Some(message_id.clone()),
+            _ => None,
+        });
+
+        assert!(completed_message_id.is_some());
+        assert_eq!(completed_message_id, discarded_message_id);
     }
 
     #[test]

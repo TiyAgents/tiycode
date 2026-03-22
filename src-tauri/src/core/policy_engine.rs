@@ -323,7 +323,10 @@ fn allowed_additional_roots(tool_name: &str, writable_roots: &[String]) -> Vec<s
 }
 
 fn tool_uses_writable_roots(tool_name: &str) -> bool {
-    matches!(tool_name, "write" | "edit" | "patch")
+    matches!(
+        tool_name,
+        "write" | "edit" | "patch" | "read" | "list" | "find" | "search"
+    )
 }
 
 /// Extract the target file path from tool input for boundary checking.

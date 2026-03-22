@@ -1,7 +1,9 @@
 use super::truncation::{truncate_line, GREP_MAX_LINE_LENGTH, GREP_MAX_MATCHES};
 use super::ToolOutput;
 use crate::core::ripgrep::run_rg;
-use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
+use crate::core::workspace_paths::{
+    canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
+};
 use crate::model::errors::{AppError, ErrorSource};
 
 /// Search workspace files using ripgrep.
@@ -9,6 +11,7 @@ use crate::model::errors::{AppError, ErrorSource};
 pub async fn search_repo(
     input: &serde_json::Value,
     workspace_path: &str,
+    writable_roots: &[String],
 ) -> Result<ToolOutput, AppError> {
     let query = input["query"].as_str().unwrap_or("").trim();
     if query.is_empty() {
@@ -23,10 +26,12 @@ pub async fn search_repo(
         ErrorSource::Tool,
         "tool.workspace.not_directory",
     )?;
+    let additional_roots = normalize_additional_roots(writable_roots);
 
     let search_dir = match input["directory"].as_str() {
-        Some(raw) => resolve_path_within_workspace(
+        Some(raw) => resolve_path_within_roots(
             &workspace_root,
+            &additional_roots,
             raw,
             ErrorSource::Tool,
             "tool.path.outside_workspace",

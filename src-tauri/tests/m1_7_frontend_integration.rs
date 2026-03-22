@@ -42,6 +42,21 @@ fn test_thread_stream_event_run_started_serialization() {
 }
 
 #[test]
+fn test_thread_stream_event_stream_resync_required_serialization() {
+    use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
+
+    let event = ThreadStreamEvent::StreamResyncRequired {
+        run_id: "run-1".into(),
+        dropped_events: 12,
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "stream_resync_required");
+    assert_eq!(json["run_id"].as_str().unwrap(), "run-1");
+    assert_eq!(json["dropped_events"].as_u64().unwrap(), 12);
+}
+
+#[test]
 fn test_thread_stream_event_message_delta_serialization() {
     use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
 
@@ -310,6 +325,10 @@ fn test_all_events_have_type_field() {
         ThreadStreamEvent::RunStarted {
             run_id: "r".into(),
             run_mode: "default".into(),
+        },
+        ThreadStreamEvent::StreamResyncRequired {
+            run_id: "r".into(),
+            dropped_events: 3,
         },
         ThreadStreamEvent::MessageDelta {
             run_id: "r".into(),

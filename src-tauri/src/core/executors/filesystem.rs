@@ -4,7 +4,6 @@ use tokio::fs;
 
 use crate::core::workspace_paths::{
     canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
-    resolve_path_within_workspace,
 };
 use crate::model::errors::{AppError, ErrorSource};
 
@@ -37,8 +36,9 @@ const IMAGE_MAX_BYTES: usize = 10 * 1024 * 1024;
 pub async fn read_file(
     input: &serde_json::Value,
     workspace_path: &str,
+    writable_roots: &[String],
 ) -> Result<ToolOutput, AppError> {
-    let path = resolve_required_path(input, workspace_path, &[])?;
+    let path = resolve_required_path(input, workspace_path, writable_roots)?;
     let offset = read_positive_integer(input, "offset").unwrap_or(1);
     let limit = read_positive_integer(input, "limit");
 
@@ -297,8 +297,9 @@ pub async fn write_file(
 pub async fn list_dir(
     input: &serde_json::Value,
     workspace_path: &str,
+    writable_roots: &[String],
 ) -> Result<ToolOutput, AppError> {
-    let path = resolve_path_or_workspace_root(input, workspace_path)?;
+    let path = resolve_path_or_workspace_root(input, workspace_path, writable_roots)?;
     let effective_limit = read_positive_integer(input, "limit")
         .unwrap_or(LIST_DIR_MAX_ENTRIES)
         .min(LIST_DIR_MAX_ENTRIES);
@@ -381,6 +382,7 @@ pub async fn list_dir(
 pub async fn find_files(
     input: &serde_json::Value,
     workspace_path: &str,
+    writable_roots: &[String],
 ) -> Result<ToolOutput, AppError> {
     let pattern = input["pattern"].as_str().ok_or_else(|| {
         AppError::recoverable(
@@ -395,13 +397,15 @@ pub async fn find_files(
         ErrorSource::Tool,
         "tool.workspace.not_directory",
     )?;
+    let additional_roots = normalize_additional_roots(writable_roots);
     let effective_limit = read_positive_integer(input, "limit")
         .unwrap_or(FIND_MAX_RESULTS)
         .min(FIND_MAX_RESULTS);
 
     let search_dir = match input["path"].as_str() {
-        Some(raw) => resolve_path_within_workspace(
+        Some(raw) => resolve_path_within_roots(
             &workspace_root,
+            &additional_roots,
             raw,
             ErrorSource::Tool,
             "tool.path.outside_workspace",
@@ -567,16 +571,19 @@ fn resolve_required_path(
 fn resolve_path_or_workspace_root(
     input: &serde_json::Value,
     workspace_path: &str,
+    writable_roots: &[String],
 ) -> Result<std::path::PathBuf, AppError> {
     let workspace_root = canonicalize_workspace_root(
         workspace_path,
         ErrorSource::Tool,
         "tool.workspace.not_directory",
     )?;
+    let additional_roots = normalize_additional_roots(writable_roots);
 
     match input["path"].as_str() {
-        Some(raw) => resolve_path_within_workspace(
+        Some(raw) => resolve_path_within_roots(
             &workspace_root,
+            &additional_roots,
             raw,
             ErrorSource::Tool,
             "tool.path.outside_workspace",
@@ -617,6 +624,7 @@ mod tests {
                 "limit": 2,
             }),
             workspace.to_string_lossy().as_ref(),
+            &[],
         )
         .await
         .expect("read file");
@@ -643,6 +651,7 @@ mod tests {
                 "limit": 2,
             }),
             workspace.to_string_lossy().as_ref(),
+            &[],
         )
         .await
         .expect("list dir");
@@ -669,6 +678,7 @@ mod tests {
                 "limit": 2,
             }),
             workspace.to_string_lossy().as_ref(),
+            &[],
         )
         .await
         .expect("find files");

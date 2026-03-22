@@ -28,6 +28,7 @@ fn extract_run_model_refs(
 }
 
 fn forward_thread_stream_events(
+    run_id: String,
     mut event_rx: broadcast::Receiver<ThreadStreamEvent>,
     on_event: Channel<ThreadStreamEvent>,
 ) {
@@ -40,7 +41,17 @@ fn forward_thread_stream_events(
                     }
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Lagged(dropped_events)) => {
+                    if on_event
+                        .send(ThreadStreamEvent::StreamResyncRequired {
+                            run_id: run_id.clone(),
+                            dropped_events: dropped_events as u64,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
             }
         }
     });
@@ -74,7 +85,7 @@ pub async fn thread_start_run(
         .await?;
 
     // Forward events from the internal channel to the Tauri Channel
-    forward_thread_stream_events(event_rx, on_event);
+    forward_thread_stream_events(run_id.clone(), event_rx, on_event);
 
     Ok(run_id)
 }
@@ -89,7 +100,7 @@ pub async fn thread_subscribe_run(
         return Ok(None);
     };
 
-    forward_thread_stream_events(event_rx, on_event);
+    forward_thread_stream_events(run_id.clone(), event_rx, on_event);
     Ok(Some(run_id))
 }
 
@@ -119,7 +130,7 @@ pub async fn thread_execute_approved_plan(
         .execute_approved_plan(&thread_id, &approval_message_id, action)
         .await?;
 
-    forward_thread_stream_events(event_rx, on_event);
+    forward_thread_stream_events(run_id.clone(), event_rx, on_event);
     Ok(run_id)
 }
 

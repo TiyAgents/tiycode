@@ -298,8 +298,8 @@ async fn test_policy_allows_mutating_paths_in_writable_roots() {
         .unwrap();
 
     assert!(
-        matches!(read_check.verdict, PolicyVerdict::Deny { .. }),
-        "read tool should still be restricted to the workspace boundary"
+        !matches!(read_check.verdict, PolicyVerdict::Deny { .. }),
+        "read tool should also be allowed inside writable roots"
     );
 }
 

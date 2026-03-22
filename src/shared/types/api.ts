@@ -220,7 +220,7 @@ export type MessageType =
   | "sources"
   | "summary_marker";
 
-export type MessageStatus = "streaming" | "completed" | "failed";
+export type MessageStatus = "streaming" | "completed" | "failed" | "discarded";
 
 export type RunMode = "default" | "plan";
 
@@ -333,12 +333,27 @@ export interface SubagentProgressSnapshot {
 
 export type ThreadStreamEvent =
   | { type: "run_started"; runId: string; runMode: string }
+  | { type: "stream_resync_required"; runId: string; droppedEvents: number }
+  | {
+      type: "run_retrying";
+      runId: string;
+      attempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      reason: string;
+    }
   | { type: "message_delta"; runId: string; messageId: string; delta: string }
   | {
       type: "message_completed";
       runId: string;
       messageId: string;
       content: string;
+    }
+  | {
+      type: "message_discarded";
+      runId: string;
+      messageId: string;
+      reason: string;
     }
   | { type: "plan_updated"; runId: string; plan: unknown }
   | { type: "reasoning_updated"; runId: string; messageId: string; reasoning: string }

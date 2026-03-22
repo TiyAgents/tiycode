@@ -68,6 +68,26 @@ pub fn resolve_path_within_roots(
     Ok(resolved)
 }
 
+/// Parse writable root paths from the persisted JSON policy value.
+///
+/// The value is expected to be a JSON array of objects with a `"path"` field,
+/// e.g. `[{"id":"…","path":"/Users/foo/bar"}]`.
+pub fn parse_writable_roots(value_json: &str) -> Vec<String> {
+    let parsed: serde_json::Value = serde_json::from_str(value_json).unwrap_or_default();
+    parsed
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.get("path").and_then(serde_json::Value::as_str))
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Normalize persisted writable root strings into canonical path boundaries.
 pub fn normalize_additional_roots(raw_roots: &[String]) -> Vec<PathBuf> {
     raw_roots
@@ -148,8 +168,8 @@ fn normalize_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
-        resolve_path_within_workspace,
+        canonicalize_workspace_root, normalize_additional_roots, parse_writable_roots,
+        resolve_path_within_roots, resolve_path_within_workspace,
     };
     use crate::model::errors::ErrorSource;
 
@@ -284,5 +304,40 @@ mod tests {
 
         assert_eq!(normalized.len(), 1);
         assert!(normalized[0].ends_with("example"));
+    }
+
+    #[test]
+    fn parses_writable_roots_from_valid_json() {
+        let json = r#"[{"id":"abc","path":"/Users/foo/bar"},{"id":"def","path":"/tmp/workspace"}]"#;
+        let roots = parse_writable_roots(json);
+        assert_eq!(roots, vec!["/Users/foo/bar", "/tmp/workspace"]);
+    }
+
+    #[test]
+    fn parses_writable_roots_trims_whitespace_and_skips_empty() {
+        let json =
+            r#"[{"id":"1","path":"  /Users/foo  "},{"id":"2","path":""},{"id":"3","path":"  "}]"#;
+        let roots = parse_writable_roots(json);
+        assert_eq!(roots, vec!["/Users/foo"]);
+    }
+
+    #[test]
+    fn parses_writable_roots_returns_empty_for_invalid_json() {
+        assert!(parse_writable_roots("not json").is_empty());
+        assert!(parse_writable_roots("").is_empty());
+        assert!(parse_writable_roots("null").is_empty());
+        assert!(parse_writable_roots("42").is_empty());
+    }
+
+    #[test]
+    fn parses_writable_roots_returns_empty_for_empty_array() {
+        assert!(parse_writable_roots("[]").is_empty());
+    }
+
+    #[test]
+    fn parses_writable_roots_skips_entries_without_path() {
+        let json = r#"[{"id":"1"},{"id":"2","path":"/valid"}]"#;
+        let roots = parse_writable_roots(json);
+        assert_eq!(roots, vec!["/valid"]);
     }
 }
