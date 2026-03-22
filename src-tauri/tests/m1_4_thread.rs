@@ -308,6 +308,40 @@ async fn test_message_has_more_detection() {
     assert!(has_more, "Should detect more messages exist");
 }
 
+#[tokio::test]
+async fn test_thread_snapshot_keeps_latest_message_when_more_than_default_page_size() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-snap-page", "/tmp/snap-page").await;
+    test_helpers::seed_thread(&pool, "t-snap-page", "ws-snap-page").await;
+
+    for i in 0..51 {
+        let id = format!("01900000-0000-7000-8000-{i:012}");
+        let content = format!("Message {i}");
+        test_helpers::seed_message(&pool, &id, "t-snap-page", "assistant", &content).await;
+    }
+
+    let manager = ThreadManager::new(pool);
+    let snapshot = manager.load("t-snap-page", None, None).await.unwrap();
+
+    assert!(snapshot.has_more_messages);
+    assert_eq!(snapshot.messages.len(), 50);
+    assert_eq!(
+        snapshot.messages.first().map(|message| message.id.as_str()),
+        Some("01900000-0000-7000-8000-000000000001")
+    );
+    assert_eq!(
+        snapshot.messages.last().map(|message| message.id.as_str()),
+        Some("01900000-0000-7000-8000-000000000050")
+    );
+    assert_eq!(
+        snapshot
+            .messages
+            .last()
+            .map(|message| message.content_markdown.as_str()),
+        Some("Message 50")
+    );
+}
+
 // =========================================================================
 // T1.4.4 — ThreadStatus derivation from run state
 // =========================================================================

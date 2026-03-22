@@ -94,9 +94,10 @@ impl ThreadManager {
         .await?;
 
         let has_more = messages.len() as i64 > limit;
+        let extra_messages = messages.len().saturating_sub(limit as usize);
         let messages: Vec<MessageDto> = messages
             .into_iter()
-            .take(limit as usize)
+            .skip(extra_messages)
             .map(MessageDto::from)
             .collect();
 

@@ -1749,7 +1749,10 @@ mod tests {
             .collect();
 
         assert_eq!(should_retry_by_attempt, vec![true, true, false]);
-        assert_eq!(observed_results.into_iter().find(|count| *count == 1), Some(1));
+        assert_eq!(
+            observed_results.into_iter().find(|count| *count == 1),
+            Some(1)
+        );
     }
 
     #[test]

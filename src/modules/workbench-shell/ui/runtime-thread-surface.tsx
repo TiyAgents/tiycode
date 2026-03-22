@@ -798,6 +798,23 @@ function appendOrReplaceMessage(
   return nextMessages;
 }
 
+function prependOlderMessages(
+  currentMessages: Array<SurfaceMessage>,
+  olderMessages: Array<SurfaceMessage>,
+) {
+  if (olderMessages.length === 0) {
+    return currentMessages;
+  }
+
+  const existingIds = new Set(currentMessages.map((message) => message.id));
+  const nextOlderMessages = olderMessages.filter((message) => !existingIds.has(message.id));
+  if (nextOlderMessages.length === 0) {
+    return currentMessages;
+  }
+
+  return [...nextOlderMessages, ...currentMessages];
+}
+
 function isRenderableTimelineMessage(message: SurfaceMessage) {
   return message.messageType !== "reasoning" || message.content.trim().length > 0;
 }
@@ -1992,7 +2009,10 @@ export function RuntimeThreadSurface({
   const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string | null>(null);
   const [helpers, setHelpers] = useState<Array<SurfaceHelperEntry>>([]);
   const [helperOpen, setHelperOpen] = useState<Record<string, boolean>>({});
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
   const [isLoading, setLoading] = useState(false);
+  const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
   const [queueArtifact, setQueueArtifact] = useState<unknown>(null);
@@ -2121,9 +2141,12 @@ export function RuntimeThreadSurface({
     if (!threadId) {
       subscribingRef.current = false;
       clearScheduledThinkingPhase();
+      setHasMoreMessages(false);
+      setHistoryLoadError(null);
       setMessages([]);
       setLoadError(null);
       setLoading(false);
+      setIsLoadingMoreMessages(false);
       onContextUsageChange?.(null);
       setApprovingPlanMessageId(null);
       setRuntimeError(null);
@@ -2136,6 +2159,7 @@ export function RuntimeThreadSurface({
     }
 
     setLoading(true);
+    setHistoryLoadError(null);
     setLoadError(null);
 
     try {
@@ -2149,6 +2173,7 @@ export function RuntimeThreadSurface({
       // Use functional update to ensure we replace the entire list atomically,
       // discarding any local-user optimistic messages that may still be in state.
       setMessages(() => snapshotMessages);
+      setHasMoreMessages(snapshot.hasMoreMessages);
       setApprovingPlanMessageId(null);
       setTools((snapshot.toolCalls ?? []).map(mapSnapshotTool));
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
@@ -2192,12 +2217,41 @@ export function RuntimeThreadSurface({
     }
   }, [clearScheduledThinkingPhase, onContextUsageChange, onRunStateChange, onThreadTitleChange, threadId]);
 
+  const loadOlderMessages = useCallback(async () => {
+    if (!threadId || isLoadingMoreMessages || messages.length === 0 || !hasMoreMessages) {
+      return;
+    }
+
+    const oldestMessageId = messages[0]?.id;
+    if (!oldestMessageId) {
+      return;
+    }
+
+    setHistoryLoadError(null);
+    setIsLoadingMoreMessages(true);
+
+    try {
+      const snapshot = await threadLoad(threadId, oldestMessageId);
+      const olderMessages = snapshot.messages.map(mapSnapshotMessage);
+      setMessages((current) => prependOlderMessages(current, olderMessages));
+      setHasMoreMessages(snapshot.hasMoreMessages);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setHistoryLoadError(message);
+    } finally {
+      setIsLoadingMoreMessages(false);
+    }
+  }, [hasMoreMessages, isLoadingMoreMessages, messages, threadId]);
+
   useEffect(() => {
     subscribingRef.current = false;
     setComposerError(null);
     setHelpers([]);
+    setHasMoreMessages(false);
+    setHistoryLoadError(null);
     setLoadError(null);
     setMessages([]);
+    setIsLoadingMoreMessages(false);
     setApprovingPlanMessageId(null);
     setQueueArtifact(null);
     setRuntimeError(null);
@@ -3468,6 +3522,24 @@ export function RuntimeThreadSurface({
       <div className="relative min-h-0 flex-1">
         <Conversation className="size-full">
           <ConversationContent className="mx-auto w-full max-w-4xl gap-0 px-6 pb-10 pt-8">
+            {hasMoreMessages ? (
+              <div className="pb-4">
+                <div className="flex flex-col items-center gap-2">
+                  <Button
+                    disabled={isLoading || isLoadingMoreMessages}
+                    onClick={() => void loadOlderMessages()}
+                    size="sm"
+                    variant="outline"
+                  >
+                    {isLoadingMoreMessages ? "Loading older messages..." : "Load older messages"}
+                  </Button>
+                  {historyLoadError ? (
+                    <p className="text-xs text-app-danger">{historyLoadError}</p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
             {isLoading && messages.length === 0 ? (
               <ConversationEmptyState
                 description="Loading thread history and runtime state."
