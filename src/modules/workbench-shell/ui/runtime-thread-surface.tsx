@@ -2109,6 +2109,8 @@ export function RuntimeThreadSurface({
           status: "completed",
         }),
       );
+
+      showThinkingPlaceholder(event.runId);
     });
 
     stream.onPlan = withActiveStream((_event) => {});
