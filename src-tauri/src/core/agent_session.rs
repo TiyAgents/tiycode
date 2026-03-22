@@ -1378,7 +1378,7 @@ pub(crate) fn convert_history_messages(
         .filter_map(|message| match message.message_type.as_str() {
             "plain_message" => match message.role.as_str() {
                 "user" => Some(AgentMessage::User(UserMessage::text(
-                    message.content_markdown.clone(),
+                    history_user_message_text(message),
                 ))),
                 "assistant" => Some(AgentMessage::Assistant(assistant_message_from_text(
                     &message.content_markdown,
@@ -1392,6 +1392,30 @@ pub(crate) fn convert_history_messages(
             _ => None,
         })
         .collect()
+}
+
+fn history_user_message_text(message: &MessageRecord) -> String {
+    message
+        .metadata_json
+        .as_deref()
+        .and_then(command_effective_prompt_from_metadata)
+        .unwrap_or_else(|| message.content_markdown.clone())
+}
+
+fn command_effective_prompt_from_metadata(raw: &str) -> Option<String> {
+    let metadata = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    let composer = metadata.get("composer")?;
+
+    if composer.get("kind")?.as_str()? != "command" {
+        return None;
+    }
+
+    composer
+        .get("effectivePrompt")?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 fn format_plan_history_message(message: &MessageRecord) -> String {
@@ -3062,5 +3086,38 @@ mod tests {
             .contains("Implementation plan checkpoint (revision 2, approval state: pending):"));
         assert!(message_text(&history[1]).contains("# Plan title"));
         assert!(message_text(&history[1]).contains("Keep the plan in follow-up context."));
+    }
+
+    #[test]
+    fn convert_history_messages_uses_effective_prompt_for_command_messages() {
+        let messages = vec![MessageRecord {
+            id: "msg-command".to_string(),
+            thread_id: "thread-1".to_string(),
+            run_id: None,
+            role: "user".to_string(),
+            content_markdown: "/init".to_string(),
+            message_type: "plain_message".to_string(),
+            status: "completed".to_string(),
+            metadata_json: Some(
+                serde_json::json!({
+                    "composer": {
+                        "kind": "command",
+                        "displayText": "/init",
+                        "effectivePrompt": "Generate or update a file named AGENTS.md."
+                    }
+                })
+                .to_string(),
+            ),
+            created_at: String::new(),
+        }];
+
+        let history =
+            convert_history_messages(&messages, &sample_resolved_model_role("primary").model);
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            message_text(&history[0]),
+            "Generate or update a file named AGENTS.md."
+        );
     }
 }

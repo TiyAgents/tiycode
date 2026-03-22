@@ -2016,7 +2016,11 @@ export function RuntimeThreadSurface({
     finalizeReasoningForRun(runId);
   }, [clearScheduledThinkingPhase, finalizeReasoningForRun]);
 
-  const appendOptimisticUserMessage = useCallback((content: string, metadata?: unknown | null) => {
+  const appendOptimisticUserMessage = useCallback((
+    content: string,
+    metadata?: unknown | null,
+    showThinking = true,
+  ) => {
     const userCreatedAt = new Date().toISOString();
     const localUserMessageId = `local-user-${Date.now()}`;
 
@@ -2040,7 +2044,9 @@ export function RuntimeThreadSurface({
       ];
     });
 
-    showThinkingPlaceholder(null, userCreatedAt);
+    if (showThinking) {
+      showThinkingPlaceholder(null, userCreatedAt);
+    }
   }, [showThinkingPlaceholder]);
 
   const loadSnapshot = useCallback(async () => {
@@ -2087,6 +2093,7 @@ export function RuntimeThreadSurface({
       onContextUsageChange?.(mapRunSummaryToContextUsage(getLatestVisibleRun(snapshot)));
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
+      setThinkingPlaceholder(null);
       if (
         (nextState === "running" || nextState === "waiting_approval" || nextState === "needs_reply")
         && streamRef.current
@@ -2636,7 +2643,7 @@ export function RuntimeThreadSurface({
     setQueueArtifact(null);
 
     if (submission.kind === "command" && submission.command?.behavior === "clear") {
-      appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null);
+      appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, false);
       try {
         await threadClearContext(threadId);
         await loadSnapshot();
@@ -2647,7 +2654,7 @@ export function RuntimeThreadSurface({
     }
 
     if (submission.kind === "command" && submission.command?.behavior === "compact") {
-      appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null);
+      appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, false);
       try {
         await threadCompactContext(threadId, submission.command.argumentsText || null);
         await loadSnapshot();
