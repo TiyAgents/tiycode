@@ -84,6 +84,7 @@ export type CommandEntry = {
   path: string;
   argumentHint: string;
   description: string;
+  prompt: string;
 };
 
 export type AgentProfile = {

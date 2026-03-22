@@ -57,7 +57,7 @@ import {
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
 import { Source, Sources, SourcesContent, SourcesTrigger } from "@/components/ai-elements/sources";
-import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
+import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import type { AgentProfile, ProviderEntry } from "@/modules/settings-center/model/types";
 import {
@@ -274,9 +274,9 @@ export function AiElementsTaskDemo({
   }, [clearFollowUpTimers]);
 
   const handleSubmit = useCallback(
-    (message: PromptInputMessage) => {
-      const nextText = message.text?.trim();
-      const nextAttachments = mapComposerAttachments(message.files);
+    (submission: ComposerSubmission) => {
+      const nextText = submission.displayText?.trim();
+      const nextAttachments = mapComposerAttachments(submission.rawMessage.files);
       const textForThread = nextText || (nextAttachments.length > 0 ? `请基于这 ${nextAttachments.length} 个附件继续细化 demo。` : "");
 
       if ((!textForThread && nextAttachments.length === 0) || !activeProfile) {

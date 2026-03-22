@@ -62,6 +62,8 @@ pub async fn thread_start_run(
     state: State<'_, AppState>,
     thread_id: String,
     prompt: String,
+    display_prompt: Option<String>,
+    prompt_metadata: Option<serde_json::Value>,
     run_mode: Option<String>,
     model_plan: Option<serde_json::Value>,
     on_event: Channel<ThreadStreamEvent>,
@@ -76,6 +78,8 @@ pub async fn thread_start_run(
         .start_run(
             &thread_id,
             &prompt,
+            display_prompt,
+            prompt_metadata,
             &run_mode,
             profile_id,
             provider_id,
@@ -172,6 +176,26 @@ mod tests {
         assert_eq!(provider_id.as_deref(), Some("provider-1"));
         assert_eq!(model_id.as_deref(), Some("gpt-5"));
     }
+}
+
+#[tauri::command]
+pub async fn thread_clear_context(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<(), AppError> {
+    state.agent_run_manager.clear_thread_context(&thread_id).await
+}
+
+#[tauri::command]
+pub async fn thread_compact_context(
+    state: State<'_, AppState>,
+    thread_id: String,
+    instructions: Option<String>,
+) -> Result<(), AppError> {
+    state
+        .agent_run_manager
+        .compact_thread_context(&thread_id, instructions)
+        .await
 }
 
 #[tauri::command]

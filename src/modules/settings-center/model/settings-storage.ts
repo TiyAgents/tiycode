@@ -132,13 +132,19 @@ export function readStoredSettings(): SettingsState {
           const rawCommands = Array.isArray(commandsRaw.commands) ? commandsRaw.commands : null;
 
           return rawCommands
-            ? (rawCommands as Array<unknown>).filter(isRecord).map((command) => ({
-                id: typeof command.id === "string" ? command.id : crypto.randomUUID(),
-                name: typeof command.name === "string" ? command.name : "",
-                path: typeof command.path === "string" ? command.path : "",
-                argumentHint: typeof command.argumentHint === "string" ? command.argumentHint : "",
-                description: typeof command.description === "string" ? command.description : "",
-              }))
+            ? (rawCommands as Array<unknown>).filter(isRecord).map((command) => {
+                const description = typeof command.description === "string" ? command.description : "";
+                const prompt = typeof command.prompt === "string" ? command.prompt : description;
+
+                return {
+                  id: typeof command.id === "string" ? command.id : crypto.randomUUID(),
+                  name: typeof command.name === "string" ? command.name : "",
+                  path: typeof command.path === "string" ? command.path : "",
+                  argumentHint: typeof command.argumentHint === "string" ? command.argumentHint : "",
+                  description,
+                  prompt,
+                };
+              })
             : DEFAULT_COMMAND_SETTINGS.commands;
         })(),
       },

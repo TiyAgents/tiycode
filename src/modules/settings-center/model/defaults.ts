@@ -190,6 +190,7 @@ export const DEFAULT_COMMAND_SETTINGS: CommandSettings = {
         "[--verify=yes|no] [--style=simple|full] [--type=feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert] [--language=english|chinese]",
       description:
         "Create well-formatted commits with conventional commit messages",
+      prompt: "Generate a conventional commit message using the current Git changes and the configured commit message guidance. Use any provided command arguments to refine style, language, verification behavior, or commit type.",
     },
     {
       id: "cmd-create-pr",
@@ -199,6 +200,7 @@ export const DEFAULT_COMMAND_SETTINGS: CommandSettings = {
         "[--draft] [--base=main|master] [--style=simple|full] [--language=english|chinese]",
       description:
         "Create pull requests via GitHub MCP tools with well-formatted PR title and description",
+      prompt: "Create a pull request using the current branch changes and any supplied command arguments. Produce a clear PR title and description, and use available GitHub tooling when appropriate.",
     },
   ],
 };

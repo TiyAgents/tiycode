@@ -21,7 +21,6 @@ import {
   MoreHorizontal,
   Trash2,
 } from "lucide-react";
-import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import {
   useLanguage,
   type LanguagePreference,
@@ -33,6 +32,7 @@ import {
   buildProfileModelPlan,
   buildRunModelPlanFromSelection,
 } from "@/modules/settings-center/model/run-model-plan";
+import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
 import {
   useSettingsController,
   type SettingsCategory,
@@ -404,7 +404,9 @@ export function DashboardWorkbench() {
   } | null>(null);
   const [pendingThreadRun, setPendingThreadRun] = useState<{
     id: string;
-    prompt: string;
+    displayText: string;
+    effectivePrompt: string;
+    metadata: Record<string, unknown> | null;
     runMode: RunMode;
     threadId: string;
   } | null>(null);
@@ -1607,27 +1609,34 @@ export function DashboardWorkbench() {
     ],
   );
 
-  const handleComposerSubmit = (message: PromptInputMessage) => {
-    const trimmedValue = message.text?.trim() ?? "";
-    const attachmentNames = message.files
+  const handleComposerSubmit = (submission: ComposerSubmission) => {
+    const trimmedValue = submission.displayText?.trim() ?? "";
+    const commandBehavior = submission.command?.behavior ?? null;
+    const attachmentNames = submission.rawMessage.files
       .map((file, index) => file.filename?.trim() || `Attachment ${index + 1}`)
       .filter((value) => value.length > 0);
-    const promptText =
+    const effectivePrompt =
       attachmentNames.length > 0
         ? [
-            trimmedValue,
+            submission.effectivePrompt,
             "Attached files:",
             attachmentNames.map((name) => `- ${name}`).join("\n"),
           ]
             .filter(Boolean)
             .join("\n\n")
-        : trimmedValue;
+        : submission.effectivePrompt;
 
-    if (!promptText) {
+    if (!effectivePrompt) {
       return;
     }
 
     if (isNewThreadMode) {
+      if (commandBehavior === "clear" || commandBehavior === "compact") {
+        setComposerValue("");
+        setComposerError(null);
+        return;
+      }
+
       void (async () => {
         if (!selectedProject) {
           return;
@@ -1660,7 +1669,7 @@ export function DashboardWorkbench() {
           newThreadTerminalBindingKey === null
             ? null
             : (terminalThreadBindings[newThreadTerminalBindingKey] ?? null);
-        const nextThreadName = buildThreadTitle(trimmedValue || promptText);
+        const nextThreadName = buildThreadTitle(trimmedValue || effectivePrompt);
 
         try {
           if (isTauri() && resolvedWorkspaceId) {
@@ -1747,8 +1756,10 @@ export function DashboardWorkbench() {
         if (persistedThreadId) {
           setPendingThreadRun({
             id: nextPendingRunId,
-            prompt: promptText,
-            runMode: newThreadRunMode,
+            displayText: submission.displayText,
+            effectivePrompt,
+            metadata: submission.metadata ?? null,
+            runMode: submission.runMode ?? newThreadRunMode,
             threadId: persistedThreadId,
           });
         }
@@ -2439,6 +2450,7 @@ export function DashboardWorkbench() {
                             activeAgentProfileId={activeAgentProfileId}
                             agentProfiles={agentProfiles}
                             canSubmitWhenAttachmentsOnly={false}
+                            commands={commands.commands}
                             error={composerError}
                             onErrorMessageChange={setComposerError}
                             onRunModeChange={setNewThreadRunMode}
@@ -2547,6 +2559,7 @@ export function DashboardWorkbench() {
                       <RuntimeThreadSurface
                         activeAgentProfileId={activeAgentProfileId}
                         agentProfiles={agentProfiles}
+                        commands={commands.commands}
                         key={resolvedTerminalThreadId ?? "runtime-thread-surface"}
                         initialPromptRequest={
                           pendingThreadRun &&

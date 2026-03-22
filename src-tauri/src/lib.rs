@@ -206,6 +206,8 @@ pub fn run() {
             commands::agent::thread_start_run,
             commands::agent::thread_subscribe_run,
             commands::agent::thread_execute_approved_plan,
+            commands::agent::thread_clear_context,
+            commands::agent::thread_compact_context,
             commands::agent::thread_cancel_run,
             commands::agent::tool_approval_respond,
             commands::agent::tool_clarify_respond,

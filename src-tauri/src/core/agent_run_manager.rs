@@ -86,6 +86,8 @@ impl AgentRunManager {
         self: &Arc<Self>,
         thread_id: &str,
         prompt: &str,
+        display_prompt: Option<String>,
+        prompt_metadata: Option<serde_json::Value>,
         run_mode: &str,
         profile_id: Option<String>,
         provider_id: Option<String>,
@@ -96,6 +98,8 @@ impl AgentRunManager {
         self.start_run_with_options(
             thread_id,
             prompt,
+            display_prompt,
+            prompt_metadata,
             run_mode,
             profile_id,
             provider_id,
@@ -113,6 +117,8 @@ impl AgentRunManager {
         self: &Arc<Self>,
         thread_id: &str,
         prompt: &str,
+        display_prompt: Option<String>,
+        prompt_metadata: Option<serde_json::Value>,
         run_mode: &str,
         profile_id: Option<String>,
         provider_id: Option<String>,
@@ -167,10 +173,10 @@ impl AgentRunManager {
                     thread_id: thread_id.to_string(),
                     run_id: None,
                     role: "user".to_string(),
-                    content_markdown: prompt.to_string(),
+                    content_markdown: display_prompt.unwrap_or_else(|| prompt.to_string()),
                     message_type: "plain_message".to_string(),
                     status: "completed".to_string(),
-                    metadata_json: None,
+                    metadata_json: prompt_metadata.map(|value| value.to_string()),
                     created_at: String::new(),
                 };
                 message_repo::insert(&self.pool, &user_message).await?;
@@ -290,6 +296,8 @@ impl AgentRunManager {
             .start_run_with_options(
                 thread_id,
                 "",
+                None,
+                None,
                 "default",
                 profile_id,
                 provider_id,
@@ -322,6 +330,203 @@ impl AgentRunManager {
         .await?;
 
         Ok(result)
+    }
+
+    pub async fn clear_thread_context(&self, thread_id: &str) -> Result<(), AppError> {
+        if self.cancel_run_if_active(thread_id).await? {
+            tracing::info!(thread_id = %thread_id, "Cancelled active run before clearing context");
+        }
+
+        let thread = thread_repo::find_by_id(&self.pool, thread_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
+        message_repo::delete_by_thread_id(&self.pool, thread_id).await?;
+
+        let command_metadata = serde_json::json!({
+            "composer": {
+                "kind": "command",
+                "displayText": "/clear",
+                "effectivePrompt": "Clear conversation history and free up context.",
+                "command": {
+                    "source": "builtin",
+                    "name": "clear",
+                    "path": "/clear",
+                    "description": "Clear conversation history and free up context.",
+                    "argumentHint": "(no arguments)",
+                    "argumentsText": "",
+                    "prompt": "Clear conversation history and free up context.",
+                    "behavior": "clear"
+                }
+            }
+        });
+        let status_metadata = serde_json::json!({
+            "kind": "thread_command_result",
+            "command": "clear",
+        });
+
+        message_repo::insert(
+            &self.pool,
+            &MessageRecord {
+                id: uuid::Uuid::now_v7().to_string(),
+                thread_id: thread_id.to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "/clear".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(command_metadata.to_string()),
+                created_at: String::new(),
+            },
+        )
+        .await?;
+        message_repo::insert(
+            &self.pool,
+            &MessageRecord {
+                id: uuid::Uuid::now_v7().to_string(),
+                thread_id: thread_id.to_string(),
+                run_id: None,
+                role: "system".to_string(),
+                content_markdown: "Conversation history cleared. Context is now reset.".to_string(),
+                message_type: "system_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(status_metadata.to_string()),
+                created_at: String::new(),
+            },
+        )
+        .await?;
+        thread_repo::touch_active(&self.pool, thread_id).await?;
+        thread_repo::update_status(&self.pool, &thread.id, &ThreadStatus::Idle).await?;
+        Ok(())
+    }
+
+    pub async fn compact_thread_context(
+        &self,
+        thread_id: &str,
+        instructions: Option<String>,
+    ) -> Result<(), AppError> {
+        if self.cancel_run_if_active(thread_id).await? {
+            tracing::info!(thread_id = %thread_id, "Cancelled active run before compacting context");
+        }
+
+        let thread = thread_repo::find_by_id(&self.pool, thread_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
+        let messages = message_repo::list_recent(&self.pool, thread_id, None, 1024).await?;
+        let workspace_path = workspace_repo::find_by_id(&self.pool, &thread.workspace_id)
+            .await?
+            .map(|workspace| workspace.canonical_path)
+            .unwrap_or_default();
+        let model_plan_value = serde_json::json!({});
+        let model = build_session_spec(
+            &self.pool,
+            "compact-preview",
+            thread_id,
+            &workspace_path,
+            "default",
+            &model_plan_value,
+        )
+        .await?
+        .model_plan
+        .primary
+        .model;
+        let history = convert_history_messages(&messages, &model);
+        let base_summary = if history.is_empty() {
+            "<context_summary>\nNo previous conversation was available to compact.\n</context_summary>".to_string()
+        } else {
+            summarize_messages(&history)
+        };
+        let compact_instructions = instructions
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let summary = if let Some(extra) = compact_instructions.as_ref() {
+            format!("{base_summary}\n\n<extra_instructions>\n{}\n</extra_instructions>", extra)
+        } else {
+            base_summary
+        };
+
+        message_repo::delete_by_thread_id(&self.pool, thread_id).await?;
+
+        let command_display_text = if let Some(extra) = compact_instructions.as_ref() {
+            format!("/compact {}", extra)
+        } else {
+            "/compact".to_string()
+        };
+
+        let command_metadata = serde_json::json!({
+            "composer": {
+                "kind": "command",
+                "displayText": command_display_text,
+                "effectivePrompt": "Compact the current conversation history and preserve a summary in context.",
+                "command": {
+                    "source": "builtin",
+                    "name": "compact",
+                    "path": "/compact",
+                    "description": "Clear history but keep a summary in context.",
+                    "argumentHint": "[instructions=...]",
+                    "argumentsText": instructions.clone().unwrap_or_default(),
+                    "prompt": "Compact the current conversation history and preserve a summary in context.",
+                    "behavior": "compact"
+                }
+            }
+        });
+        let summary_metadata = serde_json::json!({
+            "kind": "context_summary",
+            "source": "compact",
+        });
+        let status_metadata = serde_json::json!({
+            "kind": "thread_command_result",
+            "command": "compact",
+        });
+
+        message_repo::insert(
+            &self.pool,
+            &MessageRecord {
+                id: uuid::Uuid::now_v7().to_string(),
+                thread_id: thread_id.to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: command_display_text.clone(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(command_metadata.to_string()),
+                created_at: String::new(),
+            },
+        )
+        .await?;
+        message_repo::insert(
+            &self.pool,
+            &MessageRecord {
+                id: uuid::Uuid::now_v7().to_string(),
+                thread_id: thread_id.to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: summary,
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(summary_metadata.to_string()),
+                created_at: String::new(),
+            },
+        )
+        .await?;
+        message_repo::insert(
+            &self.pool,
+            &MessageRecord {
+                id: uuid::Uuid::now_v7().to_string(),
+                thread_id: thread_id.to_string(),
+                run_id: None,
+                role: "system".to_string(),
+                content_markdown: "Conversation compacted. A summary has been kept in context.".to_string(),
+                message_type: "system_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(status_metadata.to_string()),
+                created_at: String::new(),
+            },
+        )
+        .await?;
+        thread_repo::touch_active(&self.pool, thread_id).await?;
+        thread_repo::update_status(&self.pool, &thread.id, &ThreadStatus::Idle).await?;
+        Ok(())
     }
 
     pub async fn subscribe_run(

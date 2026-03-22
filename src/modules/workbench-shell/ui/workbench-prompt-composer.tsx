@@ -10,7 +10,7 @@ import {
   PaperclipIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import {
   ModelSelector,
   ModelSelectorContent,
@@ -25,6 +25,11 @@ import {
   PromptInput,
   PromptInputBody,
   PromptInputButton,
+  PromptInputCommand,
+  PromptInputCommandEmpty,
+  PromptInputCommandGroup,
+  PromptInputCommandItem,
+  PromptInputCommandList,
   PromptInputFooter,
   PromptInputHeader,
   type PromptInputMessage,
@@ -35,10 +40,18 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
 import {
+  buildComposerCommandRegistry,
+  filterComposerCommands,
+  parseSlashCommandInput,
+  shouldSmartSendCommand,
+  type ComposerCommandDescriptor,
+  type ComposerSubmission,
+} from "@/modules/workbench-shell/model/composer-commands";
+import {
   getProfilePrimaryModelId,
   getProfilePrimaryModelLabel,
 } from "@/modules/workbench-shell/model/ai-elements-task-demo";
-import type { AgentProfile, ProviderEntry } from "@/modules/settings-center/model/types";
+import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
 import type { RunMode } from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
@@ -56,12 +69,13 @@ type WorkbenchPromptComposerProps = {
   activeAgentProfileId: string;
   agentProfiles: ReadonlyArray<AgentProfile>;
   canSubmitWhenAttachmentsOnly?: boolean;
+  commands?: ReadonlyArray<CommandEntry>;
   error?: string | null;
   onErrorMessageChange?: (message: string | null) => void;
   onRunModeChange?: (mode: RunMode) => void;
   onSelectAgentProfile: (id: string) => void;
   onStop: () => void;
-  onSubmit: (message: PromptInputMessage) => void;
+  onSubmit: (submission: ComposerSubmission) => void;
   placeholder: string;
   providers: ReadonlyArray<ProviderEntry>;
   runMode?: RunMode;
@@ -78,6 +92,151 @@ function getFileExtension(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
+
+function isSlashCommandActive(value: string) {
+  return value.trimStart().startsWith("/");
+}
+
+function buildSubmissionFromPromptInput(
+  message: PromptInputMessage,
+  registry: ReadonlyArray<ComposerCommandDescriptor>,
+  runMode: RunMode,
+): ComposerSubmission {
+  const trimmedText = message.text?.trim() ?? "";
+  const parsedCommand = trimmedText ? parseSlashCommandInput(trimmedText, registry) : null;
+
+  if (!parsedCommand?.command) {
+    return {
+      kind: "plain",
+      displayText: trimmedText,
+      effectivePrompt: trimmedText,
+      rawMessage: message,
+      metadata: null,
+      runMode,
+    };
+  }
+
+  const effectivePrompt = parsedCommand.command.prompt.replace(/{{\s*arguments\s*}}/g, parsedCommand.argumentsText).replace(/{{\s*command\s*}}/g, parsedCommand.command.name).trim();
+
+  return {
+    kind: "command",
+    displayText: trimmedText,
+    effectivePrompt,
+    rawMessage: message,
+    runMode,
+    command: {
+      source: parsedCommand.command.source,
+      name: parsedCommand.command.name,
+      path: parsedCommand.command.path,
+      description: parsedCommand.command.description,
+      argumentHint: parsedCommand.command.argumentHint,
+      argumentsText: parsedCommand.argumentsText,
+      prompt: effectivePrompt,
+      behavior: parsedCommand.command.behavior,
+    },
+    metadata: {
+      composer: {
+        kind: "command",
+        displayText: trimmedText,
+        effectivePrompt,
+        command: {
+          source: parsedCommand.command.source,
+          name: parsedCommand.command.name,
+          path: parsedCommand.command.path,
+          description: parsedCommand.command.description,
+          argumentHint: parsedCommand.command.argumentHint,
+          argumentsText: parsedCommand.argumentsText,
+          prompt: effectivePrompt,
+          behavior: parsedCommand.command.behavior,
+        },
+      },
+    },
+  };
+}
+
+function getCommandDisplayPath(command: ComposerCommandDescriptor) {
+  return command.source === "builtin" ? `/${command.name}` : command.path;
+}
+
+function getCommandCompletionValue(command: ComposerCommandDescriptor) {
+  return getCommandDisplayPath(command);
+}
+
+function getDefaultSelectedCommand(
+  commands: ReadonlyArray<ComposerCommandDescriptor>,
+) {
+  return commands[0] ?? null;
+}
+
+function getCommandItemKey(command: ComposerCommandDescriptor) {
+  return `${command.source}:${command.name}`;
+}
+
+function getNextCommandIndex(currentIndex: number, commandCount: number, delta: number) {
+  if (commandCount === 0) {
+    return -1;
+  }
+
+  if (currentIndex < 0) {
+    return delta > 0 ? 0 : commandCount - 1;
+  }
+
+  return (currentIndex + delta + commandCount) % commandCount;
+}
+
+function findSelectedCommandIndex(
+  commands: ReadonlyArray<ComposerCommandDescriptor>,
+  selectedCommand: ComposerCommandDescriptor | null,
+) {
+  if (!selectedCommand) {
+    return -1;
+  }
+
+  return commands.findIndex((command) => command.source === selectedCommand.source && command.name === selectedCommand.name);
+}
+
+function buildCommandInputValue(command: ComposerCommandDescriptor) {
+  return getCommandDisplayPath(command);
+}
+
+function shouldShowCommandPicker(value: string) {
+  return isSlashCommandActive(value);
+}
+
+function shouldAutoSubmitCommand(command: ComposerCommandDescriptor, value: string) {
+  const parsed = parseSlashCommandInput(value, [command]);
+  return shouldSmartSendCommand(command, parsed?.argumentsText ?? "");
+}
+
+function getParsedActiveCommand(
+  value: string,
+  registry: ReadonlyArray<ComposerCommandDescriptor>,
+) {
+  return parseSlashCommandInput(value, registry);
+}
+
+function getFilteredCommands(
+  registry: ReadonlyArray<ComposerCommandDescriptor>,
+  value: string,
+) {
+  const parsed = getParsedActiveCommand(value, registry);
+  return filterComposerCommands(registry, parsed?.query ?? "");
+}
+
+function getSelectedCommandFromFiltered(
+  filteredCommands: ReadonlyArray<ComposerCommandDescriptor>,
+  selectedCommand: ComposerCommandDescriptor | null,
+) {
+  if (selectedCommand) {
+    const matched = filteredCommands.find((command) => command.source === selectedCommand.source && command.name === selectedCommand.name);
+    if (matched) {
+      return matched;
+    }
+  }
+
+  return getDefaultSelectedCommand(filteredCommands);
+}
+
 
 function getExtensionColor(ext: string): string {
   const colorMap: Record<string, string> = {
@@ -513,6 +672,7 @@ export function WorkbenchPromptComposer({
   activeAgentProfileId,
   agentProfiles,
   canSubmitWhenAttachmentsOnly = true,
+  commands = [],
   error,
   onErrorMessageChange,
   onRunModeChange = () => undefined,
@@ -531,11 +691,95 @@ export function WorkbenchPromptComposer({
   onValueChange,
 }: WorkbenchPromptComposerProps) {
   const [isProfileSelectorOpen, setProfileSelectorOpen] = useState(false);
+  const [selectedCommandKey, setSelectedCommandKey] = useState<string | null>(null);
+  const commandPanelRef = useRef<HTMLDivElement | null>(null);
   const activeProfile = useMemo(
     () => agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0] ?? null,
     [activeAgentProfileId, agentProfiles],
   );
   const canSwitchProfiles = agentProfiles.length > 1 && Boolean(activeProfile);
+  const commandRegistry = useMemo(
+    () => buildComposerCommandRegistry(commands),
+    [commands],
+  );
+  const slashActive = shouldShowCommandPicker(value);
+  const filteredCommands = useMemo(
+    () => getFilteredCommands(commandRegistry, value),
+    [commandRegistry, value],
+  );
+  const selectedCommand = useMemo(() => {
+    const keyedSelection = selectedCommandKey
+      ? filteredCommands.find((command) => getCommandItemKey(command) === selectedCommandKey) ?? null
+      : null;
+    return getSelectedCommandFromFiltered(filteredCommands, keyedSelection);
+  }, [filteredCommands, selectedCommandKey]);
+
+  useEffect(() => {
+    if (!slashActive) {
+      setSelectedCommandKey(null);
+      return;
+    }
+
+    if (!selectedCommand && filteredCommands.length > 0) {
+      setSelectedCommandKey(getCommandItemKey(filteredCommands[0]));
+    }
+  }, [filteredCommands, selectedCommand, slashActive]);
+
+  useEffect(() => {
+    if (!slashActive || !selectedCommandKey) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const selectedItem = commandPanelRef.current?.querySelector<HTMLElement>(
+        `[data-command-key="${selectedCommandKey}"]`,
+      );
+      selectedItem?.scrollIntoView({ block: "nearest" });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [selectedCommandKey, slashActive]);
+
+  const handlePromptSubmit = (message: PromptInputMessage) => {
+    const submission = buildSubmissionFromPromptInput(message, commandRegistry, runMode);
+    onSubmit(submission);
+  };
+
+  const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!slashActive) {
+      return;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const currentIndex = findSelectedCommandIndex(filteredCommands, selectedCommand);
+      const nextIndex = getNextCommandIndex(
+        currentIndex,
+        filteredCommands.length,
+        event.key === "ArrowDown" ? 1 : -1,
+      );
+      const nextCommand = filteredCommands[nextIndex] ?? null;
+      setSelectedCommandKey(nextCommand ? getCommandItemKey(nextCommand) : null);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setSelectedCommandKey(null);
+      return;
+    }
+
+    if ((event.key === "Enter" || event.key === "Tab") && selectedCommand) {
+      event.preventDefault();
+      const nextValue = buildCommandInputValue(selectedCommand);
+      onValueChange(nextValue);
+      setSelectedCommandKey(getCommandItemKey(selectedCommand));
+      if (shouldAutoSubmitCommand(selectedCommand, nextValue)) {
+        handlePromptSubmit({ text: nextValue, files: [] });
+        onValueChange("");
+      }
+    }
+  };
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-3">
@@ -550,11 +794,11 @@ export function WorkbenchPromptComposer({
       <div className="rounded-[26px] border border-app-border/60 bg-app-surface/82 p-1.5 shadow-[0_22px_50px_-42px_rgba(15,23,42,0.38)] backdrop-blur-sm">
         <PromptInput
           accept="image/*,.pdf,.md,.txt,.json,.ts,.tsx"
-          className="[&_[data-slot=input-group]]:shadow-none [&_[data-slot=input-group]:focus-within]:!border-app-border/60 [&_[data-slot=input-group]:focus-within]:!ring-0"
+          className="[&_[data-slot=input-group]]:overflow-visible [&_[data-slot=input-group]]:shadow-none [&_[data-slot=input-group]:focus-within]:!border-app-border/60 [&_[data-slot=input-group]:focus-within]:!ring-0"
           maxFileSize={10 * 1024 * 1024}
           maxFiles={4}
           onError={(nextError) => onErrorMessageChange?.(nextError.message)}
-          onSubmit={onSubmit}
+          onSubmit={handlePromptSubmit}
         >
           <PromptInputBody>
             <ComposerAttachmentStateSync
@@ -568,9 +812,104 @@ export function WorkbenchPromptComposer({
             <PromptInputTextarea
               className={cn("min-h-[88px]", textareaClassName)}
               onChange={(event) => onValueChange(event.currentTarget.value)}
+              onKeyDown={handleTextareaKeyDown}
               placeholder={placeholder}
               value={value}
             />
+            {slashActive ? (
+              <div
+                className="absolute inset-x-3 bottom-[calc(100%+0.5rem)] z-20 min-w-0"
+                ref={commandPanelRef}
+              >
+                <PromptInputCommand className="w-full min-w-0 overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/70 bg-app-surface/96 p-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)]">
+                  <PromptInputCommandList className="w-full min-w-0 max-h-[320px]">
+                    <PromptInputCommandEmpty>未找到匹配命令。</PromptInputCommandEmpty>
+                    {["builtin", "settings"].map((source) => {
+                      const groupCommands = filteredCommands.filter((command) => command.source === source);
+                      if (groupCommands.length === 0) {
+                        return null;
+                      }
+
+                      return (
+                        <PromptInputCommandGroup
+                          className="w-full min-w-0 p-1"
+                          key={source}
+                        >
+                          {groupCommands.map((command) => {
+                            const isSelected = selectedCommand ? getCommandItemKey(selectedCommand) === getCommandItemKey(command) : false;
+                            const commandKey = getCommandItemKey(command);
+                            return (
+                              <PromptInputCommandItem
+                                className={cn(
+                                  "w-full items-start gap-0 overflow-hidden rounded-xl px-3 py-2 text-left transition-colors data-[selected=true]:!bg-transparent data-[selected=true]:!text-inherit",
+                                  isSelected
+                                    ? "!bg-app-info/14 !text-app-foreground dark:!bg-app-info/18"
+                                    : "text-app-foreground/90 hover:bg-app-surface-muted/55 hover:text-app-foreground",
+                                )}
+                                data-command-key={commandKey}
+                                key={commandKey}
+                                onFocus={() => {
+                                  if (selectedCommandKey !== commandKey) {
+                                    setSelectedCommandKey(commandKey);
+                                  }
+                                }}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onMouseMove={() => {
+                                  if (selectedCommandKey !== commandKey) {
+                                    setSelectedCommandKey(commandKey);
+                                  }
+                                }}
+                                onSelect={() => {
+                                  const nextValue = getCommandCompletionValue(command);
+                                  onValueChange(nextValue);
+                                  setSelectedCommandKey(commandKey);
+                                  if (shouldAutoSubmitCommand(command, nextValue)) {
+                                    handlePromptSubmit({ text: nextValue, files: [] });
+                                    onValueChange("");
+                                  }
+                                }}
+                                value={getCommandDisplayPath(command)}
+                              >
+                                <div className="flex min-w-0 w-full flex-col gap-1">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <span
+                                      className="shrink-0 text-sm font-medium text-inherit"
+                                      title={getCommandDisplayPath(command)}
+                                    >
+                                      {getCommandDisplayPath(command)}
+                                    </span>
+                                    {command.argumentHint ? (
+                                      <span
+                                        className={cn(
+                                          "min-w-0 flex-1 truncate text-[11px]",
+                                          isSelected ? "text-app-foreground/75" : "text-app-subtle",
+                                        )}
+                                        title={command.argumentHint}
+                                      >
+                                        {command.argumentHint}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <p
+                                    className={cn(
+                                      "truncate text-[11px] leading-5",
+                                      isSelected ? "text-app-foreground/75" : "text-app-subtle",
+                                    )}
+                                    title={command.description || getCommandDisplayPath(command)}
+                                  >
+                                    {command.description || getCommandDisplayPath(command)}
+                                  </p>
+                                </div>
+                              </PromptInputCommandItem>
+                            );
+                          })}
+                        </PromptInputCommandGroup>
+                      );
+                    })}
+                  </PromptInputCommandList>
+                </PromptInputCommand>
+              </div>
+            ) : null}
           </PromptInputBody>
           <PromptInputFooter>
             <PromptInputTools>

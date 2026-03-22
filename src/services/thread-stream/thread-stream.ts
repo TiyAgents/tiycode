@@ -22,6 +22,7 @@ import {
   threadSubscribeRun,
   toolApprovalRespond,
   toolClarifyRespond,
+  type ThreadRunInput,
 } from "@/services/bridge";
 import type {
   RunModelPlanDto,
@@ -192,12 +193,12 @@ export class ThreadStream {
    */
   async startRun(
     threadId: string,
-    prompt: string,
+    input: ThreadRunInput,
     runMode?: string,
     modelPlan?: RunModelPlanDto | null,
   ): Promise<string> {
     try {
-      const runId = await threadStartRun(threadId, prompt, (event) => {
+      const runId = await threadStartRun(threadId, input, (event) => {
         if (this.disposed) {
           return;
         }

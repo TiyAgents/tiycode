@@ -1636,17 +1636,13 @@ function CommandsSection({
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const handleAddCommand = () => {
-    const newId = crypto.randomUUID();
     onAddCommand({
       name: "",
       path: "",
       argumentHint: "",
       description: "",
+      prompt: "",
     });
-    // find the newly added command and set editing — we use a timeout so state has updated
-    setTimeout(() => {
-      setEditingId(newId);
-    }, 0);
   };
 
   return (
@@ -1719,6 +1715,9 @@ function CommandItem({
           <p className="mt-1 truncate text-[12px] leading-5 text-app-muted">
             {command.description || <span className="italic">No description</span>}
           </p>
+          <p className="mt-1 truncate text-[11px] leading-5 text-app-subtle">
+            {command.argumentHint || <span className="italic">No argument hint</span>}
+          </p>
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
@@ -1775,17 +1774,35 @@ function CommandItem({
             <Input
               value={command.name}
               onChange={(event) => onUpdate({ name: event.target.value })}
-              placeholder="commit"
+              placeholder="review"
               className="text-[13px]"
             />
             <p className="mt-1 text-[11px] text-app-subtle">Command path: {command.name ? `/prompts:${command.name}` : "/prompts:..."}</p>
           </div>
           <div className="mt-3">
-            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">Command prompt</label>
-            <Textarea
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">Description</label>
+            <Input
               value={command.description}
               onChange={(event) => onUpdate({ description: event.target.value })}
-              placeholder="Describe what this command does..."
+              placeholder="Describe what this command does in the picker"
+              className="text-[13px]"
+            />
+          </div>
+          <div className="mt-3">
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">Argument hint</label>
+            <Input
+              value={command.argumentHint}
+              onChange={(event) => onUpdate({ argumentHint: event.target.value })}
+              placeholder="[file=path] [focus=topic]"
+              className="text-[13px]"
+            />
+          </div>
+          <div className="mt-3">
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">Command prompt</label>
+            <Textarea
+              value={command.prompt}
+              onChange={(event) => onUpdate({ prompt: event.target.value })}
+              placeholder="Write the expanded prompt sent to the model when this command is used..."
               className="min-h-24 text-[13px]"
             />
           </div>

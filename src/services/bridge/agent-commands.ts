@@ -7,6 +7,12 @@ import type {
   ThreadStreamEvent,
 } from "@/shared/types/api";
 
+export type ThreadRunInput = {
+  prompt: string;
+  displayPrompt?: string | null;
+  promptMetadata?: Record<string, unknown> | null;
+};
+
 const requireTauri = (cmd: string) => {
   if (!isTauri()) throw new Error(`${cmd} requires Tauri runtime`);
 };
@@ -415,7 +421,7 @@ function coerceThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStreamEv
  */
 export async function threadStartRun(
   threadId: string,
-  prompt: string,
+  input: ThreadRunInput,
   onEvent: (event: ThreadStreamEvent) => void,
   runMode?: string,
   modelPlan?: RunModelPlanDto | null,
@@ -429,7 +435,9 @@ export async function threadStartRun(
 
   return invoke<string>("thread_start_run", {
     threadId,
-    prompt,
+    prompt: input.prompt,
+    displayPrompt: input.displayPrompt ?? null,
+    promptMetadata: input.promptMetadata ?? null,
     runMode: runMode ?? null,
     modelPlan: modelPlan ?? null,
     onEvent: channel,
@@ -471,6 +479,22 @@ export async function threadExecuteApprovedPlan(
     approvalMessageId,
     action,
     onEvent: channel,
+  });
+}
+
+export async function threadClearContext(threadId: string): Promise<void> {
+  requireTauri("thread_clear_context");
+  return invoke("thread_clear_context", { threadId });
+}
+
+export async function threadCompactContext(
+  threadId: string,
+  instructions?: string | null,
+): Promise<void> {
+  requireTauri("thread_compact_context");
+  return invoke("thread_compact_context", {
+    threadId,
+    instructions: instructions ?? null,
   });
 }
 

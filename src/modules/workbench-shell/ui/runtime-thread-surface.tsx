@@ -19,8 +19,8 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "@/components/ai-elements/confirmation";
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
-import type { AgentProfile, ProviderEntry } from "@/modules/settings-center/model/types";
-import { threadLoad } from "@/services/bridge";
+import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
+import { threadClearContext, threadCompactContext, threadLoad } from "@/services/bridge";
 import {
   ThreadStream,
   type HelperEvent,
@@ -41,7 +41,7 @@ import type {
 } from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
-import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
+import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
 import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 
 type SurfaceMessage = {
@@ -148,7 +148,9 @@ type SurfaceRuntimeError = {
 
 type InitialPromptRequest = {
   id: string;
-  prompt: string;
+  displayText: string;
+  effectivePrompt: string;
+  metadata: Record<string, unknown> | null;
   runMode?: RunMode;
 };
 
@@ -161,6 +163,7 @@ type ThinkingPlaceholder = {
 type RuntimeThreadSurfaceProps = {
   activeAgentProfileId: string;
   agentProfiles: ReadonlyArray<AgentProfile>;
+  commands?: ReadonlyArray<CommandEntry>;
   initialPromptRequest?: InitialPromptRequest | null;
   onConsumeInitialPrompt?: (id: string) => void;
   onContextUsageChange?: (usage: ThreadContextUsage | null) => void;
@@ -364,6 +367,22 @@ function parseApprovalPromptMetadata(value: unknown): FormattedApprovalPrompt | 
     planMessageId: readStringField(record, "planMessageId"),
     planRevision: readNumberField(record, "planRevision"),
     state: readStringField(record, "state") ?? "pending",
+  };
+}
+
+function parseCommandComposerMetadata(value: unknown): {
+  displayText: string | null;
+  effectivePrompt: string | null;
+} | null {
+  const record = asObjectRecord(value);
+  const composer = asObjectRecord(record?.composer);
+  if (!composer || readStringField(composer, "kind") !== "command") {
+    return null;
+  }
+
+  return {
+    displayText: readStringField(composer, "displayText"),
+    effectivePrompt: readStringField(composer, "effectivePrompt"),
   };
 }
 
@@ -698,24 +717,6 @@ function getSnapshotRuntimeError(snapshot: ThreadSnapshotDto): SurfaceRuntimeErr
       ),
     runId: run.id,
   };
-}
-
-function buildPromptText(message: PromptInputMessage) {
-  const nextText = message.text?.trim() ?? "";
-  const attachmentNames = message.files
-    .map((file: PromptInputMessage["files"][number], index: number) => file.filename?.trim() || `Attachment ${index + 1}`)
-    .filter((value: string) => value.length > 0);
-
-  if (!nextText && attachmentNames.length === 0) {
-    return "";
-  }
-
-  if (attachmentNames.length === 0) {
-    return nextText;
-  }
-
-  const attachmentSection = attachmentNames.map((name: string) => `- ${name}`).join("\n");
-  return [nextText, "Attached files:", attachmentSection].filter(Boolean).join("\n\n");
 }
 
 function appendOrReplaceMessage(
@@ -1906,6 +1907,7 @@ function getRoleSpacingClass(
 export function RuntimeThreadSurface({
   activeAgentProfileId,
   agentProfiles,
+  commands = [],
   initialPromptRequest = null,
   onConsumeInitialPrompt,
   onContextUsageChange,
@@ -2014,7 +2016,7 @@ export function RuntimeThreadSurface({
     finalizeReasoningForRun(runId);
   }, [clearScheduledThinkingPhase, finalizeReasoningForRun]);
 
-  const appendOptimisticUserMessage = useCallback((content: string) => {
+  const appendOptimisticUserMessage = useCallback((content: string, metadata?: unknown | null) => {
     const userCreatedAt = new Date().toISOString();
     const localUserMessageId = `local-user-${Date.now()}`;
 
@@ -2029,6 +2031,7 @@ export function RuntimeThreadSurface({
           createdAt: userCreatedAt,
           id: localUserMessageId,
           messageType: "plain_message",
+          metadata: metadata ?? null,
           role: "user",
           runId: null,
           content,
@@ -2563,9 +2566,29 @@ export function RuntimeThreadSurface({
     threadId,
   ]);
 
-  const submitPrompt = useCallback(async (prompt: string, runModeOverride?: RunMode) => {
+  const submitPrompt = useCallback(async (
+    submissionOrPrompt: ComposerSubmission | string,
+    runModeOverride?: RunMode,
+  ) => {
     if (!threadId) {
       setComposerError("This thread is still preparing. Try again in a moment.");
+      return;
+    }
+
+    const submission = typeof submissionOrPrompt === "string"
+      ? {
+          kind: "plain" as const,
+          displayText: submissionOrPrompt,
+          effectivePrompt: submissionOrPrompt,
+          rawMessage: { text: submissionOrPrompt, files: [] },
+          metadata: null,
+          runMode: runModeOverride,
+        }
+      : submissionOrPrompt;
+    const prompt = submission.effectivePrompt.trim();
+
+    if (!prompt) {
+      setComposerError("Type a prompt before starting a run.");
       return;
     }
 
@@ -2611,13 +2634,40 @@ export function RuntimeThreadSurface({
     setComposerError(null);
     setRuntimeError(null);
     setQueueArtifact(null);
-    appendOptimisticUserMessage(prompt);
+
+    if (submission.kind === "command" && submission.command?.behavior === "clear") {
+      appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null);
+      try {
+        await threadClearContext(threadId);
+        await loadSnapshot();
+      } finally {
+        submittingRef.current = false;
+      }
+      return;
+    }
+
+    if (submission.kind === "command" && submission.command?.behavior === "compact") {
+      appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null);
+      try {
+        await threadCompactContext(threadId, submission.command.argumentsText || null);
+        await loadSnapshot();
+      } finally {
+        submittingRef.current = false;
+      }
+      return;
+    }
+
+    appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null);
 
     try {
       await streamRef.current?.startRun(
         threadId,
-        prompt,
-        runModeOverride ?? selectedRunMode,
+        {
+          prompt,
+          displayPrompt: submission.displayText,
+          promptMetadata: submission.metadata ?? null,
+        },
+        runModeOverride ?? submission.runMode ?? selectedRunMode,
         modelPlan,
       );
     } catch (error) {
@@ -2672,7 +2722,14 @@ export function RuntimeThreadSurface({
     if (initialPromptRequest.runMode) {
       setSelectedRunMode(initialPromptRequest.runMode);
     }
-    void submitPrompt(initialPromptRequest.prompt, initialPromptRequest.runMode)
+    void submitPrompt({
+      kind: "plain",
+      displayText: initialPromptRequest.displayText,
+      effectivePrompt: initialPromptRequest.effectivePrompt,
+      rawMessage: { text: initialPromptRequest.displayText, files: [] },
+      metadata: initialPromptRequest.metadata,
+      runMode: initialPromptRequest.runMode,
+    }, initialPromptRequest.runMode)
       .finally(() => {
         onConsumeInitialPrompt?.(initialPromptRequest.id);
       });
@@ -2825,8 +2882,8 @@ export function RuntimeThreadSurface({
     previousHelperStatusesRef.current = nextHelperStatuses;
   }, [helpers]);
 
-  const handleSubmit = useCallback(async (message: PromptInputMessage) => {
-    const prompt = buildPromptText(message);
+  const handleSubmit = useCallback(async (submission: ComposerSubmission) => {
+    const prompt = submission.effectivePrompt?.trim() ?? "";
     if (!prompt) {
       return;
     }
@@ -2839,12 +2896,12 @@ export function RuntimeThreadSurface({
           kind: "freeform",
           text: prompt,
         },
-        prompt,
+        submission.displayText || prompt,
       );
       return;
     }
 
-    await submitPrompt(prompt);
+    await submitPrompt(submission);
   }, [pendingClarifyTool, respondToClarify, submitPrompt]);
 
   const handleCompletedToolOpenChange = useCallback((toolId: string, open: boolean) => {
@@ -3547,7 +3604,37 @@ export function RuntimeThreadSurface({
                             </p>
                           </div>
                         ) : (
-                          <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
+                          (() => {
+                            const commandComposer = message.role === "user"
+                              ? parseCommandComposerMetadata(message.metadata)
+                              : null;
+                            const expandedPrompt = commandComposer?.effectivePrompt?.trim() ?? "";
+
+                            return (
+                              <div className="space-y-2">
+                                <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
+                                {expandedPrompt && expandedPrompt !== (message.content ?? "").trim() ? (
+                                  <CompactCollapsible defaultOpen={false}>
+                                    <CompactCollapsibleHeader className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground">
+                                      <div className="min-w-0">
+                                        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-app-subtle">
+                                          Expanded prompt
+                                        </div>
+                                        <div className="truncate text-xs text-app-muted">
+                                          {expandedPrompt}
+                                        </div>
+                                      </div>
+                                    </CompactCollapsibleHeader>
+                                    <CompactCollapsibleContent className="pl-0">
+                                      <div className="whitespace-pre-wrap rounded-xl border border-app-border/25 bg-app-surface/35 px-3 py-2 text-xs leading-5 text-app-muted">
+                                        {expandedPrompt}
+                                      </div>
+                                    </CompactCollapsibleContent>
+                                  </CompactCollapsible>
+                                ) : null}
+                              </div>
+                            );
+                          })()
                         )}
                       </MessageContent>
                     </Message>
@@ -3741,6 +3828,7 @@ export function RuntimeThreadSurface({
           activeAgentProfileId={activeAgentProfileId}
           agentProfiles={agentProfiles}
           canSubmitWhenAttachmentsOnly={false}
+          commands={commands}
           error={composerError}
           onErrorMessageChange={setComposerError}
           onRunModeChange={setSelectedRunMode}
@@ -3772,9 +3860,7 @@ export function RuntimeThreadSurface({
               return () => clearTimeout(timer);
             });
           }}
-          onSubmit={(message) => {
-            void handleSubmit(message);
-          }}
+          onSubmit={handleSubmit}
           placeholder="Ask Tiy anything, @ to add files, / for commands, $ for skills"
           providers={providers}
           runMode={selectedRunMode}

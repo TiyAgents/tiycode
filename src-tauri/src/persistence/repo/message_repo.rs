@@ -172,3 +172,11 @@ pub async fn update_metadata(
         .await?;
     Ok(())
 }
+
+pub async fn delete_by_thread_id(pool: &SqlitePool, thread_id: &str) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM messages WHERE thread_id = ?")
+        .bind(thread_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}

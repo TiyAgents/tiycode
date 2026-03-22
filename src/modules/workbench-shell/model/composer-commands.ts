@@ -1,0 +1,244 @@
+import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
+import type { CommandEntry } from "@/modules/settings-center/model/types";
+import type { RunMode } from "@/shared/types/api";
+
+export type BuiltinComposerCommandName = "init" | "clear" | "compact";
+
+export type ComposerCommandSource = "builtin" | "settings";
+export type ComposerSubmissionKind = "plain" | "command";
+export type ComposerCommandBehavior = "prompt" | "clear" | "compact";
+
+export type ComposerCommandDescriptor = {
+  source: ComposerCommandSource;
+  name: string;
+  path: string;
+  description: string;
+  argumentHint: string;
+  prompt: string;
+  behavior: ComposerCommandBehavior;
+  smartSend: "always" | "never";
+};
+
+export type ComposerCommandInvocation = {
+  source: ComposerCommandSource;
+  name: string;
+  path: string;
+  description: string;
+  argumentHint: string;
+  argumentsText: string;
+  prompt: string;
+  behavior: ComposerCommandBehavior;
+};
+
+export type ComposerSubmission = {
+  kind: ComposerSubmissionKind;
+  displayText: string;
+  effectivePrompt: string;
+  rawMessage: PromptInputMessage;
+  command?: ComposerCommandInvocation;
+  metadata?: Record<string, unknown> | null;
+  runMode?: RunMode;
+};
+
+const BUILTIN_COMMANDS: ReadonlyArray<ComposerCommandDescriptor> = [
+  {
+    source: "builtin",
+    name: "init",
+    path: "/init",
+    description: "根据当前项目内容生成或更新 AGENTS.md",
+    argumentHint: "",
+    prompt: [
+      "Generate or update the repository AGENTS.md based on the current workspace.",
+      "Preserve existing project-specific conventions where they are still valid.",
+      "Reflect the current repository structure, build/test commands, coding style, and agent collaboration rules.",
+    ].join("\n"),
+    behavior: "prompt",
+    smartSend: "always",
+  },
+  {
+    source: "builtin",
+    name: "clear",
+    path: "/clear",
+    description: "清空当前会话历史并释放上下文",
+    argumentHint: "",
+    prompt: "Clear conversation history and free up context.",
+    behavior: "clear",
+    smartSend: "always",
+  },
+  {
+    source: "builtin",
+    name: "compact",
+    path: "/compact",
+    description: "清空历史但保留摘要在上下文中",
+    argumentHint: "",
+    prompt: [
+      "Compact the current conversation history.",
+      "Preserve a concise summary in context before clearing prior turns.",
+    ].join("\n"),
+    behavior: "compact",
+    smartSend: "always",
+  },
+];
+
+const RESERVED_BUILTIN_NAMES = new Set(BUILTIN_COMMANDS.map((command) => command.name));
+
+function normalizeCommandName(value: string) {
+  return value.trim().replace(/^\/+/, "").toLowerCase();
+}
+
+function replaceTemplateVariables(template: string, values: Record<string, string>) {
+  return template.replace(/{{\s*(\w+)\s*}}/g, (_, key: string) => values[key] ?? "");
+}
+
+function normalizeCommandPath(value: string) {
+  const normalized = normalizeCommandName(value);
+  return normalized ? `/${normalized}` : "";
+}
+
+function getCommandTriggerToken(command: ComposerCommandDescriptor) {
+  return command.source === "builtin" ? command.name : normalizeCommandName(command.path);
+}
+
+export function isReservedBuiltinCommandName(name: string) {
+  return RESERVED_BUILTIN_NAMES.has(normalizeCommandName(name));
+}
+
+export function buildComposerCommandRegistry(settingsCommands: ReadonlyArray<CommandEntry>) {
+  const customCommands = settingsCommands
+    .map<ComposerCommandDescriptor | null>((command) => {
+      const normalizedName = normalizeCommandName(command.name);
+      if (!normalizedName || isReservedBuiltinCommandName(normalizedName)) {
+        return null;
+      }
+
+      const commandPath = `/prompts:${normalizedName}`;
+      return {
+        source: "settings",
+        name: normalizedName,
+        path: commandPath,
+        description: command.description.trim(),
+        argumentHint: command.argumentHint.trim(),
+        prompt: command.prompt.trim(),
+        behavior: "prompt",
+        smartSend: command.argumentHint.trim() ? "never" : "always",
+      };
+    })
+    .filter((command): command is ComposerCommandDescriptor => command !== null);
+
+  return [...BUILTIN_COMMANDS, ...customCommands];
+}
+
+export function parseSlashCommandInput(
+  value: string,
+  registry: ReadonlyArray<ComposerCommandDescriptor>,
+): { activeToken: string; command: ComposerCommandDescriptor | null; query: string; argumentsText: string } | null {
+  const trimmedStart = value.trimStart();
+  if (!trimmedStart.startsWith("/")) {
+    return null;
+  }
+
+  const firstLine = trimmedStart.split(/\r?\n/, 1)[0] ?? "";
+  const commandToken = firstLine.trim();
+  if (!commandToken.startsWith("/")) {
+    return null;
+  }
+
+  const withoutSlash = commandToken.slice(1);
+  const firstSpaceIndex = withoutSlash.search(/\s/);
+  const query = (firstSpaceIndex >= 0 ? withoutSlash.slice(0, firstSpaceIndex) : withoutSlash).trim().toLowerCase();
+  const argumentsText = firstSpaceIndex >= 0 ? withoutSlash.slice(firstSpaceIndex + 1).trim() : "";
+  const command = registry.find((entry) => getCommandTriggerToken(entry) === query) ?? null;
+
+  return {
+    activeToken: commandToken,
+    command,
+    query,
+    argumentsText,
+  };
+}
+
+export function filterComposerCommands(
+  registry: ReadonlyArray<ComposerCommandDescriptor>,
+  query: string,
+) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return registry;
+  }
+
+  return registry.filter((command) =>
+    command.name.includes(normalizedQuery)
+    || normalizeCommandPath(command.path).includes(`/${normalizedQuery}`)
+    || command.path.toLowerCase().includes(normalizedQuery)
+    || command.description.toLowerCase().includes(normalizedQuery),
+  );
+}
+
+export function shouldSmartSendCommand(
+  command: ComposerCommandDescriptor,
+  _argumentsText: string,
+) {
+  return command.smartSend === "always";
+}
+
+export function buildCommandEffectivePrompt(
+  command: ComposerCommandDescriptor,
+  argumentsText: string,
+) {
+  return replaceTemplateVariables(command.prompt, {
+    arguments: argumentsText.trim(),
+    command: command.name,
+  }).trim();
+}
+
+export function buildComposerSubmission(
+  message: PromptInputMessage,
+  registry: ReadonlyArray<ComposerCommandDescriptor>,
+  runMode?: RunMode,
+): ComposerSubmission | null {
+  const displayText = message.text?.trim() ?? "";
+  if (!displayText && message.files.length === 0) {
+    return null;
+  }
+
+  const parsedCommand = displayText ? parseSlashCommandInput(displayText, registry) : null;
+  if (!parsedCommand?.command) {
+    return {
+      kind: "plain",
+      displayText,
+      effectivePrompt: displayText,
+      rawMessage: message,
+      metadata: null,
+      runMode,
+    };
+  }
+
+  const effectivePrompt = buildCommandEffectivePrompt(parsedCommand.command, parsedCommand.argumentsText);
+  const invocation: ComposerCommandInvocation = {
+    source: parsedCommand.command.source,
+    name: parsedCommand.command.name,
+    path: parsedCommand.command.path,
+    description: parsedCommand.command.description,
+    argumentHint: parsedCommand.command.argumentHint,
+    argumentsText: parsedCommand.argumentsText,
+    prompt: effectivePrompt,
+    behavior: parsedCommand.command.behavior,
+  };
+
+  return {
+    kind: "command",
+    displayText,
+    effectivePrompt,
+    rawMessage: message,
+    command: invocation,
+    metadata: {
+      composer: {
+        kind: "command",
+        displayText,
+        effectivePrompt,
+        command: invocation,
+      },
+    },
+    runMode,
+  };
+}
