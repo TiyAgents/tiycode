@@ -39,12 +39,13 @@ const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(12);
 const TITLE_GENERATION_MAX_TOKENS: u32 = 32;
 const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
 const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
+const TITLE_GENERATION_COUNT_CHECK_RETRY_DELAY_MS: u64 = 50;
+const TITLE_GENERATION_COUNT_CHECK_MAX_ATTEMPTS: usize = 3;
 
 struct ActiveRun {
     run_id: String,
     thread_id: String,
     profile_id: Option<String>,
-    run_mode: String,
     frontend_tx: broadcast::Sender<ThreadStreamEvent>,
     lightweight_model_role: Option<ResolvedModelRole>,
     streaming_message_id: Option<String>,
@@ -161,7 +162,6 @@ impl AgentRunManager {
                     run_id: run_id.clone(),
                     thread_id: thread_id.to_string(),
                     profile_id: profile_id.clone(),
-                    run_mode: run_mode.to_string(),
                     frontend_tx: frontend_tx.clone(),
                     lightweight_model_role: None,
                     streaming_message_id: None,
@@ -1132,7 +1132,6 @@ impl AgentRunManager {
         let (
             thread_id,
             profile_id,
-            run_mode,
             frontend_tx,
             lightweight_model_role,
             streaming_message_id,
@@ -1145,7 +1144,6 @@ impl AgentRunManager {
             (
                 run.thread_id.clone(),
                 run.profile_id.clone(),
-                run.run_mode.clone(),
                 run.frontend_tx.clone(),
                 run.lightweight_model_role.clone(),
                 run.streaming_message_id.clone(),
@@ -1345,11 +1343,13 @@ async fn maybe_generate_thread_title(
     frontend_tx: broadcast::Sender<ThreadStreamEvent>,
     app_handle: AppHandle,
 ) -> Result<(), AppError> {
-    if message_repo::count_completed_assistant_plain_messages(pool, thread_id).await? != 1 {
+    if !wait_for_single_completed_assistant_plain_message(pool, thread_id).await? {
         tracing::debug!(
             run_id = %run_id,
             thread_id = %thread_id,
-            "skipping thread title generation: not exactly one completed assistant message"
+            max_attempts = TITLE_GENERATION_COUNT_CHECK_MAX_ATTEMPTS,
+            retry_delay_ms = TITLE_GENERATION_COUNT_CHECK_RETRY_DELAY_MS,
+            "skipping thread title generation: not exactly one completed assistant message after retries"
         );
         return Ok(());
     }
@@ -1430,6 +1430,35 @@ async fn maybe_generate_thread_title(
     }
 
     Ok(())
+}
+
+async fn wait_for_single_completed_assistant_plain_message(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<bool, AppError> {
+    for attempt in 0..TITLE_GENERATION_COUNT_CHECK_MAX_ATTEMPTS {
+        let completed_count =
+            message_repo::count_completed_assistant_plain_messages(pool, thread_id).await?;
+        if completed_count == 1 {
+            return Ok(true);
+        }
+
+        if should_retry_title_generation_count_check(
+            attempt,
+            TITLE_GENERATION_COUNT_CHECK_MAX_ATTEMPTS,
+        ) {
+            sleep(Duration::from_millis(
+                TITLE_GENERATION_COUNT_CHECK_RETRY_DELAY_MS,
+            ))
+            .await;
+        }
+    }
+
+    Ok(false)
+}
+
+fn should_retry_title_generation_count_check(attempt: usize, max_attempts: usize) -> bool {
+    attempt + 1 < max_attempts
 }
 
 async fn load_initial_title_context(
@@ -1662,7 +1691,8 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 mod tests {
     use super::{
         build_implementation_handoff_prompt, build_title_prompt, collapse_whitespace,
-        normalize_generated_title, should_complete_reasoning_for_event, truncate_chars,
+        normalize_generated_title, should_complete_reasoning_for_event,
+        should_retry_title_generation_count_check, truncate_chars,
     };
     use crate::core::agent_session::ProfileResponseStyle;
     use crate::core::plan_checkpoint::{
@@ -1704,6 +1734,38 @@ mod tests {
 
         assert!(prompt.contains("Write the title in Japanese."));
         assert!(prompt.contains("signals the user's goal or decision focus clearly"));
+    }
+
+    #[test]
+    fn title_generation_count_check_retries_until_last_allowed_attempt() {
+        let observed_results = [0_i64, 0, 1];
+
+        let should_retry_by_attempt: Vec<bool> = observed_results
+            .iter()
+            .enumerate()
+            .map(|(attempt, count)| {
+                *count != 1 && should_retry_title_generation_count_check(attempt, 3)
+            })
+            .collect();
+
+        assert_eq!(should_retry_by_attempt, vec![true, true, false]);
+        assert_eq!(observed_results.into_iter().find(|count| *count == 1), Some(1));
+    }
+
+    #[test]
+    fn title_generation_count_check_stops_after_max_attempts_when_plan_mode_never_commits() {
+        let observed_results = [0_i64, 0, 0];
+
+        let should_retry_by_attempt: Vec<bool> = observed_results
+            .iter()
+            .enumerate()
+            .map(|(attempt, count)| {
+                *count != 1 && should_retry_title_generation_count_check(attempt, 3)
+            })
+            .collect();
+
+        assert_eq!(should_retry_by_attempt, vec![true, true, false]);
+        assert!(observed_results.into_iter().all(|count| count != 1));
     }
 
     #[test]
