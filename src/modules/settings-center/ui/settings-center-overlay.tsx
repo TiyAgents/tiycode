@@ -1286,7 +1286,7 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <ModelSelectRow
-          label="Assistant model"
+          label="Auxiliary model"
           description="Supports Explore and Review helper agents, with fallback to Primary when unset."
           providerId={activeProfile.assistantProviderId}
           modelRecordId={activeProfile.assistantModelId}
@@ -1298,8 +1298,8 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <ModelSelectRow
-          label="Lite model"
-          description="Lightweight model for title generation and quick internal summaries."
+          label="Lightweight model"
+          description="Handles title generation and quick internal summaries with a smaller, faster model."
           providerId={activeProfile.liteProviderId}
           modelRecordId={activeProfile.liteModelId}
           availableModels={availableModels}

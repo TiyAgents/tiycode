@@ -16,7 +16,8 @@ use tokio::time::{sleep, Instant};
 
 use crate::core::agent_session::{
     build_session_spec, convert_history_messages, normalize_profile_response_language,
-    normalize_profile_response_style, ProfileResponseStyle, ResolvedModelRole,
+    normalize_profile_response_style, trim_history_to_current_context, ProfileResponseStyle,
+    ResolvedModelRole,
 };
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
 use crate::core::context_compression::summarize_messages;
@@ -56,6 +57,11 @@ struct StartRunOptions {
     history_override: Option<Vec<MessageRecord>>,
     initial_prompt: Option<String>,
     persist_user_message: bool,
+}
+
+struct ContextResetMessageBundle {
+    history_override: Vec<MessageRecord>,
+    persisted_messages: Vec<MessageRecord>,
 }
 
 pub struct AgentRunManager {
@@ -282,14 +288,30 @@ impl AgentRunManager {
                 )
             })?;
         let (profile_id, provider_id, model_id) = extract_run_model_refs(&model_plan_value);
+        let mut approval_metadata = approval_metadata;
+        approval_metadata.state = IMPLEMENTATION_PLAN_APPROVED_STATE.to_string();
+        approval_metadata.approved_action = Some(action.clone());
+
+        plan_metadata.approval_state = IMPLEMENTATION_PLAN_APPROVED_STATE.to_string();
+
         let implementation_prompt =
             build_implementation_handoff_prompt(&plan_metadata, action.clone());
-        let history_override = match action {
-            PlanApprovalAction::ApplyPlan => None,
-            PlanApprovalAction::ApplyPlanWithContextReset => Some(
-                self.build_context_reset_history(thread_id, &plan_message, &model_plan_value)
-                    .await?,
-            ),
+        let (history_override, context_seed_messages) = match action {
+            PlanApprovalAction::ApplyPlan => (None, None),
+            PlanApprovalAction::ApplyPlanWithContextReset => {
+                let message_bundle = self
+                    .build_context_reset_message_bundle(
+                        thread_id,
+                        &plan_message,
+                        &plan_metadata,
+                        &model_plan_value,
+                    )
+                    .await?;
+                (
+                    Some(message_bundle.history_override),
+                    Some(message_bundle.persisted_messages),
+                )
+            }
         };
 
         let result = self
@@ -311,9 +333,10 @@ impl AgentRunManager {
             )
             .await?;
 
-        let mut approval_metadata = approval_metadata;
-        approval_metadata.state = IMPLEMENTATION_PLAN_APPROVED_STATE.to_string();
-        approval_metadata.approved_action = Some(action);
+        if let Some(seed_messages) = context_seed_messages.as_ref() {
+            self.persist_messages(seed_messages).await?;
+        }
+
         message_repo::update_metadata(
             &self.pool,
             &approval_message.id,
@@ -321,7 +344,6 @@ impl AgentRunManager {
         )
         .await?;
 
-        plan_metadata.approval_state = IMPLEMENTATION_PLAN_APPROVED_STATE.to_string();
         message_repo::update_metadata(
             &self.pool,
             &plan_message.id,
@@ -340,7 +362,6 @@ impl AgentRunManager {
         let thread = thread_repo::find_by_id(&self.pool, thread_id)
             .await?
             .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
-        message_repo::delete_by_thread_id(&self.pool, thread_id).await?;
 
         let command_metadata = serde_json::json!({
             "composer": {
@@ -359,14 +380,14 @@ impl AgentRunManager {
                 }
             }
         });
-        let status_metadata = serde_json::json!({
-            "kind": "thread_command_result",
-            "command": "clear",
+        let reset_metadata = serde_json::json!({
+            "kind": "context_reset",
+            "source": "clear",
+            "label": "Context is now reset",
         });
 
-        message_repo::insert(
-            &self.pool,
-            &MessageRecord {
+        let messages = vec![
+            MessageRecord {
                 id: uuid::Uuid::now_v7().to_string(),
                 thread_id: thread_id.to_string(),
                 run_id: None,
@@ -377,23 +398,19 @@ impl AgentRunManager {
                 metadata_json: Some(command_metadata.to_string()),
                 created_at: String::new(),
             },
-        )
-        .await?;
-        message_repo::insert(
-            &self.pool,
-            &MessageRecord {
+            MessageRecord {
                 id: uuid::Uuid::now_v7().to_string(),
                 thread_id: thread_id.to_string(),
                 run_id: None,
                 role: "system".to_string(),
-                content_markdown: "Conversation history cleared. Context is now reset.".to_string(),
-                message_type: "system_message".to_string(),
+                content_markdown: "Context is now reset".to_string(),
+                message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
-                metadata_json: Some(status_metadata.to_string()),
+                metadata_json: Some(reset_metadata.to_string()),
                 created_at: String::new(),
             },
-        )
-        .await?;
+        ];
+        self.persist_messages(&messages).await?;
         thread_repo::touch_active(&self.pool, thread_id).await?;
         thread_repo::update_status(&self.pool, &thread.id, &ThreadStatus::Idle).await?;
         Ok(())
@@ -403,6 +420,7 @@ impl AgentRunManager {
         &self,
         thread_id: &str,
         instructions: Option<String>,
+        model_plan_value: serde_json::Value,
     ) -> Result<(), AppError> {
         if self.cancel_run_if_active(thread_id).await? {
             tracing::info!(thread_id = %thread_id, "Cancelled active run before compacting context");
@@ -412,12 +430,12 @@ impl AgentRunManager {
             .await?
             .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
         let messages = message_repo::list_recent(&self.pool, thread_id, None, 1024).await?;
+        let current_context_messages = trim_history_to_current_context(&messages);
         let workspace_path = workspace_repo::find_by_id(&self.pool, &thread.workspace_id)
             .await?
             .map(|workspace| workspace.canonical_path)
             .unwrap_or_default();
-        let model_plan_value = serde_json::json!({});
-        let model = build_session_spec(
+        let preview_spec = build_session_spec(
             &self.pool,
             "compact-preview",
             thread_id,
@@ -425,11 +443,9 @@ impl AgentRunManager {
             "default",
             &model_plan_value,
         )
-        .await?
-        .model_plan
-        .primary
-        .model;
-        let history = convert_history_messages(&messages, &model);
+        .await?;
+        let model = compact_summary_model(&preview_spec.model_plan);
+        let history = convert_history_messages(&current_context_messages, &model);
         let base_summary = if history.is_empty() {
             "<context_summary>\nNo previous conversation was available to compact.\n</context_summary>".to_string()
         } else {
@@ -440,12 +456,13 @@ impl AgentRunManager {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
         let summary = if let Some(extra) = compact_instructions.as_ref() {
-            format!("{base_summary}\n\n<extra_instructions>\n{}\n</extra_instructions>", extra)
+            format!(
+                "{base_summary}\n\n<extra_instructions>\n{}\n</extra_instructions>",
+                extra
+            )
         } else {
             base_summary
         };
-
-        message_repo::delete_by_thread_id(&self.pool, thread_id).await?;
 
         let command_display_text = if let Some(extra) = compact_instructions.as_ref() {
             format!("/compact {}", extra)
@@ -473,15 +490,16 @@ impl AgentRunManager {
         let summary_metadata = serde_json::json!({
             "kind": "context_summary",
             "source": "compact",
+            "label": "Compacted context summary",
         });
-        let status_metadata = serde_json::json!({
-            "kind": "thread_command_result",
-            "command": "compact",
+        let reset_metadata = serde_json::json!({
+            "kind": "context_reset",
+            "source": "compact",
+            "label": "Context is now reset",
         });
 
-        message_repo::insert(
-            &self.pool,
-            &MessageRecord {
+        let messages = vec![
+            MessageRecord {
                 id: uuid::Uuid::now_v7().to_string(),
                 thread_id: thread_id.to_string(),
                 run_id: None,
@@ -492,38 +510,30 @@ impl AgentRunManager {
                 metadata_json: Some(command_metadata.to_string()),
                 created_at: String::new(),
             },
-        )
-        .await?;
-        message_repo::insert(
-            &self.pool,
-            &MessageRecord {
-                id: uuid::Uuid::now_v7().to_string(),
-                thread_id: thread_id.to_string(),
-                run_id: None,
-                role: "user".to_string(),
-                content_markdown: summary,
-                message_type: "plain_message".to_string(),
-                status: "completed".to_string(),
-                metadata_json: Some(summary_metadata.to_string()),
-                created_at: String::new(),
-            },
-        )
-        .await?;
-        message_repo::insert(
-            &self.pool,
-            &MessageRecord {
+            MessageRecord {
                 id: uuid::Uuid::now_v7().to_string(),
                 thread_id: thread_id.to_string(),
                 run_id: None,
                 role: "system".to_string(),
-                content_markdown: "Conversation compacted. A summary has been kept in context.".to_string(),
-                message_type: "system_message".to_string(),
+                content_markdown: "Context is now reset".to_string(),
+                message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
-                metadata_json: Some(status_metadata.to_string()),
+                metadata_json: Some(reset_metadata.to_string()),
                 created_at: String::new(),
             },
-        )
-        .await?;
+            MessageRecord {
+                id: uuid::Uuid::now_v7().to_string(),
+                thread_id: thread_id.to_string(),
+                run_id: None,
+                role: "system".to_string(),
+                content_markdown: summary,
+                message_type: "summary_marker".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(summary_metadata.to_string()),
+                created_at: String::new(),
+            },
+        ];
+        self.persist_messages(&messages).await?;
         thread_repo::touch_active(&self.pool, thread_id).await?;
         thread_repo::update_status(&self.pool, &thread.id, &ThreadStatus::Idle).await?;
         Ok(())
@@ -630,12 +640,13 @@ impl AgentRunManager {
         Ok(())
     }
 
-    async fn build_context_reset_history(
+    async fn build_context_reset_message_bundle(
         &self,
         thread_id: &str,
         plan_message: &MessageRecord,
+        plan_metadata: &PlanMessageMetadata,
         model_plan_value: &serde_json::Value,
-    ) -> Result<Vec<MessageRecord>, AppError> {
+    ) -> Result<ContextResetMessageBundle, AppError> {
         let model = build_session_spec(
             &self.pool,
             "plan-reset-preview",
@@ -650,25 +661,78 @@ impl AgentRunManager {
         .model;
         let pre_plan_messages =
             message_repo::list_recent(&self.pool, thread_id, Some(&plan_message.id), 1024).await?;
-        let summary = if pre_plan_messages.is_empty() {
+        let current_context_messages = trim_history_to_current_context(&pre_plan_messages);
+        let summary = if current_context_messages.is_empty() {
             "<context_summary>\nNo earlier plain-message context was available before this plan.\n</context_summary>"
                 .to_string()
         } else {
-            let history = convert_history_messages(&pre_plan_messages, &model);
+            let history = convert_history_messages(&current_context_messages, &model);
             summarize_messages(&history)
         };
 
-        Ok(vec![MessageRecord {
+        let reset_message = MessageRecord {
             id: uuid::Uuid::now_v7().to_string(),
             thread_id: thread_id.to_string(),
             run_id: None,
-            role: "user".to_string(),
-            content_markdown: summary,
-            message_type: "plain_message".to_string(),
+            role: "system".to_string(),
+            content_markdown: "Context is now reset".to_string(),
+            message_type: "summary_marker".to_string(),
             status: "completed".to_string(),
-            metadata_json: None,
+            metadata_json: Some(
+                serde_json::json!({
+                    "kind": "context_reset",
+                    "source": "plan_approval",
+                    "label": "Context is now reset",
+                })
+                .to_string(),
+            ),
             created_at: String::new(),
-        }])
+        };
+        let summary_message = MessageRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            thread_id: thread_id.to_string(),
+            run_id: None,
+            role: "system".to_string(),
+            content_markdown: summary,
+            message_type: "summary_marker".to_string(),
+            status: "completed".to_string(),
+            metadata_json: Some(
+                serde_json::json!({
+                    "kind": "context_summary",
+                    "source": "plan_approval",
+                    "label": "Historical context summary",
+                })
+                .to_string(),
+            ),
+            created_at: String::new(),
+        };
+        let approved_plan_message = MessageRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            thread_id: thread_id.to_string(),
+            run_id: None,
+            role: "assistant".to_string(),
+            content_markdown: crate::core::plan_checkpoint::plan_markdown(plan_metadata),
+            message_type: "plan".to_string(),
+            status: "completed".to_string(),
+            metadata_json: serde_json::to_string(plan_metadata).ok(),
+            created_at: String::new(),
+        };
+
+        let history_override = vec![summary_message.clone(), approved_plan_message.clone()];
+        let persisted_messages = vec![reset_message, summary_message, approved_plan_message];
+
+        Ok(ContextResetMessageBundle {
+            history_override,
+            persisted_messages,
+        })
+    }
+
+    async fn persist_messages(&self, messages: &[MessageRecord]) -> Result<(), AppError> {
+        for message in messages {
+            message_repo::insert(&self.pool, message).await?;
+        }
+
+        Ok(())
     }
 
     async fn find_latest_pending_plan_approval(
@@ -1109,7 +1173,7 @@ impl AgentRunManager {
         };
         thread_repo::update_status(&self.pool, &thread_id, &thread_status).await?;
 
-        if status == "completed" && run_mode == "default" {
+        if status == "completed" {
             self.spawn_thread_title_generation(
                 run_id.to_string(),
                 thread_id,
@@ -1244,13 +1308,32 @@ fn build_implementation_handoff_prompt(
             "The user approved this plan after clearing the planning conversation from the implementation context."
         }
     };
-    let plan_markdown = crate::core::plan_checkpoint::plan_markdown(metadata);
+    match action {
+        PlanApprovalAction::ApplyPlan => {
+            let plan_markdown = crate::core::plan_checkpoint::plan_markdown(metadata);
 
-    format!(
-        "Implementation handoff:\n- {action_note}\n- Plan revision: {}\n- Treat the approved plan below as the implementation baseline.\n- If the plan turns out to be invalid or incomplete, pause and return to planning before making a different change.\n\nApproved plan:\n{}",
-        metadata.artifact.plan_revision,
-        plan_markdown
-    )
+            format!(
+                "Implementation handoff:\n- {action_note}\n- Plan revision: {}\n- Treat the approved plan below as the implementation baseline.\n- If the plan turns out to be invalid or incomplete, pause and return to planning before making a different change.\n\nApproved plan:\n{}",
+                metadata.artifact.plan_revision,
+                plan_markdown
+            )
+        }
+        PlanApprovalAction::ApplyPlanWithContextReset => format!(
+            "Implementation handoff:\n- {action_note}\n- Plan revision: {}\n- The reset context already includes a historical summary and the approved plan.\n- Treat the approved plan in context as the implementation baseline.\n- If the plan turns out to be invalid or incomplete, pause and return to planning before making a different change.",
+            metadata.artifact.plan_revision,
+        ),
+    }
+}
+
+fn compact_summary_model(
+    model_plan: &crate::core::agent_session::ResolvedRuntimeModelPlan,
+) -> tiy_core::types::Model {
+    model_plan
+        .auxiliary
+        .as_ref()
+        .unwrap_or(&model_plan.primary)
+        .model
+        .clone()
 }
 
 async fn maybe_generate_thread_title(
@@ -1666,9 +1749,12 @@ mod tests {
         );
 
         assert!(prompt.contains("Plan revision: 4"));
-        assert!(prompt.contains("Approved plan:"));
-        assert!(prompt.contains("# Approved plan"));
-        assert!(prompt.contains("Apply the checkpointed implementation plan."));
+        assert!(prompt.contains(
+            "The reset context already includes a historical summary and the approved plan."
+        ));
+        assert!(
+            prompt.contains("Treat the approved plan in context as the implementation baseline.")
+        );
         assert!(prompt.contains("after clearing the planning conversation"));
     }
 }

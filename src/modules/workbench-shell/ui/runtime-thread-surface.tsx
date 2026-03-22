@@ -386,6 +386,23 @@ function parseCommandComposerMetadata(value: unknown): {
   };
 }
 
+function parseSummaryMarkerMetadata(value: unknown): {
+  kind: string | null;
+  label: string | null;
+  source: string | null;
+} | null {
+  const record = asObjectRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  return {
+    kind: readStringField(record, "kind"),
+    label: readStringField(record, "label"),
+    source: readStringField(record, "source"),
+  };
+}
+
 function parseClarifyPrompt(value: unknown): ClarifyPrompt | null {
   const record = asObjectRecord(value);
   if (!record) {
@@ -671,8 +688,56 @@ function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
   }
 }
 
+function getLatestContextResetMarker(snapshot: ThreadSnapshotDto) {
+  for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
+    const message = snapshot.messages[index];
+    const marker = parseSummaryMarkerMetadata(message.metadata);
+    if (message.messageType === "summary_marker" && marker?.kind === "context_reset") {
+      return message;
+    }
+  }
+
+  return null;
+}
+
+function hasVisibleHistoryForRun(
+  snapshot: ThreadSnapshotDto,
+  runId: string,
+  afterCreatedAt?: string | null,
+) {
+  return snapshot.messages.some(
+    (message) =>
+      message.runId === runId
+      && message.status !== "discarded"
+      && (!afterCreatedAt || message.createdAt > afterCreatedAt),
+  );
+}
+
 function getLatestVisibleRun(snapshot: ThreadSnapshotDto) {
-  return snapshot.activeRun ?? snapshot.latestRun;
+  if (snapshot.activeRun) {
+    return snapshot.activeRun;
+  }
+
+  if (!snapshot.latestRun) {
+    return null;
+  }
+
+  const latestResetMarker = getLatestContextResetMarker(snapshot);
+  if (!latestResetMarker) {
+    return snapshot.latestRun;
+  }
+
+  if (snapshot.latestRun.startedAt > latestResetMarker.createdAt) {
+    return snapshot.latestRun;
+  }
+
+  return hasVisibleHistoryForRun(
+    snapshot,
+    snapshot.latestRun.id,
+    latestResetMarker.createdAt,
+  )
+    ? snapshot.latestRun
+    : null;
 }
 
 function mapRunSummaryToContextUsage(run: RunSummaryDto | null): ThreadContextUsage | null {
@@ -2645,6 +2710,7 @@ export function RuntimeThreadSurface({
     if (submission.kind === "command" && submission.command?.behavior === "clear") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, false);
       try {
+        onContextUsageChange?.(null);
         await threadClearContext(threadId);
         await loadSnapshot();
       } finally {
@@ -2656,7 +2722,12 @@ export function RuntimeThreadSurface({
     if (submission.kind === "command" && submission.command?.behavior === "compact") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, false);
       try {
-        await threadCompactContext(threadId, submission.command.argumentsText || null);
+        onContextUsageChange?.(null);
+        await threadCompactContext(
+          threadId,
+          submission.command.argumentsText || null,
+          modelPlan,
+        );
         await loadSnapshot();
       } finally {
         submittingRef.current = false;
@@ -2683,7 +2754,7 @@ export function RuntimeThreadSurface({
     } finally {
       submittingRef.current = false;
     }
-  }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, providers, runState, selectedRunMode, threadId]);
+  }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, loadSnapshot, onContextUsageChange, providers, runState, selectedRunMode, threadId]);
 
   const respondToClarify = useCallback(async (
     tool: SurfaceToolEntry,
@@ -2934,6 +3005,7 @@ export function RuntimeThreadSurface({
 
     try {
       await streamRef.current.executeApprovedPlan(threadId, messageId, action);
+      await loadSnapshot();
       setMessages((current) => {
         const approvalPrompt = parseApprovalPromptMetadata(
           current.find((message) => message.id === messageId)?.metadata,
@@ -2971,7 +3043,7 @@ export function RuntimeThreadSurface({
     } finally {
       setApprovingPlanMessageId((current) => (current === messageId ? null : current));
     }
-  }, [showThinkingPlaceholder, threadId]);
+  }, [loadSnapshot, showThinkingPlaceholder, threadId]);
 
   const renderToolEntry = useCallback((tool: SurfaceToolEntry, key: string, inset = false) => {
     const clarifyPrompt = parseClarifyPrompt(tool.input);
@@ -3453,6 +3525,42 @@ export function RuntimeThreadSurface({
 
               if (entry.kind === "message") {
                 const { message } = entry;
+                const summaryMarker = message.messageType === "summary_marker"
+                  ? parseSummaryMarkerMetadata(message.metadata)
+                  : null;
+
+                if (message.messageType === "summary_marker" && summaryMarker?.kind === "context_reset") {
+                  return (
+                    <div className={spacingClass} key={entry.key}>
+                      <div className="flex items-center gap-3 py-2">
+                        <div className="h-px flex-1 bg-app-border/28" />
+                        <span className="rounded-full border border-app-border/24 bg-app-surface/40 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.08em] text-app-subtle">
+                          {summaryMarker.label ?? "Context is now reset"}
+                        </span>
+                        <div className="h-px flex-1 bg-app-border/28" />
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (message.messageType === "summary_marker" && summaryMarker?.kind === "context_summary") {
+                  return (
+                    <div className={spacingClass} key={entry.key}>
+                      <Message className="max-w-full" from="assistant">
+                        <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                          <div className="rounded-2xl border border-app-border/24 bg-app-surface/18 px-4 py-3">
+                            <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-app-subtle">
+                              {summaryMarker.label ?? "Compacted context summary"}
+                            </div>
+                            <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-app-muted">
+                              {message.content}
+                            </div>
+                          </div>
+                        </MessageContent>
+                      </Message>
+                    </div>
+                  );
+                }
 
                 if (message.messageType === "reasoning") {
                   return (

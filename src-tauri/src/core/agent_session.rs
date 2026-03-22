@@ -152,11 +152,9 @@ pub async fn build_session_spec(
     let raw_plan: RuntimeModelPlan =
         serde_json::from_value(model_plan_value.clone()).unwrap_or_default();
     let resolved_plan = resolve_model_plan(pool, raw_plan.clone()).await?;
-    let history_messages = message_repo::list_recent(pool, thread_id, None, MESSAGE_HISTORY_LIMIT)
-        .await?
-        .into_iter()
-        .filter(|message| message.status != "discarded")
-        .collect();
+    let recent_messages =
+        message_repo::list_recent(pool, thread_id, None, MESSAGE_HISTORY_LIMIT).await?;
+    let history_messages = trim_history_to_current_context(&recent_messages);
     let system_prompt = build_system_prompt(pool, &raw_plan, workspace_path, run_mode).await?;
 
     Ok(AgentSessionSpec {
@@ -170,6 +168,20 @@ pub async fn build_session_spec(
         model_plan: resolved_plan,
         initial_prompt: None,
     })
+}
+
+pub(crate) fn trim_history_to_current_context(messages: &[MessageRecord]) -> Vec<MessageRecord> {
+    let start_index = messages
+        .iter()
+        .rposition(is_context_reset_marker)
+        .map(|index| index + 1)
+        .unwrap_or(0);
+
+    messages[start_index..]
+        .iter()
+        .filter(|message| message.status != "discarded")
+        .cloned()
+        .collect()
 }
 
 pub struct AgentSession {
@@ -1389,6 +1401,14 @@ pub(crate) fn convert_history_messages(
             "plan" if message.role == "assistant" => Some(AgentMessage::Assistant(
                 assistant_message_from_text(&format_plan_history_message(message), model),
             )),
+            "summary_marker" if is_context_summary_marker(message) => {
+                let summary = message.content_markdown.trim();
+                if summary.is_empty() {
+                    None
+                } else {
+                    Some(AgentMessage::User(UserMessage::text(summary.to_string())))
+                }
+            }
             _ => None,
         })
         .collect()
@@ -1416,6 +1436,28 @@ fn command_effective_prompt_from_metadata(raw: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+fn is_context_reset_marker(message: &MessageRecord) -> bool {
+    message.message_type == "summary_marker"
+        && metadata_kind_matches(message.metadata_json.as_deref(), "context_reset")
+}
+
+fn is_context_summary_marker(message: &MessageRecord) -> bool {
+    message.message_type == "summary_marker"
+        && metadata_kind_matches(message.metadata_json.as_deref(), "context_summary")
+}
+
+fn metadata_kind_matches(raw: Option<&str>, expected: &str) -> bool {
+    raw.and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| {
+            value
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .as_deref()
+        == Some(expected)
 }
 
 fn format_plan_history_message(message: &MessageRecord) -> String {
@@ -2261,9 +2303,9 @@ mod tests {
         normalize_profile_response_language, normalize_profile_response_style,
         plan_mode_missing_checkpoint_error, resolve_helper_model_role, resolve_helper_profile,
         response_style_system_instruction, run_mode_prompt_body, runtime_security_config,
-        runtime_tools_for_profile, standard_tool_timeout, ProfileResponseStyle, ResolvedModelRole,
-        ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
-        PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
+        runtime_tools_for_profile, standard_tool_timeout, trim_history_to_current_context,
+        ProfileResponseStyle, ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan,
+        DEFAULT_FULL_TOOL_PROFILE, PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
         STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
@@ -3118,6 +3160,121 @@ mod tests {
         assert_eq!(
             message_text(&history[0]),
             "Generate or update a file named AGENTS.md."
+        );
+    }
+
+    #[test]
+    fn trim_history_to_current_context_keeps_only_messages_after_latest_reset() {
+        let messages = vec![
+            MessageRecord {
+                id: "msg-before".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-before".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Old assistant reply".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-reset".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "system".to_string(),
+                content_markdown: "Context is now reset".to_string(),
+                message_type: "summary_marker".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({
+                        "kind": "context_reset",
+                    })
+                    .to_string(),
+                ),
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-summary".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "system".to_string(),
+                content_markdown: "<context_summary>\nCarry this forward.\n</context_summary>"
+                    .to_string(),
+                message_type: "summary_marker".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({
+                        "kind": "context_summary",
+                    })
+                    .to_string(),
+                ),
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-after".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "New request".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                created_at: String::new(),
+            },
+        ];
+
+        let trimmed = trim_history_to_current_context(&messages);
+
+        assert_eq!(trimmed.len(), 2);
+        assert_eq!(trimmed[0].id, "msg-summary");
+        assert_eq!(trimmed[1].id, "msg-after");
+    }
+
+    #[test]
+    fn convert_history_messages_keeps_context_summary_but_skips_reset_markers() {
+        let messages = vec![
+            MessageRecord {
+                id: "msg-reset".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "system".to_string(),
+                content_markdown: "Context is now reset".to_string(),
+                message_type: "summary_marker".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({
+                        "kind": "context_reset",
+                    })
+                    .to_string(),
+                ),
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-summary".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "system".to_string(),
+                content_markdown: "<context_summary>\nCarry this forward.\n</context_summary>"
+                    .to_string(),
+                message_type: "summary_marker".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({
+                        "kind": "context_summary",
+                    })
+                    .to_string(),
+                ),
+                created_at: String::new(),
+            },
+        ];
+
+        let history =
+            convert_history_messages(&messages, &sample_resolved_model_role("primary").model);
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            message_text(&history[0]),
+            "<context_summary>\nCarry this forward.\n</context_summary>"
         );
     }
 }

@@ -183,7 +183,10 @@ pub async fn thread_clear_context(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<(), AppError> {
-    state.agent_run_manager.clear_thread_context(&thread_id).await
+    state
+        .agent_run_manager
+        .clear_thread_context(&thread_id)
+        .await
 }
 
 #[tauri::command]
@@ -191,10 +194,11 @@ pub async fn thread_compact_context(
     state: State<'_, AppState>,
     thread_id: String,
     instructions: Option<String>,
+    model_plan: Option<serde_json::Value>,
 ) -> Result<(), AppError> {
     state
         .agent_run_manager
-        .compact_thread_context(&thread_id, instructions)
+        .compact_thread_context(&thread_id, instructions, model_plan.unwrap_or_default())
         .await
 }
 

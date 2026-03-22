@@ -490,11 +490,13 @@ export async function threadClearContext(threadId: string): Promise<void> {
 export async function threadCompactContext(
   threadId: string,
   instructions?: string | null,
+  modelPlan?: RunModelPlanDto | null,
 ): Promise<void> {
   requireTauri("thread_compact_context");
   return invoke("thread_compact_context", {
     threadId,
     instructions: instructions ?? null,
+    modelPlan: modelPlan ?? null,
   });
 }
 
