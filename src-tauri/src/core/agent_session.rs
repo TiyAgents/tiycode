@@ -47,6 +47,8 @@ const WORKSPACE_INSTRUCTION_FILE_NAMES: &[&str] = &["AGENTS.md", "CLAUDE.md", "A
 const WORKSPACE_INSTRUCTION_MAX_CHARS: usize = 12_800;
 const SHELL_GUIDE_TOOL_NAMES: &[&str] = &["python3", "python", "node", "npm", "uv", "git", "rg"];
 const CLARIFY_TOOL_NAME: &str = "clarify";
+const PLAN_MODE_MISSING_CHECKPOINT_ERROR: &str =
+    "Plan mode requires publishing a plan with update_plan before the run can finish.";
 
 #[derive(Debug, Clone)]
 struct WorkspaceInstructionSnippet {
@@ -280,6 +282,14 @@ impl AgentSession {
                 } else if self.checkpoint_requested.load(Ordering::SeqCst) {
                     let _ = self.event_tx.send(ThreadStreamEvent::RunCheckpointed {
                         run_id: self.spec.run_id.clone(),
+                    });
+                } else if let Some(error) = plan_mode_missing_checkpoint_error(
+                    &self.spec.run_mode,
+                    self.checkpoint_requested.load(Ordering::SeqCst),
+                ) {
+                    let _ = self.event_tx.send(ThreadStreamEvent::RunFailed {
+                        run_id: self.spec.run_id.clone(),
+                        error: error.to_string(),
                     });
                 } else {
                     let _ = self.event_tx.send(ThreadStreamEvent::RunCompleted {
@@ -1808,6 +1818,9 @@ fn run_mode_prompt_body(run_mode: &str) -> String {
 - Use agent_explore for read-only investigation and current-state analysis.\n\
 - If key implementation details are still unclear, use clarify for one concise clarifying question before publishing a plan. Offer 2-3 short options when helpful, then wait for the answer before continuing.\n\
 - Use update_plan only for the formal pre-implementation plan, not for general analysis or explanation.\n\
+- For implementation-oriented requests, a prose answer alone does not complete the run.\n\
+- Before the run can end, you must call update_plan to publish the implementation plan.\n\
+- If you still need a requirement, preference, or decision, use clarify instead of finishing without a plan.\n\
 - Do not include unresolved questions or TODO-style placeholders inside update_plan. Publish the plan only after the open decisions needed for implementation have been confirmed.\n\
 - Once you publish a plan with update_plan, the run will pause for user approval before any implementation can begin.\n\
 - Do NOT use edit, write, or shell unless the user explicitly requests execution.\n\
@@ -1817,9 +1830,21 @@ fn run_mode_prompt_body(run_mode: &str) -> String {
             "Default execution mode is active.\n\
 - Use the configured tool profile, subject to policy, approvals, and workspace boundaries.\n\
 - {TERM_PANEL_USAGE_NOTE}\n\
+- If a requirement, preference, or execution choice is still unclear, use clarify instead of guessing before you continue.\n\
 - If the task is complex enough that implementation should pause for review first, publish an implementation plan with update_plan before making changes.\n\
 - Prefer the smallest sufficient action that moves the task forward."
         ),
+    }
+}
+
+fn plan_mode_missing_checkpoint_error(
+    run_mode: &str,
+    checkpoint_requested: bool,
+) -> Option<&'static str> {
+    if run_mode == "plan" && !checkpoint_requested {
+        Some(PLAN_MODE_MISSING_CHECKPOINT_ERROR)
+    } else {
+        None
     }
 }
 
@@ -2210,10 +2235,11 @@ mod tests {
         collect_workspace_instruction_snippet, convert_history_messages,
         final_response_structure_system_instruction, handle_agent_event,
         normalize_profile_response_language, normalize_profile_response_style,
-        resolve_helper_model_role, resolve_helper_profile, response_style_system_instruction,
-        run_mode_prompt_body, runtime_security_config, runtime_tools_for_profile,
-        standard_tool_timeout, ProfileResponseStyle, ResolvedModelRole, ResolvedRuntimeModelPlan,
-        RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE,
+        plan_mode_missing_checkpoint_error, resolve_helper_model_role, resolve_helper_profile,
+        response_style_system_instruction, run_mode_prompt_body, runtime_security_config,
+        runtime_tools_for_profile, standard_tool_timeout, ProfileResponseStyle, ResolvedModelRole,
+        ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
+        PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
         STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
@@ -2881,6 +2907,16 @@ mod tests {
     }
 
     #[test]
+    fn clarify_tool_is_available_in_both_runtime_profiles() {
+        for profile in [DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE] {
+            let tools = runtime_tools_for_profile(profile);
+            let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+
+            assert!(tool_names.contains(&"clarify"));
+        }
+    }
+
+    #[test]
     fn update_plan_tool_schema_no_longer_exposes_open_questions() {
         let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
         let update_plan = tools
@@ -2924,9 +2960,28 @@ mod tests {
         let prompt = run_mode_prompt_body("plan");
 
         assert!(prompt.contains("clarify"));
+        assert!(prompt.contains("a prose answer alone does not complete the run"));
+        assert!(prompt.contains("must call update_plan"));
         assert!(prompt.contains("Do not include unresolved questions"));
         assert!(prompt.contains("Once you publish a plan with update_plan"));
         assert!(prompt.contains("pause for user approval"));
+    }
+
+    #[test]
+    fn default_mode_prompt_mentions_clarify_for_missing_information() {
+        let prompt = run_mode_prompt_body("default");
+
+        assert!(prompt.contains("use clarify instead of guessing"));
+    }
+
+    #[test]
+    fn plan_mode_requires_checkpoint_before_successful_completion() {
+        assert_eq!(
+            plan_mode_missing_checkpoint_error("plan", false),
+            Some(PLAN_MODE_MISSING_CHECKPOINT_ERROR)
+        );
+        assert_eq!(plan_mode_missing_checkpoint_error("plan", true), None);
+        assert_eq!(plan_mode_missing_checkpoint_error("default", false), None);
     }
 
     #[test]
