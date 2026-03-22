@@ -110,10 +110,7 @@ const BUILTIN_COMMANDS: ReadonlyArray<ComposerCommandDescriptor> = [
     path: "/compact",
     description: "清空历史但保留摘要在上下文中",
     argumentHint: "",
-    prompt: [
-      "Compact the current conversation history.",
-      "Preserve a concise summary in context before clearing prior turns.",
-    ].join("\n"),
+    prompt: "Compact the current conversation history and preserve a continuation summary before clearing prior turns.",
     behavior: "compact",
     smartSend: "always",
   },

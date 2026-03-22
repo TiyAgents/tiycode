@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
+use tiy_core::agent::AgentMessage;
 use tiy_core::provider::get_provider;
 use tiy_core::types::{
     Context as TiyContext, Message as TiyMessage, OnPayloadFn, StopReason,
@@ -36,8 +37,11 @@ use crate::model::thread::{MessageRecord, ThreadStatus};
 use crate::persistence::repo::{message_repo, profile_repo, run_repo, thread_repo, workspace_repo};
 
 const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(12);
+const COMPACT_SUMMARY_TIMEOUT: Duration = Duration::from_secs(20);
 const TITLE_GENERATION_MAX_TOKENS: u32 = 32;
+const COMPACT_SUMMARY_MAX_TOKENS: u32 = 700;
 const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
+const COMPACT_SUMMARY_CONTEXT_MAX_CHARS: usize = 18_000;
 const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
 const TITLE_GENERATION_COUNT_CHECK_RETRY_DELAY_MS: u64 = 50;
 const TITLE_GENERATION_COUNT_CHECK_MAX_ATTEMPTS: usize = 3;
@@ -446,23 +450,18 @@ impl AgentRunManager {
         .await?;
         let model = compact_summary_model(&preview_spec.model_plan);
         let history = convert_history_messages(&current_context_messages, &model);
-        let base_summary = if history.is_empty() {
-            "<context_summary>\nNo previous conversation was available to compact.\n</context_summary>".to_string()
-        } else {
-            summarize_messages(&history)
-        };
         let compact_instructions = instructions
             .as_ref()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-        let summary = if let Some(extra) = compact_instructions.as_ref() {
-            format!(
-                "{base_summary}\n\n<extra_instructions>\n{}\n</extra_instructions>",
-                extra
+        let summary = self
+            .build_compact_summary(
+                thread_id,
+                &history,
+                preview_spec.model_plan.lightweight.as_ref(),
+                compact_instructions.as_deref(),
             )
-        } else {
-            base_summary
-        };
+            .await;
 
         let command_display_text = if let Some(extra) = compact_instructions.as_ref() {
             format!("/compact {}", extra)
@@ -537,6 +536,51 @@ impl AgentRunManager {
         thread_repo::touch_active(&self.pool, thread_id).await?;
         thread_repo::update_status(&self.pool, &thread.id, &ThreadStatus::Idle).await?;
         Ok(())
+    }
+
+    async fn build_compact_summary(
+        &self,
+        thread_id: &str,
+        history: &[AgentMessage],
+        lightweight_model_role: Option<&ResolvedModelRole>,
+        instructions: Option<&str>,
+    ) -> String {
+        let fallback_summary = build_fallback_compact_summary(history, instructions);
+
+        if history.is_empty() {
+            return fallback_summary;
+        }
+
+        let Some(model_role) = lightweight_model_role else {
+            tracing::info!(
+                thread_id = %thread_id,
+                "compact summary falling back to heuristic summary: no lightweight model configured"
+            );
+            return fallback_summary;
+        };
+
+        match generate_compact_summary(model_role, history, instructions).await {
+            Ok(Some(summary)) => summary,
+            Ok(None) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    provider_id = %model_role.provider_id,
+                    model_id = %model_role.model_id,
+                    "compact summary generation returned empty result, falling back to heuristic summary"
+                );
+                fallback_summary
+            }
+            Err(error) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    provider_id = %model_role.provider_id,
+                    model_id = %model_role.model_id,
+                    error = %error,
+                    "compact summary generation failed, falling back to heuristic summary"
+                );
+                fallback_summary
+            }
+        }
     }
 
     pub async fn subscribe_run(
@@ -1334,6 +1378,319 @@ fn compact_summary_model(
         .clone()
 }
 
+fn build_fallback_compact_summary(history: &[AgentMessage], instructions: Option<&str>) -> String {
+    let base_summary = if history.is_empty() {
+        "<context_summary>\nNo previous conversation was available to compact.\n</context_summary>".to_string()
+    } else {
+        summarize_messages(history)
+    };
+
+    append_compact_instructions(base_summary, instructions)
+}
+
+fn build_compact_summary_system_prompt() -> String {
+    [
+        "You compress conversation state so another model can continue after context reset.",
+        "Return only one compact summary block using the exact XML-style wrapper below.",
+        "",
+        "Requirements:",
+        "- Preserve the user's current goal and latest requested outcome.",
+        "- Preserve important constraints, preferences, and decisions.",
+        "- List work already completed and important findings.",
+        "- List the most relevant remaining tasks, open questions, or risks.",
+        "- Mention key files, components, commands, tools, or errors only when they matter for continuation.",
+        "- Be factual and concise. Do not invent details.",
+        "- Do not address the user directly. Do not include greetings or commentary.",
+        "- Prefer short bullet lists under clear section labels.",
+        "- Keep the summary self-contained and suitable for direct insertion into future model context.",
+        "",
+        "Output rules:",
+        "- Start with <context_summary> on its own line.",
+        "- End with </context_summary> on its own line.",
+        "- Do not output any text before or after the wrapper.",
+        "",
+        "Example output:",
+        "<context_summary>",
+        "- User goal: Stabilize /compact summary formatting.",
+        "- Completed: Checked current local summarization flow and wrapper handling.",
+        "- Remaining: Move compact rules into system prompt and keep output parsing robust.",
+        "</context_summary>",
+    ]
+    .join("\n")
+}
+
+fn build_compact_summary_messages(
+    history: &[AgentMessage],
+    instructions: Option<&str>,
+) -> Vec<TiyMessage> {
+    let mut messages = Vec::new();
+
+    if let Some(instructions) = instructions.map(str::trim).filter(|value| !value.is_empty()) {
+        messages.push(TiyMessage::User(UserMessage::text(format!(
+            "Additional user instructions for this compact:\n{instructions}"
+        ))));
+    }
+
+    messages.push(TiyMessage::User(UserMessage::text(format!(
+        "Conversation history to compact:\n{}",
+        render_compact_summary_history(history)
+    ))));
+
+    messages
+}
+
+async fn generate_compact_summary(
+    model_role: &ResolvedModelRole,
+    history: &[AgentMessage],
+    instructions: Option<&str>,
+) -> Result<Option<String>, AppError> {
+    let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
+        AppError::recoverable(
+            ErrorSource::Settings,
+            "settings.compact_summary.provider_missing",
+            format!(
+                "Provider type '{:?}' is not registered for lightweight compact summary generation.",
+                model_role.model.provider
+            ),
+        )
+    })?;
+
+    let context = TiyContext {
+        system_prompt: Some(build_compact_summary_system_prompt()),
+        messages: build_compact_summary_messages(history, instructions),
+        tools: None,
+    };
+
+    let options = TiyStreamOptions {
+        api_key: model_role.api_key.clone(),
+        max_tokens: Some(COMPACT_SUMMARY_MAX_TOKENS),
+        on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
+        ..TiyStreamOptions::default()
+    };
+
+    let completion = provider
+        .stream(&model_role.model, &context, options)
+        .try_result(COMPACT_SUMMARY_TIMEOUT)
+        .await;
+
+    let message = match completion {
+        Some(message) => message,
+        None => return Ok(None),
+    };
+
+    if message.stop_reason == StopReason::Error {
+        let detail = message
+            .error_message
+            .clone()
+            .unwrap_or_else(|| "lightweight compact summary generation failed".to_string());
+        return Err(AppError::recoverable(
+            ErrorSource::Settings,
+            "settings.compact_summary.failed",
+            detail,
+        ));
+    }
+
+    Ok(normalize_compact_summary(message.text_content(), instructions))
+}
+
+fn render_compact_summary_history(history: &[AgentMessage]) -> String {
+    let mut rendered = String::new();
+
+    for message in history {
+        match message {
+            AgentMessage::User(user) => {
+                let text = user_message_to_text(user);
+                if text.is_empty() {
+                    continue;
+                }
+                rendered.push_str("[user]\n");
+                rendered.push_str(&text);
+                rendered.push_str("\n\n");
+            }
+            AgentMessage::Assistant(assistant) => {
+                let text = assistant_message_to_text(assistant);
+                if text.is_empty() {
+                    continue;
+                }
+                rendered.push_str("[assistant]\n");
+                rendered.push_str(&text);
+                rendered.push_str("\n\n");
+            }
+            AgentMessage::ToolResult(tool_result) => {
+                let text = tool_result_to_text(tool_result);
+                if text.is_empty() {
+                    continue;
+                }
+                rendered.push_str("[tool_result]");
+                if !tool_result.tool_name.is_empty() {
+                    rendered.push(' ');
+                    rendered.push_str(&tool_result.tool_name);
+                }
+                rendered.push('\n');
+                rendered.push_str(&text);
+                rendered.push_str("\n\n");
+            }
+            AgentMessage::Custom { data, .. } => {
+                let text = truncate_chars(&collapse_whitespace(&data.to_string()), 600);
+                if text.is_empty() {
+                    continue;
+                }
+                rendered.push_str("[custom]\n");
+                rendered.push_str(&text);
+                rendered.push_str("\n\n");
+            }
+        }
+
+        if rendered.chars().count() >= COMPACT_SUMMARY_CONTEXT_MAX_CHARS {
+            break;
+        }
+    }
+
+    truncate_chars(&rendered, COMPACT_SUMMARY_CONTEXT_MAX_CHARS)
+}
+
+fn user_message_to_text(user: &UserMessage) -> String {
+    match &user.content {
+        tiy_core::types::UserContent::Text(text) => truncate_chars(text.trim(), 1_200),
+        tiy_core::types::UserContent::Blocks(blocks) => {
+            let mut parts = Vec::new();
+            for block in blocks {
+                match block {
+                    tiy_core::types::ContentBlock::Text(text) => {
+                        let trimmed = text.text.trim();
+                        if !trimmed.is_empty() {
+                            parts.push(trimmed.to_string());
+                        }
+                    }
+                    tiy_core::types::ContentBlock::Image(_) => parts.push("[image]".to_string()),
+                    _ => {}
+                }
+            }
+            truncate_chars(&parts.join("\n"), 1_200)
+        }
+    }
+}
+
+fn assistant_message_to_text(assistant: &tiy_core::types::AssistantMessage) -> String {
+    let mut parts = Vec::new();
+    for block in &assistant.content {
+        match block {
+            tiy_core::types::ContentBlock::Text(text) => {
+                let trimmed = text.text.trim();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed.to_string());
+                }
+            }
+            tiy_core::types::ContentBlock::Thinking(thinking) => {
+                let trimmed = thinking.thinking.trim();
+                if !trimmed.is_empty() {
+                    parts.push(format!("[thinking] {trimmed}"));
+                }
+            }
+            tiy_core::types::ContentBlock::ToolCall(tool_call) => {
+                parts.push(format!(
+                    "[tool_call] {} {}",
+                    tool_call.name,
+                    truncate_chars(&collapse_whitespace(&tool_call.arguments.to_string()), 300)
+                ));
+            }
+            tiy_core::types::ContentBlock::Image(_) => parts.push("[image]".to_string()),
+        }
+    }
+    truncate_chars(&parts.join("\n"), 1_500)
+}
+
+fn tool_result_to_text(tool_result: &tiy_core::types::ToolResultMessage) -> String {
+    let mut parts = Vec::new();
+    for block in &tool_result.content {
+        if let tiy_core::types::ContentBlock::Text(text) = block {
+            let trimmed = text.text.trim();
+            if !trimmed.is_empty() {
+                parts.push(trimmed.to_string());
+            }
+        }
+    }
+    truncate_chars(&parts.join("\n"), 1_200)
+}
+
+fn normalize_compact_summary(raw: String, instructions: Option<&str>) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let summary = extract_context_summary_block(trimmed).unwrap_or_else(|| {
+        let normalized_body = extract_context_summary_body(trimmed).unwrap_or_else(|| trimmed.to_string());
+        format!("<context_summary>\n{}\n</context_summary>", normalized_body.trim())
+    });
+
+    Some(append_compact_instructions(summary, instructions))
+}
+
+fn extract_context_summary_block(raw: &str) -> Option<String> {
+    let start_tag = "<context_summary>";
+    let end_tag = "</context_summary>";
+    let start = raw.find(start_tag)?;
+    let content_start = start + start_tag.len();
+    let relative_end = raw[content_start..].find(end_tag)?;
+    let end = content_start + relative_end + end_tag.len();
+    let candidate = raw[start..end].trim();
+
+    if candidate.is_empty() {
+        return None;
+    }
+
+    Some(candidate.to_string())
+}
+
+fn extract_context_summary_body(raw: &str) -> Option<String> {
+    let start_tag = "<context_summary>";
+    let end_tag = "</context_summary>";
+
+    if let Some(block) = extract_context_summary_block(raw) {
+        let content = block
+            .trim_start_matches(start_tag)
+            .trim_end_matches(end_tag)
+            .trim();
+        return if content.is_empty() {
+            None
+        } else {
+            Some(content.to_string())
+        };
+    }
+
+    if let Some(start) = raw.find(start_tag) {
+        let content = raw[start + start_tag.len()..].trim();
+        return if content.is_empty() {
+            None
+        } else {
+            Some(content.to_string())
+        };
+    }
+
+    if let Some(end) = raw.find(end_tag) {
+        let content = raw[..end].trim();
+        return if content.is_empty() {
+            None
+        } else {
+            Some(content.to_string())
+        };
+    }
+
+    None
+}
+
+fn append_compact_instructions(base_summary: String, instructions: Option<&str>) -> String {
+    let Some(extra) = instructions.map(str::trim).filter(|value| !value.is_empty()) else {
+        return base_summary;
+    };
+
+    format!(
+        "{base_summary}\n\n<extra_instructions>\n{}\n</extra_instructions>",
+        extra
+    )
+}
+
 async fn maybe_generate_thread_title(
     pool: &SqlitePool,
     run_id: &str,
@@ -1690,7 +2047,9 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_implementation_handoff_prompt, build_title_prompt, collapse_whitespace,
+        append_compact_instructions, build_compact_summary_messages,
+        build_compact_summary_system_prompt, build_implementation_handoff_prompt, build_title_prompt,
+        collapse_whitespace, extract_context_summary_block, normalize_compact_summary,
         normalize_generated_title, should_complete_reasoning_for_event,
         should_retry_title_generation_count_check, truncate_chars,
     };
@@ -1699,6 +2058,8 @@ mod tests {
         build_plan_artifact_from_tool_input, build_plan_message_metadata, PlanApprovalAction,
     };
     use crate::ipc::frontend_channels::ThreadStreamEvent;
+    use tiy_core::agent::AgentMessage;
+    use tiy_core::types::{Message as TiyMessage, UserMessage};
 
     #[test]
     fn normalize_generated_title_strips_prefixes_and_wrappers() {
@@ -1721,6 +2082,115 @@ mod tests {
     fn truncate_chars_limits_character_count() {
         assert_eq!(truncate_chars("abcdef", 4), "abcd");
         assert_eq!(truncate_chars("你好世界标题", 4), "你好世界");
+    }
+
+    #[test]
+    fn normalize_compact_summary_wraps_plain_text_output() {
+        assert_eq!(
+            normalize_compact_summary("Goal: fix compact summary".to_string(), None).as_deref(),
+            Some("<context_summary>\nGoal: fix compact summary\n</context_summary>")
+        );
+    }
+
+    #[test]
+    fn normalize_compact_summary_extracts_single_wrapped_block_from_noisy_output() {
+        let summary = normalize_compact_summary(
+            "Here is the summary:\n<context_summary>\nState\n</context_summary>\nTrailing note"
+                .to_string(),
+            None,
+        )
+        .expect("summary should be present");
+
+        assert_eq!(summary, "<context_summary>\nState\n</context_summary>");
+    }
+
+    #[test]
+    fn normalize_compact_summary_recovers_from_missing_closing_wrapper() {
+        let summary = normalize_compact_summary(
+            "<context_summary>\nGoal\n- Pending item".to_string(),
+            None,
+        )
+        .expect("summary should be present");
+
+        assert_eq!(summary, "<context_summary>\nGoal\n- Pending item\n</context_summary>");
+    }
+
+    #[test]
+    fn compact_summary_system_prompt_includes_wrapper_example() {
+        let prompt = build_compact_summary_system_prompt();
+
+        assert!(prompt.contains("Output rules:"));
+        assert!(prompt.contains("Do not output any text before or after the wrapper."));
+        assert!(prompt.contains("Example output:"));
+        assert!(prompt.contains("<context_summary>"));
+        assert!(prompt.contains("</context_summary>"));
+    }
+
+    #[test]
+    fn compact_summary_messages_split_instructions_and_history() {
+        let history = vec![AgentMessage::User(UserMessage::text("User asked for a compact summary"))];
+        let messages = build_compact_summary_messages(&history, Some("Keep unresolved risks"));
+
+        assert_eq!(messages.len(), 2);
+
+        match &messages[0] {
+            TiyMessage::User(user) => {
+                let text = match &user.content {
+                    tiy_core::types::UserContent::Text(text) => text,
+                    _ => panic!("expected text user message for instructions"),
+                };
+                assert!(text.contains("Additional user instructions for this compact"));
+                assert!(text.contains("Keep unresolved risks"));
+            }
+            _ => panic!("expected first compact message to be user instructions"),
+        }
+
+        match &messages[1] {
+            TiyMessage::User(user) => {
+                let text = match &user.content {
+                    tiy_core::types::UserContent::Text(text) => text,
+                    _ => panic!("expected text user message for history"),
+                };
+                assert!(text.starts_with("Conversation history to compact:"));
+                assert!(text.contains("[user]"));
+                assert!(text.contains("User asked for a compact summary"));
+            }
+            _ => panic!("expected second compact message to be user history"),
+        }
+    }
+
+    #[test]
+    fn extract_context_summary_block_returns_first_complete_block() {
+        let extracted = extract_context_summary_block(
+            "prefix\n<context_summary>\nFirst\n</context_summary>\n<context_summary>\nSecond\n</context_summary>",
+        )
+        .expect("context summary block should be extracted");
+
+        assert_eq!(extracted, "<context_summary>\nFirst\n</context_summary>");
+    }
+
+    #[test]
+    fn append_compact_instructions_adds_extra_block() {
+        let summary = append_compact_instructions(
+            "<context_summary>\nState\n</context_summary>".to_string(),
+            Some("Preserve pending migration notes"),
+        );
+
+        assert!(summary.contains("<extra_instructions>"));
+        assert!(summary.contains("Preserve pending migration notes"));
+    }
+
+    #[test]
+    fn normalize_compact_summary_keeps_existing_wrapper_and_appends_instructions() {
+        let summary = normalize_compact_summary(
+            "<context_summary>\nState\n</context_summary>".to_string(),
+            Some("Keep unresolved API choice"),
+        )
+        .expect("summary should be present");
+
+        assert!(summary.starts_with("<context_summary>"));
+        assert!(summary.contains("<extra_instructions>"));
+        assert!(summary.contains("Keep unresolved API choice"));
     }
 
     #[test]
