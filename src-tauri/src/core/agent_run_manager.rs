@@ -1354,10 +1354,13 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_title_prompt, collapse_whitespace, normalize_generated_title,
-        should_complete_reasoning_for_event, truncate_chars,
+        build_implementation_handoff_prompt, build_title_prompt, collapse_whitespace,
+        normalize_generated_title, should_complete_reasoning_for_event, truncate_chars,
     };
     use crate::core::agent_session::ProfileResponseStyle;
+    use crate::core::plan_checkpoint::{
+        build_plan_artifact_from_tool_input, build_plan_message_metadata, PlanApprovalAction,
+    };
     use crate::ipc::frontend_channels::ThreadStreamEvent;
 
     #[test]
@@ -1419,5 +1422,29 @@ mod tests {
                 tool_input: serde_json::json!({ "query": "Thought" }),
             }
         ));
+    }
+
+    #[test]
+    fn implementation_handoff_prompt_embeds_the_approved_plan() {
+        let artifact = build_plan_artifact_from_tool_input(
+            &serde_json::json!({
+                "title": "Approved plan",
+                "summary": "Execute the plan exactly.",
+                "steps": ["Apply the checkpointed implementation plan."]
+            }),
+            4,
+        );
+        let metadata = build_plan_message_metadata(artifact, "run-plan", "plan");
+
+        let prompt = build_implementation_handoff_prompt(
+            &metadata,
+            PlanApprovalAction::ApplyPlanWithContextReset,
+        );
+
+        assert!(prompt.contains("Plan revision: 4"));
+        assert!(prompt.contains("Approved plan:"));
+        assert!(prompt.contains("# Approved plan"));
+        assert!(prompt.contains("Apply the checkpointed implementation plan."));
+        assert!(prompt.contains("after clearing the planning conversation"));
     }
 }

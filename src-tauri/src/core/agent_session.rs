@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 use crate::core::plan_checkpoint::{
     approval_prompt_markdown, build_approval_prompt_metadata, build_plan_artifact_from_tool_input,
-    build_plan_message_metadata, plan_markdown,
+    build_plan_message_metadata, parse_plan_message_metadata, plan_markdown,
 };
 use crate::core::subagent::{
     runtime_orchestration_tools, HelperAgentOrchestrator, HelperRunRequest,
@@ -1188,18 +1188,45 @@ pub(crate) fn convert_history_messages(
 ) -> Vec<AgentMessage> {
     messages
         .iter()
-        .filter(|message| message.message_type == "plain_message")
-        .filter_map(|message| match message.role.as_str() {
-            "user" => Some(AgentMessage::User(UserMessage::text(
-                message.content_markdown.clone(),
-            ))),
-            "assistant" => Some(AgentMessage::Assistant(assistant_message_from_text(
-                &message.content_markdown,
-                model,
-            ))),
+        .filter_map(|message| match message.message_type.as_str() {
+            "plain_message" => match message.role.as_str() {
+                "user" => Some(AgentMessage::User(UserMessage::text(
+                    message.content_markdown.clone(),
+                ))),
+                "assistant" => Some(AgentMessage::Assistant(assistant_message_from_text(
+                    &message.content_markdown,
+                    model,
+                ))),
+                _ => None,
+            },
+            "plan" if message.role == "assistant" => Some(AgentMessage::Assistant(
+                assistant_message_from_text(&format_plan_history_message(message), model),
+            )),
             _ => None,
         })
         .collect()
+}
+
+fn format_plan_history_message(message: &MessageRecord) -> String {
+    let metadata = message
+        .metadata_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| parse_plan_message_metadata(&value));
+
+    let Some(metadata) = metadata else {
+        return format!(
+            "Implementation plan checkpoint:\n{}",
+            message.content_markdown.trim()
+        );
+    };
+
+    format!(
+        "Implementation plan checkpoint (revision {}, approval state: {}):\n{}",
+        metadata.artifact.plan_revision,
+        metadata.approval_state,
+        plan_markdown(&metadata)
+    )
 }
 
 fn assistant_message_from_text(content: &str, model: &Model) -> AssistantMessage {
@@ -1923,8 +1950,9 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 mod tests {
     use super::{
         build_profile_response_prompt_parts, build_prompt_section, build_system_prompt,
-        collect_workspace_instruction_snippet, final_response_structure_system_instruction,
-        handle_agent_event, normalize_profile_response_language, normalize_profile_response_style,
+        collect_workspace_instruction_snippet, convert_history_messages,
+        final_response_structure_system_instruction, handle_agent_event,
+        normalize_profile_response_language, normalize_profile_response_style,
         resolve_helper_model_role, resolve_helper_profile, response_style_system_instruction,
         run_mode_prompt_body, runtime_security_config, runtime_tools_for_profile,
         standard_tool_timeout, ProfileResponseStyle, ResolvedModelRole, ResolvedRuntimeModelPlan,
@@ -1940,10 +1968,13 @@ mod tests {
     use tiy_core::types::{Api, AssistantMessage, AssistantMessageEvent, Provider};
     use tokio::sync::mpsc;
 
-    use crate::core::plan_checkpoint::build_plan_artifact_from_tool_input;
+    use crate::core::plan_checkpoint::{
+        build_plan_artifact_from_tool_input, build_plan_message_metadata,
+    };
     use crate::core::subagent::{RuntimeOrchestrationTool, SubagentProfile};
     use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::AgentProfileRecord;
+    use crate::model::thread::MessageRecord;
     use crate::persistence::init_database;
 
     const TEST_CONTEXT_WINDOW: &str = "128000";
@@ -2015,6 +2046,24 @@ mod tests {
             lightweight: None,
             thinking_level: ThinkingLevel::Off,
             transport: tiy_core::types::Transport::Sse,
+        }
+    }
+
+    fn message_text(message: &AgentMessage) -> String {
+        match message {
+            AgentMessage::User(user) => match &user.content {
+                tiy_core::types::UserContent::Text(text) => text.clone(),
+                tiy_core::types::UserContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        tiy_core::types::ContentBlock::Text(text) => Some(text.text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            },
+            AgentMessage::Assistant(assistant) => assistant.text_content(),
+            _ => String::new(),
         }
     }
 
@@ -2529,5 +2578,65 @@ mod tests {
         assert_eq!(artifact.plan_revision, 3);
         assert_eq!(artifact.steps[0].title, "Update runtime-thread-surface.");
         assert_eq!(artifact.steps[1].title, "Validate typecheck.");
+    }
+
+    #[test]
+    fn convert_history_messages_keeps_plan_checkpoints_but_skips_approval_prompts() {
+        let artifact = build_plan_artifact_from_tool_input(
+            &serde_json::json!({
+                "title": "Plan title",
+                "summary": "Carry the previous plan forward.",
+                "steps": ["Keep the plan in follow-up context."]
+            }),
+            2,
+        );
+        let plan_metadata = build_plan_message_metadata(artifact, "run-plan", "plan");
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Please refine the plan.".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-plan".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-plan".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "stale plan body".to_string(),
+                message_type: "plan".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::to_string(&plan_metadata).expect("serialize plan metadata"),
+                ),
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-approval".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-plan".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Review and approve the plan.".to_string(),
+                message_type: "approval_prompt".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                created_at: String::new(),
+            },
+        ];
+
+        let history =
+            convert_history_messages(&messages, &sample_resolved_model_role("primary").model);
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(message_text(&history[0]), "Please refine the plan.");
+        assert!(message_text(&history[1])
+            .contains("Implementation plan checkpoint (revision 2, approval state: pending):"));
+        assert!(message_text(&history[1]).contains("# Plan title"));
+        assert!(message_text(&history[1]).contains("Keep the plan in follow-up context."));
     }
 }
