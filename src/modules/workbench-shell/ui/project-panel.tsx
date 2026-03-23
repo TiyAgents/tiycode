@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { Check, ChevronDown, ChevronRight, FolderOpen, LoaderCircle, RefreshCw } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, FolderOpen, LoaderCircle, RefreshCw } from "lucide-react";
 import {
   type DirectoryChildrenResponse,
   indexFilterFiles,
@@ -396,6 +396,7 @@ export function ProjectPanel({
   const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(null);
   const [activeOpenTargetId, setActiveOpenTargetId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const deferredFilterValue = useDeferredValue(filterValue);
   const openMenuRef = useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = useRef<number | null>(null);
@@ -418,6 +419,18 @@ export function ProjectPanel({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!copiedPath || typeof window === "undefined") {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setCopiedPath((current) => (current === copiedPath ? null : current));
+    }, 1600);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [copiedPath]);
 
   useEffect(() => {
     if (!isOpenMenuOpen || typeof window === "undefined") {
@@ -450,6 +463,7 @@ export function ProjectPanel({
     setPendingRevealPath(null);
     setRevealedPath(null);
     setActiveFilterRevealPath(null);
+    setCopiedPath(null);
   }, [workspaceId, projectPath]);
 
   useEffect(() => {
@@ -908,6 +922,42 @@ export function ProjectPanel({
     }
   };
 
+  const handleCopyRelativePath = async (path: string) => {
+    if (typeof window === "undefined") {
+      setCopiedPath(null);
+      setOpenError("Failed to copy relative path");
+      return;
+    }
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(path);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = path;
+        textArea.setAttribute("readonly", "true");
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
+        textArea.style.pointerEvents = "none";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const didCopy = document.execCommand("copy");
+        document.body.removeChild(textArea);
+
+        if (!didCopy) {
+          throw new Error("copy command failed");
+        }
+      }
+
+      setCopiedPath(path);
+      setOpenError(null);
+    } catch {
+      setCopiedPath(null);
+      setOpenError("Failed to copy relative path");
+    }
+  };
+
   const visibleRows = flattenVisibleTree(
     treeState.data?.tree.children ?? [],
     expandedPaths,
@@ -1125,15 +1175,13 @@ export function ProjectPanel({
                   const isUntracked = node.gitState === "untracked";
                   const badgeLabel = isUntracked ? "U" : isModified ? "M" : null;
                   const icon = inferIcon(node.name, node.isDir);
+                  const isCopied = copiedPath === node.path;
 
                   return (
-                    <button
-                      ref={(element) => setTreeRowRef(node.path, element)}
-                      data-tree-path={node.path}
+                    <div
                       key={node.path || node.name}
-                      type="button"
                       className={cn(
-                        `${DRAWER_LIST_ROW_CLASS} relative flex items-center gap-2`,
+                        `${DRAWER_LIST_ROW_CLASS} group relative flex items-center gap-2`,
                         revealedPath === node.path && "bg-app-surface-hover/90 ring-1 ring-app-border-strong",
                         isIgnored
                           ? "text-app-subtle/70 hover:bg-app-surface-hover/60 hover:text-app-muted"
@@ -1142,28 +1190,51 @@ export function ProjectPanel({
                             : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                       )}
                       style={{ paddingLeft: `${10 + depth * 14}px` }}
-                      onClick={() => void handleTreeToggle(node)}
-                      onDoubleClick={() => {
-                        if (!node.isDir) {
-                          void handleOpenTreeFile(node.path);
-                        }
-                      }}
                     >
-                      <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
-                        {isLoading ? (
-                          <LoaderCircle className="size-3 animate-spin" />
-                        ) : node.isDir && node.isExpandable ? (
-                          isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />
-                        ) : null}
-                      </span>
-                      <ProjectTreeIcon icon={icon} muted={isIgnored} />
-                      <span className={DRAWER_LIST_LABEL_CLASS}>{node.name}</span>
-                      {badgeLabel ? (
-                        <span className="shrink-0 rounded-full bg-app-warning/12 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-app-warning">
-                          {badgeLabel}
+                      <button
+                        ref={(element) => setTreeRowRef(node.path, element)}
+                        data-tree-path={node.path}
+                        type="button"
+                        className="min-w-0 flex flex-1 items-center gap-2 text-left"
+                        onClick={() => void handleTreeToggle(node)}
+                        onDoubleClick={() => {
+                          if (!node.isDir) {
+                            void handleOpenTreeFile(node.path);
+                          }
+                        }}
+                      >
+                        <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
+                          {isLoading ? (
+                            <LoaderCircle className="size-3 animate-spin" />
+                          ) : node.isDir && node.isExpandable ? (
+                            isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />
+                          ) : null}
                         </span>
-                      ) : null}
-                    </button>
+                        <ProjectTreeIcon icon={icon} muted={isIgnored} />
+                        <span className={cn(DRAWER_LIST_LABEL_CLASS, "min-w-0 flex-1")}>{node.name}</span>
+                        {badgeLabel ? (
+                          <span className="shrink-0 rounded-full bg-app-warning/12 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-app-warning">
+                            {badgeLabel}
+                          </span>
+                        ) : null}
+                      </button>
+
+                      <button
+                        type="button"
+                        aria-label={`${isCopied ? "Copied relative path for" : "Copy relative path for"} ${node.name}`}
+                        title={isCopied ? "Copied" : "Copy relative path"}
+                        className={cn(
+                          "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md opacity-100 transition-colors hover:bg-app-surface-hover sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100",
+                          isCopied ? "text-app-success" : "text-app-subtle hover:text-app-foreground",
+                        )}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleCopyRelativePath(node.path);
+                        }}
+                      >
+                        {isCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                      </button>
+                    </div>
                   );
                 })}
 
