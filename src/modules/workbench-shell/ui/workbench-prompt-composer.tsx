@@ -26,7 +26,6 @@ import {
   PromptInputBody,
   PromptInputButton,
   PromptInputCommand,
-  PromptInputCommandEmpty,
   PromptInputCommandGroup,
   PromptInputCommandItem,
   PromptInputCommandList,
@@ -816,14 +815,18 @@ export function WorkbenchPromptComposer({
               placeholder={placeholder}
               value={value}
             />
-            {slashActive ? (
+            {slashActive && filteredCommands.length > 0 ? (
               <div
                 className="absolute inset-x-3 bottom-[calc(100%+0.5rem)] z-20 min-w-0"
                 ref={commandPanelRef}
               >
-                <PromptInputCommand className="w-full min-w-0 overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/70 bg-app-surface/96 p-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)]">
+                <PromptInputCommand
+                  className="w-full min-w-0 overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/70 bg-app-surface/96 p-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)]"
+                  value={selectedCommand ? getCommandDisplayPath(selectedCommand) : ""}
+                  onValueChange={() => {/* controlled by selectedCommandKey state */}}
+                  disablePointerSelection
+                >
                   <PromptInputCommandList className="w-full min-w-0 max-h-[320px]">
-                    <PromptInputCommandEmpty>未找到匹配命令。</PromptInputCommandEmpty>
                     {["builtin", "settings"].map((source) => {
                       const groupCommands = filteredCommands.filter((command) => command.source === source);
                       if (groupCommands.length === 0) {
@@ -841,10 +844,8 @@ export function WorkbenchPromptComposer({
                             return (
                               <PromptInputCommandItem
                                 className={cn(
-                                  "w-full items-start gap-0 overflow-hidden rounded-xl px-3 py-2 text-left transition-colors data-[selected=true]:!bg-transparent data-[selected=true]:!text-inherit",
-                                  isSelected
-                                    ? "!bg-app-info/14 !text-app-foreground dark:!bg-app-info/18"
-                                    : "text-app-foreground/90 hover:bg-app-surface-muted/55 hover:text-app-foreground",
+                                  "w-full items-start gap-0 overflow-hidden rounded-xl px-3 py-2 text-left transition-colors data-[selected=true]:!bg-app-info/14 data-[selected=true]:!text-app-foreground dark:data-[selected=true]:!bg-app-info/18",
+                                  !isSelected && "text-app-foreground/90",
                                 )}
                                 data-command-key={commandKey}
                                 key={commandKey}
