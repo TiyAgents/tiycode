@@ -2032,6 +2032,7 @@ export function RuntimeThreadSurface({
   const subscribingRef = useRef(false);
   const handledInitialPromptRequestIdRef = useRef<string | null>(null);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
 
   const clearScheduledThinkingPhase = useCallback(() => {
     if (thinkingTimerRef.current !== null) {
@@ -2139,6 +2140,7 @@ export function RuntimeThreadSurface({
     snapshotLoadRequestRef.current = requestId;
 
     if (!threadId) {
+      preserveContextUsageOnNextEmptySnapshotRef.current = false;
       subscribingRef.current = false;
       clearScheduledThinkingPhase();
       setHasMoreMessages(false);
@@ -2170,6 +2172,16 @@ export function RuntimeThreadSurface({
 
       const nextState = mapSnapshotToRunState(snapshot);
       const snapshotMessages = snapshot.messages.map(mapSnapshotMessage);
+      const latestVisibleRun = getLatestVisibleRun(snapshot);
+      const nextContextUsage = mapRunSummaryToContextUsage(latestVisibleRun);
+      const shouldPreserveContextUsage =
+        nextContextUsage === null && preserveContextUsageOnNextEmptySnapshotRef.current;
+      if (!shouldPreserveContextUsage) {
+        // Clear the flag only when we have valid usage or it was never set.
+        // This prevents premature clearing when stream_resync_required triggers
+        // loadSnapshot multiple times before a run has usage info.
+        preserveContextUsageOnNextEmptySnapshotRef.current = false;
+      }
       // Use functional update to ensure we replace the entire list atomically,
       // discarding any local-user optimistic messages that may still be in state.
       setMessages(() => snapshotMessages);
@@ -2180,7 +2192,9 @@ export function RuntimeThreadSurface({
       setRuntimeError(getSnapshotRuntimeError(snapshot));
       setRunState(nextState);
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
-      onContextUsageChange?.(mapRunSummaryToContextUsage(getLatestVisibleRun(snapshot)));
+      if (!shouldPreserveContextUsage) {
+        onContextUsageChange?.(nextContextUsage);
+      }
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
       setThinkingPlaceholder(null);
@@ -2205,6 +2219,7 @@ export function RuntimeThreadSurface({
         return;
       }
 
+      preserveContextUsageOnNextEmptySnapshotRef.current = false;
       const message = error instanceof Error ? error.message : String(error);
       setLoadError(message);
       onContextUsageChange?.(null);
@@ -2764,6 +2779,7 @@ export function RuntimeThreadSurface({
     if (submission.kind === "command" && submission.command?.behavior === "clear") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, false);
       try {
+        preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
         await threadClearContext(threadId);
         await loadSnapshot();
@@ -2776,6 +2792,7 @@ export function RuntimeThreadSurface({
     if (submission.kind === "command" && submission.command?.behavior === "compact") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, false);
       try {
+        preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
         await threadCompactContext(
           threadId,
@@ -3052,6 +3069,7 @@ export function RuntimeThreadSurface({
       return;
     }
 
+    preserveContextUsageOnNextEmptySnapshotRef.current = action === "apply_plan";
     setApprovingPlanMessageId(messageId);
     setComposerError(null);
     setRuntimeError(null);
@@ -3093,6 +3111,7 @@ export function RuntimeThreadSurface({
         });
       });
     } catch {
+      preserveContextUsageOnNextEmptySnapshotRef.current = false;
       setThinkingPlaceholder(null);
     } finally {
       setApprovingPlanMessageId((current) => (current === messageId ? null : current));
