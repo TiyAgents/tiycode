@@ -243,7 +243,15 @@ fn stage_paths_sync(workspace_root: &Path, workspace_paths: &[String]) -> Result
     for workspace_relative in workspace_paths {
         let repo_relative =
             workspace_path_to_repo_path(&repo_root, workspace_root, workspace_relative)?;
-        index.add_path(Path::new(&repo_relative)).map_err(|error| {
+        let repo_relative_path = Path::new(&repo_relative);
+        let worktree_target = repo_root.join(repo_relative_path);
+        let stage_result = if worktree_target.exists() {
+            index.add_path(repo_relative_path)
+        } else {
+            index.remove_path(repo_relative_path)
+        };
+
+        stage_result.map_err(|error| {
             git_error(
                 "git.stage.failed",
                 format!("Unable to stage '{workspace_relative}': {error}"),

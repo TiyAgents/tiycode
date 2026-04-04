@@ -374,9 +374,12 @@ impl HelperAgentOrchestrator {
         self.remove_helper(&request.run_id, &agent).await;
 
         if let Some(summary) = take_escalation_summary(&escalation_summary) {
+            let usage = snapshot_usage(&progress_state).unwrap_or_default();
+            if let Ok(mut progress) = progress_state.lock() {
+                progress.record_usage(&usage);
+            }
             let snapshot = snapshot_from_progress(&progress_state);
-            run_helper_repo::mark_completed(&self.pool, &helper_id, &summary, &Usage::default())
-                .await?;
+            run_helper_repo::mark_completed(&self.pool, &helper_id, &summary, &usage).await?;
 
             let _ = request.event_tx.send(ThreadStreamEvent::SubagentCompleted {
                 run_id: request.run_id,
@@ -394,7 +397,9 @@ impl HelperAgentOrchestrator {
             Ok(messages) => {
                 let summary = extract_summary(&messages)
                     .unwrap_or_else(|| "Helper completed without a textual summary.".to_string());
-                let usage = extract_usage(&messages).unwrap_or_default();
+                let usage = extract_usage(&messages)
+                    .or_else(|| snapshot_usage(&progress_state))
+                    .unwrap_or_default();
                 if let Ok(mut progress) = progress_state.lock() {
                     progress.record_usage(&usage);
                 }
@@ -415,12 +420,17 @@ impl HelperAgentOrchestrator {
             }
             Err(error) => {
                 let interrupted = error.to_string().to_lowercase().contains("aborted");
+                let usage = snapshot_usage(&progress_state).unwrap_or_default();
+                if let Ok(mut progress) = progress_state.lock() {
+                    progress.record_usage(&usage);
+                }
                 let snapshot = snapshot_from_progress(&progress_state);
                 run_helper_repo::mark_failed(
                     &self.pool,
                     &helper_id,
                     &error.to_string(),
                     interrupted,
+                    &usage,
                 )
                 .await?;
 
@@ -494,6 +504,26 @@ impl SubagentProgressState {
     fn record_usage(&mut self, usage: &Usage) {
         self.snapshot.usage = RunUsageDto::from(*usage);
     }
+}
+
+fn snapshot_usage(progress_state: &Arc<StdMutex<SubagentProgressState>>) -> Option<Usage> {
+    progress_state.lock().ok().and_then(|state| {
+        let usage = &state.snapshot.usage;
+        let has_any_tokens = usage.input_tokens > 0
+            || usage.output_tokens > 0
+            || usage.cache_read_tokens > 0
+            || usage.cache_write_tokens > 0
+            || usage.total_tokens > 0;
+
+        has_any_tokens.then_some(Usage {
+            input: usage.input_tokens,
+            output: usage.output_tokens,
+            cache_read: usage.cache_read_tokens,
+            cache_write: usage.cache_write_tokens,
+            total_tokens: usage.total_tokens,
+            cost: Default::default(),
+        })
+    })
 }
 
 fn snapshot_from_progress(
@@ -758,10 +788,23 @@ fn extract_summary(messages: &[AgentMessage]) -> Option<String> {
 }
 
 fn extract_usage(messages: &[AgentMessage]) -> Option<Usage> {
-    messages.iter().rev().find_map(|message| match message {
-        AgentMessage::Assistant(message) => Some(message.usage),
-        _ => None,
-    })
+    let mut usage = Usage::default();
+
+    for message in messages {
+        if let AgentMessage::Assistant(message) = message {
+            usage.add(&message.usage);
+        }
+    }
+
+    has_usage(&usage).then_some(usage)
+}
+
+fn has_usage(usage: &Usage) -> bool {
+    usage.input > 0
+        || usage.output > 0
+        || usage.cache_read > 0
+        || usage.cache_write > 0
+        || usage.total_tokens > 0
 }
 
 const HELPER_INHERITED_SECTION_TITLES: &[&str] = &[

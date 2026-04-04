@@ -122,18 +122,26 @@ pub async fn mark_failed(
     id: &str,
     error_summary: &str,
     interrupted: bool,
+    usage: &Usage,
 ) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     let status = if interrupted { "interrupted" } else { "failed" };
 
     sqlx::query(
         "UPDATE run_helpers
-         SET status = ?, error_summary = ?, finished_at = ?
+         SET status = ?, error_summary = ?, finished_at = ?,
+             input_tokens = ?, output_tokens = ?, cache_read_tokens = ?,
+             cache_write_tokens = ?, total_tokens = ?
          WHERE id = ?",
     )
     .bind(status)
     .bind(error_summary)
     .bind(&now)
+    .bind(i64::try_from(usage.input).unwrap_or(i64::MAX))
+    .bind(i64::try_from(usage.output).unwrap_or(i64::MAX))
+    .bind(i64::try_from(usage.cache_read).unwrap_or(i64::MAX))
+    .bind(i64::try_from(usage.cache_write).unwrap_or(i64::MAX))
+    .bind(i64::try_from(usage.total_tokens).unwrap_or(i64::MAX))
     .bind(id)
     .execute(pool)
     .await?;
