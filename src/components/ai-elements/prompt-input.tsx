@@ -862,6 +862,78 @@ export const PromptInput = ({
       return;
     }
 
+    // --- Tauri: use native drag-drop events (browser DnD receives empty files in webview) ---
+    // Note: Tauri's physical pixel positions are unreliable for DOM hit-testing
+    // (title bar offset, DPI mismatch, negative Y values), so we accept drops
+    // anywhere in the window — the composer is the only drop target.
+    if (isTauri()) {
+      let cancelled = false;
+      let cleanup: (() => void) | null = null;
+
+      void (async () => {
+        try {
+          const { listen } = await import("@tauri-apps/api/event");
+          if (cancelled) return;
+
+          type TauriDragPayload = { paths: string[]; position: { x: number; y: number } };
+
+          const [ulEnter, ulOver, ulDrop, ulLeave] = await Promise.all([
+            listen<TauriDragPayload>("tauri://drag-enter", () => {
+              setIsDragActive(true);
+            }),
+            listen<TauriDragPayload>("tauri://drag-over", () => {
+              setIsDragActive(true);
+            }),
+            listen<TauriDragPayload>("tauri://drag-drop", (event) => {
+              setIsDragActive(false);
+              const { paths } = event.payload;
+              if (paths.length === 0) {
+                return;
+              }
+
+              invoke<NativeDialogAttachmentDto[]>("attachment_read_files", {
+                maxBytes: maxFileSize ?? null,
+                paths,
+              })
+                .then((files) => {
+                  const prepared = files
+                    .map((f) => dataUrlToFile(f.dataUrl, f.name, f.mediaType))
+                    .filter((f): f is File => f instanceof File);
+                  if (prepared.length > 0) {
+                    add(prepared);
+                  }
+                })
+                .catch(() => {
+                  onError?.({
+                    code: "accept",
+                    message: "Unable to read the dropped files.",
+                  });
+                });
+            }),
+            listen("tauri://drag-leave", () => {
+              setIsDragActive(false);
+            }),
+          ]);
+
+          // If cleanup ran while we were awaiting, immediately unlisten
+          if (cancelled) {
+            ulEnter(); ulOver(); ulDrop(); ulLeave();
+            return;
+          }
+
+          cleanup = () => { ulEnter(); ulOver(); ulDrop(); ulLeave(); };
+        } catch {
+          // Tauri drag-drop listener setup failed; browser DnD will be used as fallback on next render.
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+        cleanup?.();
+      };
+    }
+
+    // --- Browser: standard HTML5 drag-and-drop ---
     const targetWindow = typeof window !== "undefined" ? window : null;
     if (!targetWindow) {
       return;
@@ -959,7 +1031,7 @@ export const PromptInput = ({
       targetWindow.removeEventListener("dragleave", onDragLeave);
       targetWindow.removeEventListener("drop", onDrop);
     };
-  }, [add, globalDrop]);
+  }, [add, globalDrop, maxFileSize, onError]);
 
   useEffect(
     () => () => {
