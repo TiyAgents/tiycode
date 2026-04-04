@@ -1,6 +1,5 @@
 import type { ChatStatus, FileUIPart } from "ai";
 import {
-  Bot,
   BracesIcon,
   CheckIcon,
   FileCodeIcon,
@@ -8,6 +7,7 @@ import {
   FileTextIcon,
   ImageIcon,
   PaperclipIcon,
+  UserStar,
   XIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
@@ -552,7 +552,7 @@ function ProfileInlineIdentity({
           muted ? "text-app-muted" : "text-app-foreground",
         )}
       >
-        <Bot className="size-3.5" />
+        <UserStar className="size-3.5" />
       </span>
       <span className={cn("shrink-0 text-sm font-medium", muted ? "text-app-foreground/88" : "text-app-foreground")}>
         {profile.name}

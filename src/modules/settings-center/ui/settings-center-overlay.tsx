@@ -968,7 +968,7 @@ function ProfilePicker({
         className="flex h-6 items-center gap-1 rounded-md border border-app-border bg-app-surface px-2 text-[11px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
         onClick={() => setIsOpen((prev) => !prev)}
       >
-        <span className="shrink-0 text-app-subtle">Profile:</span>
+        <span className="shrink-0 text-app-subtle">Agent Profile:</span>
         <span className="max-w-[120px] truncate">{activeProfile.name}</span>
         <ChevronDown className="size-3 text-app-subtle" />
       </button>
@@ -1211,7 +1211,7 @@ function GeneralSettingsPanel({
       </SettingsSection>
 
       <SettingsSection
-        title="Agent Defaults"
+        title="Agent Profiles"
         action={
           <div className="flex items-center gap-1.5">
             <ProfilePicker
