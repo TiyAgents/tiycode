@@ -1274,7 +1274,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
         AgentTool::new(
             CLARIFY_TOOL_NAME,
             "Clarify",
-            "Ask the user one concise clarifying question when you need a missing requirement, preference, or decision before continuing. Offer 2-3 short suggested options when possible, mark the recommended option, and keep the wording brief.",
+            "Ask the user one concise question when they need to choose between reasonable options, confirm a preference, approve a risky action, define scope, or provide missing requirements before you continue. Prefer this tool over guessing when multiple valid paths exist. Offer 2-5 short options when possible, mark the recommended option, and keep the wording brief.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1909,7 +1909,7 @@ You help users by reading files, searching code, editing files, executing comman
 - Delegate proactively on substantial work. When the task is cross-file, unfamiliar, risky, or likely to benefit from a second pass, use a helper instead of doing all exploration and review yourself.\n\
 - Use agent_explore to investigate unfamiliar areas, collect evidence, map dependencies, explain the current state, or gather the right files before choosing an implementation.\n\
 - For complex tasks, briefly confirm your understanding of the goal, scope, or constraints before publishing an implementation plan.\n\
-- When a requirement, user preference, or execution choice is still ambiguous, use clarify instead of guessing. Ask one concise question at a time, offer 2-3 short options when helpful, and mark the recommended option.\n\
+- Use clarify instead of guessing when the user should choose between multiple reasonable approaches, confirm a preference, decide scope, approve a risky action, or fill in missing requirements before you continue. Ask one concise question at a time, offer 2-5 short options when helpful, and mark the recommended option.\n\
 - Use update_plan to publish the current implementation plan once the intended change is clear.\n\
 - Do not use update_plan for pure analysis, architecture explanation, current-state summaries, or information gathering with no concrete implementation to plan.\n\
 - In default mode, if the task is complex or risky enough to benefit from explicit pre-implementation approval, publish a plan with update_plan before making changes.\n\
@@ -2066,7 +2066,7 @@ fn run_mode_prompt_body(run_mode: &str) -> String {
             "Default execution mode is active.\n\
 - Use the configured tool profile, subject to policy, approvals, and workspace boundaries.\n\
 - {TERM_PANEL_USAGE_NOTE}\n\
-- If a requirement, preference, or execution choice is still unclear, use clarify instead of guessing before you continue.\n\
+- Use clarify instead of guessing when the user should choose between multiple reasonable approaches, confirm a preference, decide scope, approve a risky action, or fill in missing requirements before you continue.\n\
 - If the task is complex enough that implementation should pause for review first, publish an implementation plan with update_plan before making changes.\n\
 - Prefer the smallest sufficient action that moves the task forward."
         ),
@@ -3208,6 +3208,8 @@ mod tests {
         let prompt = run_mode_prompt_body("default");
 
         assert!(prompt.contains("use clarify instead of guessing"));
+        assert!(prompt.contains("multiple reasonable approaches"));
+        assert!(prompt.contains("approve a risky action"));
     }
 
     #[test]
