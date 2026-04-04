@@ -31,7 +31,10 @@ impl TaskItemRow {
     }
 }
 
-pub async fn list_by_task_board(pool: &SqlitePool, task_board_id: &str) -> Result<Vec<TaskItemRecord>, AppError> {
+pub async fn list_by_task_board(
+    pool: &SqlitePool,
+    task_board_id: &str,
+) -> Result<Vec<TaskItemRecord>, AppError> {
     let rows = sqlx::query_as::<_, TaskItemRow>(
         "SELECT id, task_board_id, description, stage, sort_order, error_detail, created_at, updated_at
          FROM task_items

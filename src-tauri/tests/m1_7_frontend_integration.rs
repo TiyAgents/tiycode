@@ -140,7 +140,10 @@ fn test_thread_stream_event_tool_completed_preserves_edit_diff_counts() {
 
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["type"].as_str().unwrap(), "tool_completed");
-    assert_eq!(json["result"]["path"].as_str().unwrap(), "/workspace/src/example.ts");
+    assert_eq!(
+        json["result"]["path"].as_str().unwrap(),
+        "/workspace/src/example.ts"
+    );
     assert_eq!(json["result"]["linesAdded"].as_u64().unwrap(), 1);
     assert_eq!(json["result"]["linesRemoved"].as_u64().unwrap(), 1);
     assert_eq!(
@@ -627,6 +630,7 @@ fn test_message_dto_camel_case() {
         message_type: "plain_message".into(),
         status: "completed".into(),
         metadata: None,
+        attachments: vec![],
         created_at: "2026-03-16T00:00:00Z".into(),
     };
 

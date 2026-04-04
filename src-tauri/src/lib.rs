@@ -163,6 +163,7 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            commands::attachment::attachment_read_files,
             // System
             commands::system::get_system_metadata,
             commands::system::get_workspace_open_apps,

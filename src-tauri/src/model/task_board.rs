@@ -27,7 +27,10 @@ impl TaskBoardStatus {
             "completed" => Self::Completed,
             "abandoned" => Self::Abandoned,
             other => {
-                tracing::warn!(value = other, "Unknown TaskBoardStatus from DB, defaulting to Active");
+                tracing::warn!(
+                    value = other,
+                    "Unknown TaskBoardStatus from DB, defaulting to Active"
+                );
                 Self::Active
             }
         }
@@ -92,12 +95,21 @@ pub struct UpdateTaskInput {
 #[serde(rename_all = "snake_case", tag = "action")]
 pub enum UpdateTaskAction {
     #[serde(rename_all = "camelCase")]
-    StartStep { step_id: String },
+    StartStep {
+        step_id: String,
+    },
     #[serde(rename_all = "camelCase")]
-    CompleteStep { step_id: String },
+    CompleteStep {
+        step_id: String,
+    },
     #[serde(rename_all = "camelCase")]
-    FailStep { step_id: String, error_detail: String },
+    FailStep {
+        step_id: String,
+        error_detail: String,
+    },
     CompleteBoard,
     #[serde(rename_all = "camelCase")]
-    AbandonBoard { reason: Option<String> },
+    AbandonBoard {
+        reason: Option<String>,
+    },
 }

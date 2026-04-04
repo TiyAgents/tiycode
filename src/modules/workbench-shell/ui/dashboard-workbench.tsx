@@ -40,7 +40,12 @@ import {
 import { AI_ELEMENTS_THREAD_TITLE } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
 import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
-import type { RunMode, ThreadSummaryDto, WorkspaceDto } from "@/shared/types/api";
+import type {
+  MessageAttachmentDto,
+  RunMode,
+  ThreadSummaryDto,
+  WorkspaceDto,
+} from "@/shared/types/api";
 import {
   threadCreate,
   threadDelete,
@@ -439,6 +444,7 @@ export function DashboardWorkbench() {
     id: string;
     displayText: string;
     effectivePrompt: string;
+    attachments: MessageAttachmentDto[];
     metadata: Record<string, unknown> | null;
     runMode: RunMode;
     threadId: string;
@@ -1650,19 +1656,7 @@ export function DashboardWorkbench() {
   const handleComposerSubmit = (submission: ComposerSubmission) => {
     const trimmedValue = submission.displayText?.trim() ?? "";
     const commandBehavior = submission.command?.behavior ?? null;
-    const attachmentNames = submission.rawMessage.files
-      .map((file, index) => file.filename?.trim() || `Attachment ${index + 1}`)
-      .filter((value) => value.length > 0);
-    const effectivePrompt =
-      attachmentNames.length > 0
-        ? [
-            submission.effectivePrompt,
-            "Attached files:",
-            attachmentNames.map((name) => `- ${name}`).join("\n"),
-          ]
-            .filter(Boolean)
-            .join("\n\n")
-        : submission.effectivePrompt;
+    const effectivePrompt = submission.effectivePrompt;
 
     if (!effectivePrompt) {
       return;
@@ -1794,6 +1788,7 @@ export function DashboardWorkbench() {
             id: nextPendingRunId,
             displayText: submission.displayText,
             effectivePrompt,
+            attachments: submission.attachments,
             metadata: submission.metadata ?? null,
             runMode: submission.runMode ?? newThreadRunMode,
             threadId: persistedThreadId,

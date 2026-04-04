@@ -13,6 +13,7 @@ struct MessageRow {
     message_type: String,
     status: String,
     metadata_json: Option<String>,
+    attachments_json: Option<String>,
     created_at: String,
 }
 
@@ -27,6 +28,7 @@ impl MessageRow {
             message_type: self.message_type,
             status: self.status,
             metadata_json: self.metadata_json,
+            attachments_json: self.attachments_json,
             created_at: self.created_at,
         }
     }
@@ -35,7 +37,7 @@ impl MessageRow {
 pub async fn find_by_id(pool: &SqlitePool, id: &str) -> Result<Option<MessageRecord>, AppError> {
     let row = sqlx::query_as::<_, MessageRow>(
         "SELECT id, thread_id, run_id, role, content_markdown, message_type,
-                status, metadata_json, created_at
+                status, metadata_json, attachments_json, created_at
          FROM messages
          WHERE id = ?
          LIMIT 1",
@@ -58,7 +60,7 @@ pub async fn list_recent(
     let rows = if let Some(cursor) = before_id {
         sqlx::query_as::<_, MessageRow>(
             "SELECT id, thread_id, run_id, role, content_markdown, message_type,
-                    status, metadata_json, created_at
+                    status, metadata_json, attachments_json, created_at
              FROM messages
              WHERE thread_id = ? AND id < ?
              ORDER BY id DESC
@@ -72,7 +74,7 @@ pub async fn list_recent(
     } else {
         sqlx::query_as::<_, MessageRow>(
             "SELECT id, thread_id, run_id, role, content_markdown, message_type,
-                    status, metadata_json, created_at
+                    status, metadata_json, attachments_json, created_at
              FROM messages
              WHERE thread_id = ?
              ORDER BY id DESC
@@ -90,13 +92,12 @@ pub async fn list_recent(
     Ok(records)
 }
 
-
 /// Insert a new message (append-only).
 pub async fn insert(pool: &SqlitePool, record: &MessageRecord) -> Result<(), AppError> {
     sqlx::query(
         "INSERT INTO messages (id, thread_id, run_id, role, content_markdown,
-                message_type, status, metadata_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                message_type, status, metadata_json, attachments_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
     )
     .bind(&record.id)
     .bind(&record.thread_id)
@@ -106,6 +107,7 @@ pub async fn insert(pool: &SqlitePool, record: &MessageRecord) -> Result<(), App
     .bind(&record.message_type)
     .bind(&record.status)
     .bind(&record.metadata_json)
+    .bind(&record.attachments_json)
     .execute(pool)
     .await?;
 

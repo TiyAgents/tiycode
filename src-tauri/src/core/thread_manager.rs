@@ -121,8 +121,10 @@ impl ThreadManager {
         let helpers = run_helper_repo::list_by_run_ids(&self.pool, &run_ids).await?;
 
         // Load task boards
-        let task_boards = crate::core::task_board_manager::load_thread_task_boards(&self.pool, id).await?;
-        let active_task_board_id = task_boards.iter()
+        let task_boards =
+            crate::core::task_board_manager::load_thread_task_boards(&self.pool, id).await?;
+        let active_task_board_id = task_boards
+            .iter()
             .find(|b| b.status == crate::model::task_board::TaskBoardStatus::Active)
             .map(|b| b.id.clone());
 
@@ -180,6 +182,7 @@ impl ThreadManager {
                 .unwrap_or_else(|| "plain_message".to_string()),
             status: "completed".to_string(),
             metadata_json: input.metadata.map(|v| v.to_string()),
+            attachments_json: None,
             created_at: String::new(),
         };
 

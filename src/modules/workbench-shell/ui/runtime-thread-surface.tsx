@@ -31,6 +31,7 @@ import {
   type UsageEvent,
 } from "@/services/thread-stream";
 import type {
+  MessageAttachmentDto,
   MessageDto,
   RunMode,
   RunSummaryDto,
@@ -46,7 +47,7 @@ import type { ComposerSubmission } from "@/modules/workbench-shell/model/compose
 import {
   getFileMutationPresentation,
 } from "@/modules/workbench-shell/model/file-mutation-presentation";
-import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
+import { WorkbenchPromptComposer, ComposerMessageAttachments } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 import {
   initialTaskBoardState,
   taskBoardsFromSnapshot,
@@ -61,6 +62,7 @@ type SurfaceMessage = {
   id: string;
   messageType: MessageDto["messageType"];
   metadata?: unknown | null;
+  attachments: MessageAttachmentDto[];
   role: "user" | "assistant" | "system";
   runId: string | null;
   content: string;
@@ -162,6 +164,7 @@ type InitialPromptRequest = {
   id: string;
   displayText: string;
   effectivePrompt: string;
+  attachments: MessageAttachmentDto[];
   metadata: Record<string, unknown> | null;
   runMode?: RunMode;
 };
@@ -259,6 +262,7 @@ function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
     id: message.id,
     messageType: message.messageType,
     metadata: message.metadata,
+    attachments: message.attachments ?? [],
     role:
       message.role === "user" || message.role === "assistant" || message.role === "system"
         ? message.role
@@ -2008,6 +2012,7 @@ export function RuntimeThreadSurface({
   const appendOptimisticUserMessage = useCallback((
     content: string,
     metadata?: unknown | null,
+    attachments: MessageAttachmentDto[] = [],
     showThinking = true,
   ) => {
     const userCreatedAt = new Date().toISOString();
@@ -2025,6 +2030,7 @@ export function RuntimeThreadSurface({
           id: localUserMessageId,
           messageType: "plain_message",
           metadata: metadata ?? null,
+          attachments,
           role: "user",
           runId: null,
           content,
@@ -2246,6 +2252,7 @@ export function RuntimeThreadSurface({
               ?? new Date().toISOString(),
             id: event.messageId,
             messageType: "plain_message",
+            attachments: [],
             role: "assistant",
             runId: event.runId,
             content:
@@ -2264,6 +2271,7 @@ export function RuntimeThreadSurface({
             ?? new Date().toISOString(),
           id: event.messageId,
           messageType: "plain_message",
+          attachments: [],
           role: "assistant",
           runId: event.runId,
           content: event.content ?? "",
@@ -2303,6 +2311,7 @@ export function RuntimeThreadSurface({
               ?? new Date().toISOString(),
             id: reasoningMessageId,
             messageType: "reasoning",
+            attachments: [],
             role: "assistant",
             runId: event.runId,
             content: event.reasoning,
@@ -2641,6 +2650,7 @@ export function RuntimeThreadSurface({
           displayText: submissionOrPrompt,
           effectivePrompt: submissionOrPrompt,
           rawMessage: { text: submissionOrPrompt, files: [] },
+          attachments: [],
           metadata: null,
           runMode: runModeOverride,
         }
@@ -2696,7 +2706,7 @@ export function RuntimeThreadSurface({
     setQueueArtifact(null);
 
     if (submission.kind === "command" && submission.command?.behavior === "clear") {
-      appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, false);
+      appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, [], false);
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
@@ -2709,7 +2719,7 @@ export function RuntimeThreadSurface({
     }
 
     if (submission.kind === "command" && submission.command?.behavior === "compact") {
-      appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, false);
+      appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, [], false);
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
@@ -2725,7 +2735,11 @@ export function RuntimeThreadSurface({
       return;
     }
 
-    appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null);
+    appendOptimisticUserMessage(
+      submission.displayText,
+      submission.metadata ?? null,
+      submission.attachments,
+    );
 
     try {
       await streamRef.current?.startRun(
@@ -2734,6 +2748,7 @@ export function RuntimeThreadSurface({
           prompt,
           displayPrompt: submission.displayText,
           promptMetadata: submission.metadata ?? null,
+          attachments: submission.attachments,
         },
         runModeOverride ?? submission.runMode ?? selectedRunMode,
         modelPlan,
@@ -2758,7 +2773,7 @@ export function RuntimeThreadSurface({
     setComposerError(null);
     setRuntimeError(null);
     setQueueArtifact(null);
-    appendOptimisticUserMessage(displayText);
+    appendOptimisticUserMessage(displayText, null, []);
 
     try {
       await streamRef.current.respondToClarify(tool.id, response);
@@ -2795,6 +2810,7 @@ export function RuntimeThreadSurface({
       displayText: initialPromptRequest.displayText,
       effectivePrompt: initialPromptRequest.effectivePrompt,
       rawMessage: { text: initialPromptRequest.displayText, files: [] },
+      attachments: initialPromptRequest.attachments,
       metadata: initialPromptRequest.metadata,
       runMode: initialPromptRequest.runMode,
     }, initialPromptRequest.runMode)
@@ -3741,6 +3757,14 @@ export function RuntimeThreadSurface({
 
                             return (
                               <div className="space-y-2">
+                                <ComposerMessageAttachments
+                                  attachments={message.attachments.map((attachment) => ({
+                                    id: attachment.id,
+                                    mediaType: attachment.mediaType ?? undefined,
+                                    name: attachment.name,
+                                    url: attachment.url ?? undefined,
+                                  }))}
+                                />
                                 <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
                                 {expandedPrompt && expandedPrompt !== (message.content ?? "").trim() ? (
                                   <CompactCollapsible defaultOpen={false}>

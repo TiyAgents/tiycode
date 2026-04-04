@@ -88,6 +88,15 @@ impl From<ThreadRecord> for ThreadSummaryDto {
 // MessageRecord
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageAttachmentDto {
+    pub id: String,
+    pub name: String,
+    pub media_type: Option<String>,
+    pub url: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct MessageRecord {
     pub id: String,
@@ -98,6 +107,7 @@ pub struct MessageRecord {
     pub message_type: String,
     pub status: String,
     pub metadata_json: Option<String>,
+    pub attachments_json: Option<String>,
     pub created_at: String,
 }
 
@@ -112,6 +122,7 @@ pub struct MessageDto {
     pub message_type: String,
     pub status: String,
     pub metadata: Option<serde_json::Value>,
+    pub attachments: Vec<MessageAttachmentDto>,
     pub created_at: String,
 }
 
@@ -126,6 +137,10 @@ impl From<MessageRecord> for MessageDto {
             message_type: r.message_type,
             status: r.status,
             metadata: r.metadata_json.and_then(|s| serde_json::from_str(&s).ok()),
+            attachments: r
+                .attachments_json
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
             created_at: r.created_at,
         }
     }

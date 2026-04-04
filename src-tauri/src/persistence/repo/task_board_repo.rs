@@ -29,7 +29,10 @@ impl TaskBoardRow {
     }
 }
 
-pub async fn list_by_thread(pool: &SqlitePool, thread_id: &str) -> Result<Vec<TaskBoardRecord>, AppError> {
+pub async fn list_by_thread(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Vec<TaskBoardRecord>, AppError> {
     let rows = sqlx::query_as::<_, TaskBoardRow>(
         "SELECT id, thread_id, title, status, active_task_id, created_at, updated_at
          FROM task_boards
@@ -55,7 +58,10 @@ pub async fn find_by_id(pool: &SqlitePool, id: &str) -> Result<Option<TaskBoardR
     Ok(row.map(|r| r.into_record()))
 }
 
-pub async fn find_active_by_thread(pool: &SqlitePool, thread_id: &str) -> Result<Option<TaskBoardRecord>, AppError> {
+pub async fn find_active_by_thread(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<TaskBoardRecord>, AppError> {
     let row = sqlx::query_as::<_, TaskBoardRow>(
         "SELECT id, thread_id, title, status, active_task_id, created_at, updated_at
          FROM task_boards WHERE thread_id = ? AND status = 'active'
@@ -97,4 +103,3 @@ pub async fn update_active_task(
         .await?;
     Ok(())
 }
-

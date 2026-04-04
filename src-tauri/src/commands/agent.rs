@@ -5,6 +5,7 @@ use crate::core::app_state::AppState;
 use crate::core::plan_checkpoint::PlanApprovalAction;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::AppError;
+use crate::model::thread::MessageAttachmentDto;
 
 fn extract_run_string(model_plan: &serde_json::Value, path: &[&str]) -> Option<String> {
     let mut current = model_plan;
@@ -64,6 +65,7 @@ pub async fn thread_start_run(
     prompt: String,
     display_prompt: Option<String>,
     prompt_metadata: Option<serde_json::Value>,
+    attachments: Option<Vec<MessageAttachmentDto>>,
     run_mode: Option<String>,
     model_plan: Option<serde_json::Value>,
     on_event: Channel<ThreadStreamEvent>,
@@ -80,6 +82,7 @@ pub async fn thread_start_run(
             &prompt,
             display_prompt,
             prompt_metadata,
+            attachments.unwrap_or_default(),
             &run_mode,
             profile_id,
             provider_id,

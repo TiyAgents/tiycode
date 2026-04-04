@@ -461,6 +461,7 @@ impl ToolGateway {
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
+                attachments_json: None,
                 created_at: String::new(),
             };
 

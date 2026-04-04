@@ -33,7 +33,7 @@ use crate::ipc::app_events::{
 };
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
-use crate::model::thread::{MessageRecord, ThreadStatus};
+use crate::model::thread::{MessageAttachmentDto, MessageRecord, ThreadStatus};
 use crate::persistence::repo::{message_repo, profile_repo, run_repo, thread_repo, workspace_repo};
 
 const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(12);
@@ -97,6 +97,7 @@ impl AgentRunManager {
         prompt: &str,
         display_prompt: Option<String>,
         prompt_metadata: Option<serde_json::Value>,
+        attachments: Vec<MessageAttachmentDto>,
         run_mode: &str,
         profile_id: Option<String>,
         provider_id: Option<String>,
@@ -109,6 +110,7 @@ impl AgentRunManager {
             prompt,
             display_prompt,
             prompt_metadata,
+            attachments,
             run_mode,
             profile_id,
             provider_id,
@@ -128,6 +130,7 @@ impl AgentRunManager {
         prompt: &str,
         display_prompt: Option<String>,
         prompt_metadata: Option<serde_json::Value>,
+        attachments: Vec<MessageAttachmentDto>,
         run_mode: &str,
         profile_id: Option<String>,
         provider_id: Option<String>,
@@ -185,6 +188,9 @@ impl AgentRunManager {
                     message_type: "plain_message".to_string(),
                     status: "completed".to_string(),
                     metadata_json: prompt_metadata.map(|value| value.to_string()),
+                    attachments_json: serde_json::to_string(&attachments)
+                        .ok()
+                        .filter(|value| value != "[]"),
                     created_at: String::new(),
                 };
                 message_repo::insert(&self.pool, &user_message).await?;
@@ -322,6 +328,7 @@ impl AgentRunManager {
                 "",
                 None,
                 None,
+                Vec::new(),
                 "default",
                 profile_id,
                 provider_id,
@@ -398,6 +405,7 @@ impl AgentRunManager {
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(command_metadata.to_string()),
+                attachments_json: None,
                 created_at: String::new(),
             },
             MessageRecord {
@@ -409,6 +417,7 @@ impl AgentRunManager {
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(reset_metadata.to_string()),
+                attachments_json: None,
                 created_at: String::new(),
             },
         ];
@@ -505,6 +514,7 @@ impl AgentRunManager {
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(command_metadata.to_string()),
+                attachments_json: None,
                 created_at: String::new(),
             },
             MessageRecord {
@@ -516,6 +526,7 @@ impl AgentRunManager {
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(reset_metadata.to_string()),
+                attachments_json: None,
                 created_at: String::new(),
             },
             MessageRecord {
@@ -527,6 +538,7 @@ impl AgentRunManager {
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(summary_metadata.to_string()),
+                attachments_json: None,
                 created_at: String::new(),
             },
         ];
@@ -728,6 +740,7 @@ impl AgentRunManager {
                 })
                 .to_string(),
             ),
+            attachments_json: None,
             created_at: String::new(),
         };
         let summary_message = MessageRecord {
@@ -746,6 +759,7 @@ impl AgentRunManager {
                 })
                 .to_string(),
             ),
+            attachments_json: None,
             created_at: String::new(),
         };
         let approved_plan_message = MessageRecord {
@@ -757,6 +771,7 @@ impl AgentRunManager {
             message_type: "plan".to_string(),
             status: "completed".to_string(),
             metadata_json: serde_json::to_string(plan_metadata).ok(),
+            attachments_json: None,
             created_at: String::new(),
         };
 
@@ -1068,6 +1083,7 @@ impl AgentRunManager {
                 message_type: "plain_message".to_string(),
                 status: "streaming".to_string(),
                 metadata_json: None,
+                attachments_json: None,
                 created_at: String::new(),
             },
         )
@@ -1121,6 +1137,7 @@ impl AgentRunManager {
                 message_type: "reasoning".to_string(),
                 status: "streaming".to_string(),
                 metadata_json: None,
+                attachments_json: None,
                 created_at: String::new(),
             },
         )
@@ -1378,7 +1395,8 @@ fn compact_summary_model(
 
 fn build_fallback_compact_summary(history: &[AgentMessage], instructions: Option<&str>) -> String {
     let base_summary = if history.is_empty() {
-        "<context_summary>\nNo previous conversation was available to compact.\n</context_summary>".to_string()
+        "<context_summary>\nNo previous conversation was available to compact.\n</context_summary>"
+            .to_string()
     } else {
         summarize_messages(history)
     };
@@ -1423,7 +1441,10 @@ fn build_compact_summary_messages(
 ) -> Vec<TiyMessage> {
     let mut messages = Vec::new();
 
-    if let Some(instructions) = instructions.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(instructions) = instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         messages.push(TiyMessage::User(UserMessage::text(format!(
             "Additional user instructions for this compact:\n{instructions}"
         ))));
@@ -1488,7 +1509,10 @@ async fn generate_compact_summary(
         ));
     }
 
-    Ok(normalize_compact_summary(message.text_content(), instructions))
+    Ok(normalize_compact_summary(
+        message.text_content(),
+        instructions,
+    ))
 }
 
 fn render_compact_summary_history(history: &[AgentMessage]) -> String {
@@ -1618,8 +1642,12 @@ fn normalize_compact_summary(raw: String, instructions: Option<&str>) -> Option<
     }
 
     let summary = extract_context_summary_block(trimmed).unwrap_or_else(|| {
-        let normalized_body = extract_context_summary_body(trimmed).unwrap_or_else(|| trimmed.to_string());
-        format!("<context_summary>\n{}\n</context_summary>", normalized_body.trim())
+        let normalized_body =
+            extract_context_summary_body(trimmed).unwrap_or_else(|| trimmed.to_string());
+        format!(
+            "<context_summary>\n{}\n</context_summary>",
+            normalized_body.trim()
+        )
     });
 
     Some(append_compact_instructions(summary, instructions))
@@ -1679,7 +1707,10 @@ fn extract_context_summary_body(raw: &str) -> Option<String> {
 }
 
 fn append_compact_instructions(base_summary: String, instructions: Option<&str>) -> String {
-    let Some(extra) = instructions.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(extra) = instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return base_summary;
     };
 
@@ -1784,7 +1815,6 @@ async fn maybe_generate_thread_title(
 
     Ok(())
 }
-
 
 async fn load_initial_title_context(
     pool: &SqlitePool,
@@ -2016,9 +2046,9 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 mod tests {
     use super::{
         append_compact_instructions, build_compact_summary_messages,
-        build_compact_summary_system_prompt, build_implementation_handoff_prompt, build_title_prompt,
-        collapse_whitespace, extract_context_summary_block, normalize_compact_summary,
-        normalize_generated_title, should_complete_reasoning_for_event,
+        build_compact_summary_system_prompt, build_implementation_handoff_prompt,
+        build_title_prompt, collapse_whitespace, extract_context_summary_block,
+        normalize_compact_summary, normalize_generated_title, should_complete_reasoning_for_event,
         truncate_chars,
     };
     use crate::core::agent_session::ProfileResponseStyle;
@@ -2074,13 +2104,14 @@ mod tests {
 
     #[test]
     fn normalize_compact_summary_recovers_from_missing_closing_wrapper() {
-        let summary = normalize_compact_summary(
-            "<context_summary>\nGoal\n- Pending item".to_string(),
-            None,
-        )
-        .expect("summary should be present");
+        let summary =
+            normalize_compact_summary("<context_summary>\nGoal\n- Pending item".to_string(), None)
+                .expect("summary should be present");
 
-        assert_eq!(summary, "<context_summary>\nGoal\n- Pending item\n</context_summary>");
+        assert_eq!(
+            summary,
+            "<context_summary>\nGoal\n- Pending item\n</context_summary>"
+        );
     }
 
     #[test]
@@ -2096,7 +2127,9 @@ mod tests {
 
     #[test]
     fn compact_summary_messages_split_instructions_and_history() {
-        let history = vec![AgentMessage::User(UserMessage::text("User asked for a compact summary"))];
+        let history = vec![AgentMessage::User(UserMessage::text(
+            "User asked for a compact summary",
+        ))];
         let messages = build_compact_summary_messages(&history, Some("Keep unresolved risks"));
 
         assert_eq!(messages.len(), 2);

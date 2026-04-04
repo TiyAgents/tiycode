@@ -12,7 +12,9 @@ mod test_helpers;
 use sqlx::Row;
 use tiy_agent_lib::core::task_board_manager;
 use tiy_agent_lib::core::thread_manager::ThreadManager;
-use tiy_agent_lib::model::task_board::{CreateTaskInput, CreateTaskStep, TaskBoardStatus, UpdateTaskInput, UpdateTaskAction};
+use tiy_agent_lib::model::task_board::{
+    CreateTaskInput, CreateTaskStep, TaskBoardStatus, UpdateTaskAction, UpdateTaskInput,
+};
 use tiy_agent_lib::model::task_item::TaskStage;
 
 // =========================================================================
@@ -28,20 +30,33 @@ async fn test_create_task_board() {
     let input = CreateTaskInput {
         title: "Implement Feature X".to_string(),
         steps: vec![
-            CreateTaskStep { description: "Design API".to_string() },
-            CreateTaskStep { description: "Write code".to_string() },
-            CreateTaskStep { description: "Add tests".to_string() },
+            CreateTaskStep {
+                description: "Design API".to_string(),
+            },
+            CreateTaskStep {
+                description: "Write code".to_string(),
+            },
+            CreateTaskStep {
+                description: "Add tests".to_string(),
+            },
         ],
     };
 
     let result = task_board_manager::create_task_board(&pool, "t-task-1", &input).await;
-    assert!(result.is_ok(), "Failed to create task board: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to create task board: {:?}",
+        result.err()
+    );
 
     let board = result.unwrap();
     assert_eq!(board.title, "Implement Feature X");
     assert_eq!(board.status, TaskBoardStatus::Active);
     assert_eq!(board.tasks.len(), 3);
-    assert!(board.active_task_id.is_some(), "First task should be active");
+    assert!(
+        board.active_task_id.is_some(),
+        "First task should be active"
+    );
 
     // First task is auto-started (InProgress), rest are Pending
     assert_eq!(board.tasks[0].stage, TaskStage::InProgress);
@@ -58,21 +73,31 @@ async fn test_auto_complete_previous_board() {
     // Create first board
     let input1 = CreateTaskInput {
         title: "First Task".to_string(),
-        steps: vec![CreateTaskStep { description: "Step 1".to_string() }],
+        steps: vec![CreateTaskStep {
+            description: "Step 1".to_string(),
+        }],
     };
-    let board1 = task_board_manager::create_task_board(&pool, "t-auto", &input1).await.unwrap();
+    let board1 = task_board_manager::create_task_board(&pool, "t-auto", &input1)
+        .await
+        .unwrap();
     assert_eq!(board1.status, TaskBoardStatus::Active);
 
     // Create second board - should auto-complete first
     let input2 = CreateTaskInput {
         title: "Second Task".to_string(),
-        steps: vec![CreateTaskStep { description: "Step 2".to_string() }],
+        steps: vec![CreateTaskStep {
+            description: "Step 2".to_string(),
+        }],
     };
-    let board2 = task_board_manager::create_task_board(&pool, "t-auto", &input2).await.unwrap();
+    let board2 = task_board_manager::create_task_board(&pool, "t-auto", &input2)
+        .await
+        .unwrap();
     assert_eq!(board2.status, TaskBoardStatus::Active);
 
     // Verify first board is now completed
-    let boards = task_board_manager::load_thread_task_boards(&pool, "t-auto").await.unwrap();
+    let boards = task_board_manager::load_thread_task_boards(&pool, "t-auto")
+        .await
+        .unwrap();
     assert_eq!(boards.len(), 2);
     assert_eq!(boards[0].status, TaskBoardStatus::Completed);
     assert_eq!(boards[1].status, TaskBoardStatus::Active);
@@ -91,20 +116,30 @@ async fn test_update_task_start_step() {
     let input = CreateTaskInput {
         title: "Test Task".to_string(),
         steps: vec![
-            CreateTaskStep { description: "Step A".to_string() },
-            CreateTaskStep { description: "Step B".to_string() },
+            CreateTaskStep {
+                description: "Step A".to_string(),
+            },
+            CreateTaskStep {
+                description: "Step B".to_string(),
+            },
         ],
     };
-    let board = task_board_manager::create_task_board(&pool, "t-start", &input).await.unwrap();
+    let board = task_board_manager::create_task_board(&pool, "t-start", &input)
+        .await
+        .unwrap();
 
     // First step is already InProgress after creation; start the second step
     let step_b_id = &board.tasks[1].id;
     let update = UpdateTaskInput {
         task_board_id: board.id.clone(),
-        action: UpdateTaskAction::StartStep { step_id: step_b_id.clone() },
+        action: UpdateTaskAction::StartStep {
+            step_id: step_b_id.clone(),
+        },
     };
 
-    let updated = task_board_manager::update_task_board(&pool, "t-start", &update).await.unwrap();
+    let updated = task_board_manager::update_task_board(&pool, "t-start", &update)
+        .await
+        .unwrap();
     assert_eq!(updated.tasks[1].stage, TaskStage::InProgress);
     assert_eq!(updated.active_task_id.as_ref(), Some(step_b_id));
 }
@@ -118,19 +153,29 @@ async fn test_update_task_complete_step() {
     let input = CreateTaskInput {
         title: "Test Task".to_string(),
         steps: vec![
-            CreateTaskStep { description: "Step A".to_string() },
-            CreateTaskStep { description: "Step B".to_string() },
+            CreateTaskStep {
+                description: "Step A".to_string(),
+            },
+            CreateTaskStep {
+                description: "Step B".to_string(),
+            },
         ],
     };
-    let board = task_board_manager::create_task_board(&pool, "t-complete", &input).await.unwrap();
+    let board = task_board_manager::create_task_board(&pool, "t-complete", &input)
+        .await
+        .unwrap();
     let step_id = &board.tasks[0].id;
 
     // First step is already InProgress — complete it directly
     let complete = UpdateTaskInput {
         task_board_id: board.id.clone(),
-        action: UpdateTaskAction::CompleteStep { step_id: step_id.clone() },
+        action: UpdateTaskAction::CompleteStep {
+            step_id: step_id.clone(),
+        },
     };
-    let updated = task_board_manager::update_task_board(&pool, "t-complete", &complete).await.unwrap();
+    let updated = task_board_manager::update_task_board(&pool, "t-complete", &complete)
+        .await
+        .unwrap();
 
     assert_eq!(updated.tasks[0].stage, TaskStage::Completed);
     // Next task should be active
@@ -146,11 +191,17 @@ async fn test_update_task_fail_step() {
     let input = CreateTaskInput {
         title: "Test Task".to_string(),
         steps: vec![
-            CreateTaskStep { description: "Step A".to_string() },
-            CreateTaskStep { description: "Step B".to_string() },
+            CreateTaskStep {
+                description: "Step A".to_string(),
+            },
+            CreateTaskStep {
+                description: "Step B".to_string(),
+            },
         ],
     };
-    let board = task_board_manager::create_task_board(&pool, "t-fail", &input).await.unwrap();
+    let board = task_board_manager::create_task_board(&pool, "t-fail", &input)
+        .await
+        .unwrap();
     let step_id = &board.tasks[0].id;
 
     // First step is InProgress — fail it
@@ -162,9 +213,14 @@ async fn test_update_task_fail_step() {
         },
     };
 
-    let updated = task_board_manager::update_task_board(&pool, "t-fail", &update).await.unwrap();
+    let updated = task_board_manager::update_task_board(&pool, "t-fail", &update)
+        .await
+        .unwrap();
     assert_eq!(updated.tasks[0].stage, TaskStage::Failed);
-    assert_eq!(updated.tasks[0].error_detail, Some("Something went wrong".to_string()));
+    assert_eq!(
+        updated.tasks[0].error_detail,
+        Some("Something went wrong".to_string())
+    );
     // active_task_id should advance to next pending step
     assert_eq!(updated.active_task_id.as_ref(), Some(&updated.tasks[1].id));
 }
@@ -177,16 +233,22 @@ async fn test_update_task_complete_board() {
 
     let input = CreateTaskInput {
         title: "Test Task".to_string(),
-        steps: vec![CreateTaskStep { description: "Step A".to_string() }],
+        steps: vec![CreateTaskStep {
+            description: "Step A".to_string(),
+        }],
     };
-    let board = task_board_manager::create_task_board(&pool, "t-board", &input).await.unwrap();
+    let board = task_board_manager::create_task_board(&pool, "t-board", &input)
+        .await
+        .unwrap();
 
     let update = UpdateTaskInput {
         task_board_id: board.id.clone(),
         action: UpdateTaskAction::CompleteBoard,
     };
 
-    let updated = task_board_manager::update_task_board(&pool, "t-board", &update).await.unwrap();
+    let updated = task_board_manager::update_task_board(&pool, "t-board", &update)
+        .await
+        .unwrap();
     assert_eq!(updated.status, TaskBoardStatus::Completed);
 }
 
@@ -202,18 +264,27 @@ async fn test_cannot_start_already_started_step() {
 
     let input = CreateTaskInput {
         title: "SM Test".to_string(),
-        steps: vec![CreateTaskStep { description: "Step A".to_string() }],
+        steps: vec![CreateTaskStep {
+            description: "Step A".to_string(),
+        }],
     };
-    let board = task_board_manager::create_task_board(&pool, "t-sm1", &input).await.unwrap();
+    let board = task_board_manager::create_task_board(&pool, "t-sm1", &input)
+        .await
+        .unwrap();
     let step_id = &board.tasks[0].id;
 
     // Step is already InProgress — starting it again should fail
     let update = UpdateTaskInput {
         task_board_id: board.id.clone(),
-        action: UpdateTaskAction::StartStep { step_id: step_id.clone() },
+        action: UpdateTaskAction::StartStep {
+            step_id: step_id.clone(),
+        },
     };
     let result = task_board_manager::update_task_board(&pool, "t-sm1", &update).await;
-    assert!(result.is_err(), "Should reject starting an already in-progress step");
+    assert!(
+        result.is_err(),
+        "Should reject starting an already in-progress step"
+    );
 }
 
 #[tokio::test]
@@ -225,17 +296,25 @@ async fn test_cannot_complete_pending_step() {
     let input = CreateTaskInput {
         title: "SM Test".to_string(),
         steps: vec![
-            CreateTaskStep { description: "Step A".to_string() },
-            CreateTaskStep { description: "Step B".to_string() },
+            CreateTaskStep {
+                description: "Step A".to_string(),
+            },
+            CreateTaskStep {
+                description: "Step B".to_string(),
+            },
         ],
     };
-    let board = task_board_manager::create_task_board(&pool, "t-sm2", &input).await.unwrap();
+    let board = task_board_manager::create_task_board(&pool, "t-sm2", &input)
+        .await
+        .unwrap();
     let step_b_id = &board.tasks[1].id; // Step B is Pending
 
     // Completing a Pending step should fail
     let update = UpdateTaskInput {
         task_board_id: board.id.clone(),
-        action: UpdateTaskAction::CompleteStep { step_id: step_b_id.clone() },
+        action: UpdateTaskAction::CompleteStep {
+            step_id: step_b_id.clone(),
+        },
     };
     let result = task_board_manager::update_task_board(&pool, "t-sm2", &update).await;
     assert!(result.is_err(), "Should reject completing a pending step");
@@ -249,24 +328,35 @@ async fn test_cannot_update_completed_board() {
 
     let input = CreateTaskInput {
         title: "SM Test".to_string(),
-        steps: vec![CreateTaskStep { description: "Step A".to_string() }],
+        steps: vec![CreateTaskStep {
+            description: "Step A".to_string(),
+        }],
     };
-    let board = task_board_manager::create_task_board(&pool, "t-sm3", &input).await.unwrap();
+    let board = task_board_manager::create_task_board(&pool, "t-sm3", &input)
+        .await
+        .unwrap();
 
     // Complete the board
     let complete = UpdateTaskInput {
         task_board_id: board.id.clone(),
         action: UpdateTaskAction::CompleteBoard,
     };
-    task_board_manager::update_task_board(&pool, "t-sm3", &complete).await.unwrap();
+    task_board_manager::update_task_board(&pool, "t-sm3", &complete)
+        .await
+        .unwrap();
 
     // Trying to start a step on a completed board should fail
     let update = UpdateTaskInput {
         task_board_id: board.id.clone(),
-        action: UpdateTaskAction::StartStep { step_id: board.tasks[0].id.clone() },
+        action: UpdateTaskAction::StartStep {
+            step_id: board.tasks[0].id.clone(),
+        },
     };
     let result = task_board_manager::update_task_board(&pool, "t-sm3", &update).await;
-    assert!(result.is_err(), "Should reject step updates on a completed board");
+    assert!(
+        result.is_err(),
+        "Should reject step updates on a completed board"
+    );
 
     // Trying to complete an already-completed board should also fail
     let update2 = UpdateTaskInput {
@@ -274,7 +364,10 @@ async fn test_cannot_update_completed_board() {
         action: UpdateTaskAction::CompleteBoard,
     };
     let result2 = task_board_manager::update_task_board(&pool, "t-sm3", &update2).await;
-    assert!(result2.is_err(), "Should reject completing an already-completed board");
+    assert!(
+        result2.is_err(),
+        "Should reject completing an already-completed board"
+    );
 }
 
 // =========================================================================
@@ -289,12 +382,18 @@ async fn test_task_boards_deleted_with_thread() {
 
     let input = CreateTaskInput {
         title: "To Delete".to_string(),
-        steps: vec![CreateTaskStep { description: "Step".to_string() }],
+        steps: vec![CreateTaskStep {
+            description: "Step".to_string(),
+        }],
     };
-    task_board_manager::create_task_board(&pool, "t-delete", &input).await.unwrap();
+    task_board_manager::create_task_board(&pool, "t-delete", &input)
+        .await
+        .unwrap();
 
     // Verify board exists
-    let boards = task_board_manager::load_thread_task_boards(&pool, "t-delete").await.unwrap();
+    let boards = task_board_manager::load_thread_task_boards(&pool, "t-delete")
+        .await
+        .unwrap();
     assert_eq!(boards.len(), 1);
 
     // Delete thread using ThreadManager

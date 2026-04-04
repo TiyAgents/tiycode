@@ -3,8 +3,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::core::agent_session::{
-    normalize_profile_response_language, response_style_system_instruction,
-    ProfileResponseStyle,
+    normalize_profile_response_language, response_style_system_instruction, ProfileResponseStyle,
 };
 use crate::core::subagent::TERM_PANEL_USAGE_NOTE;
 use crate::model::errors::AppError;
@@ -94,7 +93,8 @@ impl PromptSectionProvider for EnvironmentProvider {
             PromptSection {
                 key: "sandbox_permissions",
                 title: "Sandbox & Permissions",
-                body: build_sandbox_permissions_body(ctx.pool, ctx.run_mode, ctx.workspace_path).await?,
+                body: build_sandbox_permissions_body(ctx.pool, ctx.run_mode, ctx.workspace_path)
+                    .await?,
                 phase: PromptPhase::RuntimeContext,
                 order_in_phase: 20,
             },
@@ -124,7 +124,8 @@ impl PromptSectionProvider for ProfileProvider {
             ctx.raw_plan.response_style.as_deref(),
         );
         let runtime_has_response_language =
-            normalize_profile_response_language(ctx.raw_plan.response_language.as_deref()).is_some();
+            normalize_profile_response_language(ctx.raw_plan.response_language.as_deref())
+                .is_some();
         let runtime_has_explicit_response_style = ctx
             .raw_plan
             .response_style
@@ -193,7 +194,10 @@ impl PromptSectionProvider for ProfileProvider {
         sections.push(PromptSection {
             key: "runtime_context",
             title: "Runtime Context",
-            body: format!("Current date: {date}\nWorkspace path: {}", ctx.workspace_path),
+            body: format!(
+                "Current date: {date}\nWorkspace path: {}",
+                ctx.workspace_path
+            ),
             phase: PromptPhase::RuntimeContext,
             order_in_phase: 40,
         });

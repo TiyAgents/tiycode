@@ -172,6 +172,7 @@ export interface RunModelPlanRoleDto {
   baseUrl: string;
   contextWindow?: string | null;
   maxOutputTokens?: string | null;
+  supportsImageInput?: boolean | null;
   customHeaders?: Record<string, string> | null;
   providerOptions?: Record<string, unknown> | null;
 }
@@ -239,6 +240,13 @@ export type RunStatus =
   | "interrupted"
   | "cancelled";
 
+export interface MessageAttachmentDto {
+  id: string;
+  name: string;
+  mediaType: string | null;
+  url: string | null;
+}
+
 export interface MessageDto {
   id: string;
   threadId: string;
@@ -248,6 +256,7 @@ export interface MessageDto {
   messageType: MessageType;
   status: MessageStatus;
   metadata: unknown | null;
+  attachments: MessageAttachmentDto[];
   createdAt: string;
 }
 

@@ -48,6 +48,7 @@ function toRunModelPlanRole(selection: ProviderModelSelection): RunModelPlanRole
     baseUrl: provider.baseUrl,
     contextWindow: model.contextWindow ?? null,
     maxOutputTokens: model.maxOutputTokens ?? null,
+    supportsImageInput: model.capabilityOverrides.vision ?? null,
     customHeaders: isNonEmptyRecord(provider.customHeaders) ? provider.customHeaders : null,
     providerOptions: isNonEmptyRecord(model.providerOptions) ? model.providerOptions : null,
   };

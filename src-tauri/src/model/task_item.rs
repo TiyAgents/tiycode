@@ -30,7 +30,10 @@ impl TaskStage {
             "completed" => Self::Completed,
             "failed" => Self::Failed,
             other => {
-                tracing::warn!(value = other, "Unknown TaskStage from DB, defaulting to Pending");
+                tracing::warn!(
+                    value = other,
+                    "Unknown TaskStage from DB, defaulting to Pending"
+                );
                 Self::Pending
             }
         }

@@ -974,9 +974,8 @@ mod tests {
 
     #[test]
     fn collect_prompt_sections_keeps_section_boundaries() {
-        let sections = collect_prompt_sections(
-            "## One\nalpha\n\n## Two\nbeta\nline two\n\n## Three\ngamma",
-        );
+        let sections =
+            collect_prompt_sections("## One\nalpha\n\n## Two\nbeta\nline two\n\n## Three\ngamma");
 
         assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].0, "One");

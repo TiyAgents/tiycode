@@ -1,6 +1,101 @@
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import type { CommandEntry } from "@/modules/settings-center/model/types";
-import type { RunMode } from "@/shared/types/api";
+import type { MessageAttachmentDto, RunMode } from "@/shared/types/api";
+
+export const SUPPORTED_COMPOSER_ATTACHMENT_EXTENSIONS = [
+  ".md",
+  ".txt",
+  ".json",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".py",
+  ".go",
+  ".rs",
+  ".java",
+  ".c",
+  ".cc",
+  ".cpp",
+  ".cxx",
+  ".h",
+  ".hpp",
+  ".hh",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".ini",
+  ".conf",
+  ".cfg",
+  ".env",
+  ".properties",
+  ".xml",
+  ".html",
+  ".css",
+  ".scss",
+  ".less",
+  ".sql",
+  ".sh",
+  ".bash",
+  ".zsh",
+] as const;
+
+export const SUPPORTED_COMPOSER_ATTACHMENT_ACCEPT = [
+  "image/*",
+  ...SUPPORTED_COMPOSER_ATTACHMENT_EXTENSIONS,
+].join(",");
+
+export const SUPPORTED_COMPOSER_ATTACHMENT_DIALOG_FILTERS = [
+  {
+    name: "Images",
+    extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"],
+  },
+  {
+    name: "Source files",
+    extensions: [
+      "md",
+      "txt",
+      "json",
+      "js",
+      "jsx",
+      "ts",
+      "tsx",
+      "py",
+      "go",
+      "rs",
+      "java",
+      "c",
+      "cc",
+      "cpp",
+      "cxx",
+      "h",
+      "hpp",
+      "hh",
+      "sh",
+      "bash",
+      "zsh",
+      "sql",
+    ],
+  },
+  {
+    name: "Config files",
+    extensions: [
+      "yaml",
+      "yml",
+      "toml",
+      "ini",
+      "conf",
+      "cfg",
+      "env",
+      "properties",
+      "xml",
+      "html",
+      "css",
+      "scss",
+      "less",
+    ],
+  },
+] as const;
 
 export type BuiltinComposerCommandName = "init" | "clear" | "compact";
 
@@ -35,6 +130,7 @@ export type ComposerSubmission = {
   displayText: string;
   effectivePrompt: string;
   rawMessage: PromptInputMessage;
+  attachments: MessageAttachmentDto[];
   command?: ComposerCommandInvocation;
   metadata?: Record<string, unknown> | null;
   runMode?: RunMode;
@@ -237,6 +333,12 @@ export function buildComposerSubmission(
     return null;
   }
 
+  const attachments = message.files.map((file, index) => ({
+    id: file.url || `${file.filename || "attachment"}-${index}`,
+    mediaType: file.mediaType ?? null,
+    name: file.filename?.trim() || `附件 ${index + 1}`,
+    url: file.url ?? null,
+  }));
   const parsedCommand = displayText ? parseSlashCommandInput(displayText, registry) : null;
   if (!parsedCommand?.command) {
     return {
@@ -244,6 +346,7 @@ export function buildComposerSubmission(
       displayText,
       effectivePrompt: displayText,
       rawMessage: message,
+      attachments,
       metadata: null,
       runMode,
     };
@@ -266,6 +369,7 @@ export function buildComposerSubmission(
     displayText,
     effectivePrompt,
     rawMessage: message,
+    attachments,
     command: invocation,
     metadata: {
       composer: {

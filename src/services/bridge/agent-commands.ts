@@ -1,5 +1,6 @@
 import { invoke, isTauri, Channel } from "@tauri-apps/api/core";
 import type {
+  MessageAttachmentDto,
   RunModelPlanDto,
   RunUsageDto,
   SubagentActivityStatus,
@@ -12,6 +13,7 @@ export type ThreadRunInput = {
   prompt: string;
   displayPrompt?: string | null;
   promptMetadata?: Record<string, unknown> | null;
+  attachments?: MessageAttachmentDto[];
 };
 
 const requireTauri = (cmd: string) => {
@@ -457,6 +459,7 @@ export async function threadStartRun(
     prompt: input.prompt,
     displayPrompt: input.displayPrompt ?? null,
     promptMetadata: input.promptMetadata ?? null,
+    attachments: input.attachments ?? [],
     runMode: runMode ?? null,
     modelPlan: modelPlan ?? null,
     onEvent: channel,

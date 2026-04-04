@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose, Engine as _};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
@@ -8,8 +9,8 @@ use tiy_core::agent::{
 };
 use tiy_core::thinking::ThinkingLevel;
 use tiy_core::types::{
-    AssistantMessage, AssistantMessageEvent, ContentBlock, Cost, InputType, Model, Provider,
-    StopReason, TextContent, Transport, Usage, UserMessage,
+    AssistantMessage, AssistantMessageEvent, ContentBlock, Cost, ImageContent, InputType, Model,
+    Provider, StopReason, TextContent, Transport, Usage, UserMessage,
 };
 use tokio::sync::mpsc;
 
@@ -21,8 +22,8 @@ use crate::core::prompt;
 use crate::core::subagent::{
     runtime_orchestration_tools, HelperAgentOrchestrator, HelperRunRequest,
     RuntimeOrchestrationTool, SubagentProfile, TERM_CLOSE_TOOL_DESCRIPTION,
-    TERM_OUTPUT_TOOL_DESCRIPTION, TERM_RESTART_TOOL_DESCRIPTION,
-    TERM_STATUS_TOOL_DESCRIPTION, TERM_WRITE_TOOL_DESCRIPTION,
+    TERM_OUTPUT_TOOL_DESCRIPTION, TERM_RESTART_TOOL_DESCRIPTION, TERM_STATUS_TOOL_DESCRIPTION,
+    TERM_WRITE_TOOL_DESCRIPTION,
 };
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
@@ -30,7 +31,7 @@ use crate::core::tool_gateway::{
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::AgentProfileRecord;
-use crate::model::thread::{MessageRecord, RunUsageDto};
+use crate::model::thread::{MessageAttachmentDto, MessageRecord, RunUsageDto};
 use crate::persistence::repo::{message_repo, provider_repo, tool_call_repo};
 
 const MESSAGE_HISTORY_LIMIT: i64 = 200;
@@ -43,6 +44,7 @@ const SUBAGENT_TOOL_TIMEOUT_SECS: u64 = 600;
 const CLARIFY_TOOL_NAME: &str = "clarify";
 const PLAN_MODE_MISSING_CHECKPOINT_ERROR: &str =
     "Plan mode requires publishing a plan with update_plan before the run can finish.";
+const TEXT_ATTACHMENT_MAX_CHARS: usize = 12_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfileResponseStyle {
@@ -66,6 +68,7 @@ pub struct RuntimeModelRole {
     pub base_url: String,
     pub context_window: Option<String>,
     pub max_output_tokens: Option<String>,
+    pub supports_image_input: Option<bool>,
     pub custom_headers: Option<HashMap<String, String>>,
     pub provider_options: Option<serde_json::Value>,
 }
@@ -326,7 +329,9 @@ impl AgentSession {
         }
 
         if tool_name == "create_task" || tool_name == "update_task" {
-            return self.execute_task_tool(tool_name, tool_call_id, tool_input).await;
+            return self
+                .execute_task_tool(tool_name, tool_call_id, tool_input)
+                .await;
         }
 
         if tool_name == CLARIFY_TOOL_NAME {
@@ -687,6 +692,7 @@ impl AgentSession {
             message_type: "plan".to_string(),
             status: "completed".to_string(),
             metadata_json: serde_json::to_string(&plan_metadata).ok(),
+            attachments_json: None,
             created_at: String::new(),
         };
         let approval_message = MessageRecord {
@@ -698,6 +704,7 @@ impl AgentSession {
             message_type: "approval_prompt".to_string(),
             status: "completed".to_string(),
             metadata_json: serde_json::to_string(&approval_metadata).ok(),
+            attachments_json: None,
             created_at: String::new(),
         };
 
@@ -729,7 +736,12 @@ impl AgentSession {
         }
     }
 
-    async fn execute_task_tool(&self, tool_name: &str, tool_call_id: &str, tool_input: &serde_json::Value) -> AgentToolResult {
+    async fn execute_task_tool(
+        &self,
+        tool_name: &str,
+        tool_call_id: &str,
+        tool_input: &serde_json::Value,
+    ) -> AgentToolResult {
         use crate::core::task_board_manager;
         use crate::model::task_board::{CreateTaskInput, UpdateTaskInput};
 
@@ -744,7 +756,9 @@ impl AgentSession {
                 tool_input_json: tool_input.to_string(),
                 status: "running".to_string(),
             },
-        ).await {
+        )
+        .await
+        {
             return agent_error_result(format!("failed to persist tool call: {error}"));
         }
 
@@ -756,7 +770,13 @@ impl AgentSession {
         let result = if tool_name == "create_task" {
             match serde_json::from_value::<CreateTaskInput>(tool_input.clone()) {
                 Ok(input) => {
-                    match task_board_manager::create_task_board(&self.pool, &self.spec.thread_id, &input).await {
+                    match task_board_manager::create_task_board(
+                        &self.pool,
+                        &self.spec.thread_id,
+                        &input,
+                    )
+                    .await
+                    {
                         Ok(dto) => {
                             let _ = self.event_tx.send(ThreadStreamEvent::TaskBoardUpdated {
                                 run_id: self.spec.run_id.clone(),
@@ -772,7 +792,13 @@ impl AgentSession {
         } else if tool_name == "update_task" {
             match serde_json::from_value::<UpdateTaskInput>(tool_input.clone()) {
                 Ok(input) => {
-                    match task_board_manager::update_task_board(&self.pool, &self.spec.thread_id, &input).await {
+                    match task_board_manager::update_task_board(
+                        &self.pool,
+                        &self.spec.thread_id,
+                        &input,
+                    )
+                    .await
+                    {
                         Ok(dto) => {
                             let _ = self.event_tx.send(ThreadStreamEvent::TaskBoardUpdated {
                                 run_id: self.spec.run_id.clone(),
@@ -797,7 +823,9 @@ impl AgentSession {
                     tool_call_id,
                     &result_json.to_string(),
                     "completed",
-                ).await.ok();
+                )
+                .await
+                .ok();
 
                 let _ = self.event_tx.send(ThreadStreamEvent::ToolCompleted {
                     run_id: self.spec.run_id.clone(),
@@ -807,11 +835,12 @@ impl AgentSession {
 
                 AgentToolResult {
                     content: vec![ContentBlock::Text(TextContent::new(
-                        serde_json::to_string(&dto).unwrap_or_else(|_| "Task updated successfully".to_string()),
+                        serde_json::to_string(&dto)
+                            .unwrap_or_else(|_| "Task updated successfully".to_string()),
                     ))],
                     details: Some(result_json),
                 }
-            },
+            }
             Err(error) => {
                 let error_json = serde_json::json!({ "error": &error });
                 tool_call_repo::update_result(
@@ -819,7 +848,9 @@ impl AgentSession {
                     tool_call_id,
                     &error_json.to_string(),
                     "failed",
-                ).await.ok();
+                )
+                .await
+                .ok();
 
                 let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
                     run_id: self.spec.run_id.clone(),
@@ -828,7 +859,7 @@ impl AgentSession {
                 });
 
                 agent_error_result(error)
-            },
+            }
         }
     }
 
@@ -1537,9 +1568,7 @@ pub(crate) fn convert_history_messages(
         .iter()
         .filter_map(|message| match message.message_type.as_str() {
             "plain_message" => match message.role.as_str() {
-                "user" => Some(AgentMessage::User(UserMessage::text(
-                    history_user_message_text(message),
-                ))),
+                "user" => Some(AgentMessage::User(history_user_message(message, model))),
                 "assistant" => Some(AgentMessage::Assistant(assistant_message_from_text(
                     &message.content_markdown,
                     model,
@@ -1560,6 +1589,29 @@ pub(crate) fn convert_history_messages(
             _ => None,
         })
         .collect()
+}
+
+fn history_user_message(message: &MessageRecord, model: &Model) -> UserMessage {
+    let text = history_user_message_text(message);
+    let attachments = history_message_attachments(message);
+
+    if attachments.is_empty() {
+        return UserMessage::text(text);
+    }
+
+    let mut blocks = Vec::new();
+    let trimmed = text.trim();
+    if !trimmed.is_empty() {
+        blocks.push(ContentBlock::Text(TextContent::new(trimmed)));
+    }
+
+    blocks.extend(attachment_blocks(&attachments, model));
+
+    if blocks.is_empty() {
+        UserMessage::text(text)
+    } else {
+        UserMessage::blocks(blocks)
+    }
 }
 
 fn history_user_message_text(message: &MessageRecord) -> String {
@@ -1584,6 +1636,288 @@ fn command_effective_prompt_from_metadata(raw: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+fn history_message_attachments(message: &MessageRecord) -> Vec<MessageAttachmentDto> {
+    message
+        .attachments_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Vec<MessageAttachmentDto>>(raw).ok())
+        .unwrap_or_default()
+}
+
+fn attachment_blocks(attachments: &[MessageAttachmentDto], model: &Model) -> Vec<ContentBlock> {
+    attachments
+        .iter()
+        .filter_map(|attachment| attachment_block(attachment, model))
+        .collect()
+}
+
+fn attachment_block(attachment: &MessageAttachmentDto, model: &Model) -> Option<ContentBlock> {
+    if is_image_attachment(attachment) {
+        return Some(image_attachment_block(attachment, model));
+    }
+
+    if is_text_attachment(attachment) {
+        return Some(text_attachment_block(attachment));
+    }
+
+    None
+}
+
+fn image_attachment_block(attachment: &MessageAttachmentDto, model: &Model) -> ContentBlock {
+    let label = attachment_label(attachment);
+
+    if !model.supports_image() {
+        return ContentBlock::Text(TextContent::new(format!("[Image attachment: {label}]")));
+    }
+
+    let Some(parsed) = attachment
+        .url
+        .as_deref()
+        .and_then(parse_data_url)
+        .filter(|parsed| parsed.is_base64)
+    else {
+        return ContentBlock::Text(TextContent::new(format!(
+            "[Image attachment could not be loaded: {label}]"
+        )));
+    };
+
+    let mime_type = attachment
+        .media_type
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(parsed.mime_type);
+
+    ContentBlock::Image(ImageContent::new(parsed.payload, mime_type))
+}
+
+fn text_attachment_block(attachment: &MessageAttachmentDto) -> ContentBlock {
+    let label = attachment_label(attachment);
+
+    match attachment
+        .url
+        .as_deref()
+        .and_then(decode_data_url_text)
+        .map(|text| render_text_attachment(&label, &text))
+    {
+        Some(content) => ContentBlock::Text(TextContent::new(content)),
+        None => ContentBlock::Text(TextContent::new(format!(
+            "[Text attachment could not be decoded: {label}]"
+        ))),
+    }
+}
+
+fn attachment_label(attachment: &MessageAttachmentDto) -> String {
+    let trimmed = attachment.name.trim();
+    if trimmed.is_empty() {
+        "unnamed attachment".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn is_image_attachment(attachment: &MessageAttachmentDto) -> bool {
+    attachment
+        .media_type
+        .as_deref()
+        .map(|value| value.starts_with("image/"))
+        .unwrap_or(false)
+        || matches!(
+            file_extension(&attachment.name).as_deref(),
+            Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg")
+        )
+}
+
+fn is_text_attachment(attachment: &MessageAttachmentDto) -> bool {
+    attachment
+        .media_type
+        .as_deref()
+        .map(is_text_media_type)
+        .unwrap_or(false)
+        || matches!(
+            file_extension(&attachment.name).as_deref(),
+            Some(
+                "txt"
+                    | "md"
+                    | "markdown"
+                    | "json"
+                    | "js"
+                    | "jsx"
+                    | "ts"
+                    | "tsx"
+                    | "rs"
+                    | "py"
+                    | "java"
+                    | "go"
+                    | "css"
+                    | "scss"
+                    | "less"
+                    | "html"
+                    | "xml"
+                    | "yaml"
+                    | "yml"
+                    | "toml"
+                    | "ini"
+                    | "sh"
+                    | "bash"
+                    | "zsh"
+                    | "sql"
+                    | "c"
+                    | "cc"
+                    | "cpp"
+                    | "h"
+                    | "hpp"
+                    | "swift"
+                    | "kt"
+                    | "rb"
+                    | "php"
+                    | "vue"
+                    | "svelte"
+                    | "astro"
+            )
+        )
+}
+
+fn is_text_media_type(media_type: &str) -> bool {
+    media_type.starts_with("text/")
+        || matches!(
+            media_type,
+            "application/json"
+                | "application/xml"
+                | "application/yaml"
+                | "application/x-yaml"
+                | "application/toml"
+                | "application/javascript"
+                | "application/x-javascript"
+                | "application/typescript"
+        )
+}
+
+fn file_extension(name: &str) -> Option<String> {
+    let (_, ext) = name.rsplit_once('.')?;
+    let trimmed = ext.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_ascii_lowercase())
+    }
+}
+
+fn render_text_attachment(name: &str, content: &str) -> String {
+    let trimmed = content.trim();
+    let truncated = truncate_for_attachment(trimmed, TEXT_ATTACHMENT_MAX_CHARS);
+    let language = fence_language(name);
+    let suffix = if truncated.chars().count() < trimmed.chars().count() {
+        "\n[attachment content truncated]"
+    } else {
+        ""
+    };
+
+    format!("[Text attachment: {name}]\n~~~{language}\n{truncated}\n~~~{suffix}")
+}
+
+fn fence_language(name: &str) -> &'static str {
+    match file_extension(name).as_deref() {
+        Some("md" | "markdown") => "markdown",
+        Some("txt") => "text",
+        Some("json") => "json",
+        Some("js" | "jsx") => "javascript",
+        Some("ts" | "tsx") => "typescript",
+        Some("rs") => "rust",
+        Some("py") => "python",
+        Some("java") => "java",
+        Some("go") => "go",
+        Some("css" | "scss" | "less") => "css",
+        Some("html") => "html",
+        Some("xml") => "xml",
+        Some("yaml" | "yml") => "yaml",
+        Some("toml") => "toml",
+        Some("sh" | "bash" | "zsh") => "bash",
+        Some("sql") => "sql",
+        Some("c" | "cc" | "cpp" | "h" | "hpp") => "cpp",
+        Some("swift") => "swift",
+        Some("kt") => "kotlin",
+        Some("rb") => "ruby",
+        Some("php") => "php",
+        Some("vue") => "vue",
+        Some("svelte") => "svelte",
+        Some("astro") => "astro",
+        _ => "text",
+    }
+}
+
+fn truncate_for_attachment(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn decode_data_url_text(url: &str) -> Option<String> {
+    let parsed = parse_data_url(url)?;
+    let bytes = if parsed.is_base64 {
+        general_purpose::STANDARD
+            .decode(parsed.payload.as_bytes())
+            .ok()?
+    } else {
+        percent_decode(parsed.payload.as_bytes())?
+    };
+
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+struct ParsedDataUrl {
+    mime_type: String,
+    payload: String,
+    is_base64: bool,
+}
+
+fn parse_data_url(url: &str) -> Option<ParsedDataUrl> {
+    let payload = url.strip_prefix("data:")?;
+    let (meta, data) = payload.split_once(',')?;
+    let mut meta_parts = meta.split(';');
+    let mime_type = meta_parts
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("text/plain")
+        .to_string();
+    let is_base64 = meta_parts.any(|part| part.eq_ignore_ascii_case("base64"));
+
+    Some(ParsedDataUrl {
+        mime_type,
+        payload: data.to_string(),
+        is_base64,
+    })
+}
+
+fn percent_decode(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return None;
+            }
+            let high = decode_hex_digit(bytes[index + 1])?;
+            let low = decode_hex_digit(bytes[index + 2])?;
+            decoded.push((high << 4) | low);
+            index += 3;
+            continue;
+        }
+
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+
+    Some(decoded)
+}
+
+fn decode_hex_digit(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn is_context_reset_marker(message: &MessageRecord) -> bool {
@@ -1838,7 +2172,13 @@ pub async fn resolve_runtime_model_role(
         .base_url(&role.base_url)
         .context_window(context_window)
         .max_tokens(max_output_tokens)
-        .input(vec![InputType::Text])
+        .input({
+            let mut input = vec![InputType::Text];
+            if role.supports_image_input.unwrap_or(false) {
+                input.push(InputType::Image);
+            }
+            input
+        })
         .cost(Cost::default());
 
     if let Some(headers) = role.custom_headers.clone() {
@@ -2002,12 +2342,11 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 mod tests {
     use super::{
         build_profile_response_prompt_parts, build_system_prompt, convert_history_messages,
-        handle_agent_event, normalize_profile_response_language,
-        normalize_profile_response_style, plan_mode_missing_checkpoint_error,
-        resolve_helper_model_role, resolve_helper_profile, response_style_system_instruction,
-        runtime_security_config, runtime_tools_for_profile, standard_tool_timeout,
-        trim_history_to_current_context, ProfileResponseStyle, ResolvedModelRole,
-        ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
+        handle_agent_event, normalize_profile_response_language, normalize_profile_response_style,
+        plan_mode_missing_checkpoint_error, resolve_helper_model_role, resolve_helper_profile,
+        response_style_system_instruction, runtime_security_config, runtime_tools_for_profile,
+        standard_tool_timeout, trim_history_to_current_context, ProfileResponseStyle,
+        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
         PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
         STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
@@ -2017,7 +2356,7 @@ mod tests {
     use tempfile::tempdir;
     use tiy_core::agent::{AgentEvent, AgentMessage};
     use tiy_core::thinking::ThinkingLevel;
-    use tiy_core::types::{Api, AssistantMessage, AssistantMessageEvent, Provider};
+    use tiy_core::types::{Api, AssistantMessage, AssistantMessageEvent, ContentBlock, Provider};
     use tokio::sync::mpsc;
 
     use crate::core::plan_checkpoint::{
@@ -2065,7 +2404,10 @@ mod tests {
             .expect("partial assistant message")
     }
 
-    fn sample_resolved_model_role(model_id: &str) -> ResolvedModelRole {
+    fn sample_resolved_model_role_with_inputs(
+        model_id: &str,
+        input: Vec<tiy_core::types::InputType>,
+    ) -> ResolvedModelRole {
         let model = tiy_core::types::Model::builder()
             .id(model_id)
             .name(model_id)
@@ -2073,7 +2415,7 @@ mod tests {
             .base_url("https://api.openai.com/v1")
             .context_window(128_000)
             .max_tokens(32_000)
-            .input(vec![tiy_core::types::InputType::Text])
+            .input(input)
             .cost(tiy_core::types::Cost::default())
             .build()
             .expect("sample resolved model");
@@ -2089,6 +2431,10 @@ mod tests {
             provider_options: None,
             model,
         }
+    }
+
+    fn sample_resolved_model_role(model_id: &str) -> ResolvedModelRole {
+        sample_resolved_model_role_with_inputs(model_id, vec![tiy_core::types::InputType::Text])
     }
 
     fn sample_resolved_runtime_model_plan(
@@ -2119,6 +2465,16 @@ mod tests {
             },
             AgentMessage::Assistant(assistant) => assistant.text_content(),
             _ => String::new(),
+        }
+    }
+
+    fn user_blocks(message: &AgentMessage) -> &[ContentBlock] {
+        match message {
+            AgentMessage::User(user) => match &user.content {
+                tiy_core::types::UserContent::Blocks(blocks) => blocks,
+                _ => panic!("expected block-based user message"),
+            },
+            _ => panic!("expected user message"),
         }
     }
 
@@ -2783,6 +3139,7 @@ mod tests {
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
+                attachments_json: None,
                 created_at: String::new(),
             },
             MessageRecord {
@@ -2796,6 +3153,7 @@ mod tests {
                 metadata_json: Some(
                     serde_json::to_string(&plan_metadata).expect("serialize plan metadata"),
                 ),
+                attachments_json: None,
                 created_at: String::new(),
             },
             MessageRecord {
@@ -2807,6 +3165,7 @@ mod tests {
                 message_type: "approval_prompt".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
+                attachments_json: None,
                 created_at: String::new(),
             },
         ];
@@ -2842,6 +3201,7 @@ mod tests {
                 })
                 .to_string(),
             ),
+            attachments_json: None,
             created_at: String::new(),
         }];
 
@@ -2856,6 +3216,117 @@ mod tests {
     }
 
     #[test]
+    fn convert_history_messages_includes_image_and_text_attachments() {
+        let messages = vec![MessageRecord {
+            id: "msg-attachment".to_string(),
+            thread_id: "thread-1".to_string(),
+            run_id: None,
+            role: "user".to_string(),
+            content_markdown: "Please inspect these files.".to_string(),
+            message_type: "plain_message".to_string(),
+            status: "completed".to_string(),
+            metadata_json: None,
+            attachments_json: Some(
+                serde_json::json!([
+                    {
+                        "id": "image-1",
+                        "name": "diagram.png",
+                        "mediaType": "image/png",
+                        "url": "data:image/png;base64,aGVsbG8="
+                    },
+                    {
+                        "id": "text-1",
+                        "name": "notes.md",
+                        "mediaType": "text/markdown",
+                        "url": "data:text/markdown;base64,IyBIZWFkZXIKCkJvZHkgbGluZS4="
+                    }
+                ])
+                .to_string(),
+            ),
+            created_at: String::new(),
+        }];
+
+        let history = convert_history_messages(
+            &messages,
+            &sample_resolved_model_role_with_inputs(
+                "vision-model",
+                vec![
+                    tiy_core::types::InputType::Text,
+                    tiy_core::types::InputType::Image,
+                ],
+            )
+            .model,
+        );
+
+        assert_eq!(history.len(), 1);
+        let blocks = user_blocks(&history[0]);
+        assert_eq!(blocks.len(), 3);
+
+        match &blocks[0] {
+            ContentBlock::Text(text) => assert_eq!(text.text, "Please inspect these files."),
+            _ => panic!("expected prompt text block"),
+        }
+
+        match &blocks[1] {
+            ContentBlock::Image(image) => {
+                assert_eq!(image.mime_type, "image/png");
+                assert_eq!(image.data, "aGVsbG8=");
+            }
+            _ => panic!("expected image block"),
+        }
+
+        match &blocks[2] {
+            ContentBlock::Text(text) => {
+                assert!(text.text.contains("[Text attachment: notes.md]"));
+                assert!(text.text.contains("~~~markdown"));
+                assert!(text.text.contains("# Header"));
+                assert!(text.text.contains("Body line."));
+            }
+            _ => panic!("expected text attachment block"),
+        }
+    }
+
+    #[test]
+    fn convert_history_messages_falls_back_to_text_for_unsupported_image_models() {
+        let messages = vec![MessageRecord {
+            id: "msg-image".to_string(),
+            thread_id: "thread-1".to_string(),
+            run_id: None,
+            role: "user".to_string(),
+            content_markdown: "Describe this image.".to_string(),
+            message_type: "plain_message".to_string(),
+            status: "completed".to_string(),
+            metadata_json: None,
+            attachments_json: Some(
+                serde_json::json!([
+                    {
+                        "id": "image-1",
+                        "name": "photo.png",
+                        "mediaType": "image/png",
+                        "url": "data:image/png;base64,aGVsbG8="
+                    }
+                ])
+                .to_string(),
+            ),
+            created_at: String::new(),
+        }];
+
+        let history =
+            convert_history_messages(&messages, &sample_resolved_model_role("primary").model);
+
+        assert_eq!(history.len(), 1);
+        let blocks = user_blocks(&history[0]);
+        assert_eq!(blocks.len(), 2);
+
+        match &blocks[1] {
+            ContentBlock::Text(text) => {
+                assert_eq!(text.text, "[Image attachment: photo.png]");
+            }
+            _ => panic!("expected text fallback block"),
+        }
+    }
+
+    #[test]
     fn trim_history_to_current_context_keeps_only_messages_after_latest_reset() {
         let messages = vec![
             MessageRecord {
@@ -2867,6 +3338,7 @@ mod tests {
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
+                attachments_json: None,
                 created_at: String::new(),
             },
             MessageRecord {
@@ -2883,6 +3355,7 @@ mod tests {
                     })
                     .to_string(),
                 ),
+                attachments_json: None,
                 created_at: String::new(),
             },
             MessageRecord {
@@ -2900,6 +3373,7 @@ mod tests {
                     })
                     .to_string(),
                 ),
+                attachments_json: None,
                 created_at: String::new(),
             },
             MessageRecord {
@@ -2911,6 +3385,7 @@ mod tests {
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
+                attachments_json: None,
                 created_at: String::new(),
             },
         ];
@@ -2939,6 +3414,7 @@ mod tests {
                     })
                     .to_string(),
                 ),
+                attachments_json: None,
                 created_at: String::new(),
             },
             MessageRecord {
@@ -2956,6 +3432,7 @@ mod tests {
                     })
                     .to_string(),
                 ),
+                attachments_json: None,
                 created_at: String::new(),
             },
         ];

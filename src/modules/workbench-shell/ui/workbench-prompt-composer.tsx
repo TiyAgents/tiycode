@@ -43,6 +43,8 @@ import {
   filterComposerCommands,
   parseSlashCommandInput,
   shouldSmartSendCommand,
+  SUPPORTED_COMPOSER_ATTACHMENT_ACCEPT,
+  SUPPORTED_COMPOSER_ATTACHMENT_DIALOG_FILTERS,
   type ComposerCommandDescriptor,
   type ComposerSubmission,
 } from "@/modules/workbench-shell/model/composer-commands";
@@ -102,6 +104,7 @@ function buildSubmissionFromPromptInput(
   runMode: RunMode,
 ): ComposerSubmission {
   const trimmedText = message.text?.trim() ?? "";
+  const attachments = mapComposerAttachments(message.files);
   const parsedCommand = trimmedText ? parseSlashCommandInput(trimmedText, registry) : null;
 
   if (!parsedCommand?.command) {
@@ -110,6 +113,7 @@ function buildSubmissionFromPromptInput(
       displayText: trimmedText,
       effectivePrompt: trimmedText,
       rawMessage: message,
+      attachments,
       metadata: null,
       runMode,
     };
@@ -122,6 +126,7 @@ function buildSubmissionFromPromptInput(
     displayText: trimmedText,
     effectivePrompt,
     rawMessage: message,
+    attachments,
     runMode,
     command: {
       source: parsedCommand.command.source,
@@ -792,8 +797,12 @@ export function WorkbenchPromptComposer({
 
       <div className="rounded-[26px] border border-app-border/60 bg-app-surface/82 p-1.5 shadow-[0_22px_50px_-42px_rgba(15,23,42,0.38)] backdrop-blur-sm">
         <PromptInput
-          accept="image/*,.pdf,.md,.txt,.json,.ts,.tsx"
+          accept={SUPPORTED_COMPOSER_ATTACHMENT_ACCEPT}
           className="[&_[data-slot=input-group]]:overflow-visible [&_[data-slot=input-group]]:shadow-none [&_[data-slot=input-group]:focus-within]:!border-app-border/60 [&_[data-slot=input-group]:focus-within]:!ring-0"
+          dialogFilters={SUPPORTED_COMPOSER_ATTACHMENT_DIALOG_FILTERS.map((filter) => ({
+            extensions: [...filter.extensions],
+            name: filter.name,
+          }))}
           maxFileSize={10 * 1024 * 1024}
           maxFiles={4}
           onError={(nextError) => onErrorMessageChange?.(nextError.message)}
