@@ -38,8 +38,18 @@ pub struct PlanArtifact {
     pub kind: String,
     pub title: String,
     pub summary: String,
+    #[serde(default)]
+    pub context: Vec<String>,
+    #[serde(default)]
+    pub design: Vec<String>,
+    #[serde(default)]
+    pub key_implementation: Vec<String>,
     pub steps: Vec<PlanStep>,
+    #[serde(default)]
+    pub verification: Vec<String>,
     pub risks: Vec<String>,
+    #[serde(default)]
+    pub assumptions: Vec<String>,
     pub plan_revision: u32,
     pub needs_context_reset_option: bool,
 }
@@ -129,6 +139,14 @@ pub fn plan_markdown(metadata: &PlanMessageMetadata) -> String {
         lines.push(artifact.summary.trim().to_string());
     }
 
+    append_string_section(&mut lines, "Context", &artifact.context);
+    append_string_section(&mut lines, "Design", &artifact.design);
+    append_string_section(
+        &mut lines,
+        "Key Implementation",
+        &artifact.key_implementation,
+    );
+
     if !artifact.steps.is_empty() {
         lines.push(String::new());
         lines.push("## Steps".to_string());
@@ -144,13 +162,9 @@ pub fn plan_markdown(metadata: &PlanMessageMetadata) -> String {
         }
     }
 
-    if !artifact.risks.is_empty() {
-        lines.push(String::new());
-        lines.push("## Risks".to_string());
-        for risk in &artifact.risks {
-            lines.push(format!("- {}", risk));
-        }
-    }
+    append_string_section(&mut lines, "Verification", &artifact.verification);
+    append_string_section(&mut lines, "Risks", &artifact.risks);
+    append_string_section(&mut lines, "Assumptions", &artifact.assumptions);
 
     lines.join("\n")
 }
@@ -213,7 +227,13 @@ pub fn build_plan_artifact_from_tool_input(
             }]
         });
 
+    let context = read_string_list(root.and_then(|value| value.get("context")));
+    let design = read_string_list(root.and_then(|value| value.get("design")));
+    let key_implementation =
+        read_string_list(root.and_then(|value| value.get("keyImplementation")));
+    let verification = read_string_list(root.and_then(|value| value.get("verification")));
     let risks = read_string_list(root.and_then(|value| value.get("risks")));
+    let assumptions = read_string_list(root.and_then(|value| value.get("assumptions")));
     let needs_context_reset_option = root
         .and_then(|value| value.get("needsContextResetOption"))
         .and_then(serde_json::Value::as_bool)
@@ -223,10 +243,27 @@ pub fn build_plan_artifact_from_tool_input(
         kind: IMPLEMENTATION_PLAN_MESSAGE_KIND.to_string(),
         title,
         summary,
+        context,
+        design,
+        key_implementation,
         steps,
+        verification,
         risks,
+        assumptions,
         plan_revision,
         needs_context_reset_option,
+    }
+}
+
+fn append_string_section(lines: &mut Vec<String>, title: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+
+    lines.push(String::new());
+    lines.push(format!("## {}", title));
+    for item in items {
+        lines.push(format!("- {}", item));
     }
 }
 
@@ -294,18 +331,19 @@ fn parse_step(step: &serde_json::Value, index: usize) -> Option<PlanStep> {
 }
 
 fn read_string_list(value: Option<&serde_json::Value>) -> Vec<String> {
-    value
-        .and_then(serde_json::Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+    match value {
+        Some(serde_json::Value::String(single)) if !single.trim().is_empty() => {
+            vec![single.trim().to_string()]
+        }
+        Some(serde_json::Value::Array(entries)) => entries
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -313,7 +351,8 @@ mod tests {
     use super::{
         approval_prompt_markdown, build_approval_prompt_metadata,
         build_plan_artifact_from_tool_input, build_plan_message_metadata,
-        parse_approval_prompt_metadata, parse_plan_message_metadata, PlanApprovalAction,
+        parse_approval_prompt_metadata, parse_plan_message_metadata, plan_markdown,
+        PlanApprovalAction,
     };
 
     #[test]
@@ -322,6 +361,9 @@ mod tests {
             &serde_json::json!({
                 "title": "Runtime refactor",
                 "summary": "Refactor plan mode behavior.",
+                "context": ["Plan artifact only stores a subset of planning data today."],
+                "design": ["Expand the artifact and keep older plans compatible."],
+                "keyImplementation": ["Update plan checkpoint parsing and rendering."],
                 "steps": [
                     "Remove helper plan tool",
                     {
@@ -330,17 +372,31 @@ mod tests {
                         "files": ["src-tauri/src/core/agent_run_manager.rs"]
                     }
                 ],
-                "risks": ["State drift"]
+                "verification": ["Run Rust tests covering plan artifact parsing."],
+                "risks": ["State drift"],
+                "assumptions": ["Plan mode continues to pause before implementation."]
             }),
             3,
         );
 
         assert_eq!(artifact.plan_revision, 3);
+        assert_eq!(
+            artifact.context,
+            vec!["Plan artifact only stores a subset of planning data today."]
+        );
+        assert_eq!(
+            artifact.key_implementation,
+            vec!["Update plan checkpoint parsing and rendering."]
+        );
         assert_eq!(artifact.steps.len(), 2);
         assert_eq!(artifact.steps[0].title, "Remove helper plan tool");
         assert_eq!(
             artifact.steps[1].files,
             vec!["src-tauri/src/core/agent_run_manager.rs"]
+        );
+        assert_eq!(
+            artifact.verification,
+            vec!["Run Rust tests covering plan artifact parsing."]
         );
     }
 
@@ -368,5 +424,31 @@ mod tests {
             PlanApprovalAction::ApplyPlan
         );
         assert!(approval_prompt_markdown(&artifact).contains("Implement checkpoint"));
+    }
+
+    #[test]
+    fn plan_markdown_renders_new_structured_sections() {
+        let artifact = build_plan_artifact_from_tool_input(
+            &serde_json::json!({
+                "title": "Structured plan",
+                "summary": "Publish a richer planning artifact.",
+                "context": ["The current artifact only stores summary, steps, and risks."],
+                "design": ["Add new sections as structured arrays."],
+                "keyImplementation": ["Extend Rust schema and frontend parsing."],
+                "steps": ["Update the plan artifact builder."],
+                "verification": ["Run plan-related Rust and TypeScript verification."],
+                "risks": ["Older plans must remain readable."],
+                "assumptions": ["Historical messages may omit new fields."]
+            }),
+            2,
+        );
+        let metadata = build_plan_message_metadata(artifact, "run-2", "plan");
+        let markdown = plan_markdown(&metadata);
+
+        assert!(markdown.contains("## Context"));
+        assert!(markdown.contains("## Design"));
+        assert!(markdown.contains("## Key Implementation"));
+        assert!(markdown.contains("## Verification"));
+        assert!(markdown.contains("## Assumptions"));
     }
 }

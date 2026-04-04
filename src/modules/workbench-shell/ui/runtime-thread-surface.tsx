@@ -209,8 +209,12 @@ type PlanStepMetadata = {
 
 type PlanMessageMetadata = {
   approvalState?: string;
+  assumptions?: string[];
+  context?: string[];
+  design?: string[];
   generatedFromRunId?: string;
   kind?: string;
+  keyImplementation?: string[];
   needsContextResetOption?: boolean;
   planRevision?: number;
   risks?: string[];
@@ -218,15 +222,21 @@ type PlanMessageMetadata = {
   steps?: PlanStepMetadata[];
   summary?: string;
   title?: string;
+  verification?: string[];
 };
 
 type FormattedPlan = {
   approvalState: string | null;
+  assumptions: string[];
+  context: string[];
+  design: string[];
+  keyImplementation: string[];
   planRevision: number | null;
   risks: string[];
   steps: string[];
   summary: string;
   title: string;
+  verification: string[];
 };
 
 type FormattedApprovalPrompt = {
@@ -327,8 +337,12 @@ function parsePlanMessageMetadata(value: unknown): PlanMessageMetadata | null {
 
   return {
     approvalState: readStringField(record, "approvalState") ?? undefined,
+    assumptions: readStringArrayField(record, "assumptions"),
+    context: readStringArrayField(record, "context"),
+    design: readStringArrayField(record, "design"),
     generatedFromRunId: readStringField(record, "generatedFromRunId") ?? undefined,
     kind: readStringField(record, "kind") ?? undefined,
+    keyImplementation: readStringArrayField(record, "keyImplementation"),
     needsContextResetOption:
       typeof record.needsContextResetOption === "boolean" ? record.needsContextResetOption : undefined,
     planRevision: readNumberField(record, "planRevision") ?? undefined,
@@ -337,6 +351,7 @@ function parsePlanMessageMetadata(value: unknown): PlanMessageMetadata | null {
     steps: stepEntries,
     summary: readStringField(record, "summary") ?? undefined,
     title: readStringField(record, "title") ?? undefined,
+    verification: readStringArrayField(record, "verification"),
   };
 }
 
@@ -488,12 +503,55 @@ function formatPlanMetadata(
 
   return {
     approvalState: parsed?.approvalState ?? null,
+    assumptions: parsed?.assumptions ?? [],
+    context: parsed?.context ?? [],
+    design: parsed?.design ?? [],
+    keyImplementation: parsed?.keyImplementation ?? [],
     planRevision: parsed?.planRevision ?? null,
     risks: parsed?.risks ?? [],
     steps,
     summary,
     title,
+    verification: parsed?.verification ?? [],
   };
+}
+
+function renderPlanListSection(
+  messageId: string,
+  title: string,
+  items: string[],
+  ordered = false,
+) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  const ListTag = ordered ? "ol" : "ul";
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-semibold uppercase tracking-[0.08em] text-app-subtle">
+        {title}
+      </div>
+      <ListTag className="space-y-1 text-sm leading-6 text-app-muted">
+        {items.map((item, index) => (
+          <li
+            className={ordered ? "flex items-start gap-3" : undefined}
+            key={`${messageId}-${title}-${index}`}
+          >
+            {ordered ? (
+              <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-app-surface-muted text-[11px] font-semibold text-app-foreground ring-1 ring-app-border/45">
+                {index + 1}
+              </span>
+            ) : null}
+            <span className="whitespace-pre-wrap">
+              {ordered ? item : `- ${item}`}
+            </span>
+          </li>
+        ))}
+      </ListTag>
+    </div>
+  );
 }
 
 function deriveSelectedRunMode(snapshot: ThreadSnapshotDto, currentMode: RunMode) {
@@ -3589,34 +3647,47 @@ export function RuntimeThreadSurface({
                               <PlanTrigger />
                             </PlanHeader>
                             <PlanContent className="space-y-4">
+                              {formattedPlan.context.length > 0
+                                ? renderPlanListSection(message.id, "Context", formattedPlan.context)
+                                : null}
+
+                              {formattedPlan.design.length > 0
+                                ? renderPlanListSection(message.id, "Design", formattedPlan.design)
+                                : null}
+
+                              {formattedPlan.keyImplementation.length > 0
+                                ? renderPlanListSection(
+                                  message.id,
+                                  "Key Implementation",
+                                  formattedPlan.keyImplementation,
+                                )
+                                : null}
+
                               {formattedPlan.steps.length > 0 ? (
-                                <ol className="space-y-2 text-sm leading-6 text-app-muted">
-                                  {formattedPlan.steps.map((step, index) => (
-                                    <li className="flex items-start gap-3" key={`${message.id}-step-${index}`}>
-                                      <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-app-surface-muted text-[11px] font-semibold text-app-foreground ring-1 ring-app-border/45">
-                                        {index + 1}
-                                      </span>
-                                      <span className="whitespace-pre-wrap">{step}</span>
-                                    </li>
-                                  ))}
-                                </ol>
+                                renderPlanListSection(message.id, "Steps", formattedPlan.steps, true)
                               ) : (
                                 <MessageResponse>{message.content}</MessageResponse>
                               )}
 
-                              {formattedPlan.risks.length > 0 ? (
-                                <div className="space-y-2">
-                                  <div className="text-xs font-semibold uppercase tracking-[0.08em] text-app-subtle">
-                                    Risks
-                                  </div>
-                                  <ul className="space-y-1 text-sm leading-6 text-app-muted">
-                                    {formattedPlan.risks.map((risk, index) => (
-                                      <li key={`${message.id}-risk-${index}`}>{`- ${risk}`}</li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              ) : null}
+                              {formattedPlan.verification.length > 0
+                                ? renderPlanListSection(
+                                  message.id,
+                                  "Verification",
+                                  formattedPlan.verification,
+                                )
+                                : null}
 
+                              {formattedPlan.risks.length > 0
+                                ? renderPlanListSection(message.id, "Risks", formattedPlan.risks)
+                                : null}
+
+                              {formattedPlan.assumptions.length > 0
+                                ? renderPlanListSection(
+                                  message.id,
+                                  "Assumptions",
+                                  formattedPlan.assumptions,
+                                )
+                                : null}
                             </PlanContent>
                           </Plan>
                         </MessageContent>

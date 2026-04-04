@@ -571,6 +571,15 @@ async fn test_build_session_spec_adds_plan_mode_guardrails() {
     assert!(spec
         .system_prompt
         .contains("Once you publish a plan with update_plan"));
+    assert!(spec.system_prompt.contains(
+        "Structure the plan as: summary, context, design, keyImplementation, ordered steps, verification, and risks."
+    ));
+    assert!(spec
+        .system_prompt
+        .contains("In `context`, include only confirmed facts"));
+    assert!(spec
+        .system_prompt
+        .contains("In `keyImplementation`, name the important files, modules, interfaces, data flow, or state transitions"));
     assert!(spec.system_prompt.contains("pause for user approval"));
 }
 

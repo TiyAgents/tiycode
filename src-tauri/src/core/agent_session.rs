@@ -3076,6 +3076,11 @@ mod tests {
         assert!(prompt.contains("must call update_plan"));
         assert!(prompt.contains("Do not include unresolved questions"));
         assert!(prompt.contains("Once you publish a plan with update_plan"));
+        assert!(prompt.contains(
+            "Structure the plan as: summary, context, design, keyImplementation, ordered steps, verification, and risks."
+        ));
+        assert!(prompt.contains("In `design`, describe the recommended approach"));
+        assert!(prompt.contains("In `verification`, include how the change will be validated"));
         assert!(prompt.contains("pause for user approval"));
     }
 
