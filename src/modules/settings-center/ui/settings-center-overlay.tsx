@@ -1522,7 +1522,7 @@ function AboutSettingsPanel({
       <section className="flex w-full justify-center">
         <div className="flex flex-col items-center gap-5 px-5 py-7 text-center">
           <div className="flex size-20 items-center justify-center rounded-2xl border border-app-border bg-[linear-gradient(145deg,color-mix(in_srgb,var(--color-app-surface)_92%,white),color-mix(in_srgb,var(--color-app-surface-muted)_76%,white))] shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:bg-[linear-gradient(145deg,color-mix(in_srgb,var(--color-app-surface)_94%,white_4%),color-mix(in_srgb,var(--color-app-surface-muted)_82%,black_6%))] dark:shadow-[0_10px_24px_rgba(0,0,0,0.18)]">
-            <img src="/icon/icon.svg" alt={`${appName} logo`} className="size-12 object-contain" />
+            <img src="/icon/tiy.png" alt={`${appName} logo`} className="size-12 object-contain" />
           </div>
 
           <div className="max-w-[560px] space-y-2">
