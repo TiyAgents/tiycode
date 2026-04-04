@@ -300,6 +300,35 @@ export interface RunHelperDto {
   usage: RunUsageDto;
 }
 
+// ---------------------------------------------------------------------------
+// Task Tracking
+// ---------------------------------------------------------------------------
+
+export type TaskBoardStatus = "active" | "completed" | "abandoned";
+export type TaskStage = "pending" | "in_progress" | "completed" | "failed";
+
+export interface TaskItemDto {
+  id: string;
+  taskBoardId: string;
+  description: string;
+  stage: TaskStage;
+  sortOrder: number;
+  errorDetail: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskBoardDto {
+  id: string;
+  threadId: string;
+  title: string;
+  status: TaskBoardStatus;
+  activeTaskId: string | null;
+  tasks: TaskItemDto[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ThreadSnapshotDto {
   thread: ThreadSummaryDto;
   messages: MessageDto[];
@@ -308,6 +337,8 @@ export interface ThreadSnapshotDto {
   latestRun: RunSummaryDto | null;
   toolCalls: ToolCallDto[];
   helpers: RunHelperDto[];
+  taskBoards: TaskBoardDto[];
+  activeTaskBoardId: string | null;
 }
 
 export interface AddMessageInput {
@@ -458,7 +489,8 @@ export type ThreadStreamEvent =
   | { type: "run_limit_reached"; runId: string; error: string; maxTurns: number }
   | { type: "run_failed"; runId: string; error: string }
   | { type: "run_cancelled"; runId: string }
-  | { type: "run_interrupted"; runId: string };
+  | { type: "run_interrupted"; runId: string }
+  | { type: "task_board_updated"; runId: string; taskBoard: TaskBoardDto };
 
 // ---------------------------------------------------------------------------
 // Git

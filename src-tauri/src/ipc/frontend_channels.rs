@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::core::subagent::{SubagentActivityStatus, SubagentProgressSnapshot};
 use crate::model::git::GitSnapshotDto;
+use crate::model::task_board::TaskBoardDto;
 use crate::model::terminal::{TerminalSessionDto, TerminalSessionStatus};
 use crate::model::thread::RunUsageDto;
 
@@ -168,6 +169,10 @@ pub enum ThreadStreamEvent {
     },
     RunInterrupted {
         run_id: String,
+    },
+    TaskBoardUpdated {
+        run_id: String,
+        task_board: TaskBoardDto,
     },
 }
 

@@ -13,6 +13,7 @@ pub mod ripgrep;
 pub mod settings_manager;
 pub mod sleep_manager;
 pub mod subagent;
+pub mod task_board_manager;
 pub mod terminal_manager;
 pub mod thread_manager;
 pub mod tool_gateway;

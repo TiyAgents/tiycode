@@ -38,11 +38,20 @@ import type {
   SubagentProgressSnapshot,
   ThreadSnapshotDto,
   ToolCallDto,
+  TaskBoardDto,
 } from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
 import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
+import {
+  initialTaskBoardState,
+  taskBoardsFromSnapshot,
+  applyTaskBoardUpdate,
+  type TaskBoardState,
+} from "@/modules/workbench-shell/model/task-board";
+import { TaskBoardCard } from "@/modules/workbench-shell/ui/task-board-card";
+import { TaskHistoryTimeline } from "@/modules/workbench-shell/ui/task-stage-history-card";
 
 type SurfaceMessage = {
   createdAt: string;
@@ -2024,6 +2033,7 @@ export function RuntimeThreadSurface({
   const [thinkingPlaceholder, setThinkingPlaceholder] = useState<ThinkingPlaceholder | null>(null);
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
   const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});
+  const [taskBoards, setTaskBoards] = useState<TaskBoardState>(initialTaskBoardState);
   const previousHelperStatusesRef = useRef<Record<string, SurfaceHelperEntry["status"]>>({});
   const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
   const snapshotLoadRequestRef = useRef(0);
@@ -2189,6 +2199,7 @@ export function RuntimeThreadSurface({
       setApprovingPlanMessageId(null);
       setTools((snapshot.toolCalls ?? []).map(mapSnapshotTool));
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
+      setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
       setRunState(nextState);
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
@@ -2399,6 +2410,10 @@ export function RuntimeThreadSurface({
 
     stream.onQueue = withActiveStream((event: QueueEvent) => {
       setQueueArtifact(event.queue);
+    });
+
+    stream.onTaskBoard = withActiveStream((event: { taskBoard: TaskBoardDto }) => {
+      setTaskBoards((current) => applyTaskBoardUpdate(current, event.taskBoard));
     });
 
     stream.onThreadTitle = withActiveStream((event: ThreadTitleEvent) => {
@@ -2907,7 +2922,8 @@ export function RuntimeThreadSurface({
     Boolean(runtimeError)
     || Boolean(queueArtifact)
     || helpers.length > 0
-    || visibleTools.length > 0;
+    || visibleTools.length > 0
+    || Boolean(taskBoards.activeBoard);
   const timelineEntries = useMemo<Array<TimelineEntry>>(
     () =>
       [
@@ -3994,6 +4010,26 @@ export function RuntimeThreadSurface({
                         </div>
                       </div>
                     </Queue>
+                  </MessageContent>
+                </Message>
+              </div>
+            ) : null}
+
+            {taskBoards.activeBoard ? (
+              <div className={getRoleSpacingClass(queueArtifact ? "assistant" : lastPresentationRole, "assistant")}>
+                <Message className="max-w-full" from="assistant">
+                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                    <TaskBoardCard board={taskBoards.activeBoard} />
+                  </MessageContent>
+                </Message>
+              </div>
+            ) : null}
+
+            {taskBoards.boards.length > 1 ? (
+              <div className={getRoleSpacingClass(taskBoards.activeBoard ? "assistant" : lastPresentationRole, "assistant")}>
+                <Message className="max-w-full" from="assistant">
+                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                    <TaskHistoryTimeline boards={taskBoards.boards} />
                   </MessageContent>
                 </Message>
               </div>

@@ -5,6 +5,8 @@ pub mod provider_repo;
 pub mod run_helper_repo;
 pub mod run_repo;
 pub mod settings_repo;
+pub mod task_board_repo;
+pub mod task_item_repo;
 pub mod terminal_session_repo;
 pub mod thread_repo;
 pub mod tool_call_repo;

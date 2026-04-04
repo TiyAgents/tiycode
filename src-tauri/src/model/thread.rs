@@ -218,6 +218,8 @@ pub struct ThreadSnapshotDto {
     pub latest_run: Option<RunSummaryDto>,
     pub tool_calls: Vec<ToolCallDto>,
     pub helpers: Vec<RunHelperDto>,
+    pub task_boards: Vec<super::task_board::TaskBoardDto>,
+    pub active_task_board_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

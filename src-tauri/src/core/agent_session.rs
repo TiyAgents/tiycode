@@ -344,6 +344,10 @@ impl AgentSession {
             return self.execute_plan_checkpoint(tool_input).await;
         }
 
+        if tool_name == "create_task" || tool_name == "update_task" {
+            return self.execute_task_tool(tool_name, tool_call_id, tool_input).await;
+        }
+
         if tool_name == CLARIFY_TOOL_NAME {
             return self
                 .execute_clarify_request(tool_name, tool_call_id, tool_input)
@@ -741,6 +745,109 @@ impl AgentSession {
                 "approvalMessageId": approval_message_id,
                 "plan": artifact,
             })),
+        }
+    }
+
+    async fn execute_task_tool(&self, tool_name: &str, tool_call_id: &str, tool_input: &serde_json::Value) -> AgentToolResult {
+        use crate::core::task_board_manager;
+        use crate::model::task_board::{CreateTaskInput, UpdateTaskInput};
+
+        // Persist the tool call record
+        if let Err(error) = tool_call_repo::insert(
+            &self.pool,
+            &tool_call_repo::ToolCallInsert {
+                id: tool_call_id.to_string(),
+                run_id: self.spec.run_id.clone(),
+                thread_id: self.spec.thread_id.clone(),
+                tool_name: tool_name.to_string(),
+                tool_input_json: tool_input.to_string(),
+                status: "running".to_string(),
+            },
+        ).await {
+            return agent_error_result(format!("failed to persist tool call: {error}"));
+        }
+
+        let _ = self.event_tx.send(ThreadStreamEvent::ToolRunning {
+            run_id: self.spec.run_id.clone(),
+            tool_call_id: tool_call_id.to_string(),
+        });
+
+        let result = if tool_name == "create_task" {
+            match serde_json::from_value::<CreateTaskInput>(tool_input.clone()) {
+                Ok(input) => {
+                    match task_board_manager::create_task_board(&self.pool, &self.spec.thread_id, &input).await {
+                        Ok(dto) => {
+                            let _ = self.event_tx.send(ThreadStreamEvent::TaskBoardUpdated {
+                                run_id: self.spec.run_id.clone(),
+                                task_board: dto.clone(),
+                            });
+                            Ok(dto)
+                        }
+                        Err(e) => Err(e.to_string()),
+                    }
+                }
+                Err(e) => Err(format!("Invalid create_task input: {}", e)),
+            }
+        } else if tool_name == "update_task" {
+            match serde_json::from_value::<UpdateTaskInput>(tool_input.clone()) {
+                Ok(input) => {
+                    match task_board_manager::update_task_board(&self.pool, &self.spec.thread_id, &input).await {
+                        Ok(dto) => {
+                            let _ = self.event_tx.send(ThreadStreamEvent::TaskBoardUpdated {
+                                run_id: self.spec.run_id.clone(),
+                                task_board: dto.clone(),
+                            });
+                            Ok(dto)
+                        }
+                        Err(e) => Err(e.to_string()),
+                    }
+                }
+                Err(e) => Err(format!("Invalid update_task input: {}", e)),
+            }
+        } else {
+            Err(format!("Unknown task tool: {}", tool_name))
+        };
+
+        match result {
+            Ok(dto) => {
+                let result_json = serde_json::to_value(&dto).unwrap_or(serde_json::json!({}));
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_id,
+                    &result_json.to_string(),
+                    "completed",
+                ).await.ok();
+
+                let _ = self.event_tx.send(ThreadStreamEvent::ToolCompleted {
+                    run_id: self.spec.run_id.clone(),
+                    tool_call_id: tool_call_id.to_string(),
+                    result: result_json.clone(),
+                });
+
+                AgentToolResult {
+                    content: vec![ContentBlock::Text(TextContent::new(
+                        serde_json::to_string(&dto).unwrap_or_else(|_| "Task updated successfully".to_string()),
+                    ))],
+                    details: Some(result_json),
+                }
+            },
+            Err(error) => {
+                let error_json = serde_json::json!({ "error": &error });
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_id,
+                    &error_json.to_string(),
+                    "failed",
+                ).await.ok();
+
+                let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                    run_id: self.spec.run_id.clone(),
+                    tool_call_id: tool_call_id.to_string(),
+                    error: error.clone(),
+                });
+
+                agent_error_result(error)
+            },
         }
     }
 
@@ -1341,6 +1448,66 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             }),
         ));
     }
+
+    // Task tracking tools (always available)
+    tools.push(AgentTool::new(
+        "create_task",
+        "Create Task",
+        "Create a new task board with steps to track implementation progress. Use this when starting a complex multi-step task that benefits from visible progress tracking.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Human-readable title for the task board."
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": { "type": "string" }
+                        },
+                        "required": ["description"]
+                    },
+                    "description": "Ordered list of task steps."
+                }
+            },
+            "required": ["title", "steps"]
+        }),
+    ));
+    tools.push(AgentTool::new(
+        "update_task",
+        "Update Task",
+        "Update a task board or its steps. Use this to mark steps as started, completed, or failed, or to complete/abandon the entire task board.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "taskBoardId": {
+                    "type": "string",
+                    "description": "ID of the task board to update."
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["start_step", "complete_step", "fail_step", "complete_board", "abandon_board"],
+                    "description": "The action to perform."
+                },
+                "stepId": {
+                    "type": "string",
+                    "description": "ID of the step (required for start_step, complete_step, fail_step)."
+                },
+                "errorDetail": {
+                    "type": "string",
+                    "description": "Error description (required for fail_step)."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional reason for abandoning the board."
+                }
+            },
+            "required": ["taskBoardId", "action"]
+        }),
+    ));
 
     tools
 }

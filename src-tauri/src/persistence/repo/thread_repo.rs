@@ -178,6 +178,16 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
         .execute(&mut *tx)
         .await?;
 
+    sqlx::query("DELETE FROM task_items WHERE task_board_id IN (SELECT id FROM task_boards WHERE thread_id = ?)")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM task_boards WHERE thread_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
     let result = sqlx::query("DELETE FROM threads WHERE id = ?")
         .bind(id)
         .execute(&mut *tx)

@@ -4,6 +4,7 @@ import type {
   RunUsageDto,
   SubagentActivityStatus,
   SubagentProgressSnapshot,
+  TaskBoardDto,
   ThreadStreamEvent,
 } from "@/shared/types/api";
 
@@ -29,6 +30,18 @@ function readRequiredString(
 ) {
   const value = event[camelKey] ?? event[snakeKey];
   if (typeof value !== "string") {
+    throw new Error(`Malformed thread stream event '${event.type}': missing ${camelKey}`);
+  }
+  return value;
+}
+
+function readRequiredObject(
+  event: RawThreadStreamEvent,
+  camelKey: string,
+  snakeKey: string,
+) {
+  const value = event[camelKey] ?? event[snakeKey];
+  if (value === undefined || value === null) {
     throw new Error(`Malformed thread stream event '${event.type}': missing ${camelKey}`);
   }
   return value;
@@ -400,6 +413,12 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         type: rawEvent.type,
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         error: readRequiredString(rawEvent, "error", "error"),
+      };
+    case "task_board_updated":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        taskBoard: readRequiredObject(rawEvent, "taskBoard", "task_board") as TaskBoardDto,
       };
   }
 }

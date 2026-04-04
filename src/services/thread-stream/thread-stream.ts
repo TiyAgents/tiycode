@@ -29,6 +29,7 @@ import type {
   RunUsageDto,
   SubagentActivityStatus,
   SubagentProgressSnapshot,
+  TaskBoardDto,
 } from "@/shared/types/api";
 import type { ThreadStreamEvent } from "./types";
 
@@ -170,6 +171,7 @@ export class ThreadStream {
   onPlan: ((event: PlanEvent) => void) | null = null;
   onReasoning: ((event: ReasoningEvent) => void) | null = null;
   onQueue: ((event: QueueEvent) => void) | null = null;
+  onTaskBoard: ((event: { taskBoard: TaskBoardDto }) => void) | null = null;
   onHelperEvent: ((event: HelperEvent) => void) | null = null;
   onThreadTitle: ((event: ThreadTitleEvent) => void) | null = null;
   onUsage: ((event: UsageEvent) => void) | null = null;
@@ -414,6 +416,12 @@ export class ThreadStream {
         this.onQueue?.({
           runId: event.runId,
           queue: event.queue,
+        });
+        break;
+
+      case "task_board_updated":
+        this.onTaskBoard?.({
+          taskBoard: event.taskBoard,
         });
         break;
 

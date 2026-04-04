@@ -77,6 +77,18 @@ impl AppError {
             retryable: false,
         }
     }
+
+    pub fn validation(source: ErrorSource, message: impl Into<String>) -> Self {
+        let message = message.into();
+        Self {
+            error_code: format!("{}.validation", source.as_str()),
+            category: ErrorCategory::Recoverable,
+            source,
+            user_message: message,
+            detail: None,
+            retryable: false,
+        }
+    }
 }
 
 impl ErrorSource {
