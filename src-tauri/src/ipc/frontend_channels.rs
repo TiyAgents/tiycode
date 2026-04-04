@@ -72,13 +72,6 @@ pub enum ThreadStreamEvent {
         message: String,
         snapshot: SubagentProgressSnapshot,
     },
-    SubagentUsageUpdated {
-        run_id: String,
-        subtask_id: String,
-        helper_kind: String,
-        started_at: String,
-        snapshot: SubagentProgressSnapshot,
-    },
     SubagentCompleted {
         run_id: String,
         subtask_id: String,

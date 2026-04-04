@@ -119,14 +119,6 @@ export type HelperEvent =
       snapshot: SubagentProgressSnapshot;
     }
   | {
-      kind: "usage";
-      runId: string;
-      subtaskId: string;
-      helperKind: string;
-      startedAt: string;
-      snapshot: SubagentProgressSnapshot;
-    }
-  | {
       kind: "completed";
       runId: string;
       subtaskId: string;
@@ -445,17 +437,6 @@ export class ThreadStream {
           startedAt: event.startedAt,
           activity: event.activity,
           message: event.message,
-          snapshot: event.snapshot,
-        });
-        break;
-
-      case "subagent_usage_updated":
-        this.onHelperEvent?.({
-          kind: "usage",
-          runId: event.runId,
-          subtaskId: event.subtaskId,
-          helperKind: event.helperKind,
-          startedAt: event.startedAt,
           snapshot: event.snapshot,
         });
         break;

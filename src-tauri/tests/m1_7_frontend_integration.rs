@@ -16,9 +16,6 @@ fn sample_subagent_snapshot() -> tiy_agent_lib::core::subagent::SubagentProgress
         "Started reading src-tauri/src/core/agent_session.rs".into(),
         "Finished reading src-tauri/src/core/agent_session.rs".into(),
     ];
-    snapshot.usage.input_tokens = 256;
-    snapshot.usage.output_tokens = 32;
-    snapshot.usage.total_tokens = 288;
     snapshot
 }
 
@@ -301,19 +298,6 @@ fn test_thread_stream_event_subagent_events_serialization() {
         "Reading src-tauri/src/core/agent_session.rs"
     );
 
-    // SubagentUsageUpdated
-    let event = ThreadStreamEvent::SubagentUsageUpdated {
-        run_id: "run-1".into(),
-        subtask_id: "sub-1".into(),
-        helper_kind: "helper_explore".into(),
-        started_at: "2026-03-20T00:00:00Z".into(),
-        snapshot: sample_subagent_snapshot(),
-    };
-    let json = serde_json::to_value(&event).unwrap();
-    assert_eq!(json["type"].as_str().unwrap(), "subagent_usage_updated");
-    assert_eq!(json["snapshot"]["usage"]["inputTokens"].as_u64(), Some(256));
-    assert_eq!(json["snapshot"]["usage"]["outputTokens"].as_u64(), Some(32));
-
     // SubagentCompleted
     let event = ThreadStreamEvent::SubagentCompleted {
         run_id: "run-1".into(),
@@ -408,13 +392,6 @@ fn test_all_events_have_type_field() {
             started_at: "2026-03-20T00:00:00Z".into(),
             activity: tiy_agent_lib::core::subagent::SubagentActivityStatus::Started,
             message: "Reading foo".into(),
-            snapshot: sample_subagent_snapshot(),
-        },
-        ThreadStreamEvent::SubagentUsageUpdated {
-            run_id: "r".into(),
-            subtask_id: "s".into(),
-            helper_kind: "helper_explore".into(),
-            started_at: "2026-03-20T00:00:00Z".into(),
             snapshot: sample_subagent_snapshot(),
         },
         ThreadStreamEvent::SubagentCompleted {

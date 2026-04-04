@@ -108,8 +108,6 @@ type SurfaceToolEntry = {
 };
 
 type SurfaceHelperEntry = {
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
   completedSteps: number;
   currentAction?: string | null;
   error?: string;
@@ -125,9 +123,6 @@ type SurfaceHelperEntry = {
   summary?: string | null;
   toolCounts: Record<string, number>;
   totalToolCalls: number;
-  totalTokens: number;
-  inputTokens: number;
-  outputTokens: number;
 };
 
 type TimelineEntry =
@@ -639,8 +634,6 @@ function mapSnapshotHelper(
   const toolSummary = buildSnapshotHelperToolSummary(helper.id, toolCalls);
 
   return {
-    cacheReadTokens: helper.usage.cacheReadTokens,
-    cacheWriteTokens: helper.usage.cacheWriteTokens,
     completedSteps: toolSummary.completedSteps,
     currentAction: null,
     error: helper.errorSummary ?? undefined,
@@ -656,9 +649,6 @@ function mapSnapshotHelper(
     summary: helper.outputSummary,
     toolCounts: toolSummary.toolCounts,
     totalToolCalls: toolSummary.totalToolCalls,
-    totalTokens: helper.usage.totalTokens,
-    inputTokens: helper.usage.inputTokens,
-    outputTokens: helper.usage.outputTokens,
   };
 }
 
@@ -884,28 +874,18 @@ function applyHelperSnapshot(
   snapshot: SubagentProgressSnapshot,
 ): Pick<
   SurfaceHelperEntry,
-  | "cacheReadTokens"
-  | "cacheWriteTokens"
   | "completedSteps"
   | "currentAction"
-  | "inputTokens"
-  | "outputTokens"
   | "recentActions"
   | "toolCounts"
   | "totalToolCalls"
-  | "totalTokens"
 > {
   return {
-    cacheReadTokens: snapshot.usage.cacheReadTokens ?? 0,
-    cacheWriteTokens: snapshot.usage.cacheWriteTokens ?? 0,
     completedSteps: snapshot.completedSteps ?? 0,
     currentAction: snapshot.currentAction ?? null,
-    inputTokens: snapshot.usage.inputTokens ?? 0,
-    outputTokens: snapshot.usage.outputTokens ?? 0,
     recentActions: snapshot.recentActions ?? [],
     toolCounts: snapshot.toolCounts ?? {},
     totalToolCalls: snapshot.totalToolCalls ?? 0,
-    totalTokens: snapshot.usage.totalTokens ?? 0,
   };
 }
 
@@ -1739,24 +1719,13 @@ function formatElapsedSeconds(seconds: number | null) {
   return `${seconds.toFixed(1)}s elapsed`;
 }
 
-function formatCompactNumber(value: number) {
-  return new Intl.NumberFormat("en", {
-    maximumFractionDigits: 1,
-    notation: "compact",
-  }).format(value);
-}
-
 type HelperExecutionSummaryMetrics = {
   elapsedText?: string | null;
-  inputTokens?: number | null;
-  outputTokens?: number | null;
   toolUses?: number | null;
 };
 
 function formatExecutionSummary({
   elapsedText,
-  inputTokens,
-  outputTokens,
   toolUses,
 }: HelperExecutionSummaryMetrics) {
   const fragments = [
@@ -1764,12 +1733,6 @@ function formatExecutionSummary({
       ? `${toolUses} tool use${toolUses === 1 ? "" : "s"}`
       : null,
     elapsedText ?? null,
-    typeof inputTokens === "number" && inputTokens > 0
-      ? `input tokens ${formatCompactNumber(inputTokens)}`
-      : null,
-    typeof outputTokens === "number" && outputTokens > 0
-      ? `output tokens ${formatCompactNumber(outputTokens)}`
-      : null,
   ].filter(Boolean);
 
   return fragments.length > 0
@@ -2383,20 +2346,6 @@ export function RuntimeThreadSurface({
               status: entry?.status ?? "running",
               summary: entry?.summary,
               totalToolCalls: event.snapshot.totalToolCalls,
-            }));
-          case "usage":
-            return updateHelper(current, event.subtaskId, (entry) => ({
-              ...entry,
-              ...applyHelperSnapshot(event.snapshot),
-              finishedAt: entry?.finishedAt ?? null,
-              id: event.subtaskId,
-              inputSummary: entry?.inputSummary,
-              kind: event.helperKind,
-              latestMessage: entry?.latestMessage,
-              runId: event.runId,
-              startedAt: entry?.startedAt ?? event.startedAt,
-              status: entry?.status ?? "running",
-              summary: entry?.summary,
             }));
           case "completed":
             return updateHelper(current, event.subtaskId, (_entry) => ({
@@ -3805,8 +3754,6 @@ export function RuntimeThreadSurface({
                 const helperToolCounts = formatHelperToolCounts(helper.toolCounts);
                 const executionSummary = formatExecutionSummary({
                   elapsedText: formatElapsedSeconds(getHelperElapsedSeconds(helper)),
-                  inputTokens: helper.inputTokens,
-                  outputTokens: helper.outputTokens,
                   toolUses: helper.totalToolCalls,
                 });
                 return (

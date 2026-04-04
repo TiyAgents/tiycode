@@ -369,7 +369,6 @@ export interface SubagentProgressSnapshot {
   currentAction: string | null;
   toolCounts: Record<string, number>;
   recentActions: string[];
-  usage: RunUsageDto;
 }
 
 export type ThreadStreamEvent =
@@ -415,14 +414,6 @@ export type ThreadStreamEvent =
       startedAt: string;
       activity: SubagentActivityStatus;
       message: string;
-      snapshot: SubagentProgressSnapshot;
-    }
-  | {
-      type: "subagent_usage_updated";
-      runId: string;
-      subtaskId: string;
-      helperKind: string;
-      startedAt: string;
       snapshot: SubagentProgressSnapshot;
     }
   | {
