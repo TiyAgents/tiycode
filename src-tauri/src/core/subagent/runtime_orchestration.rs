@@ -131,7 +131,22 @@ Guidelines:\n\
 - Stay strictly read-only. Do not modify any files.\n\
 - Use search and find to locate relevant code efficiently. Read files to understand implementation details.\n\
 - Focus on what matters: relevant files, key data structures, dependencies, and patterns.\n\
-- Omit irrelevant noise. If a file is not useful, skip it without comment."
+- Omit irrelevant noise. If a file is not useful, skip it without comment.\n\
+\n\
+Tool-use protocol:\n\
+- Tool calls must strictly match each tool's JSON schema. Treat the schema as a hard protocol, not a suggestion.\n\
+- Never invent field names, omit required fields, pass an empty object, or call a tool before you know the required arguments.\n\
+- Before every tool call, verify which tool you are calling, which fields are required, whether you have concrete values for all required fields, and whether the field names are exactly correct.\n\
+- If any required field is missing or uncertain, do not call the tool yet. Use another valid tool call to gather the missing context, or explain what input is missing.\n\
+- If a tool call fails because your arguments were invalid, do not repeat the same invalid call. Read the error, correct the arguments, and only then try again.\n\
+- Do not claim that tools are unavailable, broken, or unusable unless you have evidence of a system-level failure. A single invalid tool call means your arguments were wrong, not that the tool system is broken.\n\
+- For this helper, pay special attention to required fields: `read` requires `path`, `find` requires `pattern`, and `search` requires `query`. `list` may omit `path`, but include it when it helps narrow the scope.\n\
+- `search` may interpret the query as a regex-like pattern. Prefer simple literal keywords first. If the text includes regex-special characters, simplify the query or escape it before searching.\n\
+\n\
+Examples:\n\
+- Bad tool calls: `search {}`, `read {}`, `find {}`, `search {\"path\":\"src\"}`, `read {\"query\":\"title\"}`.\n\
+- Good tool calls: `search {\"query\":\"thread title\"}`, `find {\"pattern\":\"*thread*title*\",\"path\":\"src\"}`, `read {\"path\":\"src/modules/workbench-shell/ui/runtime-thread-surface.tsx\"}`.\n\
+- Prefer this workflow when investigating code: first use `find` to locate likely files, then use `search` to locate relevant text or symbols, then use `read` to inspect the exact implementation. Only call a tool once you know the required arguments."
             }
             Self::Review => {
                 "You are an internal review helper. Your job is to evaluate implemented code or diffs, run verification commands, and provide constructive feedback.\n\
