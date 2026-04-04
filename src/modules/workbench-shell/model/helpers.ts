@@ -410,18 +410,13 @@ export function formatThreadTimeLabel(value: string | null | undefined, now = Da
 export function buildWorkspaceThreadItem(
   thread: ThreadSummaryDto,
   activeThreadId: string | null,
-): WorkspaceThreadItem | null {
+): WorkspaceThreadItem {
   const trimmedTitle = thread.title.trim();
-
-  // Draft threads are persisted early for terminal bootstrapping but should
-  // stay hidden from the visible sidebar until they have a title.
-  if (!trimmedTitle) {
-    return null;
-  }
+  const displayTitle = trimmedTitle || "新对话";
 
   return {
     id: thread.id,
-    name: trimmedTitle,
+    name: displayTitle,
     time: formatThreadTimeLabel(thread.lastActiveAt || thread.createdAt),
     active: thread.id === activeThreadId,
     status: mapThreadStatus(thread.status),
@@ -438,9 +433,9 @@ export function buildWorkspaceItemsFromDtos(
     name: workspace.name,
     defaultOpen: workspace.isDefault,
     path: workspace.canonicalPath || workspace.path,
-    threads: (threadsByWorkspaceId[workspace.id] ?? [])
-      .map((thread) => buildWorkspaceThreadItem(thread, activeThreadId))
-      .filter((thread): thread is WorkspaceThreadItem => thread !== null),
+    threads: (threadsByWorkspaceId[workspace.id] ?? []).map((thread) =>
+      buildWorkspaceThreadItem(thread, activeThreadId),
+    ),
   }));
 }
 

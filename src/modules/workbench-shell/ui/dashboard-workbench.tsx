@@ -232,7 +232,7 @@ function mergeLocalFallbackThreads(options: {
         return false;
       }
 
-      return thread.name.trim().length > 0;
+      return true;
     });
 
     if (fallbackThreads.length === 0) {
@@ -686,10 +686,6 @@ export function DashboardWorkbench() {
         hasMoreRawThreads = batch.length === rawLimit;
 
         for (const thread of batch) {
-          if (!thread.title.trim()) {
-            continue;
-          }
-
           visibleThreads.push(thread);
 
           if (visibleThreads.length >= desiredVisibleCount) {
