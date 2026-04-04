@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::task_board::{CreateTaskInput, TaskBoardDto, TaskBoardStatus, UpdateTaskAction};
-use crate::model::task_item::{TaskItemDto, TaskStage};
+use crate::model::task_item::{TaskItemDto, TaskItemRecord, TaskStage};
 use crate::persistence::repo::{task_board_repo, task_item_repo};
 
 /// Create a new task board with steps for a thread.
@@ -137,8 +137,64 @@ pub async fn update_task_board(
                 ));
             }
 
+            let items = task_item_repo::list_by_task_board(pool, &input.task_board_id).await?;
+            if let Some(active_step) = items
+                .iter()
+                .find(|item| item.stage == TaskStage::InProgress && item.id != *step_id)
+            {
+                return Err(AppError::validation(
+                    ErrorSource::Thread,
+                    &format!(
+                        "Cannot start step '{}' while step '{}' is still in progress",
+                        step_id, active_step.id
+                    ),
+                ));
+            }
+
             task_item_repo::update_stage(pool, step_id, &TaskStage::InProgress, None).await?;
             task_board_repo::update_active_task(pool, &input.task_board_id, Some(step_id)).await?;
+        }
+        UpdateTaskAction::AdvanceStep { step_id } => {
+            if board.status != TaskBoardStatus::Active {
+                return Err(AppError::validation(
+                    ErrorSource::Thread,
+                    "Cannot update steps on a non-active task board",
+                ));
+            }
+
+            let step_id = match step_id.as_deref().or(board.active_task_id.as_deref()) {
+                Some(step_id) => step_id,
+                None => {
+                    return Err(AppError::validation(
+                        ErrorSource::Thread,
+                        "Cannot advance task board: no active step was found",
+                    ))
+                }
+            };
+
+            let task = task_item_repo::find_by_id(pool, step_id)
+                .await?
+                .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "Task step not found"))?;
+
+            if task.task_board_id != input.task_board_id {
+                return Err(AppError::not_found(
+                    ErrorSource::Thread,
+                    "Task step not in this board",
+                ));
+            }
+
+            if task.stage != TaskStage::InProgress {
+                return Err(AppError::validation(
+                    ErrorSource::Thread,
+                    &format!(
+                        "Cannot advance step: current stage is '{}', expected 'in_progress'",
+                        task.stage.as_str()
+                    ),
+                ));
+            }
+
+            task_item_repo::update_stage(pool, step_id, &TaskStage::Completed, None).await?;
+            advance_after_step_completion(pool, &input.task_board_id).await?;
         }
         UpdateTaskAction::CompleteStep { step_id } => {
             if board.status != TaskBoardStatus::Active {
@@ -171,20 +227,7 @@ pub async fn update_task_board(
             }
 
             task_item_repo::update_stage(pool, step_id, &TaskStage::Completed, None).await?;
-
-            // Find next pending task and set as active
-            let items = task_item_repo::list_by_task_board(pool, &input.task_board_id).await?;
-            let next_pending = items
-                .iter()
-                .find(|i| i.stage == TaskStage::Pending)
-                .map(|i| i.id.clone());
-
-            task_board_repo::update_active_task(
-                pool,
-                &input.task_board_id,
-                next_pending.as_deref(),
-            )
-            .await?;
+            advance_after_step_completion(pool, &input.task_board_id).await?;
         }
         UpdateTaskAction::FailStep {
             step_id,
@@ -218,20 +261,7 @@ pub async fn update_task_board(
 
             task_item_repo::update_stage(pool, step_id, &TaskStage::Failed, Some(error_detail))
                 .await?;
-
-            // Find next pending task and set as active (Fix #3)
-            let items = task_item_repo::list_by_task_board(pool, &input.task_board_id).await?;
-            let next_pending = items
-                .iter()
-                .find(|i| i.stage == TaskStage::Pending)
-                .map(|i| i.id.clone());
-
-            task_board_repo::update_active_task(
-                pool,
-                &input.task_board_id,
-                next_pending.as_deref(),
-            )
-            .await?;
+            activate_next_pending_task(pool, &input.task_board_id).await?;
         }
         UpdateTaskAction::CompleteBoard => {
             if board.status != TaskBoardStatus::Active {
@@ -240,8 +270,7 @@ pub async fn update_task_board(
                     "Task board is already completed or abandoned",
                 ));
             }
-            task_board_repo::update_status(pool, &input.task_board_id, &TaskBoardStatus::Completed)
-                .await?;
+            complete_board(pool, &input.task_board_id).await?;
         }
         UpdateTaskAction::AbandonBoard { reason: _ } => {
             if board.status != TaskBoardStatus::Active {
@@ -256,6 +285,95 @@ pub async fn update_task_board(
     }
 
     load_task_board_dto(pool, &input.task_board_id).await
+}
+
+/// Reconcile the active task board for a thread when a run reaches a terminal state.
+///
+/// This keeps `active_task_id` aligned with the real in-progress step and auto-completes the
+/// board when every step is complete. If no step is currently in progress but pending work
+/// remains, the next pending step is started so later runs can resume from a consistent state.
+pub async fn reconcile_active_task_board(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<TaskBoardDto>, AppError> {
+    let Some(board) = task_board_repo::find_active_by_thread(pool, thread_id).await? else {
+        return Ok(None);
+    };
+
+    let items = task_item_repo::list_by_task_board(pool, &board.id).await?;
+    if items.is_empty() {
+        if board.active_task_id.is_some() {
+            task_board_repo::update_active_task(pool, &board.id, None).await?;
+            return Ok(Some(load_task_board_dto(pool, &board.id).await?));
+        }
+        return Ok(None);
+    }
+
+    if items.iter().all(|item| item.stage == TaskStage::Completed) {
+        complete_board(pool, &board.id).await?;
+        return Ok(Some(load_task_board_dto(pool, &board.id).await?));
+    }
+
+    if let Some(active_step) = first_in_progress_task(&items) {
+        if board.active_task_id.as_deref() != Some(active_step.id.as_str()) {
+            task_board_repo::update_active_task(pool, &board.id, Some(&active_step.id)).await?;
+            return Ok(Some(load_task_board_dto(pool, &board.id).await?));
+        }
+        return Ok(None);
+    }
+
+    if let Some(next_pending) = first_pending_task(&items) {
+        task_item_repo::update_stage(pool, &next_pending.id, &TaskStage::InProgress, None).await?;
+        task_board_repo::update_active_task(pool, &board.id, Some(&next_pending.id)).await?;
+        return Ok(Some(load_task_board_dto(pool, &board.id).await?));
+    }
+
+    if board.active_task_id.is_some() {
+        task_board_repo::update_active_task(pool, &board.id, None).await?;
+        return Ok(Some(load_task_board_dto(pool, &board.id).await?));
+    }
+
+    Ok(None)
+}
+
+async fn advance_after_step_completion(pool: &SqlitePool, board_id: &str) -> Result<(), AppError> {
+    let items = task_item_repo::list_by_task_board(pool, board_id).await?;
+    if let Some(next_pending) = first_pending_task(&items) {
+        task_item_repo::update_stage(pool, &next_pending.id, &TaskStage::InProgress, None).await?;
+        task_board_repo::update_active_task(pool, board_id, Some(&next_pending.id)).await?;
+    } else {
+        complete_board(pool, board_id).await?;
+    }
+
+    Ok(())
+}
+
+async fn activate_next_pending_task(pool: &SqlitePool, board_id: &str) -> Result<(), AppError> {
+    let items = task_item_repo::list_by_task_board(pool, board_id).await?;
+    if let Some(next_pending) = first_pending_task(&items) {
+        task_item_repo::update_stage(pool, &next_pending.id, &TaskStage::InProgress, None).await?;
+        task_board_repo::update_active_task(pool, board_id, Some(&next_pending.id)).await?;
+    } else {
+        task_board_repo::update_active_task(pool, board_id, None).await?;
+    }
+
+    Ok(())
+}
+
+async fn complete_board(pool: &SqlitePool, board_id: &str) -> Result<(), AppError> {
+    task_board_repo::update_active_task(pool, board_id, None).await?;
+    task_board_repo::update_status(pool, board_id, &TaskBoardStatus::Completed).await?;
+    Ok(())
+}
+
+fn first_pending_task(items: &[TaskItemRecord]) -> Option<&TaskItemRecord> {
+    items.iter().find(|item| item.stage == TaskStage::Pending)
+}
+
+fn first_in_progress_task(items: &[TaskItemRecord]) -> Option<&TaskItemRecord> {
+    items
+        .iter()
+        .find(|item| item.stage == TaskStage::InProgress)
 }
 
 /// Load a task board DTO with all its tasks.

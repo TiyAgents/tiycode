@@ -1465,7 +1465,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
     tools.push(AgentTool::new(
         "create_task",
         "Create Task",
-        "Create a new task board with steps to track implementation progress. Use this when starting a complex multi-step task that benefits from visible progress tracking.",
+        "Create a new task board with steps to track implementation progress. Use this when starting a complex multi-step implementation. After creating a board, keep it current while you work instead of waiting until the very end to update statuses.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -1491,7 +1491,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
     tools.push(AgentTool::new(
         "update_task",
         "Update Task",
-        "Update a task board or its steps. Use this to mark steps as started, completed, or failed, or to complete/abandon the entire task board.",
+        "Update a task board or its steps. Keep task state aligned with the real implementation lifecycle: update progress as each step finishes, prefer `advance_step` or `complete_step` to move work forward, and make sure the board is fully reconciled before the run ends.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -1501,12 +1501,12 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["start_step", "complete_step", "fail_step", "complete_board", "abandon_board"],
-                    "description": "The action to perform."
+                    "enum": ["start_step", "advance_step", "complete_step", "fail_step", "complete_board", "abandon_board"],
+                    "description": "The action to perform. `advance_step` is the recommended default for normal progress updates because it completes the current in-progress step and automatically starts the next step or completes the board."
                 },
                 "stepId": {
                     "type": "string",
-                    "description": "ID of the step (required for start_step, complete_step, fail_step)."
+                    "description": "ID of the step (required for start_step, complete_step, fail_step; optional for advance_step, which falls back to the board's current active step)."
                 },
                 "errorDetail": {
                     "type": "string",

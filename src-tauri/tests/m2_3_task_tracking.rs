@@ -128,7 +128,7 @@ async fn test_update_task_start_step() {
         .await
         .unwrap();
 
-    // First step is already InProgress after creation; start the second step
+    // First step is already InProgress after creation; starting a different step should be rejected
     let step_b_id = &board.tasks[1].id;
     let update = UpdateTaskInput {
         task_board_id: board.id.clone(),
@@ -137,11 +137,11 @@ async fn test_update_task_start_step() {
         },
     };
 
-    let updated = task_board_manager::update_task_board(&pool, "t-start", &update)
-        .await
-        .unwrap();
-    assert_eq!(updated.tasks[1].stage, TaskStage::InProgress);
-    assert_eq!(updated.active_task_id.as_ref(), Some(step_b_id));
+    let result = task_board_manager::update_task_board(&pool, "t-start", &update).await;
+    assert!(
+        result.is_err(),
+        "Should reject starting a second active step"
+    );
 }
 
 #[tokio::test]
@@ -178,7 +178,79 @@ async fn test_update_task_complete_step() {
         .unwrap();
 
     assert_eq!(updated.tasks[0].stage, TaskStage::Completed);
-    // Next task should be active
+    assert_eq!(updated.tasks[1].stage, TaskStage::InProgress);
+    // Next task should be active and actually in progress
+    assert_eq!(updated.active_task_id.as_ref(), Some(&updated.tasks[1].id));
+}
+
+#[tokio::test]
+async fn test_update_task_complete_last_step_auto_completes_board() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-last", "/tmp/last").await;
+    test_helpers::seed_thread(&pool, "t-last", "ws-last").await;
+
+    let input = CreateTaskInput {
+        title: "Single Step Task".to_string(),
+        steps: vec![CreateTaskStep {
+            description: "Only Step".to_string(),
+        }],
+    };
+    let board = task_board_manager::create_task_board(&pool, "t-last", &input)
+        .await
+        .unwrap();
+
+    let updated = task_board_manager::update_task_board(
+        &pool,
+        "t-last",
+        &UpdateTaskInput {
+            task_board_id: board.id.clone(),
+            action: UpdateTaskAction::CompleteStep {
+                step_id: board.tasks[0].id.clone(),
+            },
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated.status, TaskBoardStatus::Completed);
+    assert_eq!(updated.tasks[0].stage, TaskStage::Completed);
+    assert_eq!(updated.active_task_id, None);
+}
+
+#[tokio::test]
+async fn test_update_task_advance_step_uses_active_step() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-advance", "/tmp/advance").await;
+    test_helpers::seed_thread(&pool, "t-advance", "ws-advance").await;
+
+    let input = CreateTaskInput {
+        title: "Advance Task".to_string(),
+        steps: vec![
+            CreateTaskStep {
+                description: "Step A".to_string(),
+            },
+            CreateTaskStep {
+                description: "Step B".to_string(),
+            },
+        ],
+    };
+    let board = task_board_manager::create_task_board(&pool, "t-advance", &input)
+        .await
+        .unwrap();
+
+    let updated = task_board_manager::update_task_board(
+        &pool,
+        "t-advance",
+        &UpdateTaskInput {
+            task_board_id: board.id.clone(),
+            action: UpdateTaskAction::AdvanceStep { step_id: None },
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated.tasks[0].stage, TaskStage::Completed);
+    assert_eq!(updated.tasks[1].stage, TaskStage::InProgress);
     assert_eq!(updated.active_task_id.as_ref(), Some(&updated.tasks[1].id));
 }
 
@@ -221,7 +293,8 @@ async fn test_update_task_fail_step() {
         updated.tasks[0].error_detail,
         Some("Something went wrong".to_string())
     );
-    // active_task_id should advance to next pending step
+    assert_eq!(updated.tasks[1].stage, TaskStage::InProgress);
+    // active_task_id should advance to the next in-progress step
     assert_eq!(updated.active_task_id.as_ref(), Some(&updated.tasks[1].id));
 }
 
@@ -318,6 +391,54 @@ async fn test_cannot_complete_pending_step() {
     };
     let result = task_board_manager::update_task_board(&pool, "t-sm2", &update).await;
     assert!(result.is_err(), "Should reject completing a pending step");
+}
+
+#[tokio::test]
+async fn test_reconcile_active_board_starts_next_pending_step() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-reconcile", "/tmp/reconcile").await;
+    test_helpers::seed_thread(&pool, "t-reconcile", "ws-reconcile").await;
+
+    let board = task_board_manager::create_task_board(
+        &pool,
+        "t-reconcile",
+        &CreateTaskInput {
+            title: "Reconcile Task".to_string(),
+            steps: vec![
+                CreateTaskStep {
+                    description: "Step A".to_string(),
+                },
+                CreateTaskStep {
+                    description: "Step B".to_string(),
+                },
+            ],
+        },
+    )
+    .await
+    .unwrap();
+
+    sqlx::query("UPDATE task_items SET stage = 'completed' WHERE id = ?")
+        .bind(&board.tasks[0].id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE task_items SET stage = 'pending' WHERE id = ?")
+        .bind(&board.tasks[1].id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let reconciled = task_board_manager::reconcile_active_task_board(&pool, "t-reconcile")
+        .await
+        .unwrap()
+        .expect("board should be reconciled");
+
+    assert_eq!(reconciled.status, TaskBoardStatus::Active);
+    assert_eq!(reconciled.tasks[1].stage, TaskStage::InProgress);
+    assert_eq!(
+        reconciled.active_task_id.as_ref(),
+        Some(&reconciled.tasks[1].id)
+    );
 }
 
 #[tokio::test]

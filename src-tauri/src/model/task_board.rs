@@ -99,6 +99,10 @@ pub enum UpdateTaskAction {
         step_id: String,
     },
     #[serde(rename_all = "camelCase")]
+    AdvanceStep {
+        step_id: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
     CompleteStep {
         step_id: String,
     },

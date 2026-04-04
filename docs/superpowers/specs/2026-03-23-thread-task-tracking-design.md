@@ -153,6 +153,12 @@ Recommended input shape:
 
 `update_task` should be incremental, but the back end should always return and broadcast a fully materialized board snapshot after applying the update.
 
+The runtime should expose an `advance_step` path for the common case:
+
+- complete the current `in_progress` step
+- auto-start the next pending step
+- auto-complete the board when no pending steps remain
+
 ### 2. Rust Domain and Persistence Layer
 
 #### Data Model
@@ -216,6 +222,7 @@ Add a dedicated manager, for example `task_board_manager`, responsible for:
 - creating or replacing the active board
 - starting a new stage
 - updating task items
+- auto-starting the next step when progress advances
 - marking boards completed when all items complete
 - loading all boards for a thread
 - producing a DTO snapshot for the front end

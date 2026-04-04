@@ -28,6 +28,7 @@ use crate::core::plan_checkpoint::{
     IMPLEMENTATION_PLAN_PENDING_STATE, IMPLEMENTATION_PLAN_SUPERSEDED_STATE,
 };
 use crate::core::sleep_manager::SleepManager;
+use crate::core::task_board_manager;
 use crate::ipc::app_events::{
     self, ThreadRunFinishedPayload, ThreadRunStartedPayload, ThreadTitleUpdatedPayload,
 };
@@ -1215,6 +1216,15 @@ impl AgentRunManager {
         }
         if let Some(message_id) = reasoning_message_id {
             message_repo::update_status(&self.pool, &message_id, finalized_message_status).await?;
+        }
+
+        if let Some(task_board) =
+            task_board_manager::reconcile_active_task_board(&self.pool, &thread_id).await?
+        {
+            let _ = frontend_tx.send(ThreadStreamEvent::TaskBoardUpdated {
+                run_id: run_id.to_string(),
+                task_board,
+            });
         }
 
         run_repo::update_status(&self.pool, run_id, status).await?;
