@@ -153,7 +153,8 @@ Return format:\n\
 - Section 1 — Review findings: critical issues, warnings, and suggestions with file paths and line ranges.\n\
 - Section 2 — Verification results: for each command run, state the command, whether it passed or failed, and quote key error output (truncated if long). If verification was skipped, say so and list the commands that need manual execution.\n\
 - Section 3 — Parent agent follow-up: say `none` when verification is complete and the parent agent does not need to rerun the same type-check or test commands. Otherwise list the exact remaining verification commands, why they still need manual execution, and any other action the parent agent should take.\n\
-- Keep the summary concise. The parent agent needs actionable signal, not exhaustive logs."
+- Keep the summary concise. The parent agent needs actionable signal, not exhaustive logs.\n\
+- When reviewing documents, architecture specs, or design proposals (as opposed to code), prefer a discursive, paragraph-oriented format over bullet-heavy enumeration. Group related observations into themed paragraphs with clear topic sentences. Reserve bullet lists for genuinely discrete, independent items like a checklist of action items."
             }
         }
     }

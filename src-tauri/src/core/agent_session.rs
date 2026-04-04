@@ -1917,7 +1917,7 @@ You help users by reading files, searching code, editing files, executing comman
 - After agent_review completes, treat its verification output as the default source of truth for post-implementation type-check and test status. Do not rerun the same verification commands yourself unless the helper explicitly could not run them, reported inconclusive results, or the user asked you to double-check.\n\
 - Recommended flow for non-trivial tasks: agent_explore -> confirm goal -> update_plan -> wait for approval -> implement -> agent_review(target='code' or 'diff').\n\
 - Skip delegation only when the task is small, obvious, and isolated enough that extra helper work would not pay off.\n\
-- Match the active response style when deciding answer length and explanation depth. Show file paths clearly when working with files.\n\
+- Adapt answer length and prose density to the active response style: in concise mode, give the shortest correct answer; in balanced mode, write enough to be clear — a few paragraphs, not a wall of bullets; in guided mode, explain reasoning and tradeoffs in full. Show file paths clearly when working with files.\n\
 - When summarizing your actions, describe what you did in plain text — do not re-read or re-cat files to prove your work.\n\
 - Flag risks, destructive operations, or ambiguity before acting. Ask when intent is unclear.",
         ),
@@ -2039,7 +2039,10 @@ fn final_response_structure_system_instruction() -> &'static str {
   - Code change or result report: outcome -> key changes 1, 2, and 3 if relevant -> verification or evidence -> next steps, risks, or follow-up recommendation.\n\
   - Comparison or decision support: recommendation -> options 1, 2, and 3 -> tradeoffs and evidence -> clearly state the recommended option and why.\n\
   - Direct explanation or question answering: direct answer -> key points 1, 2, and 3 if relevant -> examples or evidence when helpful -> next step only if it adds value.\n\
-- Do not force explicit headings on every reply unless the task benefits from a more structured presentation."
+- Do not force explicit headings on every reply unless the task benefits from a more structured presentation.\n\
+- Write complete, grammatically whole sentences in every bullet point and paragraph. Avoid telegraph-style fragments (e.g. bare noun phrases like 'Plugin 执行协议已改为结构化'). Instead write full sentences that include subject, verb, and enough context to stand on their own.\n\
+- When three or more closely related points share a single theme, merge them into one short paragraph with a topic sentence instead of listing each as a separate bullet.\n\
+- If a single section exceeds roughly 8-10 lines of output, consider whether it should be split into two sections with distinct headers, or whether some detail can be folded into a summary sentence."
 }
 
 fn run_mode_prompt_body(run_mode: &str) -> String {
@@ -2395,7 +2398,7 @@ pub fn normalize_profile_response_style(value: Option<&str>) -> ProfileResponseS
 pub fn response_style_system_instruction(style: ProfileResponseStyle) -> &'static str {
     match style {
         ProfileResponseStyle::Balanced => {
-            "Response style: balanced. Default to a compact but complete answer. Lead with the answer or outcome first. Use a short paragraph or a short flat list when that makes the reply clearer. Add explanation when it materially helps understanding, but avoid over-explaining routine details."
+            "Response style: balanced. Default to a compact but complete answer. Lead with the answer or outcome first. Use a short paragraph or a short flat list when that makes the reply clearer. Add explanation when it materially helps understanding, but avoid over-explaining routine details. Each point should be a complete thought expressed in a full sentence, not a bare noun phrase or keyword fragment. When multiple points share a single theme, consolidate them into one paragraph rather than scattering them across separate bullets."
         }
         ProfileResponseStyle::Concise => {
             "Response style: concise. Treat brevity as a hard default. Lead with the answer, result, or next action immediately. Keep the final response to 1-3 short sentences or a very short flat list unless the user explicitly asks for more detail. Do not include background, reasoning, summaries, or pleasantries unless they are required for correctness. Prefer code, commands, and direct facts over prose."
