@@ -45,7 +45,6 @@ import {
   threadCreate,
   threadDelete,
   threadList,
-  threadUpdateTitle,
   workspaceAdd,
   workspaceList,
   workspaceRemove,
@@ -206,6 +205,40 @@ function resolveProjectForWorkspace(
   }
 
   return buildProjectOptionFromPath(workspace.path);
+}
+
+function mergeLocalFallbackThreads(options: {
+  currentWorkspaces: ReadonlyArray<WorkspaceItem>;
+  syncedWorkspaces: ReadonlyArray<WorkspaceItem>;
+}) {
+  return options.syncedWorkspaces.map((workspace) => {
+    const currentWorkspace =
+      options.currentWorkspaces.find(
+        (candidate) => candidate.id === workspace.id,
+      ) ?? null;
+
+    if (!currentWorkspace) {
+      return workspace;
+    }
+
+    const syncedThreadIds = new Set(workspace.threads.map((thread) => thread.id));
+    const fallbackThreads = currentWorkspace.threads.filter((thread) => {
+      if (syncedThreadIds.has(thread.id)) {
+        return false;
+      }
+
+      return thread.name.trim().length > 0;
+    });
+
+    if (fallbackThreads.length === 0) {
+      return workspace;
+    }
+
+    return {
+      ...workspace,
+      threads: [...fallbackThreads, ...workspace.threads],
+    };
+  });
 }
 
 function mapRunStateToWorkbenchThreadStatus(
@@ -772,11 +805,16 @@ export function DashboardWorkbench() {
       });
       setWorkspaces((current) => {
         const activeThreadId = getActiveThread(current)?.id ?? null;
-        return buildWorkspaceItemsFromDtos(
+        const syncedWorkspaces = buildWorkspaceItemsFromDtos(
           workspaceEntries,
           threadsByWorkspaceId,
           activeThreadId,
         );
+
+        return mergeLocalFallbackThreads({
+          currentWorkspaces: current,
+          syncedWorkspaces,
+        });
       });
       setOpenWorkspaces((current) =>
         Object.fromEntries(
@@ -1677,8 +1715,6 @@ export function DashboardWorkbench() {
               const createdThread = await threadCreate(resolvedWorkspaceId, "");
               persistedThreadId = createdThread.id;
             }
-
-            await threadUpdateTitle(persistedThreadId, nextThreadName);
           }
         } catch (error) {
           const message = getInvokeErrorMessage(error, "创建线程失败");
