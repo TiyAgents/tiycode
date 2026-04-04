@@ -764,19 +764,84 @@ fn extract_usage(messages: &[AgentMessage]) -> Option<Usage> {
     })
 }
 
+const HELPER_INHERITED_SECTION_TITLES: &[&str] = &[
+    "Project Context (workspace instructions)",
+    "Profile Instructions",
+    "System Environment",
+    "Sandbox & Permissions",
+    "Shell Tooling Guide",
+    "Runtime Context",
+];
+
+fn is_helper_inherited_section(title: &str) -> bool {
+    let normalized = title.trim();
+    HELPER_INHERITED_SECTION_TITLES
+        .iter()
+        .any(|allowed| normalized == *allowed || normalized.starts_with(&format!("{allowed} ")))
+}
+
 fn build_helper_system_prompt(
     parent_system_prompt: &str,
     helper_profile: SubagentProfile,
 ) -> String {
-    format!(
-        "{}\n\n{}\n\nYour output will be consumed by the parent agent, not the user. \
+    let inherited_prompt = inherited_helper_prompt_sections(parent_system_prompt);
+
+    if inherited_prompt.trim().is_empty() {
+        format!(
+            "{}\n\nYour output will be consumed by the parent agent, not the user. \
 Follow any response language and response style instructions inherited above unless the parent explicitly overrides them. \
 If the inherited prompt specifies a response language, write your entire output in that language. \
 Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
 Reference specific file paths and code locations where relevant. Skip preamble.",
-        parent_system_prompt,
-        helper_profile.system_prompt()
-    )
+            helper_profile.system_prompt()
+        )
+    } else {
+        format!(
+            "{}\n\n{}\n\nYour output will be consumed by the parent agent, not the user. \
+Follow any response language and response style instructions inherited above unless the parent explicitly overrides them. \
+If the inherited prompt specifies a response language, write your entire output in that language. \
+Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
+Reference specific file paths and code locations where relevant. Skip preamble.",
+            inherited_prompt,
+            helper_profile.system_prompt()
+        )
+    }
+}
+
+fn inherited_helper_prompt_sections(parent_system_prompt: &str) -> String {
+    collect_prompt_sections(parent_system_prompt)
+        .into_iter()
+        .filter(|(title, _)| is_helper_inherited_section(title))
+        .map(|(_, body)| body)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn collect_prompt_sections(prompt: &str) -> Vec<(&str, String)> {
+    let mut sections = Vec::new();
+    let mut current_title: Option<&str> = None;
+    let mut current_lines: Vec<&str> = Vec::new();
+
+    for line in prompt.lines() {
+        if let Some(title) = line.strip_prefix("## ") {
+            if let Some(previous_title) = current_title.take() {
+                sections.push((previous_title, current_lines.join("\n").trim().to_string()));
+            }
+            current_title = Some(title.trim());
+            current_lines = vec![line];
+        } else if current_title.is_some() {
+            current_lines.push(line);
+        }
+    }
+
+    if let Some(previous_title) = current_title {
+        sections.push((previous_title, current_lines.join("\n").trim().to_string()));
+    }
+
+    sections
+        .into_iter()
+        .filter(|(_, body)| !body.trim().is_empty())
+        .collect()
 }
 
 fn merge_payload(mut base: serde_json::Value, patch: &serde_json::Value) -> serde_json::Value {
@@ -847,7 +912,9 @@ fn helper_agent_error_result(message: impl Into<String>) -> AgentToolResult {
 
 #[cfg(test)]
 mod tests {
-    use super::build_helper_system_prompt;
+    use super::{
+        build_helper_system_prompt, collect_prompt_sections, inherited_helper_prompt_sections,
+    };
     use crate::core::subagent::SubagentProfile;
 
     #[test]
@@ -862,5 +929,59 @@ mod tests {
             "Follow any response language and response style instructions inherited above"
         ));
         assert!(prompt.contains("write your entire output in that language"));
+    }
+
+    #[test]
+    fn helper_system_prompt_inherits_only_allowed_sections() {
+        let parent_prompt = "## Role\nYou are Tiy Agent.\n\n## Project Context (workspace instructions)\nFollow AGENTS.md.\n\n## Behavioral Guidelines\nUse clarify when needed.\n\n## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.\n\n## Sandbox & Permissions\n- Approval policy: auto.\n\n## Final Response Structure\nUse structured markdown.";
+
+        let prompt = build_helper_system_prompt(parent_prompt, SubagentProfile::Explore);
+
+        assert!(prompt.contains("## Project Context (workspace instructions)"));
+        assert!(prompt.contains("## Profile Instructions"));
+        assert!(prompt.contains("## Sandbox & Permissions"));
+        assert!(!prompt.contains("## Role\nYou are Tiy Agent."));
+        assert!(!prompt.contains("## Behavioral Guidelines"));
+        assert!(!prompt.contains("## Final Response Structure"));
+    }
+
+    #[test]
+    fn helper_system_prompt_preserves_environment_and_runtime_context_sections() {
+        let parent_prompt = "## System Environment\n- Operating system: macos\n\n## Runtime Context\nCurrent date: 2026-04-04\nWorkspace path: /tmp/project\n\n## Run Mode\nDefault execution mode is active.";
+
+        let inherited = inherited_helper_prompt_sections(parent_prompt);
+
+        assert!(inherited.contains("## System Environment"));
+        assert!(inherited.contains("## Runtime Context"));
+        assert!(!inherited.contains("## Run Mode"));
+    }
+
+    #[test]
+    fn helper_inherited_sections_preserve_parent_order() {
+        let parent_prompt = "## Runtime Context\nCurrent date: 2026-04-04\n\n## Project Context (workspace instructions)\nFollow AGENTS.md.\n\n## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.\n\n## Final Response Structure\nUse structured markdown.";
+
+        let inherited = inherited_helper_prompt_sections(parent_prompt);
+        let runtime_index = inherited.find("## Runtime Context").unwrap();
+        let project_index = inherited
+            .find("## Project Context (workspace instructions)")
+            .unwrap();
+        let profile_index = inherited.find("## Profile Instructions").unwrap();
+
+        assert!(runtime_index < project_index);
+        assert!(project_index < profile_index);
+        assert!(!inherited.contains("## Final Response Structure"));
+    }
+
+    #[test]
+    fn collect_prompt_sections_keeps_section_boundaries() {
+        let sections = collect_prompt_sections(
+            "## One\nalpha\n\n## Two\nbeta\nline two\n\n## Three\ngamma",
+        );
+
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].0, "One");
+        assert_eq!(sections[1].0, "Two");
+        assert!(sections[1].1.contains("beta\nline two"));
+        assert_eq!(sections[2].0, "Three");
     }
 }
