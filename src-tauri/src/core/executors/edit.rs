@@ -317,6 +317,7 @@ async fn apply_edit(
 
     // Generate diff before writing
     let diff = generate_diff(path, content, &new_content);
+    let (lines_added, lines_removed) = count_diff_line_changes(&diff);
 
     // Write the file
     match fs::write(path, &new_content).await {
@@ -325,8 +326,8 @@ async fn apply_edit(
             result: serde_json::json!({
                 "path": path.to_string_lossy().to_string(),
                 "diff": diff,
-                "linesRemoved": matched_text.lines().count(),
-                "linesAdded": new_string.lines().count(),
+                "linesRemoved": lines_removed,
+                "linesAdded": lines_added,
             }),
         }),
         Err(e) => Ok(ToolOutput {
@@ -625,6 +626,19 @@ mod tests {
 +line2_updated";
 
         let (lines_added, lines_removed) = count_diff_line_changes(diff);
+
+        assert_eq!(lines_added, 1);
+        assert_eq!(lines_removed, 1);
+    }
+
+    #[test]
+    fn test_diff_counts_track_actual_changes_not_replacement_block_size() {
+        let path = PathBuf::from("/test/file.rs");
+        let old = "line1\nline2\nline3\nline4";
+        let new = "line1\nline2_updated\nline3\nline4";
+        let diff = generate_diff(&path, old, new);
+
+        let (lines_added, lines_removed) = count_diff_line_changes(&diff);
 
         assert_eq!(lines_added, 1);
         assert_eq!(lines_removed, 1);

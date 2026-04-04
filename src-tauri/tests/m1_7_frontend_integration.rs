@@ -124,6 +124,32 @@ fn test_thread_stream_event_tool_completed_serialization() {
 }
 
 #[test]
+fn test_thread_stream_event_tool_completed_preserves_edit_diff_counts() {
+    use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
+
+    let event = ThreadStreamEvent::ToolCompleted {
+        run_id: "run-1".into(),
+        tool_call_id: "tc-edit-1".into(),
+        result: serde_json::json!({
+            "path": "/workspace/src/example.ts",
+            "diff": "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1,3 +1,3 @@\n line 1\n-line 2\n+line 2 updated\n line 3\n",
+            "linesAdded": 1,
+            "linesRemoved": 1,
+        }),
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "tool_completed");
+    assert_eq!(json["result"]["path"].as_str().unwrap(), "/workspace/src/example.ts");
+    assert_eq!(json["result"]["linesAdded"].as_u64().unwrap(), 1);
+    assert_eq!(json["result"]["linesRemoved"].as_u64().unwrap(), 1);
+    assert_eq!(
+        json["result"]["diff"].as_str().unwrap(),
+        "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1,3 +1,3 @@\n line 1\n-line 2\n+line 2 updated\n line 3\n"
+    );
+}
+
+#[test]
 fn test_thread_stream_event_tool_failed_serialization() {
     use tiy_agent_lib::ipc::frontend_channels::ThreadStreamEvent;
 
