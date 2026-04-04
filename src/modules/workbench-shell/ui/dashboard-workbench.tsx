@@ -241,7 +241,7 @@ function mergeLocalFallbackThreads(options: {
 
     return {
       ...workspace,
-      threads: [...fallbackThreads, ...workspace.threads],
+      threads: [...workspace.threads, ...fallbackThreads],
     };
   });
 }
