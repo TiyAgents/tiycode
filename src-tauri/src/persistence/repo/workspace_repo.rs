@@ -153,14 +153,6 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
     .await?;
 
     sqlx::query(
-        "DELETE FROM thread_runs
-         WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
-    )
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
         "DELETE FROM thread_summaries
          WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
     )
@@ -177,11 +169,38 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
     .await?;
 
     sqlx::query(
+        "DELETE FROM thread_runs
+         WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
         "DELETE FROM terminal_sessions
          WHERE workspace_id = ?
             OR thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
     )
     .bind(id)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM task_items
+         WHERE task_board_id IN (
+             SELECT id FROM task_boards
+             WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)
+         )",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM task_boards
+         WHERE thread_id IN (SELECT id FROM threads WHERE workspace_id = ?)",
+    )
     .bind(id)
     .execute(&mut *tx)
     .await?;
@@ -221,11 +240,56 @@ pub async fn update_status(
     Ok(())
 }
 
-pub async fn set_default(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
+pub async fn update_is_git(pool: &SqlitePool, id: &str, is_git: bool) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
+    sqlx::query("UPDATE workspaces SET is_git = ?, updated_at = ? WHERE id = ?")
+        .bind(is_git as i32)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await?;
 
-    // Clear all defaults first, then set the new one — in a transaction.
+    Ok(())
+}
+
+pub async fn update_name_and_paths(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    path: &str,
+    canonical_path: &str,
+    display_path: &str,
+    is_git: bool,
+    auto_work_tree: bool,
+) -> Result<(), AppError> {
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        "UPDATE workspaces
+         SET name = ?, path = ?, canonical_path = ?, display_path = ?,
+             is_git = ?, auto_work_tree = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(name)
+    .bind(path)
+    .bind(canonical_path)
+    .bind(display_path)
+    .bind(is_git as i32)
+    .bind(auto_work_tree as i32)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::not_found(ErrorSource::Workspace, "workspace"));
+    }
+
+    Ok(())
+}
+
+pub async fn set_default(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
+    let now = Utc::now().to_rfc3339();
 
     sqlx::query("UPDATE workspaces SET is_default = 0, updated_at = ? WHERE is_default = 1")
         .bind(&now)
@@ -243,17 +307,5 @@ pub async fn set_default(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
     }
 
     tx.commit().await?;
-    Ok(())
-}
-
-pub async fn update_is_git(pool: &SqlitePool, id: &str, is_git: bool) -> Result<(), AppError> {
-    let now = Utc::now().to_rfc3339();
-    sqlx::query("UPDATE workspaces SET is_git = ?, updated_at = ? WHERE id = ?")
-        .bind(is_git as i32)
-        .bind(&now)
-        .bind(id)
-        .execute(pool)
-        .await?;
-
     Ok(())
 }

@@ -9,6 +9,7 @@
 mod test_helpers;
 
 use sqlx::Row;
+use tiy_agent_lib::core::workspace_manager::WorkspaceManager;
 
 // =========================================================================
 // T1.2.1 — Workspace CRUD operations (repo layer)
@@ -107,6 +108,58 @@ async fn test_workspace_delete() {
         .unwrap();
 
     assert!(row.is_none());
+}
+
+#[tokio::test]
+async fn test_workspace_repo_delete_removes_messages_before_runs() {
+    let pool = test_helpers::setup_test_pool().await;
+    let manager = WorkspaceManager::new(pool.clone());
+
+    test_helpers::seed_workspace(&pool, "ws-del-repo", "/tmp/delete-repo").await;
+    test_helpers::seed_thread(&pool, "t-del-repo", "ws-del-repo").await;
+    test_helpers::seed_run(&pool, "r-del-repo", "t-del-repo", "completed", "default").await;
+
+    sqlx::query(
+        "INSERT INTO messages (
+            id, thread_id, run_id, role, content_markdown, message_type, status
+         ) VALUES (?, ?, ?, ?, ?, 'plain_message', 'completed')",
+    )
+    .bind("m-del-repo")
+    .bind("t-del-repo")
+    .bind("r-del-repo")
+    .bind("assistant")
+    .bind("cleanup me")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    manager.remove("ws-del-repo").await.unwrap();
+
+    let workspace = sqlx::query("SELECT id FROM workspaces WHERE id = ?")
+        .bind("ws-del-repo")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    let thread = sqlx::query("SELECT id FROM threads WHERE id = ?")
+        .bind("t-del-repo")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    let run = sqlx::query("SELECT id FROM thread_runs WHERE id = ?")
+        .bind("r-del-repo")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    let message = sqlx::query("SELECT id FROM messages WHERE id = ?")
+        .bind("m-del-repo")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+
+    assert!(workspace.is_none());
+    assert!(thread.is_none());
+    assert!(run.is_none());
+    assert!(message.is_none());
 }
 
 // =========================================================================
