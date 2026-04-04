@@ -639,16 +639,36 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
         "Before taking tool actions or making substantive changes, send a brief, friendly reply"
     ));
     assert!(spec.system_prompt.contains("Read files before editing."));
+    assert!(spec.system_prompt.contains("Use `read` to inspect files"));
+    assert!(spec.system_prompt.contains("instead of shell commands such as `cat`, `sed`, or `head`"));
+    assert!(spec.system_prompt.contains("Use `search` to find content and `find` to locate files"));
+    assert!(spec.system_prompt.contains("Use `shell` for one-shot non-interactive commands"));
+    assert!(spec.system_prompt.contains("terminal panel tools only for their dedicated session workflow"));
     assert!(spec
         .system_prompt
         .contains("Flag risks, destructive operations, or ambiguity before acting."));
     assert!(spec
         .system_prompt
         .contains("Do not rerun the same verification commands yourself unless the helper explicitly could not run them"));
+    assert!(spec.system_prompt.contains("Report verification status honestly."));
+    assert!(spec.system_prompt.contains("commands you ran yourself"));
+    assert!(spec.system_prompt.contains("commands the review helper ran"));
+    assert!(spec.system_prompt.contains("checks that were not run"));
+    assert!(spec.system_prompt.contains("Do not collapse main-agent verification"));
+    assert!(spec.system_prompt.contains("Do not imply that tests, type-checks, builds"));
+    assert!(spec.system_prompt.contains("which checks were run, which checks failed"));
+    assert!(spec.system_prompt.contains("If a verification command fails, say so directly"));
     assert!(spec.system_prompt.contains("## System Environment"));
     assert!(spec.system_prompt.contains("## Sandbox & Permissions"));
     assert!(spec.system_prompt.contains("Approval policy: require_all."));
     assert!(spec.system_prompt.contains("## Shell Tooling Guide"));
+    assert!(spec.system_prompt.contains(
+        "This section is a shell command selection and boundary guide."
+    ));
+    assert!(spec.system_prompt.contains("Use `term_status`, `term_output`, `term_write`"));
+    assert!(spec.system_prompt.contains(
+        "do not replace one-shot `shell` execution"
+    ));
     assert!(spec
         .system_prompt
         .contains(&format!("Workspace path: {workspace_path}")));
