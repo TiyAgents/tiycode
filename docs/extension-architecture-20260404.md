@@ -1,4 +1,6 @@
-# tiy-desktop 扩展架构设计文档 v1.0
+# tiy-desktop 扩展架构设计文档 v1.1
+
+> **v1.1 变更说明**：基于两轮 review 收敛，主要补充了：运行时接口定义（Plugin 结构化 command+args 执行协议、Hook 执行协议与硬约束）、权限模型与 PolicyEngine 对接方式、MCP config_error/stale snapshot/凭证脱敏、Skills tools≠授权/pin 机制、统一状态模型语义差异说明、Extensions Center 与 Marketplace Center IA 迁移策略、Implementation Alignment 小节（ToolGateway/PolicyEngine/AuditRepo 改造接缝）、UnifiedToolResult 包裹型定位、command-provider 定义、硬约束清单（Guardrails）、Phase 1 拆分为 1A+1B。
 
 ## 1. 总述
 
@@ -125,6 +127,8 @@
 
 ## 4. 三类扩展对象模型
 
+> **重要约束**：三类对象（plugin / mcp / skill）在 UI 上统一归入 "Extensions"，但在生命周期、安装语义、健康状态和治理方式上并不完全同构。"统一展示"不等于"统一底层状态机"——各类型保持独立的内部模型，仅在产品展示层做轻量聚合。
+
 ## 4.1 统一产品抽象
 前端产品层和 IPC 返回统一使用扩展摘要对象：
 
@@ -168,25 +172,37 @@ export type ExtensionSummary = {
 - 这是产品展示层统一模型，底层 plugin/mcp/skills 各自仍保持独立实现
 - `installState` 是产品展示层状态，由各子系统内部状态映射而来（见 5.4 映射表）
 - `health` 是**派生字段**，由各子系统运行态状态推导，不独立维护：
-  - Plugin：`Active` → `healthy`，`Error` → `error`，`Disabled` → `unknown`
-  - MCP：`connected` → `healthy`，`degraded` → `degraded`，`error` → `error`
+  - Plugin：`Enabled` → `healthy`，`Error` → `error`，`Disabled` → `unknown`
+  - MCP：`connected` → `healthy`，`degraded` → `degraded`，`error`/`config_error` → `error`
   - Skill：解析成功 → `healthy`，解析失败 → `error`
 - UI 可以用统一列表页、筛选器和状态组件
+
+### `installState` 各类型语义差异
+
+| installState | Plugin | MCP | Skill |
+|---|---|---|---|
+| `discovered` | 目录被发现，尚未登记 | — | — |
+| `installed` | manifest 解析通过，已登记 | 配置已存在于 settings | 文件已索引 |
+| `enabled` | hook/tool/command 注册就绪 | server 已启动且连接正常 | 已纳入 Select 候选池 |
+| `disabled` | 已安装但停用 | 配置存在但未启动 | 已索引但不参与 Select |
+| `error` | 校验/注册/运行时失败 | 连接/discover/运行时失败 | 文件解析失败 |
+
+各类型详情页应展示专属字段（如 MCP 的 phase/tools/resources、Plugin 的 hooks/commands、Skill 的 triggers/budget），而非仅靠统一模型。
 
 ---
 
 ## 5. Plugin 架构
 
 ## 5.1 Plugin 定义
-Plugin 是本地扩展包单元，支持以下能力类型：
+Plugin 是本地扩展包单元，支持以下能力类型（manifest `capabilities` 字段）：
 
-- `hook`
-- `tool-provider`
-- `command-provider`
-- `skill-pack`
-- `ui-metadata`
+- `hook` — 注册生命周期钩子
+- `tool-provider` — 提供可被 Agent 调用的工具
+- `command-provider` — 提供 prompt template 级命令（见 5.10）
+- `skill-pack` — 提供 skill 文件目录
 
 一期不支持：
+- `ui-metadata`（前端组件注入，留待后续）
 - 远程代码包执行
 - 任意前端脚本注入
 - 热加载沙箱
@@ -215,7 +231,11 @@ export type PluginManifest = {
   defaultEnabled?: boolean;
 
   capabilities: Array<
-    "hook" | "tool-provider" | "command-provider" | "skill-pack"
+    | "hook"
+    | "tool-provider"
+    | "command-provider"
+    | "skill-pack"
+    // "ui-metadata" 预留，一期不支持
   >;
 
   permissions: Array<
@@ -236,18 +256,21 @@ export type PluginManifest = {
   tools?: Array<{
     name: string;
     description: string;
-    entry: string;
-    requiredPermission:
-      | "read-only"
-      | "workspace-write"
-      | "danger-full-access";
+    command: string;
+    args?: string[];
+    env?: Record<string, string>;
+    cwd?: string;
+    timeoutMs?: number;            // 覆盖 plugin 级默认值
+    requiredPermission: "read" | "write" | "exec";
   }>;
 
   commands?: Array<{
     name: string;
     description: string;
-    promptTemplate?: string;
+    promptTemplate?: string;       // 一期为 prompt template 级命令，见 5.10
   }>;
+
+  timeoutMs?: number;              // plugin 级默认超时，tools/hooks 可各自覆盖
 
   skillsDir?: string;
 
@@ -297,26 +320,43 @@ Rust 侧 `PluginHost` 负责：
 
 ## 5.6 Plugin Tool 执行模型
 
-### entry 格式
-一期 `entry` 为外部可执行命令路径，支持参数模板：
+### 结构化命令格式
+一期**不采用**自由格式 shell 字符串（如 `"npx eslint --format json ${workspace}"`），而是使用结构化 `command + args`：
 
 ```jsonc
 {
   "name": "lint-check",
   "description": "运行 lint 检查",
-  "entry": "npx eslint --format json ${workspace}",
-  "requiredPermission": "workspace-read"
+  "command": "npx",
+  "args": ["eslint", "--format", "json"],
+  "cwd": "${workspace}",
+  "timeoutMs": 60000,
+  "requiredPermission": "read"
 }
 ```
 
-### 执行协议
-宿主通过 **命令行调用 + stdin/stdout JSON** 方式执行：
+这样做的原因：
+- 避免 shell 字符串拼接的注入风险（特殊字符、空格等）
+- 跨平台 shell quoting 规则不一致
+- 与"宿主强治理"目标一致——宿主清楚知道执行了什么命令和参数
+- 便于 PolicyEngine 审核和 AuditRepo 记录
 
-1. 宿主根据 `entry` 构建命令行，替换变量（`${workspace}` 等）
+### 变量替换
+`args`、`cwd`、`env` 中支持以下预定义变量：
+- `${workspace}` — 当前 workspace 路径
+- `${plugin_dir}` — 当前 plugin 安装目录
+- `${thread_id}` — 当前 thread ID（如有）
+
+变量替换由宿主完成，不走 shell 展开。
+
+### 执行协议
+宿主通过 **command + args 直接调用（非 shell）+ stdin/stdout JSON** 方式执行：
+
+1. 宿主根据 `command` + `args` 构建进程（直接 spawn，不经过 shell）
 2. 通过 stdin 传入调用参数（JSON）
 3. 读取 stdout 作为结果（JSON）
 4. stderr 作为诊断日志
-5. 超时默认 30s，可在 manifest 中配置 `timeoutMs`
+5. 超时取 tool 级 `timeoutMs` > plugin 级 `timeoutMs` > 默认 30s
 6. 非零退出码视为执行失败
 
 ```ts
@@ -336,7 +376,7 @@ type PluginToolOutput = {
 ```
 
 ### 资源限制
-- 单次调用超时：默认 30s，最大 300s
+- 单次调用超时：默认 30s，最大 300s（tool 级 > plugin 级 > 默认）
 - 不允许插件自管常驻进程
 - 不允许插件 fork 子进程脱离宿主追踪
 
@@ -407,11 +447,44 @@ type HookOutput = {
 - 单个 hook 超时默认 5s，超时视为 `continue`（不阻断主流程）
 - hook 执行错误记录到审计日志，不阻断主流程（`pre_tool_use` block 除外）
 
-### 高危边界
+### 硬约束
+- hook 只能读取输入 payload，并返回 `continue/block + message + metadata`
+- hook **不得发起新的宿主工具调用**（禁止 hook → tool → hook 递归链，防止权限面放大和审计复杂度膨胀）
+- hook **不得隐式提升权限**
 - 一期 hook **不允许**修改 system prompt，`prompt-injection` 权限不纳入一期
-- 若未来支持，需单独权限并限制仅 append，不可 replace
+- 若未来支持 prompt 修改，需单独权限并限制仅 append，不可 replace
 
-## 5.9 Plugin 与现有运行时集成
+### Hook 审计关联
+- 每次 hook 执行产生独立的 audit event
+- 必须携带原始 `tool_call_id` / `run_id`，确保与触发该 hook 的工具调用可关联
+- Activity 页和详情页可展示"某次工具调用被哪个 hook 阻断/增强"
+
+## 5.9 Command Provider 定义
+
+一期 `command-provider` 为 **prompt template 级命令**：
+
+- 本质是预定义的 prompt 片段，类似 slash command
+- 用户在输入框中通过 `/command-name` 触发
+- 触发后将 `promptTemplate` 内容注入到当前对话上下文
+- **不触发**独立执行流程，**不纳入**权限与审批体系
+- 不支持参数 schema（一期），后续可扩展
+
+```ts
+commands?: Array<{
+  name: string;                   // 命令名，如 "review-code"
+  description: string;            // 用户可见描述
+  promptTemplate?: string;        // 注入的 prompt 内容
+}>;
+```
+
+与现有系统的关系：
+- 注册到 Agent Runtime 的 command 列表
+- 前端在输入框 `/` 菜单中展示
+- 来源标记为 `plugin:<plugin_id>`
+
+---
+
+## 5.10 Plugin 与现有运行时集成
 Plugin 暴露的 tools 不直接塞进 UI 或 runtime，而是：
 
 1. PluginHost 注册到 `ExtensionToolRegistry`
@@ -421,7 +494,7 @@ Plugin 暴露的 tools 不直接塞进 UI 或 runtime，而是：
 注意：改造点在 `ToolGateway`（路由层），不改 `executors/` 内部各 executor。
 
 ### 统一工具结果模型
-所有工具（内建 / Plugin / MCP）的执行结果统一转换为：
+所有工具（内建 / Plugin / MCP）的执行结果在 ToolGateway 层统一包裹为：
 
 ```ts
 type UnifiedToolResult = {
@@ -436,9 +509,7 @@ type UnifiedToolResult = {
 };
 ```
 
-- Plugin tool 输出通过 `PluginToolOutput → UnifiedToolResult` 转换
-- MCP tool 输出通过 MCP 协议标准 result → `UnifiedToolResult` 转换
-- 内建工具直接构造 `UnifiedToolResult`
+与现有 `ToolOutput` 的关系详见 15.0 Implementation Alignment。
 
 ---
 
@@ -496,10 +567,11 @@ export type McpServerConfig = {
 ```ts
 export type McpServerStatus =
   | "disconnected"
+  | "config_error"    // 配置层错误：command 不存在、url 缺失、headers 不合法等
   | "connecting"
   | "connected"
   | "degraded"
-  | "error";
+  | "error";          // 运行时错误：连接断开、discover 失败、调用超时等
 
 export type McpToolSummary = {
   name: string;
@@ -531,6 +603,7 @@ export type McpServerState = {
     | "error";
   tools: McpToolSummary[];
   resources: McpResourceSummary[];
+  staleSnapshot: boolean;           // true 表示 tools/resources 为上次成功快照，当前 discover 失败
   lastError?: string;
   updatedAt: string;
 };
@@ -569,7 +642,27 @@ MCP 子系统必须支持部分可用：
 - UI 能清晰展示 phase 与 lastError
 - runtime 能跳过不可用 provider
 
+### Stale Snapshot 策略
+- discover 失败时，**保留上次成功发现的 tools/resources**，标记 `staleSnapshot: true`
+- UI 展示 stale 标记，避免从"有数据"突然变"空"导致诊断困难
+- runtime 可选择是否使用 stale 数据（默认继续使用，标记告警）
+
 这是一期必须保留的设计能力，不是锦上添花。
+
+## 6.8 MCP 凭证安全
+MCP 配置中的敏感字段规则：
+
+| 字段 | 敏感级别 | 处理 |
+|---|---|---|
+| `env` values | sensitive | 前端 mask、审计脱敏、日志不记录 |
+| `headers` values | sensitive | 同上 |
+| `url` | low | 可展示，但含 token 的 URL 应识别并 mask query params |
+| `command` / `args` | non-sensitive | 正常展示和记录 |
+
+即便一期继续使用 settings KV 存储，也必须确保：
+- UI 不回显明文凭证
+- 导出/诊断功能脱敏
+- 日志中不记录 sensitive 字段的值
 
 ---
 
@@ -633,15 +726,24 @@ export type SkillRecord = {
   description?: string;
   tags: string[];
   triggers: string[];
-  tools: string[];
+  tools: string[];              // 仅用于检索/推荐，不代表权限授予（见下方说明）
   priority?: "low" | "medium" | "high";
   source: SkillSource;
   path: string;
   enabled: boolean;
-  contentPreview: string;   // 截断摘要，用于索引层展示和 Select 阶段评估
+  pinned: boolean;              // 用户或 profile 显式钉选，跳过自动匹配直接纳入候选
+  contentPreview: string;       // 截断摘要，用于索引层展示和 Select 阶段评估
   // 完整内容在 Assemble 阶段按需从 path 读取，不缓存在索引中
 };
 ```
+
+> **重要约束**：skill frontmatter 中的 `tools` 字段仅用于检索排序和推荐展示。它**不能**被解释为权限提升——skill 声明 `tools: [shell]` 不意味着该 skill 可以绕过 `PolicyEngine` 执行 shell 命令。所有工具调用仍然必须经过 `ToolGateway + PolicyEngine` 完整链路。
+
+### Pin/Unpin 机制
+- 仅依赖自动关键词检索可能导致技能选择不稳定
+- 用户或 agent profile 可显式 pin skill（`pinned: true`），使其跳过 Select 匹配直接纳入候选
+- pinned skills 仍受 Prompt Budget 限制
+- UI 在 Skills 页提供 pin/unpin 操作
 
 ## 7.5 SkillHost 职责
 Rust 侧 `SkillHost` 负责：
@@ -683,13 +785,7 @@ Rust 侧 `SkillHost` 负责：
 
 > Skills 一期纳入统一 `Extensions Center`
 
-因此扩展中心有三个 tab：
-
-- Plugins
-- MCP
-- Skills
-
-不单独拆 `Skills Center` 一级入口。
+扩展中心共五个页签（三类扩展对象 + Marketplace + Activity），Skills 作为其中一个页签，不单独拆 `Skills Center` 一级入口。详见 13.1。
 
 ---
 
@@ -896,16 +992,45 @@ export type MarketplaceExtensionListing = {
 - 防止安装后 plugin 目录被篡改
 
 ## 12.2 权限模型
-权限采用三层：
+权限采用两层：
 
-1. **声明权限**
-   - manifest / config 声明
+1. **扩展声明权限（Extension declared permissions）**
+   - manifest / config 中声明扩展需要的能力（如 `workspace-read` / `shell-exec`）
+   - 仅表示"扩展声称自己需要这些能力"
+   - **不直接等于策略审批规则**——声明权限不能自动转化为 `PolicyEngine` 的 allow/deny
 
-2. **策略允许**
-   - policy 判断当前宿主是否允许
+2. **宿主运行时决策（Host runtime verdict）**
+   - `PolicyEngine` 对每次具体调用做出 `AutoAllow / RequireApproval / Deny` 判断
+   - 判断依据包括：tool_name、tool_input、workspace、run_mode，以及 **provider metadata**
 
-3. **运行时审批**
-   - 高危动作仍可触发 approval
+### PolicyEngine 扩展适配
+
+当前 `PolicyEngine::evaluate` 签名为 `(tool_name, tool_input, workspace_path, writable_roots, run_mode)`。为支持扩展工具，需要扩展输入参数：
+
+`ToolExecutionRequest` 增加：
+```rust
+pub struct ToolExecutionRequest {
+    // ... 现有字段 ...
+    pub provider_type: Option<String>,  // "builtin" | "plugin" | "mcp"
+    pub provider_id: Option<String>,    // plugin_id 或 mcp_server_id
+}
+```
+
+`PolicyEngine::evaluate` 增加 provider 上下文：
+```rust
+pub async fn evaluate(
+    &self,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    workspace_canonical_path: Option<&str>,
+    writable_roots: &[String],
+    run_mode: &str,
+    provider_type: Option<&str>,     // 新增
+    provider_id: Option<&str>,       // 新增
+) -> Result<PolicyCheck, AppError>
+```
+
+这使得 PolicyEngine 可以对扩展工具施加额外约束（如：来自特定 plugin 的 shell-exec 始终 RequireApproval）。
 
 ### 建议权限项
 - `workspace-read`
@@ -956,7 +1081,18 @@ export type MarketplaceExtensionListing = {
 2. **MCP**
 3. **Skills**
 4. **Marketplace**
-5. **Activity** — 扩展专属事件日志流，展示安装/启停/执行/错误等事件
+5. **Activity** — 扩展专属事件日志流（一期 lightweight 版本）
+
+### 与现有 Marketplace Center 的 IA 迁移策略
+
+当前仓库已有独立的 `src/modules/marketplace-center/`（含 skills/mcps/plugins/automations 四个 tab）。为避免双中心并存：
+
+- **目标 IA**：统一为 Extensions Center，Marketplace 作为其中一个 tab
+- **过渡策略**：保留现有 Marketplace Center 入口，但实际导航到 Extensions Center 的 Marketplace tab
+- **迁移步骤**：
+  1. Phase 1B 建立 Extensions Center 壳层时，将 Marketplace Center 的 catalog 数据和 UI 迁入 Marketplace tab
+  2. 旧入口改为 redirect
+  3. 稳定后移除旧模块代码
 
 ## 13.2 Plugins 页
 展示：
@@ -994,13 +1130,17 @@ export type MarketplaceExtensionListing = {
 - 权限与风险说明
 - 文档跳转
 
-## 13.6 Activity 页（Extensions Center 第五个 tab）
-展示：
-- 扩展安装/卸载/启用/禁用事件
-- 工具执行记录（来源、耗时、成功/失败）
-- Hook 执行记录
-- MCP 连接/断开/重连事件
-- 错误与告警（可筛选）
+## 13.6 Activity 页（Extensions Center 第五个 tab，lightweight 版本）
+
+一期为轻量版，仅展示核心事件：
+- 扩展安装/启用/禁用/错误
+- MCP 连接/断开/discover 错误
+- Plugin tool 调用成功/失败
+
+后续增强项（不纳入一期）：
+- Hook 详细执行流
+- 全量筛选与跨类型关联
+- 事件统计与趋势
 
 ---
 
@@ -1035,7 +1175,39 @@ export type MarketplaceExtensionListing = {
 
 ---
 
-## 15. 与现有 Agent Runtime 的集成
+## 15. 与现有系统的实现对齐（Implementation Alignment）
+
+## 15.0 当前系统接缝分析
+
+扩展系统接入现有代码库时，以下接缝需要明确处理方式：
+
+### ToolGateway 改造
+- **改造方式**：在 `ToolGateway::execute_tool_call` 内部增加 provider 路由扩展点
+- **不重写**现有 `executors::execute_tool` 分发逻辑
+- 路由顺序：先匹配内建工具（现有 executor），未命中再查 `ExtensionToolRegistry`
+- `ToolExecutionRequest` 增加 `provider_type` / `provider_id` 字段（内建工具为 `None`）
+
+### PolicyEngine 扩展
+- 当前 `PolicyEngine::evaluate` 按 `tool_name + tool_input` 分类判断
+- 需要增加 `provider_type` / `provider_id` 参数，使 PolicyEngine 可对扩展工具施加额外策略
+- 现有内建工具调用不受影响（provider 参数为 `None`，走原有逻辑）
+
+### UnifiedToolResult 与现有 ToolOutput 的关系
+- 当前 Rust 侧已有 `ToolOutput { success: bool, result: Value }`
+- `UnifiedToolResult` 在 `ToolOutput` 基础上**包裹** provider metadata，不替代 `ToolOutput`
+- 一期采用"包裹型"兼容方案：
+  - 内建工具执行器继续返回 `ToolOutput`
+  - `ToolGateway` 层将 `ToolOutput` + provider info 包装为 `UnifiedToolResult`
+  - 扩展工具（Plugin / MCP）输出直接构造为 `UnifiedToolResult`
+- 底层 executor 先不强制重构，后续成熟后再考虑统一
+
+### AuditRepo 复用
+- 先复用现有 `AuditInsert` 结构
+- 通过 `source` 字段区分扩展来源（如 `"plugin:lint-tool"` / `"mcp:brave-search"`)
+- 通过 `target_type` + `target_id` 标识扩展对象
+- 后续可抽象为 extension-facing audit service
+
+---
 
 ## 15.1 Session 构建阶段
 在 session 构建中增加扩展上下文组装：
@@ -1062,80 +1234,119 @@ export type MarketplaceExtensionListing = {
 
 ## 16. 分阶段实施建议
 
-## 16.1 Phase 1：扩展基础设施 + ExtensionToolRegistry
+## 16.1 Phase 1A：后端骨架
 交付：
 - ExtensionRegistry（统一注册表）
 - ExtensionToolRegistry（统一工具路由）
-- ToolGateway 扩展路由改造
-- UnifiedToolResult 适配层
-- Extensions Center 基础 UI（tab 框架 + Activity 日志）
-- Marketplace listing 展示
+- ToolGateway provider 路由扩展点
+- ToolExecutionRequest 增加 provider_type / provider_id
+- PolicyEngine 增加 provider 上下文参数
+- UnifiedToolResult 包裹型适配层
+- shared types 初稿（`extensions.ts / plugins.ts / mcp.ts / skills.ts`）
+- settings key namespace（`extensions.*`）
 
-> 本阶段不含具体 provider 实现，只建立骨架。
+> 本阶段不含具体 provider 实现和前端 UI，只建立后端骨架和类型定义。
 
-## 16.2 Phase 2：MCP Host
+## 16.2 Phase 1B：前端壳层
+交付：
+- Extensions Center 外壳（tab 框架：Plugins / MCP / Skills / Marketplace）
+- 各 tab 基础空页面
+- 现有 Marketplace Center 入口接入统一导航（redirect）
+- Marketplace tab 集成现有 catalog 数据
+
+> Activity tab 不纳入本阶段，作为后续增强项。
+
+## 16.3 Phase 2：MCP Host
 交付：
 - stdio transport
 - server registry
-- discover（tools + resources）
-- status/phase/error UI
+- discover（tools + resources）+ stale snapshot
+- config_error / status / phase / error UI
 - MCP tool 注册到 ExtensionToolRegistry
 - MCP tool 执行经 ToolGateway 全链路打通
+- MCP 凭证脱敏展示
 
 > MCP 是用户最直接感知价值的扩展类型，优先落地以验证整体架构。
 
-## 16.3 Phase 3：Plugin Tool Execution + Hooks
+## 16.4 Phase 3：Plugin Tool Execution + Hooks
 交付：
-- Plugin manifest 发现与校验
+- Plugin manifest 发现与校验（含完整性 hash）
 - Plugin 启停生命周期
-- Plugin tool execution（stdin/stdout JSON 协议）
-- pre/post tool hooks
-- command-provider 接入
+- Plugin tool execution（结构化 command + args，stdin/stdout JSON 协议）
+- pre/post tool hooks（含审计关联）
+- command-provider 接入（prompt template 级）
 - 本地导入 plugin
 
 > 与 Phase 2 的 MCP 执行路径复用 ExtensionToolRegistry + ToolGateway。
 
-## 16.4 Phase 4：Skill Host
+## 16.5 Phase 4：Skill Host
 交付：
 - builtin/workspace/plugin 扫描
 - skill 索引（关键词子串匹配）
-- skill 预览与启停
+- skill 预览、启停、pin/unpin
 - prompt 预算控制
 - Skills tab UI
 
+## 16.6 Phase 5：增强项
+交付：
+- Activity tab（lightweight 版本）
+- 扩展冲突检测 UI
+- hook 详细执行流日志
+- 跨类型事件关联
+
 ---
 
-## 17. 风险与控制
+## 17. 硬约束清单（Guardrails）
+
+以下约束为一期不可违反的硬性规则，实现时不得绕过：
+
+1. **Plugin tool 不允许绕过宿主执行外部命令** — 所有执行必须经 ToolGateway
+2. **Plugin tool `entry` 不采用自由格式 shell 字符串** — 必须使用结构化 `command + args`
+3. **Hook 不允许发起新的宿主工具调用** — 禁止 hook → tool → hook 递归链
+4. **Hook 不允许修改 system prompt** — `prompt-injection` 权限一期不实现
+5. **Skill frontmatter 中的 `tools` 不代表授权** — 不能绕过 PolicyEngine
+6. **Extension manifest permission 不直接等于 policy approval rule** — 声明权限 ≠ 运行时决策
+7. **MCP 凭证字段必须脱敏展示与脱敏记录** — env/headers 的 value 不可明文暴露
+8. **Discover 失败时保留上次成功快照并标记 stale** — 防止 UI 突变
+9. **三类对象各自保持独立内部状态机** — 统一展示不等于统一底层模型
+10. **所有扩展工具调用必须经过 PolicyEngine + Approval + AuditRepo 完整链路**
+
+---
+
+## 18. 风险与控制
 
 ### 主要风险
 1. 插件执行能力带来宿主风险面扩大
 2. MCP 连接不稳导致用户感知差
 3. skills 注入不受控导致 prompt 过大
-4. UI 做成“展示页”而非“可诊断控制台”
+4. UI 做成”展示页”而非”可诊断控制台”
+5. Phase 1 范围过大导致交付延期
 
 ### 对应控制
 - 严格要求所有扩展调用归一到 ToolGateway
 - MCP phase/status/error 全量可见
 - skills 强预算与选择器
 - 所有扩展状态、权限、错误在 UI 可见
+- Phase 1 拆为 1A（后端骨架）+ 1B（前端壳层），降低首次交付复杂度
 
 ---
 
-## 18. 推荐的下一步
+## 19. 推荐的下一步
 
-我建议下一步直接进入 **实施规格文档**，把这份架构拆成可开发事项。  
+建议下一步直接进入 **实施规格文档**，把这份架构拆成可开发事项。
 最合理的输出顺序是：
 
-1. **Phase 1 实施方案**
-   - 后端模块
-   - 前端页面
-   - IPC 列表
-   - 状态模型
-2. **共享类型草案**
-   - `extensions.ts / plugins.ts / mcp.ts / skills.ts`
-3. **Rust 侧模块 skeleton**
-4. **UI 信息架构与状态流**
+1. **Phase 1A 实施方案**
+   - Rust 侧模块 skeleton
+   - ToolGateway / PolicyEngine 改造点
+   - 共享类型草案（`extensions.ts / plugins.ts / mcp.ts / skills.ts`）
+   - settings key namespace 定义
+2. **Phase 1B 实施方案**
+   - Extensions Center UI 信息架构
+   - Marketplace Center 迁移步骤
+   - 各 tab 状态流
+3. **Phase 2（MCP Host）实施方案**
 
 如果继续推进，建议下一步产出：
 
-- **《tiy-desktop 扩展系统实施方案 Phase 1》**
+- **《tiy-desktop 扩展系统实施方案 Phase 1A》**
