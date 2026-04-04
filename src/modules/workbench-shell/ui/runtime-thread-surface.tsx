@@ -162,6 +162,7 @@ type SurfaceRuntimeError = {
 
 type InitialPromptRequest = {
   id: string;
+  threadId: string;
   displayText: string;
   effectivePrompt: string;
   attachments: MessageAttachmentDto[];
@@ -2792,6 +2793,7 @@ export function RuntimeThreadSurface({
 
     if (
       !initialPromptRequest
+      || initialPromptRequest.threadId !== threadId
       || !isCurrentThreadSnapshotReady
       || hasBlockingRun
       || handledInitialPromptRequestIdRef.current === initialPromptRequestId
