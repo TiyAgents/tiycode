@@ -97,6 +97,14 @@ pub async fn insert(pool: &SqlitePool, record: &ThreadRecord) -> Result<(), AppE
     Ok(())
 }
 
+pub async fn has_title(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
+    let title = sqlx::query_scalar::<_, String>("SELECT title FROM threads WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(title.map_or(false, |t| !t.trim().is_empty()))
+}
+
 pub async fn update_title(pool: &SqlitePool, id: &str, title: &str) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query("UPDATE threads SET title = ?, updated_at = ? WHERE id = ?")

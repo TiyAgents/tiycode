@@ -43,8 +43,6 @@ const COMPACT_SUMMARY_MAX_TOKENS: u32 = 700;
 const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
 const COMPACT_SUMMARY_CONTEXT_MAX_CHARS: usize = 18_000;
 const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
-const TITLE_GENERATION_COUNT_CHECK_RETRY_DELAY_MS: u64 = 50;
-const TITLE_GENERATION_COUNT_CHECK_MAX_ATTEMPTS: usize = 3;
 
 struct ActiveRun {
     run_id: String,
@@ -1700,13 +1698,11 @@ async fn maybe_generate_thread_title(
     frontend_tx: broadcast::Sender<ThreadStreamEvent>,
     app_handle: AppHandle,
 ) -> Result<(), AppError> {
-    if !wait_for_single_completed_assistant_plain_message(pool, thread_id).await? {
+    if thread_repo::has_title(pool, thread_id).await? {
         tracing::debug!(
             run_id = %run_id,
             thread_id = %thread_id,
-            max_attempts = TITLE_GENERATION_COUNT_CHECK_MAX_ATTEMPTS,
-            retry_delay_ms = TITLE_GENERATION_COUNT_CHECK_RETRY_DELAY_MS,
-            "skipping thread title generation: not exactly one completed assistant message after retries"
+            "skipping thread title generation: thread already has a title"
         );
         return Ok(());
     }
@@ -1789,34 +1785,6 @@ async fn maybe_generate_thread_title(
     Ok(())
 }
 
-async fn wait_for_single_completed_assistant_plain_message(
-    pool: &SqlitePool,
-    thread_id: &str,
-) -> Result<bool, AppError> {
-    for attempt in 0..TITLE_GENERATION_COUNT_CHECK_MAX_ATTEMPTS {
-        let completed_count =
-            message_repo::count_completed_assistant_plain_messages(pool, thread_id).await?;
-        if completed_count == 1 {
-            return Ok(true);
-        }
-
-        if should_retry_title_generation_count_check(
-            attempt,
-            TITLE_GENERATION_COUNT_CHECK_MAX_ATTEMPTS,
-        ) {
-            sleep(Duration::from_millis(
-                TITLE_GENERATION_COUNT_CHECK_RETRY_DELAY_MS,
-            ))
-            .await;
-        }
-    }
-
-    Ok(false)
-}
-
-fn should_retry_title_generation_count_check(attempt: usize, max_attempts: usize) -> bool {
-    attempt + 1 < max_attempts
-}
 
 async fn load_initial_title_context(
     pool: &SqlitePool,
@@ -2051,7 +2019,7 @@ mod tests {
         build_compact_summary_system_prompt, build_implementation_handoff_prompt, build_title_prompt,
         collapse_whitespace, extract_context_summary_block, normalize_compact_summary,
         normalize_generated_title, should_complete_reasoning_for_event,
-        should_retry_title_generation_count_check, truncate_chars,
+        truncate_chars,
     };
     use crate::core::agent_session::ProfileResponseStyle;
     use crate::core::plan_checkpoint::{
@@ -2204,41 +2172,6 @@ mod tests {
 
         assert!(prompt.contains("Write the title in Japanese."));
         assert!(prompt.contains("signals the user's goal or decision focus clearly"));
-    }
-
-    #[test]
-    fn title_generation_count_check_retries_until_last_allowed_attempt() {
-        let observed_results = [0_i64, 0, 1];
-
-        let should_retry_by_attempt: Vec<bool> = observed_results
-            .iter()
-            .enumerate()
-            .map(|(attempt, count)| {
-                *count != 1 && should_retry_title_generation_count_check(attempt, 3)
-            })
-            .collect();
-
-        assert_eq!(should_retry_by_attempt, vec![true, true, false]);
-        assert_eq!(
-            observed_results.into_iter().find(|count| *count == 1),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn title_generation_count_check_stops_after_max_attempts_when_plan_mode_never_commits() {
-        let observed_results = [0_i64, 0, 0];
-
-        let should_retry_by_attempt: Vec<bool> = observed_results
-            .iter()
-            .enumerate()
-            .map(|(attempt, count)| {
-                *count != 1 && should_retry_title_generation_count_check(attempt, 3)
-            })
-            .collect();
-
-        assert_eq!(should_retry_by_attempt, vec![true, true, false]);
-        assert!(observed_results.into_iter().all(|count| count != 1));
     }
 
     #[test]
