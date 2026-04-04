@@ -821,7 +821,7 @@ export function WorkbenchPromptComposer({
                 ref={commandPanelRef}
               >
                 <PromptInputCommand
-                  className="w-full min-w-0 overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/70 bg-app-surface/96 p-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)]"
+                  className="w-full min-w-0 overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu p-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl dark:bg-app-menu/98"
                   value={selectedCommand ? getCommandDisplayPath(selectedCommand) : ""}
                   onValueChange={() => {/* controlled by selectedCommandKey state */}}
                   disablePointerSelection
