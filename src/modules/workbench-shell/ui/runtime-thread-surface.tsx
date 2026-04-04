@@ -1962,17 +1962,32 @@ function getTimelineEntryKindOrder(entry: TimelineEntry) {
 
 function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
   switch (event.type) {
-    case "run_started":
-    case "stream_resync_required":
-    case "run_retrying":
-    case "reasoning_updated":
-    case "subagent_usage_updated":
-    case "thread_usage_updated":
-    case "plan_updated":
-    case "clarify_resolved":
-      return false;
-    default:
+    // Content arriving — replaces the thinking placeholder
+    case "message_delta":
+    case "message_completed":
+    case "message_discarded":
+    // Tool lifecycle — tool UI replaces the placeholder
+    case "tool_requested":
+    case "tool_running":
+    case "tool_completed":
+    case "tool_failed":
+    case "approval_required":
+    case "clarify_required":
+    // Helper lifecycle — helper UI replaces the placeholder
+    case "subagent_started":
+    case "subagent_progress":
+    case "subagent_completed":
+    case "subagent_failed":
+    // Terminal run states
+    case "run_completed":
+    case "run_failed":
+    case "run_cancelled":
+    case "run_interrupted":
+    case "run_limit_reached":
+    case "run_checkpointed":
       return true;
+    default:
+      return false;
   }
 }
 
@@ -2211,7 +2226,15 @@ export function RuntimeThreadSurface({
       }
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
-      setThinkingPlaceholder(null);
+      if (nextState === "running") {
+        // Preserve (or restore) the thinking placeholder while the run is
+        // still active — the LLM may be mid-generation and we don't want the
+        // placeholder to vanish just because loadSnapshot was triggered (e.g.
+        // by stream_resync_required or plan approval).
+        showThinkingPlaceholder(latestVisibleRun?.id ?? null);
+      } else {
+        setThinkingPlaceholder(null);
+      }
       if (
         (nextState === "running" || nextState === "waiting_approval" || nextState === "needs_reply")
         && streamRef.current
@@ -2244,7 +2267,7 @@ export function RuntimeThreadSurface({
         setLoading(false);
       }
     }
-  }, [clearScheduledThinkingPhase, onContextUsageChange, onRunStateChange, onThreadTitleChange, threadId]);
+  }, [clearScheduledThinkingPhase, onContextUsageChange, onRunStateChange, onThreadTitleChange, showThinkingPlaceholder, threadId]);
 
   const loadOlderMessages = useCallback(async () => {
     if (!threadId || isLoadingMoreMessages || messages.length === 0 || !hasMoreMessages) {
