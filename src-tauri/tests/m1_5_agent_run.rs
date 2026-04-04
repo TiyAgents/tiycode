@@ -650,14 +650,14 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
     assert!(spec
         .system_prompt
         .contains("Do not rerun the same verification commands yourself unless the helper explicitly could not run them"));
-    assert!(spec.system_prompt.contains("Report verification status honestly."));
-    assert!(spec.system_prompt.contains("commands you ran yourself"));
-    assert!(spec.system_prompt.contains("commands the review helper ran"));
-    assert!(spec.system_prompt.contains("checks that were not run"));
-    assert!(spec.system_prompt.contains("Do not collapse main-agent verification"));
-    assert!(spec.system_prompt.contains("Do not imply that tests, type-checks, builds"));
-    assert!(spec.system_prompt.contains("which checks were run, which checks failed"));
-    assert!(spec.system_prompt.contains("If a verification command fails, say so directly"));
+    assert!(spec.system_prompt.contains("When the user's goal is clear"));
+    assert!(spec.system_prompt.contains("low-risk, local, and reversible"));
+    assert!(spec.system_prompt.contains("move forward without unnecessary clarification"));
+    assert!(spec.system_prompt.contains("Do not use clarify to offload work"));
+    assert!(spec.system_prompt.contains("Use update_plan before implementation"));
+    assert!(spec.system_prompt.contains("complex, cross-file, or risky"));
+    assert!(spec.system_prompt.contains("scope decision is still unresolved"));
+    assert!(spec.system_prompt.contains("before publishing update_plan"));
     assert!(spec.system_prompt.contains("## System Environment"));
     assert!(spec.system_prompt.contains("## Sandbox & Permissions"));
     assert!(spec.system_prompt.contains("Approval policy: require_all."));
