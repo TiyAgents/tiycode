@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
-use crate::core::ripgrep::run_rg;
+use crate::core::ripgrep::run_rg_in;
 use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::git::GitFileState;
@@ -375,6 +375,7 @@ impl IndexManager {
             ));
         }
 
+        let workspace_root = canonicalize_workspace(workspace_path)?;
         let limit = max_results.unwrap_or(50).max(1);
         let normalized_file_pattern = normalize_search_file_pattern(file_pattern);
 
@@ -384,22 +385,24 @@ impl IndexManager {
             limit.to_string().into(),
             "--max-filesize=1M".into(),
             query.into(),
-            workspace_path.into(),
+            workspace_root.as_os_str().to_os_string(),
         ];
         if let Some(pattern) = normalized_file_pattern {
             args.push("--glob".into());
             args.push(pattern.into());
         }
 
-        let output = run_rg(args).await.map_err(|e| {
-            AppError::recoverable(
-                ErrorSource::Index,
-                "index.search.rg_failed",
-                format!(
-                    "ripgrep failed: {e}. Ensure 'rg' is installed, reachable from a login shell, or bundled with the app."
-                ),
-            )
-        })?;
+        let output = run_rg_in(args, Some(workspace_root.as_path()))
+            .await
+            .map_err(|e| {
+                AppError::recoverable(
+                    ErrorSource::Index,
+                    "index.search.rg_failed",
+                    format!(
+                        "ripgrep failed: {e}. Ensure 'rg' is installed, reachable from a login shell, or bundled with the app."
+                    ),
+                )
+            })?;
 
         if !output.status.success() && output.status.code() != Some(1) {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -417,7 +420,8 @@ impl IndexManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut results = parse_rg_json(&stdout, workspace_path);
+        let workspace_root_display = workspace_root.to_string_lossy().to_string();
+        let mut results = parse_rg_json(&stdout, &workspace_root_display);
         if results.len() > limit {
             results.truncate(limit);
         }

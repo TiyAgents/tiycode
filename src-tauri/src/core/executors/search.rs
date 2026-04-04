@@ -1,6 +1,6 @@
 use super::truncation::{truncate_line, GREP_MAX_LINE_LENGTH, GREP_MAX_MATCHES};
 use super::ToolOutput;
-use crate::core::ripgrep::run_rg;
+use crate::core::ripgrep::run_rg_in;
 use crate::core::workspace_paths::{
     canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
 };
@@ -58,7 +58,7 @@ pub async fn search_repo(
         args.push(pattern.into());
     }
 
-    match run_rg(args).await {
+    match run_rg_in(args, Some(workspace_root.as_path())).await {
         Ok(output) => {
             if !output.status.success() && output.status.code() != Some(1) {
                 let stderr = String::from_utf8_lossy(&output.stderr);

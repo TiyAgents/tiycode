@@ -345,6 +345,49 @@ async fn test_search_repo_respects_global_max_results() {
 }
 
 #[tokio::test]
+async fn test_search_repo_path_based_file_pattern_is_resolved_from_workspace_root() {
+    use tiy_agent_lib::core::index_manager::IndexManager;
+
+    let manager = IndexManager::new();
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+    std::fs::create_dir_all(base.join("src/components")).unwrap();
+    std::fs::write(
+        base.join("src/components/widget.tsx"),
+        "export const label = 'needle';\n",
+    )
+    .unwrap();
+
+    let result = manager
+        .search(
+            &base.to_string_lossy(),
+            "needle",
+            Some("src/components/widget.tsx"),
+            Some(20),
+        )
+        .await;
+
+    match result {
+        Ok(response) => {
+            assert_eq!(
+                response.count, 1,
+                "path-based filePattern should still match"
+            );
+            assert_eq!(response.results.len(), 1, "should return the matching file");
+            assert_eq!(response.results[0].path, "src/components/widget.tsx");
+        }
+        Err(e) => {
+            let err_msg = format!("{e}");
+            assert!(
+                err_msg.contains("not found") || err_msg.contains("No such file"),
+                "If search fails, it should be because ripgrep is not installed: {e}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_filter_files_finds_deep_paths_beyond_loaded_tree() {
     use tiy_agent_lib::core::index_manager::IndexManager;
 

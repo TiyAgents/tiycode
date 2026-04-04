@@ -13,11 +13,18 @@ use tokio::process::Command;
 /// 3. `command -v rg` from a login shell (helps GUI apps on macOS)
 /// 4. bundled app resource locations near the current executable
 pub async fn run_rg(args: Vec<OsString>) -> io::Result<std::process::Output> {
-    match spawn_rg("rg", &args).await {
+    run_rg_in(args, None::<&Path>).await
+}
+
+pub async fn run_rg_in(
+    args: Vec<OsString>,
+    current_dir: Option<&Path>,
+) -> io::Result<std::process::Output> {
+    match spawn_rg("rg", &args, current_dir).await {
         Ok(output) => Ok(output),
         Err(error) if error.kind() == ErrorKind::NotFound => {
             let resolved = resolve_rg_executable().await?;
-            spawn_rg(&resolved, &args).await
+            spawn_rg(&resolved, &args, current_dir).await
         }
         Err(error) => Err(error),
     }
@@ -26,8 +33,12 @@ pub async fn run_rg(args: Vec<OsString>) -> io::Result<std::process::Output> {
 async fn spawn_rg(
     program: impl AsRef<OsStr>,
     args: &[OsString],
+    current_dir: Option<&Path>,
 ) -> io::Result<std::process::Output> {
     let mut cmd = Command::new(program);
+    if let Some(current_dir) = current_dir {
+        cmd.current_dir(current_dir);
+    }
     cmd.args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
