@@ -9,6 +9,7 @@ pub mod git_manager;
 pub mod index_manager;
 pub mod plan_checkpoint;
 pub mod policy_engine;
+pub mod prompt;
 pub mod ripgrep;
 pub mod settings_manager;
 pub mod sleep_manager;

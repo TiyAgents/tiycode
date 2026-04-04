@@ -638,6 +638,13 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
     assert!(spec.system_prompt.contains(
         "Before taking tool actions or making substantive changes, send a brief, friendly reply"
     ));
+    assert!(spec.system_prompt.contains("Read files before editing."));
+    assert!(spec
+        .system_prompt
+        .contains("Flag risks, destructive operations, or ambiguity before acting."));
+    assert!(spec
+        .system_prompt
+        .contains("Do not rerun the same verification commands yourself unless the helper explicitly could not run them"));
     assert!(spec.system_prompt.contains("## System Environment"));
     assert!(spec.system_prompt.contains("## Sandbox & Permissions"));
     assert!(spec.system_prompt.contains("Approval policy: require_all."));
