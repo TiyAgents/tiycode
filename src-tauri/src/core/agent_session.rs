@@ -1326,6 +1326,33 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                 "properties": {
                     "title": { "type": "string" },
                     "summary": { "type": "string" },
+                    "context": {
+                        "oneOf": [
+                            { "type": "string" },
+                            {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        ]
+                    },
+                    "design": {
+                        "oneOf": [
+                            { "type": "string" },
+                            {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        ]
+                    },
+                    "keyImplementation": {
+                        "oneOf": [
+                            { "type": "string" },
+                            {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        ]
+                    },
                     "steps": {
                         "type": "array",
                         "items": {
@@ -1347,14 +1374,107 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                             ]
                         }
                     },
+                    "verification": {
+                        "oneOf": [
+                            { "type": "string" },
+                            {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        ]
+                    },
                     "risks": {
                         "type": "array",
                         "items": { "type": "string" }
                     },
+                    "assumptions": {
+                        "oneOf": [
+                            { "type": "string" },
+                            {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        ]
+                    },
                     "needsContextResetOption": { "type": "boolean" },
                     "plan": {
                         "type": "object",
-                        "description": "Optional nested plan payload. If provided, the runtime reads planning fields from this object."
+                        "description": "Optional nested plan payload. If provided, the runtime reads planning fields from this object.",
+                        "properties": {
+                            "title": { "type": "string" },
+                            "summary": { "type": "string" },
+                            "context": {
+                                "oneOf": [
+                                    { "type": "string" },
+                                    {
+                                        "type": "array",
+                                        "items": { "type": "string" }
+                                    }
+                                ]
+                            },
+                            "design": {
+                                "oneOf": [
+                                    { "type": "string" },
+                                    {
+                                        "type": "array",
+                                        "items": { "type": "string" }
+                                    }
+                                ]
+                            },
+                            "keyImplementation": {
+                                "oneOf": [
+                                    { "type": "string" },
+                                    {
+                                        "type": "array",
+                                        "items": { "type": "string" }
+                                    }
+                                ]
+                            },
+                            "steps": {
+                                "type": "array",
+                                "items": {
+                                    "oneOf": [
+                                        { "type": "string" },
+                                        {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": { "type": "string" },
+                                                "title": { "type": "string" },
+                                                "description": { "type": "string" },
+                                                "status": { "type": "string" },
+                                                "files": {
+                                                    "type": "array",
+                                                    "items": { "type": "string" }
+                                                }
+                                            }
+                                        }
+                                    ]
+                                }
+                            },
+                            "verification": {
+                                "oneOf": [
+                                    { "type": "string" },
+                                    {
+                                        "type": "array",
+                                        "items": { "type": "string" }
+                                    }
+                                ]
+                            },
+                            "risks": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            },
+                            "assumptions": {
+                                "oneOf": [
+                                    { "type": "string" },
+                                    {
+                                        "type": "array",
+                                        "items": { "type": "string" }
+                                    }
+                                ]
+                            },
+                            "needsContextResetOption": { "type": "boolean" }
+                        }
                     }
                 }
             }),
@@ -3040,6 +3160,33 @@ mod tests {
             .expect("update_plan properties should be object");
 
         assert!(!properties.contains_key("openQuestions"));
+    }
+
+    #[test]
+    fn update_plan_tool_schema_exposes_structured_plan_sections() {
+        let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
+        let update_plan = tools
+            .iter()
+            .find(|tool| tool.name == "update_plan")
+            .expect("update_plan tool should exist");
+        let properties = update_plan.parameters["properties"]
+            .as_object()
+            .expect("update_plan properties should be object");
+
+        assert!(properties.contains_key("context"));
+        assert!(properties.contains_key("design"));
+        assert!(properties.contains_key("keyImplementation"));
+        assert!(properties.contains_key("verification"));
+        assert!(properties.contains_key("assumptions"));
+
+        let nested_plan_properties = update_plan.parameters["properties"]["plan"]["properties"]
+            .as_object()
+            .expect("nested plan properties should be object");
+        assert!(nested_plan_properties.contains_key("context"));
+        assert!(nested_plan_properties.contains_key("design"));
+        assert!(nested_plan_properties.contains_key("keyImplementation"));
+        assert!(nested_plan_properties.contains_key("verification"));
+        assert!(nested_plan_properties.contains_key("assumptions"));
     }
 
     #[test]
