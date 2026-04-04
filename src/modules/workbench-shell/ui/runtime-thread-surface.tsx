@@ -2185,11 +2185,14 @@ export function RuntimeThreadSurface({
       const latestVisibleRun = getLatestVisibleRun(snapshot);
       const nextContextUsage = mapRunSummaryToContextUsage(latestVisibleRun);
       const shouldPreserveContextUsage =
-        nextContextUsage === null && preserveContextUsageOnNextEmptySnapshotRef.current;
+        preserveContextUsageOnNextEmptySnapshotRef.current
+        && (nextContextUsage === null || nextContextUsage.totalTokens === 0);
       if (!shouldPreserveContextUsage) {
         // Clear the flag only when we have valid usage or it was never set.
         // This prevents premature clearing when stream_resync_required triggers
-        // loadSnapshot multiple times before a run has usage info.
+        // loadSnapshot multiple times before a run has usage info, and also
+        // avoids a brief "0" flash when a new run exists but hasn't received
+        // its first API response yet.
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
       }
       // Use functional update to ensure we replace the entire list atomically,
@@ -3086,6 +3089,9 @@ export function RuntimeThreadSurface({
     }
 
     preserveContextUsageOnNextEmptySnapshotRef.current = action === "apply_plan";
+    if (action === "apply_plan_with_context_reset") {
+      onContextUsageChange?.(null);
+    }
     setApprovingPlanMessageId(messageId);
     setComposerError(null);
     setRuntimeError(null);
