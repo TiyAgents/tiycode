@@ -4,7 +4,7 @@ import {
   BookCopy,
   Boxes,
   CirclePlus,
-  Plug,
+  PackageOpen,
   RefreshCw,
   Search,
 } from "lucide-react";
@@ -65,7 +65,7 @@ type PluginCollectionItem = {
 function PluginIcon() {
   return (
     <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-app-border bg-app-canvas shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]">
-      <Plug className="size-4 shrink-0" />
+      <PackageOpen className="size-[18px] shrink-0 stroke-[1.9]" />
     </div>
   );
 }
