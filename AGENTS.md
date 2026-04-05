@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-The desktop UI lives in `src/` with React + TypeScript. Use `src/app/` for bootstrap, routing, providers, and global styles; `src/modules/` for domain areas such as workbench, settings, and marketplace; `src/features/` for platform-facing features like terminal and system metadata; `src/shared/` for reusable UI, types, config, and helpers; and `src/services/` for bridge and streaming integrations. Static assets belong in `public/`. Tauri/Rust code lives in `src-tauri/src/`, migrations in `src-tauri/migrations/`, backend integration tests in `src-tauri/tests/`, and design references in `docs/`.
+The desktop UI lives in `src/` with React + TypeScript. Use `src/app/` for bootstrap, routing, providers, and global styles; `src/modules/` for domain areas such as workbench, settings, marketplace, and the newer extensions center surfaces; `src/features/` for platform-facing features like terminal and system metadata; `src/shared/` for reusable UI, types, config, and helpers; and `src/services/` for bridge and streaming integrations. Static assets belong in `public/`. Tauri/Rust code lives in `src-tauri/src/`, with extension host/runtime code now under `src-tauri/src/extensions/`; migrations stay in `src-tauri/migrations/`, backend integration tests in `src-tauri/tests/`, and design references in `docs/`.
 
 ## Build, Test, and Development Commands
 - `npm run dev` — start the full Tauri desktop app.

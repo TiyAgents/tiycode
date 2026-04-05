@@ -26,8 +26,8 @@ import {
   type LanguagePreference,
 } from "@/app/providers/language-provider";
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
-import { useMarketplaceController } from "@/modules/marketplace-center/model/use-marketplace-controller";
-import { MarketplaceOverlay } from "@/modules/marketplace-center/ui/marketplace-overlay";
+import { useExtensionsController } from "@/modules/extensions-center/model/use-extensions-controller";
+import { ExtensionsCenterOverlay } from "@/modules/extensions-center/ui/extensions-center-overlay";
 import {
   buildProfileModelPlan,
   buildRunModelPlanFromSelection,
@@ -96,6 +96,7 @@ import type {
   WorkbenchOverlay,
   WorkspaceItem,
 } from "@/modules/workbench-shell/model/types";
+import type { ExtensionDetail, SkillPreview } from "@/shared/types/extensions";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
 import {
@@ -357,13 +358,55 @@ export function DashboardWorkbench() {
   const { data } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
   const { language, setLanguage } = useLanguage();
+  const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(
+    () => (isTauri() ? null : (RECENT_PROJECTS[0] ?? null)),
+  );
   const {
-    itemStates: marketplaceItemStates,
-    installItem,
-    uninstallItem,
-    enableItem,
-    disableItem,
-  } = useMarketplaceController();
+    addMarketplaceSource,
+    addMcpServer,
+    activity: extensionActivity,
+    detailByKey: extensionDetailByKey,
+    disableExtension,
+    disableSkill,
+    enableExtension,
+    enableSkill,
+    error: extensionsError,
+    extensions,
+    installMarketplaceItem,
+    isLoading: areExtensionsLoading,
+    loadDetail: loadExtensionDetail,
+    loadSkillPreview,
+    marketplaceItems,
+    marketplaceSources,
+    mcpServers,
+    pinSkill,
+    pluginCommandEntries,
+    refresh: refreshExtensions,
+    refreshMarketplaceSource,
+    removeMarketplaceSource,
+    removeMcpServer,
+    rescanSkills,
+    restartMcpServer,
+    skillPreviewByKey,
+    skills: extensionSkills,
+    uninstallExtension,
+    updateMcpServer,
+  } = useExtensionsController(selectedProject?.path ?? null);
+  const currentExtensionScope = selectedProject?.path ? "workspace" : "global";
+  const extensionDetailById = useMemo<Record<string, ExtensionDetail>>(() => {
+    return Object.fromEntries(
+      Object.entries(extensionDetailByKey)
+        .filter(([key]) => key.startsWith(`${currentExtensionScope}:`))
+        .map(([, value]) => [value.summary.id, value]),
+    );
+  }, [currentExtensionScope, extensionDetailByKey]);
+  const skillPreviewById = useMemo<Record<string, SkillPreview>>(() => {
+    return Object.fromEntries(
+      Object.entries(skillPreviewByKey)
+        .filter(([key]) => key.startsWith(`${currentExtensionScope}:`))
+        .map(([, value]) => [value.record.id, value]),
+    );
+  }, [currentExtensionScope, skillPreviewByKey]);
   const {
     general: generalPreferences,
     workspaces: settingsWorkspaces,
@@ -406,9 +449,6 @@ export function DashboardWorkbench() {
   );
   const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(
     () => (isTauri() ? [] : [...RECENT_PROJECTS]),
-  );
-  const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(
-    () => (isTauri() ? null : (RECENT_PROJECTS[0] ?? null)),
   );
   const [isNewThreadMode, setNewThreadMode] = useState(true);
   const [activeOverlay, setActiveOverlay] = useState<WorkbenchOverlay>(null);
@@ -454,6 +494,10 @@ export function DashboardWorkbench() {
     Record<string, PendingThreadRun>
   >({});
   const [newThreadRunMode, setNewThreadRunMode] = useState<RunMode>("default");
+  const composerCommands = useMemo(
+    () => [...commands.commands, ...pluginCommandEntries],
+    [commands.commands, pluginCommandEntries],
+  );
   const [runtimeContextUsage, setRuntimeContextUsage] =
     useState<ThreadContextUsage | null>(null);
   const [terminalWorkspaceBindings, setTerminalWorkspaceBindings] = useState<
@@ -2555,7 +2599,7 @@ export function DashboardWorkbench() {
                             activeAgentProfileId={activeAgentProfileId}
                             agentProfiles={agentProfiles}
                             canSubmitWhenAttachmentsOnly={false}
-                            commands={commands.commands}
+                            commands={composerCommands}
                             error={composerError}
                             onErrorMessageChange={setComposerError}
                             onRunModeChange={setNewThreadRunMode}
@@ -2665,7 +2709,7 @@ export function DashboardWorkbench() {
                       <RuntimeThreadSurface
                         activeAgentProfileId={activeAgentProfileId}
                         agentProfiles={agentProfiles}
-                        commands={commands.commands}
+                        commands={composerCommands}
                         key={resolvedTerminalThreadId ?? "runtime-thread-surface"}
                         initialPromptRequest={
                           resolvedTerminalThreadId
@@ -2870,14 +2914,37 @@ export function DashboardWorkbench() {
       ) : null}
 
       {isMarketplaceOpen ? (
-        <MarketplaceOverlay
+        <ExtensionsCenterOverlay
           contentRef={overlayContentRef}
-          itemStates={marketplaceItemStates}
+          activity={extensionActivity}
+          detailById={extensionDetailById}
+          error={extensionsError}
+          extensions={extensions}
+          isLoading={areExtensionsLoading}
+          marketplaceItems={marketplaceItems}
+          marketplaceSources={marketplaceSources}
+          mcpServers={mcpServers}
           onClose={() => setActiveOverlay(null)}
-          onDisableItem={disableItem}
-          onEnableItem={enableItem}
-          onInstallItem={installItem}
-          onUninstallItem={uninstallItem}
+          onRefresh={() => void refreshExtensions(currentExtensionScope)}
+          onLoadDetail={(id) => loadExtensionDetail(id, currentExtensionScope)}
+          onLoadSkillPreview={(id) => loadSkillPreview(id, currentExtensionScope)}
+          onEnableExtension={(id) => enableExtension(id, currentExtensionScope)}
+          onDisableExtension={(id) => disableExtension(id, currentExtensionScope)}
+          onUninstallExtension={(id) => uninstallExtension(id, currentExtensionScope)}
+          onAddMarketplaceSource={addMarketplaceSource}
+          onRemoveMarketplaceSource={removeMarketplaceSource}
+          onRefreshMarketplaceSource={refreshMarketplaceSource}
+          onInstallMarketplaceItem={installMarketplaceItem}
+          onAddMcpServer={(input) => addMcpServer(input, currentExtensionScope)}
+          onUpdateMcpServer={(id, input) => updateMcpServer(id, input, currentExtensionScope)}
+          onRemoveMcpServer={(id) => removeMcpServer(id, currentExtensionScope)}
+          onRestartMcpServer={(id) => restartMcpServer(id, currentExtensionScope)}
+          onRescanSkills={() => rescanSkills(currentExtensionScope)}
+          onEnableSkill={(id) => enableSkill(id, currentExtensionScope)}
+          onDisableSkill={(id) => disableSkill(id, currentExtensionScope)}
+          onPinSkill={(id, pinned) => pinSkill(id, pinned, currentExtensionScope)}
+          skillPreviewById={skillPreviewById}
+          skills={extensionSkills}
         />
       ) : null}
     </main>

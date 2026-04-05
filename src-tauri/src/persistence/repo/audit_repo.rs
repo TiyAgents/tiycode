@@ -1,7 +1,9 @@
 use chrono::Utc;
+use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::model::errors::AppError;
+use crate::model::extensions::ExtensionActivityEventDto;
 
 pub struct AuditInsert {
     pub actor_type: String,
@@ -46,4 +48,49 @@ pub async fn insert(pool: &SqlitePool, r: &AuditInsert) -> Result<(), AppError> 
     .await?;
 
     Ok(())
+}
+
+#[derive(sqlx::FromRow, Serialize)]
+struct ExtensionActivityRow {
+    id: String,
+    source: String,
+    action: String,
+    target_type: Option<String>,
+    target_id: Option<String>,
+    result_json: Option<String>,
+    created_at: String,
+}
+
+pub async fn list_extension_activity(
+    pool: &SqlitePool,
+    limit: usize,
+) -> Result<Vec<ExtensionActivityEventDto>, AppError> {
+    let rows = sqlx::query_as::<_, ExtensionActivityRow>(
+        "SELECT id, source, action, target_type, target_id, result_json, created_at
+         FROM audit_events
+         WHERE source = 'extensions'
+            OR source LIKE 'plugin:%'
+            OR source LIKE 'mcp:%'
+         ORDER BY created_at DESC
+         LIMIT ?",
+    )
+    .bind(limit as i64)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ExtensionActivityEventDto {
+            id: row.id,
+            source: row.source,
+            action: row.action,
+            target_type: row.target_type,
+            target_id: row.target_id,
+            result: row
+                .result_json
+                .as_deref()
+                .and_then(|value| serde_json::from_str(value).ok()),
+            created_at: row.created_at,
+        })
+        .collect())
 }

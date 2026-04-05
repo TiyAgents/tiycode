@@ -12,6 +12,7 @@ use crate::core::terminal_manager::TerminalManager;
 use crate::core::thread_manager::ThreadManager;
 use crate::core::tool_gateway::ToolGateway;
 use crate::core::workspace_manager::WorkspaceManager;
+use crate::extensions::ExtensionsManager;
 
 /// Global application state shared across all Tauri commands.
 ///
@@ -28,6 +29,7 @@ pub struct AppState {
     pub terminal_manager: Arc<TerminalManager>,
     pub index_manager: IndexManager,
     pub git_manager: GitManager,
+    pub extensions_manager: Arc<ExtensionsManager>,
 }
 
 impl AppState {
@@ -41,6 +43,7 @@ impl AppState {
             pool.clone(),
             Arc::clone(&terminal_manager),
         ));
+        let extensions_manager = Arc::new(ExtensionsManager::new(pool.clone()));
         let built_in_agent_runtime = Arc::new(BuiltInAgentRuntime::new(
             pool.clone(),
             Arc::clone(&tool_gateway),
@@ -66,6 +69,7 @@ impl AppState {
             terminal_manager,
             index_manager,
             git_manager,
+            extensions_manager,
         }
     }
 }

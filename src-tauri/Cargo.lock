@@ -5683,7 +5683,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "tempfile",
  "thiserror 2.0.18",
- "tiy-core",
+ "tiycore",
  "tokio",
  "tracing",
  "tracing-appender",
@@ -5692,7 +5692,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tiy-core"
+name = "tiycore"
 version = "0.1.0"
 dependencies = [
  "anyhow",

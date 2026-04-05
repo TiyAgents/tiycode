@@ -28,6 +28,7 @@ use crate::core::subagent::{
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
 };
+use crate::extensions::ExtensionsManager;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::AgentProfileRecord;
@@ -119,6 +120,7 @@ pub struct AgentSessionSpec {
     pub workspace_path: String,
     pub run_mode: String,
     pub tool_profile_name: String,
+    pub runtime_tools: Vec<AgentTool>,
     pub system_prompt: String,
     pub history_messages: Vec<MessageRecord>,
     pub model_plan: ResolvedRuntimeModelPlan,
@@ -136,17 +138,25 @@ pub async fn build_session_spec(
     let raw_plan: RuntimeModelPlan =
         serde_json::from_value(model_plan_value.clone()).unwrap_or_default();
     let resolved_plan = resolve_model_plan(pool, raw_plan.clone()).await?;
+    let tool_profile_name = resolve_tool_profile_name(&raw_plan, run_mode);
     let recent_messages =
         message_repo::list_recent(pool, thread_id, None, MESSAGE_HISTORY_LIMIT).await?;
     let history_messages = trim_history_to_current_context(&recent_messages);
     let system_prompt = build_system_prompt(pool, &raw_plan, workspace_path, run_mode).await?;
+    let extension_tools = ExtensionsManager::new(pool.clone())
+        .list_runtime_agent_tools(Some(workspace_path))
+        .await?;
 
     Ok(AgentSessionSpec {
         run_id: run_id.to_string(),
         thread_id: thread_id.to_string(),
         workspace_path: workspace_path.to_string(),
         run_mode: run_mode.to_string(),
-        tool_profile_name: resolve_tool_profile_name(&raw_plan, run_mode),
+        tool_profile_name: tool_profile_name.clone(),
+        runtime_tools: runtime_tools_for_profile_with_extensions(
+            &tool_profile_name,
+            extension_tools,
+        ),
         system_prompt,
         history_messages,
         model_plan: resolved_plan,
@@ -893,7 +903,7 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
         &spec.history_messages,
         &spec.model_plan.primary.model,
     ));
-    agent.set_tools(runtime_tools_for_profile(&spec.tool_profile_name));
+    agent.set_tools(spec.runtime_tools.clone());
     agent.set_tool_execution(ToolExecutionMode::Sequential);
     agent.set_thinking_level(spec.model_plan.thinking_level);
     agent.set_transport(spec.model_plan.transport);
@@ -1640,6 +1650,25 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
             "required": ["taskBoardId", "action"]
         }),
     ));
+
+    tools
+}
+
+fn runtime_tools_for_profile_with_extensions(
+    profile_name: &str,
+    extension_tools: Vec<AgentTool>,
+) -> Vec<AgentTool> {
+    let mut tools = runtime_tools_for_profile(profile_name);
+    let mut names = tools
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect::<std::collections::HashSet<_>>();
+
+    for tool in extension_tools {
+        if names.insert(tool.name.clone()) {
+            tools.push(tool);
+        }
+    }
 
     tools
 }
@@ -2465,8 +2494,9 @@ mod tests {
         handle_agent_event, normalize_profile_response_language, normalize_profile_response_style,
         plan_mode_missing_checkpoint_error, resolve_helper_model_role, resolve_helper_profile,
         response_style_system_instruction, runtime_security_config, runtime_tools_for_profile,
-        standard_tool_timeout, trim_history_to_current_context, ProfileResponseStyle,
-        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
+        runtime_tools_for_profile_with_extensions, standard_tool_timeout,
+        trim_history_to_current_context, ProfileResponseStyle, ResolvedModelRole,
+        ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
         PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
         STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
@@ -2474,7 +2504,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     use tempfile::tempdir;
-    use tiy_core::agent::{AgentEvent, AgentMessage};
+    use tiy_core::agent::{AgentEvent, AgentMessage, AgentTool};
     use tiy_core::thinking::ThinkingLevel;
     use tiy_core::types::{Api, AssistantMessage, AssistantMessageEvent, ContentBlock, Provider};
     use tokio::sync::mpsc;
@@ -3146,6 +3176,31 @@ mod tests {
 
             assert!(tool_names.contains(&"clarify"));
         }
+    }
+
+    #[test]
+    fn runtime_tools_merge_extension_tools_without_overriding_builtin_names() {
+        let tools = runtime_tools_for_profile_with_extensions(
+            DEFAULT_FULL_TOOL_PROFILE,
+            vec![
+                AgentTool::new(
+                    "__mcp_context7_resolve-library-id",
+                    "resolve-library-id",
+                    "Context7 MCP tool",
+                    serde_json::json!({ "type": "object" }),
+                ),
+                AgentTool::new(
+                    "read",
+                    "Read",
+                    "should not override builtin tool",
+                    serde_json::json!({ "type": "object" }),
+                ),
+            ],
+        );
+        let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+
+        assert!(tool_names.contains(&"__mcp_context7_resolve-library-id"));
+        assert_eq!(tool_names.iter().filter(|name| **name == "read").count(), 1);
     }
 
     #[test]

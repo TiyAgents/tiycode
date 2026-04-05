@@ -457,6 +457,7 @@ where
             Some(&workspace.canonical_path),
             &[],
             "default",
+            None,
         )
         .await?;
     let policy_json = serde_json::to_string(&check).unwrap_or_default();

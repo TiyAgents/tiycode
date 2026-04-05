@@ -20,12 +20,13 @@ npm run build
 ```text
 src/
   app/       # 入口、Provider、路由、全局样式
-  modules/   # 工作台、设置中心、项目树、Git 等领域模块
+  modules/   # 工作台、设置中心、扩展中心、项目树、Git 等领域模块
   pages/     # 页面级组装
   features/  # 与运行时/平台强相关的轻量能力模块
   shared/    # 共享 UI / lib / types / config
 src-tauri/
-  src/commands/ # Rust 命令模块
+  src/commands/   # Rust 命令模块
+  src/extensions/ # 扩展宿主、注册表与插件/MCP/Skill 运行时
 ```
 
 ## 当前脚手架包含
@@ -38,7 +39,7 @@ src-tauri/
 - 内置工作台设置中心，包含 `Account / General / Providers / Commands / Permissions / Workspace / About` 分类页与本地持久化
 - 内置基于 AI Elements 原生组件的 existing-thread Demo，覆盖 `Plan / Queue / Reasoning / Chain of Thought / Tool / Confirmation / Sources / Suggestion / PromptInput`，并支持基于 Settings 的 Profile 切换
 - Agent 运行时支持通过 `clarify` 在执行过程中发起结构化提问：当需求存在不确定信息时，可展示推荐选项供用户点选，或直接在 composer 中补充自由输入后继续当前 run
-- 内置 Marketplace 全屏浮层，支持 `Skills / MCPs / Plugins / Automations` tab、搜索、已安装/推荐列表，以及本地持久化的安装/启用/禁用/卸载交互
+- 内置 `Extensions Center` 全屏浮层，统一承载 `Plugins / MCP / Skills / Marketplace / Activity` 五个 tab；其中 Rust 侧已提供扩展注册、详情、启停、活动流、插件导入、MCP 配置与技能索引 IPC
 - Git Drawer 已接入真实仓库状态、Diff、History，并支持 `stage / unstage / commit / fetch / pull / push`；其中 `commit / fetch / pull / push` 依赖本地 Git CLI，缺失时会自动降级为只读
 - Agent Run 主链路已切换为内置 Rust runtime：`Frontend -> Rust Core -> BuiltInAgentRuntime -> tiy-core -> LLM`，不再依赖独立 sidecar 进程
 - Rust 端示例命令 `get_system_metadata`

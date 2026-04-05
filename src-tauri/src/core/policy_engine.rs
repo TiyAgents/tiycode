@@ -14,6 +14,7 @@ use sqlx::SqlitePool;
 use crate::core::workspace_paths::{
     canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
 };
+use crate::extensions::ToolProviderContext;
 use crate::model::errors::AppError;
 use crate::persistence::repo::settings_repo;
 
@@ -122,6 +123,7 @@ impl PolicyEngine {
         workspace_canonical_path: Option<&str>,
         writable_roots: &[String],
         run_mode: &str,
+        provider_context: Option<&ToolProviderContext>,
     ) -> Result<PolicyCheck, AppError> {
         let mut checked = Vec::new();
 
@@ -234,7 +236,35 @@ impl PolicyEngine {
             }
         }
 
-        // 6. Read-only tools default to auto-allow
+        // 6. Extension provider heuristics
+        if let Some(provider_context) = provider_context {
+            checked.push("extension_provider".to_string());
+            if provider_context.provider_type == "plugin" {
+                return Ok(PolicyCheck {
+                    tool_name: tool_name.to_string(),
+                    verdict: match provider_context.required_permission.as_str() {
+                        "write" | "exec" => PolicyVerdict::RequireApproval {
+                            reason: format!(
+                                "Plugin '{}' requires approval for '{}' access",
+                                provider_context.provider_id, provider_context.required_permission
+                            ),
+                        },
+                        _ => PolicyVerdict::AutoAllow,
+                    },
+                    checked_rules: checked,
+                });
+            }
+
+            if provider_context.provider_type == "mcp" {
+                return Ok(PolicyCheck {
+                    tool_name: tool_name.to_string(),
+                    verdict: PolicyVerdict::AutoAllow,
+                    checked_rules: checked,
+                });
+            }
+        }
+
+        // 7. Read-only tools default to auto-allow
         if READ_ONLY_TOOLS.contains(&tool_name) {
             checked.push("read_only_default".to_string());
             return Ok(PolicyCheck {
@@ -244,7 +274,7 @@ impl PolicyEngine {
             });
         }
 
-        // 7. Approval policy fallback
+        // 8. Approval policy fallback
         checked.push("approval_policy".to_string());
         let approval_mode = self.load_approval_mode().await?;
 

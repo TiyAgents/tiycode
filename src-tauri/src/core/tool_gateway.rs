@@ -17,6 +17,7 @@ use crate::core::executors::{self, ToolOutput};
 use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
 use crate::core::terminal_manager::TerminalManager;
 use crate::core::workspace_paths::parse_writable_roots;
+use crate::extensions::{ExtensionsManager, ResolvedTool};
 use crate::model::thread::MessageRecord;
 use crate::persistence::repo::{
     audit_repo, message_repo, settings_repo, thread_repo, tool_call_repo,
@@ -88,6 +89,7 @@ pub struct ToolGateway {
     pool: SqlitePool,
     policy_engine: PolicyEngine,
     terminal_manager: Arc<TerminalManager>,
+    extensions_manager: Arc<ExtensionsManager>,
     pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     pending_clarifications: Arc<Mutex<HashMap<String, PendingClarification>>>,
 }
@@ -101,9 +103,10 @@ impl ToolGateway {
     pub fn new(pool: SqlitePool, terminal_manager: Arc<TerminalManager>) -> Self {
         let policy_engine = PolicyEngine::new(pool.clone());
         Self {
-            pool,
+            pool: pool.clone(),
             policy_engine,
             terminal_manager,
+            extensions_manager: Arc::new(ExtensionsManager::new(pool.clone())),
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
             pending_clarifications: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -123,6 +126,13 @@ impl ToolGateway {
         FR: FnMut(),
     {
         let writable_roots = self.load_writable_roots().await?;
+        let resolved_tool = self
+            .extensions_manager
+            .resolve_tool(&request.tool_name)
+            .await?;
+        let provider_context = resolved_tool
+            .as_ref()
+            .map(ExtensionsManager::provider_context_from_resolved);
         let check = self
             .policy_engine
             .evaluate(
@@ -131,6 +141,7 @@ impl ToolGateway {
                 Some(&request.workspace_path),
                 &writable_roots,
                 &request.run_mode,
+                provider_context.as_ref(),
             )
             .await?;
 
@@ -149,6 +160,7 @@ impl ToolGateway {
                     "tool_denied",
                     &policy_json,
                     &serde_json::json!({ "reason": reason }).to_string(),
+                    resolved_tool.as_ref(),
                 )
                 .await?;
 
@@ -161,9 +173,21 @@ impl ToolGateway {
                 })
             }
             PolicyVerdict::AutoAllow => {
+                if let Some(reason) = self.run_pre_tool_hooks(&request).await? {
+                    return Ok(ToolGatewayOutcome {
+                        approval_required: false,
+                        result: ToolGatewayResult::Denied {
+                            tool_call_id: request.tool_call_id,
+                            reason,
+                        },
+                    });
+                }
+
                 on_execution_started();
 
-                let output = self.execute_and_audit(&request, &policy_json).await?;
+                let output = self
+                    .execute_and_audit(&request, &policy_json, resolved_tool.as_ref())
+                    .await?;
 
                 Ok(ToolGatewayOutcome {
                     approval_required: false,
@@ -191,6 +215,7 @@ impl ToolGateway {
                         "tool_approval_escalated",
                         &policy_json,
                         &serde_json::json!({ "reason": reason }).to_string(),
+                        resolved_tool.as_ref(),
                     )
                     .await?;
 
@@ -246,7 +271,19 @@ impl ToolGateway {
 
                         on_execution_started();
 
-                        let output = self.execute_and_audit(&request, &policy_json).await?;
+                        if let Some(reason) = self.run_pre_tool_hooks(&request).await? {
+                            return Ok(ToolGatewayOutcome {
+                                approval_required: true,
+                                result: ToolGatewayResult::Denied {
+                                    tool_call_id: request.tool_call_id,
+                                    reason,
+                                },
+                            });
+                        }
+
+                        let output = self
+                            .execute_and_audit(&request, &policy_json, resolved_tool.as_ref())
+                            .await?;
 
                         Ok(ToolGatewayOutcome {
                             approval_required: true,
@@ -273,6 +310,7 @@ impl ToolGateway {
                             "tool_approval_denied",
                             &serde_json::to_string(&check).unwrap_or_default(),
                             "{}",
+                            resolved_tool.as_ref(),
                         )
                         .await?;
 
@@ -300,6 +338,7 @@ impl ToolGateway {
                             "tool_cancelled",
                             &serde_json::to_string(&check).unwrap_or_default(),
                             "{}",
+                            resolved_tool.as_ref(),
                         )
                         .await?;
 
@@ -354,6 +393,7 @@ impl ToolGateway {
             "tool_clarification_requested",
             "{}",
             &request.tool_input.to_string(),
+            None,
         )
         .await?;
 
@@ -399,6 +439,7 @@ impl ToolGateway {
                     "tool_clarification_resolved",
                     "{}",
                     &response.to_string(),
+                    None,
                 )
                 .await?;
 
@@ -419,6 +460,7 @@ impl ToolGateway {
                     "tool_cancelled",
                     "{}",
                     "{}",
+                    None,
                 )
                 .await?;
 
@@ -490,20 +532,31 @@ impl ToolGateway {
         &self,
         request: &ToolExecutionRequest,
         policy_json: &str,
+        resolved_tool: Option<&ResolvedTool>,
     ) -> Result<ToolOutput, crate::model::errors::AppError> {
         tool_call_repo::update_status(&self.pool, &request.tool_call_id, "running").await?;
         let writable_roots = self.load_writable_roots().await?;
 
-        let output = match executors::execute_tool(
-            &request.tool_name,
-            &request.tool_input,
-            &request.workspace_path,
-            &writable_roots,
-            &request.thread_id,
-            Some(&self.terminal_manager),
-        )
-        .await
-        {
+        let output = match if let Some(resolved_tool) = resolved_tool {
+            self.extensions_manager
+                .execute_resolved_tool(
+                    resolved_tool,
+                    &request.tool_input,
+                    &request.workspace_path,
+                    &request.thread_id,
+                )
+                .await
+        } else {
+            executors::execute_tool(
+                &request.tool_name,
+                &request.tool_input,
+                &request.workspace_path,
+                &writable_roots,
+                &request.thread_id,
+                Some(&self.terminal_manager),
+            )
+            .await
+        } {
             Ok(output) => output,
             Err(error) => {
                 let message = error.to_string();
@@ -526,6 +579,7 @@ impl ToolGateway {
                     "tool_failed",
                     policy_json,
                     &result_json,
+                    resolved_tool,
                 )
                 .await
                 .ok();
@@ -551,8 +605,22 @@ impl ToolGateway {
             &format!("tool_{status}"),
             policy_json,
             &result_json,
+            resolved_tool,
         )
         .await?;
+
+        self.extensions_manager
+            .run_post_tool_hooks(
+                &request.tool_name,
+                &request.tool_input,
+                &output.result,
+                &request.workspace_path,
+                &request.thread_id,
+                &request.run_id,
+                &request.tool_call_id,
+            )
+            .await
+            .ok();
 
         tracing::info!(
             tool_call_id = %request.tool_call_id,
@@ -580,24 +648,55 @@ impl ToolGateway {
         action: &str,
         policy_json: &str,
         result_json: &str,
+        resolved_tool: Option<&ResolvedTool>,
     ) -> Result<(), crate::model::errors::AppError> {
+        let source = resolved_tool
+            .map(|resolved_tool| {
+                format!(
+                    "{}:{}",
+                    resolved_tool.provider_type, resolved_tool.provider_id
+                )
+            })
+            .unwrap_or_else(|| "tool".to_string());
+        let target_type = resolved_tool
+            .map(|resolved_tool| resolved_tool.provider_type.clone())
+            .unwrap_or_else(|| "tool".to_string());
+        let target_id = resolved_tool
+            .map(|resolved_tool| resolved_tool.provider_id.clone())
+            .unwrap_or_else(|| tool_name.to_string());
         audit_repo::insert(
             &self.pool,
             &audit_repo::AuditInsert {
                 actor_type: "agent".to_string(),
                 actor_id: Some(run_id.to_string()),
-                source: "tool".to_string(),
+                source,
                 workspace_id: None,
                 thread_id: Some(thread_id.to_string()),
                 run_id: Some(run_id.to_string()),
                 tool_call_id: Some(tool_call_id.to_string()),
                 action: action.to_string(),
-                target_type: Some("tool".to_string()),
-                target_id: Some(tool_name.to_string()),
+                target_type: Some(target_type),
+                target_id: Some(target_id),
                 policy_check_json: Some(policy_json.to_string()),
                 result_json: Some(result_json.to_string()),
             },
         )
         .await
+    }
+
+    async fn run_pre_tool_hooks(
+        &self,
+        request: &ToolExecutionRequest,
+    ) -> Result<Option<String>, crate::model::errors::AppError> {
+        self.extensions_manager
+            .run_pre_tool_hooks(
+                &request.tool_name,
+                &request.tool_input,
+                &request.workspace_path,
+                &request.thread_id,
+                &request.run_id,
+                &request.tool_call_id,
+            )
+            .await
     }
 }

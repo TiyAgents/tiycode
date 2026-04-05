@@ -1,4 +1,5 @@
 pub mod errors;
+pub mod extensions;
 pub mod git;
 pub mod provider;
 pub mod settings;

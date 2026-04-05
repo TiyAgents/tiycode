@@ -1,5 +1,6 @@
 mod commands;
 pub mod core;
+pub mod extensions;
 pub mod ipc;
 pub mod model;
 mod persistence;
@@ -196,6 +197,35 @@ pub fn run() {
             commands::settings::profile_create,
             commands::settings::profile_update,
             commands::settings::profile_delete,
+            // Extensions
+            commands::extensions::extensions_list,
+            commands::extensions::extension_get_detail,
+            commands::extensions::extension_enable,
+            commands::extensions::extension_disable,
+            commands::extensions::extension_uninstall,
+            commands::extensions::extensions_list_commands,
+            commands::extensions::extensions_list_activity,
+            commands::extensions::marketplace_list_sources,
+            commands::extensions::marketplace_add_source,
+            commands::extensions::marketplace_remove_source,
+            commands::extensions::marketplace_refresh_source,
+            commands::extensions::marketplace_list_items,
+            commands::extensions::marketplace_install_item,
+            commands::extensions::plugin_validate_dir,
+            commands::extensions::plugin_install_from_dir,
+            commands::extensions::plugin_update_config,
+            commands::extensions::mcp_list_servers,
+            commands::extensions::mcp_add_server,
+            commands::extensions::mcp_update_server,
+            commands::extensions::mcp_remove_server,
+            commands::extensions::mcp_restart_server,
+            commands::extensions::mcp_get_server_state,
+            commands::extensions::skill_list,
+            commands::extensions::skill_rescan,
+            commands::extensions::skill_enable,
+            commands::extensions::skill_disable,
+            commands::extensions::skill_pin,
+            commands::extensions::skill_preview,
             // Threads
             commands::thread::thread_list,
             commands::thread::thread_create,

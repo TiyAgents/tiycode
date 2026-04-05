@@ -141,6 +141,7 @@ async fn test_policy_allow_list_pattern_must_match() {
             None,
             &[],
             "default",
+            None,
         )
         .await
         .unwrap();
@@ -153,6 +154,7 @@ async fn test_policy_allow_list_pattern_must_match() {
             None,
             &[],
             "default",
+            None,
         )
         .await
         .unwrap();
@@ -277,6 +279,7 @@ async fn test_policy_allows_mutating_paths_in_writable_roots() {
             Some(workspace.path().to_string_lossy().as_ref()),
             &writable_roots,
             "default",
+            None,
         )
         .await
         .unwrap();
@@ -293,6 +296,7 @@ async fn test_policy_allows_mutating_paths_in_writable_roots() {
             Some(workspace.path().to_string_lossy().as_ref()),
             &writable_roots,
             "default",
+            None,
         )
         .await
         .unwrap();
