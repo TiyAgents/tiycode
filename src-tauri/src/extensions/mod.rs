@@ -3,8 +3,10 @@ use std::ffi::OsStr;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::Utc;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tiycore::agent::AgentTool;
@@ -31,6 +33,9 @@ const EXTENSIONS_SKILLS_MAX_SELECTED_COUNT_KEY: &str = "extensions.skills.max_se
 const DEFAULT_PLUGIN_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_HOOK_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_MCP_TIMEOUT_MS: u64 = 15_000;
+const MAX_MCP_TIMEOUT_MS: u64 = 120_000;
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const MCP_HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const DEFAULT_MARKETPLACE_SOURCE_KIND: &str = "git";
 const BUILTIN_MARKETPLACE_ANTHROPIC_NAME: &str = "Anthropic Official Plugins";
 const BUILTIN_MARKETPLACE_ANTHROPIC_URL: &str =
@@ -159,6 +164,12 @@ struct McpRuntimeRecord {
     status: Option<String>,
     phase: Option<String>,
     updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StreamableHttpSession {
+    protocol_version: String,
+    session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -564,6 +575,7 @@ impl ExtensionsManager {
         workspace_path: Option<&str>,
         scope: ConfigScope,
     ) -> Result<McpServerStateDto, AppError> {
+        let input = canonicalize_mcp_config(input);
         self.validate_mcp_input(&input)?;
         let mut configs = self
             .load_mcp_configs_for_scope(workspace_path, scope)
@@ -579,7 +591,7 @@ impl ExtensionsManager {
             "mcp_added",
             "mcp",
             &input.id,
-            serde_json::to_value(&input).unwrap_or_default(),
+            serde_json::to_value(self.mask_mcp_config(&input)).unwrap_or_default(),
         )
         .await?;
         Ok(state)
@@ -592,6 +604,7 @@ impl ExtensionsManager {
         workspace_path: Option<&str>,
         scope: ConfigScope,
     ) -> Result<McpServerStateDto, AppError> {
+        let input = canonicalize_mcp_config(input);
         if id != input.id {
             return Err(AppError::validation(
                 ErrorSource::Settings,
@@ -606,7 +619,7 @@ impl ExtensionsManager {
         let mut found = false;
         for server in &mut configs {
             if server.id == id {
-                *server = input.clone();
+                *server = merge_mcp_sensitive_fields(server, input.clone());
                 found = true;
                 break;
             }
@@ -630,14 +643,21 @@ impl ExtensionsManager {
         }
         self.save_mcp_configs_for_scope(&configs, workspace_path, scope)
             .await?;
+        let saved = configs
+            .iter()
+            .find(|server| server.id == id)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::not_found(ErrorSource::Settings, format!("MCP server '{id}'"))
+            })?;
         let state = self
-            .refresh_mcp_runtime(&input, None, scope.as_str())
+            .refresh_mcp_runtime(&saved, None, scope.as_str())
             .await?;
         self.write_extension_audit(
             "mcp_updated",
             "mcp",
             id,
-            serde_json::to_value(&input).unwrap_or_default(),
+            serde_json::to_value(self.mask_mcp_config(&saved)).unwrap_or_default(),
         )
         .await?;
         Ok(state)
@@ -1620,7 +1640,12 @@ impl ExtensionsManager {
             ConfigScope::Global => global_mcp_path(),
             ConfigScope::Workspace => workspace_mcp_path(workspace_path)?,
         };
-        Ok(self.read_json_file::<McpConfigFile>(&file)?.servers)
+        Ok(self
+            .read_json_file::<McpConfigFile>(&file)?
+            .servers
+            .into_iter()
+            .map(canonicalize_mcp_config)
+            .collect())
     }
 
     async fn load_mcp_configs_with_scope(
@@ -1702,7 +1727,7 @@ impl ExtensionsManager {
             ));
         }
 
-        match input.transport.as_str() {
+        match canonicalize_mcp_transport(&input.transport) {
             "stdio" => {
                 if input.command.as_deref().unwrap_or("").trim().is_empty() {
                     return Err(AppError::validation(
@@ -1904,7 +1929,9 @@ impl ExtensionsManager {
                 "error" | "config_error" => ExtensionHealth::Error,
                 _ => ExtensionHealth::Unknown,
             },
-            permissions: if server.config.transport == "streamable-http" {
+            permissions: if canonicalize_mcp_transport(&server.config.transport)
+                == "streamable-http"
+            {
                 vec!["network-access".to_string()]
             } else {
                 vec!["shell-exec".to_string()]
@@ -2868,16 +2895,9 @@ impl ExtensionsManager {
         &self,
         config: &McpServerConfigInput,
     ) -> Result<McpRuntimeRecord, AppError> {
-        match config.transport.as_str() {
+        match canonicalize_mcp_transport(&config.transport) {
             "stdio" => self.probe_stdio_mcp_runtime(config).await,
-            "streamable-http" => Err(AppError::recoverable(
-                ErrorSource::Tool,
-                "extensions.mcp.transport_unsupported",
-                format!(
-                    "MCP discovery for '{}' via streamable-http is not implemented yet",
-                    config.label
-                ),
-            )),
+            "streamable-http" => self.probe_streamable_http_mcp_runtime(config).await,
             _ => Err(AppError::validation(
                 ErrorSource::Settings,
                 "Unsupported MCP transport",
@@ -2945,6 +2965,85 @@ impl ExtensionsManager {
         })
     }
 
+    async fn probe_streamable_http_mcp_runtime(
+        &self,
+        config: &McpServerConfigInput,
+    ) -> Result<McpRuntimeRecord, AppError> {
+        let server_id = config.id.clone();
+        let (session, init_result) = initialize_streamable_http_session(config).await?;
+        let capabilities = init_result
+            .get("capabilities")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+
+        let tools = if mcp_capability_enabled(&capabilities, "tools") {
+            call_streamable_http_mcp_method(
+                config,
+                &session,
+                2,
+                "tools/list",
+                serde_json::json!({}),
+            )
+            .await
+            .map(|result| parse_mcp_tools(&result, &server_id))
+        } else {
+            Ok(Vec::new())
+        };
+        let resources = if mcp_capability_enabled(&capabilities, "resources")
+            || mcp_capability_enabled(&capabilities, "resourceTemplates")
+        {
+            call_streamable_http_mcp_method(
+                config,
+                &session,
+                3,
+                "resources/list",
+                serde_json::json!({}),
+            )
+            .await
+            .map(|result| parse_mcp_resources(&result))
+        } else {
+            Ok(Vec::new())
+        };
+
+        let result = match (tools, resources) {
+            (Ok(tools), Ok(resources)) => Ok(McpRuntimeRecord {
+                tools,
+                resources,
+                stale_snapshot: false,
+                last_error: None,
+                status: Some("connected".to_string()),
+                phase: Some("ready".to_string()),
+                updated_at: None,
+            }),
+            (Err(error), _) | (_, Err(error)) => Err(error),
+        };
+
+        close_streamable_http_session(config, &session).await;
+        result
+    }
+
+    async fn call_streamable_http_mcp_tool_once(
+        &self,
+        config: &McpServerConfigInput,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<serde_json::Value, AppError> {
+        let (session, _) = initialize_streamable_http_session(config).await?;
+        let result = call_streamable_http_mcp_method(
+            config,
+            &session,
+            4,
+            "tools/call",
+            serde_json::json!({
+                "name": tool_name,
+                "arguments": arguments,
+            }),
+        )
+        .await;
+        close_streamable_http_session(config, &session).await;
+        result
+    }
+
     async fn call_mcp_tool_once(
         &self,
         config: &McpServerConfigInput,
@@ -2952,7 +3051,7 @@ impl ExtensionsManager {
         arguments: &serde_json::Value,
         workspace_path: Option<&str>,
     ) -> Result<serde_json::Value, AppError> {
-        match config.transport.as_str() {
+        match canonicalize_mcp_transport(&config.transport) {
             "stdio" => {
                 let tool_name = tool_name.to_string();
                 let arguments = arguments.clone();
@@ -2974,14 +3073,10 @@ impl ExtensionsManager {
                 })
                 .await
             }
-            "streamable-http" => Err(AppError::recoverable(
-                ErrorSource::Tool,
-                "extensions.mcp.transport_unsupported",
-                format!(
-                    "MCP tool execution for '{}' via streamable-http is not implemented yet",
-                    config.label
-                ),
-            )),
+            "streamable-http" => {
+                self.call_streamable_http_mcp_tool_once(config, tool_name, arguments)
+                    .await
+            }
             _ => Err(AppError::validation(
                 ErrorSource::Settings,
                 "Unsupported MCP transport",
@@ -3859,6 +3954,442 @@ fn read_config_schema(value: Option<&serde_json::Value>) -> Option<PluginManifes
     })
 }
 
+fn canonicalize_mcp_transport(transport: &str) -> &'static str {
+    match transport.trim().to_ascii_lowercase().as_str() {
+        "http-streamable" | "streamable-http" => "streamable-http",
+        "stdio" => "stdio",
+        _ => "",
+    }
+}
+
+fn canonicalize_mcp_config(mut config: McpServerConfigInput) -> McpServerConfigInput {
+    let transport = canonicalize_mcp_transport(&config.transport);
+    if !transport.is_empty() {
+        config.transport = transport.to_string();
+    }
+    config
+}
+
+fn merge_masked_string_map(
+    existing: Option<&HashMap<String, String>>,
+    incoming: Option<HashMap<String, String>>,
+) -> Option<HashMap<String, String>> {
+    let Some(mut merged) = incoming else {
+        return None;
+    };
+    if let Some(existing) = existing {
+        for (key, existing_value) in existing {
+            let Some(candidate) = merged.get_mut(key) else {
+                continue;
+            };
+            if candidate == &mask_sensitive_value(existing_value) {
+                *candidate = existing_value.clone();
+            }
+        }
+    }
+    Some(merged)
+}
+
+fn merge_mcp_sensitive_fields(
+    existing: &McpServerConfigInput,
+    mut incoming: McpServerConfigInput,
+) -> McpServerConfigInput {
+    if let (Some(existing_url), Some(candidate_url)) = (&existing.url, &incoming.url) {
+        if candidate_url == &mask_url(existing_url.clone()) {
+            incoming.url = Some(existing_url.clone());
+        }
+    }
+    incoming.env = merge_masked_string_map(existing.env.as_ref(), incoming.env);
+    incoming.headers = merge_masked_string_map(existing.headers.as_ref(), incoming.headers);
+    incoming
+}
+
+fn build_streamable_http_client(
+    config: &McpServerConfigInput,
+) -> Result<reqwest::Client, AppError> {
+    let timeout_ms = config
+        .timeout_ms
+        .unwrap_or(DEFAULT_MCP_TIMEOUT_MS)
+        .min(MAX_MCP_TIMEOUT_MS);
+    reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|error| {
+            AppError::internal(
+                ErrorSource::Tool,
+                format!(
+                    "Failed to build HTTP client for MCP server '{}': {error}",
+                    config.label
+                ),
+            )
+        })
+}
+
+fn build_streamable_http_headers(
+    config: &McpServerConfigInput,
+    session: Option<&StreamableHttpSession>,
+) -> Result<HeaderMap, AppError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/json, text/event-stream"),
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    let protocol_version = session
+        .map(|session| session.protocol_version.as_str())
+        .unwrap_or(MCP_PROTOCOL_VERSION);
+    headers.insert(
+        HeaderName::from_static("mcp-protocol-version"),
+        HeaderValue::from_str(protocol_version).map_err(|error| {
+            AppError::validation(
+                ErrorSource::Settings,
+                format!("Invalid MCP protocol version header: {error}"),
+            )
+        })?,
+    );
+
+    if let Some(session_id) = session.and_then(|session| session.session_id.as_deref()) {
+        headers.insert(
+            HeaderName::from_static("mcp-session-id"),
+            HeaderValue::from_str(session_id).map_err(|error| {
+                AppError::validation(
+                    ErrorSource::Settings,
+                    format!("Invalid MCP session header: {error}"),
+                )
+            })?,
+        );
+    }
+
+    if let Some(custom_headers) = &config.headers {
+        for (key, value) in custom_headers {
+            let name = HeaderName::from_bytes(key.trim().as_bytes()).map_err(|error| {
+                AppError::validation(
+                    ErrorSource::Settings,
+                    format!("Invalid MCP header name '{key}': {error}"),
+                )
+            })?;
+            let value = HeaderValue::from_str(value).map_err(|error| {
+                AppError::validation(
+                    ErrorSource::Settings,
+                    format!("Invalid MCP header value for '{key}': {error}"),
+                )
+            })?;
+            headers.insert(name, value);
+        }
+    }
+
+    Ok(headers)
+}
+
+async fn initialize_streamable_http_session(
+    config: &McpServerConfigInput,
+) -> Result<(StreamableHttpSession, serde_json::Value), AppError> {
+    let response = send_streamable_http_jsonrpc_request(
+        config,
+        None,
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "tiy-desktop",
+                    "version": env!("CARGO_PKG_VERSION"),
+                }
+            }
+        }),
+    )
+    .await?;
+    let init_result = extract_streamable_http_jsonrpc_result(&response.body, 1, "initialize")?;
+    let session = StreamableHttpSession {
+        protocol_version: init_result
+            .get("protocolVersion")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(MCP_PROTOCOL_VERSION)
+            .to_string(),
+        session_id: response.session_id,
+    };
+
+    send_streamable_http_notification(
+        config,
+        &session,
+        "notifications/initialized",
+        serde_json::json!({}),
+    )
+    .await?;
+
+    Ok((session, init_result))
+}
+
+async fn call_streamable_http_mcp_method(
+    config: &McpServerConfigInput,
+    session: &StreamableHttpSession,
+    id: u64,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, AppError> {
+    let response = send_streamable_http_jsonrpc_request(
+        config,
+        Some(session),
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        }),
+    )
+    .await?;
+    extract_streamable_http_jsonrpc_result(&response.body, id, method)
+}
+
+async fn send_streamable_http_notification(
+    config: &McpServerConfigInput,
+    session: &StreamableHttpSession,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<(), AppError> {
+    send_streamable_http_jsonrpc_request(
+        config,
+        Some(session),
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn close_streamable_http_session(
+    config: &McpServerConfigInput,
+    session: &StreamableHttpSession,
+) {
+    let Some(_session_id) = session.session_id.as_deref() else {
+        return;
+    };
+    let Ok(client) = build_streamable_http_client(config) else {
+        return;
+    };
+    let Ok(headers) = build_streamable_http_headers(config, Some(session)) else {
+        return;
+    };
+    let Some(url) = config.url.as_deref() else {
+        return;
+    };
+    let _ = client
+        .delete(url)
+        .headers(headers)
+        .send()
+        .await
+        .map(|response| {
+            let _ = response.error_for_status();
+        });
+}
+
+#[derive(Debug)]
+struct StreamableHttpJsonRpcResponse {
+    session_id: Option<String>,
+    body: serde_json::Value,
+}
+
+async fn send_streamable_http_jsonrpc_request(
+    config: &McpServerConfigInput,
+    session: Option<&StreamableHttpSession>,
+    message: &serde_json::Value,
+) -> Result<StreamableHttpJsonRpcResponse, AppError> {
+    let client = build_streamable_http_client(config)?;
+    let url = config.url.as_deref().ok_or_else(|| {
+        AppError::validation(
+            ErrorSource::Settings,
+            "streamable-http MCP servers require a URL",
+        )
+    })?;
+    let headers = build_streamable_http_headers(config, session)?;
+    let payload = serde_json::to_vec(message).map_err(|error| {
+        AppError::internal(
+            ErrorSource::Tool,
+            format!("Failed to serialize MCP HTTP request: {error}"),
+        )
+    })?;
+    let response = client
+        .post(url)
+        .headers(headers)
+        .body(payload)
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Tool,
+                "extensions.mcp.http_request_failed",
+                format!("Failed to call MCP server '{}': {error}", config.label),
+            )
+        })?;
+
+    let status = response.status();
+    let session_id = response
+        .headers()
+        .get(MCP_HEADER_SESSION_ID)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+        .or_else(|| session.and_then(|current| current.session_id.clone()));
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let body = response.text().await.map_err(|error| {
+        AppError::recoverable(
+            ErrorSource::Tool,
+            "extensions.mcp.read_failed",
+            format!("Failed to read MCP HTTP response: {error}"),
+        )
+    })?;
+
+    if !status.is_success() {
+        let detail = if body.trim().is_empty() {
+            status.to_string()
+        } else {
+            format!("{status}: {}", body.trim())
+        };
+        return Err(AppError::recoverable(
+            ErrorSource::Tool,
+            "extensions.mcp.http_request_failed",
+            format!("MCP server '{}' returned {detail}", config.label),
+        ));
+    }
+
+    if body.trim().is_empty() {
+        return Ok(StreamableHttpJsonRpcResponse {
+            session_id,
+            body: serde_json::Value::Null,
+        });
+    }
+
+    let parsed = if content_type.starts_with("text/event-stream") {
+        parse_streamable_http_sse_payload(&body)?
+    } else {
+        serde_json::from_str::<serde_json::Value>(&body).map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Tool,
+                "extensions.mcp.invalid_json",
+                format!("MCP HTTP response was not valid JSON: {error}"),
+            )
+        })?
+    };
+
+    Ok(StreamableHttpJsonRpcResponse {
+        session_id,
+        body: parsed,
+    })
+}
+
+fn extract_streamable_http_jsonrpc_result(
+    payload: &serde_json::Value,
+    id: u64,
+    method: &str,
+) -> Result<serde_json::Value, AppError> {
+    let message = match payload {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find(|item| message_id_matches(item, id))
+            .cloned()
+            .ok_or_else(|| {
+                AppError::recoverable(
+                    ErrorSource::Tool,
+                    "extensions.mcp.read_failed",
+                    format!("MCP method '{method}' did not return a response payload"),
+                )
+            })?,
+        serde_json::Value::Object(_) if message_id_matches(payload, id) => payload.clone(),
+        serde_json::Value::Object(_) => {
+            return Err(AppError::recoverable(
+                ErrorSource::Tool,
+                "extensions.mcp.read_failed",
+                format!("MCP method '{method}' did not return the expected response id"),
+            ))
+        }
+        serde_json::Value::Null => {
+            return Err(AppError::recoverable(
+                ErrorSource::Tool,
+                "extensions.mcp.read_failed",
+                format!("MCP method '{method}' returned an empty response"),
+            ))
+        }
+        _ => {
+            return Err(AppError::recoverable(
+                ErrorSource::Tool,
+                "extensions.mcp.invalid_json",
+                format!("MCP method '{method}' returned an unsupported response payload"),
+            ))
+        }
+    };
+
+    if let Some(error) = message.get("error") {
+        let code = error
+            .get("code")
+            .and_then(serde_json::Value::as_i64)
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let detail = error
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown error");
+        return Err(AppError::recoverable(
+            ErrorSource::Tool,
+            "extensions.mcp.rpc_error",
+            format!("MCP method '{method}' failed ({code}): {detail}"),
+        ));
+    }
+
+    Ok(message
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null))
+}
+
+fn parse_streamable_http_sse_payload(payload: &str) -> Result<serde_json::Value, AppError> {
+    let normalized = payload.replace("\r\n", "\n");
+    let mut messages = Vec::new();
+
+    for block in normalized.split("\n\n") {
+        let mut data_lines = Vec::new();
+        for line in block.lines() {
+            if let Some(rest) = line.strip_prefix("data:") {
+                data_lines.push(rest.trim_start().to_string());
+            }
+        }
+        if data_lines.is_empty() {
+            continue;
+        }
+        let data = data_lines.join("\n");
+        messages.push(
+            serde_json::from_str::<serde_json::Value>(&data).map_err(|error| {
+                AppError::recoverable(
+                    ErrorSource::Tool,
+                    "extensions.mcp.invalid_json",
+                    format!("MCP SSE event was not valid JSON: {error}"),
+                )
+            })?,
+        );
+    }
+
+    if messages.is_empty() {
+        return Err(AppError::recoverable(
+            ErrorSource::Tool,
+            "extensions.mcp.read_failed",
+            "MCP SSE response did not include any JSON-RPC payloads",
+        ));
+    }
+
+    Ok(serde_json::Value::Array(messages))
+}
+
 fn spawn_stdio_mcp_process(
     config: &McpServerConfigInput,
     workspace_path: Option<&str>,
@@ -3900,7 +4431,7 @@ async fn initialize_mcp_session(
         1,
         "initialize",
         serde_json::json!({
-            "protocolVersion": "2025-06-18",
+            "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {
                 "name": "tiy-desktop",
@@ -4216,7 +4747,212 @@ fn append_mcp_stderr(mut error: AppError, stderr_output: &str) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    #[derive(Debug, Clone)]
+    struct ObservedHttpRequest {
+        method: String,
+        headers: HashMap<String, String>,
+        body: String,
+    }
+
+    async fn read_http_request(
+        stream: &mut TcpStream,
+    ) -> (String, HashMap<String, String>, serde_json::Value) {
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 2048];
+        let header_end = loop {
+            let read = stream.read(&mut chunk).await.expect("read request");
+            assert!(read > 0, "request closed before headers");
+            buffer.extend_from_slice(&chunk[..read]);
+            if let Some(index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+
+        let header_text = String::from_utf8(buffer[..header_end].to_vec()).expect("headers utf8");
+        let mut lines = header_text.split("\r\n");
+        let request_line = lines.next().expect("request line");
+        let method = request_line
+            .split_whitespace()
+            .next()
+            .expect("request method")
+            .to_string();
+        let headers = lines
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                Some((name.trim().to_ascii_lowercase(), value.trim().to_string()))
+            })
+            .collect::<HashMap<_, _>>();
+        let content_length = headers
+            .get("content-length")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body = buffer[header_end..].to_vec();
+        while body.len() < content_length {
+            let read = stream.read(&mut chunk).await.expect("read body");
+            assert!(read > 0, "request closed before body");
+            body.extend_from_slice(&chunk[..read]);
+        }
+        body.truncate(content_length);
+        let json = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&body).expect("json body")
+        };
+        (method, headers, json)
+    }
+
+    async fn write_http_response(
+        stream: &mut TcpStream,
+        status: &str,
+        headers: &[(&str, String)],
+        body: &str,
+    ) {
+        let mut response = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n", body.len());
+        for (name, value) in headers {
+            response.push_str(&format!("{name}: {value}\r\n"));
+        }
+        response.push_str("\r\n");
+        response.push_str(body);
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    }
+
+    async fn spawn_fake_streamable_http_server() -> (
+        String,
+        Arc<Mutex<Vec<ObservedHttpRequest>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake server");
+        let address = listener.local_addr().expect("local addr");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let requests_clone = Arc::clone(&requests);
+        let handle = tokio::spawn(async move {
+            for _ in 0..9 {
+                let (mut stream, _) = listener.accept().await.expect("accept connection");
+                let (method, headers, body) = read_http_request(&mut stream).await;
+                requests_clone
+                    .lock()
+                    .expect("requests lock")
+                    .push(ObservedHttpRequest {
+                        method: method.clone(),
+                        headers: headers.clone(),
+                        body: body.to_string(),
+                    });
+                match method.as_str() {
+                    "POST" => {
+                        let rpc_method = body
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .expect("rpc method");
+                        match rpc_method {
+                            "initialize" => {
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    &[
+                                        ("Content-Type", "application/json".to_string()),
+                                        (MCP_HEADER_SESSION_ID, "session-123".to_string()),
+                                    ],
+                                    &serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": body.get("id").and_then(serde_json::Value::as_u64).expect("init id"),
+                                        "result": {
+                                            "protocolVersion": MCP_PROTOCOL_VERSION,
+                                            "capabilities": { "tools": {}, "resources": {} },
+                                            "serverInfo": { "name": "Fake HTTP MCP", "version": "1.0.0" }
+                                        }
+                                    })
+                                    .to_string(),
+                                )
+                                .await;
+                            }
+                            "notifications/initialized" => {
+                                assert_eq!(
+                                    headers.get("mcp-session-id").map(String::as_str),
+                                    Some("session-123")
+                                );
+                                write_http_response(&mut stream, "202 Accepted", &[], "").await;
+                            }
+                            "tools/list" => {
+                                assert_eq!(
+                                    headers.get("authorization").map(String::as_str),
+                                    Some("Bearer test-token")
+                                );
+                                let body = concat!(
+                                    "event: message\r\n",
+                                    "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\"}}\r\n\r\n",
+                                    "data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"lookup\",\"description\":\"Look things up\",\"inputSchema\":{\"type\":\"object\"}}]}}\r\n\r\n"
+                                );
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    &[("Content-Type", "text/event-stream".to_string())],
+                                    body,
+                                )
+                                .await;
+                            }
+                            "resources/list" => {
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    &[("Content-Type", "application/json".to_string())],
+                                    &serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": body.get("id").and_then(serde_json::Value::as_u64).expect("resources id"),
+                                        "result": {
+                                            "resources": [
+                                                {
+                                                    "uri": "file:///docs/readme.md",
+                                                    "name": "README",
+                                                    "description": "Repo readme",
+                                                    "mimeType": "text/markdown"
+                                                }
+                                            ]
+                                        }
+                                    })
+                                    .to_string(),
+                                )
+                                .await;
+                            }
+                            "tools/call" => {
+                                let body = concat!(
+                                    "data: {\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],\"isError\":false}}\r\n\r\n"
+                                );
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    &[("Content-Type", "text/event-stream".to_string())],
+                                    body,
+                                )
+                                .await;
+                            }
+                            other => panic!("unexpected rpc method: {other}"),
+                        }
+                    }
+                    "DELETE" => {
+                        assert_eq!(
+                            headers.get("mcp-session-id").map(String::as_str),
+                            Some("session-123")
+                        );
+                        write_http_response(&mut stream, "204 No Content", &[], "").await;
+                    }
+                    other => panic!("unexpected HTTP method: {other}"),
+                }
+            }
+        });
+
+        (format!("http://{address}/mcp"), requests, handle)
+    }
 
     #[test]
     fn parse_skill_markdown_namespaces_non_builtin_sources() {
@@ -4441,6 +5177,75 @@ Body text
             Some("Bearer test")
         );
         assert_eq!(merged.timeout_ms, Some(45_000));
+    }
+
+    #[test]
+    fn merge_mcp_sensitive_fields_preserves_masked_values_on_edit() {
+        let existing = McpServerConfigInput {
+            id: "server".to_string(),
+            label: "Server".to_string(),
+            transport: "streamable-http".to_string(),
+            enabled: true,
+            auto_start: true,
+            command: None,
+            args: None,
+            env: Some(HashMap::from([(
+                "TOKEN".to_string(),
+                "super-secret".to_string(),
+            )])),
+            cwd: None,
+            url: Some("https://example.com/mcp?token=secret".to_string()),
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer test-token".to_string(),
+            )])),
+            timeout_ms: Some(30_000),
+        };
+
+        let incoming = McpServerConfigInput {
+            id: existing.id.clone(),
+            label: existing.label.clone(),
+            transport: "http-streamable".to_string(),
+            enabled: true,
+            auto_start: true,
+            command: None,
+            args: None,
+            env: Some(HashMap::from([(
+                "TOKEN".to_string(),
+                mask_sensitive_value("super-secret"),
+            )])),
+            cwd: None,
+            url: Some(mask_url("https://example.com/mcp?token=secret".to_string())),
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                mask_sensitive_value("Bearer test-token"),
+            )])),
+            timeout_ms: Some(30_000),
+        };
+
+        let merged = merge_mcp_sensitive_fields(&existing, canonicalize_mcp_config(incoming));
+
+        assert_eq!(merged.transport, "streamable-http");
+        assert_eq!(
+            merged.url.as_deref(),
+            Some("https://example.com/mcp?token=secret")
+        );
+        assert_eq!(
+            merged
+                .headers
+                .as_ref()
+                .and_then(|headers| headers.get("Authorization"))
+                .map(String::as_str),
+            Some("Bearer test-token")
+        );
+        assert_eq!(
+            merged
+                .env
+                .as_ref()
+                .and_then(|env| env.get("TOKEN"))
+                .map(String::as_str),
+            Some("super-secret")
+        );
     }
 
     #[test]
@@ -4671,6 +5476,76 @@ rl.on("line", (line) => {
                 .and_then(serde_json::Value::as_str),
             Some("ok")
         );
+    }
+
+    #[tokio::test]
+    async fn probe_streamable_http_runtime_discovers_tools_and_executes_calls() {
+        let (url, requests, server_task) = spawn_fake_streamable_http_server().await;
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+        let config = McpServerConfigInput {
+            id: "fake::http".to_string(),
+            label: "Fake HTTP MCP".to_string(),
+            transport: "streamable-http".to_string(),
+            enabled: true,
+            auto_start: true,
+            command: None,
+            args: None,
+            env: None,
+            cwd: None,
+            url: Some(url),
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer test-token".to_string(),
+            )])),
+            timeout_ms: Some(5_000),
+        };
+
+        let runtime = manager
+            .probe_streamable_http_mcp_runtime(&config)
+            .await
+            .expect("probe runtime");
+        assert_eq!(runtime.tools.len(), 1);
+        assert_eq!(runtime.tools[0].name, "lookup");
+        assert_eq!(runtime.tools[0].qualified_name, "__mcp_http_lookup");
+        assert_eq!(runtime.resources.len(), 1);
+        assert_eq!(runtime.resources[0].name, "README");
+
+        let result = manager
+            .call_streamable_http_mcp_tool_once(
+                &config,
+                "lookup",
+                &serde_json::json!({ "query": "docs" }),
+            )
+            .await
+            .expect("call mcp tool");
+        assert_eq!(
+            result
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|content| content.first())
+                .and_then(|item| item.get("text"))
+                .and_then(serde_json::Value::as_str),
+            Some("ok")
+        );
+
+        server_task.await.expect("server task");
+        let requests = requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 9);
+        assert!(requests.iter().any(|request| request.method == "DELETE"));
+        assert!(requests.iter().any(|request| {
+            request
+                .headers
+                .get("mcp-protocol-version")
+                .map(String::as_str)
+                == Some(MCP_PROTOCOL_VERSION)
+        }));
+        assert!(requests
+            .iter()
+            .any(|request| request.body.contains("\"tools/call\"")));
     }
 
     #[test]

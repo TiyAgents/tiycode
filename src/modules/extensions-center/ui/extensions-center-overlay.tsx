@@ -33,6 +33,7 @@ import { LocalLlmIcon } from "@/shared/ui/local-llm-icon";
 import { ScrollArea } from "@/shared/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
 import { Switch } from "@/shared/ui/switch";
+import { Textarea } from "@/shared/ui/textarea";
 import type {
   ExtensionDetail,
   ExtensionSummary,
@@ -153,6 +154,28 @@ function createDefaultMcpFormState(): McpFormState {
     headers: {},
     timeoutMs: 30_000,
   };
+}
+
+function formatHeaderMap(headers: Record<string, string> | undefined) {
+  return Object.entries(headers ?? {})
+    .map(([key, value]) => `${key}: ${value}`)
+    .join("\n");
+}
+
+function parseHeaderMapInput(value: string) {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reduce<Record<string, string>>((headers, line) => {
+      const [rawKey, ...rawValue] = line.split(":");
+      const key = rawKey?.trim();
+      if (!key) {
+        return headers;
+      }
+      headers[key] = rawValue.join(":").trim();
+      return headers;
+    }, {});
 }
 
 function getTabCount(tab: ExtensionTab, props: ExtensionsCenterOverlayProps) {
@@ -437,6 +460,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const [mcpDialogMode, setMcpDialogMode] = useState<"create" | "edit">("create");
   const [mcpForm, setMcpForm] = useState<McpFormState>(createDefaultMcpFormState);
+  const [mcpHeadersText, setMcpHeadersText] = useState("");
   const [marketSourceDialogOpen, setMarketSourceDialogOpen] = useState(false);
   const [marketSourceForm, setMarketSourceForm] = useState<MarketplaceSourceInput>({ name: "", url: "" });
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
@@ -671,6 +695,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
   const handleOpenCreateMcpDialog = () => {
     setMcpDialogMode("create");
     setMcpForm(createDefaultMcpFormState());
+    setMcpHeadersText("");
     setMcpDialogOpen(true);
   };
 
@@ -690,16 +715,19 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
       headers: server.config.headers,
       timeoutMs: server.config.timeoutMs ?? 30_000,
     });
+    setMcpHeadersText(formatHeaderMap(server.config.headers));
     setMcpDialogOpen(true);
   };
 
   const handleSubmitMcp = async () => {
+    const headers = parseHeaderMapInput(mcpHeadersText);
     const payload: McpServerConfigInput = {
       ...mcpForm,
       command: mcpForm.command?.trim() || undefined,
       cwd: mcpForm.cwd?.trim() || undefined,
       url: mcpForm.url?.trim() || undefined,
       args: (mcpForm.args ?? []).filter(Boolean),
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
     };
     await runAction(() =>
       mcpDialogMode === "create"
@@ -1633,7 +1661,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                 onChange={(event) =>
                   setMcpForm((current) => ({ ...current, timeoutMs: Number(event.target.value || 30000) }))
                 }
-                placeholder="timeout ms"
+                placeholder="timeout (ms)"
               />
             </div>
 
@@ -1659,11 +1687,22 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                 />
               </>
             ) : (
-              <Input
-                value={mcpForm.url ?? ""}
-                onChange={(event) => setMcpForm((current) => ({ ...current, url: event.target.value }))}
-                placeholder="https://example.com/mcp"
-              />
+              <>
+                <Input
+                  value={mcpForm.url ?? ""}
+                  onChange={(event) => setMcpForm((current) => ({ ...current, url: event.target.value }))}
+                  placeholder="https://example.com/mcp"
+                />
+                <Textarea
+                  value={mcpHeadersText}
+                  onChange={(event) => setMcpHeadersText(event.target.value)}
+                  placeholder={"Authorization: Bearer <token>\nX-API-Key: <key>"}
+                  className="min-h-28"
+                />
+                <div className="text-xs text-app-muted">
+                  Use one `Header: value` per line. Masked values are kept unless you replace or remove them.
+                </div>
+              </>
             )}
 
             <div className="flex items-center justify-between rounded-xl border border-app-border bg-app-surface p-3">
