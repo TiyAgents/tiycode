@@ -4,11 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 use sqlx::SqlitePool;
-use tiy_core::agent::{
+use tiycore::agent::{
     Agent, AgentError, AgentMessage, AgentTool, AgentToolResult, ToolExecutionMode,
 };
-use tiy_core::thinking::ThinkingLevel;
-use tiy_core::types::{
+use tiycore::thinking::ThinkingLevel;
+use tiycore::types::{
     AssistantMessage, AssistantMessageEvent, ContentBlock, Cost, ImageContent, InputType, Model,
     Provider, StopReason, TextContent, Transport, Usage, UserMessage,
 };
@@ -187,7 +187,7 @@ pub struct AgentSession {
     agent: Arc<Agent>,
     cancel_requested: Arc<AtomicBool>,
     checkpoint_requested: AtomicBool,
-    abort_signal: tiy_core::agent::AbortSignal,
+    abort_signal: tiycore::agent::AbortSignal,
 }
 
 impl AgentSession {
@@ -212,7 +212,7 @@ impl AgentSession {
                 agent,
                 cancel_requested: Arc::new(AtomicBool::new(false)),
                 checkpoint_requested: AtomicBool::new(false),
-                abort_signal: tiy_core::agent::AbortSignal::new(),
+                abort_signal: tiycore::agent::AbortSignal::new(),
             }
         })
     }
@@ -958,10 +958,10 @@ fn handle_agent_event(
     reasoning_buffer: &StdMutex<String>,
     context_window: &str,
     model_display_name: &str,
-    event: &tiy_core::agent::AgentEvent,
+    event: &tiycore::agent::AgentEvent,
 ) {
     match event {
-        tiy_core::agent::AgentEvent::TurnRetrying {
+        tiycore::agent::AgentEvent::TurnRetrying {
             attempt,
             max_attempts,
             delay_ms,
@@ -975,7 +975,7 @@ fn handle_agent_event(
                 reason: reason.clone(),
             });
         }
-        tiy_core::agent::AgentEvent::MessageUpdate {
+        tiycore::agent::AgentEvent::MessageUpdate {
             assistant_event, ..
         } => {
             match assistant_event.as_ref() {
@@ -1037,7 +1037,7 @@ fn handle_agent_event(
                 );
             }
         }
-        tiy_core::agent::AgentEvent::MessageEnd { message } => {
+        tiycore::agent::AgentEvent::MessageEnd { message } => {
             if let AgentMessage::Assistant(assistant) = message {
                 let content = assistant.text_content();
                 if content.is_empty() && assistant.has_tool_calls() {
@@ -1073,7 +1073,7 @@ fn handle_agent_event(
 
             reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
         }
-        tiy_core::agent::AgentEvent::MessageDiscarded { reason, .. } => {
+        tiycore::agent::AgentEvent::MessageDiscarded { reason, .. } => {
             if let Some(message_id) = read_last_completed_message_id(last_completed_message_id) {
                 let _ = event_tx.send(ThreadStreamEvent::MessageDiscarded {
                     run_id: run_id.to_string(),
@@ -2125,23 +2125,23 @@ fn assistant_message_from_text(content: &str, model: &Model) -> AssistantMessage
         .expect("assistant history message should always build")
 }
 
-fn effective_api_for_model(model: &Model) -> tiy_core::types::Api {
+fn effective_api_for_model(model: &Model) -> tiycore::types::Api {
     if let Some(api) = model.api.clone() {
         return api;
     }
 
     match &model.provider {
         Provider::OpenAI | Provider::OpenAIResponses | Provider::AzureOpenAIResponses => {
-            tiy_core::types::Api::OpenAIResponses
+            tiycore::types::Api::OpenAIResponses
         }
         Provider::Anthropic | Provider::MiniMax | Provider::MiniMaxCN | Provider::KimiCoding => {
-            tiy_core::types::Api::AnthropicMessages
+            tiycore::types::Api::AnthropicMessages
         }
         Provider::Google | Provider::GoogleGeminiCli | Provider::GoogleAntigravity => {
-            tiy_core::types::Api::GoogleGenerativeAi
+            tiycore::types::Api::GoogleGenerativeAi
         }
-        Provider::GoogleVertex => tiy_core::types::Api::GoogleVertex,
-        Provider::Ollama => tiy_core::types::Api::Ollama,
+        Provider::GoogleVertex => tiycore::types::Api::GoogleVertex,
+        Provider::Ollama => tiycore::types::Api::Ollama,
         Provider::XAI
         | Provider::Groq
         | Provider::OpenRouter
@@ -2156,9 +2156,9 @@ fn effective_api_for_model(model: &Model) -> tiy_core::types::Api {
         | Provider::OpenCode
         | Provider::OpenCodeGo
         | Provider::DeepSeek
-        | Provider::Zenmux => tiy_core::types::Api::OpenAICompletions,
-        Provider::AmazonBedrock => tiy_core::types::Api::BedrockConverseStream,
-        Provider::Custom(name) => tiy_core::types::Api::Custom(name.clone()),
+        | Provider::Zenmux => tiycore::types::Api::OpenAICompletions,
+        Provider::AmazonBedrock => tiycore::types::Api::BedrockConverseStream,
+        Provider::Custom(name) => tiycore::types::Api::Custom(name.clone()),
     }
 }
 
@@ -2455,8 +2455,8 @@ fn normalize_provider_options(value: Option<serde_json::Value>) -> Option<serde_
     })
 }
 
-fn runtime_security_config() -> tiy_core::types::SecurityConfig {
-    let mut security = tiy_core::types::SecurityConfig::default();
+fn runtime_security_config() -> tiycore::types::SecurityConfig {
+    let mut security = tiycore::types::SecurityConfig::default();
     security.agent.tool_execution_timeout_secs = SUBAGENT_TOOL_TIMEOUT_SECS;
     security
 }
@@ -2504,9 +2504,9 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     use tempfile::tempdir;
-    use tiy_core::agent::{AgentEvent, AgentMessage, AgentTool};
-    use tiy_core::thinking::ThinkingLevel;
-    use tiy_core::types::{Api, AssistantMessage, AssistantMessageEvent, ContentBlock, Provider};
+    use tiycore::agent::{AgentEvent, AgentMessage, AgentTool};
+    use tiycore::thinking::ThinkingLevel;
+    use tiycore::types::{Api, AssistantMessage, AssistantMessageEvent, ContentBlock, Provider};
     use tokio::sync::mpsc;
 
     use crate::core::plan_checkpoint::{
@@ -2556,9 +2556,9 @@ mod tests {
 
     fn sample_resolved_model_role_with_inputs(
         model_id: &str,
-        input: Vec<tiy_core::types::InputType>,
+        input: Vec<tiycore::types::InputType>,
     ) -> ResolvedModelRole {
-        let model = tiy_core::types::Model::builder()
+        let model = tiycore::types::Model::builder()
             .id(model_id)
             .name(model_id)
             .provider(Provider::OpenAI)
@@ -2566,7 +2566,7 @@ mod tests {
             .context_window(128_000)
             .max_tokens(32_000)
             .input(input)
-            .cost(tiy_core::types::Cost::default())
+            .cost(tiycore::types::Cost::default())
             .build()
             .expect("sample resolved model");
 
@@ -2584,7 +2584,7 @@ mod tests {
     }
 
     fn sample_resolved_model_role(model_id: &str) -> ResolvedModelRole {
-        sample_resolved_model_role_with_inputs(model_id, vec![tiy_core::types::InputType::Text])
+        sample_resolved_model_role_with_inputs(model_id, vec![tiycore::types::InputType::Text])
     }
 
     fn sample_resolved_runtime_model_plan(
@@ -2596,18 +2596,18 @@ mod tests {
             auxiliary,
             lightweight: None,
             thinking_level: ThinkingLevel::Off,
-            transport: tiy_core::types::Transport::Sse,
+            transport: tiycore::types::Transport::Sse,
         }
     }
 
     fn message_text(message: &AgentMessage) -> String {
         match message {
             AgentMessage::User(user) => match &user.content {
-                tiy_core::types::UserContent::Text(text) => text.clone(),
-                tiy_core::types::UserContent::Blocks(blocks) => blocks
+                tiycore::types::UserContent::Text(text) => text.clone(),
+                tiycore::types::UserContent::Blocks(blocks) => blocks
                     .iter()
                     .filter_map(|block| match block {
-                        tiy_core::types::ContentBlock::Text(text) => Some(text.text.as_str()),
+                        tiycore::types::ContentBlock::Text(text) => Some(text.text.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -2621,7 +2621,7 @@ mod tests {
     fn user_blocks(message: &AgentMessage) -> &[ContentBlock] {
         match message {
             AgentMessage::User(user) => match &user.content {
-                tiy_core::types::UserContent::Blocks(blocks) => blocks,
+                tiycore::types::UserContent::Blocks(blocks) => blocks,
                 _ => panic!("expected block-based user message"),
             },
             _ => panic!("expected user message"),
@@ -2633,7 +2633,7 @@ mod tests {
         event_tx: &mpsc::UnboundedSender<ThreadStreamEvent>,
         current_message_id: &StdMutex<Option<String>>,
         current_reasoning_message_id: &StdMutex<Option<String>>,
-        last_usage: &StdMutex<Option<tiy_core::types::Usage>>,
+        last_usage: &StdMutex<Option<tiycore::types::Usage>>,
         reasoning_buffer: &StdMutex<String>,
         event: &AgentEvent,
     ) {
@@ -2849,7 +2849,7 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let current_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
-        let last_usage = StdMutex::new(None::<tiy_core::types::Usage>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let partial = sample_partial_assistant_message();
 
@@ -2958,7 +2958,7 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let current_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
-        let last_usage = StdMutex::new(None::<tiy_core::types::Usage>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let partial = sample_partial_assistant_message();
 
@@ -3006,13 +3006,13 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let current_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
-        let last_usage = StdMutex::new(None::<tiy_core::types::Usage>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let assistant = AssistantMessage::builder()
             .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
             .model("gpt-test")
-            .usage(tiy_core::types::Usage::from_tokens(256, 32))
+            .usage(tiycore::types::Usage::from_tokens(256, 32))
             .build()
             .expect("assistant message with usage");
 
@@ -3058,7 +3058,7 @@ mod tests {
         let current_message_id = StdMutex::new(None::<String>);
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
-        let last_usage = StdMutex::new(None::<tiy_core::types::Usage>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
 
         handle_agent_event(
@@ -3098,7 +3098,7 @@ mod tests {
         let current_message_id = StdMutex::new(None::<String>);
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
-        let last_usage = StdMutex::new(None::<tiy_core::types::Usage>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let assistant = sample_partial_assistant_message();
 
@@ -3290,7 +3290,7 @@ mod tests {
     fn default_mode_prompt_mentions_clarify_for_missing_information() {
         let prompt = run_mode_prompt_body("default");
 
-        assert!(prompt.contains("use clarify instead of guessing"));
+        assert!(prompt.contains("Use clarify instead of guessing"));
         assert!(prompt.contains("multiple reasonable approaches"));
         assert!(prompt.contains("approve a risky action"));
     }
@@ -3458,8 +3458,8 @@ mod tests {
             &sample_resolved_model_role_with_inputs(
                 "vision-model",
                 vec![
-                    tiy_core::types::InputType::Text,
-                    tiy_core::types::InputType::Image,
+                    tiycore::types::InputType::Text,
+                    tiycore::types::InputType::Image,
                 ],
             )
             .model,

@@ -1,12 +1,12 @@
 [package]
-name = "tiy-agent"
+name = "tiycode"
 version = "0.1.0"
-description = "Tiy Agent desktop application built with Tauri 2 + React"
+description = "TiyCode is an open-source, flexible, convenient cross-platform vibe-coding agent"
 authors = ["Tiy AI"]
 edition = "2021"
 
 [lib]
-name = "tiy_agent_lib"
+name = "tiycode"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -44,7 +44,7 @@ chrono = { version = "0.4", features = ["serde"] }
 keepawake = "0.6"
 portable-pty = "0.9"
 git2 = { version = "0.20", features = ["vendored-libgit2"] }
-tiy_core = { package = "tiycore", path = "../../tiycore" }
+tiycore = "0.1.1-rc.26040512"
 
 [dev-dependencies]
 tempfile = "3"

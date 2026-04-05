@@ -5663,7 +5663,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
-name = "tiy-agent"
+name = "tiycode"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5693,7 +5693,9 @@ dependencies = [
 
 [[package]]
 name = "tiycore"
-version = "0.1.0"
+version = "0.1.1-rc.26040512"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d815efea3e8d0c01fc4c7491322ca9e895193fb6a9b471ba0962c46426388623"
 dependencies = [
  "anyhow",
  "arc-swap",

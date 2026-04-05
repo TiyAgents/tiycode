@@ -1,4 +1,4 @@
-//! Shared test helpers for Tiy Agent integration tests.
+//! Shared test helpers for TiyCode integration tests.
 //!
 //! Provides an in-memory SQLite pool with migrations applied,
 //! useful for testing repo and manager layers without touching disk.

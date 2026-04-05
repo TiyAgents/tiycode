@@ -12,7 +12,7 @@
 
 #[tokio::test]
 async fn test_file_tree_scan_current_dir() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
     let cwd = std::env::current_dir()
@@ -35,7 +35,7 @@ async fn test_file_tree_scan_current_dir() {
 
 #[tokio::test]
 async fn test_file_tree_hides_only_reserved_entries() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
 
@@ -91,7 +91,7 @@ async fn test_file_tree_hides_only_reserved_entries() {
 
 #[tokio::test]
 async fn test_file_tree_loads_root_level_only_and_defers_nested_branches() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
     let tmp = tempfile::tempdir().expect("should create tempdir");
@@ -153,7 +153,7 @@ async fn test_file_tree_loads_root_level_only_and_defers_nested_branches() {
 
 #[tokio::test]
 async fn test_large_directories_page_children_without_filtering_them_from_tree() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
     let tmp = tempfile::tempdir().expect("should create tempdir");
@@ -218,7 +218,7 @@ async fn test_large_directories_page_children_without_filtering_them_from_tree()
 
 #[tokio::test]
 async fn test_file_tree_nonexistent_path() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
     let result = manager
@@ -234,7 +234,7 @@ async fn test_file_tree_nonexistent_path() {
 
 #[tokio::test]
 async fn test_search_repo_basic() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
 
@@ -281,7 +281,7 @@ async fn test_search_repo_basic() {
 
 #[tokio::test]
 async fn test_search_repo_no_results() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
 
@@ -311,7 +311,7 @@ async fn test_search_repo_no_results() {
 
 #[tokio::test]
 async fn test_search_repo_respects_global_max_results() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
 
@@ -346,7 +346,7 @@ async fn test_search_repo_respects_global_max_results() {
 
 #[tokio::test]
 async fn test_search_repo_path_based_file_pattern_is_resolved_from_workspace_root() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
 
@@ -389,7 +389,7 @@ async fn test_search_repo_path_based_file_pattern_is_resolved_from_workspace_roo
 
 #[tokio::test]
 async fn test_filter_files_finds_deep_paths_beyond_loaded_tree() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
     let tmp = tempfile::tempdir().expect("should create tempdir");
@@ -433,7 +433,7 @@ async fn test_filter_files_finds_deep_paths_beyond_loaded_tree() {
 
 #[tokio::test]
 async fn test_reveal_path_materializes_new_file_in_loaded_directory() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
     let tmp = tempfile::tempdir().expect("should create tempdir");
@@ -480,7 +480,7 @@ async fn test_reveal_path_materializes_new_file_in_loaded_directory() {
 
 #[tokio::test]
 async fn test_reveal_path_materializes_root_level_file() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
     let tmp = tempfile::tempdir().expect("should create tempdir");
@@ -519,7 +519,7 @@ async fn test_reveal_path_materializes_root_level_file() {
 
 #[tokio::test]
 async fn test_reveal_path_pages_until_large_directory_target_is_found() {
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
     let tmp = tempfile::tempdir().expect("should create tempdir");
@@ -585,7 +585,7 @@ async fn test_reveal_path_pages_until_large_directory_target_is_found() {
 #[tokio::test]
 async fn test_file_tree_scan_performance() {
     use std::time::Instant;
-    use tiy_agent_lib::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::IndexManager;
 
     let manager = IndexManager::new();
 

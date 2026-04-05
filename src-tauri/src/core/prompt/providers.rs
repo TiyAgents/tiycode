@@ -40,7 +40,7 @@ impl PromptSectionProvider for BaseProvider {
             PromptSection {
                 key: "role",
                 title: "Role",
-                body: "You are Tiy Agent, an expert working assistant embedded in the user's desktop workspace.\nYou help users by reading files, searching code, editing files, executing commands, and writing new files.".to_string(),
+                body: "You are TiyCode, an open-source, flexible, convenient cross-platform vibe-coding agent embedded in the user's desktop workspace.\nYou help users by reading files, searching code, editing files, executing commands, and writing new files.".to_string(),
                 phase: PromptPhase::Core,
                 order_in_phase: 10,
             },

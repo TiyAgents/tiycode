@@ -1,7 +1,7 @@
 use chrono::Utc;
 use sqlx::QueryBuilder;
 use sqlx::SqlitePool;
-use tiy_core::types::Usage;
+use tiycore::types::Usage;
 
 use crate::model::errors::AppError;
 use crate::model::thread::{RunHelperDto, RunUsageDto};

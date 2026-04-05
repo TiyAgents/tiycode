@@ -324,7 +324,7 @@ function applyMockCommitMutation(
         id: nextCommitId,
         shortId: nextCommitId.slice(0, 7),
         summary: trimmed,
-        authorName: "Tiy Agent",
+        authorName: "TiyCode",
         committedAt,
         refs: snapshot.headRef ? [snapshot.headRef, "HEAD"] : ["HEAD"],
         isHead: true,

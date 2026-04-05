@@ -32,7 +32,7 @@ pub struct WorkspaceOpenApp {
 #[tauri::command]
 pub fn get_system_metadata() -> SystemMetadata {
     SystemMetadata {
-        app_name: "Tiy Agent".into(),
+        app_name: "TiyCode".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         platform: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),

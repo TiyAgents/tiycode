@@ -30,7 +30,7 @@ fn tiy_home() -> PathBuf {
         .join(".tiy")
 }
 
-/// Resolve the platform-native log directory for Tiy Agent.
+/// Resolve the platform-native log directory for TiyCode.
 fn log_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     {

@@ -11,7 +11,7 @@ use std::fs;
 
 use sqlx::Row;
 use tempfile::tempdir;
-use tiy_agent_lib::core::thread_manager::ThreadManager;
+use tiycode::core::thread_manager::ThreadManager;
 
 // =========================================================================
 // T1.5.1 — Run lifecycle state machine
@@ -379,7 +379,7 @@ async fn test_effective_model_plan_stored() {
 
 #[tokio::test]
 async fn test_build_session_spec_resolves_primary_model_and_profile_prompt() {
-    use tiy_agent_lib::core::agent_session::build_session_spec;
+    use tiycode::core::agent_session::build_session_spec;
 
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-runtime", "/tmp/runtime").await;
@@ -459,7 +459,7 @@ async fn test_build_session_spec_resolves_primary_model_and_profile_prompt() {
 
 #[tokio::test]
 async fn test_build_session_spec_uses_runtime_custom_instructions_when_profile_lookup_misses() {
-    use tiy_agent_lib::core::agent_session::build_session_spec;
+    use tiycode::core::agent_session::build_session_spec;
 
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-runtime-inline", "/tmp/runtime-inline").await;
@@ -517,7 +517,7 @@ async fn test_build_session_spec_uses_runtime_custom_instructions_when_profile_l
 
 #[tokio::test]
 async fn test_build_session_spec_adds_plan_mode_guardrails() {
-    use tiy_agent_lib::core::agent_session::build_session_spec;
+    use tiycode::core::agent_session::build_session_spec;
 
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-plan", "/tmp/plan").await;
@@ -585,7 +585,7 @@ async fn test_build_session_spec_adds_plan_mode_guardrails() {
 
 #[tokio::test]
 async fn test_build_session_spec_includes_structured_runtime_context_sections() {
-    use tiy_agent_lib::core::agent_session::build_session_spec;
+    use tiycode::core::agent_session::build_session_spec;
 
     let pool = test_helpers::setup_test_pool().await;
     let temp_dir = tempdir().unwrap();
@@ -705,7 +705,7 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
 
 #[tokio::test]
 async fn test_build_session_spec_reads_object_style_approval_policy() {
-    use tiy_agent_lib::core::agent_session::build_session_spec;
+    use tiycode::core::agent_session::build_session_spec;
 
     let pool = test_helpers::setup_test_pool().await;
     let temp_dir = tempdir().unwrap();

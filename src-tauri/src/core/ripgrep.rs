@@ -275,12 +275,12 @@ mod tests {
 
     #[test]
     fn includes_macos_bundle_resource_candidates() {
-        let current_exe = PathBuf::from("/Applications/TiyAgent.app/Contents/MacOS/tiy-agent");
+        let current_exe = PathBuf::from("/Applications/TiyCode.app/Contents/MacOS/TiyCode");
         let candidates = bundled_rg_candidates(&current_exe);
 
         assert!(
             candidates.contains(&PathBuf::from(
-                "/Applications/TiyAgent.app/Contents/Resources/rg"
+                "/Applications/TiyCode.app/Contents/Resources/rg"
             )),
             "expected bundled resources candidate in macOS app bundle"
         );

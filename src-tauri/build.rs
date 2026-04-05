@@ -23,7 +23,7 @@ fn bundle_ripgrep() -> io::Result<()> {
     let rg_source = locate_rg().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "ripgrep ('rg') is required at build time so Tiy Agent can bundle search support",
+            "ripgrep ('rg') is required at build time so TiyCode can bundle search support",
         )
     })?;
 

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tiy_core::agent::AbortSignal;
+use tiycore::agent::AbortSignal;
 use tokio::sync::{oneshot, Mutex};
 
 use crate::core::executors::{self, ToolOutput};

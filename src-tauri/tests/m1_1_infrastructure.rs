@@ -348,7 +348,7 @@ async fn test_fk_message_requires_thread() {
 
 #[test]
 fn test_app_error_internal_format() {
-    use tiy_agent_lib::model::errors::{AppError, ErrorCategory, ErrorSource};
+    use tiycode::model::errors::{AppError, ErrorCategory, ErrorSource};
 
     let err = AppError::internal(ErrorSource::Database, "connection lost");
 
@@ -360,7 +360,7 @@ fn test_app_error_internal_format() {
 
 #[test]
 fn test_app_error_recoverable_format() {
-    use tiy_agent_lib::model::errors::{AppError, ErrorCategory, ErrorSource};
+    use tiycode::model::errors::{AppError, ErrorCategory, ErrorSource};
 
     let err = AppError::recoverable(
         ErrorSource::Workspace,
@@ -375,7 +375,7 @@ fn test_app_error_recoverable_format() {
 
 #[test]
 fn test_app_error_not_found_format() {
-    use tiy_agent_lib::model::errors::{AppError, ErrorSource};
+    use tiycode::model::errors::{AppError, ErrorSource};
 
     let err = AppError::not_found(ErrorSource::Thread, "thread");
 
@@ -386,7 +386,7 @@ fn test_app_error_not_found_format() {
 
 #[test]
 fn test_app_error_display() {
-    use tiy_agent_lib::model::errors::{AppError, ErrorSource};
+    use tiycode::model::errors::{AppError, ErrorSource};
 
     let err = AppError::internal(ErrorSource::System, "out of memory");
     let display = format!("{err}");
@@ -396,7 +396,7 @@ fn test_app_error_display() {
 
 #[test]
 fn test_app_error_from_io_error() {
-    use tiy_agent_lib::model::errors::{AppError, ErrorSource};
+    use tiycode::model::errors::{AppError, ErrorSource};
 
     let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
     let app_err: AppError = io_err.into();

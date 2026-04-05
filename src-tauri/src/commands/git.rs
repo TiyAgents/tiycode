@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{ipc::Channel, State};
-use tiy_core::provider::get_provider;
-use tiy_core::types::{
+use tiycore::provider::get_provider;
+use tiycore::types::{
     Context as TiyContext, Message as TiyMessage, OnPayloadFn, StopReason,
     StreamOptions as TiyStreamOptions, UserMessage,
 };

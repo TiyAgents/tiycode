@@ -8,8 +8,8 @@
 mod test_helpers;
 
 use sqlx::Row;
-use tiy_agent_lib::core::settings_manager::SettingsManager;
-use tiy_agent_lib::model::provider::{CustomProviderCreateInput, ProviderModelInput};
+use tiycode::core::settings_manager::SettingsManager;
+use tiycode::model::provider::{CustomProviderCreateInput, ProviderModelInput};
 
 // =========================================================================
 // T1.3.1 — Settings CRUD

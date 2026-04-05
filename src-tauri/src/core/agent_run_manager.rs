@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
-use tiy_core::agent::AgentMessage;
-use tiy_core::provider::get_provider;
-use tiy_core::types::{
+use tiycore::agent::AgentMessage;
+use tiycore::provider::get_provider;
+use tiycore::types::{
     Context as TiyContext, Message as TiyMessage, OnPayloadFn, StopReason,
     StreamOptions as TiyStreamOptions, UserMessage,
 };
@@ -942,13 +942,13 @@ impl AgentRunManager {
                 run_repo::update_status(&self.pool, run_id, "running").await?;
             }
             ThreadStreamEvent::ThreadUsageUpdated { usage, .. } => {
-                let usage = tiy_core::types::Usage {
+                let usage = tiycore::types::Usage {
                     input: usage.input_tokens,
                     output: usage.output_tokens,
                     cache_read: usage.cache_read_tokens,
                     cache_write: usage.cache_write_tokens,
                     total_tokens: usage.total_tokens,
-                    cost: tiy_core::types::UsageCost::default(),
+                    cost: tiycore::types::UsageCost::default(),
                 };
                 run_repo::update_usage(&self.pool, run_id, &usage).await?;
             }
@@ -1404,7 +1404,7 @@ fn build_implementation_handoff_prompt(
 
 fn compact_summary_model(
     model_plan: &crate::core::agent_session::ResolvedRuntimeModelPlan,
-) -> tiy_core::types::Model {
+) -> tiycore::types::Model {
     model_plan
         .auxiliary
         .as_ref()
@@ -1593,18 +1593,18 @@ fn render_compact_summary_history(history: &[AgentMessage]) -> String {
 
 fn user_message_to_text(user: &UserMessage) -> String {
     match &user.content {
-        tiy_core::types::UserContent::Text(text) => truncate_chars(text.trim(), 1_200),
-        tiy_core::types::UserContent::Blocks(blocks) => {
+        tiycore::types::UserContent::Text(text) => truncate_chars(text.trim(), 1_200),
+        tiycore::types::UserContent::Blocks(blocks) => {
             let mut parts = Vec::new();
             for block in blocks {
                 match block {
-                    tiy_core::types::ContentBlock::Text(text) => {
+                    tiycore::types::ContentBlock::Text(text) => {
                         let trimmed = text.text.trim();
                         if !trimmed.is_empty() {
                             parts.push(trimmed.to_string());
                         }
                     }
-                    tiy_core::types::ContentBlock::Image(_) => parts.push("[image]".to_string()),
+                    tiycore::types::ContentBlock::Image(_) => parts.push("[image]".to_string()),
                     _ => {}
                 }
             }
@@ -1613,39 +1613,39 @@ fn user_message_to_text(user: &UserMessage) -> String {
     }
 }
 
-fn assistant_message_to_text(assistant: &tiy_core::types::AssistantMessage) -> String {
+fn assistant_message_to_text(assistant: &tiycore::types::AssistantMessage) -> String {
     let mut parts = Vec::new();
     for block in &assistant.content {
         match block {
-            tiy_core::types::ContentBlock::Text(text) => {
+            tiycore::types::ContentBlock::Text(text) => {
                 let trimmed = text.text.trim();
                 if !trimmed.is_empty() {
                     parts.push(trimmed.to_string());
                 }
             }
-            tiy_core::types::ContentBlock::Thinking(thinking) => {
+            tiycore::types::ContentBlock::Thinking(thinking) => {
                 let trimmed = thinking.thinking.trim();
                 if !trimmed.is_empty() {
                     parts.push(format!("[thinking] {trimmed}"));
                 }
             }
-            tiy_core::types::ContentBlock::ToolCall(tool_call) => {
+            tiycore::types::ContentBlock::ToolCall(tool_call) => {
                 parts.push(format!(
                     "[tool_call] {} {}",
                     tool_call.name,
                     truncate_chars(&collapse_whitespace(&tool_call.arguments.to_string()), 300)
                 ));
             }
-            tiy_core::types::ContentBlock::Image(_) => parts.push("[image]".to_string()),
+            tiycore::types::ContentBlock::Image(_) => parts.push("[image]".to_string()),
         }
     }
     truncate_chars(&parts.join("\n"), 1_500)
 }
 
-fn tool_result_to_text(tool_result: &tiy_core::types::ToolResultMessage) -> String {
+fn tool_result_to_text(tool_result: &tiycore::types::ToolResultMessage) -> String {
     let mut parts = Vec::new();
     for block in &tool_result.content {
-        if let tiy_core::types::ContentBlock::Text(text) = block {
+        if let tiycore::types::ContentBlock::Text(text) = block {
             let trimmed = text.text.trim();
             if !trimmed.is_empty() {
                 parts.push(trimmed.to_string());
@@ -2076,8 +2076,8 @@ mod tests {
         build_plan_artifact_from_tool_input, build_plan_message_metadata, PlanApprovalAction,
     };
     use crate::ipc::frontend_channels::ThreadStreamEvent;
-    use tiy_core::agent::AgentMessage;
-    use tiy_core::types::{Message as TiyMessage, UserMessage};
+    use tiycore::agent::AgentMessage;
+    use tiycore::types::{Message as TiyMessage, UserMessage};
 
     #[test]
     fn normalize_generated_title_strips_prefixes_and_wrappers() {
@@ -2157,7 +2157,7 @@ mod tests {
         match &messages[0] {
             TiyMessage::User(user) => {
                 let text = match &user.content {
-                    tiy_core::types::UserContent::Text(text) => text,
+                    tiycore::types::UserContent::Text(text) => text,
                     _ => panic!("expected text user message for instructions"),
                 };
                 assert!(text.contains("Additional user instructions for this compact"));
@@ -2169,7 +2169,7 @@ mod tests {
         match &messages[1] {
             TiyMessage::User(user) => {
                 let text = match &user.content {
-                    tiy_core::types::UserContent::Text(text) => text,
+                    tiycore::types::UserContent::Text(text) => text,
                     _ => panic!("expected text user message for history"),
                 };
                 assert!(text.starts_with("Conversation history to compact:"));

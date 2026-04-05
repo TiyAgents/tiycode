@@ -9,7 +9,7 @@
 mod test_helpers;
 
 use sqlx::Row;
-use tiy_agent_lib::core::workspace_manager::WorkspaceManager;
+use tiycode::core::workspace_manager::WorkspaceManager;
 
 // =========================================================================
 // T1.2.1 — Workspace CRUD operations (repo layer)

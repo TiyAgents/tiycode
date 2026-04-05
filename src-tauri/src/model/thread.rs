@@ -160,8 +160,8 @@ pub struct RunUsageDto {
     pub total_tokens: u64,
 }
 
-impl From<tiy_core::types::Usage> for RunUsageDto {
-    fn from(value: tiy_core::types::Usage) -> Self {
+impl From<tiycore::types::Usage> for RunUsageDto {
+    fn from(value: tiycore::types::Usage) -> Self {
         Self {
             input_tokens: value.input,
             output_tokens: value.output,

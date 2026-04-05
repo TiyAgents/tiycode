@@ -4,13 +4,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
-use tiy_core::catalog::{
+use tiycore::catalog::{
     enrich_manual_model, list_models, list_models_with_enrichment, load_catalog_metadata_store,
     refresh_catalog_snapshot, CatalogMetadataStore, CatalogRemoteConfig, EmptyCatalogMetadataStore,
     FileCatalogMetadataStore, UnifiedModelInfo,
 };
-use tiy_core::provider::get_provider;
-use tiy_core::types::{
+use tiycore::provider::get_provider;
+use tiycore::types::{
     Context as TiyContext, Cost as TiyCost, InputType, Message as TiyMessage, Model as TiyModel,
     OnPayloadFn, Provider as TiyProvider, StopReason, StreamOptions as TiyStreamOptions,
     UserMessage,
@@ -28,7 +28,7 @@ use crate::persistence::repo::{profile_repo, provider_repo, settings_repo};
 const PROVIDER_SCHEMA_VERSION_KEY: &str = "providers.schema_version";
 const PROVIDER_SCHEMA_VERSION: u32 = 3;
 const TIY_CATALOG_SNAPSHOT_FILE: &str = "catalog.json";
-const PROVIDER_MODEL_TEST_PROMPT: &str = "Ping from Tiy Agent.";
+const PROVIDER_MODEL_TEST_PROMPT: &str = "Ping from TiyCode.";
 const PROVIDER_MODEL_TEST_MIN_MAX_TOKENS: u32 = 16;
 const PROVIDER_MODEL_TEST_CONTEXT_WINDOW_FALLBACK: u32 = 8_192;
 const PROVIDER_MODEL_TEST_MAX_OUTPUT_TOKENS_FALLBACK: u32 = 4_096;
@@ -670,7 +670,7 @@ impl SettingsManager {
             .await?
             .ok_or_else(|| AppError::not_found(ErrorSource::Settings, "provider"))?;
         let provider_type = TiyProvider::from(provider.provider_type.clone());
-        let request = tiy_core::catalog::FetchModelsRequest {
+        let request = tiycore::catalog::FetchModelsRequest {
             provider: provider_type,
             api_key: provider.api_key_encrypted.clone(),
             base_url: Some(provider.base_url.clone()),
@@ -1352,7 +1352,7 @@ impl SettingsManager {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use tiy_core::catalog::{CatalogModelMetadata, InMemoryCatalogMetadataStore};
+    use tiycore::catalog::{CatalogModelMetadata, InMemoryCatalogMetadataStore};
 
     use super::*;
 
@@ -1638,7 +1638,7 @@ mod tests {
 
         let prompt = match &request.context.messages[0] {
             TiyMessage::User(message) => match &message.content {
-                tiy_core::types::UserContent::Text(text) => text.as_str(),
+                tiycore::types::UserContent::Text(text) => text.as_str(),
                 _ => panic!("expected text user message"),
             },
             _ => panic!("expected user message"),

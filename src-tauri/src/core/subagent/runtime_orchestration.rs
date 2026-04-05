@@ -1,4 +1,4 @@
-use tiy_core::agent::AgentTool;
+use tiycore::agent::AgentTool;
 
 pub const TERM_STATUS_TOOL_DESCRIPTION: &str =
     "Inspect the status of the desktop app's embedded Terminal panel session for the current thread. Use this to check that panel's session state without mutating it. It does not inspect the agent runtime, CLI process, or host shell outside the panel.";

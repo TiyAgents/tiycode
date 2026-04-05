@@ -14,8 +14,8 @@
 //! 5. **Summary injection**: Old messages before the cut-point are replaced with a single
 //!    `AgentMessage::User` containing a structured summary of what was discarded.
 
-use tiy_core::agent::AgentMessage;
-use tiy_core::types::{ContentBlock, TextContent, UserMessage};
+use tiycore::agent::AgentMessage;
+use tiycore::types::{ContentBlock, TextContent, UserMessage};
 
 /// Reserve this many tokens for the model's response + overhead.
 /// Matches pi-mono `DEFAULT_COMPACTION_SETTINGS.reserveTokens`.
@@ -47,8 +47,8 @@ fn estimate_message_tokens(message: &AgentMessage) -> u32 {
     match message {
         AgentMessage::User(user_msg) => {
             let text = match &user_msg.content {
-                tiy_core::types::UserContent::Text(t) => t.as_str(),
-                tiy_core::types::UserContent::Blocks(blocks) => {
+                tiycore::types::UserContent::Text(t) => t.as_str(),
+                tiycore::types::UserContent::Blocks(blocks) => {
                     // Sum all text blocks; images contribute a fixed overhead
                     let mut total = 0u32;
                     for block in blocks {
@@ -330,8 +330,8 @@ fn generate_discard_summary(messages: &[AgentMessage]) -> String {
         match msg {
             AgentMessage::User(user_msg) => {
                 let text = match &user_msg.content {
-                    tiy_core::types::UserContent::Text(t) => t.clone(),
-                    tiy_core::types::UserContent::Blocks(blocks) => blocks
+                    tiycore::types::UserContent::Text(t) => t.clone(),
+                    tiycore::types::UserContent::Blocks(blocks) => blocks
                         .iter()
                         .filter_map(|b| b.as_text())
                         .map(|t| t.text.as_str())
@@ -425,7 +425,7 @@ fn generate_discard_summary(messages: &[AgentMessage]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tiy_core::types::{
+    use tiycore::types::{
         Api, AssistantMessage, ContentBlock, Provider, StopReason, TextContent, ToolCall,
         ToolResultMessage, Usage, UserMessage,
     };

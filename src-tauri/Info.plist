@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>Tiy Agent</string>
+  <string>TiyCode</string>
   <key>CFBundleName</key>
-  <string>Tiy Agent</string>
+  <string>TiyCode</string>
   <key>CFBundleSpokenName</key>
-  <string>Tiy Agent</string>
+  <string>TiyCode</string>
 </dict>
 </plist>

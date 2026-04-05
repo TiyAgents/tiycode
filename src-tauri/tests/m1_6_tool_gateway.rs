@@ -13,7 +13,7 @@ use serde_json::json;
 use sqlx::Row;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tiy_agent_lib::core::policy_engine::{PolicyEngine, PolicyVerdict};
+use tiycode::core::policy_engine::{PolicyEngine, PolicyVerdict};
 
 // =========================================================================
 // T1.6.1 — Dangerous command hard deny
@@ -565,8 +565,8 @@ async fn test_pending_tool_calls_query() {
 
 #[tokio::test]
 async fn test_tool_gateway_can_fold_approval_into_escalation() {
-    use tiy_agent_lib::core::terminal_manager::TerminalManager;
-    use tiy_agent_lib::core::tool_gateway::{
+    use tiycode::core::terminal_manager::TerminalManager;
+    use tiycode::core::tool_gateway::{
         ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
     };
 
@@ -623,7 +623,7 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
                 workspace_path: workspace_root.display().to_string(),
                 run_mode: "default".into(),
             },
-            tiy_core::agent::AbortSignal::new(),
+            tiycore::agent::AbortSignal::new(),
             ToolExecutionOptions {
                 allow_user_approval: false,
             },
@@ -676,8 +676,8 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
 
 #[tokio::test]
 async fn test_search_repo_allows_relative_directory_within_workspace() {
-    use tiy_agent_lib::core::terminal_manager::TerminalManager;
-    use tiy_agent_lib::core::tool_gateway::{
+    use tiycode::core::terminal_manager::TerminalManager;
+    use tiycode::core::tool_gateway::{
         ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
     };
 
@@ -735,7 +735,7 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
                 workspace_path: workspace_root.display().to_string(),
                 run_mode: "default".into(),
             },
-            tiy_core::agent::AbortSignal::new(),
+            tiycore::agent::AbortSignal::new(),
             ToolExecutionOptions::default(),
             |_| {},
             || {},
@@ -773,8 +773,8 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
 
 #[tokio::test]
 async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
-    use tiy_agent_lib::core::terminal_manager::TerminalManager;
-    use tiy_agent_lib::core::tool_gateway::{
+    use tiycode::core::terminal_manager::TerminalManager;
+    use tiycode::core::tool_gateway::{
         ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
     };
 
@@ -837,7 +837,7 @@ async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
                 workspace_path: workspace_root.display().to_string(),
                 run_mode: "default".into(),
             },
-            tiy_core::agent::AbortSignal::new(),
+            tiycore::agent::AbortSignal::new(),
             ToolExecutionOptions::default(),
             |_| {},
             || {},

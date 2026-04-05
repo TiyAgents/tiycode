@@ -4,8 +4,8 @@ use std::sync::Mutex as StdMutex;
 
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tiy_core::agent::{Agent, AgentEvent, AgentMessage, AgentToolResult, ToolExecutionMode};
-use tiy_core::types::{ContentBlock, TextContent, Usage};
+use tiycore::agent::{Agent, AgentEvent, AgentMessage, AgentToolResult, ToolExecutionMode};
+use tiycore::types::{ContentBlock, TextContent, Usage};
 use tokio::sync::Mutex;
 
 use crate::core::agent_session::ResolvedModelRole;
@@ -229,7 +229,7 @@ impl HelperAgentOrchestrator {
                 match helper_gateway
                     .execute_tool_call(
                         request,
-                        tiy_core::agent::AbortSignal::new(),
+                        tiycore::agent::AbortSignal::new(),
                         ToolExecutionOptions {
                             allow_user_approval: false,
                         },
@@ -838,14 +838,14 @@ mod tests {
 
     #[test]
     fn helper_system_prompt_inherits_only_allowed_sections() {
-        let parent_prompt = "## Role\nYou are Tiy Agent.\n\n## Project Context (workspace instructions)\nFollow AGENTS.md.\n\n## Behavioral Guidelines\nUse clarify when needed.\n\n## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.\n\n## Sandbox & Permissions\n- Approval policy: auto.\n\n## Final Response Structure\nUse structured markdown.";
+        let parent_prompt = "## Role\nYou are TiyCode.\n\n## Project Context (workspace instructions)\nFollow AGENTS.md.\n\n## Behavioral Guidelines\nUse clarify when needed.\n\n## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.\n\n## Sandbox & Permissions\n- Approval policy: auto.\n\n## Final Response Structure\nUse structured markdown.";
 
         let prompt = build_helper_system_prompt(parent_prompt, SubagentProfile::Explore);
 
         assert!(prompt.contains("## Project Context (workspace instructions)"));
         assert!(prompt.contains("## Profile Instructions"));
         assert!(prompt.contains("## Sandbox & Permissions"));
-        assert!(!prompt.contains("## Role\nYou are Tiy Agent."));
+        assert!(!prompt.contains("## Role\nYou are TiyCode."));
         assert!(!prompt.contains("## Behavioral Guidelines"));
         assert!(!prompt.contains("## Final Response Structure"));
     }

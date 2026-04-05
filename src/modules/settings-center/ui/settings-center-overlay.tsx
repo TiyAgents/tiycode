@@ -1513,7 +1513,7 @@ function AboutSettingsPanel({
   onCheckUpdates: () => void;
 }) {
   const version = runtime?.version ?? "0.1.0";
-  const appName = runtime?.appName ?? "Tiy Agent";
+  const appName = runtime?.appName ?? "TiyCode";
   const platformSummary = runtime?.platform ?? "Unknown platform";
   const architectureSummary = runtime?.arch ?? "Unknown architecture";
   const aboutActions = [
@@ -1534,7 +1534,7 @@ function AboutSettingsPanel({
           <div className="max-w-[560px] space-y-2">
             <h2 className="text-[19px] font-semibold tracking-[-0.03em] text-app-foreground">{appName}</h2>
             <p className="text-[13px] leading-6 text-app-muted">
-              A desktop coding partner grounded in your workspace, tools, models, and runtime context.
+              An open-source, flexible, convenient cross-platform vibe-coding agent grounded in your workspace, tools, models, and runtime context.
             </p>
             <p className="text-[12px] leading-5 text-app-subtle">{`Version v${version} • ${platformSummary} • ${architectureSummary}`}</p>
           </div>

@@ -1,9 +1,8 @@
-# Tiy Agent 实施落地计划
+# TiyCode 实施落地计划
 
 ## Context
 
-Tiy Agent 是一款面向开发者的 AI 桌面工作台，当前处于 Alpha 原型向正式产品
-收敛阶段。
+TiyCode 是一款开源、自由、便利的跨平台 Vibe-Coding Agent，当前处于 Alpha 原型向正式产品收敛阶段。
 
 本计划基于 2026-03-19 的架构修订：
 

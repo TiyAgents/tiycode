@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::Row;
-use tiy_agent_lib::core::terminal_manager::TerminalManager;
+use tiycode::core::terminal_manager::TerminalManager;
 
 #[tokio::test]
 async fn test_terminal_session_lifecycle_and_output() {

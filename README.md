@@ -1,6 +1,8 @@
-# Tiy Agent
+# TiyCode
 
-一个基于 `Tauri 2 + TypeScript + React + shadcn/ui` 的跨平台桌面应用脚手架。
+TiyCode 是一款开源、自由、便利的跨平台 Vibe-Coding Agent。
+
+项目当前基于 `Tauri 2 + TypeScript + React + shadcn/ui` 构建。
 
 ## 启动
 

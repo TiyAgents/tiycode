@@ -77,7 +77,7 @@ export function NewThreadEmptyState({
     >
       <div className="relative flex w-full max-w-[28rem] flex-col items-center justify-center gap-4">
         <div className="flex size-12 items-center justify-center overflow-hidden rounded-2xl shadow-[0_10px_28px_rgba(15,23,42,0.08)] dark:shadow-[0_14px_30px_rgba(0,0,0,0.24)]">
-          <img src="/icon/tiy.png" alt="Tiy Agent logo" className="size-full object-cover opacity-90" />
+          <img src="/icon/tiy.png" alt="TiyCode logo" className="size-full object-cover opacity-90" />
         </div>
 
         <div className="flex flex-col items-center gap-1 text-center">

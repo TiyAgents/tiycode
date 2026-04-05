@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Tiy Agent",
+  "productName": "TiyCode",
   "version": "0.1.0",
   "identifier": "ai.tiy.agent",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Tiy Agent",
+        "title": "TiyCode",
         "width": 1280,
         "height": 820,
         "minWidth": 1280,
@@ -57,12 +57,12 @@
     "externalBin": [
       "target/tiy-rg/rg"
     ],
-    "shortDescription": "Cross-platform desktop AI agent built with Tauri.",
-    "longDescription": "Tiy Agent is a cross-platform desktop AI agent application built with Tauri, React and TypeScript.",
+    "shortDescription": "Open-source, flexible, convenient cross-platform vibe-coding agent.",
+    "longDescription": "TiyCode is an open-source, flexible, convenient cross-platform vibe-coding agent built with Tauri, React, and TypeScript.",
     "copyright": "© 2026 Tiy AI",
     "macOS": {
       "infoPlist": "Info.plist"
     }
   },
-  "mainBinaryName": "Tiy-Agent"
+  "mainBinaryName": "TiyCode"
 }
