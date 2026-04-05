@@ -13,7 +13,8 @@ use sqlx::Row;
 use tiycode::core::task_board_manager;
 use tiycode::core::thread_manager::ThreadManager;
 use tiycode::model::task_board::{
-    CreateTaskInput, CreateTaskStep, TaskBoardStatus, UpdateTaskAction, UpdateTaskInput,
+    CreateTaskInput, CreateTaskStep, QueryTaskScope, TaskBoardStatus, UpdateTaskAction,
+    UpdateTaskInput,
 };
 use tiycode::model::task_item::TaskStage;
 
@@ -362,6 +363,144 @@ async fn test_update_task_complete_board() {
         .await
         .unwrap();
     assert_eq!(updated.status, TaskBoardStatus::Completed);
+}
+
+#[tokio::test]
+async fn test_query_task_active_returns_only_active_board() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-query-active", "/tmp/query-active").await;
+    test_helpers::seed_thread(&pool, "t-query-active", "ws-query-active").await;
+
+    let first_board = task_board_manager::create_task_board(
+        &pool,
+        "t-query-active",
+        &CreateTaskInput {
+            title: "Completed Board".to_string(),
+            steps: vec![CreateTaskStep {
+                description: "Step 1".to_string(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    let second_board = task_board_manager::create_task_board(
+        &pool,
+        "t-query-active",
+        &CreateTaskInput {
+            title: "Active Board".to_string(),
+            steps: vec![CreateTaskStep {
+                description: "Step 2".to_string(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    let queried = task_board_manager::query_thread_task_boards(
+        &pool,
+        "t-query-active",
+        QueryTaskScope::Active,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(first_board.status, TaskBoardStatus::Active);
+    assert_eq!(queried.scope, QueryTaskScope::Active);
+    assert_eq!(
+        queried.active_task_board_id.as_deref(),
+        Some(second_board.id.as_str())
+    );
+    assert_eq!(queried.task_boards.len(), 1);
+    assert_eq!(queried.task_boards[0].id, second_board.id);
+    assert_eq!(queried.task_boards[0].status, TaskBoardStatus::Active);
+}
+
+#[tokio::test]
+async fn test_query_task_active_returns_empty_when_no_active_board_exists() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-query-none", "/tmp/query-none").await;
+    test_helpers::seed_thread(&pool, "t-query-none", "ws-query-none").await;
+
+    let board = task_board_manager::create_task_board(
+        &pool,
+        "t-query-none",
+        &CreateTaskInput {
+            title: "Single Board".to_string(),
+            steps: vec![CreateTaskStep {
+                description: "Only step".to_string(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    task_board_manager::update_task_board(
+        &pool,
+        "t-query-none",
+        &UpdateTaskInput {
+            task_board_id: board.id,
+            action: UpdateTaskAction::CompleteBoard,
+        },
+    )
+    .await
+    .unwrap();
+
+    let queried =
+        task_board_manager::query_thread_task_boards(&pool, "t-query-none", QueryTaskScope::Active)
+            .await
+            .unwrap();
+
+    assert_eq!(queried.scope, QueryTaskScope::Active);
+    assert_eq!(queried.active_task_board_id, None);
+    assert!(queried.task_boards.is_empty());
+}
+
+#[tokio::test]
+async fn test_query_task_all_returns_all_boards_and_active_id() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-query-all", "/tmp/query-all").await;
+    test_helpers::seed_thread(&pool, "t-query-all", "ws-query-all").await;
+
+    let first_board = task_board_manager::create_task_board(
+        &pool,
+        "t-query-all",
+        &CreateTaskInput {
+            title: "Board One".to_string(),
+            steps: vec![CreateTaskStep {
+                description: "Step 1".to_string(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    let second_board = task_board_manager::create_task_board(
+        &pool,
+        "t-query-all",
+        &CreateTaskInput {
+            title: "Board Two".to_string(),
+            steps: vec![CreateTaskStep {
+                description: "Step 2".to_string(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    let queried =
+        task_board_manager::query_thread_task_boards(&pool, "t-query-all", QueryTaskScope::All)
+            .await
+            .unwrap();
+
+    assert_eq!(queried.scope, QueryTaskScope::All);
+    assert_eq!(
+        queried.active_task_board_id.as_deref(),
+        Some(second_board.id.as_str())
+    );
+    assert_eq!(queried.task_boards.len(), 2);
+    assert_eq!(queried.task_boards[0].id, first_board.id);
+    assert_eq!(queried.task_boards[0].status, TaskBoardStatus::Completed);
+    assert_eq!(queried.task_boards[1].id, second_board.id);
+    assert_eq!(queried.task_boards[1].status, TaskBoardStatus::Active);
 }
 
 // =========================================================================

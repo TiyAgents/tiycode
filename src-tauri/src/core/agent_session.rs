@@ -338,7 +338,7 @@ impl AgentSession {
             return self.execute_plan_checkpoint(tool_input).await;
         }
 
-        if tool_name == "create_task" || tool_name == "update_task" {
+        if tool_name == "create_task" || tool_name == "update_task" || tool_name == "query_task" {
             return self
                 .execute_task_tool(tool_name, tool_call_id, tool_input)
                 .await;
@@ -753,7 +753,7 @@ impl AgentSession {
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
         use crate::core::task_board_manager;
-        use crate::model::task_board::{CreateTaskInput, UpdateTaskInput};
+        use crate::model::task_board::{CreateTaskInput, QueryTaskInput, UpdateTaskInput};
 
         // Persist the tool call record
         if let Err(error) = tool_call_repo::insert(
@@ -777,7 +777,7 @@ impl AgentSession {
             tool_call_id: tool_call_id.to_string(),
         });
 
-        let result = if tool_name == "create_task" {
+        let result: Result<serde_json::Value, String> = if tool_name == "create_task" {
             match serde_json::from_value::<CreateTaskInput>(tool_input.clone()) {
                 Ok(input) => {
                     match task_board_manager::create_task_board(
@@ -792,7 +792,9 @@ impl AgentSession {
                                 run_id: self.spec.run_id.clone(),
                                 task_board: dto.clone(),
                             });
-                            Ok(dto)
+                            serde_json::to_value(&dto).map_err(|error| {
+                                format!("Failed to serialize create_task result: {error}")
+                            })
                         }
                         Err(e) => Err(e.to_string()),
                     }
@@ -814,20 +816,36 @@ impl AgentSession {
                                 run_id: self.spec.run_id.clone(),
                                 task_board: dto.clone(),
                             });
-                            Ok(dto)
+                            serde_json::to_value(&dto).map_err(|error| {
+                                format!("Failed to serialize update_task result: {error}")
+                            })
                         }
                         Err(e) => Err(e.to_string()),
                     }
                 }
                 Err(e) => Err(format!("Invalid update_task input: {}", e)),
             }
+        } else if tool_name == "query_task" {
+            match serde_json::from_value::<QueryTaskInput>(tool_input.clone()) {
+                Ok(input) => task_board_manager::query_thread_task_boards(
+                    &self.pool,
+                    &self.spec.thread_id,
+                    input.scope,
+                )
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| {
+                    serde_json::to_value(&result)
+                        .map_err(|error| format!("Failed to serialize query_task result: {error}"))
+                }),
+                Err(e) => Err(format!("Invalid query_task input: {}", e)),
+            }
         } else {
             Err(format!("Unknown task tool: {}", tool_name))
         };
 
         match result {
-            Ok(dto) => {
-                let result_json = serde_json::to_value(&dto).unwrap_or(serde_json::json!({}));
+            Ok(result_json) => {
                 tool_call_repo::update_result(
                     &self.pool,
                     tool_call_id,
@@ -845,7 +863,7 @@ impl AgentSession {
 
                 AgentToolResult {
                     content: vec![ContentBlock::Text(TextContent::new(
-                        serde_json::to_string(&dto)
+                        serde_json::to_string(&result_json)
                             .unwrap_or_else(|_| "Task updated successfully".to_string()),
                     ))],
                     details: Some(result_json),
@@ -1621,13 +1639,13 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
     tools.push(AgentTool::new(
         "update_task",
         "Update Task",
-        "Update a task board or its steps. Call this after completing each implementation step to keep the board in sync with actual progress. The easiest pattern: call with action='advance_step' and no stepId — this completes the current active step and automatically starts the next one (or completes the board if no steps remain). Call after every step, not just at the end.",
+        "Update a task board or its steps. Call this after completing each implementation step to keep the board in sync with actual progress. The easiest pattern: call with action='advance_step' and no stepId — this completes the current active step and automatically starts the next one (or completes the board if no steps remain). If the app was interrupted or you are unsure which taskBoardId is current, call query_task first. Call after every step, not just at the end.",
         serde_json::json!({
             "type": "object",
             "properties": {
                 "taskBoardId": {
                     "type": "string",
-                    "description": "ID of the task board to update."
+                    "description": "ID of the task board to update. If unknown after a restart or interruption, call query_task first."
                 },
                 "action": {
                     "type": "string",
@@ -1648,6 +1666,21 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                 }
             },
             "required": ["taskBoardId", "action"]
+        }),
+    ));
+    tools.push(AgentTool::new(
+        "query_task",
+        "Query Task",
+        "Read the current thread's task-board state. Use this when resuming work after an interruption, restart, or any time you need to recover the current taskBoardId before calling update_task.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["active", "all"],
+                    "description": "Which task boards to return. Defaults to `active`. Use `all` only when you need the full thread task-board history."
+                }
+            }
         }),
     ));
 
@@ -2883,6 +2916,29 @@ Used for prompt assembly coverage.
         assert!(prompt.contains("### How to use skills"));
     }
 
+    #[tokio::test]
+    async fn system_prompt_includes_query_task_recovery_guidance() {
+        let temp_dir = tempdir().expect("temp dir");
+        let workspace_root = temp_dir.path().join("workspace");
+        fs::create_dir(&workspace_root).expect("workspace dir");
+
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+
+        let prompt = build_system_prompt(
+            &pool,
+            &RuntimeModelPlan::default(),
+            workspace_root.to_string_lossy().as_ref(),
+            "default",
+        )
+        .await
+        .expect("system prompt");
+
+        assert!(prompt.contains("call `query_task` first"));
+        assert!(prompt.contains("call `query_task` with `scope='active'`"));
+        assert!(prompt.contains("Use `query_task` with `scope='all'` only"));
+    }
+
     #[test]
     fn reasoning_blocks_reset_message_id_between_thought_segments() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -3215,6 +3271,37 @@ Used for prompt assembly coverage.
 
             assert!(tool_names.contains(&"clarify"));
         }
+    }
+
+    #[test]
+    fn query_task_tool_is_available_in_both_runtime_profiles() {
+        for profile in [DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE] {
+            let tools = runtime_tools_for_profile(profile);
+            let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+
+            assert!(tool_names.contains(&"query_task"));
+        }
+    }
+
+    #[test]
+    fn query_task_tool_schema_defaults_to_active_and_supports_all_scope() {
+        let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
+        let query_task = tools
+            .iter()
+            .find(|tool| tool.name == "query_task")
+            .expect("query_task tool should exist");
+        let scope = &query_task.parameters["properties"]["scope"];
+        let scope_enum = scope["enum"]
+            .as_array()
+            .expect("query_task scope enum should be present");
+        let description = scope["description"]
+            .as_str()
+            .expect("query_task scope description should be present");
+
+        assert_eq!(scope_enum.len(), 2);
+        assert_eq!(scope_enum[0], "active");
+        assert_eq!(scope_enum[1], "all");
+        assert!(description.contains("Defaults to `active`"));
     }
 
     #[test]

@@ -5,7 +5,10 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::model::errors::{AppError, ErrorSource};
-use crate::model::task_board::{CreateTaskInput, TaskBoardDto, TaskBoardStatus, UpdateTaskAction};
+use crate::model::task_board::{
+    CreateTaskInput, QueryTaskResult, QueryTaskScope, TaskBoardDto, TaskBoardStatus,
+    UpdateTaskAction,
+};
 use crate::model::task_item::{TaskItemDto, TaskItemRecord, TaskStage};
 use crate::persistence::repo::{task_board_repo, task_item_repo};
 
@@ -465,5 +468,39 @@ pub async fn get_active_task_board(
             Ok(Some(dto))
         }
         None => Ok(None),
+    }
+}
+
+/// Query task-board state for a thread without mutating any task data.
+pub async fn query_thread_task_boards(
+    pool: &SqlitePool,
+    thread_id: &str,
+    scope: QueryTaskScope,
+) -> Result<QueryTaskResult, AppError> {
+    match scope {
+        QueryTaskScope::Active => {
+            let active_board = get_active_task_board(pool, thread_id).await?;
+            let active_task_board_id = active_board.as_ref().map(|board| board.id.clone());
+            let task_boards = active_board.into_iter().collect();
+
+            Ok(QueryTaskResult {
+                scope,
+                active_task_board_id,
+                task_boards,
+            })
+        }
+        QueryTaskScope::All => {
+            let task_boards = load_thread_task_boards(pool, thread_id).await?;
+            let active_task_board_id = task_boards
+                .iter()
+                .find(|board| board.status == TaskBoardStatus::Active)
+                .map(|board| board.id.clone());
+
+            Ok(QueryTaskResult {
+                scope,
+                active_task_board_id,
+                task_boards,
+            })
+        }
     }
 }

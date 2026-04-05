@@ -62,6 +62,26 @@ pub struct TaskBoardDto {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryTaskScope {
+    Active,
+    All,
+}
+
+impl QueryTaskScope {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::All => "all",
+        }
+    }
+}
+
+fn default_query_task_scope() -> QueryTaskScope {
+    QueryTaskScope::Active
+}
+
 // ---------------------------------------------------------------------------
 // Input types for create_task tool
 // ---------------------------------------------------------------------------
@@ -77,6 +97,21 @@ pub struct CreateTaskInput {
 #[serde(rename_all = "camelCase")]
 pub struct CreateTaskStep {
     pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryTaskInput {
+    #[serde(default = "default_query_task_scope")]
+    pub scope: QueryTaskScope,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryTaskResult {
+    pub scope: QueryTaskScope,
+    pub active_task_board_id: Option<String>,
+    pub task_boards: Vec<TaskBoardDto>,
 }
 
 // ---------------------------------------------------------------------------
