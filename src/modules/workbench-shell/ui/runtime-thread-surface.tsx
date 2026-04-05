@@ -177,8 +177,10 @@ type RuntimeThreadSurfaceProps = {
   activeAgentProfileId: string;
   agentProfiles: ReadonlyArray<AgentProfile>;
   commands?: ReadonlyArray<CommandEntry>;
+  composerDraft?: string;
   enabledSkills?: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "scope" | "source" | "tags" | "triggers" | "contentPreview">>;
   initialPromptRequest?: InitialPromptRequest | null;
+  onComposerDraftChange?: (value: string) => void;
   onConsumeInitialPrompt?: (id: string) => void;
   onContextUsageChange?: (usage: ThreadContextUsage | null) => void;
   onRunStateChange?: (state: RunState) => void;
@@ -1929,8 +1931,10 @@ export function RuntimeThreadSurface({
   activeAgentProfileId,
   agentProfiles,
   commands = [],
+  composerDraft = "",
   enabledSkills = [],
   initialPromptRequest = null,
+  onComposerDraftChange,
   onConsumeInitialPrompt,
   onContextUsageChange,
   onRunStateChange,
@@ -1946,7 +1950,9 @@ export function RuntimeThreadSurface({
     [activeAgentProfileId, agentProfiles],
   );
   const [composerError, setComposerError] = useState<string | null>(null);
-  const [composerValue, setComposerValue] = useState("");
+  const [localComposerValue, setLocalComposerValue] = useState("");
+  const composerValue = onComposerDraftChange ? composerDraft : localComposerValue;
+  const setComposerValue = onComposerDraftChange ? onComposerDraftChange : setLocalComposerValue;
   const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string | null>(null);
   const [helpers, setHelpers] = useState<Array<SurfaceHelperEntry>>([]);
   const [helperOpen, setHelperOpen] = useState<Record<string, boolean>>({});
@@ -2269,6 +2275,9 @@ export function RuntimeThreadSurface({
   useEffect(() => {
     subscribingRef.current = false;
     setComposerError(null);
+    if (!onComposerDraftChange) {
+      setLocalComposerValue("");
+    }
     setHelpers([]);
     setHasMoreMessages(false);
     setHistoryLoadError(null);
@@ -2285,7 +2294,7 @@ export function RuntimeThreadSurface({
     setThinkingPlaceholder(null);
     setTools([]);
     void loadSnapshot();
-  }, [clearScheduledThinkingPhase, loadSnapshot]);
+  }, [clearScheduledThinkingPhase, loadSnapshot, onComposerDraftChange, threadId]);
 
   useEffect(() => {
     if (!threadId) {

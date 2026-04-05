@@ -466,6 +466,7 @@ export function DashboardWorkbench() {
     Record<string, string>
   >({});
   const [composerValue, setComposerValue] = useState("");
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
   const [composerError, setComposerError] = useState<string | null>(null);
   const [openSettingsSection, setOpenSettingsSection] = useState<
     "theme" | "language" | null
@@ -1665,6 +1666,16 @@ export function DashboardWorkbench() {
     [syncWorkspaceSidebar],
   );
 
+  const handleComposerDraftChange = useCallback(
+    (threadId: string, value: string) => {
+      setComposerDrafts((current) => ({
+        ...current,
+        [threadId]: value,
+      }));
+    },
+    [],
+  );
+
   const handleThreadDeleteRequest = useCallback((threadId: string) => {
     setPendingDeleteThreadId(threadId);
     setTerminalBootstrapError(null);
@@ -2710,12 +2721,21 @@ export function DashboardWorkbench() {
                         activeAgentProfileId={activeAgentProfileId}
                         agentProfiles={agentProfiles}
                         commands={composerCommands}
+                        composerDraft={
+                          resolvedTerminalThreadId
+                            ? (composerDrafts[resolvedTerminalThreadId] ?? "")
+                            : ""
+                        }
                         enabledSkills={enabledSkillEntries}
-                        key={resolvedTerminalThreadId ?? "runtime-thread-surface"}
                         initialPromptRequest={
                           resolvedTerminalThreadId
                             ? (pendingThreadRuns[resolvedTerminalThreadId] ?? null)
                             : null
+                        }
+                        onComposerDraftChange={
+                          resolvedTerminalThreadId
+                            ? (value) => handleComposerDraftChange(resolvedTerminalThreadId, value)
+                            : undefined
                         }
                         onConsumeInitialPrompt={(id) => {
                           setPendingThreadRuns((current) => {
