@@ -309,7 +309,7 @@ pub async fn reconcile_active_task_board(
         return Ok(None);
     }
 
-    if items.iter().all(|item| item.stage == TaskStage::Completed) {
+    if all_steps_terminal(&items) {
         complete_board(pool, &board.id).await?;
         return Ok(Some(load_task_board_dto(pool, &board.id).await?));
     }
@@ -353,6 +353,8 @@ async fn activate_next_pending_task(pool: &SqlitePool, board_id: &str) -> Result
     if let Some(next_pending) = first_pending_task(&items) {
         task_item_repo::update_stage(pool, &next_pending.id, &TaskStage::InProgress, None).await?;
         task_board_repo::update_active_task(pool, board_id, Some(&next_pending.id)).await?;
+    } else if all_steps_terminal(&items) {
+        complete_board(pool, board_id).await?;
     } else {
         task_board_repo::update_active_task(pool, board_id, None).await?;
     }
@@ -368,6 +370,13 @@ async fn complete_board(pool: &SqlitePool, board_id: &str) -> Result<(), AppErro
 
 fn first_pending_task(items: &[TaskItemRecord]) -> Option<&TaskItemRecord> {
     items.iter().find(|item| item.stage == TaskStage::Pending)
+}
+
+fn all_steps_terminal(items: &[TaskItemRecord]) -> bool {
+    !items.is_empty()
+        && items
+            .iter()
+            .all(|item| item.stage == TaskStage::Completed || item.stage == TaskStage::Failed)
 }
 
 fn first_in_progress_task(items: &[TaskItemRecord]) -> Option<&TaskItemRecord> {

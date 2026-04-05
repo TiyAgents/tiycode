@@ -1621,7 +1621,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
     tools.push(AgentTool::new(
         "update_task",
         "Update Task",
-        "Update a task board or its steps. Keep task state aligned with the real implementation lifecycle: update progress as each step finishes, prefer `advance_step` or `complete_step` to move work forward, and make sure the board is fully reconciled before the run ends.",
+        "Update a task board or its steps. Call this after completing each implementation step to keep the board in sync with actual progress. The easiest pattern: call with action='advance_step' and no stepId — this completes the current active step and automatically starts the next one (or completes the board if no steps remain). Call after every step, not just at the end.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -1632,11 +1632,11 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                 "action": {
                     "type": "string",
                     "enum": ["start_step", "advance_step", "complete_step", "fail_step", "complete_board", "abandon_board"],
-                    "description": "The action to perform. `advance_step` is the recommended default for normal progress updates because it completes the current in-progress step and automatically starts the next step or completes the board."
+                    "description": "The action to perform. Use `advance_step` after finishing each step — it completes the current active step and auto-starts the next (or auto-completes the board). No stepId needed. Use `fail_step` if a step cannot be completed. Use `start_step` only to manually start a specific pending step."
                 },
                 "stepId": {
                     "type": "string",
-                    "description": "ID of the step (required for start_step, complete_step, fail_step; optional for advance_step, which falls back to the board's current active step)."
+                    "description": "Step ID. Required for start_step, complete_step, fail_step. Omit for advance_step to automatically target the current active step (recommended)."
                 },
                 "errorDetail": {
                     "type": "string",

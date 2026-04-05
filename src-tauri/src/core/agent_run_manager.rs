@@ -1218,9 +1218,19 @@ impl AgentRunManager {
             message_repo::update_status(&self.pool, &message_id, finalized_message_status).await?;
         }
 
-        if let Some(task_board) =
-            task_board_manager::reconcile_active_task_board(&self.pool, &thread_id).await?
-        {
+        // Reconcile task board state, then always push latest state to frontend.
+        // reconcile may return a DTO if it made changes (including completing the board);
+        // otherwise fall back to querying the current active board so the frontend is
+        // always in sync when the run finishes.
+        let reconciled_board =
+            task_board_manager::reconcile_active_task_board(&self.pool, &thread_id).await?;
+        let board_to_send = match reconciled_board {
+            Some(board) => Some(board),
+            None => {
+                task_board_manager::get_active_task_board(&self.pool, &thread_id).await?
+            }
+        };
+        if let Some(task_board) = board_to_send {
             let _ = frontend_tx.send(ThreadStreamEvent::TaskBoardUpdated {
                 run_id: run_id.to_string(),
                 task_board,
