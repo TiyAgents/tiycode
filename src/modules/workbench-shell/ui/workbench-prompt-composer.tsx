@@ -1402,7 +1402,7 @@ export function WorkbenchPromptComposer({
                           <ProfileInlineIdentity badge={false} profile={activeProfile} providers={providers} showModel={false} />
                         </PromptInputButton>
                       </ModelSelectorTrigger>
-                      <ModelSelectorContent title="Profile Selector">
+                      <ModelSelectorContent commandProps={{ value: activeAgentProfileId ?? undefined }} title="Profile Selector">
                         <ModelSelectorInput placeholder="Search profiles..." />
                         <ModelSelectorList>
                           <ModelSelectorEmpty>未找到可用的 profile。</ModelSelectorEmpty>
