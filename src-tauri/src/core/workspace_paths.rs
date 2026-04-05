@@ -3,6 +3,8 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::model::errors::{AppError, ErrorSource};
 
+const BUILTIN_WRITABLE_ROOT_DIRS: &[&str] = &[".agents", ".tiy"];
+
 /// Canonicalize a workspace root and ensure it is a directory.
 pub fn canonicalize_workspace_root(
     workspace_path: &str,
@@ -88,6 +90,36 @@ pub fn parse_writable_roots(value_json: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Return builtin writable roots that should always be available at runtime.
+pub fn builtin_writable_roots() -> Vec<String> {
+    let Some(home_dir) = dirs::home_dir() else {
+        return Vec::new();
+    };
+
+    BUILTIN_WRITABLE_ROOT_DIRS
+        .iter()
+        .map(|dir| home_dir.join(dir).to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Merge persisted writable roots with builtin runtime roots and de-duplicate them.
+pub fn merge_writable_roots(raw_roots: &[String]) -> Vec<String> {
+    let mut merged = Vec::new();
+
+    for root in raw_roots
+        .iter()
+        .chain(builtin_writable_roots().iter())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        if !merged.iter().any(|existing: &String| existing == root) {
+            merged.push(root.to_string());
+        }
+    }
+
+    merged
+}
+
 /// Normalize persisted writable root strings into canonical path boundaries.
 pub fn normalize_additional_roots(raw_roots: &[String]) -> Vec<PathBuf> {
     raw_roots
@@ -168,8 +200,9 @@ fn normalize_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonicalize_workspace_root, normalize_additional_roots, parse_writable_roots,
-        resolve_path_within_roots, resolve_path_within_workspace,
+        builtin_writable_roots, canonicalize_workspace_root, merge_writable_roots,
+        normalize_additional_roots, parse_writable_roots, resolve_path_within_roots,
+        resolve_path_within_workspace,
     };
     use crate::model::errors::ErrorSource;
 
@@ -292,6 +325,41 @@ mod tests {
         .expect_err("path outside allowed roots should be rejected");
 
         assert_eq!(error.error_code, "tool.path.outside_workspace");
+    }
+
+    #[test]
+    fn builtin_writable_roots_include_agents_and_tiy_when_home_exists() {
+        let roots = builtin_writable_roots();
+
+        if let Some(home_dir) = dirs::home_dir() {
+            let agents = home_dir.join(".agents").to_string_lossy().into_owned();
+            let tiy = home_dir.join(".tiy").to_string_lossy().into_owned();
+            assert!(roots.contains(&agents));
+            assert!(roots.contains(&tiy));
+        } else {
+            assert!(roots.is_empty());
+        }
+    }
+
+    #[test]
+    fn merge_writable_roots_adds_builtin_roots_without_duplicates() {
+        let mut input = vec!["/tmp/custom-root".to_string()];
+        let builtin = builtin_writable_roots();
+        if let Some(first_builtin) = builtin.first() {
+            input.push(first_builtin.clone());
+        }
+
+        let merged = merge_writable_roots(&input);
+
+        assert!(merged.contains(&"/tmp/custom-root".to_string()));
+        for builtin_root in builtin {
+            assert!(merged.contains(&builtin_root));
+            assert_eq!(
+                merged.iter().filter(|root| *root == &builtin_root).count(),
+                1,
+                "builtin root should not be duplicated"
+            );
+        }
     }
 
     #[test]

@@ -16,7 +16,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::core::executors::{self, ToolOutput};
 use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
 use crate::core::terminal_manager::TerminalManager;
-use crate::core::workspace_paths::parse_writable_roots;
+use crate::core::workspace_paths::{merge_writable_roots, parse_writable_roots};
 use crate::extensions::{ExtensionsManager, ResolvedTool};
 use crate::model::thread::MessageRecord;
 use crate::persistence::repo::{
@@ -634,9 +634,10 @@ impl ToolGateway {
 
     async fn load_writable_roots(&self) -> Result<Vec<String>, crate::model::errors::AppError> {
         let record = settings_repo::policy_get(&self.pool, "writable_roots").await?;
-        Ok(record
+        let persisted_roots = record
             .map(|record| parse_writable_roots(&record.value_json))
-            .unwrap_or_default())
+            .unwrap_or_default();
+        Ok(merge_writable_roots(&persisted_roots))
     }
 
     async fn write_audit(

@@ -299,7 +299,7 @@ async fn build_sandbox_permissions_body(
     run_mode: &str,
     workspace_path: &str,
 ) -> Result<String, AppError> {
-    use crate::core::workspace_paths::parse_writable_roots;
+    use crate::core::workspace_paths::{merge_writable_roots, parse_writable_roots};
 
     let approval_policy = settings_repo::policy_get(pool, "approval_policy")
         .await?
@@ -309,7 +309,8 @@ async fn build_sandbox_permissions_body(
     let writable_roots: Vec<String> = settings_repo::policy_get(pool, "writable_roots")
         .await?
         .map(|record| parse_writable_roots(&record.value_json))
-        .unwrap_or_default();
+        .map(|roots| merge_writable_roots(&roots))
+        .unwrap_or_else(|| merge_writable_roots(&[]));
 
     let run_mode_line = if run_mode == "plan" {
         "Plan mode is active, so mutating tools are blocked."
