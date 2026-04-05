@@ -20,7 +20,7 @@
     "@streamdown/math": "^1.0.2",
     "@streamdown/mermaid": "^1.0.2",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2",
     "@xterm/addon-fit": "^0.11.0",
     "ai": "^6.0.116",
