@@ -184,6 +184,7 @@ type RuntimeThreadSurfaceProps = {
   providers: ReadonlyArray<ProviderEntry>;
   threadId: string | null;
   threadTitle: string;
+  workspaceId?: string | null;
 };
 
 export type ThreadContextUsage = {
@@ -1927,6 +1928,7 @@ export function RuntimeThreadSurface({
   providers,
   threadId,
   threadTitle,
+  workspaceId,
 }: RuntimeThreadSurfaceProps) {
   const activeProfile = useMemo(
     () => agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0] ?? null,
@@ -1956,6 +1958,7 @@ export function RuntimeThreadSurface({
   const previousHelperStatusesRef = useRef<Record<string, SurfaceHelperEntry["status"]>>({});
   const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
   const snapshotLoadRequestRef = useRef(0);
+  const completedMessageResyncRequestRef = useRef(0);
   const streamRef = useRef<ThreadStream | null>(null);
   const submittingRef = useRef(false);
   const subscribingRef = useRef(false);
@@ -2201,6 +2204,56 @@ export function RuntimeThreadSurface({
     }
   }, [hasMoreMessages, isLoadingMoreMessages, messages, threadId]);
 
+  const resyncCompletedMessage = useCallback(async (messageId: string, runId: string) => {
+    if (!threadId) {
+      return;
+    }
+
+    const requestId = completedMessageResyncRequestRef.current + 1;
+    completedMessageResyncRequestRef.current = requestId;
+
+    try {
+      const snapshot = await threadLoad(threadId);
+      if (
+        completedMessageResyncRequestRef.current !== requestId
+        || snapshot.thread.id !== threadId
+      ) {
+        return;
+      }
+
+      const persistedMessage = snapshot.messages.find((message) => message.id === messageId);
+      if (!persistedMessage) {
+        return;
+      }
+
+      const mappedMessage = mapSnapshotMessage(persistedMessage);
+      setMessages((current) => appendOrReplaceMessage(current, mappedMessage));
+
+      const nextState = mapSnapshotToRunState(snapshot);
+      setTools((snapshot.toolCalls ?? []).map(mapSnapshotTool));
+      setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
+      setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
+      setRuntimeError(getSnapshotRuntimeError(snapshot));
+      setRunState(nextState);
+      setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
+
+      const latestVisibleRun = getLatestVisibleRun(snapshot);
+      if (latestVisibleRun?.id === runId) {
+        const nextContextUsage = mapRunSummaryToContextUsage(latestVisibleRun);
+        if (nextContextUsage) {
+          onContextUsageChange?.(nextContextUsage);
+        }
+      }
+
+      if (snapshot.thread.title.trim()) {
+        onThreadTitleChange?.(snapshot.thread.id, snapshot.thread.title.trim());
+      }
+      onRunStateChange?.(nextState);
+    } catch {
+      // Keep the local completed fallback message if snapshot resync is not ready yet.
+    }
+  }, [onContextUsageChange, onRunStateChange, onThreadTitleChange, threadId]);
+
   useEffect(() => {
     subscribingRef.current = false;
     setComposerError(null);
@@ -2301,6 +2354,7 @@ export function RuntimeThreadSurface({
         }),
       );
 
+      void resyncCompletedMessage(event.messageId, event.runId);
       showThinkingPlaceholder(event.runId);
     });
 
@@ -2639,6 +2693,7 @@ export function RuntimeThreadSurface({
     onRunStateChange,
     onContextUsageChange,
     onThreadTitleChange,
+    resyncCompletedMessage,
     scheduleThinkingPhase,
     threadId,
   ]);
@@ -4061,6 +4116,7 @@ export function RuntimeThreadSurface({
           showRunModeToggle
           status={composerStatus}
           value={composerValue}
+          workspaceId={workspaceId}
           onValueChange={setComposerValue}
         />
       </div>

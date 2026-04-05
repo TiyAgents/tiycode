@@ -2568,6 +2568,7 @@ export function DashboardWorkbench() {
                             showRunModeToggle
                             status="ready"
                             value={composerValue}
+                            workspaceId={selectedProjectWorkspaceId}
                             onValueChange={setComposerValue}
                           />
                         </div>
@@ -2693,6 +2694,7 @@ export function DashboardWorkbench() {
                         threadTitle={
                           activeThread?.name ?? AI_ELEMENTS_THREAD_TITLE
                         }
+                        workspaceId={resolvedWorkspaceId}
                       />
                     </>
                   )}

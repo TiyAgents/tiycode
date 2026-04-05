@@ -1,16 +1,18 @@
-import type { ChatStatus, FileUIPart } from "ai";
+import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai";
 import {
   BracesIcon,
   CheckIcon,
   FileCodeIcon,
   FileIcon,
+  FileSearchIcon,
   FileTextIcon,
   ImageIcon,
+  LoaderCircle,
   PaperclipIcon,
   UserStar,
   XIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import {
   ModelSelector,
   ModelSelectorContent,
@@ -36,6 +38,7 @@ import {
   PromptInputTextarea,
   PromptInputTools,
   usePromptInputAttachments,
+  usePromptInputReferencedSources,
 } from "@/components/ai-elements/prompt-input";
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
 import {
@@ -46,6 +49,7 @@ import {
   SUPPORTED_COMPOSER_ATTACHMENT_ACCEPT,
   SUPPORTED_COMPOSER_ATTACHMENT_DIALOG_FILTERS,
   type ComposerCommandDescriptor,
+  type ComposerReferencedFile,
   type ComposerSubmission,
 } from "@/modules/workbench-shell/model/composer-commands";
 import {
@@ -54,6 +58,7 @@ import {
 } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
 import type { RunMode } from "@/shared/types/api";
+import { indexFilterFiles, type FileFilterMatch } from "@/services/bridge";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { ModelBrandIcon } from "@/shared/ui/model-brand-icon";
@@ -65,6 +70,25 @@ type ComposerAttachment = {
   name: string;
   url?: string;
 };
+
+type MentionMatch = {
+  query: string;
+  tokenEnd: number;
+  tokenStart: number;
+};
+
+type ReferencedSourceBridgeProps = {
+  clearSignal: number;
+  onBridgeReady: (bridge: ReferencedSourceBridgeHandle) => void;
+};
+
+type ReferencedSourceBridgeHandle = {
+  clear: () => void;
+  syncFiles: (files: ReadonlyArray<ComposerReferencedFile>) => void;
+};
+
+const FILE_SEARCH_RESULT_LIMIT = 200;
+const FILE_SEARCH_DEBOUNCE_MS = 120;
 
 type WorkbenchPromptComposerProps = {
   activeAgentProfileId: string;
@@ -86,6 +110,7 @@ type WorkbenchPromptComposerProps = {
   suggestions?: ReadonlyArray<string>;
   textareaClassName?: string;
   value: string;
+  workspaceId?: string | null;
   onValueChange: (value: string) => void;
 };
 
@@ -102,10 +127,18 @@ function buildSubmissionFromPromptInput(
   message: PromptInputMessage,
   registry: ReadonlyArray<ComposerCommandDescriptor>,
   runMode: RunMode,
+  referencedFiles: ReadonlyArray<ComposerReferencedFile>,
 ): ComposerSubmission {
   const trimmedText = message.text?.trim() ?? "";
   const attachments = mapComposerAttachments(message.files);
   const parsedCommand = trimmedText ? parseSlashCommandInput(trimmedText, registry) : null;
+  const referencedFilesMetadata = referencedFiles.length > 0
+    ? referencedFiles.map((file) => ({
+        name: file.name,
+        path: file.path,
+        parentPath: file.parentPath,
+      }))
+    : [];
 
   if (!parsedCommand?.command) {
     return {
@@ -114,7 +147,16 @@ function buildSubmissionFromPromptInput(
       effectivePrompt: trimmedText,
       rawMessage: message,
       attachments,
-      metadata: null,
+      metadata: referencedFilesMetadata.length > 0
+        ? {
+            composer: {
+              kind: "plain",
+              displayText: trimmedText,
+              effectivePrompt: trimmedText,
+              referencedFiles: referencedFilesMetadata,
+            },
+          }
+        : null,
       runMode,
     };
   }
@@ -143,6 +185,7 @@ function buildSubmissionFromPromptInput(
         kind: "command",
         displayText: trimmedText,
         effectivePrompt,
+        referencedFiles: referencedFilesMetadata,
         command: {
           source: parsedCommand.command.source,
           name: parsedCommand.command.name,
@@ -239,6 +282,90 @@ function getSelectedCommandFromFiltered(
   }
 
   return getDefaultSelectedCommand(filteredCommands);
+}
+
+function getActiveMentionMatch(value: string, cursorPosition: number | null): MentionMatch | null {
+  if (cursorPosition == null) {
+    return null;
+  }
+
+  const safeCursor = Math.max(0, Math.min(cursorPosition, value.length));
+  const tokenStart = value.lastIndexOf("@", safeCursor - 1);
+  if (tokenStart < 0) {
+    return null;
+  }
+
+  const beforeAt = tokenStart === 0 ? "" : value[tokenStart - 1] ?? "";
+  if (beforeAt && !/\s|[(\[{]/.test(beforeAt)) {
+    return null;
+  }
+
+  const between = value.slice(tokenStart + 1, safeCursor);
+  if (between.length === 0) {
+    return {
+      query: "",
+      tokenEnd: safeCursor,
+      tokenStart,
+    };
+  }
+
+  if (/\s/.test(between)) {
+    return null;
+  }
+
+  const atEndsEmailOrWord = tokenStart > 0 && /[A-Za-z0-9._-]/.test(beforeAt);
+  if (atEndsEmailOrWord) {
+    return null;
+  }
+
+  return {
+    query: between,
+    tokenEnd: safeCursor,
+    tokenStart,
+  };
+}
+
+function getNextFileIndex(currentIndex: number, resultCount: number, delta: number) {
+  if (resultCount === 0) {
+    return -1;
+  }
+
+  if (currentIndex < 0) {
+    return delta > 0 ? 0 : resultCount - 1;
+  }
+
+  return (currentIndex + delta + resultCount) % resultCount;
+}
+
+function buildMentionSourceDocument(file: ComposerReferencedFile): SourceDocumentUIPart {
+  return {
+    type: "source-document",
+    sourceId: file.path,
+    title: file.name,
+    filename: file.name,
+    mediaType: "text/plain",
+    providerMetadata: {
+      tiy: {
+        parentPath: file.parentPath,
+        path: file.path,
+      },
+    },
+  };
+}
+
+function mergeReferencedFiles(
+  current: ReadonlyArray<ComposerReferencedFile>,
+  nextFile: ComposerReferencedFile,
+) {
+  const withoutDuplicate = current.filter((file) => file.path !== nextFile.path);
+  return [...withoutDuplicate, nextFile];
+}
+
+function removeUnmentionedReferencedFiles(
+  current: ReadonlyArray<ComposerReferencedFile>,
+  value: string,
+) {
+  return current.filter((file) => value.includes(`@${file.path}`));
 }
 
 
@@ -487,6 +614,94 @@ function ComposerAttachmentStateSyncInner({
   return null;
 }
 
+function ComposerReferencedSourcesBridge({
+  clearSignal,
+  onBridgeReady,
+}: ReferencedSourceBridgeProps) {
+  const referencedSources = usePromptInputReferencedSources();
+  const previousFilesRef = useRef<ReadonlyArray<ComposerReferencedFile>>([]);
+  const referencedSourcesRef = useRef(referencedSources);
+  referencedSourcesRef.current = referencedSources;
+
+  useEffect(() => {
+    onBridgeReady({
+      clear: () => {
+        referencedSourcesRef.current.clear();
+        previousFilesRef.current = [];
+      },
+      syncFiles: (files) => {
+        const ctx = referencedSourcesRef.current;
+        const previousPaths = new Set(previousFilesRef.current.map((file) => file.path));
+        const nextPaths = new Set(files.map((file) => file.path));
+
+        for (const source of ctx.sources) {
+          const sourcePath = source.sourceId;
+          if (sourcePath && !nextPaths.has(sourcePath)) {
+            ctx.remove(source.id);
+          }
+        }
+
+        const newFiles = files.filter((file) => !previousPaths.has(file.path));
+        if (newFiles.length > 0) {
+          ctx.add(newFiles.map((file) => buildMentionSourceDocument(file)));
+        }
+
+        previousFilesRef.current = files;
+      },
+    });
+  }, [onBridgeReady]);
+
+  useEffect(() => {
+    referencedSourcesRef.current.clear();
+    previousFilesRef.current = [];
+  }, [clearSignal]);
+
+  return null;
+}
+
+function ComposerReferencedFilesHeader({
+  files,
+  onRemove,
+}: {
+  files: ReadonlyArray<ComposerReferencedFile>;
+  onRemove: (path: string) => void;
+}) {
+  if (files.length === 0) {
+    return null;
+  }
+
+  return (
+    <PromptInputHeader className="border-b border-app-border/45 bg-app-surface-muted/35 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge className="gap-1.5 rounded-full border-app-info/30 bg-app-info/10 px-2.5 py-1 text-[11px] text-app-info">
+          <FileSearchIcon className="size-3" />
+          {files.length} 个文件引用
+        </Badge>
+        {files.map((file) => (
+          <Badge
+            className="gap-1 rounded-full border border-app-border/55 bg-app-surface px-2.5 py-1 text-[11px] text-app-foreground"
+            key={file.path}
+            variant="outline"
+          >
+            <span className="max-w-[240px] truncate" title={file.path}>{file.path}</span>
+            <button
+              aria-label={`移除文件引用 ${file.path}`}
+              className="inline-flex size-4 items-center justify-center rounded-full text-app-subtle transition-colors hover:bg-app-surface-muted hover:text-app-foreground"
+              onClick={(event) => {
+                event.preventDefault();
+                onRemove(file.path);
+              }}
+              type="button"
+            >
+              <XIcon className="size-3" />
+            </button>
+          </Badge>
+        ))}
+      </div>
+    </PromptInputHeader>
+  );
+}
+
 function ComposerAttachmentTrigger() {
   const attachments = usePromptInputAttachments();
 
@@ -692,11 +907,25 @@ export function WorkbenchPromptComposer({
   suggestions,
   textareaClassName,
   value,
+  workspaceId,
   onValueChange,
 }: WorkbenchPromptComposerProps) {
   const [isProfileSelectorOpen, setProfileSelectorOpen] = useState(false);
   const [selectedCommandKey, setSelectedCommandKey] = useState<string | null>(null);
+  const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+  const [fileSearchResults, setFileSearchResults] = useState<ReadonlyArray<FileFilterMatch>>([]);
+  const [isFileSearchLoading, setFileSearchLoading] = useState(false);
+  const [fileSearchError, setFileSearchError] = useState<string | null>(null);
+  const [cursorPosition, setCursorPosition] = useState<number | null>(value.length);
+  const [referencedFiles, setReferencedFiles] = useState<ReadonlyArray<ComposerReferencedFile>>([]);
+  const [clearReferencedSourcesSignal, setClearReferencedSourcesSignal] = useState(0);
   const commandPanelRef = useRef<HTMLDivElement | null>(null);
+  const filePanelRef = useRef<HTMLDivElement | null>(null);
+  const requestSequenceRef = useRef(0);
+  const referencedSourceBridgeRef = useRef<ReferencedSourceBridgeHandle | null>(null);
+  const registerReferencedSourceBridge = useCallback((bridge: ReferencedSourceBridgeHandle) => {
+    referencedSourceBridgeRef.current = bridge;
+  }, []);
   const activeProfile = useMemo(
     () => agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0] ?? null,
     [activeAgentProfileId, agentProfiles],
@@ -707,6 +936,12 @@ export function WorkbenchPromptComposer({
     [commands],
   );
   const slashActive = shouldShowCommandPicker(value);
+  const mentionMatch = useMemo(
+    () => getActiveMentionMatch(value, cursorPosition),
+    [cursorPosition, value],
+  );
+  const mentionActive = !slashActive && Boolean(mentionMatch);
+  const mentionQuery = mentionMatch?.query.trim() ?? "";
   const filteredCommands = useMemo(
     () => getFilteredCommands(commandRegistry, value),
     [commandRegistry, value],
@@ -717,6 +952,9 @@ export function WorkbenchPromptComposer({
       : null;
     return getSelectedCommandFromFiltered(filteredCommands, keyedSelection);
   }, [filteredCommands, selectedCommandKey]);
+  const selectedFileResult = mentionActive
+    ? fileSearchResults[selectedFileIndex] ?? null
+    : null;
 
   useEffect(() => {
     if (!slashActive) {
@@ -744,12 +982,149 @@ export function WorkbenchPromptComposer({
     return () => cancelAnimationFrame(frame);
   }, [selectedCommandKey, slashActive]);
 
+  useEffect(() => {
+    setReferencedFiles((current) => removeUnmentionedReferencedFiles(current, value));
+  }, [value]);
+
+  useEffect(() => {
+    referencedSourceBridgeRef.current?.syncFiles(referencedFiles);
+  }, [referencedFiles]);
+
+  useEffect(() => {
+    if (!mentionActive) {
+      setFileSearchResults([]);
+      setFileSearchError(null);
+      setFileSearchLoading(false);
+      setSelectedFileIndex(0);
+      return;
+    }
+
+    if (!workspaceId) {
+      setFileSearchResults([]);
+      setFileSearchError(null);
+      setFileSearchLoading(false);
+      setSelectedFileIndex(0);
+      return;
+    }
+
+    if (!mentionQuery) {
+      setFileSearchResults([]);
+      setFileSearchError(null);
+      setFileSearchLoading(false);
+      setSelectedFileIndex(0);
+      return;
+    }
+
+    const nextRequestId = requestSequenceRef.current + 1;
+    requestSequenceRef.current = nextRequestId;
+    setFileSearchLoading(true);
+    setFileSearchError(null);
+
+    const timer = window.setTimeout(() => {
+      void indexFilterFiles(workspaceId, mentionQuery, FILE_SEARCH_RESULT_LIMIT)
+        .then((response) => {
+          if (requestSequenceRef.current !== nextRequestId) {
+            return;
+          }
+          setFileSearchResults(response.results);
+          setSelectedFileIndex(0);
+          setFileSearchLoading(false);
+        })
+        .catch((searchError) => {
+          if (requestSequenceRef.current !== nextRequestId) {
+            return;
+          }
+          setFileSearchResults([]);
+          setSelectedFileIndex(0);
+          setFileSearchLoading(false);
+          setFileSearchError(searchError instanceof Error ? searchError.message : "文件搜索失败，请稍后重试。");
+        });
+    }, FILE_SEARCH_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [mentionActive, mentionQuery, workspaceId]);
+
+  useEffect(() => {
+    if (!mentionActive || fileSearchResults.length === 0) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const selectedItem = filePanelRef.current?.querySelector<HTMLElement>(
+        `[data-file-index="${selectedFileIndex}"]`,
+      );
+      selectedItem?.scrollIntoView({ block: "nearest" });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [mentionActive, fileSearchResults, selectedFileIndex]);
+
   const handlePromptSubmit = (message: PromptInputMessage) => {
-    const submission = buildSubmissionFromPromptInput(message, commandRegistry, runMode);
+    const submission = buildSubmissionFromPromptInput(message, commandRegistry, runMode, referencedFiles);
     onSubmit(submission);
+    setReferencedFiles([]);
+    setClearReferencedSourcesSignal((current) => current + 1);
+  };
+
+  const insertReferencedFile = (match: FileFilterMatch) => {
+    if (!mentionMatch) {
+      return;
+    }
+
+    const mentionText = `@${match.path}`;
+    const nextValue = `${value.slice(0, mentionMatch.tokenStart)}${mentionText} ${value.slice(mentionMatch.tokenEnd)}`;
+    const nextCursorPosition = mentionMatch.tokenStart + mentionText.length + 1;
+    const referencedFile: ComposerReferencedFile = {
+      name: match.name,
+      path: match.path,
+      parentPath: match.parentPath,
+    };
+
+    onValueChange(nextValue);
+    setCursorPosition(nextCursorPosition);
+    setReferencedFiles((current) => mergeReferencedFiles(current, referencedFile));
+    setSelectedFileIndex(0);
+    setFileSearchResults([]);
+    setFileSearchError(null);
+    setFileSearchLoading(false);
   };
 
   const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
+
+    if (mentionActive) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        if (fileSearchResults.length === 0) {
+          return;
+        }
+        event.preventDefault();
+        setSelectedFileIndex((currentIndex) => getNextFileIndex(
+          currentIndex,
+          fileSearchResults.length,
+          event.key === "ArrowDown" ? 1 : -1,
+        ));
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCursorPosition(null);
+        setFileSearchResults([]);
+        setFileSearchError(null);
+        setFileSearchLoading(false);
+        setSelectedFileIndex(0);
+        return;
+      }
+
+      if ((event.key === "Enter" || event.key === "Tab") && selectedFileResult) {
+        event.preventDefault();
+        insertReferencedFile(selectedFileResult);
+        return;
+      }
+    }
+
     if (!slashActive) {
       return;
     }
@@ -809,6 +1184,10 @@ export function WorkbenchPromptComposer({
           onSubmit={handlePromptSubmit}
         >
           <PromptInputBody>
+            <ComposerReferencedSourcesBridge
+              clearSignal={clearReferencedSourcesSignal}
+              onBridgeReady={registerReferencedSourceBridge}
+            />
             <ComposerAttachmentStateSync
               onHasAttachmentsChange={(hasAttachments) => {
                 if (hasAttachments) {
@@ -817,13 +1196,102 @@ export function WorkbenchPromptComposer({
               }}
             />
             <ComposerAttachmentHeader />
+            <ComposerReferencedFilesHeader
+              files={referencedFiles}
+              onRemove={(path) => {
+                const nextFiles = referencedFiles.filter((file) => file.path !== path);
+                setReferencedFiles(nextFiles);
+                onValueChange(value.split(`@${path}`).join("").replace(/\s{2,}/g, " ").trimStart());
+              }}
+            />
             <PromptInputTextarea
               className={cn("min-h-[88px]", textareaClassName)}
-              onChange={(event) => onValueChange(event.currentTarget.value)}
+              onChange={(event) => {
+                onValueChange(event.currentTarget.value);
+                setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
+              }}
+              onClick={(event) => {
+                setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
+              }}
               onKeyDown={handleTextareaKeyDown}
+              onKeyUp={(event) => {
+                setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
+              }}
+              onSelect={(event) => {
+                setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
+              }}
               placeholder={placeholder}
               value={value}
             />
+            {mentionActive ? (
+              <div
+                className="absolute inset-x-3 bottom-[calc(100%+0.5rem)] z-20 min-w-0"
+                ref={filePanelRef}
+              >
+                <div className="w-full min-w-0 overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu p-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl dark:bg-app-menu/98">
+                  <div className="max-h-[320px] overflow-y-auto">
+                    {!workspaceId ? (
+                      <div className="px-3 py-3 text-sm text-app-subtle">当前未绑定 workspace，暂时无法搜索文件。</div>
+                    ) : !mentionQuery ? (
+                      <div className="px-3 py-3 text-sm text-app-subtle">继续输入文件名或路径以搜索文件。</div>
+                    ) : isFileSearchLoading ? (
+                      <div className="flex items-center gap-2 px-3 py-3 text-sm text-app-subtle">
+                        <LoaderCircle className="size-4 animate-spin" />
+                        <span>正在搜索文件…</span>
+                      </div>
+                    ) : fileSearchError ? (
+                      <div className="px-3 py-3 text-sm text-app-danger">{fileSearchError}</div>
+                    ) : fileSearchResults.length === 0 ? (
+                      <div className="px-3 py-3 text-sm text-app-subtle">没有找到匹配的文件。</div>
+                    ) : (
+                      <div className="flex flex-col gap-1">
+                        {fileSearchResults.map((match, index) => {
+                          const isSelected = index === selectedFileIndex;
+                          return (
+                            <button
+                              className={cn(
+                                "flex w-full items-start gap-3 rounded-xl px-3 py-2 text-left transition-colors",
+                                isSelected
+                                  ? "bg-app-info/14 text-app-foreground dark:bg-app-info/18"
+                                  : "text-app-foreground/90 hover:bg-app-accent/8",
+                              )}
+                              data-file-index={index}
+                              key={match.path}
+                              onClick={() => insertReferencedFile(match)}
+                              onMouseEnter={() => {
+                                if (selectedFileIndex !== index) {
+                                  setSelectedFileIndex(index);
+                                }
+                              }}
+                              onMouseDown={(event) => event.preventDefault()}
+                              type="button"
+                            >
+                              <span className={cn(
+                                "mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-lg border",
+                                isSelected
+                                  ? "border-app-info/30 bg-app-info/10 text-app-info"
+                                  : "border-app-border/55 bg-app-surface-muted/70 text-app-subtle",
+                              )}>
+                                <FileSearchIcon className="size-4" />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-medium text-inherit">{match.name}</span>
+                                <span className={cn(
+                                  "mt-1 block truncate text-[11px]",
+                                  isSelected ? "text-app-foreground/75" : "text-app-subtle",
+                                )}>
+                                  {match.path}
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {slashActive && filteredCommands.length > 0 ? (
               <div
                 className="absolute inset-x-3 bottom-[calc(100%+0.5rem)] z-20 min-w-0"

@@ -125,6 +125,12 @@ export type ComposerCommandInvocation = {
   behavior: ComposerCommandBehavior;
 };
 
+export type ComposerReferencedFile = {
+  name: string;
+  path: string;
+  parentPath: string;
+};
+
 export type ComposerSubmission = {
   kind: ComposerSubmissionKind;
   displayText: string;
