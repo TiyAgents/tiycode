@@ -153,7 +153,7 @@ impl PromptSectionProvider for SkillsProvider {
         lines.push("- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.".to_string());
         lines.push("- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.".to_string());
         lines.push("- How to use a skill (progressive disclosure):".to_string());
-        lines.push("  1. After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.".to_string());
+        lines.push("  1. After deciding to use a skill, open its `SKILL.md`. Before using a skill, read its `SKILL.md` completely unless the file is clearly only metadata plus links and the relevant workflow section has been fully loaded.".to_string());
         lines.push("  2. When `SKILL.md` references relative paths (for example, `scripts/foo.py`), resolve them relative to the skill directory listed above first, and only consider other paths if needed.".to_string());
         lines.push("  3. If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.".to_string());
         lines.push("  4. If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.".to_string());
