@@ -10,7 +10,6 @@ import {
   Plug,
   RefreshCw,
   Search,
-  Server,
 } from "lucide-react";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
@@ -25,6 +24,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
+import { LocalLlmIcon } from "@/shared/ui/local-llm-icon";
 import { ScrollArea } from "@/shared/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
 import { Switch } from "@/shared/ui/switch";
@@ -204,6 +204,42 @@ function getStatusBadgeClass(status: string) {
     return "bg-app-danger/12 text-app-danger";
   }
   return "bg-app-surface-muted/80 text-app-subtle";
+}
+
+function getStatusBadgeLabel(status: string) {
+  return status.replace(/_/g, " ");
+}
+
+function getMcpToolParameters(inputSchema: unknown) {
+  if (!inputSchema || typeof inputSchema !== "object" || Array.isArray(inputSchema)) {
+    return [];
+  }
+
+  const schema = inputSchema as {
+    properties?: Record<string, { description?: string; type?: string | string[] }>;
+    required?: string[];
+  };
+  const properties = schema.properties ?? {};
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+
+  return Object.entries(properties).map(([name, definition]) => ({
+    description: definition?.description ?? null,
+    name,
+    required: required.has(name),
+    type: Array.isArray(definition?.type) ? definition.type.join(" | ") : (definition?.type ?? null),
+  }));
+}
+
+function getMcpServerDescription(server: McpServerState) {
+  if (server.lastError) {
+    return server.lastError;
+  }
+  if (server.config.transport === "streamable-http") {
+    return server.config.url ?? "Remote MCP server";
+  }
+  const command = server.config.command?.trim() ?? "";
+  const args = server.config.args.join(" ").trim();
+  return [command, args].filter(Boolean).join(" ").trim() || "Local stdio MCP server";
 }
 
 function getPluginStateLabel(item: PluginCollectionItem) {
@@ -783,31 +819,53 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         )}
                         onClick={() => setSelectedId(server.id)}
                       >
-                        <CardHeader className="gap-3 pb-4">
+                        <CardHeader className="gap-3 pb-3">
                           <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-start gap-3">
+                            <div className="flex min-w-0 items-start gap-3">
                               <div className="mt-0.5 flex size-10 items-center justify-center rounded-2xl border border-app-border bg-app-canvas text-app-foreground">
-                                <Server className="size-4" />
+                                <LocalLlmIcon slug="mcp" className="size-4" title="MCP" />
                               </div>
-                              <div>
+                              <div className="min-w-0">
                                 <CardTitle className="text-[15px]">{server.label}</CardTitle>
-                                <CardDescription className="mt-1">
-                                  {server.config.transport} · {server.phase}
+                                <CardDescription className="mt-1 truncate text-[13px] leading-5" title={getMcpServerDescription(server)}>
+                                  {getMcpServerDescription(server)}
                                 </CardDescription>
                               </div>
                             </div>
-                            <Badge className={getStatusBadgeClass(server.status)}>{server.status}</Badge>
+                            <div className="flex shrink-0 items-start gap-2">
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-8 rounded-lg px-3 text-[12px]"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleOpenEditMcpDialog(server);
+                                  }}
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="h-8 rounded-lg px-3 text-[12px]"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void runAction(() => props.onRestartMcpServer(server.id));
+                                  }}
+                                >
+                                  Restart
+                                </Button>
+                              </div>
+                            </div>
                           </div>
                         </CardHeader>
-                        <CardContent className="space-y-3">
+                        <CardContent className="space-y-3 pt-0">
                           <div className="flex flex-wrap gap-2">
                             <Badge variant="outline">{server.tools.length} tools</Badge>
                             <Badge variant="outline">{server.resources.length} resources</Badge>
                             {server.staleSnapshot ? <Badge variant="outline">stale snapshot</Badge> : null}
                           </div>
-                          <p className="text-[12px] text-app-subtle">
-                            {server.lastError ?? "Managed MCP entry with settings-backed runtime state."}
-                          </p>
                         </CardContent>
                         <CardFooter className="justify-between gap-2">
                           <Switch
@@ -819,30 +877,9 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                             }
                             aria-label={`${server.label} enabled`}
                           />
-                          <div className="flex items-center gap-2">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-8 rounded-lg px-3 text-[12px]"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                handleOpenEditMcpDialog(server);
-                              }}
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              className="h-8 rounded-lg px-3 text-[12px]"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void runAction(() => props.onRestartMcpServer(server.id));
-                              }}
-                            >
-                              Restart
-                            </Button>
-                          </div>
+                          <Badge className={cn("shrink-0", getStatusBadgeClass(server.status))}>
+                            {getStatusBadgeLabel(server.status)}
+                          </Badge>
                         </CardFooter>
                       </Card>
                     ))
@@ -1199,40 +1236,20 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
                             <Badge variant="outline">{selectedDetail.summary.kind}</Badge>
-                            <Badge className={getHealthBadgeClass(selectedDetail.summary.health)}>
-                              {selectedDetail.summary.health}
+                            <Badge className={getStatusBadgeClass(selectedDetail.mcp?.status ?? "unknown")}>
+                              {getStatusBadgeLabel(selectedDetail.mcp?.status ?? "unknown")}
                             </Badge>
                           </div>
                           <h2 className="text-lg font-semibold">{selectedDetail.summary.name}</h2>
                           <p className="text-sm leading-6 text-app-muted">
-                            {selectedDetail.summary.description ?? formatSource(selectedDetail.summary)}
+                            {selectedDetail.mcp
+                              ? getMcpServerDescription(selectedDetail.mcp)
+                              : (selectedDetail.summary.description ?? "MCP server")}
                           </p>
                         </div>
 
                         {selectedDetail.mcp ? (
                           <div className="space-y-4">
-                            <DetailSection title="Connection">
-                              <div className="grid gap-2 text-sm text-app-muted">
-                                <span>Status: {selectedDetail.mcp.status}</span>
-                                <span>Phase: {selectedDetail.mcp.phase}</span>
-                                <span>Transport: {selectedDetail.mcp.config.transport}</span>
-                                {selectedDetail.mcp.lastError ? <span>Error: {selectedDetail.mcp.lastError}</span> : null}
-                              </div>
-                            </DetailSection>
-                            <DetailSection title="Tools">
-                              {selectedDetail.mcp.tools.length > 0 ? (
-                                selectedDetail.mcp.tools.map((tool) => (
-                                  <div key={tool.qualifiedName} className="rounded-xl border border-app-border bg-app-canvas/70 p-3">
-                                    <div className="text-sm font-medium" title={tool.qualifiedName}>
-                                      {tool.name}
-                                    </div>
-                                    <div className="mt-1 text-xs text-app-muted">{tool.description ?? "No description"}</div>
-                                  </div>
-                                ))
-                              ) : (
-                                <p className="text-sm text-app-muted">No discovered tools yet.</p>
-                              )}
-                            </DetailSection>
                             <DetailSection title="Actions">
                               <div className="flex flex-wrap gap-2">
                                 <Button size="sm" variant="secondary" onClick={() => handleOpenEditMcpDialog(selectedDetail.mcp!)}>
@@ -1245,6 +1262,69 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                   Remove
                                 </Button>
                               </div>
+                            </DetailSection>
+                            <DetailSection title="Tools">
+                              {selectedDetail.mcp.tools.length > 0 ? (
+                                selectedDetail.mcp.tools.map((tool) => (
+                                  <div key={tool.qualifiedName} className="rounded-xl border border-app-border bg-app-canvas/70 p-3">
+                                    <div className="text-sm font-medium" title={tool.qualifiedName}>
+                                      {tool.name}
+                                    </div>
+                                    <div
+                                      className="mt-1 overflow-hidden text-xs leading-5 text-app-muted"
+                                      style={{
+                                        WebkitBoxOrient: "vertical",
+                                        WebkitLineClamp: 3,
+                                        display: "-webkit-box",
+                                      }}
+                                      title={tool.description ?? "No description"}
+                                    >
+                                      {tool.description ?? "No description"}
+                                    </div>
+                                    {getMcpToolParameters(tool.inputSchema).length > 0 ? (
+                                      <div className="mt-3 space-y-2">
+                                        <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+                                          Parameters
+                                        </div>
+                                        <div className="space-y-2">
+                                          {getMcpToolParameters(tool.inputSchema).map((parameter) => (
+                                            <div key={parameter.name} className="rounded-lg border border-app-border/80 bg-app-surface/50 px-2.5 py-2">
+                                              <div className="flex flex-wrap items-center gap-2">
+                                                <span className="text-xs font-medium text-app-foreground">{parameter.name}</span>
+                                                {parameter.type ? (
+                                                  <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                                                    {parameter.type}
+                                                  </Badge>
+                                                ) : null}
+                                                {parameter.required ? (
+                                                  <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                                                    required
+                                                  </Badge>
+                                                ) : null}
+                                              </div>
+                                              {parameter.description ? (
+                                                <div
+                                                  className="mt-1 overflow-hidden text-[11px] leading-5 text-app-muted"
+                                                  style={{
+                                                    WebkitBoxOrient: "vertical",
+                                                    WebkitLineClamp: 3,
+                                                    display: "-webkit-box",
+                                                  }}
+                                                  title={parameter.description}
+                                                >
+                                                  {parameter.description}
+                                                </div>
+                                              ) : null}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ))
+                              ) : (
+                                <p className="text-sm text-app-muted">No discovered tools yet.</p>
+                              )}
                             </DetailSection>
                           </div>
                         ) : null}

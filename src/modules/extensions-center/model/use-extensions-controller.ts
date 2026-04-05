@@ -166,6 +166,8 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
       setError(null);
       try {
         await mutation();
+        setDetailByKey({});
+        setSkillPreviewByKey({});
         await refresh(scope);
       } catch (mutationError) {
         const message = getInvokeErrorMessage(mutationError, "Extension update failed");

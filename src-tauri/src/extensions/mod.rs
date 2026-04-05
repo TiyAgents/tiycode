@@ -541,6 +541,9 @@ impl ExtensionsManager {
                 && (runtime_record.is_none()
                     || runtime_record
                         .map(|record| mcp_runtime_record_needs_refresh(&config.id, record))
+                        .unwrap_or(false)
+                    || runtime_record
+                        .map(mcp_runtime_record_is_disabled)
                         .unwrap_or(false))
             {
                 self.refresh_mcp_runtime(&config, None, config_scope.as_str())
@@ -2470,9 +2473,22 @@ impl ExtensionsManager {
             .load_mcp_configs_for_scope(None, ConfigScope::Global)
             .await?;
         let prefix = plugin_managed_mcp_prefix(&plugin.manifest.id);
+        let existing_managed_configs = configs
+            .iter()
+            .filter(|config| config.id.starts_with(&prefix))
+            .map(|config| (config.id.clone(), config.clone()))
+            .collect::<HashMap<_, _>>();
         configs.retain(|config| !config.id.starts_with(&prefix));
         let managed_configs = if plugin.enabled {
             self.load_plugin_managed_mcp_configs(plugin)?
+                .into_iter()
+                .map(|config| {
+                    merge_plugin_managed_mcp_config(
+                        existing_managed_configs.get(&config.id),
+                        config,
+                    )
+                })
+                .collect()
         } else {
             Vec::new()
         };
@@ -3539,7 +3555,7 @@ fn build_plugin_managed_mcp_config(
         _ => return None,
     };
     let label = read_string_keys(spec, &["label", "name"])
-        .unwrap_or_else(|| format!("{} / {}", manifest.name, server_name));
+        .unwrap_or_else(|| build_plugin_managed_mcp_label(&manifest.name, &server_name));
     Some(McpServerConfigInput {
         id: plugin_managed_mcp_id(&manifest.id, &server_name),
         label,
@@ -3554,6 +3570,54 @@ fn build_plugin_managed_mcp_config(
         headers: read_string_map_keys(spec, &["headers"]),
         timeout_ms: read_u64_keys(spec, &["timeoutMs", "timeout_ms"]),
     })
+}
+
+fn build_plugin_managed_mcp_label(plugin_name: &str, server_name: &str) -> String {
+    let plugin_name = plugin_name.trim();
+    let server_name = server_name.trim();
+
+    if plugin_name.is_empty() {
+        return server_name.to_string();
+    }
+    if server_name.is_empty() {
+        return plugin_name.to_string();
+    }
+    if plugin_managed_mcp_names_match(plugin_name, server_name) {
+        return plugin_name.to_string();
+    }
+
+    format!("{plugin_name} / {server_name}")
+}
+
+fn plugin_managed_mcp_names_match(left: &str, right: &str) -> bool {
+    normalize_plugin_managed_mcp_name(left) == normalize_plugin_managed_mcp_name(right)
+}
+
+fn normalize_plugin_managed_mcp_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|char| char.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn merge_plugin_managed_mcp_config(
+    existing: Option<&McpServerConfigInput>,
+    managed: McpServerConfigInput,
+) -> McpServerConfigInput {
+    let Some(existing) = existing else {
+        return managed;
+    };
+
+    McpServerConfigInput {
+        enabled: existing.enabled,
+        auto_start: existing.auto_start,
+        env: existing.env.clone().or(managed.env.clone()),
+        cwd: existing.cwd.clone().or(managed.cwd.clone()),
+        headers: existing.headers.clone().or(managed.headers.clone()),
+        timeout_ms: existing.timeout_ms.or(managed.timeout_ms),
+        ..managed
+    }
 }
 
 fn read_string_keys(
@@ -3936,6 +4000,11 @@ fn mcp_runtime_record_needs_refresh(server_id: &str, runtime: &McpRuntimeRecord)
     })
 }
 
+fn mcp_runtime_record_is_disabled(runtime: &McpRuntimeRecord) -> bool {
+    matches!(runtime.status.as_deref(), Some("disconnected"))
+        || matches!(runtime.phase.as_deref(), Some("shutdown"))
+}
+
 fn mcp_tool_name_is_provider_safe(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -4155,6 +4224,7 @@ Body text
             stdio_value.as_object().expect("stdio object"),
         )
         .expect("stdio config");
+        assert_eq!(stdio_config.label, "Bundle Plugin / context7");
         assert_eq!(stdio_config.transport, "stdio");
         assert_eq!(stdio_config.command.as_deref(), Some("uvx"));
         assert_eq!(
@@ -4169,6 +4239,114 @@ Body text
                 .map(String::as_str),
             Some("secret")
         );
+    }
+
+    #[test]
+    fn merge_plugin_managed_mcp_config_preserves_user_enabled_state() {
+        let existing = McpServerConfigInput {
+            id: "plugin::bundle.plugin::context7".to_string(),
+            label: "Bundle Plugin / context7".to_string(),
+            transport: "stdio".to_string(),
+            enabled: false,
+            auto_start: false,
+            command: Some("old-command".to_string()),
+            args: Some(vec!["old-arg".to_string()]),
+            env: Some(HashMap::from([("TOKEN".to_string(), "secret".to_string())])),
+            cwd: Some("/tmp/context7".to_string()),
+            url: None,
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer test".to_string(),
+            )])),
+            timeout_ms: Some(45_000),
+        };
+
+        let managed = McpServerConfigInput {
+            id: existing.id.clone(),
+            label: existing.label.clone(),
+            transport: "stdio".to_string(),
+            enabled: true,
+            auto_start: true,
+            command: Some("uvx".to_string()),
+            args: Some(vec!["context7-mcp".to_string()]),
+            env: None,
+            cwd: None,
+            url: None,
+            headers: None,
+            timeout_ms: Some(15_000),
+        };
+
+        let merged = merge_plugin_managed_mcp_config(Some(&existing), managed);
+
+        assert!(!merged.enabled);
+        assert!(!merged.auto_start);
+        assert_eq!(merged.command.as_deref(), Some("uvx"));
+        assert_eq!(
+            merged.args.as_ref().expect("args"),
+            &vec!["context7-mcp".to_string()]
+        );
+        assert_eq!(
+            merged
+                .env
+                .as_ref()
+                .and_then(|env| env.get("TOKEN"))
+                .map(String::as_str),
+            Some("secret")
+        );
+        assert_eq!(merged.cwd.as_deref(), Some("/tmp/context7"));
+        assert_eq!(
+            merged
+                .headers
+                .as_ref()
+                .and_then(|headers| headers.get("Authorization"))
+                .map(String::as_str),
+            Some("Bearer test")
+        );
+        assert_eq!(merged.timeout_ms, Some(45_000));
+    }
+
+    #[test]
+    fn build_plugin_managed_mcp_label_deduplicates_equivalent_names() {
+        assert_eq!(build_plugin_managed_mcp_label("context7", "context7"), "context7");
+        assert_eq!(build_plugin_managed_mcp_label("Context7", "context-7"), "Context7");
+        assert_eq!(
+            build_plugin_managed_mcp_label("Anthropic Tools", "filesystem"),
+            "Anthropic Tools / filesystem"
+        );
+    }
+
+    #[test]
+    fn build_plugin_managed_mcp_config_deduplicates_matching_plugin_and_server_names() {
+        let manifest = PluginManifest {
+            id: "context7".to_string(),
+            name: "context7".to_string(),
+            version: "1.0.0".to_string(),
+            description: None,
+            author: None,
+            homepage: None,
+            default_enabled: Some(true),
+            capabilities: Vec::new(),
+            permissions: Vec::new(),
+            hooks: None,
+            tools: Vec::new(),
+            commands: Vec::new(),
+            timeout_ms: None,
+            skills_dir: None,
+            config_schema: None,
+        };
+
+        let value = serde_json::json!({
+            "command": "uvx",
+            "args": ["context7-mcp"]
+        });
+        let config = build_plugin_managed_mcp_config(
+            &manifest,
+            "context7".to_string(),
+            value.as_object().expect("stdio object"),
+        )
+        .expect("stdio config");
+
+        assert_eq!(config.label, "context7");
     }
 
     #[test]
