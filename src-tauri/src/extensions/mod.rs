@@ -4096,7 +4096,7 @@ async fn initialize_streamable_http_session(
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "tiy-desktop",
+                    "name": "tiycode",
                     "version": env!("CARGO_PKG_VERSION"),
                 }
             }
@@ -4434,7 +4434,7 @@ async fn initialize_mcp_session(
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {
-                "name": "tiy-desktop",
+                "name": "tiycode",
                 "version": env!("CARGO_PKG_VERSION"),
             }
         }),

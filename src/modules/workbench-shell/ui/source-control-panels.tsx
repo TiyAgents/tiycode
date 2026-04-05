@@ -224,7 +224,7 @@ function buildMockSnapshot(): GitSnapshotDto {
 
   return {
     workspaceId: "mock-workspace",
-    repoRoot: "/mock/tiy-desktop",
+    repoRoot: "/mock/tiycode",
     capabilities: {
       repoAvailable: true,
       gitCliAvailable: true,

@@ -310,7 +310,7 @@ export function WorkbenchTopBar({
           className="relative z-10 flex h-full items-center justify-center"
           data-tauri-drag-region=""
         >
-          <img src="/icon/tiy.png" alt="" className="mr-1.5 size-4 shrink-0 select-none" draggable={false} data-tauri-drag-region="" />
+          <img src="/app-icon.png" alt="" className="mr-1.5 size-4 shrink-0 select-none" draggable={false} data-tauri-drag-region="" />
           <span className="select-none text-[13px] font-semibold tracking-[0.02em] text-app-foreground" data-tauri-drag-region="">TiyCode</span>
         </div>
 

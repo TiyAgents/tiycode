@@ -49,8 +49,8 @@ const THREAD_ITEMS = [
 
 export const WORKSPACE_ITEMS: ReadonlyArray<WorkspaceSeed> = [
   {
-    id: "tiy-desktop",
-    name: "tiy-desktop",
+    id: "tiycode",
+    name: "tiycode",
     defaultOpen: true,
     threads: THREAD_ITEMS,
   },
@@ -116,9 +116,9 @@ export const WORKSPACE_ITEMS: ReadonlyArray<WorkspaceSeed> = [
 
 export const RECENT_PROJECTS: ReadonlyArray<ProjectOption> = [
   {
-    id: "tiy-desktop",
-    name: "tiy-desktop",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/tiy-desktop",
+    id: "tiycode",
+    name: "tiycode",
+    path: "/Users/jorben/Documents/Codespace/TiyAgents/tiycode",
     lastOpenedLabel: "刚刚",
   },
   {
@@ -188,13 +188,13 @@ export const MESSAGE_SECTIONS = [
     title: "运行验证",
     bullets: [
       "npm run build:web 通过",
-      "cargo check --manifest-path /Users/jorben/Documents/Codespace/TiyAgents/tiy-desktop/src-tauri/Cargo.toml 通过",
+      "cargo check --manifest-path /Users/jorben/Documents/Codespace/TiyAgents/tiycode/src-tauri/Cargo.toml 通过",
     ],
   },
   {
     title: "现在启动",
     bullets: [
-      "cd /Users/jorben/Documents/Codespace/TiyAgents/tiy-desktop",
+      "cd /Users/jorben/Documents/Codespace/TiyAgents/tiycode",
       "npm run dev:app",
     ],
   },
@@ -204,7 +204,7 @@ export const TERMINAL_LINES = [
   "1:20:15 AM [vite] client hmr update /src/widgets/dashboard-overview/ui/dashboard-overview.tsx",
   "Info File src-tauri/tauri.conf.json changed. Rebuilding application...",
   "Running DevCommand (`cargo run --no-default-features --color always --`)",
-  "Compiling tiy-agent v0.1.0 (/Users/jorben/Documents/Codespace/TiyAgents/tiy-desktop/src-tauri)",
+  "Compiling tiy-agent v0.1.0 (/Users/jorben/Documents/Codespace/TiyAgents/tiycode/src-tauri)",
   "Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.27s",
   "Running `target/debug/tiy-agent`",
 ] as const;
