@@ -44,6 +44,7 @@ import type {
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
+import type { SkillRecord } from "@/shared/types/extensions";
 import {
   getFileMutationPresentation,
 } from "@/modules/workbench-shell/model/file-mutation-presentation";
@@ -175,6 +176,7 @@ type RuntimeThreadSurfaceProps = {
   activeAgentProfileId: string;
   agentProfiles: ReadonlyArray<AgentProfile>;
   commands?: ReadonlyArray<CommandEntry>;
+  enabledSkills?: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "scope" | "source" | "tags" | "triggers" | "contentPreview">>;
   initialPromptRequest?: InitialPromptRequest | null;
   onConsumeInitialPrompt?: (id: string) => void;
   onContextUsageChange?: (usage: ThreadContextUsage | null) => void;
@@ -399,16 +401,23 @@ function parseApprovalPromptMetadata(value: unknown): FormattedApprovalPrompt | 
 }
 
 function parseCommandComposerMetadata(value: unknown): {
+  kind: "plain" | "command";
   displayText: string | null;
   effectivePrompt: string | null;
 } | null {
   const record = asObjectRecord(value);
   const composer = asObjectRecord(record?.composer);
-  if (!composer || readStringField(composer, "kind") !== "command") {
+  if (!composer) {
+    return null;
+  }
+
+  const kind = readStringField(composer, "kind");
+  if (kind !== "command" && kind !== "plain") {
     return null;
   }
 
   return {
+    kind,
     displayText: readStringField(composer, "displayText"),
     effectivePrompt: readStringField(composer, "effectivePrompt"),
   };
@@ -1919,6 +1928,7 @@ export function RuntimeThreadSurface({
   activeAgentProfileId,
   agentProfiles,
   commands = [],
+  enabledSkills = [],
   initialPromptRequest = null,
   onConsumeInitialPrompt,
   onContextUsageChange,
@@ -3830,7 +3840,9 @@ export function RuntimeThreadSurface({
                             const commandComposer = message.role === "user"
                               ? parseCommandComposerMetadata(message.metadata)
                               : null;
-                            const expandedPrompt = commandComposer?.effectivePrompt?.trim() ?? "";
+                            const expandedPrompt = commandComposer?.kind === "command"
+                              ? (commandComposer.effectivePrompt?.trim() ?? "")
+                              : "";
 
                             return (
                               <div className="space-y-2">
@@ -4077,6 +4089,7 @@ export function RuntimeThreadSurface({
           agentProfiles={agentProfiles}
           canSubmitWhenAttachmentsOnly={false}
           commands={commands}
+          enabledSkills={enabledSkills}
           error={composerError}
           onErrorMessageChange={setComposerError}
           onRunModeChange={setSelectedRunMode}

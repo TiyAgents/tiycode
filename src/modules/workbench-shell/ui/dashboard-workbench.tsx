@@ -379,6 +379,7 @@ export function DashboardWorkbench() {
     marketplaceSources,
     mcpServers,
     pluginCommandEntries,
+    enabledSkillEntries,
     refresh: refreshExtensions,
     refreshMarketplaceSource,
     removeMarketplaceSource,
@@ -2598,6 +2599,7 @@ export function DashboardWorkbench() {
                             agentProfiles={agentProfiles}
                             canSubmitWhenAttachmentsOnly={false}
                             commands={composerCommands}
+                            enabledSkills={enabledSkillEntries}
                             error={composerError}
                             onErrorMessageChange={setComposerError}
                             onRunModeChange={setNewThreadRunMode}
@@ -2708,6 +2710,7 @@ export function DashboardWorkbench() {
                         activeAgentProfileId={activeAgentProfileId}
                         agentProfiles={agentProfiles}
                         commands={composerCommands}
+                        enabledSkills={enabledSkillEntries}
                         key={resolvedTerminalThreadId ?? "runtime-thread-surface"}
                         initialPromptRequest={
                           resolvedTerminalThreadId

@@ -182,10 +182,31 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
     [commands],
   );
 
+  const enabledSkills = useMemo(
+    () => skills.filter((skill) => skill.enabled),
+    [skills],
+  );
+
+  const enabledSkillEntries = useMemo(
+    () => enabledSkills.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description ?? null,
+      scope: skill.scope,
+      source: skill.source,
+      tags: skill.tags,
+      triggers: skill.triggers,
+      contentPreview: skill.contentPreview,
+    })),
+    [enabledSkills],
+  );
+
   return {
     extensions,
     mcpServers,
     skills,
+    enabledSkills,
+    enabledSkillEntries,
     commands,
     marketplaceSources,
     marketplaceItems,

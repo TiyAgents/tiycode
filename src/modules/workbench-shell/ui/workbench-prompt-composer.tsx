@@ -57,6 +57,7 @@ import {
   getProfilePrimaryModelLabel,
 } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
+import type { SkillRecord } from "@/shared/types/extensions";
 import type { RunMode } from "@/shared/types/api";
 import { indexFilterFiles, type FileFilterMatch } from "@/services/bridge";
 import { cn } from "@/shared/lib/utils";
@@ -73,6 +74,7 @@ type ComposerAttachment = {
 
 type MentionMatch = {
   query: string;
+  token: "@" | "$";
   tokenEnd: number;
   tokenStart: number;
 };
@@ -95,6 +97,7 @@ type WorkbenchPromptComposerProps = {
   agentProfiles: ReadonlyArray<AgentProfile>;
   canSubmitWhenAttachmentsOnly?: boolean;
   commands?: ReadonlyArray<CommandEntry>;
+  enabledSkills?: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "scope" | "source" | "tags" | "triggers" | "contentPreview">>;
   error?: string | null;
   onErrorMessageChange?: (message: string | null) => void;
   onRunModeChange?: (mode: RunMode) => void;
@@ -141,10 +144,11 @@ function buildSubmissionFromPromptInput(
     : [];
 
   if (!parsedCommand?.command) {
+    const effectivePrompt = trimmedText;
     return {
       kind: "plain",
       displayText: trimmedText,
-      effectivePrompt: trimmedText,
+      effectivePrompt,
       rawMessage: message,
       attachments,
       metadata: referencedFilesMetadata.length > 0
@@ -152,7 +156,7 @@ function buildSubmissionFromPromptInput(
             composer: {
               kind: "plain",
               displayText: trimmedText,
-              effectivePrompt: trimmedText,
+              effectivePrompt,
               referencedFiles: referencedFilesMetadata,
             },
           }
@@ -161,7 +165,10 @@ function buildSubmissionFromPromptInput(
     };
   }
 
-  const effectivePrompt = parsedCommand.command.prompt.replace(/{{\s*arguments\s*}}/g, parsedCommand.argumentsText).replace(/{{\s*command\s*}}/g, parsedCommand.command.name).trim();
+  const effectivePrompt = parsedCommand.command.prompt
+    .replace(/{{\s*arguments\s*}}/g, parsedCommand.argumentsText)
+    .replace(/{{\s*command\s*}}/g, parsedCommand.command.name)
+    .trim();
 
   return {
     kind: "command",
@@ -290,13 +297,24 @@ function getActiveMentionMatch(value: string, cursorPosition: number | null): Me
   }
 
   const safeCursor = Math.max(0, Math.min(cursorPosition, value.length));
-  const tokenStart = value.lastIndexOf("@", safeCursor - 1);
-  if (tokenStart < 0) {
+  const triggers: Array<"@" | "$"> = ["@", "$"];
+  let tokenStart = -1;
+  let token: "@" | "$" | null = null;
+
+  for (const candidate of triggers) {
+    const index = value.lastIndexOf(candidate, safeCursor - 1);
+    if (index > tokenStart) {
+      tokenStart = index;
+      token = candidate;
+    }
+  }
+
+  if (tokenStart < 0 || !token) {
     return null;
   }
 
-  const beforeAt = tokenStart === 0 ? "" : value[tokenStart - 1] ?? "";
-  if (beforeAt && !/\s|[(\[{]/.test(beforeAt)) {
+  const beforeToken = tokenStart === 0 ? "" : value[tokenStart - 1] ?? "";
+  if (beforeToken && !/\s|[(\[{]/.test(beforeToken)) {
     return null;
   }
 
@@ -304,6 +322,7 @@ function getActiveMentionMatch(value: string, cursorPosition: number | null): Me
   if (between.length === 0) {
     return {
       query: "",
+      token,
       tokenEnd: safeCursor,
       tokenStart,
     };
@@ -313,13 +332,14 @@ function getActiveMentionMatch(value: string, cursorPosition: number | null): Me
     return null;
   }
 
-  const atEndsEmailOrWord = tokenStart > 0 && /[A-Za-z0-9._-]/.test(beforeAt);
-  if (atEndsEmailOrWord) {
+  const tokenEndsEmailOrWord = token === "@" && tokenStart > 0 && /[A-Za-z0-9._-]/.test(beforeToken);
+  if (tokenEndsEmailOrWord) {
     return null;
   }
 
   return {
     query: between,
+    token,
     tokenEnd: safeCursor,
     tokenStart,
   };
@@ -366,6 +386,31 @@ function removeUnmentionedReferencedFiles(
   value: string,
 ) {
   return current.filter((file) => value.includes(`@${file.path}`));
+}
+
+function filterReferencedSkills(
+  skills: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "scope" | "source" | "tags" | "triggers" | "contentPreview">>,
+  query: string,
+) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return skills.slice(0, 20);
+  }
+
+  return skills
+    .filter((skill) => {
+      const haystacks = [
+        skill.name,
+        skill.description ?? "",
+        skill.contentPreview,
+        skill.scope,
+        skill.source,
+        ...skill.tags,
+        ...skill.triggers,
+      ];
+      return haystacks.some((value) => value.toLowerCase().includes(normalizedQuery));
+    })
+    .slice(0, 20);
 }
 
 
@@ -892,6 +937,7 @@ export function WorkbenchPromptComposer({
   agentProfiles,
   canSubmitWhenAttachmentsOnly = true,
   commands = [],
+  enabledSkills = [],
   error,
   onErrorMessageChange,
   onRunModeChange = () => undefined,
@@ -913,6 +959,7 @@ export function WorkbenchPromptComposer({
   const [isProfileSelectorOpen, setProfileSelectorOpen] = useState(false);
   const [selectedCommandKey, setSelectedCommandKey] = useState<string | null>(null);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+  const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   const [fileSearchResults, setFileSearchResults] = useState<ReadonlyArray<FileFilterMatch>>([]);
   const [isFileSearchLoading, setFileSearchLoading] = useState(false);
   const [fileSearchError, setFileSearchError] = useState<string | null>(null);
@@ -921,6 +968,7 @@ export function WorkbenchPromptComposer({
   const [clearReferencedSourcesSignal, setClearReferencedSourcesSignal] = useState(0);
   const commandPanelRef = useRef<HTMLDivElement | null>(null);
   const filePanelRef = useRef<HTMLDivElement | null>(null);
+  const skillPanelRef = useRef<HTMLDivElement | null>(null);
   const requestSequenceRef = useRef(0);
   const referencedSourceBridgeRef = useRef<ReferencedSourceBridgeHandle | null>(null);
   const registerReferencedSourceBridge = useCallback((bridge: ReferencedSourceBridgeHandle) => {
@@ -942,6 +990,15 @@ export function WorkbenchPromptComposer({
   );
   const mentionActive = !slashActive && Boolean(mentionMatch);
   const mentionQuery = mentionMatch?.query.trim() ?? "";
+  const fileMentionActive = mentionActive && mentionMatch?.token === "@";
+  const skillMentionActive = mentionActive && mentionMatch?.token === "$";
+  const filteredSkills = useMemo(
+    () => (skillMentionActive ? filterReferencedSkills(enabledSkills, mentionQuery) : []),
+    [enabledSkills, mentionQuery, skillMentionActive],
+  );
+  const selectedSkillResult = skillMentionActive
+    ? filteredSkills[selectedSkillIndex] ?? null
+    : null;
   const filteredCommands = useMemo(
     () => getFilteredCommands(commandRegistry, value),
     [commandRegistry, value],
@@ -952,7 +1009,7 @@ export function WorkbenchPromptComposer({
       : null;
     return getSelectedCommandFromFiltered(filteredCommands, keyedSelection);
   }, [filteredCommands, selectedCommandKey]);
-  const selectedFileResult = mentionActive
+  const selectedFileResult = fileMentionActive
     ? fileSearchResults[selectedFileIndex] ?? null
     : null;
 
@@ -991,7 +1048,7 @@ export function WorkbenchPromptComposer({
   }, [referencedFiles]);
 
   useEffect(() => {
-    if (!mentionActive) {
+    if (!fileMentionActive) {
       setFileSearchResults([]);
       setFileSearchError(null);
       setFileSearchLoading(false);
@@ -1042,10 +1099,19 @@ export function WorkbenchPromptComposer({
     }, FILE_SEARCH_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [mentionActive, mentionQuery, workspaceId]);
+  }, [fileMentionActive, mentionQuery, workspaceId]);
 
   useEffect(() => {
-    if (!mentionActive || fileSearchResults.length === 0) {
+    if (!skillMentionActive) {
+      setSelectedSkillIndex(0);
+      return;
+    }
+
+    setSelectedSkillIndex(0);
+  }, [mentionQuery, skillMentionActive]);
+
+  useEffect(() => {
+    if (!fileMentionActive || fileSearchResults.length === 0) {
       return;
     }
 
@@ -1057,7 +1123,22 @@ export function WorkbenchPromptComposer({
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [mentionActive, fileSearchResults, selectedFileIndex]);
+  }, [fileMentionActive, fileSearchResults, selectedFileIndex]);
+
+  useEffect(() => {
+    if (!skillMentionActive || filteredSkills.length === 0) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const selectedItem = skillPanelRef.current?.querySelector<HTMLElement>(
+        `[data-skill-index="${selectedSkillIndex}"]`,
+      );
+      selectedItem?.scrollIntoView({ block: "nearest" });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [filteredSkills, selectedSkillIndex, skillMentionActive]);
 
   const handlePromptSubmit = (message: PromptInputMessage) => {
     const submission = buildSubmissionFromPromptInput(message, commandRegistry, runMode, referencedFiles);
@@ -1089,6 +1170,22 @@ export function WorkbenchPromptComposer({
     setFileSearchLoading(false);
   };
 
+  const insertReferencedSkill = (
+    skill: Pick<SkillRecord, "id" | "name" | "description" | "scope" | "source" | "tags" | "triggers" | "contentPreview">,
+  ) => {
+    if (!mentionMatch || mentionMatch.token !== "$") {
+      return;
+    }
+
+    const mentionText = `$${skill.name}`;
+    const nextValue = `${value.slice(0, mentionMatch.tokenStart)}${mentionText} ${value.slice(mentionMatch.tokenEnd)}`;
+    const nextCursorPosition = mentionMatch.tokenStart + mentionText.length + 1;
+
+    onValueChange(nextValue);
+    setCursorPosition(nextCursorPosition);
+    setSelectedSkillIndex(0);
+  };
+
   const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) {
       return;
@@ -1096,15 +1193,24 @@ export function WorkbenchPromptComposer({
 
     if (mentionActive) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        if (fileSearchResults.length === 0) {
+        const resultCount = fileMentionActive ? fileSearchResults.length : filteredSkills.length;
+        if (resultCount === 0) {
           return;
         }
         event.preventDefault();
-        setSelectedFileIndex((currentIndex) => getNextFileIndex(
-          currentIndex,
-          fileSearchResults.length,
-          event.key === "ArrowDown" ? 1 : -1,
-        ));
+        if (fileMentionActive) {
+          setSelectedFileIndex((currentIndex) => getNextFileIndex(
+            currentIndex,
+            fileSearchResults.length,
+            event.key === "ArrowDown" ? 1 : -1,
+          ));
+        } else if (skillMentionActive) {
+          setSelectedSkillIndex((currentIndex) => getNextFileIndex(
+            currentIndex,
+            filteredSkills.length,
+            event.key === "ArrowDown" ? 1 : -1,
+          ));
+        }
         return;
       }
 
@@ -1115,13 +1221,22 @@ export function WorkbenchPromptComposer({
         setFileSearchError(null);
         setFileSearchLoading(false);
         setSelectedFileIndex(0);
+        setSelectedSkillIndex(0);
         return;
       }
 
-      if ((event.key === "Enter" || event.key === "Tab") && selectedFileResult) {
-        event.preventDefault();
-        insertReferencedFile(selectedFileResult);
-        return;
+      if ((event.key === "Enter" || event.key === "Tab")) {
+        if (fileMentionActive && selectedFileResult) {
+          event.preventDefault();
+          insertReferencedFile(selectedFileResult);
+          return;
+        }
+
+        if (skillMentionActive && selectedSkillResult) {
+          event.preventDefault();
+          insertReferencedSkill(selectedSkillResult);
+          return;
+        }
       }
     }
 
@@ -1204,26 +1319,31 @@ export function WorkbenchPromptComposer({
                 onValueChange(value.split(`@${path}`).join("").replace(/\s{2,}/g, " ").trimStart());
               }}
             />
-            <PromptInputTextarea
-              className={cn("min-h-[88px]", textareaClassName)}
-              onChange={(event) => {
-                onValueChange(event.currentTarget.value);
-                setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
-              }}
-              onClick={(event) => {
-                setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
-              }}
-              onKeyDown={handleTextareaKeyDown}
-              onKeyUp={(event) => {
-                setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
-              }}
-              onSelect={(event) => {
-                setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
-              }}
-              placeholder={placeholder}
-              value={value}
-            />
-            {mentionActive ? (
+            <div className="relative flex w-full items-start self-stretch">
+              <PromptInputTextarea
+                className={cn(
+                  "block min-h-[88px] w-full self-stretch bg-transparent px-3 py-3 text-left align-top text-app-foreground caret-app-foreground selection:bg-app-info/20",
+                  textareaClassName,
+                )}
+                onChange={(event) => {
+                  onValueChange(event.currentTarget.value);
+                  setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
+                }}
+                onClick={(event) => {
+                  setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
+                }}
+                onKeyDown={handleTextareaKeyDown}
+                onKeyUp={(event) => {
+                  setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
+                }}
+                onSelect={(event) => {
+                  setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
+                }}
+                placeholder={placeholder}
+                value={value}
+              />
+            </div>
+            {fileMentionActive ? (
               <div
                 className="absolute inset-x-3 bottom-[calc(100%+0.5rem)] z-20 min-w-0"
                 ref={filePanelRef}
@@ -1281,6 +1401,75 @@ export function WorkbenchPromptComposer({
                                   isSelected ? "text-app-foreground/75" : "text-app-subtle",
                                 )}>
                                   {match.path}
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            {skillMentionActive ? (
+              <div
+                className="absolute inset-x-3 bottom-[calc(100%+0.5rem)] z-20 min-w-0"
+                ref={skillPanelRef}
+              >
+                <div className="w-full min-w-0 overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu p-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl dark:bg-app-menu/98">
+                  <div className="max-h-[320px] overflow-y-auto">
+                    {!mentionQuery ? (
+                      <div className="px-3 py-3 text-sm text-app-subtle">继续输入 skill 名称、标签或触发词以搜索已启用 skill。</div>
+                    ) : filteredSkills.length === 0 ? (
+                      <div className="px-3 py-3 text-sm text-app-subtle">没有找到匹配的已启用 skill。</div>
+                    ) : (
+                      <div className="flex flex-col gap-1">
+                        {filteredSkills.map((skill, index) => {
+                          const isSelected = index === selectedSkillIndex;
+                          const summary = skill.description?.trim() || skill.contentPreview?.trim() || skill.name;
+                          return (
+                            <button
+                              className={cn(
+                                "flex w-full items-start gap-3 rounded-xl px-3 py-2 text-left transition-colors",
+                                isSelected
+                                  ? "bg-app-info/14 text-app-foreground dark:bg-app-info/18"
+                                  : "text-app-foreground/90 hover:bg-app-accent/8",
+                              )}
+                              data-skill-index={index}
+                              key={skill.id}
+                              onClick={() => insertReferencedSkill(skill)}
+                              onMouseEnter={() => {
+                                if (selectedSkillIndex !== index) {
+                                  setSelectedSkillIndex(index);
+                                }
+                              }}
+                              onMouseDown={(event) => event.preventDefault()}
+                              type="button"
+                            >
+                              <span className={cn(
+                                "mt-0.5 inline-flex h-8 shrink-0 items-center justify-center rounded-lg border px-2 text-[11px] font-medium",
+                                isSelected
+                                  ? "border-app-info/30 bg-app-info/10 text-app-info"
+                                  : "border-app-border/55 bg-app-surface-muted/70 text-app-subtle",
+                              )}>
+                                $SKILL
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="flex min-w-0 items-center gap-2">
+                                  <span className="truncate text-sm font-medium text-inherit">{skill.name}</span>
+                                  <span className={cn(
+                                    "shrink-0 text-[11px]",
+                                    isSelected ? "text-app-foreground/75" : "text-app-subtle",
+                                  )}>
+                                    {skill.scope}
+                                  </span>
+                                </span>
+                                <span className={cn(
+                                  "mt-1 block line-clamp-2 text-[11px] leading-5",
+                                  isSelected ? "text-app-foreground/75" : "text-app-subtle",
+                                )}>
+                                  {summary}
                                 </span>
                               </span>
                             </button>

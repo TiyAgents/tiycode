@@ -2,6 +2,12 @@ import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import type { CommandEntry } from "@/modules/settings-center/model/types";
 import type { MessageAttachmentDto, RunMode } from "@/shared/types/api";
 
+export type ComposerReferencedFile = {
+  name: string;
+  path: string;
+  parentPath: string;
+};
+
 export const SUPPORTED_COMPOSER_ATTACHMENT_EXTENSIONS = [
   ".md",
   ".txt",
@@ -123,12 +129,6 @@ export type ComposerCommandInvocation = {
   argumentsText: string;
   prompt: string;
   behavior: ComposerCommandBehavior;
-};
-
-export type ComposerReferencedFile = {
-  name: string;
-  path: string;
-  parentPath: string;
 };
 
 export type ComposerSubmission = {
