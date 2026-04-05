@@ -11,6 +11,7 @@ import {
   CompactCollapsibleHeader,
 } from "@/components/ai-elements/compact-collapsible";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/components/ai-elements/conversation";
+import type { StickToBottomContext } from "use-stick-to-bottom";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Plan, PlanContent, PlanDescription, PlanHeader, PlanTitle, PlanTrigger } from "@/components/ai-elements/plan";
 import { Queue } from "@/components/ai-elements/queue";
@@ -1975,6 +1976,7 @@ export function RuntimeThreadSurface({
   const handledInitialPromptRequestIdRef = useRef<string | null>(null);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
+  const conversationContextRef = useRef<StickToBottomContext | null>(null);
 
   const clearScheduledThinkingPhase = useCallback(() => {
     if (thinkingTimerRef.current !== null) {
@@ -2780,6 +2782,7 @@ export function RuntimeThreadSurface({
 
     if (submission.kind === "command" && submission.command?.behavior === "clear") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, [], false);
+      conversationContextRef.current?.scrollToBottom();
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
@@ -2793,6 +2796,7 @@ export function RuntimeThreadSurface({
 
     if (submission.kind === "command" && submission.command?.behavior === "compact") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, [], false);
+      conversationContextRef.current?.scrollToBottom();
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
@@ -2813,6 +2817,10 @@ export function RuntimeThreadSurface({
       submission.metadata ?? null,
       submission.attachments,
     );
+
+    // Scroll to bottom when sending a new message to ensure the conversation
+    // follows the new content even if the user had scrolled up previously.
+    conversationContextRef.current?.scrollToBottom();
 
     try {
       await streamRef.current?.startRun(
@@ -2847,6 +2855,7 @@ export function RuntimeThreadSurface({
     setRuntimeError(null);
     setQueueArtifact(null);
     appendOptimisticUserMessage(displayText, null, []);
+    conversationContextRef.current?.scrollToBottom();
 
     try {
       await streamRef.current.respondToClarify(tool.id, response);
@@ -3552,7 +3561,7 @@ export function RuntimeThreadSurface({
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">
       <div className="pointer-events-none absolute left-1/2 top-0 h-56 w-[72rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(120,180,255,0.11),transparent_68%)] blur-3xl" />
       <div className="relative min-h-0 flex-1">
-        <Conversation className="size-full">
+        <Conversation className="size-full" contextRef={conversationContextRef}>
           <ConversationContent className="mx-auto w-full max-w-4xl gap-0 px-6 pb-10 pt-8">
             {hasMoreMessages ? (
               <div className="pb-4">
