@@ -162,7 +162,12 @@ pub async fn update_task_board(
                 ));
             }
 
-            let step_id = match step_id.as_deref().or(board.active_task_id.as_deref()) {
+            let explicit_step_id = step_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+
+            let step_id = match explicit_step_id.or(board.active_task_id.as_deref()) {
                 Some(step_id) => step_id,
                 None => {
                     return Err(AppError::validation(

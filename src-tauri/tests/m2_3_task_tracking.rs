@@ -255,6 +255,45 @@ async fn test_update_task_advance_step_uses_active_step() {
 }
 
 #[tokio::test]
+async fn test_update_task_advance_step_treats_empty_step_id_as_missing() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-advance-empty", "/tmp/advance-empty").await;
+    test_helpers::seed_thread(&pool, "t-advance-empty", "ws-advance-empty").await;
+
+    let input = CreateTaskInput {
+        title: "Advance Task Empty Step Id".to_string(),
+        steps: vec![
+            CreateTaskStep {
+                description: "Step A".to_string(),
+            },
+            CreateTaskStep {
+                description: "Step B".to_string(),
+            },
+        ],
+    };
+    let board = task_board_manager::create_task_board(&pool, "t-advance-empty", &input)
+        .await
+        .unwrap();
+
+    let updated = task_board_manager::update_task_board(
+        &pool,
+        "t-advance-empty",
+        &UpdateTaskInput {
+            task_board_id: board.id.clone(),
+            action: UpdateTaskAction::AdvanceStep {
+                step_id: Some("".to_string()),
+            },
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated.tasks[0].stage, TaskStage::Completed);
+    assert_eq!(updated.tasks[1].stage, TaskStage::InProgress);
+    assert_eq!(updated.active_task_id.as_ref(), Some(&updated.tasks[1].id));
+}
+
+#[tokio::test]
 async fn test_update_task_fail_step() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-fail", "/tmp/fail").await;
