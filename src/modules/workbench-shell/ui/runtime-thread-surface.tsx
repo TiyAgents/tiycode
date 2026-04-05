@@ -2294,7 +2294,7 @@ export function RuntimeThreadSurface({
     setThinkingPlaceholder(null);
     setTools([]);
     void loadSnapshot();
-  }, [clearScheduledThinkingPhase, loadSnapshot, onComposerDraftChange, threadId]);
+  }, [clearScheduledThinkingPhase, loadSnapshot, threadId]);
 
   useEffect(() => {
     if (!threadId) {
