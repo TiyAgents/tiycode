@@ -4263,8 +4263,8 @@ tools:
 Body text
 "#;
 
-        let (record, _) =
-            parse_skill_markdown(raw, skill_dir.path(), "builtin").expect("folded description skill");
+        let (record, _) = parse_skill_markdown(raw, skill_dir.path(), "builtin")
+            .expect("folded description skill");
 
         assert_eq!(
             record.description.as_deref(),
@@ -4445,8 +4445,14 @@ Body text
 
     #[test]
     fn build_plugin_managed_mcp_label_deduplicates_equivalent_names() {
-        assert_eq!(build_plugin_managed_mcp_label("context7", "context7"), "context7");
-        assert_eq!(build_plugin_managed_mcp_label("Context7", "context-7"), "Context7");
+        assert_eq!(
+            build_plugin_managed_mcp_label("context7", "context7"),
+            "context7"
+        );
+        assert_eq!(
+            build_plugin_managed_mcp_label("Context7", "context-7"),
+            "Context7"
+        );
         assert_eq!(
             build_plugin_managed_mcp_label("Anthropic Tools", "filesystem"),
             "Anthropic Tools / filesystem"

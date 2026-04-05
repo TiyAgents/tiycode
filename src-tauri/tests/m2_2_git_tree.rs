@@ -724,8 +724,7 @@ fn commit_selected(repo: &Repository, paths: &[&str], message: &str) {
 
     let tree_id = index.write_tree().expect("should write tree");
     let tree = repo.find_tree(tree_id).expect("should find tree");
-    let signature =
-        Signature::now("TiyCode", "tests@tiy.local").expect("should create signature");
+    let signature = Signature::now("TiyCode", "tests@tiy.local").expect("should create signature");
     let parent_commit = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
 
     match parent_commit.as_ref() {

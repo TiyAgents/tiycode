@@ -1,9 +1,16 @@
 import { type ReactNode, type RefObject, useEffect, useMemo, useState } from "react";
+import { Streamdown } from "streamdown";
+import { cjk } from "@streamdown/cjk";
+import { code } from "@streamdown/code";
+import { math } from "@streamdown/math";
+import { mermaid } from "@streamdown/mermaid";
 import {
   ArrowLeft,
   BookCopy,
   Boxes,
   CirclePlus,
+  CircleX,
+  Eye,
   PackageOpen,
   RefreshCw,
   Search,
@@ -14,6 +21,7 @@ import { Button } from "@/shared/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/shared/ui/card";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -40,6 +48,10 @@ import type {
 
 type ExtensionTab = "plugins" | "mcps" | "skills";
 type PluginSourceFilter = "all" | string;
+type SkillFrontmatterEntry = {
+  key: string;
+  value: string;
+};
 
 type PluginCollectionItem = {
   key: string;
@@ -214,6 +226,147 @@ function getSkillStatusLabel(enabled: boolean) {
   return enabled ? "enabled" : "disabled";
 }
 
+const streamdownPlugins = { cjk, code, math, mermaid };
+const streamdownControls = { code: { download: false } };
+
+function normalizeFrontmatterValue(value: string) {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith("\"") && trimmed.endsWith("\""))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function countLeadingSpaces(value: string) {
+  const match = value.match(/^ */);
+  return match ? match[0].length : 0;
+}
+
+function formatYamlBlockScalar(lines: string[], mode: "folded" | "literal") {
+  if (mode === "literal") {
+    return lines.join("\n").trim();
+  }
+
+  const paragraphs: string[] = [];
+  let current: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (current.length > 0) {
+        paragraphs.push(current.join(" "));
+        current = [];
+      }
+      continue;
+    }
+    current.push(trimmed);
+  }
+
+  if (current.length > 0) {
+    paragraphs.push(current.join(" "));
+  }
+
+  return paragraphs.join("\n\n").trim();
+}
+
+function parseSkillFrontmatter(content: string | null) {
+  if (!content) {
+    return { body: "", entries: [] as SkillFrontmatterEntry[] };
+  }
+
+  const normalized = content.replace(/\r\n/g, "\n");
+  if (!normalized.startsWith("---\n")) {
+    return { body: normalized.trim(), entries: [] as SkillFrontmatterEntry[] };
+  }
+
+  const closingIndex = normalized.indexOf("\n---\n", 4);
+  if (closingIndex === -1) {
+    return { body: normalized.trim(), entries: [] as SkillFrontmatterEntry[] };
+  }
+
+  const frontmatter = normalized.slice(4, closingIndex);
+  const body = normalized.slice(closingIndex + 5).trim();
+  const lines = frontmatter.split("\n");
+  const entries: SkillFrontmatterEntry[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    const rawValue = line.slice(separatorIndex + 1);
+
+    if (!key) {
+      continue;
+    }
+
+    const marker = rawValue.trim();
+    if (marker === ">" || marker === ">-" || marker === ">+" || marker === "|" || marker === "|-" || marker === "|+") {
+      const mode = marker.startsWith(">") ? "folded" : "literal";
+      const blockLines: string[] = [];
+      let blockIndent: number | null = null;
+
+      while (index + 1 < lines.length) {
+        const nextLine = lines[index + 1];
+        const nextTrimmed = nextLine.trim();
+
+        if (!nextTrimmed) {
+          if (blockIndent !== null) {
+            blockLines.push("");
+            index += 1;
+            continue;
+          }
+          index += 1;
+          continue;
+        }
+
+        const nextIndent = countLeadingSpaces(nextLine);
+        if (nextIndent === 0) {
+          break;
+        }
+
+        if (blockIndent === null) {
+          blockIndent = nextIndent;
+        }
+
+        if (nextIndent < blockIndent) {
+          break;
+        }
+
+        blockLines.push(nextLine.slice(blockIndent));
+        index += 1;
+      }
+
+      const value = formatYamlBlockScalar(blockLines, mode);
+      if (value) {
+        entries.push({ key, value });
+      }
+      continue;
+    }
+
+    const value = normalizeFrontmatterValue(rawValue);
+    if (!value) {
+      continue;
+    }
+
+    entries.push({ key, value });
+  }
+
+  return { body, entries };
+}
+
 function getMcpToolParameters(inputSchema: unknown) {
   if (!inputSchema || typeof inputSchema !== "object" || Array.isArray(inputSchema)) {
     return [];
@@ -288,6 +441,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
   const [marketSourceForm, setMarketSourceForm] = useState<MarketplaceSourceInput>({ name: "", url: "" });
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [isActionPending, setActionPending] = useState(false);
+  const [skillPreviewDialogOpen, setSkillPreviewDialogOpen] = useState(false);
   const activeQuery = queryByTab[activeTab];
 
   const allPluginItems = useMemo(() => {
@@ -477,6 +631,10 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
     void props.onLoadSkillPreview(selectedId);
   }, [activeTab, props, selectedId]);
 
+  useEffect(() => {
+    setSkillPreviewDialogOpen(false);
+  }, [activeTab, selectedId]);
+
   const selectedPluginItem =
     activeTab === "plugins"
       ? pluginItems.find((item) => item.key === selectedId) ?? null
@@ -490,6 +648,13 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
       : selectedId
         ? (props.detailById[selectedId] ?? null)
         : null;
+  const selectedSkillContent = selectedDetail?.skill
+    ? (props.skillPreviewById[selectedDetail.skill.id]?.content ?? selectedDetail.skill.contentPreview)
+    : null;
+  const selectedSkillPreview = useMemo(
+    () => parseSkillFrontmatter(selectedSkillContent),
+    [selectedSkillContent],
+  );
   const activeMeta = TAB_META[activeTab];
 
   const runAction = async (action: () => Promise<void>) => {
@@ -943,7 +1108,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
               </div>
             </ScrollArea>
 
-            <aside className="min-h-0 rounded-2xl border border-app-border bg-app-surface/80">
+            <aside className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-app-border bg-app-surface/80">
               <ScrollArea className="h-full">
                 <div className="min-w-0 space-y-5 overflow-hidden p-5">
                   {activeTab === "plugins" ? (
@@ -1295,7 +1460,19 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                               {getSkillStatusLabel(selectedDetail.skill.enabled)}
                             </Badge>
                           </div>
-                          <h2 className="text-lg font-semibold">{selectedDetail.skill.name}</h2>
+                          <div className="flex items-center justify-between gap-3">
+                            <h2 className="min-w-0 text-lg font-semibold">{selectedDetail.skill.name}</h2>
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              className="shrink-0"
+                              onClick={() => setSkillPreviewDialogOpen(true)}
+                              title="Preview skill markdown"
+                              aria-label="Preview skill markdown"
+                            >
+                              <Eye className="size-4" />
+                            </Button>
+                          </div>
                           <p className="break-words text-sm leading-6 text-app-muted">
                             {selectedDetail.skill.description ?? "Skill record"}
                           </p>
@@ -1335,13 +1512,6 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                 ))
                               : <p className="text-sm text-app-muted">No tool requirements declared.</p>}
                           </DetailSection>
-                          <DetailSection title="Preview">
-                            <div className="w-full min-w-0 overflow-hidden">
-                              <pre className="w-full min-w-0 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-xl border border-app-border bg-app-canvas/70 p-3 text-[12px] leading-5 text-app-muted [overflow-wrap:anywhere]">
-                                {props.skillPreviewById[selectedDetail.skill.id]?.content ?? selectedDetail.skill.contentPreview}
-                              </pre>
-                            </div>
-                          </DetailSection>
                         </div>
                       </>
                     ) : (
@@ -1354,6 +1524,69 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
           </div>
         </div>
       </div>
+
+      <Dialog open={skillPreviewDialogOpen} onOpenChange={setSkillPreviewDialogOpen}>
+        <DialogContent
+          showCloseButton={false}
+          className="flex h-[min(82vh,860px)] w-[min(calc(100vw-3rem),80rem)] max-w-[calc(100%-3rem)] flex-col overflow-hidden rounded-[24px] border border-app-border bg-app-surface p-0 shadow-[0_32px_96px_rgba(15,23,42,0.28)] sm:max-w-[min(calc(100vw-3rem),80rem)] dark:shadow-[0_32px_96px_rgba(0,0,0,0.56)]"
+        >
+          <DialogHeader className="shrink-0 border-b border-app-border px-5 py-4 text-left">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <DialogTitle className="truncate">{selectedDetail?.skill?.name ?? "Skill preview"}</DialogTitle>
+                <DialogDescription className="mt-1">
+                  {selectedDetail?.skill?.description ?? "Skill markdown preview"}
+                </DialogDescription>
+              </div>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  aria-label="Close skill preview"
+                  title="Close skill preview"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-lg text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                >
+                  <CircleX className="size-4" />
+                </button>
+              </DialogClose>
+            </div>
+          </DialogHeader>
+          <div className="shrink-0 border-b border-app-border bg-app-surface-muted/50 px-5 py-2 text-[11px] uppercase tracking-[0.12em] text-app-subtle">
+            SKILL.md Preview
+          </div>
+          <ScrollArea className="min-h-0 flex-1 bg-app-drawer">
+            <div className="w-full min-w-0 px-5 py-5">
+              <div className="w-full min-w-0 max-w-full space-y-4 overflow-hidden rounded-2xl border border-app-border bg-app-surface p-6 text-[14px] leading-7 text-app-muted shadow-[0_18px_48px_-36px_rgba(15,23,42,0.45)]">
+                {selectedSkillPreview.entries.length > 0 ? (
+                  <div className="rounded-xl border border-app-border bg-app-canvas/65 p-4">
+                    <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-app-subtle">
+                      Frontmatter
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {selectedSkillPreview.entries.map((entry) => (
+                        <div key={entry.key} className="min-w-0 rounded-lg border border-app-border/80 bg-app-surface/70 px-3 py-2.5">
+                          <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+                            {entry.key}
+                          </div>
+                          <div className="mt-1 break-words text-[13px] leading-6 text-app-foreground [overflow-wrap:anywhere]">
+                            {entry.value}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <Streamdown
+                  className="w-full min-w-0 max-w-full break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:break-all [&_code]:break-all [&_p]:[overflow-wrap:anywhere] [&_li]:[overflow-wrap:anywhere] [&_blockquote]:[overflow-wrap:anywhere]"
+                  controls={streamdownControls}
+                  plugins={streamdownPlugins}
+                >
+                  {selectedSkillPreview.body}
+                </Streamdown>
+              </div>
+            </div>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={mcpDialogOpen} onOpenChange={setMcpDialogOpen}>
         <DialogContent className="max-w-xl border-app-border bg-app-canvas">

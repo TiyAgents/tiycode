@@ -1226,9 +1226,7 @@ impl AgentRunManager {
             task_board_manager::reconcile_active_task_board(&self.pool, &thread_id).await?;
         let board_to_send = match reconciled_board {
             Some(board) => Some(board),
-            None => {
-                task_board_manager::get_active_task_board(&self.pool, &thread_id).await?
-            }
+            None => task_board_manager::get_active_task_board(&self.pool, &thread_id).await?,
         };
         if let Some(task_board) = board_to_send {
             let _ = frontend_tx.send(ThreadStreamEvent::TaskBoardUpdated {

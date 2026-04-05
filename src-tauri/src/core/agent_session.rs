@@ -2844,6 +2844,45 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn system_prompt_includes_enabled_workspace_skills() {
+        let temp_dir = tempdir().expect("temp dir");
+        let workspace_root = temp_dir.path().join("workspace");
+        let skill_dir = workspace_root.join(".tiy/skills/test-skill");
+        fs::create_dir_all(&skill_dir).expect("skill dir");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: test-skill
+description: "Helps with local skill prompt injection tests."
+---
+
+# Test Skill
+
+Used for prompt assembly coverage.
+"#,
+        )
+        .expect("write skill");
+
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+
+        let prompt = build_system_prompt(
+            &pool,
+            &RuntimeModelPlan::default(),
+            workspace_root.to_string_lossy().as_ref(),
+            "default",
+        )
+        .await
+        .expect("system prompt");
+
+        assert!(prompt.contains("## Skills"));
+        assert!(prompt.contains("### Available skills"));
+        assert!(prompt.contains("test-skill: Helps with local skill prompt injection tests."));
+        assert!(prompt.contains(&skill_dir.join("SKILL.md").display().to_string()));
+        assert!(prompt.contains("### How to use skills"));
+    }
+
     #[test]
     fn reasoning_blocks_reset_message_id_between_thought_segments() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();

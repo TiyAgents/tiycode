@@ -310,6 +310,15 @@
     padding: 0 1rem 0.875rem !important;
     font-size: 13px;
     line-height: 1.72;
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word;
+  }
+
+  [data-streamdown="code-block-body"] pre code {
+    white-space: inherit !important;
+    overflow-wrap: inherit !important;
+    word-break: inherit;
   }
 
   [data-streamdown="code-block-body"] pre code > span::before {

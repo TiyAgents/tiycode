@@ -1,7 +1,9 @@
 use crate::model::errors::AppError;
 
 use super::context::PromptBuildContext;
-use super::providers::{BaseProvider, EnvironmentProvider, ProfileProvider, WorkspaceProvider};
+use super::providers::{
+    BaseProvider, EnvironmentProvider, ProfileProvider, SkillsProvider, WorkspaceProvider,
+};
 use super::section::{PromptSection, PromptSectionProvider};
 
 pub async fn build_system_prompt(
@@ -16,6 +18,7 @@ pub async fn build_system_prompt(
     sections.extend(BaseProvider.collect(&ctx).await?);
     sections.extend(WorkspaceProvider.collect(&ctx).await?);
     sections.extend(EnvironmentProvider.collect(&ctx).await?);
+    sections.extend(SkillsProvider.collect(&ctx).await?);
     sections.extend(ProfileProvider.collect(&ctx).await?);
 
     sections.retain(|section: &PromptSection| !section.is_empty());
