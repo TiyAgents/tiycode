@@ -364,7 +364,6 @@ export function DashboardWorkbench() {
   const {
     addMarketplaceSource,
     addMcpServer,
-    activity: extensionActivity,
     detailByKey: extensionDetailByKey,
     disableExtension,
     disableSkill,
@@ -379,7 +378,6 @@ export function DashboardWorkbench() {
     marketplaceItems,
     marketplaceSources,
     mcpServers,
-    pinSkill,
     pluginCommandEntries,
     refresh: refreshExtensions,
     refreshMarketplaceSource,
@@ -391,8 +389,8 @@ export function DashboardWorkbench() {
     skills: extensionSkills,
     uninstallExtension,
     updateMcpServer,
-  } = useExtensionsController(selectedProject?.path ?? null);
-  const currentExtensionScope = selectedProject?.path ? "workspace" : "global";
+  } = useExtensionsController();
+  const currentExtensionScope = "global";
   const extensionDetailById = useMemo<Record<string, ExtensionDetail>>(() => {
     return Object.fromEntries(
       Object.entries(extensionDetailByKey)
@@ -2305,7 +2303,7 @@ export function DashboardWorkbench() {
                   )}
                 />
                 <span className="truncate text-sm font-medium">
-                  Marketplace
+                  Extensions
                 </span>
               </button>
             </div>
@@ -2916,7 +2914,6 @@ export function DashboardWorkbench() {
       {isMarketplaceOpen ? (
         <ExtensionsCenterOverlay
           contentRef={overlayContentRef}
-          activity={extensionActivity}
           detailById={extensionDetailById}
           error={extensionsError}
           extensions={extensions}
@@ -2942,7 +2939,6 @@ export function DashboardWorkbench() {
           onRescanSkills={() => rescanSkills(currentExtensionScope)}
           onEnableSkill={(id) => enableSkill(id, currentExtensionScope)}
           onDisableSkill={(id) => disableSkill(id, currentExtensionScope)}
-          onPinSkill={(id, pinned) => pinSkill(id, pinned, currentExtensionScope)}
           skillPreviewById={skillPreviewById}
           skills={extensionSkills}
         />

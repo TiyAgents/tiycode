@@ -1,12 +1,9 @@
 import { type ReactNode, type RefObject, useEffect, useMemo, useState } from "react";
 import {
-  Activity,
   ArrowLeft,
-  BookOpenText,
+  BookCopy,
   Boxes,
   CirclePlus,
-  Pin,
-  PinOff,
   Plug,
   RefreshCw,
   Search,
@@ -29,7 +26,6 @@ import { ScrollArea } from "@/shared/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
 import { Switch } from "@/shared/ui/switch";
 import type {
-  ExtensionActivityEvent,
   ExtensionDetail,
   ExtensionSummary,
   MarketplaceItem,
@@ -42,7 +38,7 @@ import type {
   SkillRecord,
 } from "@/shared/types/extensions";
 
-type ExtensionTab = "plugins" | "mcps" | "skills" | "activity";
+type ExtensionTab = "plugins" | "mcps" | "skills";
 type PluginSourceFilter = "all" | string;
 
 type PluginCollectionItem = {
@@ -74,6 +70,14 @@ function PluginIcon() {
   );
 }
 
+function SkillIcon() {
+  return (
+    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-app-border bg-app-canvas shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]">
+      <BookCopy className="size-[18px] shrink-0 stroke-[1.9]" />
+    </div>
+  );
+}
+
 type ExtensionsCenterOverlayProps = {
   contentRef: RefObject<HTMLDivElement | null>;
   error: string | null;
@@ -81,7 +85,6 @@ type ExtensionsCenterOverlayProps = {
   extensions: ExtensionSummary[];
   mcpServers: McpServerState[];
   skills: SkillRecord[];
-  activity: ExtensionActivityEvent[];
   detailById: Record<string, ExtensionDetail>;
   skillPreviewById: Record<string, SkillPreview>;
   marketplaceSources: MarketplaceSource[];
@@ -100,7 +103,6 @@ type ExtensionsCenterOverlayProps = {
   onRescanSkills: () => Promise<void>;
   onEnableSkill: (id: string) => Promise<void>;
   onDisableSkill: (id: string) => Promise<void>;
-  onPinSkill: (id: string, pinned: boolean) => Promise<void>;
   onAddMarketplaceSource: (input: MarketplaceSourceInput) => Promise<void>;
   onRemoveMarketplaceSource: (id: string) => Promise<void>;
   onRefreshMarketplaceSource: (id: string) => Promise<void>;
@@ -115,16 +117,12 @@ const TAB_META: Record<ExtensionTab, { description: string; label: string }> = {
     description: "Local extension packages with tools, hooks, commands, and optional skill packs.",
   },
   mcps: {
-    label: "MCP",
+    label: "MCP Servers",
     description: "Managed connector entries with transport status, phase, snapshots, and reconnect controls.",
   },
   skills: {
     label: "Skills",
-    description: "Indexed prompt assets from builtin, workspace, and plugin sources with enable and pin controls.",
-  },
-  activity: {
-    label: "Activity",
-    description: "Recent extension lifecycle, tool, and host events for lightweight diagnostics.",
+    description: "Indexed prompt assets from builtin, workspace, and plugin sources with enable controls.",
   },
 };
 
@@ -160,8 +158,6 @@ function getTabCount(tab: ExtensionTab, props: ExtensionsCenterOverlayProps) {
       return props.mcpServers.length;
     case "skills":
       return props.skills.length;
-    case "activity":
-      return props.activity.length;
   }
 }
 
@@ -208,6 +204,14 @@ function getStatusBadgeClass(status: string) {
 
 function getStatusBadgeLabel(status: string) {
   return status.replace(/_/g, " ");
+}
+
+function getSkillStatusBadgeClass(enabled: boolean) {
+  return enabled ? "bg-app-success/12 text-app-success" : "bg-app-surface-muted/80 text-app-subtle";
+}
+
+function getSkillStatusLabel(enabled: boolean) {
+  return enabled ? "enabled" : "disabled";
 }
 
 function getMcpToolParameters(inputSchema: unknown) {
@@ -274,10 +278,8 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
     plugins: "",
     mcps: "",
     skills: "",
-    activity: "",
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
   const [pluginSourceFilter, setPluginSourceFilter] = useState<PluginSourceFilter>("all");
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const [mcpDialogMode, setMcpDialogMode] = useState<"create" | "edit">("create");
@@ -415,13 +417,6 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
       ),
     [activeQuery, activeTab, props.skills],
   );
-  const filteredActivity = useMemo(
-    () =>
-      filterByQuery(props.activity, activeTab === "activity" ? activeQuery : "", (item) =>
-        [item.action, item.source, item.targetId ?? "", item.targetType ?? ""].join(" "),
-      ),
-    [activeQuery, activeTab, props.activity],
-  );
 
   useEffect(() => {
     if (activeTab === "plugins") {
@@ -434,10 +429,8 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
     }
     if (activeTab === "skills") {
       setSelectedId(filteredSkills[0]?.id ?? null);
-      return;
     }
-    setSelectedActivityId(filteredActivity[0]?.id ?? null);
-  }, [activeTab, filteredActivity, filteredMcpServers, filteredSkills, pluginItems]);
+  }, [activeTab, filteredMcpServers, filteredSkills, pluginItems]);
 
   useEffect(() => {
     if (activeTab === "plugins" && !selectedId && pluginItems[0]) {
@@ -449,10 +442,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
     if (activeTab === "skills" && !selectedId && filteredSkills[0]) {
       setSelectedId(filteredSkills[0].id);
     }
-    if (activeTab === "activity" && !selectedActivityId && filteredActivity[0]) {
-      setSelectedActivityId(filteredActivity[0].id);
-    }
-  }, [activeTab, filteredActivity, filteredMcpServers, filteredSkills, pluginItems, selectedActivityId, selectedId]);
+  }, [activeTab, filteredMcpServers, filteredSkills, pluginItems, selectedId]);
 
   useEffect(() => {
     if (!pluginSourceOptions.some((option) => option.key === pluginSourceFilter)) {
@@ -500,9 +490,6 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
       : selectedId
         ? (props.detailById[selectedId] ?? null)
         : null;
-  const selectedActivity = selectedActivityId
-    ? filteredActivity.find((item) => item.id === selectedActivityId) ?? null
-    : null;
   const activeMeta = TAB_META[activeTab];
 
   const runAction = async (action: () => Promise<void>) => {
@@ -895,94 +882,57 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         )}
                         onClick={() => setSelectedId(skill.id)}
                       >
-                        <CardHeader className="gap-3 pb-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-start gap-3">
-                              <div className="mt-0.5 flex size-10 items-center justify-center rounded-2xl border border-app-border bg-app-canvas text-app-foreground">
-                                <BookOpenText className="size-4" />
-                              </div>
-                              <div>
-                                <CardTitle className="text-[15px]">{skill.name}</CardTitle>
-                                <CardDescription className="mt-1">{skill.description ?? "Skill record"}</CardDescription>
-                              </div>
-                            </div>
-                            <Badge className={skill.enabled ? "bg-app-success/12 text-app-success" : "bg-app-surface-muted/80 text-app-subtle"}>
-                              {skill.enabled ? "enabled" : "disabled"}
-                            </Badge>
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                          <div className="flex flex-wrap gap-2">
-                            <Badge variant="outline">{skill.source}</Badge>
-                            {skill.priority ? <Badge variant="outline">{skill.priority}</Badge> : null}
-                            {skill.pinned ? <Badge variant="outline">pinned</Badge> : null}
-                          </div>
-                          <p className="line-clamp-3 text-[12px] leading-5 text-app-subtle">{skill.contentPreview}</p>
-                        </CardContent>
-                        <CardFooter className="justify-between gap-2">
-                          <Button
-                            size="sm"
-                            variant={skill.enabled ? "secondary" : "default"}
-                            className="h-8 rounded-lg px-3 text-[12px]"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void runAction(() =>
-                                skill.enabled ? props.onDisableSkill(skill.id) : props.onEnableSkill(skill.id),
-                              );
-                            }}
-                          >
-                            {skill.enabled ? "Disable" : "Enable"}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-8 rounded-lg px-3 text-[12px]"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void runAction(() => props.onPinSkill(skill.id, !skill.pinned));
-                            }}
-                          >
-                            {skill.pinned ? "Unpin" : "Pin"}
-                          </Button>
-                        </CardFooter>
-                      </Card>
-                    ))
-                  : null}
-
-                {activeTab === "activity"
-                  ? filteredActivity.map((event) => (
-                      <Card
-                        key={event.id}
-                        className={cn(
-                          "cursor-pointer border transition-colors hover:border-app-border-strong md:col-span-2",
-                          selectedActivityId === event.id && "border-app-border-strong bg-app-surface-hover",
-                        )}
-                        onClick={() => setSelectedActivityId(event.id)}
-                      >
                         <CardHeader className="gap-3 pb-3">
                           <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-start gap-3">
-                              <div className="mt-0.5 flex size-10 items-center justify-center rounded-2xl border border-app-border bg-app-canvas text-app-foreground">
-                                <Activity className="size-4" />
-                              </div>
-                              <div>
-                                <CardTitle className="text-[15px]">{event.action}</CardTitle>
-                                <CardDescription className="mt-1">
-                                  {event.source} · {event.targetId ?? "system"}
+                            <div className="flex min-w-0 items-start gap-3">
+                              <SkillIcon />
+                              <div className="min-w-0">
+                                <CardTitle className="text-[15px]">{skill.name}</CardTitle>
+                                <CardDescription
+                                  className="mt-1 line-clamp-2 min-h-[2.5rem] text-[13px] leading-5"
+                                  title={skill.description ?? "Skill record"}
+                                >
+                                  {skill.description ?? "Skill record"}
                                 </CardDescription>
                               </div>
                             </div>
-                            <Badge variant="outline">{new Date(event.createdAt).toLocaleString()}</Badge>
+                            <div className="flex shrink-0 items-start gap-2">
+                              <Button
+                                size="sm"
+                                variant={skill.enabled ? "secondary" : "default"}
+                                className="h-8 rounded-lg px-3 text-[12px]"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void runAction(() =>
+                                    skill.enabled ? props.onDisableSkill(skill.id) : props.onEnableSkill(skill.id),
+                                  );
+                                }}
+                              >
+                                {skill.enabled ? "Disable" : "Enable"}
+                              </Button>
+                            </div>
                           </div>
                         </CardHeader>
+                        <CardContent className="space-y-3 pt-0">
+                          <div className="flex flex-wrap gap-2">
+                            <Badge variant="outline">{skill.triggers.length} triggers</Badge>
+                            {skill.tools.length > 0 ? <Badge variant="outline">{skill.tools.length} tools</Badge> : null}
+                          </div>
+                        </CardContent>
+                        <CardFooter className="justify-end gap-3">
+                          <div className="flex items-center justify-end gap-3">
+                            <Badge className={cn("shrink-0", getSkillStatusBadgeClass(skill.enabled))}>
+                              {getSkillStatusLabel(skill.enabled)}
+                            </Badge>
+                          </div>
+                        </CardFooter>
                       </Card>
                     ))
                   : null}
 
                 {((activeTab === "plugins" && pluginItems.length === 0) ||
                   (activeTab === "mcps" && filteredMcpServers.length === 0) ||
-                  (activeTab === "skills" && filteredSkills.length === 0) ||
-                  (activeTab === "activity" && filteredActivity.length === 0)) ? (
+                  (activeTab === "skills" && filteredSkills.length === 0)) ? (
                   <Card className="md:col-span-2">
                     <CardContent className="flex min-h-40 items-center justify-center text-center text-sm text-app-muted">
                       No {activeMeta.label.toLowerCase()} match the current search.
@@ -995,7 +945,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
             <aside className="min-h-0 rounded-2xl border border-app-border bg-app-surface/80">
               <ScrollArea className="h-full">
-                <div className="space-y-5 p-5">
+                <div className="min-w-0 space-y-5 overflow-hidden p-5">
                   {activeTab === "plugins" ? (
                     selectedPluginItem ? (
                       <>
@@ -1230,7 +1180,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                     )
                   ) : null}
 
-                  {activeTab === "mcps" || activeTab === "skills" ? (
+                  {activeTab === "mcps" ? (
                     selectedDetail ? (
                       <>
                         <div className="space-y-2">
@@ -1329,80 +1279,73 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                           </div>
                         ) : null}
 
-                        {selectedDetail.skill ? (
-                          <div className="space-y-4">
-                            <DetailSection title="Metadata">
-                              <div className="flex flex-wrap gap-2">
-                                <Badge variant="outline">{selectedDetail.skill.source}</Badge>
-                                {selectedDetail.skill.priority ? <Badge variant="outline">{selectedDetail.skill.priority}</Badge> : null}
-                                {selectedDetail.skill.pinned ? <Badge variant="outline">Pinned</Badge> : null}
-                              </div>
-                            </DetailSection>
-                            <DetailSection title="Triggers">
-                              {selectedDetail.skill.triggers.map((trigger) => (
-                                <Badge key={trigger} variant="outline">
-                                  {trigger}
-                                </Badge>
-                              ))}
-                            </DetailSection>
-                            <DetailSection title="Preview">
-                              <pre className="whitespace-pre-wrap rounded-xl border border-app-border bg-app-canvas/70 p-3 text-[12px] leading-5 text-app-muted">
-                                {props.skillPreviewById[selectedDetail.skill.id]?.content ?? selectedDetail.skill.contentPreview}
-                              </pre>
-                            </DetailSection>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="sm"
-                                variant={selectedDetail.skill.enabled ? "secondary" : "default"}
-                                onClick={() =>
-                                  void runAction(() =>
-                                    selectedDetail.skill!.enabled
-                                      ? props.onDisableSkill(selectedDetail.skill!.id)
-                                      : props.onEnableSkill(selectedDetail.skill!.id),
-                                  )
-                                }
-                              >
-                                {selectedDetail.skill.enabled ? "Disable" : "Enable"}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => void runAction(() => props.onPinSkill(selectedDetail.skill!.id, !selectedDetail.skill!.pinned))}
-                              >
-                                {selectedDetail.skill.pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-                                {selectedDetail.skill.pinned ? "Unpin" : "Pin"}
-                              </Button>
-                            </div>
-                          </div>
-                        ) : null}
                       </>
                     ) : (
                       <EmptyDetailState isLoading={Boolean(detailLoadingId)} label={activeMeta.label} />
                     )
                   ) : null}
 
-                  {activeTab === "activity" ? (
-                    selectedActivity ? (
+                  {activeTab === "skills" ? (
+                    selectedDetail?.skill ? (
                       <>
-                        <div className="space-y-2">
+                        <div className="min-w-0 space-y-3 overflow-hidden">
                           <div className="flex items-center gap-2">
-                            <Badge variant="outline">{selectedActivity.source}</Badge>
-                            {selectedActivity.targetType ? <Badge variant="outline">{selectedActivity.targetType}</Badge> : null}
+                            <Badge variant="outline">skill</Badge>
+                            <Badge className={getSkillStatusBadgeClass(selectedDetail.skill.enabled)}>
+                              {getSkillStatusLabel(selectedDetail.skill.enabled)}
+                            </Badge>
                           </div>
-                          <h2 className="text-lg font-semibold">{selectedActivity.action}</h2>
-                          <p className="text-sm text-app-muted">{new Date(selectedActivity.createdAt).toLocaleString()}</p>
+                          <h2 className="text-lg font-semibold">{selectedDetail.skill.name}</h2>
+                          <p className="break-words text-sm leading-6 text-app-muted">
+                            {selectedDetail.skill.description ?? "Skill record"}
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant={selectedDetail.skill.enabled ? "secondary" : "default"}
+                              onClick={() =>
+                                void runAction(() =>
+                                  selectedDetail.skill!.enabled
+                                    ? props.onDisableSkill(selectedDetail.skill!.id)
+                                    : props.onEnableSkill(selectedDetail.skill!.id),
+                                )
+                              }
+                            >
+                              {selectedDetail.skill.enabled ? "Disable" : "Enable"}
+                            </Button>
+                          </div>
                         </div>
-                        <DetailSection title="Target">
-                          <p className="text-sm text-app-muted">{selectedActivity.targetId ?? "System-level event"}</p>
-                        </DetailSection>
-                        <DetailSection title="Payload">
-                          <pre className="whitespace-pre-wrap rounded-xl border border-app-border bg-app-canvas/70 p-3 text-[12px] leading-5 text-app-muted">
-                            {JSON.stringify(selectedActivity.result ?? {}, null, 2)}
-                          </pre>
-                        </DetailSection>
+
+                        <div className="space-y-4">
+                          <DetailSection title="Triggers">
+                            {selectedDetail.skill.triggers.length > 0
+                              ? selectedDetail.skill.triggers.map((trigger) => (
+                                  <Badge key={trigger} variant="outline" className={DETAIL_WRAP_BADGE_CLASS}>
+                                    {trigger}
+                                  </Badge>
+                                ))
+                              : <p className="text-sm text-app-muted">No triggers defined.</p>}
+                          </DetailSection>
+                          <DetailSection title="Tools">
+                            {selectedDetail.skill.tools.length > 0
+                              ? selectedDetail.skill.tools.map((tool) => (
+                                  <Badge key={tool} variant="outline" className={DETAIL_WRAP_BADGE_CLASS}>
+                                    {tool}
+                                  </Badge>
+                                ))
+                              : <p className="text-sm text-app-muted">No tool requirements declared.</p>}
+                          </DetailSection>
+                          <DetailSection title="Preview">
+                            <div className="w-full min-w-0 overflow-hidden">
+                              <pre className="w-full min-w-0 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-xl border border-app-border bg-app-canvas/70 p-3 text-[12px] leading-5 text-app-muted [overflow-wrap:anywhere]">
+                                {props.skillPreviewById[selectedDetail.skill.id]?.content ?? selectedDetail.skill.contentPreview}
+                              </pre>
+                            </div>
+                          </DetailSection>
+                        </div>
                       </>
                     ) : (
-                      <EmptyDetailState isLoading={false} label="Activity" />
+                      <EmptyDetailState isLoading={Boolean(detailLoadingId)} label={activeMeta.label} />
                     )
                   ) : null}
                 </div>
@@ -1557,9 +1500,9 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
 function DetailSection({ children, title }: { children: ReactNode; title: string }) {
   return (
-    <section className="space-y-2">
+    <section className="min-w-0 space-y-2">
       <h3 className="text-sm font-medium text-app-foreground">{title}</h3>
-      <div className="flex flex-wrap gap-2">{children}</div>
+      <div className="min-w-0 flex flex-wrap gap-2">{children}</div>
     </section>
   );
 }

@@ -5,7 +5,6 @@ import {
   extensionGetDetail,
   extensionUninstall,
   extensionsList,
-  extensionsListActivity,
   extensionsListCommands,
   marketplaceAddSource,
   marketplaceInstallItem,
@@ -21,13 +20,11 @@ import {
   skillDisable,
   skillEnable,
   skillList,
-  skillPin,
   skillPreview,
   skillRescan,
 } from "@/services/bridge";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import type {
-  ExtensionActivityEvent,
   ExtensionCommand,
   ExtensionDetail,
   ExtensionSummary,
@@ -51,7 +48,6 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
   const [extensions, setExtensions] = useState<ExtensionSummary[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerState[]>([]);
   const [skills, setSkills] = useState<SkillRecord[]>([]);
-  const [activity, setActivity] = useState<ExtensionActivityEvent[]>([]);
   const [commands, setCommands] = useState<ExtensionCommand[]>([]);
   const [marketplaceSources, setMarketplaceSources] = useState<MarketplaceSource[]>([]);
   const [marketplaceItems, setMarketplaceItems] = useState<MarketplaceItem[]>([]);
@@ -83,13 +79,12 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
           extensionsList(scopeOptions),
           mcpListServers(scopeOptions),
           skillList(scopeOptions),
-          extensionsListActivity(80),
           extensionsListCommands(),
           marketplaceListSources(),
           marketplaceListItems(),
         ]);
 
-        const [nextExtensions, nextMcpServers, nextSkills, nextActivity, nextCommands, nextSources, nextMarketplaceItems] =
+        const [nextExtensions, nextMcpServers, nextSkills, nextCommands, nextSources, nextMarketplaceItems] =
           results;
 
         if (nextExtensions.status === "fulfilled") {
@@ -100,9 +95,6 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
         }
         if (nextSkills.status === "fulfilled") {
           setSkills(nextSkills.value);
-        }
-        if (nextActivity.status === "fulfilled") {
-          setActivity(nextActivity.value);
         }
         if (nextCommands.status === "fulfilled") {
           setCommands(nextCommands.value);
@@ -194,7 +186,6 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
     extensions,
     mcpServers,
     skills,
-    activity,
     commands,
     marketplaceSources,
     marketplaceItems,
@@ -233,7 +224,5 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
       mutateAndRefresh(scope, () => skillEnable(id, buildScopeOptions(scope))),
     disableSkill: (id: string, scope: ExtensionScope) =>
       mutateAndRefresh(scope, () => skillDisable(id, buildScopeOptions(scope))),
-    pinSkill: (id: string, pinned: boolean, scope: ExtensionScope) =>
-      mutateAndRefresh(scope, () => skillPin(id, pinned, buildScopeOptions(scope))),
   };
 }

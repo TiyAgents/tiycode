@@ -3447,21 +3447,82 @@ fn split_frontmatter(raw: &str) -> Option<(&str, &str)> {
 
 fn parse_frontmatter_map(frontmatter: &str) -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
-    for line in frontmatter.lines() {
-        let line = line.trim();
+    let lines = frontmatter.lines().collect::<Vec<_>>();
+    let mut index = 0usize;
+
+    while index < lines.len() {
+        let raw_line = lines[index];
+        let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
+            index += 1;
             continue;
         }
-        if let Some((key, value)) = line.split_once(':') {
-            values.insert(
-                key.trim().to_string(),
-                value
-                    .trim()
-                    .trim_matches('"')
-                    .trim_matches('\'')
-                    .to_string(),
-            );
+        if raw_line.starts_with(' ') || raw_line.starts_with('\t') {
+            index += 1;
+            continue;
         }
+
+        let Some((key, value)) = line.split_once(':') else {
+            index += 1;
+            continue;
+        };
+        let key = key.trim().to_string();
+        let value = value.trim();
+
+        if matches!(value, ">" | ">-" | ">+" | "|" | "|-" | "|+") {
+            let folded = value.starts_with('>');
+            index += 1;
+            let mut block_lines = Vec::new();
+            while index < lines.len() {
+                let next_line = lines[index];
+                if next_line.starts_with(' ') || next_line.starts_with('\t') {
+                    block_lines.push(next_line.trim().to_string());
+                    index += 1;
+                    continue;
+                }
+                if next_line.trim().is_empty() {
+                    block_lines.push(String::new());
+                    index += 1;
+                    continue;
+                }
+                break;
+            }
+
+            let parsed = if folded {
+                fold_yaml_block_scalar(&block_lines)
+            } else {
+                block_lines.join("\n").trim().to_string()
+            };
+            values.insert(key, parsed);
+            continue;
+        }
+
+        if value.is_empty() {
+            index += 1;
+            let mut list_items = Vec::new();
+            while index < lines.len() {
+                let next_line = lines[index];
+                let trimmed = next_line.trim();
+                if trimmed.is_empty() {
+                    index += 1;
+                    continue;
+                }
+                if next_line.starts_with(' ') || next_line.starts_with('\t') {
+                    if let Some(item) = trimmed.strip_prefix("- ") {
+                        list_items.push(trim_yaml_scalar(item));
+                        index += 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+
+            values.insert(key, list_items.join("\n"));
+            continue;
+        }
+
+        values.insert(key, trim_yaml_scalar(value));
+        index += 1;
     }
     values
 }
@@ -3472,18 +3533,59 @@ fn parse_array_field(value: Option<&String>) -> Vec<String> {
     };
     let trimmed = value.trim();
     if !(trimmed.starts_with('[') && trimmed.ends_with(']')) {
+        if trimmed.contains('\n') {
+            return trimmed
+                .lines()
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(trim_yaml_scalar)
+                .collect();
+        }
         return if trimmed.is_empty() {
             Vec::new()
         } else {
-            vec![trimmed.to_string()]
+            vec![trim_yaml_scalar(trimmed)]
         };
     }
     trimmed[1..trimmed.len() - 1]
         .split(',')
         .map(str::trim)
         .filter(|item| !item.is_empty())
-        .map(|item| item.trim_matches('"').trim_matches('\'').to_string())
+        .map(trim_yaml_scalar)
         .collect()
+}
+
+fn trim_yaml_scalar(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_string()
+}
+
+fn fold_yaml_block_scalar(lines: &[String]) -> String {
+    let mut result = String::new();
+
+    for line in lines {
+        if line.is_empty() {
+            if !result.ends_with("\n\n") {
+                if result.ends_with(' ') {
+                    result.pop();
+                }
+                result.push_str("\n\n");
+            }
+            continue;
+        }
+
+        if result.is_empty() || result.ends_with("\n\n") {
+            result.push_str(line);
+        } else {
+            result.push(' ');
+            result.push_str(line);
+        }
+    }
+
+    result.trim().to_string()
 }
 
 fn read_named_value(value: &serde_json::Value) -> Option<String> {
@@ -4137,6 +4239,42 @@ Body text
             workspace_record.id,
             format!("workspace:{}", builtin_record.id)
         );
+    }
+
+    #[test]
+    fn parse_skill_markdown_supports_folded_descriptions_and_yaml_lists() {
+        let skill_dir = tempdir().expect("tempdir");
+        let raw = r#"---
+name: project-docs-sync
+description: >-
+  Proactively detect when project documentation files need updating.
+  Automatically applies targeted edits to keep docs in sync.
+tags:
+  - documentation
+  - automation
+triggers:
+  - README.md
+  - AGENTS.md
+tools:
+  - git
+  - rg
+---
+
+Body text
+"#;
+
+        let (record, _) =
+            parse_skill_markdown(raw, skill_dir.path(), "builtin").expect("folded description skill");
+
+        assert_eq!(
+            record.description.as_deref(),
+            Some(
+                "Proactively detect when project documentation files need updating. Automatically applies targeted edits to keep docs in sync."
+            )
+        );
+        assert_eq!(record.tags, vec!["documentation", "automation"]);
+        assert_eq!(record.triggers, vec!["README.md", "AGENTS.md"]);
+        assert_eq!(record.tools, vec!["git", "rg"]);
     }
 
     #[test]

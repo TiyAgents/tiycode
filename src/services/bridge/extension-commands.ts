@@ -138,15 +138,6 @@ export async function skillDisable(id: string, options?: { scope?: string; works
   return invoke("skill_disable", { id, scope: options?.scope, workspacePath: options?.workspacePath ?? undefined });
 }
 
-export async function skillPin(
-  id: string,
-  pinned: boolean,
-  options?: { scope?: string; workspacePath?: string | null },
-): Promise<void> {
-  requireTauri("skill_pin");
-  return invoke("skill_pin", { id, pinned, scope: options?.scope, workspacePath: options?.workspacePath ?? undefined });
-}
-
 export async function skillPreview(id: string, options?: { scope?: string; workspacePath?: string | null }): Promise<SkillPreview> {
   requireTauri("skill_preview");
   return invoke<SkillPreview>("skill_preview", { id, scope: options?.scope, workspacePath: options?.workspacePath ?? undefined });
