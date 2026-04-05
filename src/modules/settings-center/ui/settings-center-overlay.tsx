@@ -1121,7 +1121,13 @@ function GeneralSettingsPanel({
         });
       }
     }
-    return models;
+    return models.sort((a, b) => {
+      const providerCompare = a.providerName.localeCompare(b.providerName, undefined, { sensitivity: "base" });
+      if (providerCompare !== 0) return providerCompare;
+      const modelCompare = a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" });
+      if (modelCompare !== 0) return modelCompare;
+      return a.modelId.localeCompare(b.modelId, undefined, { sensitivity: "base" });
+    });
   }, [providers]);
 
   const activeProfile = agentProfiles.find((p) => p.id === activeAgentProfileId) ?? agentProfiles[0];
