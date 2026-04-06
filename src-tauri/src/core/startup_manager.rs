@@ -1,4 +1,6 @@
-use crate::model::errors::{AppError, ErrorSource};
+use crate::model::errors::AppError;
+#[cfg(target_os = "macos")]
+use crate::model::errors::ErrorSource;
 
 #[cfg(target_os = "macos")]
 use smappservice_rs::{AppService, ServiceManagementError, ServiceStatus, ServiceType};

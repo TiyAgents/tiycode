@@ -23,6 +23,7 @@ use crate::core::desktop_runtime::{
     DesktopRuntimeState, LAUNCH_AT_LOGIN_SETTING_KEY, MINIMIZE_TO_TRAY_SETTING_KEY,
 };
 use crate::core::sleep_manager::PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY;
+#[cfg(target_os = "macos")]
 use crate::core::startup_manager;
 
 const MAIN_WINDOW_LABEL: &str = "main";
