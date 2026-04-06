@@ -148,7 +148,7 @@ That means the best use cases today are:
 
 ## License
 
-This project is licensed under the GPL-3.0 License. See `LICENSE` for details.
+This project is licensed under the Apache License 2.0. See `LICENSE` for details.
 
 ## Acknowledgements
 
@@ -156,5 +156,6 @@ This project was inspired by the following projects and tools:
 
 - [pi-mono](https://github.com/badlogic/pi-mono)
 - [nanobot](https://github.com/HKUDS/nanobot)
+- [lobe-icons](https://github.com/lobehub/lobe-icons)
 - Codex
 - ClaudeCode

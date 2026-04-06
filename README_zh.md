@@ -148,7 +148,7 @@ TiyCode 将可扩展性作为桌面工作台的一等能力来设计。
 
 ## License
 
-本项目采用 GPL-3.0 License。详细信息请见 `LICENSE`。
+本项目采用 Apache License 2.0 开源协议。详细信息请见 `LICENSE`。
 
 ## 致敬
 
