@@ -14,8 +14,6 @@ TiyCode <sub>/taɪ koʊd/</sub> is built for people who want coding to feel nati
 
 Around that collaboration model, TiyCode brings together Agent Profiles, workspace-based threads, code review, version control, terminal workflows, and an extensible runtime in one local-first desktop product.
 
-Today, the repository is best consumed as a **source-first desktop application**. You run it locally from source, inspect the architecture, and build on top of the existing workbench, runtime, and extension host.
-
 ## Highlights
 
 - **AI-first coding collaboration.** TiyCode is designed around the idea that humans express intent through conversation while agents take the lead in execution.
