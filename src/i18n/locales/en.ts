@@ -181,8 +181,8 @@ const en: Record<TranslationKey, string> = {
   "sidebar.deleting": "Deleting",
 
   // ── New Thread Empty State ─────────────────────────────────
-  "newThread.headline": "Anything you need, through conversation.",
-  "newThread.description": "Pick a local workspace first so the next thread can stay grounded in files, commands, and runtime context.",
+  "newThread.headline": "Anything you need, just ask.",
+  "newThread.description": "Choose a local workspace and start your next goal here.",
   "newThread.chooseProject": "Choose project",
   "newThread.selectFolderHint": "Select a folder to start a workspace-backed thread",
   "newThread.recentProjects": "Recent projects",
@@ -280,7 +280,7 @@ const en: Record<TranslationKey, string> = {
   "settings.profile.delete": "Delete",
 
   // ── Settings: About Panel ──────────────────────────────────
-  "settings.about.description": "An open-source, flexible, convenient cross-platform vibe-coding agent grounded in your workspace, tools, models, and runtime context.",
+  "settings.about.description": "An AI-first desktop coding agent designed around conversation, execution, and workspace collaboration.",
   "settings.about.officialWebsite": "Official Website",
   "settings.about.license": "License",
   "settings.about.feedback": "Feedback",

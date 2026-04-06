@@ -1,8 +1,8 @@
 <div align="center">
   <img src="./public/app-icon.png" alt="TiyCode 标志" width="120" />
-  <h1>TiyCode</h1>
-  <p><strong>一款开源、灵活、便利的跨平台 vibe-coding agent。</strong></p>
-  <p>TiyCode 是一个基于 Tauri、React、TypeScript 与 Rust 构建的桌面 AI 工作台。它把线程式 Agent 运行、工作区感知工具、终端与 Git 集成、设置管理以及可扩展运行时放进同一个本地优先的桌面应用里。</p>
+  <h1>TiyCode（钛可）</h1>
+  <p><strong>一款践行 AI First 理念的 desktop coding agent。</strong></p>
+  <p>面向新一代编码协作范式而设计。人通过对话表达目标、约束与反馈，Agent 主导理解、执行与推进工作。</p>
   <p>
     <a href="./README.md">English</a>
   </p>
@@ -10,18 +10,20 @@
 
 ## 为什么是 TiyCode
 
-TiyCode 面向的是希望获得“AI 编码工作台”而不是“单一聊天框”的用户。这个项目强调本地桌面体验，让 Agent 对话、工具执行、终端流程、Git 操作和扩展能力在同一个界面中协同工作。
+TiyCode 面向的是希望以 AI 时代的方式进行编码协作的用户。在这里，对话不是工作流的补充，而是工作流的起点。你负责提出目标、约束与反馈，Agent 负责理解上下文、调用工具，并在真实工作区中持续推进执行。
+
+围绕这种协作方式，TiyCode 将 Agent Profile、基于工作区的多会话 Thread、代码审阅、版本控制、Terminal 能力以及可扩展运行时组织为统一的本地优先桌面产品体验。
 
 当前仓库最适合以**源码优先的桌面应用**来理解和使用。也就是说，现阶段的主要使用方式是从源码运行、阅读架构设计，并在现有工作台、运行时和扩展宿主的基础上继续开发。
 
 ## 核心亮点
 
-- **桌面优先的 AI 工作台。** 应用基于 Tauri 2、React + TypeScript 前端和 Rust 核心构建，因此界面能够自然接入终端会话、仓库状态读取和工作区作用域工具等本地能力。
-- **内置 Agent Runtime。** 主执行链路已经收敛为 `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`，不再依赖单独的 sidecar 进程。
-- **运行中结构化澄清。** 运行时支持 `clarify` 步骤，Agent 在缺少关键信息时可以中途暂停、向用户发问，并提供推荐选项后继续执行。
-- **内建 Git 与终端工作流。** 工作台已经整合真实仓库状态、Diff、History 视图和终端能力；当本地 Git CLI 不可用时，部分写操作会自动降级。
-- **统一扩展中心。** 应用内置 `Extensions Center`，把 Plugins、MCP、Skills、Marketplace 和 Activity 放到同一入口中统一管理。
-- **面向 Agent 线程的 UI 基础。** 前端已经接入基于 AI Elements 风格的线程组件，包括 plan、queue、reasoning、tool call、confirmation、sources、suggestion 和 prompt input 等界面单元。
+- **AI First 的编码协作。** TiyCode 围绕“人用对话表达意图，Agent 主导执行”这一理念来设计产品形态。
+- **Agent Profile。** 支持自由组合不同服务商的模型，并可配置回复风格、回复语言、自定义指令等设定，且能在不同 Profile 之间灵活切换。
+- **以工作区为中心的执行体验。** 对话线程扎根本地工作区，并与代码审阅、版本控制、仓库状态读取和 Terminal 工作流自然衔接。
+- **更友好的日常体验。** Slash Command、智能会话标题、上下文压缩与 Commit Message 生成等能力，让协作过程更顺手、更连贯。
+- **一等公民式扩展能力。** Plugins、MCP 与 Skills 通过 `Extensions Center` 形成统一的扩展入口与产品模型。
+- **内置 Runtime 主链路。** 主执行链路已经收敛为 `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`，不再依赖单独的 sidecar 进程。
 
 ## 技术栈
 

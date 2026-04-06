@@ -1,7 +1,7 @@
 [package]
 name = "tiycode"
 version = "0.1.0"
-description = "TiyCode is an open-source, flexible, convenient cross-platform vibe-coding agent"
+description = "TiyCode is an AI-first desktop coding agent"
 authors = ["Tiy AI"]
 edition = "2021"
 

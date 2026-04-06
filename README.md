@@ -1,8 +1,8 @@
 <div align="center">
   <img src="./public/app-icon.png" alt="TiyCode logo" width="120" />
-  <h1>TiyCode</h1>
-  <p><strong>An open-source, flexible, convenient cross-platform vibe-coding agent.</strong></p>
-  <p>TiyCode is a desktop AI workbench built with Tauri, React, TypeScript, and Rust. It combines threaded agent runs, workspace-aware tools, terminal and Git integration, settings management, and an extensible runtime in one local-first desktop app.</p>
+  <h1>TiyCode <sub>/taɪ koʊd/</sub></h1>
+  <p><strong>An AI-first desktop coding agent.</strong></p>
+  <p>Designed for a new coding collaboration paradigm. Humans express goals, constraints, and feedback through conversation, while agents take the lead in understanding, execution, and forward progress.</p>
   <p>
     <a href="./README_zh.md">简体中文</a>
   </p>
@@ -10,18 +10,20 @@
 
 ## Why TiyCode
 
-TiyCode is designed for people who want an AI coding workspace instead of a single chat box. The project focuses on a local desktop experience where agent conversations, tool execution, terminal workflows, Git operations, and extension capabilities live in the same interface.
+TiyCode is built for people who want coding to feel native to the AI era. Conversation is not a companion to the workflow here, but the starting point of it. You define goals, constraints, and feedback. The agent understands context, uses tools, and drives execution forward inside a real workspace.
+
+Around that collaboration model, TiyCode brings together Agent Profiles, workspace-based threads, code review, version control, terminal workflows, and an extensible runtime in one local-first desktop product.
 
 Today, the repository is best consumed as a **source-first desktop application**. You run it locally from source, inspect the architecture, and build on top of the existing workbench, runtime, and extension host.
 
 ## Highlights
 
-- **Desktop-first AI workbench.** The app is built on Tauri 2 with a React + TypeScript frontend and a Rust core, giving the UI direct access to native capabilities such as terminal sessions, repository inspection, and workspace-scoped tools.
-- **Built-in agent runtime.** The main execution path is `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`, which means agent runs no longer depend on a separate sidecar process.
-- **Structured clarification during runs.** The runtime supports a `clarify` step so an agent can pause, ask for missing information, and offer recommended choices before continuing a task.
-- **Integrated Git and terminal workflows.** The workbench includes real repository status, diff, and history views, plus terminal tooling for execution-heavy tasks. Git write operations can degrade gracefully when the local Git CLI is unavailable.
-- **Unified extensions surface.** The app includes an `Extensions Center` that brings together Plugins, MCP, Skills, Marketplace, and Activity in one place.
-- **AI-oriented thread UI.** The frontend already integrates AI Elements-based thread components such as plan, queue, reasoning, tool calls, confirmations, sources, suggestions, and prompt input.
+- **AI-first coding collaboration.** TiyCode is designed around the idea that humans express intent through conversation while agents take the lead in execution.
+- **Agent Profiles.** Mix models from different providers, tune response style, language, and custom instructions, and switch profiles flexibly for different kinds of work.
+- **Workspace-centered execution.** Threads stay grounded in the local workspace and connect naturally to code review, version control, repository inspection, and terminal workflows.
+- **Operator-friendly experience.** Slash commands, smart conversation titles, context compression controls, and commit message generation help the product feel fast and practical in day-to-day use.
+- **Extensible by design.** Plugins, MCP servers, and Skills are treated as first-class building blocks through the `Extensions Center`.
+- **Built-in runtime path.** The main execution flow is `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`, so agent runs do not depend on a separate sidecar process.
 
 ## Tech Stack
 

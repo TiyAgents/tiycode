@@ -57,8 +57,8 @@
     "externalBin": [
       "target/tiy-rg/rg"
     ],
-    "shortDescription": "Open-source, flexible, convenient cross-platform vibe-coding agent.",
-    "longDescription": "TiyCode is an open-source, flexible, convenient cross-platform vibe-coding agent built with Tauri, React, and TypeScript.",
+    "shortDescription": "An AI-first desktop coding agent.",
+    "longDescription": "TiyCode is an AI-first desktop coding agent built for a new coding collaboration paradigm, where humans work through conversation and agents drive execution in a real workspace.",
     "copyright": "© 2026 Tiy AI",
     "macOS": {
       "infoPlist": "Info.plist"

@@ -181,9 +181,9 @@ const zhCN = {
   "sidebar.deleting": "正在删除",
 
   // ── New Thread Empty State ─────────────────────────────────
-  "newThread.headline": "一切所需，对话即达。",
+  "newThread.headline": "一切所需，聊聊即达。",
   "newThread.description":
-    "先选择一个本地工作区，这样下一个对话就能基于文件、命令和运行时上下文进行。",
+    "选择一个本地工作区，从这里开始你的下一项目标。",
   "newThread.chooseProject": "选择项目",
   "newThread.selectFolderHint": "选择一个文件夹以启动基于工作区的对话",
   "newThread.recentProjects": "最近的项目",
@@ -298,7 +298,7 @@ const zhCN = {
 
   // ── Settings: About Panel ──────────────────────────────────
   "settings.about.description":
-    "一款开源、灵活、便捷的跨平台 vibe-coding Agent，扎根于你的工作区、工具、模型和运行时上下文。",
+    "一款践行 AI First 理念的 desktop coding agent，围绕对话、执行与工作区协作而设计。",
   "settings.about.officialWebsite": "官方网站",
   "settings.about.license": "许可证",
   "settings.about.feedback": "反馈",
