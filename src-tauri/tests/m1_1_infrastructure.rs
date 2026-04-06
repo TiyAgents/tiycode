@@ -74,6 +74,31 @@ async fn test_migrations_create_all_tables() {
     );
 }
 
+#[tokio::test]
+async fn test_migrations_seed_latest_default_settings() {
+    let pool = test_helpers::setup_test_pool().await;
+
+    let minimize_to_tray: String =
+        sqlx::query_scalar("SELECT value_json FROM settings WHERE key = ?")
+            .bind("general.minimize_to_tray")
+            .fetch_one(&pool)
+            .await
+            .expect("should seed minimize-to-tray setting");
+    assert_eq!(minimize_to_tray, "true");
+
+    let deny_list: String = sqlx::query_scalar("SELECT value_json FROM policies WHERE key = ?")
+        .bind("deny_list")
+        .fetch_one(&pool)
+        .await
+        .expect("should seed deny-list defaults");
+    let deny_list_json: serde_json::Value =
+        serde_json::from_str(&deny_list).expect("deny_list should be valid JSON");
+
+    assert_eq!(deny_list_json.as_array().map(Vec::len), Some(2));
+    assert_eq!(deny_list_json[0]["id"], "default-deny-rm-root");
+    assert_eq!(deny_list_json[1]["id"], "default-deny-rm-literal-star");
+}
+
 // =========================================================================
 // T1.1.2 — WAL mode and pragmas
 // =========================================================================
