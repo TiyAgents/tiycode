@@ -76,6 +76,48 @@ type UserSession = {
   email: string;
 };
 
+function validatePolicyPatternInput(
+  value: string,
+  t: ReturnType<typeof useT>,
+): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return t("settings.permissions.patternRequired");
+  }
+
+  if (trimmed.startsWith("shell:")) {
+    return trimmed.slice("shell:".length).trim()
+      ? null
+      : t("settings.permissions.shellPatternRequired");
+  }
+
+  if (trimmed.startsWith("any:")) {
+    return trimmed.slice("any:".length).trim()
+      ? null
+      : t("settings.permissions.anyPatternRequired");
+  }
+
+  if (trimmed.startsWith("tool:")) {
+    const remainder = trimmed.slice("tool:".length).trimStart();
+    if (!remainder) {
+      return t("settings.permissions.toolPatternFormat");
+    }
+
+    const separatorIndex = remainder.search(/\s/);
+    if (separatorIndex < 0) {
+      return t("settings.permissions.toolPatternFormat");
+    }
+
+    const toolName = remainder.slice(0, separatorIndex).trim();
+    const pattern = remainder.slice(separatorIndex).trim();
+    return toolName && pattern
+      ? null
+      : t("settings.permissions.toolPatternFormat");
+  }
+
+  return null;
+}
+
 type SettingsCenterOverlayProps = {
   activeCategory: SettingsCategory;
   agentProfiles: Array<AgentProfile>;
@@ -1968,18 +2010,23 @@ function PatternItem({
   onUpdate: (patch: Partial<Omit<PatternEntry, "id">>) => void;
 }) {
   const t = useT();
+  const validationError = isEditing ? validatePolicyPatternInput(entry.pattern, t) : null;
+  const isValid = !validationError;
+
   return (
-    <div className={cn("flex items-center gap-3 px-3 py-2", !isFirst && "border-t border-dashed border-app-border")}>
-      <div className="min-w-0 flex-1">
+    <div className={cn("px-3 py-2", !isFirst && "border-t border-dashed border-app-border")}>
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
         {isEditing ? (
           <Input
             autoFocus
             value={entry.pattern}
             onChange={(event) => onUpdate({ pattern: event.target.value })}
             onKeyDown={(event) => {
-              if (event.key === "Enter") onEdit();
+              if (event.key === "Enter" && isValid) onEdit();
               if (event.key === "Escape") onCancelEdit();
             }}
+            aria-invalid={!isValid}
             placeholder={t("settings.permissions.patternPlaceholder")}
             className="h-8 text-[13px]"
           />
@@ -1988,17 +2035,25 @@ function PatternItem({
             {entry.pattern || <span className="italic text-app-muted">{t("settings.permissions.empty")}</span>}
           </span>
         )}
-      </div>
+        </div>
 
-      <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
         {isEditing ? (
           <>
             <button
               type="button"
               title={t("settings.permissions.confirm")}
               aria-label={t("settings.permissions.confirm")}
-              className="flex size-7 items-center justify-center rounded-md text-green-500 transition-colors hover:bg-app-surface-hover hover:text-green-600"
-              onClick={onEdit}
+              disabled={!isValid}
+              className={cn(
+                "flex size-7 items-center justify-center rounded-md transition-colors",
+                isValid
+                  ? "text-green-500 hover:bg-app-surface-hover hover:text-green-600"
+                  : "cursor-not-allowed text-app-subtle/50",
+              )}
+              onClick={() => {
+                if (isValid) onEdit();
+              }}
             >
               <Check className="size-3.5" />
             </button>
@@ -2034,7 +2089,11 @@ function PatternItem({
             </button>
           </>
         )}
+        </div>
       </div>
+      {isEditing && validationError ? (
+        <p className="mt-2 text-[11px] text-app-danger">{validationError}</p>
+      ) : null}
     </div>
   );
 }

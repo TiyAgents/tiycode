@@ -106,6 +106,12 @@ pub struct PolicyEngine {
     pool: SqlitePool,
 }
 
+#[derive(Debug, Clone)]
+struct EffectivePolicyRule {
+    tool: String,
+    pattern: String,
+}
+
 impl PolicyEngine {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
@@ -146,17 +152,17 @@ impl PolicyEngine {
         checked.push("user_deny_list".to_string());
         if let Some(deny_list) = self.load_policy_list("deny_list").await? {
             for rule in &deny_list {
-                if let Some(tool) = rule["tool"].as_str() {
-                    if tool == tool_name || tool == "*" {
-                        let pattern = rule["pattern"].as_str().unwrap_or("");
-                        if pattern.is_empty()
-                            || input_matches_pattern(tool_name, tool_input, pattern)
+                if let Some(parsed_rule) = effective_policy_rule(rule) {
+                    if parsed_rule.tool == tool_name || parsed_rule.tool == "*" {
+                        if parsed_rule.pattern.is_empty()
+                            || input_matches_pattern(tool_name, tool_input, &parsed_rule.pattern)
                         {
                             return Ok(PolicyCheck {
                                 tool_name: tool_name.to_string(),
                                 verdict: PolicyVerdict::Deny {
                                     reason: format!(
-                                        "Denied by user deny list rule: {tool}/{pattern}"
+                                        "Denied by user deny list rule: {}/{}",
+                                        parsed_rule.tool, parsed_rule.pattern
                                     ),
                                 },
                                 checked_rules: checked,
@@ -217,11 +223,10 @@ impl PolicyEngine {
         checked.push("user_allow_list".to_string());
         if let Some(allow_list) = self.load_policy_list("allow_list").await? {
             for rule in &allow_list {
-                if let Some(tool) = rule["tool"].as_str() {
-                    if tool == tool_name || tool == "*" {
-                        let pattern = rule["pattern"].as_str().unwrap_or("");
-                        if !pattern.is_empty()
-                            && !input_matches_pattern(tool_name, tool_input, pattern)
+                if let Some(parsed_rule) = effective_policy_rule(rule) {
+                    if parsed_rule.tool == tool_name || parsed_rule.tool == "*" {
+                        if !parsed_rule.pattern.is_empty()
+                            && !input_matches_pattern(tool_name, tool_input, &parsed_rule.pattern)
                         {
                             continue;
                         }
@@ -542,4 +547,81 @@ fn simple_glob_match(pattern: &str, text: &str) -> bool {
     }
 
     matches_from(&pattern_chars, &text_chars, 0, 0, &mut memo)
+}
+
+fn effective_policy_rule(rule: &serde_json::Value) -> Option<EffectivePolicyRule> {
+    let base_tool = rule["tool"].as_str().unwrap_or("*").trim();
+    let base_pattern = rule["pattern"].as_str().unwrap_or("").trim();
+
+    let mut effective = EffectivePolicyRule {
+        tool: normalize_rule_tool(base_tool),
+        pattern: base_pattern.to_string(),
+    };
+
+    if let Some(prefixed) = parse_prefixed_policy_pattern(base_pattern) {
+        effective = prefixed;
+    }
+
+    if effective.tool.is_empty() {
+        effective.tool = "*".to_string();
+    }
+
+    Some(effective)
+}
+
+fn parse_prefixed_policy_pattern(raw: &str) -> Option<EffectivePolicyRule> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let colon_index = trimmed.find(':')?;
+    let prefix = trimmed[..colon_index].trim().to_ascii_lowercase();
+    let remainder = trimmed[colon_index + 1..].trim_start();
+
+    match prefix.as_str() {
+        "shell" => {
+            if remainder.is_empty() {
+                None
+            } else {
+                Some(EffectivePolicyRule {
+                    tool: "shell".to_string(),
+                    pattern: remainder.to_string(),
+                })
+            }
+        }
+        "any" => {
+            if remainder.is_empty() {
+                None
+            } else {
+                Some(EffectivePolicyRule {
+                    tool: "*".to_string(),
+                    pattern: remainder.to_string(),
+                })
+            }
+        }
+        "tool" => {
+            let mut parts = remainder.splitn(2, char::is_whitespace);
+            let tool_name = parts.next().unwrap_or("").trim();
+            let pattern = parts.next().unwrap_or("").trim();
+            if tool_name.is_empty() || pattern.is_empty() {
+                return None;
+            }
+
+            Some(EffectivePolicyRule {
+                tool: normalize_rule_tool(tool_name),
+                pattern: pattern.to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn normalize_rule_tool(tool: &str) -> String {
+    let trimmed = tool.trim();
+    if trimmed.is_empty() {
+        "*".to_string()
+    } else {
+        trimmed.to_ascii_lowercase()
+    }
 }

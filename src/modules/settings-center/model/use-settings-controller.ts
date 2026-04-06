@@ -148,6 +148,63 @@ function mapApprovalPolicyToDb(value: PolicySettings["approvalPolicy"]) {
   return { mode };
 }
 
+function parsePrefixedPolicyPattern(raw: string): { tool: string; pattern: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const colonIndex = trimmed.indexOf(":");
+  if (colonIndex < 0) {
+    return null;
+  }
+
+  const prefix = trimmed.slice(0, colonIndex).trim().toLowerCase();
+  const remainder = trimmed.slice(colonIndex + 1).trimStart();
+  if (!remainder) {
+    return null;
+  }
+
+  if (prefix === "shell") {
+    return { tool: "shell", pattern: remainder };
+  }
+
+  if (prefix === "any") {
+    return { tool: "*", pattern: remainder };
+  }
+
+  if (prefix === "tool") {
+    const separatorIndex = remainder.search(/\s/);
+    if (separatorIndex < 0) {
+      return null;
+    }
+
+    const tool = remainder.slice(0, separatorIndex).trim().toLowerCase();
+    const pattern = remainder.slice(separatorIndex).trim();
+    if (!tool || !pattern) {
+      return null;
+    }
+
+    return { tool, pattern };
+  }
+
+  return null;
+}
+
+function formatPolicyPatternForUi(tool: string, pattern: string) {
+  const normalizedTool = tool.trim().toLowerCase();
+  if (!normalizedTool) {
+    return pattern;
+  }
+  if (normalizedTool === "*") {
+    return `any:${pattern}`;
+  }
+  if (normalizedTool === "shell") {
+    return `shell:${pattern}`;
+  }
+  return `tool:${normalizedTool} ${pattern}`;
+}
+
 function mapPatternEntriesFromDb(value: unknown): Array<PatternEntry> {
   if (!Array.isArray(value)) {
     return DEFAULT_POLICY_SETTINGS.allowList;
@@ -158,14 +215,17 @@ function mapPatternEntriesFromDb(value: unknown): Array<PatternEntry> {
       return [];
     }
 
-    const record = entry as { id?: unknown; pattern?: unknown };
+    const record = entry as { id?: unknown; pattern?: unknown; tool?: unknown };
     if (typeof record.pattern !== "string") {
       return [];
     }
 
     return [{
       id: typeof record.id === "string" ? record.id : crypto.randomUUID(),
-      pattern: record.pattern,
+      pattern: formatPolicyPatternForUi(
+        typeof record.tool === "string" ? record.tool : "*",
+        record.pattern,
+      ),
     }];
   });
 }
@@ -206,16 +266,22 @@ function mapPoliciesFromDtos(policyDtos: Array<import("@/shared/types/api").Sett
 async function persistPolicyState(policy: PolicySettings) {
   await Promise.all([
     policySet("approval_policy", JSON.stringify(mapApprovalPolicyToDb(policy.approvalPolicy))),
-    policySet("allow_list", JSON.stringify(policy.allowList.map((entry) => ({
-      id: entry.id,
-      tool: "*",
-      pattern: entry.pattern,
-    })))),
-    policySet("deny_list", JSON.stringify(policy.denyList.map((entry) => ({
-      id: entry.id,
-      tool: "*",
-      pattern: entry.pattern,
-    })))),
+    policySet("allow_list", JSON.stringify(policy.allowList.map((entry) => {
+      const parsed = parsePrefixedPolicyPattern(entry.pattern);
+      return {
+        id: entry.id,
+        tool: parsed?.tool ?? "*",
+        pattern: parsed?.pattern ?? entry.pattern,
+      };
+    }))),
+    policySet("deny_list", JSON.stringify(policy.denyList.map((entry) => {
+      const parsed = parsePrefixedPolicyPattern(entry.pattern);
+      return {
+        id: entry.id,
+        tool: parsed?.tool ?? "*",
+        pattern: parsed?.pattern ?? entry.pattern,
+      };
+    }))),
     policySet("writable_roots", JSON.stringify(policy.writableRoots)),
   ]);
 }

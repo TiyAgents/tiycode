@@ -284,6 +284,85 @@ async fn test_policy_non_shell_patterns_use_simple_glob_matching() {
 }
 
 #[tokio::test]
+async fn test_policy_prefix_syntax_targets_shell_and_tool_rules() {
+    let read_pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_policy(
+        &read_pool,
+        "deny_list",
+        r#"[{"tool":"*","pattern":"tool:read .env.*"}]"#,
+    )
+    .await;
+    let read_engine = PolicyEngine::new(read_pool);
+
+    let read_match = read_engine
+        .evaluate(
+            "read",
+            &json!({ "path": ".env.local" }),
+            None,
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(read_match.verdict, PolicyVerdict::Deny { .. }));
+
+    let write_miss = read_engine
+        .evaluate(
+            "write",
+            &json!({ "path": ".env.local" }),
+            None,
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !matches!(write_miss.verdict, PolicyVerdict::Deny { .. }),
+        "tool-prefixed rules should only apply to the targeted tool"
+    );
+
+    let shell_pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_policy(
+        &shell_pool,
+        "deny_list",
+        r#"[{"tool":"*","pattern":"shell:rm -rf /"}]"#,
+    )
+    .await;
+    let shell_engine = PolicyEngine::new(shell_pool);
+
+    let shell_match = shell_engine
+        .evaluate(
+            "shell",
+            &json!({ "command": "rm -rf /" }),
+            None,
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(shell_match.verdict, PolicyVerdict::Deny { .. }));
+
+    let non_shell_miss = shell_engine
+        .evaluate(
+            "read",
+            &json!({ "path": "rm -rf /" }),
+            None,
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !matches!(non_shell_miss.verdict, PolicyVerdict::Deny { .. }),
+        "shell-prefixed rules should not leak into non-shell tools"
+    );
+}
+
+#[tokio::test]
 async fn test_policy_allow_list_pattern_must_match() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_policy(

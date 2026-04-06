@@ -214,13 +214,16 @@ export const DEFAULT_PROVIDERS: Array<ProviderEntry> = [];
 export const DEFAULT_GENERAL_PREFERENCES: GeneralPreferences = {
   launchAtLogin: false,
   preventSleepWhileRunning: false,
-  minimizeToTray: false,
+  minimizeToTray: true,
 };
 
 export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
   approvalPolicy: "on-request",
   allowList: [],
-  denyList: [],
+  denyList: [
+    { id: "default-deny-rm-root", pattern: "shell:rm -rf /" },
+    { id: "default-deny-rm-literal-star", pattern: "shell:rm -rf \\*" },
+  ],
   writableRoots: [],
 };
 

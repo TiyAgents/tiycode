@@ -375,12 +375,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_terminal_sessions_active
 INSERT OR IGNORE INTO settings (key, value_json) VALUES
     ('theme', '"system"'),
     ('language', '"zh-CN"'),
-    ('startup_behavior', '{"restore_last_workspace": true}');
+    ('startup_behavior', '{"restore_last_workspace": true}'),
+    ('general.minimize_to_tray', 'true');
 
 INSERT OR IGNORE INTO policies (key, value_json) VALUES
     ('approval_policy', '{"mode": "require_for_mutations"}'),
     ('sandbox_policy', '{"enabled": false}'),
     ('network_access', '{"allowed": true, "blocked_domains": []}'),
     ('allow_list', '[]'),
-    ('deny_list', '[]'),
+    ('deny_list', '[{"id":"default-deny-rm-root","tool":"shell","pattern":"rm -rf /"},{"id":"default-deny-rm-literal-star","tool":"shell","pattern":"rm -rf \\\\*"}]'),
     ('writable_roots', '[]');
