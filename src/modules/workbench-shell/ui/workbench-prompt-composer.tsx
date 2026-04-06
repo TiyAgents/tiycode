@@ -1285,10 +1285,10 @@ export function WorkbenchPromptComposer({
         </Suggestions>
       ) : null}
 
-      <div className="rounded-[26px] border border-app-border/60 bg-app-surface/82 p-1.5 shadow-[0_22px_50px_-42px_rgba(15,23,42,0.38)] backdrop-blur-sm">
+      <div className="[--composer-shell-border:1px] [--composer-shell-gap:6px] [--composer-shell-radius:26px] rounded-[var(--composer-shell-radius)] border border-app-border/60 bg-app-surface/82 p-[var(--composer-shell-gap)] shadow-[0_22px_50px_-42px_rgba(15,23,42,0.38)] backdrop-blur-sm">
         <PromptInput
           accept={SUPPORTED_COMPOSER_ATTACHMENT_ACCEPT}
-          className="[&_[data-slot=input-group]]:overflow-visible [&_[data-slot=input-group]]:shadow-none [&_[data-slot=input-group]:focus-within]:!border-app-border/60 [&_[data-slot=input-group]:focus-within]:!ring-0"
+          className="[&_[data-slot=input-group]]:overflow-visible [&_[data-slot=input-group]]:rounded-[calc(var(--composer-shell-radius)-var(--composer-shell-border)-var(--composer-shell-gap))] [&_[data-slot=input-group]]:shadow-none [&_[data-slot=input-group]:focus-within]:!border-app-border/60 [&_[data-slot=input-group]:focus-within]:!ring-0"
           dialogFilters={SUPPORTED_COMPOSER_ATTACHMENT_DIALOG_FILTERS.map((filter) => ({
             extensions: [...filter.extensions],
             name: filter.name,
