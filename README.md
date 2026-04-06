@@ -1,6 +1,6 @@
 <div align="center">
   <img src="./public/app-icon.png" alt="TiyCode logo" width="120" />
-  <h1>TiyCode <sub>/taɪ koʊd/</sub></h1>
+  <h1>TiyCode</h1>
   <p><strong>An AI-first desktop coding agent.</strong></p>
   <p>Designed for a new coding collaboration paradigm. Humans express goals, constraints, and feedback through conversation, while agents take the lead in understanding, execution, and forward progress.</p>
   <p>
@@ -10,7 +10,7 @@
 
 ## Why TiyCode
 
-TiyCode is built for people who want coding to feel native to the AI era. Conversation is not a companion to the workflow here, but the starting point of it. You define goals, constraints, and feedback. The agent understands context, uses tools, and drives execution forward inside a real workspace.
+TiyCode <sub>/taɪ koʊd/</sub> is built for people who want coding to feel native to the AI era. Conversation is not a companion to the workflow here, but the starting point of it. You define goals, constraints, and feedback. The agent understands context, uses tools, and drives execution forward inside a real workspace.
 
 Around that collaboration model, TiyCode brings together Agent Profiles, workspace-based threads, code review, version control, terminal workflows, and an extensible runtime in one local-first desktop product.
 
