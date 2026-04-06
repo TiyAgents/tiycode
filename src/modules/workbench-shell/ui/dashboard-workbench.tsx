@@ -2252,7 +2252,6 @@ export function DashboardWorkbench() {
         language={language}
         theme={theme}
         onToggleUserMenu={handleUserMenuToggle}
-        onLogin={handleLogin}
         onLogout={handleLogout}
         onCheckUpdates={handleCheckUpdates}
         onOpenSettings={() => handleOpenSettings("general")}

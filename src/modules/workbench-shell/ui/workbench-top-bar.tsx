@@ -5,7 +5,6 @@ import {
   Copy,
   Globe,
   LoaderCircle,
-  LogIn,
   LogOut,
   Minus,
   MoreHorizontal,
@@ -59,7 +58,6 @@ export function WorkbenchTopBar({
   language,
   theme,
   onToggleUserMenu,
-  onLogin,
   onLogout,
   onCheckUpdates,
   onOpenSettings,
@@ -88,7 +86,6 @@ export function WorkbenchTopBar({
   language: LanguagePreference;
   theme: ThemePreference;
   onToggleUserMenu: () => void;
-  onLogin: () => void;
   onLogout: () => void;
   onCheckUpdates: () => void;
   onOpenSettings: () => void;
@@ -162,8 +159,8 @@ export function WorkbenchTopBar({
               isOverlayOpen && "pointer-events-none invisible",
               isUserMenuOpen && "bg-app-surface-hover text-app-foreground",
             )}
-            aria-label={isLoggedIn ? "打开用户菜单" : "打开登录菜单"}
-            title={isLoggedIn ? "打开用户菜单" : "打开登录菜单"}
+            aria-label={isLoggedIn ? "打开用户菜单" : "打开菜单"}
+            title={isLoggedIn ? "打开用户菜单" : "打开菜单"}
             aria-expanded={isUserMenuOpen}
             aria-haspopup="menu"
             onClick={onToggleUserMenu}
@@ -292,12 +289,7 @@ export function WorkbenchTopBar({
                   <LogOut className={MENU_TRIGGER_ICON_CLASS} />
                   <span className={MENU_TRIGGER_LABEL_CLASS}>退出登录</span>
                 </button>
-              ) : (
-                <button type="button" className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")} onClick={onLogin}>
-                  <LogIn className={MENU_TRIGGER_ICON_CLASS} />
-                  <span className={MENU_TRIGGER_LABEL_CLASS}>登录</span>
-                </button>
-              )}
+              ) : null}
 
               {updateStatus ? (
                 <div className="px-3 pb-1 pt-2 text-xs text-app-subtle">{updateStatus}</div>
