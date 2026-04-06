@@ -371,6 +371,7 @@ export function DashboardWorkbench() {
     enableSkill,
     error: extensionsError,
     extensions,
+    getMarketplaceSourceRemovePlan,
     installMarketplaceItem,
     isLoading: areExtensionsLoading,
     loadDetail: loadExtensionDetail,
@@ -2951,6 +2952,7 @@ export function DashboardWorkbench() {
           onDisableExtension={(id) => disableExtension(id, currentExtensionScope)}
           onUninstallExtension={(id) => uninstallExtension(id, currentExtensionScope)}
           onAddMarketplaceSource={addMarketplaceSource}
+          onGetMarketplaceSourceRemovePlan={getMarketplaceSourceRemovePlan}
           onRemoveMarketplaceSource={removeMarketplaceSource}
           onRefreshMarketplaceSource={refreshMarketplaceSource}
           onInstallMarketplaceItem={installMarketplaceItem}

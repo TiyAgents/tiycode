@@ -183,6 +183,22 @@ export type MarketplaceSourceInput = {
   url: string;
 };
 
+export type MarketplaceSourcePluginRef = {
+  id: string;
+  name: string;
+  version: string;
+  enabled: boolean;
+  path: string;
+};
+
+export type MarketplaceRemoveSourcePlan = {
+  source: MarketplaceSource;
+  canRemove: boolean;
+  blockingPlugins: MarketplaceSourcePluginRef[];
+  removableInstalledPlugins: MarketplaceSourcePluginRef[];
+  summary: string;
+};
+
 export type MarketplaceItem = {
   id: string;
   sourceId: string;

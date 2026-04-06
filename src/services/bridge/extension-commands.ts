@@ -5,6 +5,7 @@ import type {
   ExtensionDetail,
   ExtensionSummary,
   MarketplaceItem,
+  MarketplaceRemoveSourcePlan,
   MarketplaceSource,
   MarketplaceSourceInput,
   McpServerConfigInput,
@@ -156,6 +157,11 @@ export async function marketplaceAddSource(input: MarketplaceSourceInput): Promi
 export async function marketplaceRemoveSource(id: string): Promise<void> {
   requireTauri("marketplace_remove_source");
   return invoke("marketplace_remove_source", { id });
+}
+
+export async function marketplaceGetRemoveSourcePlan(id: string): Promise<MarketplaceRemoveSourcePlan> {
+  requireTauri("marketplace_get_remove_source_plan");
+  return invoke<MarketplaceRemoveSourcePlan>("marketplace_get_remove_source_plan", { id });
 }
 
 export async function marketplaceRefreshSource(id: string): Promise<MarketplaceSource> {

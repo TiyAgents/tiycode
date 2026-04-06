@@ -246,6 +246,26 @@ pub struct MarketplaceSourceInputDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MarketplaceSourcePluginRefDto {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub enabled: bool,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceRemoveSourcePlanDto {
+    pub source: MarketplaceSourceDto,
+    pub can_remove: bool,
+    pub blocking_plugins: Vec<MarketplaceSourcePluginRefDto>,
+    pub removable_installed_plugins: Vec<MarketplaceSourcePluginRefDto>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MarketplaceItemDto {
     pub id: String,
     pub source_id: String,

@@ -7,6 +7,7 @@ import {
   extensionsList,
   extensionsListCommands,
   marketplaceAddSource,
+  marketplaceGetRemoveSourcePlan,
   marketplaceInstallItem,
   marketplaceListItems,
   marketplaceListSources,
@@ -29,6 +30,7 @@ import type {
   ExtensionDetail,
   ExtensionSummary,
   MarketplaceItem,
+  MarketplaceRemoveSourcePlan,
   MarketplaceSource,
   MarketplaceSourceInput,
   McpServerConfigInput,
@@ -227,6 +229,8 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
     installMarketplaceItem: (id: string) => mutateAndRefresh("global", () => marketplaceInstallItem(id)),
     addMarketplaceSource: (input: MarketplaceSourceInput) =>
       mutateAndRefresh("global", () => marketplaceAddSource(input)),
+    getMarketplaceSourceRemovePlan: (id: string): Promise<MarketplaceRemoveSourcePlan> =>
+      marketplaceGetRemoveSourcePlan(id),
     removeMarketplaceSource: (id: string) =>
       mutateAndRefresh("global", () => marketplaceRemoveSource(id)),
     refreshMarketplaceSource: (id: string) =>

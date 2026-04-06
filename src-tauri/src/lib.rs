@@ -283,6 +283,7 @@ pub fn run() {
             commands::extensions::marketplace_list_sources,
             commands::extensions::marketplace_add_source,
             commands::extensions::marketplace_remove_source,
+            commands::extensions::marketplace_get_remove_source_plan,
             commands::extensions::marketplace_refresh_source,
             commands::extensions::marketplace_list_items,
             commands::extensions::marketplace_install_item,

@@ -14,7 +14,9 @@ import {
   PackageOpen,
   RefreshCw,
   Search,
+  X,
 } from "lucide-react";
+import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -38,6 +40,7 @@ import type {
   ExtensionDetail,
   ExtensionSummary,
   MarketplaceItem,
+  MarketplaceRemoveSourcePlan,
   MarketplaceSource,
   MarketplaceSourceInput,
   McpServerConfigInput,
@@ -117,6 +120,7 @@ type ExtensionsCenterOverlayProps = {
   onEnableSkill: (id: string) => Promise<void>;
   onDisableSkill: (id: string) => Promise<void>;
   onAddMarketplaceSource: (input: MarketplaceSourceInput) => Promise<void>;
+  onGetMarketplaceSourceRemovePlan: (id: string) => Promise<MarketplaceRemoveSourcePlan>;
   onRemoveMarketplaceSource: (id: string) => Promise<void>;
   onRefreshMarketplaceSource: (id: string) => Promise<void>;
   onInstallMarketplaceItem: (id: string) => Promise<void>;
@@ -463,6 +467,12 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
   const [mcpHeadersText, setMcpHeadersText] = useState("");
   const [marketSourceDialogOpen, setMarketSourceDialogOpen] = useState(false);
   const [marketSourceForm, setMarketSourceForm] = useState<MarketplaceSourceInput>({ name: "", url: "" });
+  const [removeSourceDialogOpen, setRemoveSourceDialogOpen] = useState(false);
+  const [removeSourcePlan, setRemoveSourcePlan] = useState<MarketplaceRemoveSourcePlan | null>(null);
+  const [removeSourceTargetId, setRemoveSourceTargetId] = useState<string | null>(null);
+  const [removeSourceError, setRemoveSourceError] = useState<string | null>(null);
+  const [isRemoveSourcePreviewLoading, setRemoveSourcePreviewLoading] = useState(false);
+  const [isRemoveSourceSubmitting, setRemoveSourceSubmitting] = useState(false);
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [isActionPending, setActionPending] = useState(false);
   const [skillPreviewDialogOpen, setSkillPreviewDialogOpen] = useState(false);
@@ -568,11 +578,12 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
   }, [activeQuery, activeTab, allPluginItems, pluginSourceFilter]);
   const pluginSourceOptions = useMemo(() => {
     return [
-      { count: allPluginItems.length, key: "all" as const, label: "All" },
+      { count: allPluginItems.length, key: "all" as const, label: "All", source: null },
       ...props.marketplaceSources.map((source) => ({
         count: allPluginItems.filter((item) => item.sourceFilter === source.id).length,
         key: source.id,
         label: source.name,
+        source,
       })),
     ];
   }, [allPluginItems, props.marketplaceSources]);
@@ -680,6 +691,8 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
     [selectedSkillContent],
   );
   const activeMeta = TAB_META[activeTab];
+  const sourceActionLockedId =
+    isRemoveSourcePreviewLoading || isRemoveSourceSubmitting ? removeSourceTargetId : null;
 
   const runAction = async (action: () => Promise<void>) => {
     setActionPending(true);
@@ -735,6 +748,46 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
         : props.onUpdateMcpServer(payload.id, payload),
     );
     setMcpDialogOpen(false);
+  };
+
+  const handleOpenRemoveSourceDialog = async (source: MarketplaceSource) => {
+    setRemoveSourceDialogOpen(true);
+    setRemoveSourceTargetId(source.id);
+    setRemoveSourcePlan(null);
+    setRemoveSourceError(null);
+    setRemoveSourcePreviewLoading(true);
+    try {
+      const plan = await props.onGetMarketplaceSourceRemovePlan(source.id);
+      setRemoveSourcePlan(plan);
+    } catch (error) {
+      setRemoveSourceError(getInvokeErrorMessage(error, "Failed to load source removal details"));
+    } finally {
+      setRemoveSourcePreviewLoading(false);
+    }
+  };
+
+  const handleConfirmRemoveSource = async () => {
+    if (!removeSourceTargetId) {
+      return;
+    }
+    setRemoveSourceSubmitting(true);
+    setRemoveSourceError(null);
+    try {
+      await props.onRemoveMarketplaceSource(removeSourceTargetId);
+      setRemoveSourceDialogOpen(false);
+      setRemoveSourcePlan(null);
+      setRemoveSourceTargetId(null);
+    } catch (error) {
+      setRemoveSourceError(getInvokeErrorMessage(error, "Failed to remove source"));
+      try {
+        const nextPlan = await props.onGetMarketplaceSourceRemovePlan(removeSourceTargetId);
+        setRemoveSourcePlan(nextPlan);
+      } catch {
+        // Keep the latest visible error if preview refresh also fails.
+      }
+    } finally {
+      setRemoveSourceSubmitting(false);
+    }
   };
 
   return (
@@ -872,25 +925,45 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                 {activeTab === "plugins" ? (
                   <div className="sticky top-0 z-10 -mx-1 border-b border-app-border/70 bg-[color:color-mix(in_srgb,var(--app-bg)_88%,transparent)] px-1 py-3 backdrop-blur">
                     <div className="flex flex-wrap items-center gap-2">
-                    {pluginSourceOptions.map((option) => (
-                      <button
-                        key={option.key}
-                        type="button"
-                        className={cn(
-                          "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] transition-colors",
-                          pluginSourceFilter === option.key
-                            ? "border-app-border-strong bg-app-canvas text-app-foreground"
-                            : "border-app-border bg-app-surface-muted/70 text-app-muted hover:text-app-foreground",
-                        )}
-                        onClick={() => setPluginSourceFilter(option.key)}
-                      >
-                        <span>{option.label}</span>
-                        <span className="rounded-full bg-app-surface px-1.5 py-0.5 text-[10px] text-app-subtle">
-                          {option.count}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
+                      {pluginSourceOptions.map((option) => (
+                        <div key={option.key} className="group relative">
+                          <button
+                            type="button"
+                            className={cn(
+                              "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] transition-colors",
+                              pluginSourceFilter === option.key
+                                ? "border-app-border-strong bg-app-canvas text-app-foreground"
+                                : "border-app-border bg-app-surface-muted/70 text-app-muted hover:text-app-foreground",
+                            )}
+                            onClick={() => setPluginSourceFilter(option.key)}
+                          >
+                            <span>{option.label}</span>
+                            <span className="rounded-full bg-app-surface px-1.5 py-0.5 text-[10px] text-app-subtle">
+                              {option.count}
+                            </span>
+                          </button>
+                          {option.source && !option.source.builtin ? (
+                            <button
+                              type="button"
+                              aria-label={`Remove ${option.source.name}`}
+                              title={`Remove ${option.source.name}`}
+                              disabled={sourceActionLockedId === option.source.id}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void handleOpenRemoveSourceDialog(option.source);
+                              }}
+                              className={cn(
+                                "absolute -right-1 -top-1 z-10 flex size-5 items-center justify-center rounded-full border border-app-border bg-app-canvas text-app-subtle opacity-0 shadow-sm transition hover:text-app-foreground group-hover:opacity-100 group-focus-within:opacity-100",
+                                sourceActionLockedId === option.source.id && "pointer-events-none opacity-40",
+                              )}
+                            >
+                              <X className="size-3" />
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
 
@@ -1321,7 +1394,10 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         <DetailSection title="Marketplace Sources">
                           {props.marketplaceSources.length > 0 ? (
                             props.marketplaceSources.map((source) => (
-                              <div key={source.id} className="w-full rounded-xl border border-app-border bg-app-canvas/70 p-3">
+                              <div
+                                key={source.id}
+                                className="w-full rounded-xl border border-app-border bg-app-canvas/70 p-3"
+                              >
                                 <div className="flex items-start justify-between gap-3">
                                   <div className="min-w-0">
                                     <div className="flex flex-wrap items-center gap-2">
@@ -1348,19 +1424,11 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                     <Button
                                       size="sm"
                                       variant="outline"
+                                      disabled={isActionPending || sourceActionLockedId === source.id}
                                       onClick={() => void runAction(() => props.onRefreshMarketplaceSource(source.id))}
                                     >
                                       Refresh
                                     </Button>
-                                    {!source.builtin ? (
-                                      <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        onClick={() => void runAction(() => props.onRemoveMarketplaceSource(source.id))}
-                                      >
-                                        Remove
-                                      </Button>
-                                    ) : null}
                                   </div>
                                 </div>
                               </div>
@@ -1763,6 +1831,118 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
             >
               Add source
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={removeSourceDialogOpen}
+        onOpenChange={(open) => {
+          setRemoveSourceDialogOpen(open);
+          if (!open) {
+            setRemoveSourcePlan(null);
+            setRemoveSourceTargetId(null);
+            setRemoveSourceError(null);
+            setRemoveSourcePreviewLoading(false);
+            setRemoveSourceSubmitting(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-xl border-app-border bg-app-canvas">
+          <DialogHeader>
+            <DialogTitle>
+              {removeSourcePlan && !removeSourcePlan.canRemove ? "Can't remove source" : "Remove source"}
+            </DialogTitle>
+            <DialogDescription>
+              {isRemoveSourcePreviewLoading
+                ? "Checking whether this source can be removed."
+                : removeSourcePlan && !removeSourcePlan.canRemove
+                  ? "This source still has enabled plugins. Disable them before removing the source."
+                  : "Removing this source will also remove installed plugins from it that are not enabled."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3">
+            {removeSourceError ? (
+              <div className="rounded-xl border border-app-danger/30 bg-app-danger/8 px-3 py-2 text-sm text-app-danger">
+                {removeSourceError}
+              </div>
+            ) : null}
+
+            {isRemoveSourcePreviewLoading ? (
+              <div className="rounded-xl border border-app-border bg-app-surface px-4 py-5 text-sm text-app-muted">
+                Loading source removal details...
+              </div>
+            ) : null}
+
+            {removeSourcePlan ? (
+              <>
+                <div className="rounded-xl border border-app-border bg-app-surface px-4 py-3">
+                  <div className="text-sm font-medium text-app-foreground">{removeSourcePlan.source.name}</div>
+                  <div className="mt-1 break-all text-xs text-app-muted">{removeSourcePlan.source.url}</div>
+                  <div className="mt-2 text-xs text-app-muted">{removeSourcePlan.summary}</div>
+                </div>
+
+                {!removeSourcePlan.canRemove ? (
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-app-foreground">Enabled plugins blocking removal</div>
+                    <div className="space-y-2">
+                      {removeSourcePlan.blockingPlugins.map((plugin) => (
+                        <div
+                          key={plugin.id}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-app-border bg-app-canvas/70 px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-app-foreground">{plugin.name}</div>
+                            <div className="text-xs text-app-muted">v{plugin.version}</div>
+                          </div>
+                          <Badge className="bg-app-success/12 text-app-success">enabled</Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-app-foreground">Plugins to remove</div>
+                    {removeSourcePlan.removableInstalledPlugins.length > 0 ? (
+                      <div className="space-y-2">
+                        {removeSourcePlan.removableInstalledPlugins.map((plugin) => (
+                          <div
+                            key={plugin.id}
+                            className="flex items-center justify-between gap-3 rounded-xl border border-app-border bg-app-canvas/70 px-3 py-2"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-app-foreground">{plugin.name}</div>
+                              <div className="text-xs text-app-muted">v{plugin.version}</div>
+                            </div>
+                            <Badge variant="outline">installed</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border border-app-border bg-app-canvas/70 px-3 py-2 text-sm text-app-muted">
+                        No installed plugins from this source will be removed.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRemoveSourceDialogOpen(false)}
+              disabled={isRemoveSourcePreviewLoading || isRemoveSourceSubmitting}
+            >
+              {removeSourcePlan && !removeSourcePlan.canRemove ? "Close" : "Cancel"}
+            </Button>
+            {removeSourcePlan?.canRemove ? (
+              <Button onClick={() => void handleConfirmRemoveSource()} disabled={isRemoveSourceSubmitting}>
+                Remove source
+              </Button>
+            ) : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>

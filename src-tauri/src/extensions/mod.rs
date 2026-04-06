@@ -18,7 +18,8 @@ use crate::model::errors::{AppError, ErrorSource};
 use crate::model::extensions::{
     ExtensionActivityEventDto, ExtensionCommandDto, ExtensionDetailDto, ExtensionHealth,
     ExtensionInstallState, ExtensionKind, ExtensionSourceDto, ExtensionSummaryDto,
-    MarketplaceItemDto, MarketplaceSourceDto, MarketplaceSourceInputDto, McpResourceSummaryDto,
+    MarketplaceItemDto, MarketplaceRemoveSourcePlanDto, MarketplaceSourceDto,
+    MarketplaceSourceInputDto, MarketplaceSourcePluginRefDto, McpResourceSummaryDto,
     McpServerConfigDto, McpServerConfigInput, McpServerStateDto, McpToolSummaryDto,
     PluginCommandDto, PluginDetailDto, PluginHookGroupDto, PluginToolDto, SkillPreviewDto,
     SkillRecordDto,
@@ -837,30 +838,7 @@ impl ExtensionsManager {
         Ok(store
             .sources
             .into_iter()
-            .map(|source| {
-                let plugin_count = if source.last_error.is_some() {
-                    0
-                } else {
-                    marketplace_cache_plugin_count(&source)
-                };
-                MarketplaceSourceDto {
-                    id: source.id.clone(),
-                    name: source.name,
-                    url: source.url,
-                    builtin: is_builtin_marketplace_source_id(&source.id),
-                    kind: source.kind,
-                    status: if source.last_error.is_some() {
-                        "error".to_string()
-                    } else if source.last_synced_at.is_some() {
-                        "ready".to_string()
-                    } else {
-                        "idle".to_string()
-                    },
-                    last_synced_at: source.last_synced_at,
-                    last_error: source.last_error,
-                    plugin_count,
-                }
-            })
+            .map(|source| self.build_marketplace_source_dto(&source, None))
             .collect())
     }
 
@@ -883,20 +861,60 @@ impl ExtensionsManager {
         self.marketplace_refresh_source(&id).await
     }
 
+    pub async fn marketplace_get_remove_source_plan(
+        &self,
+        id: &str,
+    ) -> Result<MarketplaceRemoveSourcePlanDto, AppError> {
+        self.build_marketplace_remove_source_plan(id).await
+    }
+
     pub async fn marketplace_remove_source(&self, id: &str) -> Result<(), AppError> {
-        if is_builtin_marketplace_source_id(id) {
+        let plan = self.build_marketplace_remove_source_plan(id).await?;
+        if !plan.can_remove {
             return Err(AppError::validation(
                 ErrorSource::Settings,
-                "Builtin marketplace sources cannot be removed",
+                plan.summary.clone(),
             ));
         }
+
+        for plugin in &plan.removable_installed_plugins {
+            self.uninstall_plugin(&plugin.id).await?;
+        }
+
         let mut store = self.load_marketplace_sources()?;
+        let before = store.sources.len();
         store.sources.retain(|source| source.id != id);
+        if before == store.sources.len() {
+            return Err(AppError::not_found(
+                ErrorSource::Settings,
+                format!("marketplace source '{id}'"),
+            ));
+        }
         self.save_marketplace_sources(&store)?;
         let cache_dir = marketplace_cache_root().join(id);
         if cache_dir.exists() {
-            fs::remove_dir_all(cache_dir).ok();
+            if let Err(error) = fs::remove_dir_all(&cache_dir) {
+                tracing::warn!(
+                    source_id = %id,
+                    path = %cache_dir.display(),
+                    error = %error,
+                    "failed to remove marketplace source cache"
+                );
+            }
         }
+        self.write_extension_audit(
+            "marketplace_source_removed",
+            "marketplace_source",
+            id,
+            serde_json::json!({
+                "removedPluginIds": plan
+                    .removable_installed_plugins
+                    .iter()
+                    .map(|plugin| plugin.id.clone())
+                    .collect::<Vec<_>>(),
+            }),
+        )
+        .await?;
         Ok(())
     }
 
@@ -927,21 +945,7 @@ impl ExtensionsManager {
         self.save_marketplace_sources(&store)?;
         let source = store.sources[source_index].clone();
         let items = self.marketplace_items_for_source(&source).await?;
-        Ok(MarketplaceSourceDto {
-            id: source.id.clone(),
-            name: source.name.clone(),
-            url: source.url.clone(),
-            builtin: is_builtin_marketplace_source_id(&source.id),
-            kind: source.kind.clone(),
-            status: if source.last_error.is_some() {
-                "error".to_string()
-            } else {
-                "ready".to_string()
-            },
-            last_synced_at: source.last_synced_at.clone(),
-            last_error: source.last_error.clone(),
-            plugin_count: items.len(),
-        })
+        Ok(self.build_marketplace_source_dto(&source, Some(items.len())))
     }
 
     pub async fn marketplace_list_items(&self) -> Result<Vec<MarketplaceItemDto>, AppError> {
@@ -2314,6 +2318,125 @@ impl ExtensionsManager {
         }
 
         Ok(items)
+    }
+
+    fn build_marketplace_source_dto(
+        &self,
+        source: &MarketplaceSourceRecord,
+        plugin_count: Option<usize>,
+    ) -> MarketplaceSourceDto {
+        let plugin_count = plugin_count.unwrap_or_else(|| {
+            if source.last_error.is_some() {
+                0
+            } else {
+                marketplace_cache_plugin_count(source)
+            }
+        });
+
+        MarketplaceSourceDto {
+            id: source.id.clone(),
+            name: source.name.clone(),
+            url: source.url.clone(),
+            builtin: is_builtin_marketplace_source_id(&source.id),
+            kind: source.kind.clone(),
+            status: if source.last_error.is_some() {
+                "error".to_string()
+            } else if source.last_synced_at.is_some() {
+                "ready".to_string()
+            } else {
+                "idle".to_string()
+            },
+            last_synced_at: source.last_synced_at.clone(),
+            last_error: source.last_error.clone(),
+            plugin_count,
+        }
+    }
+
+    async fn build_marketplace_remove_source_plan(
+        &self,
+        id: &str,
+    ) -> Result<MarketplaceRemoveSourcePlanDto, AppError> {
+        if is_builtin_marketplace_source_id(id) {
+            return Err(AppError::validation(
+                ErrorSource::Settings,
+                "Builtin marketplace sources cannot be removed",
+            ));
+        }
+
+        let store = self.load_marketplace_sources()?;
+        let source = store
+            .sources
+            .into_iter()
+            .find(|source| source.id == id)
+            .ok_or_else(|| {
+                AppError::not_found(ErrorSource::Settings, format!("marketplace source '{id}'"))
+            })?;
+        let source_root = marketplace_cache_root().join(&source.id);
+
+        let mut installed_plugins = self
+            .load_installed_plugin_records()
+            .await?
+            .into_iter()
+            .filter(|record| Path::new(&record.path).starts_with(&source_root))
+            .map(|record| {
+                let runtime = self
+                    .load_plugin_from_dir(Path::new(&record.path), false)
+                    .ok();
+                MarketplaceSourcePluginRefDto {
+                    id: record.id,
+                    name: runtime
+                        .as_ref()
+                        .map(|plugin| plugin.manifest.name.clone())
+                        .unwrap_or_else(|| "Unknown plugin".to_string()),
+                    version: runtime
+                        .as_ref()
+                        .map(|plugin| plugin.manifest.version.clone())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    enabled: record.enabled,
+                    path: record.path,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        installed_plugins.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        let (blocking_plugins, removable_installed_plugins): (Vec<_>, Vec<_>) = installed_plugins
+            .into_iter()
+            .partition(|plugin| plugin.enabled);
+        let can_remove = blocking_plugins.is_empty();
+        let summary = if can_remove {
+            let removable_count = removable_installed_plugins.len();
+            if removable_count == 0 {
+                format!("Remove '{}' from Extensions Center.", source.name)
+            } else {
+                format!(
+                    "Remove '{}' and {} installed plugin{} from this source.",
+                    source.name,
+                    removable_count,
+                    if removable_count == 1 { "" } else { "s" }
+                )
+            }
+        } else {
+            format!(
+                "Disable {} enabled plugin{} before removing '{}'.",
+                blocking_plugins.len(),
+                if blocking_plugins.len() == 1 { "" } else { "s" },
+                source.name
+            )
+        };
+
+        Ok(MarketplaceRemoveSourcePlanDto {
+            source: self.build_marketplace_source_dto(&source, None),
+            can_remove,
+            blocking_plugins,
+            removable_installed_plugins,
+            summary,
+        })
     }
 
     fn build_plugin_hook_groups(&self, manifest: &PluginManifest) -> Vec<PluginHookGroupDto> {

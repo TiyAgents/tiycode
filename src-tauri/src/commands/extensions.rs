@@ -5,8 +5,9 @@ use crate::extensions::ConfigScope;
 use crate::model::errors::AppError;
 use crate::model::extensions::{
     ExtensionActivityEventDto, ExtensionCommandDto, ExtensionDetailDto, ExtensionSummaryDto,
-    MarketplaceItemDto, MarketplaceSourceDto, MarketplaceSourceInputDto, McpServerConfigInput,
-    McpServerStateDto, PluginDetailDto, SkillPreviewDto, SkillRecordDto,
+    MarketplaceItemDto, MarketplaceRemoveSourcePlanDto, MarketplaceSourceDto,
+    MarketplaceSourceInputDto, McpServerConfigInput, McpServerStateDto, PluginDetailDto,
+    SkillPreviewDto, SkillRecordDto,
 };
 
 #[tauri::command]
@@ -369,6 +370,17 @@ pub async fn marketplace_remove_source(
     state
         .extensions_manager
         .marketplace_remove_source(&id)
+        .await
+}
+
+#[tauri::command]
+pub async fn marketplace_get_remove_source_plan(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<MarketplaceRemoveSourcePlanDto, AppError> {
+    state
+        .extensions_manager
+        .marketplace_get_remove_source_plan(&id)
         .await
 }
 
