@@ -47,7 +47,7 @@ fn refresh_wake_lock(state: &mut SleepManagerState) {
             .idle(true)
             .reason("Active TiyCode run")
             .app_name("TiyCode")
-            .app_reverse_domain("ai.tiy.agent");
+            .app_reverse_domain("ai.tiy.tiycode");
 
         match builder.create() {
             Ok(lock) => {
