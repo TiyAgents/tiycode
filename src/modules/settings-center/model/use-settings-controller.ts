@@ -148,44 +148,6 @@ function mapApprovalPolicyToDb(value: PolicySettings["approvalPolicy"]) {
   return { mode };
 }
 
-function mapSandboxPolicyFromDb(value: unknown): PolicySettings["sandboxPolicy"] {
-  if (value === "read-only" || value === "workspace-write" || value === "full-access") {
-    return value;
-  }
-
-  if (value && typeof value === "object") {
-    const mode = (value as { mode?: unknown }).mode;
-    if (mode === "read-only" || mode === "workspace-write" || mode === "full-access") {
-      return mode;
-    }
-  }
-
-  return DEFAULT_POLICY_SETTINGS.sandboxPolicy;
-}
-
-function mapNetworkAccessFromDb(value: unknown): PolicySettings["networkAccess"] {
-  if (value === "ask" || value === "block" || value === "allow") {
-    return value;
-  }
-
-  if (value && typeof value === "object") {
-    const mode = (value as { mode?: unknown }).mode;
-    if (mode === "ask" || mode === "block" || mode === "allow") {
-      return mode;
-    }
-
-    if ((value as { allowed?: unknown }).allowed === true) {
-      return "allow";
-    }
-
-    if ((value as { allowed?: unknown }).allowed === false) {
-      return "block";
-    }
-  }
-
-  return DEFAULT_POLICY_SETTINGS.networkAccess;
-}
-
 function mapPatternEntriesFromDb(value: unknown): Array<PatternEntry> {
   if (!Array.isArray(value)) {
     return DEFAULT_POLICY_SETTINGS.allowList;
@@ -237,8 +199,6 @@ function mapPoliciesFromDtos(policyDtos: Array<import("@/shared/types/api").Sett
     approvalPolicy: mapApprovalPolicyFromDb(policyByKey.get("approval_policy")),
     allowList: mapPatternEntriesFromDb(policyByKey.get("allow_list")),
     denyList: mapPatternEntriesFromDb(policyByKey.get("deny_list")),
-    sandboxPolicy: mapSandboxPolicyFromDb(policyByKey.get("sandbox_policy")),
-    networkAccess: mapNetworkAccessFromDb(policyByKey.get("network_access")),
     writableRoots: mapWritableRootsFromDb(policyByKey.get("writable_roots")),
   };
 }
@@ -256,8 +216,6 @@ async function persistPolicyState(policy: PolicySettings) {
       tool: "*",
       pattern: entry.pattern,
     })))),
-    policySet("sandbox_policy", JSON.stringify({ mode: policy.sandboxPolicy })),
-    policySet("network_access", JSON.stringify({ mode: policy.networkAccess })),
     policySet("writable_roots", JSON.stringify(policy.writableRoots)),
   ]);
 }
@@ -265,8 +223,6 @@ async function persistPolicyState(policy: PolicySettings) {
 function isDefaultPolicyState(policy: PolicySettings) {
   return (
     policy.approvalPolicy === DEFAULT_POLICY_SETTINGS.approvalPolicy
-    && policy.sandboxPolicy === DEFAULT_POLICY_SETTINGS.sandboxPolicy
-    && policy.networkAccess === DEFAULT_POLICY_SETTINGS.networkAccess
     && policy.allowList.length === 0
     && policy.denyList.length === 0
     && policy.writableRoots.length === 0

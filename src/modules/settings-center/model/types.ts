@@ -1,8 +1,6 @@
 export type SettingsCategory = "account" | "general" | "workspace" | "providers" | "commands" | "policy" | "about";
 export type PromptResponseStyle = "balanced" | "concise" | "guide";
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";
-export type SandboxPolicy = "read-only" | "workspace-write" | "full-access";
-export type NetworkAccessPolicy = "ask" | "block" | "allow";
 export type PatternEntry = { id: string; pattern: string };
 export type WritableRootEntry = { id: string; path: string };
 
@@ -117,8 +115,6 @@ export type PolicySettings = {
   approvalPolicy: ApprovalPolicy;
   allowList: Array<PatternEntry>;
   denyList: Array<PatternEntry>;
-  sandboxPolicy: SandboxPolicy;
-  networkAccess: NetworkAccessPolicy;
   writableRoots: Array<WritableRootEntry>;
 };
 

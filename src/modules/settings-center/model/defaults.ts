@@ -221,8 +221,6 @@ export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
   approvalPolicy: "on-request",
   allowList: [],
   denyList: [],
-  sandboxPolicy: "workspace-write",
-  networkAccess: "ask",
   writableRoots: [],
 };
 

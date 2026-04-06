@@ -56,7 +56,6 @@ import type {
   CommandSettings,
   CustomProviderType,
   GeneralPreferences,
-  NetworkAccessPolicy,
   PatternEntry,
   PolicySettings,
   PromptResponseStyle,
@@ -64,7 +63,6 @@ import type {
   ProviderEntry,
   ProviderModel,
   ProviderModelCapabilities,
-  SandboxPolicy,
   SettingsCategory,
   WorkspaceEntry,
   WritableRootEntry,
@@ -182,6 +180,8 @@ const CATEGORY_META: ReadonlyArray<{
   },
 ] as const;
 
+const VISIBLE_CATEGORY_META = CATEGORY_META.filter((category) => category.key !== "account");
+
 const THEME_OPTIONS: ReadonlyArray<{ label: string; value: ThemePreference }> = [
   { label: "System", value: "system" },
   { label: "Light", value: "light" },
@@ -211,26 +211,6 @@ const APPROVAL_POLICY_OPTIONS: ReadonlyArray<{
   { value: "untrusted", label: "Untrusted", description: "Approve every tool call and command individually." },
   { value: "on-request", label: "On request", description: "Auto-approve safe actions, ask for risky ones." },
   { value: "never", label: "Never", description: "Let the agent run without approval prompts." },
-] as const;
-
-const SANDBOX_POLICY_OPTIONS: ReadonlyArray<{
-  description: string;
-  label: string;
-  value: SandboxPolicy;
-}> = [
-  { value: "read-only", label: "Read only", description: "No file writes allowed anywhere." },
-  { value: "workspace-write", label: "Workspace write", description: "Write only inside the active workspace." },
-  { value: "full-access", label: "Full access", description: "Write anywhere on the filesystem." },
-] as const;
-
-const NETWORK_ACCESS_OPTIONS: ReadonlyArray<{
-  description: string;
-  label: string;
-  value: NetworkAccessPolicy;
-}> = [
-  { value: "ask", label: "Ask", description: "Prompt before making network requests." },
-  { value: "block", label: "Block", description: "Block all outbound network access." },
-  { value: "allow", label: "Allow", description: "Allow network access without prompts." },
 ] as const;
 
 const MINIMAX_BASE_URL_OPTIONS = [
@@ -295,7 +275,7 @@ export function SettingsCenterOverlay({
   onUpdateProvider,
   onUpdateWritableRoot,
 }: SettingsCenterOverlayProps) {
-  const activeMeta = CATEGORY_META.find((category) => category.key === activeCategory) ?? CATEGORY_META[1];
+  const activeMeta = CATEGORY_META.find((category) => category.key === activeCategory) ?? CATEGORY_META[0];
   const isAboutCategory = activeCategory === "about";
 
   return (
@@ -313,7 +293,7 @@ export function SettingsCenterOverlay({
             </button>
 
             <div className="mt-4 space-y-1">
-              {CATEGORY_META.map((category) => {
+              {VISIBLE_CATEGORY_META.map((category) => {
                 const Icon = category.icon;
                 const isActive = category.key === activeCategory;
 
@@ -359,7 +339,7 @@ export function SettingsCenterOverlay({
 
           <div className="overflow-x-auto border-b border-app-border px-4 py-2 md:hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <div className="flex w-max items-center gap-4">
-              {CATEGORY_META.map((category) => {
+              {VISIBLE_CATEGORY_META.map((category) => {
                 const isActive = category.key === activeCategory;
 
                 return (
@@ -1876,32 +1856,6 @@ function PolicySettingsPanel({
           onAdd={onAddDenyEntry}
           onRemove={onRemoveDenyEntry}
           onUpdate={onUpdateDenyEntry}
-        />
-      </SettingsSection>
-
-      <SettingsSection title="Sandbox">
-        <SettingsRow
-          label="Sandbox policy"
-          description={SANDBOX_POLICY_OPTIONS.find((option) => option.value === policy.sandboxPolicy)?.description ?? ""}
-          control={
-            <ChoiceGroup
-              options={SANDBOX_POLICY_OPTIONS.map(({ label, value }) => ({ label, value }))}
-              value={policy.sandboxPolicy}
-              onValueChange={(value) => onUpdatePolicySetting("sandboxPolicy", value as SandboxPolicy)}
-            />
-          }
-        />
-        <SectionDivider />
-        <SettingsRow
-          label="Network access"
-          description={NETWORK_ACCESS_OPTIONS.find((option) => option.value === policy.networkAccess)?.description ?? ""}
-          control={
-            <ChoiceGroup
-              options={NETWORK_ACCESS_OPTIONS.map(({ label, value }) => ({ label, value }))}
-              value={policy.networkAccess}
-              onValueChange={(value) => onUpdatePolicySetting("networkAccess", value as NetworkAccessPolicy)}
-            />
-          }
         />
         <SectionDivider />
         <WritableRootsSubsection

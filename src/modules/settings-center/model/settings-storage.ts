@@ -14,9 +14,7 @@ import type {
 } from "@/modules/settings-center/model/types";
 import {
   type ApprovalPolicy,
-  type NetworkAccessPolicy,
   type PromptResponseStyle,
-  type SandboxPolicy,
 } from "@/modules/settings-center/model/types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -29,14 +27,6 @@ function isPromptResponseStyle(value: unknown): value is PromptResponseStyle {
 
 function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
   return value === "untrusted" || value === "on-request" || value === "never";
-}
-
-function isSandboxPolicy(value: unknown): value is SandboxPolicy {
-  return value === "read-only" || value === "workspace-write" || value === "full-access";
-}
-
-function isNetworkAccessPolicy(value: unknown): value is NetworkAccessPolicy {
-  return value === "ask" || value === "block" || value === "allow";
 }
 
 function parseAgentProfileEntry(raw: Record<string, unknown>): AgentProfile {
@@ -165,12 +155,6 @@ export function readStoredSettings(): SettingsState {
               pattern: typeof entry.pattern === "string" ? entry.pattern : "",
             }))
           : DEFAULT_POLICY_SETTINGS.denyList,
-        sandboxPolicy: isSandboxPolicy(policyRaw.sandboxPolicy)
-          ? policyRaw.sandboxPolicy
-          : DEFAULT_POLICY_SETTINGS.sandboxPolicy,
-        networkAccess: isNetworkAccessPolicy(policyRaw.networkAccess)
-          ? policyRaw.networkAccess
-          : DEFAULT_POLICY_SETTINGS.networkAccess,
         writableRoots: Array.isArray(policyRaw.writableRoots)
           ? (policyRaw.writableRoots as Array<unknown>).filter(isRecord).map((entry) => ({
               id: typeof entry.id === "string" ? entry.id : crypto.randomUUID(),

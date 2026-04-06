@@ -452,7 +452,7 @@ export function DashboardWorkbench() {
   const [isNewThreadMode, setNewThreadMode] = useState(true);
   const [activeOverlay, setActiveOverlay] = useState<WorkbenchOverlay>(null);
   const [activeSettingsCategory, setActiveSettingsCategory] =
-    useState<SettingsCategory>("account");
+    useState<SettingsCategory>("general");
   const [panelVisibilityState, setPanelVisibilityState] =
     useState<PanelVisibilityState>(() => readPanelVisibilityState());
   const [terminalCollapsedByThreadKey, setTerminalCollapsedByThreadKey] =
@@ -1938,7 +1938,7 @@ export function DashboardWorkbench() {
     setOpenSettingsSection("language");
   };
 
-  const handleOpenSettings = (category: SettingsCategory = "account") => {
+  const handleOpenSettings = (category: SettingsCategory = "general") => {
     setActiveSettingsCategory(category);
     setActiveOverlay("settings");
     setUserMenuOpen(false);
@@ -2224,7 +2224,7 @@ export function DashboardWorkbench() {
       }
 
       event.preventDefault();
-      handleOpenSettings("account");
+      handleOpenSettings("general");
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -2255,7 +2255,7 @@ export function DashboardWorkbench() {
         onLogin={handleLogin}
         onLogout={handleLogout}
         onCheckUpdates={handleCheckUpdates}
-        onOpenSettings={() => handleOpenSettings("account")}
+        onOpenSettings={() => handleOpenSettings("general")}
         onSelectLanguage={handleLanguageSelect}
         onSelectTheme={handleThemeSelect}
         onToggleSettingsSection={setOpenSettingsSection}
