@@ -104,18 +104,23 @@ jobs:
         shell: bash
         run: |
           VERSION=${GITHUB_REF_NAME#v}
+          # MSI requires pure numeric version (no pre-release suffix like -rc.1)
+          # Strip pre-release suffix for bundle version on Windows
+          BUNDLE_VERSION=$(echo "$VERSION" | sed 's/-.*//')
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          # Update tauri.conf.json version
+          echo "BUNDLE_VERSION=$BUNDLE_VERSION" >> "$GITHUB_ENV"
+
+          # Use BUNDLE_VERSION for tauri.conf.json (bundler compatibility)
+          # Use VERSION for display/tag reference
           node -e "
             const fs = require('fs');
             const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-            conf.version = '$VERSION';
+            conf.version = '$BUNDLE_VERSION';
             fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
           "
-          # Update Cargo.toml version
-          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          sed -i.bak "s/^version = \".*\"/version = \"$BUNDLE_VERSION\"/" src-tauri/Cargo.toml
           rm -f src-tauri/Cargo.toml.bak
-          echo "Set version to $VERSION"
+          echo "Tag version: $VERSION, Bundle version: $BUNDLE_VERSION"
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
