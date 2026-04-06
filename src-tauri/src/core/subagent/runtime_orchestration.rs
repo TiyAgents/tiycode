@@ -217,7 +217,7 @@ Return format:\n\
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Search term or regex."
+                            "description": "Literal text to search for. Special regex characters are matched as plain text by default."
                         },
                         "directory": {
                             "type": "string",

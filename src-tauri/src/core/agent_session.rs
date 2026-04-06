@@ -1256,7 +1256,7 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search term or regex."
+                        "description": "Literal text to search for. Special regex characters are matched as plain text by default."
                     },
                     "directory": {
                         "type": "string",

@@ -7,7 +7,7 @@ use crate::core::workspace_paths::{
 use crate::model::errors::{AppError, ErrorSource};
 
 /// Search workspace files using ripgrep.
-/// Input: { "query": "search term", "directory": "optional/path", "filePattern": "*.rs" }
+/// Input: { "query": "literal search term", "directory": "optional/path", "filePattern": "*.rs" }
 pub async fn search_repo(
     input: &serde_json::Value,
     workspace_path: &str,
@@ -48,6 +48,7 @@ pub async fn search_repo(
 
     let mut args = vec![
         "--json".into(),
+        "--fixed-strings".into(),
         format!("--max-count={}", max_results).into(),
         "--max-filesize=1M".into(),
         query.into(),
@@ -225,5 +226,21 @@ mod tests {
         assert_eq!(parsed.results.len(), 1);
         assert!(parsed.truncated);
         assert_eq!(parsed.results[0]["path"].as_str(), Some("src/a.rs"));
+    }
+
+    #[test]
+    fn literal_queries_can_include_regex_metacharacters() {
+        let query = "warn!(";
+        let args = vec![
+            "--json".to_string(),
+            "--fixed-strings".to_string(),
+            "--max-count=100".to_string(),
+            "--max-filesize=1M".to_string(),
+            query.to_string(),
+            "/workspace".to_string(),
+        ];
+
+        assert!(args.iter().any(|arg| arg == "--fixed-strings"));
+        assert_eq!(args[4], query);
     }
 }

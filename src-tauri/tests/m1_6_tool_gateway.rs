@@ -1120,3 +1120,107 @@ async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
         }
     }
 }
+
+#[tokio::test]
+async fn test_search_repo_treats_regex_metacharacters_as_literal_text() {
+    use tiycode::core::terminal_manager::TerminalManager;
+    use tiycode::core::tool_gateway::{
+        ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
+    };
+
+    let pool = test_helpers::setup_test_pool().await;
+    let workspace_root =
+        std::env::temp_dir().join(format!("tiy-search-literal-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::write(
+        workspace_root.join("macros.rs"),
+        "fn demo() {\n    warn!(\"literal metacharacters\");\n}\n",
+    )
+    .unwrap();
+    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+
+    test_helpers::seed_workspace(
+        &pool,
+        "ws-search-literal",
+        workspace_root.to_str().unwrap(),
+    )
+    .await;
+    test_helpers::seed_thread(&pool, "t-search-literal", "ws-search-literal").await;
+    test_helpers::seed_run(
+        &pool,
+        "r-search-literal",
+        "t-search-literal",
+        "running",
+        "default",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-search-literal",
+        "r-search-literal",
+        "t-search-literal",
+        "search",
+        "requested",
+    )
+    .await;
+
+    let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+    let gateway = ToolGateway::new(pool, terminal_manager);
+
+    let outcome = gateway
+        .execute_tool_call(
+            ToolExecutionRequest {
+                run_id: "r-search-literal".into(),
+                thread_id: "t-search-literal".into(),
+                tool_call_id: "tc-search-literal".into(),
+                tool_name: "search".into(),
+                tool_input: serde_json::json!({
+                    "query": "warn!(",
+                    "filePattern": "*.rs",
+                    "maxResults": 5,
+                }),
+                workspace_path: workspace_root.display().to_string(),
+                run_mode: "default".into(),
+            },
+            tiycore::agent::AbortSignal::new(),
+            ToolExecutionOptions::default(),
+            |_| {},
+            || {},
+        )
+        .await
+        .unwrap();
+
+    match outcome.result {
+        ToolGatewayResult::Executed { output, .. } => {
+            if !output.success {
+                let error = output.result["error"].as_str().unwrap_or_default();
+                assert!(
+                    error.contains("ripgrep execution failed"),
+                    "regex metacharacter query should not fail with regex parse errors: {error}"
+                );
+                return;
+            }
+
+            assert_eq!(output.result["count"].as_u64(), Some(1));
+            assert_eq!(output.result["shownCount"].as_u64(), Some(1));
+            let first = &output.result["results"][0];
+            assert_eq!(first["path"].as_str(), Some("macros.rs"));
+            assert!(
+                first["lineText"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("warn!(\"literal metacharacters\")"),
+                "expected literal macro invocation in search result"
+            );
+        }
+        ToolGatewayResult::Denied { reason, .. } => {
+            panic!("literal metacharacter search should not be denied: {reason}");
+        }
+        ToolGatewayResult::EscalationRequired { reason, .. } => {
+            panic!("literal metacharacter search should not require approval: {reason}");
+        }
+        ToolGatewayResult::Cancelled { .. } => {
+            panic!("literal metacharacter search should not be cancelled");
+        }
+    }
+}
