@@ -163,20 +163,20 @@ jobs:
           elif [ "${{ matrix.platform }}" = "windows" ]; then
             cp "$BUNDLE_DIR"/msi/*.msi release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/nsis/*.exe release-artifacts/ 2>/dev/null || true
-
-            if [ "$BUNDLE_VERSION" != "$VERSION" ]; then
-              for artifact in release-artifacts/*; do
-                [ -f "$artifact" ] || continue
-                renamed_artifact="${artifact//$BUNDLE_VERSION/$VERSION}"
-                if [ "$renamed_artifact" != "$artifact" ]; then
-                  mv "$artifact" "$renamed_artifact"
-                fi
-              done
-            fi
           elif [ "${{ matrix.platform }}" = "linux" ]; then
             cp "$BUNDLE_DIR"/deb/*.deb release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/rpm/*.rpm release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/appimage/*.AppImage release-artifacts/ 2>/dev/null || true
+          fi
+
+          if [ "$BUNDLE_VERSION" != "$VERSION" ]; then
+            for artifact in release-artifacts/*; do
+              [ -f "$artifact" ] || continue
+              renamed_artifact="${artifact//$BUNDLE_VERSION/$VERSION}"
+              if [ "$renamed_artifact" != "$artifact" ]; then
+                mv "$artifact" "$renamed_artifact"
+              fi
+            done
           fi
 
           echo "Collected artifacts:"
