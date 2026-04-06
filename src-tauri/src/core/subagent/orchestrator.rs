@@ -122,7 +122,8 @@ impl HelperAgentOrchestrator {
         let helper_model_display_name = request.model_role.model_name.clone();
 
         let agent = Arc::new(Agent::with_model(request.model_role.model.clone()));
-        agent.set_max_turns(crate::desktop_agent_max_turns!());
+        let max_turns = crate::core::agent_runtime_limits::desktop_agent_max_turns(&self.pool).await;
+        agent.set_max_turns(max_turns);
         agent.set_system_prompt(build_helper_system_prompt(
             &request.system_prompt,
             helper_profile,
