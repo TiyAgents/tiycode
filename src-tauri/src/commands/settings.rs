@@ -1,7 +1,14 @@
+use tauri::AppHandle;
 use tauri::State;
+#[cfg(not(target_os = "macos"))]
+use tauri_plugin_autostart::ManagerExt as AutoStartManagerExt;
 
 use crate::core::app_state::AppState;
+use crate::core::desktop_runtime::{
+    DesktopRuntimeState, LAUNCH_AT_LOGIN_SETTING_KEY, MINIMIZE_TO_TRAY_SETTING_KEY,
+};
 use crate::core::sleep_manager::PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY;
+use crate::core::startup_manager;
 use crate::model::errors::AppError;
 use crate::model::provider::{
     AgentProfileDto, AgentProfileInput, CustomProviderCreateInput, ProviderCatalogEntryDto,
@@ -38,17 +45,58 @@ pub async fn settings_get_all(state: State<'_, AppState>) -> Result<Vec<SettingD
 
 #[tauri::command]
 pub async fn settings_set(
+    app: AppHandle,
     state: State<'_, AppState>,
+    desktop_runtime: State<'_, DesktopRuntimeState>,
     key: String,
     value: String,
 ) -> Result<(), AppError> {
     state.settings_manager.set_setting(&key, &value).await?;
 
-    if key == PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY {
-        match serde_json::from_str::<bool>(&value) {
+    match key.as_str() {
+        PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY => match serde_json::from_str::<bool>(&value) {
             Ok(enabled) => state.sleep_manager.set_user_preference(enabled).await,
             Err(error) => tracing::warn!(error = %error, "invalid prevent sleep setting payload"),
-        }
+        },
+        LAUNCH_AT_LOGIN_SETTING_KEY => match serde_json::from_str::<bool>(&value) {
+            Ok(enabled) => {
+                #[cfg(target_os = "macos")]
+                {
+                    startup_manager::set_launch_at_login(enabled)?;
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let autolaunch = app.autolaunch();
+                    let result = if enabled {
+                        autolaunch.enable()
+                    } else {
+                        autolaunch.disable()
+                    };
+
+                    if let Err(error) = result {
+                        return Err(AppError::internal(
+                            crate::model::errors::ErrorSource::Settings,
+                            error.to_string(),
+                        ));
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(error = %error, "invalid launch at login payload"),
+        },
+        MINIMIZE_TO_TRAY_SETTING_KEY => match serde_json::from_str::<bool>(&value) {
+            Ok(enabled) => {
+                desktop_runtime.set_minimize_to_tray(enabled);
+
+                if let Some(tray) = app.tray_by_id("main-tray") {
+                    if let Err(error) = tray.set_visible(enabled) {
+                        tracing::warn!(error = %error, "failed to update tray visibility");
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(error = %error, "invalid minimize to tray payload"),
+        },
+        _ => {}
     }
 
     Ok(())

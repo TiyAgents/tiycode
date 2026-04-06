@@ -8,16 +8,27 @@ mod persistence;
 use std::fs;
 use std::path::PathBuf;
 
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
-use tauri::Manager;
+use tauri::{Manager, RunEvent, WindowEvent};
+#[cfg(not(target_os = "macos"))]
+use tauri_plugin_autostart::ManagerExt as AutoStartManagerExt;
 use tauri_plugin_window_state::StateFlags;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::core::app_state::AppState;
+use crate::core::desktop_runtime::{
+    DesktopRuntimeState, LAUNCH_AT_LOGIN_SETTING_KEY, MINIMIZE_TO_TRAY_SETTING_KEY,
+};
 use crate::core::sleep_manager::PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY;
+use crate::core::startup_manager;
 
 const MAIN_WINDOW_LABEL: &str = "main";
+const MAIN_TRAY_ID: &str = "main-tray";
+const TRAY_SHOW_ID: &str = "tray-show";
+const TRAY_QUIT_ID: &str = "tray-quit";
 
 fn persisted_window_state_flags() -> StateFlags {
     StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
@@ -143,6 +154,58 @@ fn configure_ripgrep_path<R: tauri::Runtime>(app: &tauri::App<R>) {
     }
 }
 
+fn parse_bool_setting(record: Option<crate::model::settings::SettingRecord>, key: &str) -> bool {
+    match record {
+        Some(setting) => match serde_json::from_str::<bool>(&setting.value_json) {
+            Ok(enabled) => enabled,
+            Err(error) => {
+                tracing::warn!(setting = key, error = %error, "failed to parse boolean setting");
+                false
+            }
+        },
+        None => false,
+    }
+}
+
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn sync_tray_visibility<R: tauri::Runtime>(app: &tauri::AppHandle<R>, visible: bool) {
+    if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
+        if let Err(error) = tray.set_visible(visible) {
+            tracing::warn!(error = %error, "failed to update tray visibility");
+        }
+    }
+}
+
+fn build_tray<R: tauri::Runtime>(
+    app: &tauri::App<R>,
+    visible: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let show = MenuItemBuilder::with_id(TRAY_SHOW_ID, "Show").build(app)?;
+    let quit = MenuItemBuilder::with_id(TRAY_QUIT_ID, "Quit").build(app)?;
+    let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
+
+    let mut tray_builder = TrayIconBuilder::with_id(MAIN_TRAY_ID)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("TiyCode");
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray_builder = tray_builder.icon(icon);
+    }
+
+    let tray = tray_builder.build(app)?;
+    tray.set_visible(visible)?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let tiy_home = tiy_home();
@@ -155,14 +218,25 @@ pub fn run() {
     tracing::info!(path = %tiy_home.display(), "tiy agent starting");
 
     // 3. Build Tauri app
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(persisted_window_state_flags())
                 .build(),
-        )
+        );
+
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        None::<Vec<&'static str>>,
+    ));
+
+    #[cfg(target_os = "macos")]
+    let builder = builder;
+
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::attachment::attachment_read_files,
             // System
@@ -284,21 +358,84 @@ pub fn run() {
 
             // 5. Construct and manage AppState
             let state = AppState::new(pool, app.handle().clone());
+            let desktop_runtime = DesktopRuntimeState::default();
 
-            if let Some(setting) = tauri::async_runtime::block_on(async {
+            let (prevent_sleep_while_running, launch_at_login, minimize_to_tray) =
+                tauri::async_runtime::block_on(async {
+                    let prevent_sleep = state
+                        .settings_manager
+                        .get_setting(PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY)
+                        .await?;
+                    let launch_at_login = state
+                        .settings_manager
+                        .get_setting(LAUNCH_AT_LOGIN_SETTING_KEY)
+                        .await?;
+                    let minimize_to_tray = state
+                        .settings_manager
+                        .get_setting(MINIMIZE_TO_TRAY_SETTING_KEY)
+                        .await?;
+
+                    Ok::<_, crate::model::errors::AppError>((
+                        parse_bool_setting(prevent_sleep, PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY),
+                        parse_bool_setting(launch_at_login, LAUNCH_AT_LOGIN_SETTING_KEY),
+                        parse_bool_setting(minimize_to_tray, MINIMIZE_TO_TRAY_SETTING_KEY),
+                    ))
+                })?;
+
+            tauri::async_runtime::block_on(async {
                 state
-                    .settings_manager
-                    .get_setting(PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY)
-                    .await
-            })? {
-                match serde_json::from_str::<bool>(&setting.value_json) {
-                    Ok(enabled) => {
-                        tauri::async_runtime::block_on(async {
-                            state.sleep_manager.set_user_preference(enabled).await;
-                        });
+                    .sleep_manager
+                    .set_user_preference(prevent_sleep_while_running)
+                    .await;
+            });
+
+            desktop_runtime.set_minimize_to_tray(minimize_to_tray);
+
+            #[cfg(target_os = "macos")]
+            if let Some(system_enabled) = startup_manager::launch_at_login_enabled() {
+                if system_enabled != launch_at_login {
+                    let value_json =
+                        serde_json::to_string(&system_enabled).unwrap_or_else(|_| "false".to_string());
+                    let sync_result = state.settings_manager.set_setting(
+                        LAUNCH_AT_LOGIN_SETTING_KEY,
+                        &value_json,
+                    );
+
+                    if let Err(error) = tauri::async_runtime::block_on(sync_result) {
+                        tracing::warn!(error = %error, "failed to sync launch at login setting from system state");
                     }
+                }
+            } else if let Err(error) = startup_manager::set_launch_at_login(launch_at_login) {
+                tracing::warn!(error = %error, "failed to sync launch at login state");
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let autolaunch = app.handle().autolaunch();
+                match autolaunch.is_enabled() {
+                    Ok(system_enabled) if system_enabled != launch_at_login => {
+                        let value_json = serde_json::to_string(&system_enabled)
+                            .unwrap_or_else(|_| "false".to_string());
+                        if let Err(error) = tauri::async_runtime::block_on(
+                            state.settings_manager.set_setting(
+                                LAUNCH_AT_LOGIN_SETTING_KEY,
+                                &value_json,
+                            ),
+                        ) {
+                            tracing::warn!(error = %error, "failed to sync launch at login setting from system state");
+                        }
+                    }
+                    Ok(_) => {} // already in sync
                     Err(error) => {
-                        tracing::warn!(error = %error, "failed to parse prevent sleep setting");
+                        tracing::warn!(error = %error, "failed to query autolaunch state, applying DB value");
+                        let result = if launch_at_login {
+                            autolaunch.enable()
+                        } else {
+                            autolaunch.disable()
+                        };
+                        if let Err(error) = result {
+                            tracing::warn!(error = %error, "failed to sync launch at login state");
+                        }
                     }
                 }
             }
@@ -317,6 +454,8 @@ pub fn run() {
             });
 
             app.manage(state);
+            app.manage(desktop_runtime);
+            build_tray(app, minimize_to_tray)?;
 
             // 7. Platform-specific window setup
             #[cfg(target_os = "windows")]
@@ -335,6 +474,52 @@ pub fn run() {
             let _ = window.show();
             let _ = window.set_focus();
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .on_window_event(|window, event| {
+            if window.label() != MAIN_WINDOW_LABEL {
+                return;
+            }
+
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let runtime = window.state::<DesktopRuntimeState>();
+                if runtime.minimize_to_tray_enabled() && !runtime.is_quitting() {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TRAY_SHOW_ID => show_main_window(app),
+            TRAY_QUIT_ID => {
+                app.state::<DesktopRuntimeState>().mark_quitting();
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|app, event| {
+            if event.id().as_ref() != MAIN_TRAY_ID {
+                return;
+            }
+
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(app);
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            RunEvent::ExitRequested { .. } => {
+                app.state::<DesktopRuntimeState>().mark_quitting();
+                sync_tray_visibility(app, false);
+            }
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { .. } => {
+                show_main_window(app);
+            }
+            _ => {}
+        });
 }

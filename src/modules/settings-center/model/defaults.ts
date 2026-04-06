@@ -10,8 +10,10 @@ import type {
 
 export const SETTINGS_STORAGE_KEY = "tiy-agent-workbench-settings";
 export const SETTINGS_STORAGE_SCHEMA_VERSION = 2;
+export const GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY = "general.launch_at_login";
 export const GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY =
   "general.prevent_sleep_while_running";
+export const GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY = "general.minimize_to_tray";
 
 const DEFAULT_CUSTOM_INSTRUCTIONS =
   "Keep answers grounded in the local workspace. Prefer workspace-aware tools over shell commands for exploration. When a task involves risk or ambiguity, surface it before acting.";

@@ -2,6 +2,9 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import {
   DEFAULT_AGENT_PROFILES,
+  DEFAULT_GENERAL_PREFERENCES,
+  GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY,
+  GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY,
   DEFAULT_POLICY_SETTINGS,
   GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
 } from "@/modules/settings-center/model/defaults";
@@ -44,6 +47,7 @@ import {
   providerSettingsUpdateCustom,
   providerSettingsUpsertBuiltin,
   settingsGet,
+  settingsGetAll,
   settingsSet,
   workspaceAdd,
   workspaceList,
@@ -55,6 +59,32 @@ export * from "@/modules/settings-center/model/types";
 
 const ACTIVE_AGENT_PROFILE_SETTING_KEY = "active_profile_id";
 const DB_BACKED_SETTINGS_MIGRATION_KEY = "settings.db_backed_sources_v1";
+
+function mapBooleanSettingValue(value: unknown, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function mapGeneralPreferencesFromSettings(
+  settings: ReadonlyArray<import("@/shared/types/api").SettingDto>,
+  fallback: GeneralPreferences,
+): GeneralPreferences {
+  const values = new Map(settings.map((entry) => [entry.key, entry.value]));
+
+  return {
+    launchAtLogin: mapBooleanSettingValue(
+      values.get(GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY),
+      fallback.launchAtLogin,
+    ),
+    preventSleepWhileRunning: mapBooleanSettingValue(
+      values.get(GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY),
+      fallback.preventSleepWhileRunning,
+    ),
+    minimizeToTray: mapBooleanSettingValue(
+      values.get(GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY),
+      fallback.minimizeToTray,
+    ),
+  };
+}
 
 function mapProfileDto(profile: import("@/shared/types/api").AgentProfileDto): AgentProfile {
   const defaultProfile = DEFAULT_AGENT_PROFILES[0];
@@ -298,6 +328,7 @@ export function useSettingsController() {
   const [settings, setSettings] = useState<SettingsState>(() => storedSettingsRef.current);
   const [providerCatalog, setProviderCatalog] = useState<Array<ProviderCatalogEntry>>([]);
   const [backendHydrated, setBackendHydrated] = useState(!isTauri());
+  const [generalSettingsHydrated, setGeneralSettingsHydrated] = useState(!isTauri());
   const settingsRef = useRef(settings);
 
   settingsRef.current = settings;
@@ -324,13 +355,14 @@ export function useSettingsController() {
 
     async function hydrateDbBackedSettings() {
       try {
-        const [providers, catalog, policies, profiles, workspaceEntries, activeProfileSetting, migrationSetting] =
+        const [providers, catalog, policies, profiles, workspaceEntries, storedSettings, activeProfileSetting, migrationSetting] =
           await Promise.all([
             providerSettingsGetAll(),
             providerCatalogList(),
             policyGetAll(),
             profileList(),
             workspaceList(),
+            settingsGetAll(),
             settingsGet(ACTIVE_AGENT_PROFILE_SETTING_KEY),
             settingsGet(DB_BACKED_SETTINGS_MIGRATION_KEY),
           ]);
@@ -349,6 +381,7 @@ export function useSettingsController() {
         const localProfiles = storedSettingsRef.current.agentProfiles.length > 0
           ? storedSettingsRef.current.agentProfiles
           : DEFAULT_AGENT_PROFILES;
+        const localGeneral = storedSettingsRef.current.general;
         const migrated = migrationSetting?.value === true;
 
         if (!migrated && mappedProfiles.length === 0) {
@@ -406,6 +439,39 @@ export function useSettingsController() {
           ? storedSettingsRef.current.policy
           : mappedPolicy;
 
+        const generalSettingKeys = new Set(storedSettings.map((entry) => entry.key));
+        const generalMigrationWrites = !migrated
+          ? [
+              !generalSettingKeys.has(GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY)
+              && localGeneral.launchAtLogin !== DEFAULT_GENERAL_PREFERENCES.launchAtLogin
+                ? settingsSet(
+                    GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY,
+                    JSON.stringify(localGeneral.launchAtLogin),
+                  )
+                : null,
+              !generalSettingKeys.has(GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY)
+              && localGeneral.preventSleepWhileRunning !== DEFAULT_GENERAL_PREFERENCES.preventSleepWhileRunning
+                ? settingsSet(
+                    GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
+                    JSON.stringify(localGeneral.preventSleepWhileRunning),
+                  )
+                : null,
+              !generalSettingKeys.has(GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY)
+              && localGeneral.minimizeToTray !== DEFAULT_GENERAL_PREFERENCES.minimizeToTray
+                ? settingsSet(
+                    GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY,
+                    JSON.stringify(localGeneral.minimizeToTray),
+                  )
+                : null,
+            ].filter((operation): operation is Promise<void> => operation !== null)
+          : [];
+
+        if (generalMigrationWrites.length > 0) {
+          await Promise.all(generalMigrationWrites);
+        }
+
+        const resolvedGeneral = mapGeneralPreferencesFromSettings(storedSettings, localGeneral);
+
         const resolvedActiveProfileId = resolveActiveProfileId(
           mappedProfiles,
           activeProfileSetting?.value,
@@ -426,9 +492,12 @@ export function useSettingsController() {
           return;
         }
 
+        const nextGeneral = resolvedGeneral;
+
         setProviderCatalog(mappedCatalog);
         setSettings((current) => ({
           ...current,
+          general: nextGeneral,
           workspaces: workspaceEntries.map(mapWorkspaceDto),
           providers: mappedProviders,
           policy: resolvedPolicy,
@@ -437,10 +506,18 @@ export function useSettingsController() {
             ? resolvedActiveProfileId
             : DEFAULT_AGENT_PROFILES[0]?.id ?? "default-profile",
         }));
+        storedSettingsRef.current = {
+          ...storedSettingsRef.current,
+          general: nextGeneral,
+        };
+        setGeneralSettingsHydrated(true);
       } catch (error) {
         console.warn("Failed to hydrate DB-backed settings", error);
       } finally {
         if (!cancelled) {
+          if (!generalSettingsHydrated) {
+            setGeneralSettingsHydrated(true);
+          }
           setBackendHydrated(true);
         }
       }
@@ -458,13 +535,32 @@ export function useSettingsController() {
       return;
     }
 
-    void settingsSet(
-      GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
-      JSON.stringify(settings.general.preventSleepWhileRunning),
+    const generalSettings = [
+      {
+        key: GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY,
+        value: settings.general.launchAtLogin,
+      },
+      {
+        key: GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
+        value: settings.general.preventSleepWhileRunning,
+      },
+      {
+        key: GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY,
+        value: settings.general.minimizeToTray,
+      },
+    ];
+
+    void Promise.all(
+      generalSettings.map(({ key, value }) => settingsSet(key, JSON.stringify(value))),
     ).catch((error) => {
-      console.warn("Failed to sync preventSleepWhileRunning setting", error);
+      console.warn("Failed to sync general settings", error);
     });
-  }, [settings.general.preventSleepWhileRunning]);
+  }, [
+    generalSettingsHydrated,
+    settings.general.launchAtLogin,
+    settings.general.preventSleepWhileRunning,
+    settings.general.minimizeToTray,
+  ]);
 
   const updateGeneralPreference = <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => {
     setSettings((current) => ({
