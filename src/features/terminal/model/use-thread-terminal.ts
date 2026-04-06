@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useT } from "@/i18n";
 import type {
   TerminalAttachDto,
   TerminalSessionDto,
@@ -30,6 +31,7 @@ export function useThreadTerminal({
   onStderr,
   onExit,
 }: UseThreadTerminalOptions) {
+  const t = useT();
   const [error, setError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const attachGenerationRef = useRef(0);
@@ -58,7 +60,7 @@ export function useThreadTerminal({
     }
 
     if (!isTauri()) {
-      setError("Terminal 仅在 Tauri 桌面环境中可用。");
+      setError(t("terminal.onlyTauri"));
       return;
     }
 
@@ -128,7 +130,7 @@ export function useThreadTerminal({
         if (cancelled) {
           return;
         }
-        const message = getInvokeErrorMessage(attachError, "Terminal 连接失败。");
+        const message = getInvokeErrorMessage(attachError, t("terminal.connectionFailed"));
         setError(message);
       })
       .finally(() => {
@@ -160,7 +162,7 @@ export function useThreadTerminal({
         terminalStore.setSessionMeta(threadId, { cols, rows });
       })
       .catch((resizeError) => {
-        const message = getInvokeErrorMessage(resizeError, "Terminal 尺寸同步失败。");
+        const message = getInvokeErrorMessage(resizeError, t("terminal.resizeFailed"));
         setError(message);
       });
   }, [active, cols, rows, session, sessionId, threadId]);

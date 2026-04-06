@@ -3,6 +3,7 @@
 import type { ChatStatus } from "ai";
 import { AlertCircleIcon, BotIcon, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useT, type TranslationKey } from "@/i18n";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import {
   CompactCollapsible,
@@ -361,7 +362,7 @@ function parsePlanMessageMetadata(value: unknown): PlanMessageMetadata | null {
   };
 }
 
-function parseApprovalPromptMetadata(value: unknown): FormattedApprovalPrompt | null {
+function parseApprovalPromptMetadata(value: unknown, t: (key: TranslationKey) => string): FormattedApprovalPrompt | null {
   const record = asObjectRecord(value);
   if (!record) {
     return null;
@@ -394,8 +395,8 @@ function parseApprovalPromptMetadata(value: unknown): FormattedApprovalPrompt | 
     options: options.length > 0
       ? options
       : [
-          { action: "apply_plan", label: "按计划实施" },
-          { action: "apply_plan_with_context_reset", label: "清理上下文后按计划实施" },
+          { action: "apply_plan", label: t("plan.implementAsPlan") },
+          { action: "apply_plan_with_context_reset", label: t("plan.clearAndImplement") },
         ],
     planMessageId: readStringField(record, "planMessageId"),
     planRevision: readNumberField(record, "planRevision"),
@@ -583,18 +584,18 @@ function deriveSelectedRunMode(snapshot: ThreadSnapshotDto, currentMode: RunMode
   return currentMode;
 }
 
-function formatApprovalPromptState(state: string, approvedAction: PlanApprovalAction | null) {
+function formatApprovalPromptState(state: string, approvedAction: PlanApprovalAction | null, t: (key: TranslationKey) => string) {
   switch (state) {
     case "approved":
       return approvedAction === "apply_plan_with_context_reset"
-        ? "已批准：清理上下文后按计划实施"
+        ? t("plan.approvedClearAndImplement")
         : approvedAction === "apply_plan"
-          ? "已批准：按计划实施"
-          : "已批准进入实施"
+          ? t("plan.approvedImplement")
+          : t("plan.approvedToImplement")
     case "superseded":
-      return "该计划已被新的规划版本替代。";
+      return t("plan.superseded");
     default:
-      return "等待实施审批";
+      return t("plan.awaitingApproval");
   }
 }
 
@@ -1945,6 +1946,7 @@ export function RuntimeThreadSurface({
   threadTitle,
   workspaceId,
 }: RuntimeThreadSurfaceProps) {
+  const t = useT();
   const activeProfile = useMemo(
     () => agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0] ?? null,
     [activeAgentProfileId, agentProfiles],
@@ -3111,7 +3113,7 @@ export function RuntimeThreadSurface({
       await loadSnapshot();
       setMessages((current) => {
         const approvalPrompt = parseApprovalPromptMetadata(
-          current.find((message) => message.id === messageId)?.metadata,
+          current.find((message) => message.id === messageId)?.metadata, t,
         );
 
         return current.map((message) => {
@@ -3706,7 +3708,7 @@ export function RuntimeThreadSurface({
                 if (message.messageType === "plan") {
                   const formattedPlan = formatPlanMetadata(message.metadata, message.content);
                   const approvalStateLabel = formattedPlan.approvalState
-                    ? formatApprovalPromptState(formattedPlan.approvalState, null)
+                    ? formatApprovalPromptState(formattedPlan.approvalState, null, t)
                     : null;
 
                   return (
@@ -3780,11 +3782,11 @@ export function RuntimeThreadSurface({
                 }
 
                 if (message.messageType === "approval_prompt") {
-                  const approvalPrompt = parseApprovalPromptMetadata(message.metadata);
+                  const approvalPrompt = parseApprovalPromptMetadata(message.metadata, t);
                   const approvalState = approvalPrompt?.state ?? "pending";
                   const approvalOptions = approvalPrompt?.options ?? [
-                    { action: "apply_plan" as const, label: "按计划实施" },
-                    { action: "apply_plan_with_context_reset" as const, label: "清理上下文后按计划实施" },
+                    { action: "apply_plan" as const, label: t("plan.implementAsPlan") },
+                    { action: "apply_plan_with_context_reset" as const, label: t("plan.clearAndImplement") },
                   ];
                   const disabled =
                     !threadId
@@ -3802,7 +3804,7 @@ export function RuntimeThreadSurface({
                                 {approvalPrompt?.planRevision !== null && approvalPrompt?.planRevision !== undefined ? (
                                   <span>{`Plan v${approvalPrompt.planRevision}`}</span>
                                 ) : null}
-                                <span>{formatApprovalPromptState(approvalState, approvalPrompt?.approvedAction ?? null)}</span>
+                                <span>{formatApprovalPromptState(approvalState, approvalPrompt?.approvedAction ?? null, t)}</span>
                               </div>
                               <MessageResponse>{message.content}</MessageResponse>
                             </div>

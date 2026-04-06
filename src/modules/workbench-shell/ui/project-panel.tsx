@@ -1,4 +1,5 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useT } from "@/i18n";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Check, ChevronDown, ChevronRight, Copy, FolderOpen, LoaderCircle, RefreshCw } from "lucide-react";
 import {
@@ -382,6 +383,7 @@ export function ProjectPanel({
   workspaceId: string | null;
   workspaceBootstrapError?: string | null;
 }) {
+  const t = useT();
   const [filterValue, setFilterValue] = useState("");
   const [treeState, setTreeState] = useState<TreeState>(initialTreeState);
   const [filterState, setFilterState] = useState<FilterState>(initialFilterState);
@@ -565,7 +567,7 @@ export function ProjectPanel({
           return;
         }
 
-        const message = getInvokeErrorMessage(error, "读取文件树失败");
+        const message = getInvokeErrorMessage(error, t("projectPanel.error.readFileTree"));
         setTreeState({
           data: null,
           error: message,
@@ -645,7 +647,7 @@ export function ProjectPanel({
           return;
         }
 
-        const message = getInvokeErrorMessage(error, "过滤文件失败");
+        const message = getInvokeErrorMessage(error, t("projectPanel.error.filterFiles"));
         setFilterState({
           data: null,
           error: message,
@@ -828,7 +830,7 @@ export function ProjectPanel({
         };
       });
     } catch (error) {
-      const message = getInvokeErrorMessage(error, "读取目录内容失败");
+      const message = getInvokeErrorMessage(error, t("projectPanel.error.readDirectory"));
       setTreeState((current) => ({
         ...current,
         error: message,
@@ -857,7 +859,7 @@ export function ProjectPanel({
         };
       });
     } catch (error) {
-      const message = getInvokeErrorMessage(error, "继续加载目录内容失败");
+      const message = getInvokeErrorMessage(error, t("projectPanel.error.loadMoreDirectory"));
       setTreeState((current) => ({
         ...current,
         error: message,
@@ -912,7 +914,7 @@ export function ProjectPanel({
       setPendingRevealPath(response.targetPath);
       setFilterValue("");
     } catch (error) {
-      const message = getInvokeErrorMessage(error, "无法展开筛选结果路径");
+      const message = getInvokeErrorMessage(error, t("projectPanel.error.expandFilterPath"));
       setFilterState((current) => ({
         ...current,
         error: message,

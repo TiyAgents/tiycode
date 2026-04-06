@@ -2,6 +2,8 @@ import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, us
 import { createPortal } from "react-dom";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useT } from "@/i18n";
+import type { TranslationKey } from "@/i18n/locales/zh-CN";
 import {
   ArrowLeft,
   Brain,
@@ -130,57 +132,54 @@ type SettingsCenterOverlayProps = {
   onUpdateWritableRoot: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
 };
 
-const CATEGORY_META: ReadonlyArray<{
-  description: string;
-  icon: typeof CircleUserRound;
-  key: SettingsCategory;
-  title: string;
-}> = [
-  {
-    key: "account",
-    title: "Account",
-    description: "Manage your local session, account identity, active plan, and available subscription tiers.",
-    icon: CircleUserRound,
-  },
-  {
-    key: "general",
-    title: "General",
-    description: "Set app preferences and default agent behavior, including theme, language, startup, models, and instructions.",
-    icon: Monitor,
-  },
-  {
-    key: "providers",
-    title: "Providers",
-    description: "Configure model providers, API access, request settings, and the models available to your agent.",
-    icon: Server,
-  },
-  {
-    key: "commands",
-    title: "Commands",
-    description: "Create reusable prompt shortcuts that appear when typing / in chat.",
-    icon: Zap,
-  },
-  {
-    key: "policy",
-    title: "Permissions",
-    description: "Control approval mode, allow and deny rules, sandbox access, network access, and writable paths.",
-    icon: ShieldCheck,
-  },
-  {
-    key: "workspace",
-    title: "Workspace",
-    description: "Manage project directories and choose which workspace new conversations should start in.",
-    icon: FolderOpen,
-  },
-  {
-    key: "about",
-    title: "About",
-    description: "View product details, jump to key project links, and check whether this desktop build is up to date.",
-    icon: Info,
-  },
-] as const;
+type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
-const VISIBLE_CATEGORY_META = CATEGORY_META.filter((category) => category.key !== "account");
+function getCategoryMeta(t: TFunc) {
+  return [
+    {
+      key: "account" as SettingsCategory,
+      title: t("settings.category.account"),
+      description: t("settings.category.accountDesc"),
+      icon: CircleUserRound,
+    },
+    {
+      key: "general" as SettingsCategory,
+      title: t("settings.category.general"),
+      description: t("settings.category.generalDesc"),
+      icon: Monitor,
+    },
+    {
+      key: "providers" as SettingsCategory,
+      title: t("settings.category.providers"),
+      description: t("settings.category.providersDesc"),
+      icon: Server,
+    },
+    {
+      key: "commands" as SettingsCategory,
+      title: t("settings.category.commands"),
+      description: t("settings.category.commandsDesc"),
+      icon: Zap,
+    },
+    {
+      key: "policy" as SettingsCategory,
+      title: t("settings.category.permissions"),
+      description: t("settings.category.permissionsDesc"),
+      icon: ShieldCheck,
+    },
+    {
+      key: "workspace" as SettingsCategory,
+      title: t("settings.category.workspace"),
+      description: t("settings.category.workspaceDesc"),
+      icon: FolderOpen,
+    },
+    {
+      key: "about" as SettingsCategory,
+      title: t("settings.category.about"),
+      description: t("settings.category.aboutDesc"),
+      icon: Info,
+    },
+  ];
+}
 
 const THEME_OPTIONS: ReadonlyArray<{ label: string; value: ThemePreference }> = [
   { label: "System", value: "system" },
@@ -193,25 +192,21 @@ const LANGUAGE_OPTIONS: ReadonlyArray<{ label: string; value: LanguagePreference
   { label: "简体中文", value: "zh-CN" },
 ];
 
-const RESPONSE_STYLE_OPTIONS: ReadonlyArray<{
-  description: string;
-  label: string;
-  value: PromptResponseStyle;
-}> = [
-  { value: "concise", label: "Concise", description: "Very short, answer-first replies with minimal explanation." },
-  { value: "balanced", label: "Balanced", description: "Compact by default, with extra detail only when it helps." },
-  { value: "guide", label: "Guided", description: "Explanatory replies with reasoning, tradeoffs, and next steps." },
-] as const;
+function getResponseStyleOptions(t: TFunc) {
+  return [
+    { value: "concise" as PromptResponseStyle, label: t("settings.responseStyle.concise"), description: t("settings.responseStyle.conciseDesc") },
+    { value: "balanced" as PromptResponseStyle, label: t("settings.responseStyle.balanced"), description: t("settings.responseStyle.balancedDesc") },
+    { value: "guide" as PromptResponseStyle, label: t("settings.responseStyle.guided"), description: t("settings.responseStyle.guidedDesc") },
+  ];
+}
 
-const APPROVAL_POLICY_OPTIONS: ReadonlyArray<{
-  description: string;
-  label: string;
-  value: ApprovalPolicy;
-}> = [
-  { value: "untrusted", label: "Untrusted", description: "Approve every tool call and command individually." },
-  { value: "on-request", label: "On request", description: "Auto-approve safe actions, ask for risky ones." },
-  { value: "never", label: "Never", description: "Let the agent run without approval prompts." },
-] as const;
+function getApprovalPolicyOptions(t: TFunc) {
+  return [
+    { value: "untrusted" as ApprovalPolicy, label: t("settings.policy.untrusted"), description: t("settings.policy.untrustedDesc") },
+    { value: "on-request" as ApprovalPolicy, label: t("settings.policy.onRequest"), description: t("settings.policy.onRequestDesc") },
+    { value: "never" as ApprovalPolicy, label: t("settings.policy.never"), description: t("settings.policy.neverDesc") },
+  ];
+}
 
 const MINIMAX_BASE_URL_OPTIONS = [
   "https://api.minimax.io/anthropic",
@@ -275,6 +270,9 @@ export function SettingsCenterOverlay({
   onUpdateProvider,
   onUpdateWritableRoot,
 }: SettingsCenterOverlayProps) {
+  const t = useT();
+  const CATEGORY_META = useMemo(() => getCategoryMeta(t), [t]);
+  const VISIBLE_CATEGORY_META = useMemo(() => CATEGORY_META.filter((category) => category.key !== "account"), [CATEGORY_META]);
   const activeMeta = CATEGORY_META.find((category) => category.key === activeCategory) ?? CATEGORY_META[0];
   const isAboutCategory = activeCategory === "about";
 
@@ -289,7 +287,7 @@ export function SettingsCenterOverlay({
               onClick={onClose}
             >
               <ArrowLeft className="size-3.5" />
-              <span>Back to app</span>
+              <span>{t("settings.backToApp")}</span>
             </button>
 
             <div className="mt-4 space-y-1">
@@ -332,7 +330,7 @@ export function SettingsCenterOverlay({
               onClick={onClose}
             >
               <ArrowLeft className="size-3.5" />
-              <span>Back to app</span>
+              <span>{t("settings.backToApp")}</span>
             </button>
             <p className="text-sm font-medium text-app-foreground">{activeMeta.title}</p>
           </div>
@@ -624,6 +622,7 @@ function SessionIdentityCard({
   onLogin: () => void;
   onLogout: () => void;
 }) {
+  const t = useT();
   return (
     <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-center gap-3">
@@ -632,10 +631,10 @@ function SessionIdentityCard({
         </div>
         <div className="min-w-0">
           <p className="truncate text-[14px] font-semibold text-app-foreground">
-            {userSession?.name ?? "Guest"}
+            {userSession?.name ?? t("settings.account.guest")}
           </p>
           <p className="mt-1 truncate text-[12px] text-app-muted">
-            {userSession?.email ?? "Sign in to sync your account identity and plan usage."}
+            {userSession?.email ?? t("settings.account.signInHint")}
           </p>
         </div>
       </div>
@@ -647,13 +646,14 @@ function SessionIdentityCard({
         className="border-app-border bg-app-surface-muted text-app-foreground shadow-none hover:bg-app-surface-hover"
         onClick={userSession ? onLogout : onLogin}
       >
-        {userSession ? "Sign out" : "Sign in"}
+        {userSession ? t("settings.account.signOut") : t("settings.account.signIn")}
       </Button>
     </div>
   );
 }
 
 function CurrentPlanCard({ plan }: { plan: CurrentPlanSnapshot }) {
+  const t = useT();
   const usageRatio = Math.min(plan.creditsUsed / plan.creditsTotal, 1);
   const remainingCredits = Math.max(plan.creditsTotal - plan.creditsUsed, 0);
   const planStyle = PLAN_VISUAL_STYLES[plan.name];
@@ -679,7 +679,7 @@ function CurrentPlanCard({ plan }: { plan: CurrentPlanSnapshot }) {
         </div>
 
         <div className="sm:text-right">
-          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Next Reset</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.nextReset")}</p>
           <p className="mt-2 text-[13px] font-medium text-app-foreground">{plan.nextResetAt}</p>
         </div>
       </div>
@@ -698,7 +698,7 @@ function CurrentPlanCard({ plan }: { plan: CurrentPlanSnapshot }) {
           />
         </div>
         <p className="mt-2 text-[12px] text-app-muted">
-          {formatCreditCount(remainingCredits)} credits remaining in the current cycle.
+          {formatCreditCount(remainingCredits)} {t("settings.account.creditsRemaining")}
         </p>
       </div>
     </div>
@@ -712,6 +712,7 @@ function PlanCatalogCard({
   isActive: boolean;
   plan: PlanDefinition;
 }) {
+  const t = useT();
   const planStyle = PLAN_VISUAL_STYLES[plan.name];
 
   return (
@@ -735,7 +736,7 @@ function PlanCatalogCard({
                   planStyle?.currentBadgeClass ?? "border-app-foreground/15",
                 )}
               >
-                Current
+                {t("settings.account.currentBadge")}
               </span>
             ) : null}
           </div>
@@ -756,7 +757,7 @@ function PlanCatalogCard({
           <span>{formatCreditCount(plan.monthlyCredits)} credits</span>
           {plan.name === "Free" ? (
             <span className="inline-flex items-center rounded-full bg-app-surface-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-app-subtle">
-              Trial
+              {t("settings.account.trialBadge")}
             </span>
           ) : null}
         </div>
@@ -772,16 +773,17 @@ function BillingHistoryTable({
 }: {
   entries: ReadonlyArray<BillingHistoryEntry>;
 }) {
+  const t = useT();
   return (
     <div className="overflow-hidden rounded-2xl border border-app-border bg-app-surface">
       <div className="overflow-x-auto">
         <table className="min-w-full border-collapse text-left">
           <thead className="bg-app-surface-muted/80">
             <tr>
-              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Time</th>
-              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Amount</th>
-              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Payment Method</th>
-              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Invoice</th>
+              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.timeHeader")}</th>
+              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.amountHeader")}</th>
+              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.paymentMethodHeader")}</th>
+              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.invoiceHeader")}</th>
             </tr>
           </thead>
           <tbody>
@@ -815,11 +817,12 @@ function AccountSettingsPanel({
   onLogin: () => void;
   onLogout: () => void;
 }) {
+  const t = useT();
   const currentPlan = userSession ? CURRENT_PLAN_SNAPSHOT : null;
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeading title="Account" description={description} />
+      <PageHeading title={t("settings.category.account")} description={description} />
 
       <SettingsSection title="Session">
         <SessionIdentityCard userSession={userSession} onLogin={onLogin} onLogout={onLogout} />
@@ -827,15 +830,15 @@ function AccountSettingsPanel({
 
       <section>
         <div className="mb-2 flex items-center justify-between px-1">
-          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Current Plan</h2>
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.currentPlan")}</h2>
         </div>
         {currentPlan ? (
           <CurrentPlanCard plan={currentPlan} />
         ) : (
           <div className="rounded-2xl border border-dashed border-app-border bg-app-surface-muted px-4 py-4">
-            <p className="text-[13px] font-medium text-app-foreground">Guest access</p>
+            <p className="text-[13px] font-medium text-app-foreground">{t("settings.account.guestAccess")}</p>
             <p className="mt-1 text-[12px] leading-5 text-app-muted">
-              Sign in to see your current plan, credit usage, and the exact reset time for the next billing cycle.
+              {t("settings.account.signInForPlan")}
             </p>
           </div>
         )}
@@ -843,7 +846,7 @@ function AccountSettingsPanel({
 
       <section>
         <div className="mb-2 flex items-center justify-between px-1">
-          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Plan Comparison</h2>
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.planComparison")}</h2>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           {PLAN_DEFINITIONS.map((plan) => (
@@ -858,15 +861,15 @@ function AccountSettingsPanel({
 
       <section>
         <div className="mb-2 flex items-center justify-between px-1">
-          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Billing History</h2>
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.billingHistory")}</h2>
         </div>
         {userSession ? (
           <BillingHistoryTable entries={BILLING_HISTORY_SNAPSHOT} />
         ) : (
           <div className="rounded-2xl border border-dashed border-app-border bg-app-surface-muted px-4 py-4">
-            <p className="text-[13px] font-medium text-app-foreground">Billing records are available after sign-in</p>
+            <p className="text-[13px] font-medium text-app-foreground">{t("settings.account.billingAfterSignIn")}</p>
             <p className="mt-1 text-[12px] leading-5 text-app-muted">
-              Sign in to review charge history, payment methods, and invoice references for your account.
+              {t("settings.account.signInForBilling")}
             </p>
           </div>
         )}
@@ -890,6 +893,7 @@ function ProfilePicker({
   onDuplicate: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
+  const t = useT();
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -948,7 +952,7 @@ function ProfilePicker({
         className="flex h-6 items-center gap-1 rounded-md border border-app-border bg-app-surface px-2 text-[11px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
         onClick={() => setIsOpen((prev) => !prev)}
       >
-        <span className="shrink-0 text-app-subtle">Current Profile:</span>
+        <span className="shrink-0 text-app-subtle">{t("settings.profile.currentProfile")}</span>
         <span className="max-w-[120px] truncate">{activeProfile.name}</span>
         <ChevronDown className="size-3 text-app-subtle" />
       </button>
@@ -996,7 +1000,7 @@ function ProfilePicker({
                       <button
                         type="button"
                         className="flex size-5 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground"
-                        title="Rename"
+                        title={t("settings.profile.rename")}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleStartRename(profile);
@@ -1007,7 +1011,7 @@ function ProfilePicker({
                       <button
                         type="button"
                         className="flex size-5 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground"
-                        title="Duplicate"
+                        title={t("settings.profile.duplicate")}
                         onClick={(e) => {
                           e.stopPropagation();
                           onDuplicate(profile.id);
@@ -1024,7 +1028,7 @@ function ProfilePicker({
                             ? "cursor-not-allowed text-app-subtle/40"
                             : "text-app-subtle hover:bg-app-canvas hover:text-red-500",
                         )}
-                        title="Delete"
+                        title={t("settings.profile.delete")}
                         disabled={profiles.length <= 1}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1080,6 +1084,9 @@ function GeneralSettingsPanel({
   onUpdateAgentProfile: (id: string, patch: Partial<Omit<AgentProfile, "id">>) => void;
   onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
 }) {
+  const t = useT();
+  const RESPONSE_STYLE_OPTIONS = useMemo(() => getResponseStyleOptions(t), [t]);
+
   const availableModels = useMemo(() => {
     const models: Array<{
       providerId: string;
@@ -1115,7 +1122,7 @@ function GeneralSettingsPanel({
 
   const handleAddProfile = () => {
     onAddAgentProfile({
-      name: "New Profile",
+      name: t("settings.general.newProfile"),
       customInstructions: "",
       commitMessagePrompt: activeProfile.commitMessagePrompt,
       responseStyle: "balanced",
@@ -1132,12 +1139,12 @@ function GeneralSettingsPanel({
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeading title="General" description={description} />
+      <PageHeading title={t("settings.category.general")} description={description} />
 
-      <SettingsSection title="Preferences">
+      <SettingsSection title={t("settings.general.preferences")}>
         <SettingsRow
-          label="Theme"
-          description="Use the system appearance or lock the app to light or dark mode."
+          label={t("settings.general.themeLabel")}
+          description={t("settings.general.themeDesc")}
           control={
             <ChoiceGroup
               options={THEME_OPTIONS}
@@ -1148,8 +1155,8 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <SettingsRow
-          label="Language"
-          description="Choose which language the app interface should use."
+          label={t("settings.general.languageLabel")}
+          description={t("settings.general.languageDesc")}
           control={
             <ChoiceGroup
               options={LANGUAGE_OPTIONS}
@@ -1160,8 +1167,8 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <SettingsRow
-          label="Startup"
-          description="Automatically launch the app when you log in."
+          label={t("settings.general.startupLabel")}
+          description={t("settings.general.startupDesc")}
           control={
             <Switch
               size="sm"
@@ -1172,8 +1179,8 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <SettingsRow
-          label="Prevent sleep while running"
-          description="Keep the system awake while an agent run is active."
+          label={t("settings.general.preventSleepLabel")}
+          description={t("settings.general.preventSleepDesc")}
           control={
             <Switch
               size="sm"
@@ -1184,8 +1191,8 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <SettingsRow
-          label="Close to tray"
-          description="Minimize to system tray instead of quitting when the window is closed."
+          label={t("settings.general.closeToTrayLabel")}
+          description={t("settings.general.closeToTrayDesc")}
           control={
             <Switch
               size="sm"
@@ -1197,7 +1204,7 @@ function GeneralSettingsPanel({
       </SettingsSection>
 
       <SettingsSection
-        title="Agent Profiles"
+        title={t("settings.general.agentProfiles")}
         action={
           <div className="flex items-center gap-1.5">
             <ProfilePicker
@@ -1214,13 +1221,13 @@ function GeneralSettingsPanel({
               onClick={handleAddProfile}
             >
               <Plus className="size-3" />
-              Add Profile
+              {t("settings.general.addProfile")}
             </button>
           </div>
         }
       >
         <SettingsRow
-          label="Response style"
+          label={t("settings.general.responseStyle")}
           description={selectedStyle.description}
           control={
             <ChoiceGroup
@@ -1232,8 +1239,8 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <SettingsRow
-          label="Response language"
-          description="The language used for agent responses."
+          label={t("settings.general.responseLanguage")}
+          description={t("settings.general.responseLanguageDesc")}
           control={
             <Input
               value={activeProfile.responseLanguage}
@@ -1245,8 +1252,8 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <SettingsRow
-          label="Commit message language"
-          description="The language used when the Git panel generates commit messages."
+          label={t("settings.general.commitLanguage")}
+          description={t("settings.general.commitLanguageDesc")}
           control={
             <Input
               value={activeProfile.commitMessageLanguage}
@@ -1260,8 +1267,8 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <ModelSelectRow
-          label="Primary model"
-          description="Handles the main task flow, deep reasoning, and the Plan Agent."
+          label={t("settings.general.primaryModel")}
+          description={t("settings.general.primaryModelDesc")}
           providerId={activeProfile.primaryProviderId}
           modelRecordId={activeProfile.primaryModelId}
           availableModels={availableModels}
@@ -1272,8 +1279,8 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <ModelSelectRow
-          label="Auxiliary model"
-          description="Supports Explore and Review helper agents, with fallback to Primary when unset."
+          label={t("settings.general.auxiliaryModel")}
+          description={t("settings.general.auxiliaryModelDesc")}
           providerId={activeProfile.assistantProviderId}
           modelRecordId={activeProfile.assistantModelId}
           availableModels={availableModels}
@@ -1284,8 +1291,8 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <ModelSelectRow
-          label="Lightweight model"
-          description="Handles title generation and quick internal summaries with a smaller, faster model."
+          label={t("settings.general.lightweightModel")}
+          description={t("settings.general.lightweightModelDesc")}
           providerId={activeProfile.liteProviderId}
           modelRecordId={activeProfile.liteModelId}
           availableModels={availableModels}
@@ -1296,9 +1303,9 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <div className="px-4 py-3">
-          <div className="mb-1 text-[13px] font-medium leading-5 text-app-foreground">Custom instructions</div>
+          <div className="mb-1 text-[13px] font-medium leading-5 text-app-foreground">{t("settings.general.customInstructions")}</div>
           <p className="mb-3 text-[12px] leading-5 text-app-muted">
-            Standing instruction applied to every thread. Use it to define the agent&apos;s personality, constraints, and default behavior.
+            {t("settings.general.customInstructionsDesc")}
           </p>
           <Textarea
             value={activeProfile.customInstructions}
@@ -1308,9 +1315,9 @@ function GeneralSettingsPanel({
         </div>
         <SectionDivider />
         <div className="px-4 py-3">
-          <div className="mb-1 text-[13px] font-medium leading-5 text-app-foreground">Commit message prompt</div>
+          <div className="mb-1 text-[13px] font-medium leading-5 text-app-foreground">{t("settings.general.commitPrompt")}</div>
           <p className="mb-3 text-[12px] leading-5 text-app-muted">
-            Prompt used by the Git panel when generating commit messages for the current profile.
+            {t("settings.general.commitPromptDesc")}
           </p>
           <Textarea
             value={activeProfile.commitMessagePrompt}
@@ -1344,6 +1351,7 @@ function ModelSelectRow({
   modelRecordId: string;
   onValueChange: (providerId: string, modelRecordId: string) => void;
 }) {
+  const t = useT();
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -1382,7 +1390,7 @@ function ModelSelectRow({
     ? `${selectedModel.displayName}`
     : modelRecordId
       ? modelRecordId
-      : "Not set";
+      : t("settings.general.notSet");
 
   const grouped = useMemo(() => {
     const map = new Map<string, Array<{
@@ -1443,7 +1451,7 @@ function ModelSelectRow({
                   )}
                   onClick={() => { onValueChange("", ""); setIsOpen(false); }}
                 >
-                  <span className="italic text-app-muted">Not set</span>
+                  <span className="italic text-app-muted">{t("settings.general.notSet")}</span>
                 </button>
                 {[...grouped.entries()].map(([providerName, models]) => (
                   <div key={providerName}>
@@ -1469,7 +1477,7 @@ function ModelSelectRow({
                 ))}
                 {availableModels.length === 0 ? (
                   <div className="px-3 py-4 text-center text-[12px] text-app-muted">
-                    No models available. Enable providers and models first.
+                    {t("settings.general.noModelsAvailable")}
                   </div>
                 ) : null}
               </div>,
@@ -1492,15 +1500,16 @@ function AboutSettingsPanel({
   updateStatus: string | null;
   onCheckUpdates: () => void;
 }) {
+  const t = useT();
   const version = runtime?.version ?? "0.1.0";
   const appName = runtime?.appName ?? "TiyCode";
   const platformSummary = runtime?.platform ?? "Unknown platform";
   const architectureSummary = runtime?.arch ?? "Unknown architecture";
   const aboutActions = [
-    { href: "https://tiy.ai", label: "Official Website" },
-    { href: "https://github.com/TiyAgents/tiycode/blob/master/LICENSE", label: "License" },
-    { href: "https://github.com/TiyAgents/tiycode/issues", label: "Feedback" },
-    { href: "mailto:contact@tiy.ai", label: "Contact Email" },
+    { href: "https://tiy.ai", label: t("settings.about.officialWebsite") },
+    { href: "https://github.com/TiyAgents/tiycode/blob/master/LICENSE", label: t("settings.about.license") },
+    { href: "https://github.com/TiyAgents/tiycode/issues", label: t("settings.about.feedback") },
+    { href: "mailto:contact@tiy.ai", label: t("settings.about.contactEmail") },
   ] as const;
 
   return (
@@ -1512,7 +1521,7 @@ function AboutSettingsPanel({
           <div className="max-w-[560px] space-y-2">
             <h2 className="text-[19px] font-semibold tracking-[-0.03em] text-app-foreground">{appName}</h2>
             <p className="text-[13px] leading-6 text-app-muted">
-              An open-source, flexible, convenient cross-platform vibe-coding agent grounded in your workspace, tools, models, and runtime context.
+              {t("settings.about.description")}
             </p>
             <p className="text-[12px] leading-5 text-app-subtle">{`Version v${version} • ${platformSummary} • ${architectureSummary}`}</p>
           </div>
@@ -1540,7 +1549,7 @@ function AboutSettingsPanel({
             onClick={onCheckUpdates}
           >
             <RefreshCw data-icon="inline-start" className={cn("size-3.5", isCheckingUpdates && "animate-spin")} />
-            {isCheckingUpdates ? "Checking for Updates..." : "Check for Updates"}
+            {isCheckingUpdates ? t("settings.about.checkingUpdates") : t("settings.about.checkForUpdates")}
           </Button>
 
           <div className="flex min-h-10 items-center justify-center">
@@ -1550,7 +1559,7 @@ function AboutSettingsPanel({
           </div>
 
           <div className="flex w-full max-w-[560px] flex-col items-center gap-1.5 pt-1 text-[11px] leading-5 text-app-subtle">
-            <p className="text-center">Copyright © 2026 Tiy.Ai All Rights Reserved.</p>
+            <p className="text-center">{t("settings.about.copyright")}</p>
 
             <div className="flex items-center justify-center gap-3">
               <button
@@ -1560,7 +1569,7 @@ function AboutSettingsPanel({
                   void openUrl("https://tiy.ai/terms");
                 }}
               >
-                Terms of Service
+                {t("settings.about.termsOfService")}
               </button>
               <button
                 type="button"
@@ -1569,7 +1578,7 @@ function AboutSettingsPanel({
                   void openUrl("https://tiy.ai/privacy");
                 }}
               >
-                Privacy Policy
+                {t("settings.about.privacyPolicy")}
               </button>
             </div>
           </div>
@@ -1592,9 +1601,10 @@ function CommandSettingsPanel({
   onRemoveCommand: (id: string) => void;
   onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
 }) {
+  const t = useT();
   return (
     <div className="flex flex-col gap-6">
-      <PageHeading title="Commands" description={description} />
+      <PageHeading title={t("settings.category.commands")} description={description} />
 
       <CommandsSection
         commands={commands.commands}
@@ -1617,6 +1627,7 @@ function CommandsSection({
   onRemoveCommand: (id: string) => void;
   onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
 }) {
+  const t = useT();
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const handleAddCommand = () => {
@@ -1631,7 +1642,7 @@ function CommandsSection({
 
   return (
     <SettingsSection
-      title="Commands"
+      title={t("settings.category.commands")}
       action={
         <button
           type="button"
@@ -1639,13 +1650,13 @@ function CommandsSection({
           onClick={handleAddCommand}
         >
           <Plus className="size-3.5" />
-          <span>Add Prompt</span>
+          <span>{t("settings.commands.addPrompt")}</span>
         </button>
       }
     >
       <div className="px-4 py-3">
         <p className="text-[12px] leading-5 text-app-muted">
-          Create quick prompts that can be triggered by typing / in the chat
+          {t("settings.commands.createHint")}
         </p>
       </div>
       {commands.length > 0 ? (
@@ -1682,6 +1693,7 @@ function CommandItem({
   onRemove: () => void;
   onUpdate: (patch: Partial<Omit<CommandEntry, "id">>) => void;
 }) {
+  const t = useT();
   const commandPath = command.name ? `/prompts:${command.name}` : "/prompts:unnamed";
 
   return (
@@ -1693,14 +1705,14 @@ function CommandItem({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-app-foreground">{command.name || "Untitled"}</span>
+            <span className="text-[13px] font-semibold text-app-foreground">{command.name || t("settings.commands.untitled")}</span>
             <span className="text-[12px] text-app-subtle">{commandPath}</span>
           </div>
           <p className="mt-1 truncate text-[12px] leading-5 text-app-muted">
-            {command.description || <span className="italic">No description</span>}
+            {command.description || <span className="italic">{t("settings.commands.noDescription")}</span>}
           </p>
           <p className="mt-1 truncate text-[11px] leading-5 text-app-subtle">
-            {command.argumentHint || <span className="italic">No argument hint</span>}
+            {command.argumentHint || <span className="italic">{t("settings.commands.noArgumentHint")}</span>}
           </p>
         </div>
 
@@ -1709,8 +1721,8 @@ function CommandItem({
             <>
               <button
                 type="button"
-                title="Save changes"
-                aria-label="Save changes"
+                title={t("settings.commands.saveChanges")}
+                aria-label={t("settings.commands.saveChanges")}
                 className="flex size-7 items-center justify-center rounded-md text-green-500 transition-colors hover:bg-app-surface-hover hover:text-green-600"
                 onClick={onEdit}
               >
@@ -1718,8 +1730,8 @@ function CommandItem({
               </button>
               <button
                 type="button"
-                title="Cancel editing"
-                aria-label="Cancel editing"
+                title={t("settings.commands.cancelEditing")}
+                aria-label={t("settings.commands.cancelEditing")}
                 className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
                 onClick={onCancelEdit}
               >
@@ -1730,8 +1742,8 @@ function CommandItem({
             <>
               <button
                 type="button"
-                title="Edit command"
-                aria-label="Edit command"
+                title={t("settings.commands.editCommand")}
+                aria-label={t("settings.commands.editCommand")}
                 className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
                 onClick={onEdit}
               >
@@ -1739,8 +1751,8 @@ function CommandItem({
               </button>
               <button
                 type="button"
-                title="Remove command"
-                aria-label="Remove command"
+                title={t("settings.commands.removeCommand")}
+                aria-label={t("settings.commands.removeCommand")}
                 className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-red-500"
                 onClick={onRemove}
               >
@@ -1754,7 +1766,7 @@ function CommandItem({
       {isEditing ? (
         <div className="border-t border-dashed border-app-border bg-app-surface-muted px-4 py-3">
           <div>
-            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">Name</label>
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">{t("settings.commands.nameLabel")}</label>
             <Input
               value={command.name}
               onChange={(event) => onUpdate({ name: event.target.value })}
@@ -1764,16 +1776,16 @@ function CommandItem({
             <p className="mt-1 text-[11px] text-app-subtle">Command path: {command.name ? `/prompts:${command.name}` : "/prompts:..."}</p>
           </div>
           <div className="mt-3">
-            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">Description</label>
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">{t("settings.commands.descriptionLabel")}</label>
             <Input
               value={command.description}
               onChange={(event) => onUpdate({ description: event.target.value })}
-              placeholder="Describe what this command does in the picker"
+              placeholder={t("settings.commands.descriptionPlaceholder")}
               className="text-[13px]"
             />
           </div>
           <div className="mt-3">
-            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">Argument hint</label>
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">{t("settings.commands.argumentHintLabel")}</label>
             <Input
               value={command.argumentHint}
               onChange={(event) => onUpdate({ argumentHint: event.target.value })}
@@ -1782,11 +1794,11 @@ function CommandItem({
             />
           </div>
           <div className="mt-3">
-            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">Command prompt</label>
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-app-subtle">{t("settings.commands.commandPromptLabel")}</label>
             <Textarea
               value={command.prompt}
               onChange={(event) => onUpdate({ prompt: event.target.value })}
-              placeholder="Write the expanded prompt sent to the model when this command is used..."
+              placeholder={t("settings.commands.commandPromptPlaceholder")}
               className="min-h-24 text-[13px]"
             />
           </div>
@@ -1823,13 +1835,15 @@ function PolicySettingsPanel({
   onUpdatePolicySetting: <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => void;
   onUpdateWritableRoot: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
 }) {
+  const t = useT();
+  const APPROVAL_POLICY_OPTIONS = useMemo(() => getApprovalPolicyOptions(t), [t]);
   return (
     <div className="flex flex-col gap-6">
-      <PageHeading title="Permissions" description={description} />
+      <PageHeading title={t("settings.category.permissions")} description={description} />
 
-      <SettingsSection title="Execution">
+      <SettingsSection title={t("settings.permissions.execution")}>
         <SettingsRow
-          label="Approval policy"
+          label={t("settings.permissions.approvalPolicy")}
           description={APPROVAL_POLICY_OPTIONS.find((option) => option.value === policy.approvalPolicy)?.description ?? ""}
           control={
             <ChoiceGroup
@@ -1841,8 +1855,8 @@ function PolicySettingsPanel({
         />
         <SectionDivider />
         <PatternSubsection
-          title="Allowed"
-          description="Patterns the agent can use without approval."
+          title={t("settings.permissions.allowed")}
+          description={t("settings.permissions.allowedDesc")}
           entries={policy.allowList}
           onAdd={onAddAllowEntry}
           onRemove={onRemoveAllowEntry}
@@ -1850,8 +1864,8 @@ function PolicySettingsPanel({
         />
         <SectionDivider />
         <PatternSubsection
-          title="Denied"
-          description="Patterns the agent must never use."
+          title={t("settings.permissions.denied")}
+          description={t("settings.permissions.deniedDesc")}
           entries={policy.denyList}
           onAdd={onAddDenyEntry}
           onRemove={onRemoveDenyEntry}
@@ -1884,6 +1898,7 @@ function PatternSubsection({
   onUpdate: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
   title: string;
 }) {
+  const t = useT();
   const [editingId, setEditingId] = useState<string | null>(null);
   const pendingAddRef = useRef(false);
 
@@ -1912,7 +1927,7 @@ function PatternSubsection({
           onClick={handleAdd}
         >
           <Plus className="size-3.5" />
-          <span>Add</span>
+          <span>{t("settings.permissions.add")}</span>
         </button>
       </div>
       {entries.length > 0 ? (
@@ -1952,6 +1967,7 @@ function PatternItem({
   onRemove: () => void;
   onUpdate: (patch: Partial<Omit<PatternEntry, "id">>) => void;
 }) {
+  const t = useT();
   return (
     <div className={cn("flex items-center gap-3 px-3 py-2", !isFirst && "border-t border-dashed border-app-border")}>
       <div className="min-w-0 flex-1">
@@ -1969,7 +1985,7 @@ function PatternItem({
           />
         ) : (
           <span className="text-[13px] font-medium text-app-foreground">
-            {entry.pattern || <span className="italic text-app-muted">Empty</span>}
+            {entry.pattern || <span className="italic text-app-muted">{t("settings.permissions.empty")}</span>}
           </span>
         )}
       </div>
@@ -1979,8 +1995,8 @@ function PatternItem({
           <>
             <button
               type="button"
-              title="Confirm"
-              aria-label="Confirm"
+              title={t("settings.permissions.confirm")}
+              aria-label={t("settings.permissions.confirm")}
               className="flex size-7 items-center justify-center rounded-md text-green-500 transition-colors hover:bg-app-surface-hover hover:text-green-600"
               onClick={onEdit}
             >
@@ -1988,8 +2004,8 @@ function PatternItem({
             </button>
             <button
               type="button"
-              title="Cancel"
-              aria-label="Cancel"
+              title={t("settings.permissions.cancel")}
+              aria-label={t("settings.permissions.cancel")}
               className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
               onClick={onCancelEdit}
             >
@@ -2000,8 +2016,8 @@ function PatternItem({
           <>
             <button
               type="button"
-              title="Edit pattern"
-              aria-label="Edit pattern"
+              title={t("settings.permissions.editPattern")}
+              aria-label={t("settings.permissions.editPattern")}
               className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
               onClick={onEdit}
             >
@@ -2009,8 +2025,8 @@ function PatternItem({
             </button>
             <button
               type="button"
-              title="Remove pattern"
-              aria-label="Remove pattern"
+              title={t("settings.permissions.removePattern")}
+              aria-label={t("settings.permissions.removePattern")}
               className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-red-500"
               onClick={onRemove}
             >
@@ -2034,6 +2050,7 @@ function WritableRootsSubsection({
   onRemove: (id: string) => void;
   onUpdate: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
 }) {
+  const t = useT();
   const [editingId, setEditingId] = useState<string | null>(null);
   const pendingAddRef = useRef(false);
 
@@ -2053,8 +2070,8 @@ function WritableRootsSubsection({
     <div>
       <div className="flex items-center justify-between px-4 py-3">
         <div className="min-w-0">
-          <p className="text-[13px] font-medium text-app-foreground">Writable roots</p>
-          <p className="mt-1 text-[12px] leading-5 text-app-muted">Additional directories the sandbox is allowed to write to.</p>
+          <p className="text-[13px] font-medium text-app-foreground">{t("settings.permissions.writableRoots")}</p>
+          <p className="mt-1 text-[12px] leading-5 text-app-muted">{t("settings.permissions.writableRootsDesc")}</p>
         </div>
         <button
           type="button"
@@ -2062,7 +2079,7 @@ function WritableRootsSubsection({
           onClick={handleAdd}
         >
           <Plus className="size-3.5" />
-          <span>Add</span>
+          <span>{t("settings.permissions.add")}</span>
         </button>
       </div>
       {entries.length > 0 ? (
@@ -2102,6 +2119,7 @@ function WritableRootItem({
   onRemove: () => void;
   onUpdate: (patch: Partial<Omit<WritableRootEntry, "id">>) => void;
 }) {
+  const t = useT();
   return (
     <div className={cn("flex items-center gap-3 px-3 py-2", !isFirst && "border-t border-dashed border-app-border")}>
       <div className="shrink-0 text-app-subtle">
@@ -2123,7 +2141,7 @@ function WritableRootItem({
           />
         ) : (
           <span className="text-[13px] font-medium text-app-foreground">
-            {entry.path || <span className="italic text-app-muted">Empty path</span>}
+            {entry.path || <span className="italic text-app-muted">{t("settings.permissions.emptyPath")}</span>}
           </span>
         )}
       </div>
@@ -2133,8 +2151,8 @@ function WritableRootItem({
           <>
             <button
               type="button"
-              title="Confirm"
-              aria-label="Confirm"
+              title={t("settings.permissions.confirm")}
+              aria-label={t("settings.permissions.confirm")}
               className="flex size-7 items-center justify-center rounded-md text-green-500 transition-colors hover:bg-app-surface-hover hover:text-green-600"
               onClick={onEdit}
             >
@@ -2142,8 +2160,8 @@ function WritableRootItem({
             </button>
             <button
               type="button"
-              title="Cancel"
-              aria-label="Cancel"
+              title={t("settings.permissions.cancel")}
+              aria-label={t("settings.permissions.cancel")}
               className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
               onClick={onCancelEdit}
             >
@@ -2154,8 +2172,8 @@ function WritableRootItem({
           <>
             <button
               type="button"
-              title="Edit path"
-              aria-label="Edit path"
+              title={t("settings.permissions.editPath")}
+              aria-label={t("settings.permissions.editPath")}
               className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
               onClick={onEdit}
             >
@@ -2163,8 +2181,8 @@ function WritableRootItem({
             </button>
             <button
               type="button"
-              title="Remove path"
-              aria-label="Remove path"
+              title={t("settings.permissions.removePath")}
+              aria-label={t("settings.permissions.removePath")}
               className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-red-500"
               onClick={onRemove}
             >
@@ -2177,17 +2195,15 @@ function WritableRootItem({
   );
 }
 
-const MODEL_CAPABILITY_META: ReadonlyArray<{
-  icon: React.ComponentType<{ className?: string }>;
-  key: keyof ProviderModelCapabilities;
-  label: string;
-}> = [
-  { key: "vision", label: "Vision", icon: Eye },
-  { key: "imageOutput", label: "Image Output", icon: Image },
-  { key: "toolCalling", label: "Tool Calling", icon: Wrench },
-  { key: "reasoning", label: "Reasoning", icon: Brain },
-  { key: "embedding", label: "Embedding", icon: Database },
-];
+function getModelCapabilityMeta(t: TFunc) {
+  return [
+    { key: "vision" as keyof ProviderModelCapabilities, label: t("settings.capability.vision"), icon: Eye },
+    { key: "imageOutput" as keyof ProviderModelCapabilities, label: t("settings.capability.imageOutput"), icon: Image },
+    { key: "toolCalling" as keyof ProviderModelCapabilities, label: t("settings.capability.toolCalling"), icon: Wrench },
+    { key: "reasoning" as keyof ProviderModelCapabilities, label: t("settings.capability.reasoning"), icon: Brain },
+    { key: "embedding" as keyof ProviderModelCapabilities, label: t("settings.capability.embedding"), icon: Database },
+  ];
+}
 
 function formatCustomHeaders(customHeaders: Record<string, string> | undefined) {
   return JSON.stringify(customHeaders ?? {}, null, 2);
@@ -2305,6 +2321,7 @@ function ProviderSettingsPanel({
   onRemoveProvider: (id: string) => void;
   onUpdateProvider: (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => void;
 }) {
+  const t = useT();
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     () => providers[0]?.id ?? null,
   );
@@ -2413,7 +2430,7 @@ function ProviderSettingsPanel({
       kind: "custom",
       providerKey: crypto.randomUUID(),
       providerType: customProviderTypeOptions[0]?.value ?? "openai-compatible",
-      displayName: "Custom Provider",
+      displayName: t("settings.providers.customProvider"),
       baseUrl: customProviderTypeOptions[0]?.defaultBaseUrl ?? "https://api.example.com/v1",
       apiKey: "",
       hasApiKey: false,
@@ -2507,10 +2524,10 @@ function ProviderSettingsPanel({
       await onFetchProviderModels(selectedProvider.id);
       setFetchFeedback({
         kind: "success",
-        message: "Model catalog updated from provider API.",
+        message: t("settings.providers.catalogUpdated"),
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to fetch provider models.";
+      const message = error instanceof Error ? error.message : t("settings.providers.fetchFailed");
       setFetchFeedback({
         kind: "error",
         message,
@@ -2551,7 +2568,7 @@ function ProviderSettingsPanel({
         [modelId]: {
           success: false,
           unsupported: false,
-          message: "Connection test failed.",
+          message: t("settings.providers.connectionTestFailed"),
           detail,
         },
       }));
@@ -2573,18 +2590,18 @@ function ProviderSettingsPanel({
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeading title="Providers" description={description} />
+      <PageHeading title={t("settings.category.providers")} description={description} />
 
       <section>
         <div className="mb-2 flex items-center justify-between px-1">
-          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Providers</h2>
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.category.providers")}</h2>
           <button
             type="button"
             className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-[12px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
             onClick={handleAddCustomProvider}
           >
             <Plus className="size-3.5" />
-            <span>Add Provider</span>
+            <span>{t("settings.providers.addProvider")}</span>
           </button>
         </div>
         <div className="flex min-h-[520px] gap-4" style={{ height: "calc(100vh - 220px)" }}>
@@ -2595,7 +2612,7 @@ function ProviderSettingsPanel({
                 <Search className="size-3.5 shrink-0 text-app-subtle" />
                 <input
                   type="text"
-                  placeholder="Search providers..."
+                  placeholder={t("settings.providers.searchProviders")}
                   value={providerSearch}
                   onChange={(event) => setProviderSearch(event.target.value)}
                   className="min-w-0 flex-1 bg-transparent text-[12px] text-app-foreground placeholder:text-app-subtle outline-none"
@@ -2626,7 +2643,7 @@ function ProviderSettingsPanel({
                       <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{provider.displayName}</span>
                       {provider.kind === "custom" ? (
                         <span className="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-app-subtle">
-                          custom
+                          {t("settings.providers.customBadge")}
                         </span>
                       ) : null}
                       <div
@@ -2653,16 +2670,16 @@ function ProviderSettingsPanel({
                       <h3 className="text-[15px] font-semibold text-app-foreground">{selectedProvider.displayName}</h3>
                       {selectedProvider.kind === "custom" ? (
                         <span className="rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-app-muted">
-                          Custom
+                          {t("settings.providers.customBadge")}
                         </span>
                       ) : (
                         <span className="rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-app-muted">
-                          Built-in
+                          {t("settings.providers.builtInBadge")}
                         </span>
                       )}
                       {selectedProvider.enabled ? (
                         <span className="rounded-md bg-app-success/15 px-1.5 py-0.5 text-[10px] font-medium text-app-success">
-                          Active
+                          {t("settings.providers.activeBadge")}
                         </span>
                       ) : null}
                     </div>
@@ -2672,8 +2689,8 @@ function ProviderSettingsPanel({
                     {selectedProvider.kind === "custom" ? (
                       <button
                         type="button"
-                        title="Delete provider"
-                        aria-label="Delete provider"
+                        title={t("settings.providers.deleteProvider")}
+                        aria-label={t("settings.providers.deleteProvider")}
                         className="flex size-8 items-center justify-center rounded-lg border border-app-danger/30 text-app-danger transition-colors hover:bg-app-danger/10"
                         onClick={() => {
                           onRemoveProvider(selectedProvider.id);
@@ -2685,7 +2702,7 @@ function ProviderSettingsPanel({
                     ) : null}
                     <Switch
                       checked={selectedProvider.enabled}
-                      aria-label="Toggle provider"
+                      aria-label={t("settings.providers.toggleProvider")}
                       onCheckedChange={(checked) => onUpdateProvider(selectedProvider.id, { enabled: checked })}
                     />
                   </div>
@@ -2693,7 +2710,7 @@ function ProviderSettingsPanel({
 
                 {/* Form fields */}
                 <div className="space-y-5 px-5 py-4">
-                  <ProviderField label="Provider Name">
+                  <ProviderField label={t("settings.providers.providerName")}>
                     <Input
                       value={selectedProvider.displayName}
                       onChange={(event) => onUpdateProvider(selectedProvider.id, { displayName: event.target.value })}
@@ -2701,7 +2718,7 @@ function ProviderSettingsPanel({
                     />
                   </ProviderField>
 
-                  <ProviderField label="Base URL">
+                  <ProviderField label={t("settings.providers.baseUrl")}>
                     {isMiniMaxProvider ? (
                       <div className="space-y-2">
                         <div className="relative">
@@ -2723,7 +2740,7 @@ function ProviderSettingsPanel({
                                 {option}
                               </option>
                             ))}
-                            <option value="__custom__">Custom Base URL</option>
+                            <option value="__custom__">{t("settings.providers.customBaseUrl")}</option>
                           </select>
                           <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-app-subtle" />
                         </div>
@@ -2735,7 +2752,7 @@ function ProviderSettingsPanel({
                           />
                         ) : null}
                         <p className="text-[11px] text-app-subtle">
-                          Choose a recommended MiniMax endpoint or enter your own Base URL.
+                          {t("settings.providers.baseUrlHelper")}
                         </p>
                       </div>
                     ) : (
@@ -2980,8 +2997,10 @@ function ProviderModelRow({
   onToggleExpanded: () => void;
   onUpdate: (patch: Partial<ProviderModel>) => void;
 }) {
+  const t = useT();
+  const capabilityMeta = getModelCapabilityMeta(t);
   const effectiveCapabilities = getEffectiveModelCapabilities(model);
-  const activeCapabilities = MODEL_CAPABILITY_META.filter((item) => effectiveCapabilities[item.key]);
+  const activeCapabilities = capabilityMeta.filter((item) => effectiveCapabilities[item.key]);
   const [providerOptionsInput, setProviderOptionsInput] = useState(() => formatProviderOptions(model.providerOptions));
   const [providerOptionsError, setProviderOptionsError] = useState<string | null>(null);
 
@@ -3168,7 +3187,7 @@ function ProviderModelRow({
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
-            {MODEL_CAPABILITY_META.map((capability) => {
+            {capabilityMeta.map((capability) => {
               const Icon = capability.icon;
               const isAuto = model.capabilityOverrides[capability.key] === undefined;
               return (
@@ -3295,13 +3314,14 @@ function WorkspaceSettingsPanel({
   onRemoveWorkspace: (id: string) => void;
   onSetDefaultWorkspace: (id: string) => void;
 }) {
+  const t = useT();
   const [activeOpenWorkspaceId, setActiveOpenWorkspaceId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const isMacOS = systemMetadata?.platform === "macos"
     || (typeof navigator !== "undefined" && navigator.userAgent.includes("Mac"));
   const isWindows = systemMetadata?.platform === "windows"
     || (typeof navigator !== "undefined" && navigator.userAgent.includes("Windows"));
-  const openWorkspaceLabel = isWindows ? "Open in Explorer" : isMacOS ? "Open in Finder" : "Open folder";
+  const openWorkspaceLabel = t("settings.workspace.openInFileManager");
 
   const handleAddWorkspace = () => {
     if (!isTauri()) {

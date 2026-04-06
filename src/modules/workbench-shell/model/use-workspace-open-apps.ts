@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
+import { useT } from "@/i18n";
 import type { WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 
 type State = {
@@ -15,6 +16,7 @@ const initialState: State = {
 };
 
 export function useWorkspaceOpenApps() {
+  const t = useT();
   const [state, setState] = useState<State>(initialState);
 
   const refetch = useCallback(async () => {
@@ -29,10 +31,10 @@ export function useWorkspaceOpenApps() {
       const data = await invoke<Array<WorkspaceOpenApp>>("get_workspace_open_apps");
       setState({ data, error: null, isLoading: false });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "读取可用应用失败";
+      const message = error instanceof Error ? error.message : t("workspaceApps.error.readApps");
       setState({ data: [], error: message, isLoading: false });
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void refetch();

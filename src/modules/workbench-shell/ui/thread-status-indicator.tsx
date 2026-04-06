@@ -1,6 +1,7 @@
 import { cn } from "@/shared/lib/utils";
 import { THREAD_STATUS_META } from "@/modules/workbench-shell/model/fixtures";
 import type { ThreadStatus } from "@/modules/workbench-shell/model/types";
+import { useT } from "@/i18n";
 
 export function ThreadStatusIndicator({
   status,
@@ -9,8 +10,10 @@ export function ThreadStatusIndicator({
   status: ThreadStatus;
   emphasis?: "default" | "subtle";
 }) {
+  const t = useT();
   const meta = THREAD_STATUS_META[status];
   const Icon = meta.icon;
+  const label = t(meta.labelKey);
   const isSubtle = emphasis === "subtle";
   const containerClassName = cn(
     "flex size-[1.15rem] shrink-0 items-center justify-center rounded-md border",
@@ -32,7 +35,7 @@ export function ThreadStatusIndicator({
   );
 
   return (
-    <span className={containerClassName} title={meta.label} aria-label={meta.label}>
+    <span className={containerClassName} title={label} aria-label={label}>
       <Icon className={cn("size-3.5", meta.spin && "animate-spin")} />
     </span>
   );

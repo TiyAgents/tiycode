@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useT } from "@/i18n";
 import { getSystemMetadata } from "@/features/system-info/api/get-system-metadata";
 import type { SystemMetadata } from "@/shared/types/system";
 
@@ -15,6 +16,7 @@ const initialState: State = {
 };
 
 export function useSystemMetadata() {
+  const t = useT();
   const [state, setState] = useState<State>(initialState);
 
   const refetch = useCallback(async () => {
@@ -24,10 +26,10 @@ export function useSystemMetadata() {
       const data = await getSystemMetadata();
       setState({ data, error: null, isLoading: false });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "读取运行时信息失败";
+      const message = error instanceof Error ? error.message : t("systemInfo.error.readRuntime");
       setState({ data: null, error: message, isLoading: false });
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void refetch();

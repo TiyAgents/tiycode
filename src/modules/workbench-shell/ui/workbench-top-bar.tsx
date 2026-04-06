@@ -22,6 +22,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
+import { useT } from "@/i18n";
 import { Button } from "@/shared/ui/button";
 import { cn } from "@/shared/lib/utils";
 import {
@@ -96,6 +97,7 @@ export function WorkbenchTopBar({
   onToggleDrawer: () => void;
   onToggleTerminal: () => void;
 }) {
+  const t = useT();
   const [isMaximized, setIsMaximized] = useState(false);
   const canUseDesktopWindowControls = isWindows && isTauri();
 
@@ -159,8 +161,8 @@ export function WorkbenchTopBar({
               isOverlayOpen && "pointer-events-none invisible",
               isUserMenuOpen && "bg-app-surface-hover text-app-foreground",
             )}
-            aria-label={isLoggedIn ? "打开用户菜单" : "打开菜单"}
-            title={isLoggedIn ? "打开用户菜单" : "打开菜单"}
+            aria-label={isLoggedIn ? t("topBar.openUserMenu") : t("topBar.openMenu")}
+            title={isLoggedIn ? t("topBar.openUserMenu") : t("topBar.openMenu")}
             aria-expanded={isUserMenuOpen}
             aria-haspopup="menu"
             onClick={onToggleUserMenu}
@@ -189,7 +191,7 @@ export function WorkbenchTopBar({
                 onClick={() => onToggleSettingsSection((current) => (current === "theme" ? null : "theme"))}
               >
                 <Palette className={MENU_TRIGGER_ICON_CLASS} />
-                <span className={MENU_TRIGGER_LABEL_CLASS}>主题</span>
+                <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.theme")}</span>
                 <span className="shrink-0 text-xs text-app-subtle">{selectedThemeSummary}</span>
               </button>
 
@@ -213,7 +215,7 @@ export function WorkbenchTopBar({
                           onClick={() => onSelectTheme(option.value)}
                         >
                           <OptionIcon className={MENU_SUBMENU_ICON_CLASS} />
-                          <span className={MENU_SUBMENU_LABEL_CLASS}>{option.label}</span>
+                          <span className={MENU_SUBMENU_LABEL_CLASS}>{t(option.labelKey)}</span>
                           {isSelected ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
                         </button>
                       );
@@ -229,7 +231,7 @@ export function WorkbenchTopBar({
                 onClick={() => onToggleSettingsSection((current) => (current === "language" ? null : "language"))}
               >
                 <Globe className={MENU_TRIGGER_ICON_CLASS} />
-                <span className={MENU_TRIGGER_LABEL_CLASS}>语言</span>
+                <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.language")}</span>
                 <span className="shrink-0 text-xs text-app-subtle">{selectedLanguageLabel}</span>
               </button>
 
@@ -272,7 +274,7 @@ export function WorkbenchTopBar({
                 ) : (
                   <RefreshCw className={MENU_TRIGGER_ICON_CLASS} />
                 )}
-                <span className={MENU_TRIGGER_LABEL_CLASS}>检查更新</span>
+                <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.checkUpdates")}</span>
               </button>
 
               <button
@@ -281,13 +283,13 @@ export function WorkbenchTopBar({
                 onClick={onOpenSettings}
               >
                 <MoreHorizontal className={MENU_TRIGGER_ICON_CLASS} />
-                <span className={MENU_TRIGGER_LABEL_CLASS}>更多设置</span>
+                <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.moreSettings")}</span>
               </button>
 
               {userSession ? (
                 <button type="button" className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")} onClick={onLogout}>
                   <LogOut className={MENU_TRIGGER_ICON_CLASS} />
-                  <span className={MENU_TRIGGER_LABEL_CLASS}>退出登录</span>
+                  <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.logout")}</span>
                 </button>
               ) : null}
 
@@ -311,8 +313,8 @@ export function WorkbenchTopBar({
             size="icon"
             variant="ghost"
             className={cn(panelToggleButtonClass, isSidebarOpen && "text-app-foreground", isOverlayOpen && "pointer-events-none invisible")}
-            aria-label={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
-            title={isSidebarOpen ? "收拢 sidebar" : "展开 sidebar"}
+            aria-label={isSidebarOpen ? t("topBar.collapseSidebar") : t("topBar.expandSidebar")}
+            title={isSidebarOpen ? t("topBar.collapseSidebar") : t("topBar.expandSidebar")}
             onClick={onToggleSidebar}
           >
             <PanelLeft className="size-4" />
@@ -321,8 +323,8 @@ export function WorkbenchTopBar({
             size="icon"
             variant="ghost"
             className={cn(panelToggleButtonClass, !isTerminalCollapsed && "text-app-foreground", isOverlayOpen && "pointer-events-none invisible")}
-            aria-label={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
-            title={isTerminalCollapsed ? "展开 terminal 面板" : "收起 terminal 面板"}
+            aria-label={isTerminalCollapsed ? t("topBar.expandTerminal") : t("topBar.collapseTerminal")}
+            title={isTerminalCollapsed ? t("topBar.expandTerminal") : t("topBar.collapseTerminal")}
             onClick={onToggleTerminal}
           >
             <PanelBottom className="size-4" />
@@ -331,8 +333,8 @@ export function WorkbenchTopBar({
             size="icon"
             variant="ghost"
             className={cn(panelToggleButtonClass, isDrawerOpen && "text-app-foreground", isOverlayOpen && "pointer-events-none invisible")}
-            aria-label={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
-            title={isDrawerOpen ? "收拢右侧面板" : "展开右侧面板"}
+            aria-label={isDrawerOpen ? t("topBar.collapseDrawer") : t("topBar.expandDrawer")}
+            title={isDrawerOpen ? t("topBar.collapseDrawer") : t("topBar.expandDrawer")}
             onClick={onToggleDrawer}
           >
             <PanelRight className="size-4" />
@@ -344,8 +346,8 @@ export function WorkbenchTopBar({
               <button
                 type="button"
                 className="flex size-7 items-center justify-center text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
-                aria-label="最小化"
-                title="最小化"
+                aria-label={t("topBar.minimize")}
+                title={t("topBar.minimize")}
                 onClick={handleWindowMinimize}
               >
                 <Minus className="size-3.5" />
@@ -353,8 +355,8 @@ export function WorkbenchTopBar({
               <button
                 type="button"
                 className="flex size-7 items-center justify-center text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
-                aria-label={isMaximized ? "还原" : "最大化"}
-                title={isMaximized ? "还原" : "最大化"}
+                aria-label={isMaximized ? t("topBar.restore") : t("topBar.maximize")}
+                title={isMaximized ? t("topBar.restore") : t("topBar.maximize")}
                 onClick={handleWindowToggleMaximize}
               >
                 {isMaximized ? <Copy className="size-3" /> : <Square className="size-3" />}
@@ -362,8 +364,8 @@ export function WorkbenchTopBar({
               <button
                 type="button"
                 className="flex size-7 items-center justify-center text-app-subtle transition-colors hover:bg-red-500/90 hover:text-white"
-                aria-label="关闭"
-                title="关闭"
+                aria-label={t("topBar.close")}
+                title={t("topBar.close")}
                 onClick={handleWindowClose}
               >
                 <X className="size-3.5" />

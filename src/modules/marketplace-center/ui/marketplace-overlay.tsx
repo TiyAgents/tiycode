@@ -33,6 +33,7 @@ import type {
   MarketplaceStoredState,
   MarketplaceTab,
 } from "@/modules/marketplace-center/model/types";
+import { useT, type TranslationKey } from "@/i18n";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -53,54 +54,62 @@ type MarketplaceItemState = {
   installed: boolean;
 };
 
-const TAB_META: ReadonlyArray<{
+type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
+
+function getTabMeta(t: TFunc): ReadonlyArray<{
   description: string;
   label: string;
   value: MarketplaceTab;
-}> = [
-  {
-    value: "skills",
-    label: "Skills",
-    description: "Focused instructions and reusable workflows for everyday coding tasks.",
-  },
-  {
-    value: "mcps",
-    label: "MCP",
-    description: "Live servers that connect the assistant to tools, APIs, and current data.",
-  },
-  {
-    value: "plugins",
-    label: "Plugins",
-    description: "Workbench add-ons that extend desktop surfaces and task-oriented utilities.",
-  },
-  {
-    value: "automations",
-    label: "Automations",
-    description: "Scheduled tasks and recurring workflows that run with minimal manual work.",
-  },
-];
+}> {
+  return [
+    {
+      value: "skills",
+      label: t("marketplace.tab.skills"),
+      description: t("marketplace.tab.skillsDesc"),
+    },
+    {
+      value: "mcps",
+      label: t("marketplace.tab.mcp"),
+      description: t("marketplace.tab.mcpDesc"),
+    },
+    {
+      value: "plugins",
+      label: t("marketplace.tab.plugins"),
+      description: t("marketplace.tab.pluginsDesc"),
+    },
+    {
+      value: "automations",
+      label: t("marketplace.tab.automations"),
+      description: t("marketplace.tab.automationsDesc"),
+    },
+  ];
+}
 
-const EMPTY_STATE_COPY: Record<"installed" | "recommended", Record<MarketplaceTab, string>> = {
-  installed: {
-    skills: "No installed skills match this search yet.",
-    mcps: "No installed MCP match this search yet.",
-    plugins: "No installed plugins match this search yet.",
-    automations: "No installed automations match this search yet.",
-  },
-  recommended: {
-    skills: "No recommended skills match the current search.",
-    mcps: "No recommended MCP match the current search.",
-    plugins: "No recommended plugins match the current search.",
-    automations: "No recommended automations match the current search.",
-  },
-};
+function getEmptyStateCopy(t: TFunc): Record<"installed" | "recommended", Record<MarketplaceTab, string>> {
+  return {
+    installed: {
+      skills: t("marketplace.empty.installedSkills"),
+      mcps: t("marketplace.empty.installedMcp"),
+      plugins: t("marketplace.empty.installedPlugins"),
+      automations: t("marketplace.empty.installedAutomations"),
+    },
+    recommended: {
+      skills: t("marketplace.empty.recommendedSkills"),
+      mcps: t("marketplace.empty.recommendedMcp"),
+      plugins: t("marketplace.empty.recommendedPlugins"),
+      automations: t("marketplace.empty.recommendedAutomations"),
+    },
+  };
+}
 
-const SEARCH_PLACEHOLDER: Record<MarketplaceTab, string> = {
-  skills: "Search skills, workflows, and prompt packs",
-  mcps: "Search MCP, integrations, and tools",
-  plugins: "Search plugins, add-ons, and desktop extensions",
-  automations: "Search automations, schedules, and recurring tasks",
-};
+function getSearchPlaceholder(t: TFunc): Record<MarketplaceTab, string> {
+  return {
+    skills: t("marketplace.search.skills"),
+    mcps: t("marketplace.search.mcp"),
+    plugins: t("marketplace.search.plugins"),
+    automations: t("marketplace.search.automations"),
+  };
+}
 
 const TOOLBAR_TAB_ORDER: ReadonlyArray<MarketplaceTab> = ["plugins", "skills", "mcps", "automations"];
 
@@ -146,23 +155,23 @@ function getMarketplaceIcon(icon: MarketplaceItemIcon) {
   }
 }
 
-function getDrawerStatusMeta(state: MarketplaceItemState) {
+function getDrawerStatusMeta(state: MarketplaceItemState, t: TFunc) {
   if (!state.installed) {
     return {
-      label: "Available",
+      label: t("marketplace.status.available"),
       className: "bg-app-warning/10 text-app-warning",
     };
   }
 
   if (state.enabled) {
     return {
-      label: "Installed + Enabled",
+      label: t("marketplace.status.installedEnabled"),
       className: "bg-app-success/12 text-app-success",
     };
   }
 
   return {
-    label: "Installed + Disabled",
+    label: t("marketplace.status.installedDisabled"),
     className: "bg-app-surface-muted/90 text-app-subtle",
   };
 }
@@ -187,7 +196,8 @@ function MarketplacePrimaryActionButton({
   onEnableItem: (itemId: string) => void;
   onInstallItem: (itemId: string) => void;
 }) {
-  const label = state.installed ? (state.enabled ? "Disable" : "Enable") : "Install";
+  const t = useT();
+  const label = state.installed ? (state.enabled ? t("extensions.disable") : t("extensions.enable")) : t("extensions.install");
 
   const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -273,6 +283,7 @@ function MarketplaceDrawerActionRow({
   onInstallItem: (itemId: string) => void;
   onUninstallItem: (itemId: string) => void;
 }) {
+  const t = useT();
   return (
     <div className="flex flex-wrap items-center gap-2">
       <MarketplacePrimaryActionButton
@@ -289,7 +300,7 @@ function MarketplaceDrawerActionRow({
           className="h-8 rounded-lg px-3 text-[12px] text-app-danger hover:bg-app-danger/10 hover:text-app-danger"
           onClick={() => onUninstallItem(itemId)}
         >
-          Uninstall
+          {t("marketplace.uninstall")}
         </Button>
       ) : null}
     </div>
@@ -463,6 +474,8 @@ function MarketplaceDrawer({
   onInstallItem: (itemId: string) => void;
   onUninstallItem: (itemId: string) => void;
 }) {
+  const t = useT();
+  const TAB_META = useMemo(() => getTabMeta(t), [t]);
   const isOpen = drawerTarget !== null;
   const selectedItem =
     drawerTarget?.mode === "item"
@@ -470,7 +483,7 @@ function MarketplaceDrawer({
       : null;
   const itemState = selectedItem ? getItemState(itemStates, selectedItem.id) : null;
   const DrawerIcon = selectedItem ? getMarketplaceIcon(selectedItem.icon) : CirclePlus;
-  const drawerStatusMeta = itemState ? getDrawerStatusMeta(itemState) : null;
+  const drawerStatusMeta = itemState ? getDrawerStatusMeta(itemState, t) : null;
 
   return (
     <>
@@ -495,12 +508,12 @@ function MarketplaceDrawer({
               </div>
               <div className="min-w-0">
                 <p className="truncate text-[15px] font-semibold tracking-[-0.02em] text-app-foreground">
-                  {drawerTarget?.mode === "item" ? selectedItem?.name : "Add source"}
+                  {drawerTarget?.mode === "item" ? selectedItem?.name : t("marketplace.addSource")}
                 </p>
                 <p className="mt-0.5 truncate text-[12px] text-app-subtle">
                   {drawerTarget?.mode === "item"
                     ? selectedItem?.sourceLabel
-                    : "Prepare custom source and URL-based install flows"}
+                    : t("marketplace.addSourceSubtitle")}
                 </p>
               </div>
             </div>
@@ -528,7 +541,7 @@ function MarketplaceDrawer({
                   </span>
                   {selectedItem.recommended ? (
                     <span className="rounded-full bg-app-surface-muted/75 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-app-subtle">
-                      Recommended
+                      {t("marketplace.recommendedBadge")}
                     </span>
                   ) : null}
                 </div>
@@ -536,7 +549,7 @@ function MarketplaceDrawer({
               </section>
 
               <section className="border-b border-app-border/70 pb-5">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-app-subtle">Actions</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-app-subtle">{t("marketplace.actionsSection")}</p>
                 <div className="mt-3">
                   <MarketplaceDrawerActionRow
                     itemId={selectedItem.id}
@@ -550,18 +563,18 @@ function MarketplaceDrawer({
               </section>
 
               <section className="border-b border-app-border/70 pb-5">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-app-subtle">Details</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-app-subtle">{t("marketplace.detailsSection")}</p>
                 <dl className="mt-3 space-y-3 text-[13px]">
                   <div className="flex items-start justify-between gap-4">
-                    <dt className="text-app-subtle">Publisher</dt>
+                    <dt className="text-app-subtle">{t("marketplace.publisher")}</dt>
                     <dd className="text-right text-app-foreground">{selectedItem.publisher}</dd>
                   </div>
                   <div className="flex items-start justify-between gap-4">
-                    <dt className="text-app-subtle">Source</dt>
+                    <dt className="text-app-subtle">{t("marketplace.sourceLabel")}</dt>
                     <dd className="text-right text-app-foreground">{selectedItem.sourceLabel}</dd>
                   </div>
                   <div className="flex items-start justify-between gap-4">
-                    <dt className="text-app-subtle">Category</dt>
+                    <dt className="text-app-subtle">{t("marketplace.category")}</dt>
                     <dd className="text-right text-app-foreground">
                       {TAB_META.find((tab) => tab.value === selectedItem.tab)?.label ?? selectedItem.tab}
                     </dd>
@@ -570,7 +583,7 @@ function MarketplaceDrawer({
               </section>
 
               <section>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-app-subtle">Capabilities</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-app-subtle">{t("marketplace.capabilitiesSection")}</p>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {selectedItem.tags.map((tag) => (
                     <span
@@ -586,17 +599,17 @@ function MarketplaceDrawer({
           ) : (
             <div className="space-y-3">
               <p className="text-[13px] leading-6 text-app-muted">
-                Prepare curated team catalogs or direct package installs without leaving the workbench.
+                {t("marketplace.emptyDrawerDesc")}
               </p>
               <MarketplaceSourceOption
                 icon={CirclePlus}
-                title="Custom source"
-                description="Register organization catalogs, internal package feeds, or curated team bundles."
+                title={t("marketplace.customSource")}
+                description={t("marketplace.customSourceDesc")}
               />
               <MarketplaceSourceOption
                 icon={ExternalLink}
-                title="Install from URL"
-                description="Paste a package URL, git repository, or managed source endpoint to install directly."
+                title={t("marketplace.installFromUrl")}
+                description={t("marketplace.installFromUrlDesc")}
               />
             </div>
           )}
@@ -615,6 +628,11 @@ export function MarketplaceOverlay({
   onInstallItem,
   onUninstallItem,
 }: MarketplaceOverlayProps) {
+  const t = useT();
+  const TAB_META = useMemo(() => getTabMeta(t), [t]);
+  const EMPTY_STATE_COPY = useMemo(() => getEmptyStateCopy(t), [t]);
+  const SEARCH_PLACEHOLDER = useMemo(() => getSearchPlaceholder(t), [t]);
+
   const [activeTab, setActiveTab] = useState<MarketplaceTab>(() => readStoredMarketplaceActiveTab());
   const [searchByTab, setSearchByTab] = useState<Record<MarketplaceTab, string>>({
     skills: "",
@@ -707,7 +725,7 @@ export function MarketplaceOverlay({
                 onClick={onClose}
               >
                 <ArrowLeft className="size-3.5" />
-                <span>Back to app</span>
+                <span>{t("marketplace.backToApp")}</span>
               </button>
 
               <div className="mt-3 flex items-start gap-3">
@@ -716,13 +734,13 @@ export function MarketplaceOverlay({
                 </div>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <h1 className="text-[19px] font-semibold tracking-[-0.03em] text-app-foreground">Marketplace</h1>
+                    <h1 className="text-[19px] font-semibold tracking-[-0.03em] text-app-foreground">{t("marketplace.title")}</h1>
                     <span className="rounded-full border border-app-border bg-app-surface-muted/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-app-subtle">
                       {activeTabMeta.label}
                     </span>
                   </div>
                   <p className="mt-1 text-[13px] leading-5 text-app-muted">
-                    Browse skills, MCP servers, plugins, and scheduled automations in one catalog view.
+                    {t("marketplace.subtitle")}
                   </p>
                 </div>
               </div>
@@ -782,7 +800,7 @@ export function MarketplaceOverlay({
                     onClick={() => setDrawerTarget({ mode: "source-intake" })}
                   >
                     <CirclePlus className="size-4" />
-                    Add source
+                    {t("marketplace.addSource")}
                   </Button>
                 </div>
               </div>
@@ -794,7 +812,7 @@ export function MarketplaceOverlay({
           <div className="h-full overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-5 pb-6 pt-5">
               <MarketplaceSection
-                title="Installed"
+                title={t("marketplace.installed")}
                 items={installedItems}
                 selectedItemId={selectedItemId}
                 emptyCopy={EMPTY_STATE_COPY.installed[activeTab]}
@@ -806,7 +824,7 @@ export function MarketplaceOverlay({
               />
 
               <MarketplaceSection
-                title="Recommended"
+                title={t("marketplace.recommended")}
                 items={recommendedItems}
                 selectedItemId={selectedItemId}
                 emptyCopy={EMPTY_STATE_COPY.recommended[activeTab]}

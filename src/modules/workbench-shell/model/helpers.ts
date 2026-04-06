@@ -4,6 +4,8 @@ import {
   PANEL_VISIBILITY_STORAGE_KEY,
   WORKSPACE_ITEMS,
 } from "@/modules/workbench-shell/model/fixtures";
+import { translate } from "@/i18n";
+import type { LanguagePreference } from "@/app/providers/language-provider";
 import type {
   ThreadStatus as ApiThreadStatus,
   ThreadSummaryDto,
@@ -373,7 +375,7 @@ function mapThreadStatus(status: ApiThreadStatus): WorkbenchThreadStatus {
   }
 }
 
-export function formatThreadTimeLabel(value: string | null | undefined, now = Date.now()) {
+export function formatThreadTimeLabel(value: string | null | undefined, language: LanguagePreference = "zh-CN", now = Date.now()) {
   if (!value) {
     return "";
   }
@@ -387,7 +389,7 @@ export function formatThreadTimeLabel(value: string | null | undefined, now = Da
   const diffMinutes = Math.floor(diffMs / 60_000);
 
   if (diffMinutes < 1) {
-    return "刚刚";
+    return translate(language, "time.justNow");
   }
 
   if (diffMinutes < 60) {
@@ -410,14 +412,15 @@ export function formatThreadTimeLabel(value: string | null | undefined, now = Da
 export function buildWorkspaceThreadItem(
   thread: ThreadSummaryDto,
   activeThreadId: string | null,
+  language: LanguagePreference = "zh-CN",
 ): WorkspaceThreadItem {
   const trimmedTitle = thread.title.trim();
-  const displayTitle = trimmedTitle || "新对话";
+  const displayTitle = trimmedTitle || translate(language, "dashboard.newThread");
 
   return {
     id: thread.id,
     name: displayTitle,
-    time: formatThreadTimeLabel(thread.lastActiveAt || thread.createdAt),
+    time: formatThreadTimeLabel(thread.lastActiveAt || thread.createdAt, language),
     active: thread.id === activeThreadId,
     status: mapThreadStatus(thread.status),
   };
@@ -427,6 +430,7 @@ export function buildWorkspaceItemsFromDtos(
   workspaces: ReadonlyArray<WorkspaceDto>,
   threadsByWorkspaceId: Record<string, ReadonlyArray<ThreadSummaryDto>>,
   activeThreadId: string | null,
+  language: LanguagePreference = "zh-CN",
 ): Array<WorkspaceItem> {
   return workspaces.map((workspace) => ({
     id: workspace.id,
@@ -434,7 +438,7 @@ export function buildWorkspaceItemsFromDtos(
     defaultOpen: workspace.isDefault,
     path: workspace.canonicalPath || workspace.path,
     threads: (threadsByWorkspaceId[workspace.id] ?? []).map((thread) =>
-      buildWorkspaceThreadItem(thread, activeThreadId),
+      buildWorkspaceThreadItem(thread, activeThreadId, language),
     ),
   }));
 }
@@ -536,7 +540,7 @@ export function buildProjectOptionFromPath(path: string | null): ProjectOption |
     id: normalizedId || `project-${Date.now()}`,
     name: folderName,
     path: normalizedPath,
-    lastOpenedLabel: "刚刚",
+    lastOpenedLabel: translate("zh-CN", "time.justNow"),
   };
 }
 

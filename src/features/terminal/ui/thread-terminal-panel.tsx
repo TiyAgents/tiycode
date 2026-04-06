@@ -4,6 +4,7 @@ import {
   TerminalHost,
   type TerminalHostHandle,
 } from "@/features/terminal/ui/terminal-host";
+import { useT } from "@/i18n";
 import { Button } from "@/shared/ui/button";
 
 type ThreadTerminalPanelProps = {
@@ -25,6 +26,7 @@ export function ThreadTerminalPanel({
   idleMessage,
   onCollapse,
 }: ThreadTerminalPanelProps) {
+  const t = useT();
   const terminalHostRef = useRef<TerminalHostHandle | null>(null);
 
   return (
@@ -35,7 +37,7 @@ export function ThreadTerminalPanel({
           <span className="font-medium text-app-foreground">Terminal</span>
           {isPendingThread ? null : (
             <span className="truncate text-app-subtle">
-              {threadTitle ?? "未选择线程"}
+              {threadTitle ?? t("terminal.noThread")}
             </span>
           )}
         </div>
@@ -45,8 +47,8 @@ export function ThreadTerminalPanel({
             size="icon"
             variant="ghost"
             className="size-7 text-app-subtle hover:bg-app-surface-hover hover:text-app-foreground"
-            aria-label="重启 terminal"
-            title="重启 terminal"
+            aria-label={t("terminal.restartTerminal")}
+            title={t("terminal.restartTerminal")}
             disabled={!threadId}
             onClick={() => {
               void terminalHostRef.current?.restart();
@@ -58,8 +60,8 @@ export function ThreadTerminalPanel({
             size="icon"
             variant="ghost"
             className="size-7 text-app-subtle hover:bg-app-surface-hover hover:text-app-foreground"
-            aria-label="关闭 terminal"
-            title="关闭 terminal"
+            aria-label={t("terminal.closeTerminal")}
+            title={t("terminal.closeTerminal")}
             disabled={!threadId}
             onClick={() => {
               void terminalHostRef.current?.close();
@@ -71,8 +73,8 @@ export function ThreadTerminalPanel({
             size="icon"
             variant="ghost"
             className="size-7 text-app-subtle hover:bg-app-surface-hover hover:text-app-foreground"
-            aria-label="收起 terminal"
-            title="收起 terminal"
+            aria-label={t("terminal.collapseTerminal")}
+            title={t("terminal.collapseTerminal")}
             onClick={onCollapse}
           >
             <PanelBottom className="size-4" />
@@ -89,7 +91,7 @@ export function ThreadTerminalPanel({
           bootstrapError={bootstrapError}
           idleMessage={
             isPendingThread
-              ? (idleMessage ?? "发送第一条消息后可进入 Terminal")
+              ? (idleMessage ?? t("terminal.sendFirstMessageHint"))
               : undefined
           }
         />

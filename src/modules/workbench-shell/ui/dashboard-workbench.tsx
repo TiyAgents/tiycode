@@ -26,6 +26,7 @@ import {
   type LanguagePreference,
 } from "@/app/providers/language-provider";
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
+import { useT } from "@/i18n";
 import { useExtensionsController } from "@/modules/extensions-center/model/use-extensions-controller";
 import { ExtensionsCenterOverlay } from "@/modules/extensions-center/ui/extensions-center-overlay";
 import {
@@ -37,7 +38,6 @@ import {
   useSettingsController,
   type SettingsCategory,
 } from "@/modules/settings-center/model/use-settings-controller";
-import { AI_ELEMENTS_THREAD_TITLE } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
 import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
 import type {
@@ -358,6 +358,7 @@ export function DashboardWorkbench() {
   const { data } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
   const { language, setLanguage } = useLanguage();
+  const t = useT();
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(
     () => (isTauri() ? null : (RECENT_PROJECTS[0] ?? null)),
   );
@@ -925,6 +926,7 @@ export function DashboardWorkbench() {
           workspaceEntries,
           threadsByWorkspaceId,
           activeThreadId,
+          language,
         );
         const mergedWithFallbacks = mergeLocalFallbackThreads({
           currentWorkspaces: current,
@@ -954,8 +956,8 @@ export function DashboardWorkbench() {
               const syncedTitle = thread.name.trim();
               if (
                 currentTitle
-                && currentTitle !== "新对话"
-                && syncedTitle === "新对话"
+                && currentTitle !== t("dashboard.newThread")
+                && syncedTitle === t("dashboard.newThread")
               ) {
                 return {
                   ...thread,
@@ -1105,7 +1107,7 @@ export function DashboardWorkbench() {
 
       sidebarSyncInFlightRef.current = true;
       void syncWorkspaceSidebar().catch((error) => {
-        const message = getInvokeErrorMessage(error, "刷新线程列表失败");
+        const message = getInvokeErrorMessage(error, t("dashboard.error.refreshThreadList"));
         setTerminalBootstrapError(message);
       }).finally(() => {
         sidebarSyncInFlightRef.current = false;
@@ -1148,7 +1150,7 @@ export function DashboardWorkbench() {
           return;
         }
 
-        const message = getInvokeErrorMessage(error, "工作区初始化失败");
+        const message = getInvokeErrorMessage(error, t("dashboard.error.workspaceInit"));
         setTerminalBootstrapError(message);
       });
 
@@ -1246,7 +1248,7 @@ export function DashboardWorkbench() {
 
           const message = getInvokeErrorMessage(
             refreshError,
-            "刷新工作区列表失败",
+            t("dashboard.error.refreshWorkspaceList"),
           );
           setTerminalBootstrapError(message);
         });
@@ -1256,7 +1258,7 @@ export function DashboardWorkbench() {
           return;
         }
 
-        const message = getInvokeErrorMessage(error, "添加工作区失败");
+        const message = getInvokeErrorMessage(error, t("dashboard.error.addWorkspace"));
         setTerminalBootstrapError(message);
       });
 
@@ -1290,7 +1292,7 @@ export function DashboardWorkbench() {
           return;
         }
 
-        const message = getInvokeErrorMessage(error, "更新默认工作区失败");
+        const message = getInvokeErrorMessage(error, t("dashboard.error.updateDefaultWorkspace"));
         setTerminalBootstrapError(message);
       });
 
@@ -1531,7 +1533,7 @@ export function DashboardWorkbench() {
         },
       })
         .catch((error) => {
-          const message = getInvokeErrorMessage(error, "加载更多线程失败");
+          const message = getInvokeErrorMessage(error, t("dashboard.error.loadMoreThreads"));
           setTerminalBootstrapError(message);
         })
         .finally(() => {
@@ -1566,7 +1568,7 @@ export function DashboardWorkbench() {
   const handleProjectSelect = (project: ProjectOption) => {
     const nextProject = {
       ...project,
-      lastOpenedLabel: "刚刚",
+      lastOpenedLabel: t("time.justNow"),
     };
 
     setSelectedProject(nextProject);
@@ -1586,12 +1588,12 @@ export function DashboardWorkbench() {
         id: workspace.id,
         name: workspace.name,
         path: workspace.path,
-        lastOpenedLabel: "刚刚",
+        lastOpenedLabel: t("time.justNow"),
       }),
       id: workspace.id,
       name: workspace.name,
       path: workspace.path,
-      lastOpenedLabel: "刚刚",
+      lastOpenedLabel: t("time.justNow"),
     };
 
     setSelectedProject(nextProject);
@@ -1660,11 +1662,11 @@ export function DashboardWorkbench() {
       );
 
       void syncWorkspaceSidebar().catch((error) => {
-        const message = getInvokeErrorMessage(error, "刷新线程列表失败");
+        const message = getInvokeErrorMessage(error, t("dashboard.error.refreshThreadList"));
         setTerminalBootstrapError(message);
       });
     },
-    [syncWorkspaceSidebar],
+    [syncWorkspaceSidebar, t],
   );
 
   const handleComposerDraftChange = useCallback(
@@ -1745,12 +1747,12 @@ export function DashboardWorkbench() {
 
           if (isTauri()) {
             void syncWorkspaceSidebar().catch((error) => {
-              const message = getInvokeErrorMessage(error, "刷新线程列表失败");
+              const message = getInvokeErrorMessage(error, t("dashboard.error.refreshThreadList"));
               setTerminalBootstrapError(message);
             });
           }
         } catch (error) {
-          const message = getInvokeErrorMessage(error, "删除线程失败");
+          const message = getInvokeErrorMessage(error, t("dashboard.error.deleteThread"));
           setTerminalBootstrapError(message);
         } finally {
           setDeletingThreadId(null);
@@ -1798,7 +1800,7 @@ export function DashboardWorkbench() {
 
         const project = {
           ...selectedProject,
-          lastOpenedLabel: "刚刚",
+          lastOpenedLabel: t("time.justNow"),
         };
         const existingWorkspace = workspaces.find(
           (workspace) =>
@@ -1825,7 +1827,7 @@ export function DashboardWorkbench() {
             }
           }
         } catch (error) {
-          const message = getInvokeErrorMessage(error, "创建线程失败");
+          const message = getInvokeErrorMessage(error, t("dashboard.error.createThread"));
           setComposerError(message);
           return;
         }
@@ -1833,7 +1835,7 @@ export function DashboardWorkbench() {
         const nextThread = {
           id: persistedThreadId ?? `${project.id}-thread-${Date.now()}`,
           name: nextThreadName,
-          time: "刚刚",
+          time: t("time.justNow"),
           active: true,
           status: "running" as const,
         };
@@ -2181,25 +2183,20 @@ export function DashboardWorkbench() {
 
     window.setTimeout(() => {
       setCheckingUpdates(false);
-      setUpdateStatus(`当前已是最新版本 v${data?.version ?? "0.1.0"}`);
+      setUpdateStatus(t("dashboard.upToDate", { version: data?.version ?? "0.1.0" }));
     }, 900);
   };
 
-  const workspaceOpenLabel = isWindows
-    ? "Open in Explorer"
-    : isMacOS
-      ? "Open in Finder"
-      : "Open folder";
+  const workspaceOpenLabel = t("sidebar.openInFileManager");
   const canOpenWorkspaceInSystem = isTauri() && (isMacOS || isWindows);
   const selectedThemeOption =
     THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[0];
-  const selectedThemeSummary =
-    theme === "system" ? "跟随系统" : selectedThemeOption.label;
+  const selectedThemeSummary = t(selectedThemeOption.labelKey);
   const selectedLanguageOption =
     LANGUAGE_OPTIONS.find((option) => option.value === language) ??
     LANGUAGE_OPTIONS[1];
   const newThreadTerminalIdleMessage = !selectedProject
-    ? "选择workspace后可进入 Terminal"
+    ? t("dashboard.terminalDisabledHint")
     : !resolvedWorkspaceId && !terminalBootstrapError
       ? "Preparing workspace…"
       : undefined;
@@ -2293,7 +2290,7 @@ export function DashboardWorkbench() {
                       : "text-app-subtle group-hover:text-app-foreground",
                   )}
                 />
-                <span className="truncate text-sm font-medium">New thread</span>
+                <span className="truncate text-sm font-medium">{t("sidebar.newThread")}</span>
               </button>
 
               <button
@@ -2315,19 +2312,19 @@ export function DashboardWorkbench() {
                   )}
                 />
                 <span className="truncate text-sm font-medium">
-                  Extensions
+                  {t("sidebar.extensions")}
                 </span>
               </button>
             </div>
 
             <div className="mt-6 flex items-center justify-between px-3">
               <span className="text-xs uppercase tracking-[0.14em] text-app-subtle">
-                WORKSPACE
+                {t("sidebar.workspace")}
               </span>
               <button
                 type="button"
-                aria-label="Add workspace"
-                title="Add workspace"
+                aria-label={t("sidebar.addWorkspace")}
+                title={t("sidebar.addWorkspace")}
                 className="inline-flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={handleChooseWorkspaceFolder}
                 disabled={isAddingWorkspace}
@@ -2393,8 +2390,8 @@ export function DashboardWorkbench() {
                           </button>
                           <button
                             type="button"
-                            aria-label="更多操作"
-                            title="更多操作"
+                            aria-label={t("dashboard.moreActions")}
+                            title={t("dashboard.moreActions")}
                             aria-haspopup="menu"
                             aria-expanded={isWorkspaceMenuOpen}
                             className={cn(
@@ -2427,7 +2424,7 @@ export function DashboardWorkbench() {
                                 }
                               >
                                 <MessageSquarePlus className="size-4 shrink-0" />
-                                <span>New Thread</span>
+                                <span>{t("sidebar.newThreadForWorkspace")}</span>
                               </button>
                               <button
                                 type="button"
@@ -2468,7 +2465,7 @@ export function DashboardWorkbench() {
                                 ) : (
                                   <Trash2 className="size-4 shrink-0" />
                                 )}
-                                <span>Remove</span>
+                                <span>{t("sidebar.remove")}</span>
                               </button>
                             </div>
                           ) : null}
@@ -2521,10 +2518,10 @@ export function DashboardWorkbench() {
                                     type="button"
                                     aria-label={
                                       isDeleting
-                                        ? "正在删除 thread"
-                                        : "确认删除 thread"
+                                        ? t("dashboard.deletingThread")
+                                        : t("dashboard.confirmDeleteThread")
                                     }
-                                    title={isDeleting ? "Deleting" : "Delete"}
+                                    title={isDeleting ? t("sidebar.deleting") : t("sidebar.delete")}
                                     className="absolute right-1.5 top-1/2 inline-flex h-7 -translate-y-1/2 items-center justify-center rounded-md border border-app-danger/20 bg-app-danger/10 px-2 text-[11px] font-medium text-app-danger transition-colors hover:border-app-danger/30 hover:bg-app-danger/14 disabled:cursor-not-allowed disabled:opacity-80"
                                     onClick={(event) => {
                                       event.stopPropagation();
@@ -2535,13 +2532,13 @@ export function DashboardWorkbench() {
                                     {isDeleting ? (
                                       <LoaderCircle className="size-3.5 animate-spin" />
                                     ) : (
-                                      "Delete"
+                                      t("sidebar.delete")
                                     )}
                                   </button>
                                 ) : (
                                   <button
                                     type="button"
-                                    aria-label="删除 thread"
+                                    aria-label={t("dashboard.deleteThread")}
                                     title="Delete thread"
                                     className="absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-app-danger opacity-0 transition-all duration-200 hover:bg-app-danger/10 hover:text-app-danger group-hover:opacity-100"
                                     onClick={(event) => {
@@ -2567,7 +2564,7 @@ export function DashboardWorkbench() {
                               }
                               disabled={isLoadingMoreThreads}
                             >
-                              <span>Show more</span>
+                              <span>{t("sidebar.showMore")}</span>
                               {isLoadingMoreThreads ? (
                                 <LoaderCircle className="size-3.5 animate-spin" />
                               ) : null}
@@ -2617,7 +2614,7 @@ export function DashboardWorkbench() {
                             onSelectAgentProfile={setActiveAgentProfile}
                             onStop={() => undefined}
                             onSubmit={handleComposerSubmit}
-                            placeholder="Ask Tiy anything, @ to add files, / for commands, $ for skills"
+                            placeholder={t("composer.placeholder")}
                             providers={providers}
                             runMode={newThreadRunMode}
                             showRunModeToggle
@@ -2640,7 +2637,7 @@ export function DashboardWorkbench() {
                               />
                             ) : null}
                             <p className="truncate text-sm font-semibold text-app-foreground">
-                              {activeThread?.name ?? AI_ELEMENTS_THREAD_TITLE}
+                              {activeThread?.name ?? t("dashboard.newThread")}
                             </p>
                           </div>
                         </div>
@@ -2757,7 +2754,7 @@ export function DashboardWorkbench() {
                         providers={providers}
                         threadId={resolvedTerminalThreadId}
                         threadTitle={
-                          activeThread?.name ?? AI_ELEMENTS_THREAD_TITLE
+                          activeThread?.name ?? t("dashboard.newThread")
                         }
                         workspaceId={resolvedWorkspaceId}
                       />
@@ -2782,14 +2779,14 @@ export function DashboardWorkbench() {
                       options={[
                         {
                           value: "project",
-                          label: "文件树",
-                          title: "文件树 · Project Panel",
+                          label: t("dashboard.fileTree"),
+                          title: t("dashboard.fileTreePanel"),
                           content: <FolderOpen className="size-4" />,
                         },
                         {
                           value: "git",
-                          label: "版本控制",
-                          title: "版本控制 · Git Panel",
+                          label: t("dashboard.sourceControl"),
+                          title: t("dashboard.sourceControlPanel"),
                           content: <GitBranch className="size-4" />,
                         },
                       ]}
@@ -2858,7 +2855,7 @@ export function DashboardWorkbench() {
               >
                 <ThreadTerminalPanel
                   threadId={resolvedTerminalThreadId}
-                  threadTitle={activeThread?.name ?? AI_ELEMENTS_THREAD_TITLE}
+                  threadTitle={activeThread?.name ?? t("dashboard.newThread")}
                   active={!isTerminalCollapsed}
                   bootstrapError={terminalBootstrapError}
                   isPendingThread={isNewThreadMode}

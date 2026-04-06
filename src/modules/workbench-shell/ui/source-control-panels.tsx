@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useT, type TranslationKey } from "@/i18n";
 import { isTauri } from "@tauri-apps/api/core";
 import {
   AlertCircle,
@@ -74,6 +75,8 @@ import type {
   ProjectTreeItem,
 } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
+
+type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
 type GitPanelProps = {
   workspaceId: string | null;
@@ -385,37 +388,37 @@ function statusCode(status: GitChangeKind) {
   }
 }
 
-function statusLabel(status: GitChangeKind) {
+function statusLabel(status: GitChangeKind, t: TFunc) {
   switch (status) {
     case "added":
-      return "Added";
+      return t("sourceControl.statusAdded");
     case "deleted":
-      return "Deleted";
+      return t("sourceControl.statusDeleted");
     case "renamed":
-      return "Renamed";
+      return t("sourceControl.statusRenamed");
     case "typechange":
-      return "Type changed";
+      return t("sourceControl.statusTypeChanged");
     case "unmerged":
-      return "Conflict";
+      return t("sourceControl.statusConflict");
     default:
-      return "Modified";
+      return t("sourceControl.statusModified");
   }
 }
 
-function gitActionLabel(action: GitMutationAction) {
+function gitActionLabel(action: GitMutationAction, t: TFunc) {
   switch (action) {
     case "commit":
-      return "Commit";
+      return t("sourceControl.actionCommit");
     case "fetch":
-      return "Fetch";
+      return t("sourceControl.actionFetch");
     case "pull":
-      return "Pull";
+      return t("sourceControl.actionPull");
     case "push":
-      return "Push";
+      return t("sourceControl.actionPush");
   }
 }
 
-function formatChangeSummary(change: GitFileChangeDto) {
+function formatChangeSummary(change: GitFileChangeDto, t: TFunc) {
   const pieces = [];
 
   if (change.additions > 0) {
@@ -426,14 +429,14 @@ function formatChangeSummary(change: GitFileChangeDto) {
     pieces.push(`-${change.deletions}`);
   }
 
-  return pieces.join(" ") || statusLabel(change.status);
+  return pieces.join(" ") || statusLabel(change.status, t);
 }
 
-function renderChangeStats(change: GitFileChangeDto) {
+function renderChangeStats(change: GitFileChangeDto, t: TFunc) {
   const hasLineStats = change.additions > 0 || change.deletions > 0;
 
   if (!hasLineStats) {
-    return <span className={DRAWER_LIST_META_CLASS}>{statusLabel(change.status)}</span>;
+    return <span className={DRAWER_LIST_META_CLASS}>{statusLabel(change.status, t)}</span>;
   }
 
   return (
@@ -566,7 +569,7 @@ function buildSplitRowsFromDiff(diff: GitDiffDto): ReadonlyArray<GitSplitDiffRow
   return rows;
 }
 
-function buildMockPreviewSelection(selection: GitDiffSelection): GitChangeFile {
+function buildMockPreviewSelection(selection: GitDiffSelection, t: TFunc): GitChangeFile {
   const existing = GIT_CHANGE_FILES.find((file) => file.path === selection.path);
   if (existing) {
     return existing;
@@ -577,7 +580,7 @@ function buildMockPreviewSelection(selection: GitDiffSelection): GitChangeFile {
     path: selection.path,
     status: statusCode(selection.status) as GitChangeFile["status"],
     icon: selection.icon,
-    summary: formatChangeSummary(selection),
+    summary: formatChangeSummary(selection, t),
     initialStaged: selection.staged,
   };
 }
@@ -616,6 +619,7 @@ function ChangeGroup({
   files,
   staged,
   pendingPaths,
+  t,
   onOpenDiffPreview,
   onToggleStage,
   onToggleAll,
@@ -624,6 +628,7 @@ function ChangeGroup({
   files: GitFileChangeDto[];
   staged: boolean;
   pendingPaths: ReadonlySet<string>;
+  t: TFunc;
   onOpenDiffPreview: (selection: GitDiffSelection) => void;
   onToggleStage: (paths: string[], staged: boolean) => void;
   onToggleAll: (paths: string[], staged: boolean) => void;
@@ -643,7 +648,7 @@ function ChangeGroup({
           <button
             type="button"
             aria-label={staged ? `Unstage all ${title}` : `Stage all ${title}`}
-            title={staged ? "Unstage all" : "Stage all"}
+            title={staged ? t("sourceControl.unstageAll") : t("sourceControl.stageAll")}
             className={DRAWER_ICON_ACTION_CLASS}
             onClick={() => onToggleAll(files.map((file) => file.path), staged)}
           >
@@ -689,11 +694,11 @@ function ChangeGroup({
             <span className={DRAWER_LIST_LABEL_CLASS}>
               {file.path.split("/").pop() ?? file.path}
             </span>
-            {renderChangeStats(file)}
+            {renderChangeStats(file, t)}
             <button
               type="button"
               aria-label={staged ? `Unstage ${file.path}` : `Stage ${file.path}`}
-              title={staged ? "Unstage" : "Stage"}
+              title={staged ? t("sourceControl.unstage") : t("sourceControl.stage")}
               disabled={pendingPaths.has(file.path)}
               className={cn(
                 "flex size-6 shrink-0 items-center justify-center rounded-md border border-app-border text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-wait disabled:opacity-60",
@@ -729,6 +734,7 @@ export function GitPanel({
   commitMessageModelPlan,
   onOpenDiffPreview,
 }: GitPanelProps) {
+  const t = useT();
   const isMockMode = !isTauri();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const topContentRef = useRef<HTMLDivElement | null>(null);
@@ -828,7 +834,7 @@ export function GitPanel({
         if (cancelled) {
           return;
         }
-        const message = formatUiError(nextError, "Failed to load Git state");
+        const message = formatUiError(nextError, t("sourceControl.failedLoadGit"));
         setError(message);
       })
       .finally(() => {
@@ -861,7 +867,7 @@ export function GitPanel({
         return;
       }
 
-      const message = formatUiError(subscriptionError, "Failed to subscribe to Git updates");
+      const message = formatUiError(subscriptionError, t("sourceControl.failedSubscribeGit"));
       setError(message);
     });
 
@@ -994,7 +1000,7 @@ export function GitPanel({
 
   const branchLabel = snapshot?.isDetached
     ? "detached HEAD"
-    : (snapshot?.headRef ?? "No branch");
+    : (snapshot?.headRef ?? t("sourceControl.noBranch"));
 
   const handleHistoryResizeStart = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1058,7 +1064,7 @@ export function GitPanel({
         resetCommitMessage();
       }
     } catch (nextError) {
-      const message = formatUiError(nextError, `${gitActionLabel(action)} failed`);
+      const message = formatUiError(nextError, t("sourceControl.gitActionFailed"));
       showActionAlert(message);
     } finally {
       setPendingAction(null);
@@ -1081,7 +1087,7 @@ export function GitPanel({
         setHistory(nextSnapshot.recentCommits);
       })
       .catch((nextError) => {
-        const message = formatUiError(nextError, "Failed to refresh Git snapshot");
+        const message = formatUiError(nextError, t("sourceControl.failedRefreshSnapshot"));
         setError(message);
         setIsRefreshing(false);
       });
@@ -1125,7 +1131,7 @@ export function GitPanel({
         setHistory(nextSnapshot.recentCommits);
       })
       .catch((nextError) => {
-        const message = formatUiError(nextError, "Git action failed");
+        const message = formatUiError(nextError, t("sourceControl.gitActionFailed"));
         showActionAlert(message);
       })
       .finally(() => {
@@ -1169,7 +1175,7 @@ export function GitPanel({
         setCommitMessageExpanded(message.includes("\n"));
       })
       .catch((nextError) => {
-        const message = formatUiError(nextError, "Failed to generate commit message");
+        const message = formatUiError(nextError, t("sourceControl.failedGenerateCommitMsg"));
         showActionAlert(message);
       })
       .finally(() => {
@@ -1208,7 +1214,7 @@ export function GitPanel({
           clearActionAlert();
           resetCommitMessage();
         } catch (nextError) {
-          const message = formatUiError(nextError, "Commit failed");
+          const message = formatUiError(nextError, t("sourceControl.commitFailed"));
           showActionAlert(message);
         }
         return;
@@ -1270,7 +1276,7 @@ export function GitPanel({
   if (workspaceBootstrapError) {
     return (
       <EmptyState
-        title="Git drawer is unavailable"
+        title={t("sourceControl.drawerUnavailable")}
         body={workspaceBootstrapError}
         error
       />
@@ -1280,7 +1286,7 @@ export function GitPanel({
   if (!currentProject) {
     return (
       <EmptyState
-        title="Select a workspace first"
+        title={t("sourceControl.selectWorkspaceFirst")}
         body="Choose a workspace in the thread area before opening Git status and history."
       />
     );
@@ -1289,7 +1295,7 @@ export function GitPanel({
   if (!isMockMode && !workspaceId && !workspaceBootstrapError) {
     return (
       <EmptyState
-        title="Preparing Git context"
+        title={t("sourceControl.preparingGitContext")}
         body="The selected workspace is still being attached. Git data will load in a moment."
       />
     );
@@ -1309,7 +1315,7 @@ export function GitPanel({
   if (error) {
     return (
       <EmptyState
-        title="Failed to load Git state"
+        title={t("sourceControl.failedLoadGitState")}
         body={error}
         error
       />
@@ -1319,7 +1325,7 @@ export function GitPanel({
   if (!snapshot?.capabilities.repoAvailable) {
     return (
       <EmptyState
-        title="This workspace is not a Git repository"
+        title={t("sourceControl.notGitRepo")}
         body="Project browsing still works, but Git history and diff previews stay hidden until the workspace is inside a repository."
       />
     );
@@ -1354,13 +1360,13 @@ export function GitPanel({
         >
           <DialogHeader className="gap-2 text-left">
             <DialogTitle className="text-base font-semibold text-app-foreground">
-              {confirmAction ? `Confirm ${gitActionLabel(confirmAction)}` : "Confirm action"}
+              {confirmAction ? t("sourceControl.confirmAction", { action: gitActionLabel(confirmAction, t) }) : t("sourceControl.confirmActionDefault")}
             </DialogTitle>
             <DialogDescription className="text-[13px] leading-6 text-app-subtle">
               {confirmAction === "commit"
                 ? "Commit will create a new local revision from the currently staged changes."
                 : confirmAction
-                  ? `${gitActionLabel(confirmAction)} will operate on the remote repository for the current branch.`
+                  ? `${gitActionLabel(confirmAction, t)} will operate on the remote repository for the current branch.`
                   : "This action requires confirmation."}
             </DialogDescription>
           </DialogHeader>
@@ -1415,10 +1421,10 @@ export function GitPanel({
                 readOnly={!gitCliAvailable || pendingAction !== null}
                 placeholder={
                   gitCliAvailable
-                    ? "Write a commit message for the staged changes"
-                    : "Install Git CLI to enable commit, fetch, pull, and push"
+                    ? t("sourceControl.commitMsgPlaceholder")
+                    : t("sourceControl.installGitHint")
                 }
-                aria-label="Commit Message"
+                aria-label={t("sourceControl.commitMsgLabel")}
                 rows={isCommitMessageExpanded ? 4 : 1}
                 onChange={(event) => setCommitMessage(event.target.value)}
                 onFocus={() => setCommitMessageExpanded(true)}
@@ -1433,19 +1439,19 @@ export function GitPanel({
               />
               <button
                 type="button"
-                aria-label="智能生成 Commit Message"
+                aria-label={t("sourceControl.generateCommitMessage")}
                 title={
                   isMockMode
-                    ? "Commit message generation is unavailable in mock mode"
+                    ? t("sourceControl.mockModeUnavailable")
                     : !workspaceId
-                      ? "A workspace is required"
+                      ? t("sourceControl.workspaceRequired")
                       : commitMessageModelPlan === null
-                        ? "Select an enabled lite, assistant, or primary model in the current profile first"
+                        ? t("sourceControl.selectModelFirst")
                         : totalChanges === 0
-                          ? "No changes available to summarize"
+                          ? t("sourceControl.noChangesToSummarize")
                           : isGeneratingCommitMessage
-                            ? "Generating commit message"
-                            : "Generate a commit message from the current profile"
+                            ? t("sourceControl.generatingCommitMsg")
+                            : t("sourceControl.generateFromProfile")
                 }
                 disabled={commitGeneratorDisabled}
                 className={cn(
@@ -1463,17 +1469,17 @@ export function GitPanel({
             </div>
             <button
               type="button"
-              aria-label="Commit"
+              aria-label={t("sourceControl.commitLabel")}
               title={
                 !gitCliAvailable
-                  ? "Git CLI is required"
+                  ? t("sourceControl.gitCliRequired")
                   : !hasStagedChanges
-                    ? "Stage changes before committing"
+                    ? t("sourceControl.stageChangesFirst")
                     : commitMessage.trim().length === 0
-                      ? "Write a commit message first"
+                      ? t("sourceControl.writeCommitMsgFirst")
                   : pendingAction === "commit"
-                    ? "Commit in progress"
-                    : "Commit staged changes"
+                    ? t("sourceControl.commitInProgress")
+                    : t("sourceControl.commitStagedChanges")
               }
               disabled={commitDisabled}
               className={cn(
@@ -1513,8 +1519,8 @@ export function GitPanel({
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                aria-label="Refresh Git snapshot"
-                title="Refresh Git snapshot"
+                aria-label={t("sourceControl.refreshSnapshot")}
+                title={t("sourceControl.refreshSnapshot")}
                 className={DRAWER_ICON_ACTION_CLASS}
                 onClick={handleRefresh}
               >
@@ -1541,28 +1547,31 @@ export function GitPanel({
             ) : (
               <div className={DRAWER_LIST_STACK_CLASS}>
                 <ChangeGroup
-                  title="Staged"
+                  title={t("sourceControl.staged")}
                   files={snapshot.stagedFiles}
                   staged
                   pendingPaths={pendingPaths}
+                  t={t}
                   onOpenDiffPreview={onOpenDiffPreview}
                   onToggleStage={handleToggleStage}
                   onToggleAll={handleToggleAll}
                 />
                 <ChangeGroup
-                  title="Tracked"
+                  title={t("sourceControl.tracked")}
                   files={snapshot.unstagedFiles}
                   staged={false}
                   pendingPaths={pendingPaths}
+                  t={t}
                   onOpenDiffPreview={onOpenDiffPreview}
                   onToggleStage={handleToggleStage}
                   onToggleAll={handleToggleAll}
                 />
                 <ChangeGroup
-                  title="Untracked"
+                  title={t("sourceControl.untracked")}
                   files={snapshot.untrackedFiles}
                   staged={false}
                   pendingPaths={pendingPaths}
+                  t={t}
                   onOpenDiffPreview={onOpenDiffPreview}
                   onToggleStage={handleToggleStage}
                   onToggleAll={handleToggleAll}
@@ -1786,6 +1795,7 @@ export function GitDiffPreviewPanel({
   selection,
   onClose,
 }: GitDiffPreviewPanelProps) {
+  const t = useT();
   const [isMetaExpanded, setMetaExpanded] = useState(false);
   const [diff, setDiff] = useState<GitDiffDto | null>(null);
   const [fileStatus, setFileStatus] = useState<GitFileStatusDto | null>(null);
@@ -1822,7 +1832,7 @@ export function GitDiffPreviewPanel({
           return;
         }
 
-        const message = formatUiError(nextError, "Failed to load file diff");
+        const message = formatUiError(nextError, t("sourceControl.failedLoadFileDiff"));
         setError(message);
       })
       .finally(() => {
@@ -1837,8 +1847,8 @@ export function GitDiffPreviewPanel({
   }, [selection.path, selection.staged, workspaceId]);
 
   const mockFile = useMemo(
-    () => buildMockPreviewSelection(selection),
-    [selection],
+    () => buildMockPreviewSelection(selection, t),
+    [selection, t],
   );
   const mockPreview = useMemo(() => buildGitDiffPreview(mockFile), [mockFile]);
   const splitRows = useMemo<ReadonlyArray<GitSplitDiffRow>>(() => {
@@ -1863,10 +1873,10 @@ export function GitDiffPreviewPanel({
     ? []
     : [
         fileStatus.stagedStatus
-          ? `staged ${statusLabel(fileStatus.stagedStatus)}`
+          ? `staged ${statusLabel(fileStatus.stagedStatus, t)}`
           : null,
         fileStatus.unstagedStatus
-          ? `working ${statusLabel(fileStatus.unstagedStatus)}`
+          ? `working ${statusLabel(fileStatus.unstagedStatus, t)}`
           : null,
         fileStatus.isUntracked ? "untracked" : null,
         fileStatus.isIgnored ? "ignored" : null,
@@ -1889,7 +1899,7 @@ export function GitDiffPreviewPanel({
               </span>
               <p className="truncate text-sm font-semibold text-app-foreground">{fileName}</p>
               <span className="shrink-0 rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-subtle">
-                {formatChangeSummary(selection)}
+                {formatChangeSummary(selection, t)}
               </span>
               <span
                 className={cn(

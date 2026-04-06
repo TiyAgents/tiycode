@@ -9,6 +9,7 @@ import {
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "xterm";
 import "xterm/css/xterm.css";
+import { useT } from "@/i18n";
 import { useThreadTerminal } from "@/features/terminal/model/use-thread-terminal";
 
 type TerminalHostProps = {
@@ -27,6 +28,7 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
   { threadId, active, bootstrapError, idleMessage },
   ref,
 ) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -188,11 +190,11 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
     }
 
     if (!threadId) {
-      return idleMessage ?? "当前没有可附着的线程。";
+      return idleMessage ?? t("terminal.noAttachableThread");
     }
 
     if (terminalApi.isConnecting) {
-      return "Terminal 正在连接…";
+      return t("terminal.connecting");
     }
 
     return terminalApi.error ?? null;

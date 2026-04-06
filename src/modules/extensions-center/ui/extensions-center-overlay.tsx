@@ -4,6 +4,7 @@ import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
+import { useT, type TranslationKey } from "@/i18n";
 import {
   ArrowLeft,
   BookCopy,
@@ -128,20 +129,24 @@ type ExtensionsCenterOverlayProps = {
 
 type McpFormState = McpServerConfigInput;
 
-const TAB_META: Record<ExtensionTab, { description: string; label: string }> = {
-  plugins: {
-    label: "Plugins",
-    description: "Local extension packages with tools, hooks, commands, and optional skill packs.",
-  },
-  mcps: {
-    label: "MCP Servers",
-    description: "Managed connector entries with transport status, phase, snapshots, and reconnect controls.",
-  },
-  skills: {
-    label: "Skills",
-    description: "Indexed prompt assets from builtin, workspace, and plugin sources with enable controls.",
-  },
-};
+type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
+
+function getTabMeta(t: TFunc): Record<ExtensionTab, { description: string; label: string }> {
+  return {
+    plugins: {
+      label: t("extensions.tab.plugins"),
+      description: t("extensions.tab.pluginsDesc"),
+    },
+    mcps: {
+      label: t("extensions.tab.mcpServers"),
+      description: t("extensions.tab.mcpServersDesc"),
+    },
+    skills: {
+      label: t("extensions.tab.skills"),
+      description: t("extensions.tab.skillsDesc"),
+    },
+  };
+}
 
 function createDefaultMcpFormState(): McpFormState {
   return {
@@ -204,10 +209,10 @@ function normalizePluginNameList(items: string[]) {
   return [...items].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
 }
 
-function formatSource(summary: ExtensionSummary) {
+function formatSource(summary: ExtensionSummary, t?: TFunc) {
   switch (summary.source.type) {
     case "builtin":
-      return "Builtin";
+      return t ? t("extensions.builtinBadge") : "Builtin";
     case "local-dir":
       return summary.source.path;
     case "marketplace":
@@ -249,7 +254,10 @@ function getSkillStatusBadgeClass(enabled: boolean) {
   return enabled ? "bg-app-success/12 text-app-success" : "bg-app-surface-muted/80 text-app-subtle";
 }
 
-function getSkillStatusLabel(enabled: boolean) {
+function getSkillStatusLabel(enabled: boolean, t?: TFunc) {
+  if (t) {
+    return enabled ? t("extensions.enabledBadge") : t("extensions.disabledBadge");
+  }
   return enabled ? "enabled" : "disabled";
 }
 
@@ -426,20 +434,20 @@ function getMcpServerDescription(server: McpServerState) {
   return [command, args].filter(Boolean).join(" ").trim() || "Local stdio MCP server";
 }
 
-function getPluginStateLabel(item: PluginCollectionItem) {
+function getPluginStateLabel(item: PluginCollectionItem, t?: TFunc) {
   if (!item.installed) {
     return null;
   }
   if (item.installState === "enabled") {
-    return "enabled";
+    return t ? t("extensions.enabledBadge") : "enabled";
   }
   if (item.installState === "error") {
     return "error";
   }
   if (item.installState === "disabled") {
-    return "disabled";
+    return t ? t("extensions.disabledBadge") : "disabled";
   }
-  return "installed";
+  return t ? t("extensions.installedBadge") : "installed";
 }
 
 const DETAIL_WRAP_BADGE_CLASS = "h-auto max-w-full whitespace-normal break-all py-1 text-left leading-5";
@@ -453,6 +461,8 @@ function filterByQuery<T>(items: T[], query: string, toHaystack: (item: T) => st
 }
 
 export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
+  const t = useT();
+  const TAB_META = getTabMeta(t);
   const [activeTab, setActiveTab] = useState<ExtensionTab>("plugins");
   const [queryByTab, setQueryByTab] = useState<Record<ExtensionTab, string>>({
     plugins: "",
@@ -531,7 +541,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
           description: item.description ?? "Local plugin package",
           version: item.version,
           tags: item.tags,
-          sourceLabel: formatSource(item),
+          sourceLabel: formatSource(item, t),
           sourceFilter: "local",
           installed: item.installState !== "discovered",
           enabled: item.installState === "enabled",
@@ -556,6 +566,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
   }, [
     props.extensions,
     props.marketplaceItems,
+    t,
   ]);
   const pluginItems = useMemo(() => {
     const sourceFiltered =
@@ -817,7 +828,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
               onClick={props.onClose}
             >
               <ArrowLeft className="size-3.5" />
-              <span>Back to app</span>
+              <span>{t("extensions.backToApp")}</span>
             </button>
 
             <div className="mt-3 flex items-start gap-3">
@@ -826,7 +837,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
               </div>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <h1 className="text-[19px] font-semibold tracking-[-0.03em] text-app-foreground">Extensions Center</h1>
+                  <h1 className="text-[19px] font-semibold tracking-[-0.03em] text-app-foreground">{t("extensions.title")}</h1>
                   <span className="rounded-full border border-app-border bg-app-surface-muted/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-app-subtle">
                     {activeMeta.label}
                   </span>
@@ -868,7 +879,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                     onChange={(event) =>
                       setQueryByTab((current) => ({ ...current, [activeTab]: event.target.value }))
                     }
-                    placeholder={`Search ${activeMeta.label.toLowerCase()}`}
+                    placeholder={t("extensions.searchPlaceholder", { label: activeMeta.label.toLowerCase() })}
                     className="h-9 rounded-xl border-app-border bg-app-surface-muted/80 pl-10 text-[13px]"
                   />
                 </div>
@@ -881,7 +892,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                   disabled={props.isLoading || isActionPending}
                 >
                   <RefreshCw className={cn("size-4", props.isLoading && "animate-spin")} />
-                  Refresh
+                  {t("extensions.refresh")}
                 </Button>
 
                 {activeTab === "plugins" ? (
@@ -894,7 +905,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                       disabled={isActionPending}
                     >
                       <CirclePlus className="size-4" />
-                      Add source
+                      {t("extensions.addSource")}
                     </Button>
                   </>
                 ) : null}
@@ -907,7 +918,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                     disabled={isActionPending}
                   >
                     <CirclePlus className="size-4" />
-                    Add MCP
+                    {t("extensions.addMcp")}
                   </Button>
                 ) : null}
 
@@ -920,7 +931,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                     disabled={isActionPending}
                   >
                     <RefreshCw className="size-4" />
-                    Rescan skills
+                    {t("extensions.rescanSkills")}
                   </Button>
                 ) : null}
               </div>
@@ -1030,7 +1041,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                   }}
                                   disabled={isActionPending || (item.installed && !item.extensionId)}
                                 >
-                                  {!item.installed ? "Install" : item.enabled ? "Disable" : "Enable"}
+                                  {!item.installed ? t("extensions.install") : item.enabled ? t("extensions.disable") : t("extensions.enable")}
                                 </Button>
                                 {item.installed ? (
                                   <Button
@@ -1045,7 +1056,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                     }}
                                     disabled={isActionPending || !item.extensionId}
                                   >
-                                    Remove
+                                    {t("extensions.remove")}
                                   </Button>
                                 ) : null}
                               </div>
@@ -1060,16 +1071,16 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                 {tag}
                               </Badge>
                             ))}
-                            {item.commands.length > 0 ? <Badge variant="outline">{item.commands.length} commands</Badge> : null}
-                            {item.mcpServers.length > 0 ? <Badge variant="outline">{item.mcpServers.length} mcps</Badge> : null}
-                            {item.skillNames.length > 0 ? <Badge variant="outline">{item.skillNames.length} skills</Badge> : null}
-                            {item.hooks.length > 0 ? <Badge variant="outline">{item.hooks.length} hooks</Badge> : null}
+                            {item.commands.length > 0 ? <Badge variant="outline">{item.commands.length} {t("extensions.commandsBadge")}</Badge> : null}
+                            {item.mcpServers.length > 0 ? <Badge variant="outline">{item.mcpServers.length} {t("extensions.mcpsBadge")}</Badge> : null}
+                            {item.skillNames.length > 0 ? <Badge variant="outline">{item.skillNames.length} {t("extensions.skillsBadge")}</Badge> : null}
+                            {item.hooks.length > 0 ? <Badge variant="outline">{item.hooks.length} {t("extensions.hooksBadge")}</Badge> : null}
                           </div>
                           <div className="flex items-center justify-between gap-3">
                             <p className="truncate text-[12px] text-app-subtle" title={item.sourceLabel}>{item.sourceLabel}</p>
-                            {getPluginStateLabel(item) ? (
+                            {getPluginStateLabel(item, t) ? (
                               <Badge className={cn("shrink-0 capitalize", getHealthBadgeClass(item.health))}>
-                                {getPluginStateLabel(item)}
+                                {getPluginStateLabel(item, t)}
                               </Badge>
                             ) : null}
                           </div>
@@ -1112,7 +1123,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                     handleOpenEditMcpDialog(server);
                                   }}
                                 >
-                                  Edit
+                                  {t("extensions.edit")}
                                 </Button>
                                 <Button
                                   size="sm"
@@ -1123,7 +1134,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                     void runAction(() => props.onRestartMcpServer(server.id));
                                   }}
                                 >
-                                  Restart
+                                  {t("extensions.restart")}
                                 </Button>
                               </div>
                             </div>
@@ -1131,9 +1142,9 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         </CardHeader>
                         <CardContent className="space-y-3 pt-0">
                           <div className="flex flex-wrap gap-2">
-                            <Badge variant="outline">{server.tools.length} tools</Badge>
-                            <Badge variant="outline">{server.resources.length} resources</Badge>
-                            {server.staleSnapshot ? <Badge variant="outline">stale snapshot</Badge> : null}
+                            <Badge variant="outline">{server.tools.length} {t("extensions.toolsBadge")}</Badge>
+                            <Badge variant="outline">{server.resources.length} {t("extensions.resourcesBadge")}</Badge>
+                            {server.staleSnapshot ? <Badge variant="outline">{t("extensions.staleSnapshot")}</Badge> : null}
                           </div>
                         </CardContent>
                         <CardFooter className="justify-between gap-2">
@@ -1190,21 +1201,21 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                   );
                                 }}
                               >
-                                {skill.enabled ? "Disable" : "Enable"}
+                                {skill.enabled ? t("extensions.disable") : t("extensions.enable")}
                               </Button>
                             </div>
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-3 pt-0">
                           <div className="flex flex-wrap gap-2">
-                            <Badge variant="outline">{skill.triggers.length} triggers</Badge>
-                            {skill.tools.length > 0 ? <Badge variant="outline">{skill.tools.length} tools</Badge> : null}
+                            <Badge variant="outline">{skill.triggers.length} {t("extensions.triggersBadge")}</Badge>
+                            {skill.tools.length > 0 ? <Badge variant="outline">{skill.tools.length} {t("extensions.toolsBadge")}</Badge> : null}
                           </div>
                         </CardContent>
                         <CardFooter className="justify-end gap-3">
                           <div className="flex items-center justify-end gap-3">
                             <Badge className={cn("shrink-0", getSkillStatusBadgeClass(skill.enabled))}>
-                              {getSkillStatusLabel(skill.enabled)}
+                              {getSkillStatusLabel(skill.enabled, t)}
                             </Badge>
                           </div>
                         </CardFooter>
@@ -1217,7 +1228,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                   (activeTab === "skills" && filteredSkills.length === 0)) ? (
                   <Card className="md:col-span-2">
                     <CardContent className="flex min-h-40 items-center justify-center text-center text-sm text-app-muted">
-                      No {activeMeta.label.toLowerCase()} match the current search.
+                      {t("extensions.noMatch", { label: activeMeta.label.toLowerCase() })}
                     </CardContent>
                   </Card>
                 ) : null}
@@ -1234,14 +1245,14 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         <div className="space-y-3">
                           <div className="flex items-center gap-2">
                             <Badge variant="outline" className={DETAIL_WRAP_BADGE_CLASS}>
-                              plugin
+                              {t("extensions.pluginBadge")}
                             </Badge>
                             <Badge variant="outline" className={DETAIL_WRAP_BADGE_CLASS}>
                               {selectedPluginItem.sourceLabel}
                             </Badge>
-                            {getPluginStateLabel(selectedPluginItem) ? (
+                            {getPluginStateLabel(selectedPluginItem, t) ? (
                               <Badge className={getHealthBadgeClass(selectedPluginItem.health)}>
-                                {getPluginStateLabel(selectedPluginItem)}
+                                {getPluginStateLabel(selectedPluginItem, t)}
                               </Badge>
                             ) : null}
                           </div>
@@ -1270,7 +1281,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                               }}
                               disabled={isActionPending || (selectedPluginItem.installed && !selectedPluginItem.extensionId)}
                             >
-                              {!selectedPluginItem.installed ? "Install" : selectedPluginItem.enabled ? "Disable" : "Enable"}
+                              {!selectedPluginItem.installed ? t("extensions.install") : selectedPluginItem.enabled ? t("extensions.disable") : t("extensions.enable")}
                             </Button>
                             {selectedPluginItem.installed ? (
                               <Button
@@ -1283,7 +1294,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                 }}
                                 disabled={isActionPending || !selectedPluginItem.extensionId}
                               >
-                                Remove
+                                {t("extensions.remove")}
                               </Button>
                             ) : null}
                           </div>
@@ -1291,21 +1302,21 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
                         {selectedDetail?.plugin ? (
                           <div className="space-y-4">
-                            <DetailSection title="Capabilities">
+                            <DetailSection title={t("extensions.capabilities")}>
                               {selectedDetail.plugin.capabilities.map((item) => (
                                 <Badge key={item} variant="outline" className={DETAIL_WRAP_BADGE_CLASS}>
                                   {item}
                                 </Badge>
                               ))}
                             </DetailSection>
-                            <DetailSection title="Permissions">
+                            <DetailSection title={t("extensions.permissions")}>
                               {selectedDetail.plugin.permissions.map((item) => (
                                 <Badge key={item} variant="outline" className={DETAIL_WRAP_BADGE_CLASS}>
                                   {item}
                                 </Badge>
                               ))}
                             </DetailSection>
-                            <DetailSection title="Tools">
+                            <DetailSection title={t("extensions.tools")}>
                               {selectedDetail.plugin.tools.map((tool) => (
                                 <div key={tool.name} className="rounded-xl border border-app-border bg-app-canvas/70 p-3">
                                   <div className="break-all text-sm font-medium">{tool.name}</div>
@@ -1320,7 +1331,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         ) : null}
 
                         <div className="space-y-4">
-                          <DetailSection title="Commands">
+                          <DetailSection title={t("extensions.commands")}>
                             {(selectedDetail?.plugin?.commands.length ?? 0) > 0
                               ? selectedDetail!.plugin!.commands.map((command) => (
                                 <Badge
@@ -1343,9 +1354,9 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                       /{command.name}
                                     </Badge>
                                   ))
-                                : <p className="text-sm text-app-muted">No bundled commands.</p>}
+                                : <p className="text-sm text-app-muted">{t("extensions.noBundledCommands")}</p>}
                           </DetailSection>
-                          <DetailSection title="MCPs">
+                          <DetailSection title={t("extensions.mcps")}>
                             {(selectedDetail?.plugin?.bundledMcpServers.length ?? 0) > 0
                               ? selectedDetail!.plugin!.bundledMcpServers.map((server) => (
                                   <Badge key={server} variant="outline" className={DETAIL_WRAP_BADGE_CLASS}>
@@ -1358,9 +1369,9 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                       {server}
                                     </Badge>
                                   ))
-                                : <p className="text-sm text-app-muted">No bundled MCP servers.</p>}
+                                : <p className="text-sm text-app-muted">{t("extensions.noBundledMcps")}</p>}
                           </DetailSection>
-                          <DetailSection title="Skills">
+                          <DetailSection title={t("extensions.skills")}>
                             {(selectedDetail?.plugin?.bundledSkills.length ?? 0) > 0
                               ? selectedDetail!.plugin!.bundledSkills.map((skill) => (
                                   <Badge key={skill} variant="outline" className={DETAIL_WRAP_BADGE_CLASS}>
@@ -1373,9 +1384,9 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                       {skill}
                                     </Badge>
                                   ))
-                                : <p className="text-sm text-app-muted">No bundled skills.</p>}
+                                : <p className="text-sm text-app-muted">{t("extensions.noBundledSkills")}</p>}
                           </DetailSection>
-                          <DetailSection title="Hooks">
+                          <DetailSection title={t("extensions.hooks")}>
                             {(selectedDetail?.plugin?.hooks.length ?? 0) > 0
                               ? selectedDetail!.plugin!.hooks.map((hook) => (
                                   <div key={hook.event} className="rounded-xl border border-app-border bg-app-canvas/70 p-3">
@@ -1390,10 +1401,10 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                       <div className="mt-1 break-all text-xs text-app-muted">{hook.handlers.join(", ")}</div>
                                     </div>
                                   ))
-                                : <p className="text-sm text-app-muted">No hooks declared.</p>}
+                                : <p className="text-sm text-app-muted">{t("extensions.noHooksDeclared")}</p>}
                           </DetailSection>
                           {selectedPluginSource ? (
-                            <DetailSection title="Source">
+                            <DetailSection title={t("extensions.source")}>
                               <p
                                 className="break-all text-sm leading-6 text-app-muted"
                                 title={`${selectedPluginSource.name} · ${selectedPluginSource.url}`}
@@ -1407,7 +1418,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                     ) : (
                       <div className="space-y-4">
                         <EmptyDetailState isLoading={Boolean(detailLoadingId)} label={activeMeta.label} />
-                        <DetailSection title="Marketplace Sources">
+                        <DetailSection title={t("extensions.marketplaceSources")}>
                           {props.marketplaceSources.length > 0 ? (
                             props.marketplaceSources.map((source) => (
                               <div
@@ -1418,7 +1429,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                   <div className="min-w-0">
                                     <div className="flex flex-wrap items-center gap-2">
                                       <div className="text-sm font-medium">{source.name}</div>
-                                      <Badge variant="outline">{source.pluginCount} plugins</Badge>
+                                      <Badge variant="outline">{source.pluginCount} {t("extensions.pluginsBadge")}</Badge>
                                       <Badge
                                         className={cn(
                                           source.status === "ready"
@@ -1443,14 +1454,14 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                       disabled={isActionPending || sourceActionLockedId === source.id}
                                       onClick={() => void runAction(() => props.onRefreshMarketplaceSource(source.id))}
                                     >
-                                      Refresh
+                                      {t("extensions.refresh")}
                                     </Button>
                                   </div>
                                 </div>
                               </div>
                             ))
                           ) : (
-                            <p className="text-sm text-app-muted">No marketplace sources configured.</p>
+                            <p className="text-sm text-app-muted">{t("extensions.noMarketplaceSources")}</p>
                           )}
                         </DetailSection>
                       </div>
@@ -1477,20 +1488,20 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
                         {selectedDetail.mcp ? (
                           <div className="space-y-4">
-                            <DetailSection title="Actions">
+                            <DetailSection title={t("extensions.actions")}>
                               <div className="flex flex-wrap gap-2">
                                 <Button size="sm" variant="secondary" onClick={() => handleOpenEditMcpDialog(selectedDetail.mcp!)}>
-                                  Edit
+                                  {t("extensions.edit")}
                                 </Button>
                                 <Button size="sm" variant="outline" onClick={() => void runAction(() => props.onRestartMcpServer(selectedDetail.mcp!.id))}>
-                                  Restart
+                                  {t("extensions.restart")}
                                 </Button>
                                 <Button size="sm" variant="ghost" onClick={() => void runAction(() => props.onRemoveMcpServer(selectedDetail.mcp!.id))}>
-                                  Remove
+                                  {t("extensions.remove")}
                                 </Button>
                               </div>
                             </DetailSection>
-                            <DetailSection title="Tools">
+                            <DetailSection title={t("extensions.tools")}>
                               {selectedDetail.mcp.tools.length > 0 ? (
                                 selectedDetail.mcp.tools.map((tool) => (
                                   <div key={tool.qualifiedName} className="rounded-xl border border-app-border bg-app-canvas/70 p-3">
@@ -1511,7 +1522,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                     {getMcpToolParameters(tool.inputSchema).length > 0 ? (
                                       <div className="mt-3 space-y-2">
                                         <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
-                                          Parameters
+                                          {t("extensions.parameters")}
                                         </div>
                                         <div className="space-y-2">
                                           {getMcpToolParameters(tool.inputSchema).map((parameter) => (
@@ -1525,7 +1536,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                                 ) : null}
                                                 {parameter.required ? (
                                                   <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                                                    required
+                                                    {t("extensions.requiredBadge")}
                                                   </Badge>
                                                 ) : null}
                                               </div>
@@ -1550,7 +1561,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                   </div>
                                 ))
                               ) : (
-                                <p className="text-sm text-app-muted">No discovered tools yet.</p>
+                                <p className="text-sm text-app-muted">{t("extensions.noDiscoveredTools")}</p>
                               )}
                             </DetailSection>
                           </div>
@@ -1567,9 +1578,9 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                       <>
                         <div className="min-w-0 space-y-3 overflow-hidden">
                           <div className="flex items-center gap-2">
-                            <Badge variant="outline">skill</Badge>
+                            <Badge variant="outline">{t("extensions.skillBadge")}</Badge>
                             <Badge className={getSkillStatusBadgeClass(selectedDetail.skill.enabled)}>
-                              {getSkillStatusLabel(selectedDetail.skill.enabled)}
+                              {getSkillStatusLabel(selectedDetail.skill.enabled, t)}
                             </Badge>
                           </div>
                           <div className="flex items-center justify-between gap-3">
@@ -1579,8 +1590,8 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                               variant="ghost"
                               className="shrink-0"
                               onClick={() => setSkillPreviewDialogOpen(true)}
-                              title="Preview skill markdown"
-                              aria-label="Preview skill markdown"
+                              title={t("extensions.previewSkillMarkdown")}
+                              aria-label={t("extensions.previewSkillMarkdown")}
                             >
                               <Eye className="size-4" />
                             </Button>
@@ -1600,29 +1611,29 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                 )
                               }
                             >
-                              {selectedDetail.skill.enabled ? "Disable" : "Enable"}
+                              {selectedDetail.skill.enabled ? t("extensions.disable") : t("extensions.enable")}
                             </Button>
                           </div>
                         </div>
 
                         <div className="space-y-4">
-                          <DetailSection title="Triggers">
+                          <DetailSection title={t("extensions.triggersBadge")}>
                             {selectedDetail.skill.triggers.length > 0
                               ? selectedDetail.skill.triggers.map((trigger) => (
                                   <Badge key={trigger} variant="outline" className={DETAIL_WRAP_BADGE_CLASS}>
                                     {trigger}
                                   </Badge>
                                 ))
-                              : <p className="text-sm text-app-muted">No triggers defined.</p>}
+                              : <p className="text-sm text-app-muted">{t("extensions.noTriggersDefined")}</p>}
                           </DetailSection>
-                          <DetailSection title="Tools">
+                          <DetailSection title={t("extensions.tools")}>
                             {selectedDetail.skill.tools.length > 0
                               ? selectedDetail.skill.tools.map((tool) => (
                                   <Badge key={tool} variant="outline" className={DETAIL_WRAP_BADGE_CLASS}>
                                     {tool}
                                   </Badge>
                                 ))
-                              : <p className="text-sm text-app-muted">No tool requirements declared.</p>}
+                              : <p className="text-sm text-app-muted">{t("extensions.noToolRequirements")}</p>}
                           </DetailSection>
                         </div>
                       </>
@@ -1645,16 +1656,16 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
           <DialogHeader className="shrink-0 border-b border-app-border px-5 py-4 text-left">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <DialogTitle className="truncate">{selectedDetail?.skill?.name ?? "Skill preview"}</DialogTitle>
+                <DialogTitle className="truncate">{selectedDetail?.skill?.name ?? t("extensions.skillPreview")}</DialogTitle>
                 <DialogDescription className="mt-1">
-                  {selectedDetail?.skill?.description ?? "Skill markdown preview"}
+                  {selectedDetail?.skill?.description ?? t("extensions.skillPreviewDesc")}
                 </DialogDescription>
               </div>
               <DialogClose asChild>
                 <button
                   type="button"
-                  aria-label="Close skill preview"
-                  title="Close skill preview"
+                  aria-label={t("extensions.closeSkillPreview")}
+                  title={t("extensions.closeSkillPreview")}
                   className="flex size-8 shrink-0 items-center justify-center rounded-lg text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
                 >
                   <CircleX className="size-4" />
@@ -1663,7 +1674,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
             </div>
           </DialogHeader>
           <div className="shrink-0 border-b border-app-border bg-app-surface-muted/50 px-5 py-2 text-[11px] uppercase tracking-[0.12em] text-app-subtle">
-            SKILL.md Preview
+            {t("extensions.skillMdPreview")}
           </div>
           <ScrollArea className="min-h-0 flex-1 bg-app-drawer">
             <div className="w-full min-w-0 px-5 py-5">
@@ -1671,7 +1682,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                 {selectedSkillPreview.entries.length > 0 ? (
                   <div className="rounded-xl border border-app-border bg-app-canvas/65 p-4">
                     <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-app-subtle">
-                      Frontmatter
+                      {t("extensions.frontmatter")}
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       {selectedSkillPreview.entries.map((entry) => (
@@ -1703,9 +1714,9 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
       <Dialog open={mcpDialogOpen} onOpenChange={setMcpDialogOpen}>
         <DialogContent className="max-w-xl border-app-border bg-app-canvas">
           <DialogHeader>
-            <DialogTitle>{mcpDialogMode === "create" ? "Add MCP server" : "Edit MCP server"}</DialogTitle>
+            <DialogTitle>{mcpDialogMode === "create" ? t("extensions.addMcpServer") : t("extensions.editMcpServer")}</DialogTitle>
             <DialogDescription>
-              Manage settings-backed MCP entries. Sensitive fields stay masked in the runtime views and activity logs.
+              {t("extensions.mcpDialogDesc")}
             </DialogDescription>
           </DialogHeader>
 
@@ -1714,13 +1725,13 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
               <Input
                 value={mcpForm.id}
                 onChange={(event) => setMcpForm((current) => ({ ...current, id: event.target.value }))}
-                placeholder="server id"
+                placeholder={t("extensions.serverIdPlaceholder")}
                 disabled={mcpDialogMode === "edit"}
               />
               <Input
                 value={mcpForm.label}
                 onChange={(event) => setMcpForm((current) => ({ ...current, label: event.target.value }))}
-                placeholder="display name"
+                placeholder={t("extensions.displayNamePlaceholder")}
               />
             </div>
 
@@ -1732,7 +1743,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                 }
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Transport" />
+                  <SelectValue placeholder={t("extensions.transportPlaceholder")} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="stdio">stdio</SelectItem>
@@ -1745,7 +1756,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                 onChange={(event) =>
                   setMcpForm((current) => ({ ...current, timeoutMs: Number(event.target.value || 30000) }))
                 }
-                placeholder="timeout (ms)"
+                placeholder={t("extensions.timeoutPlaceholder")}
               />
             </div>
 
@@ -1754,7 +1765,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                 <Input
                   value={mcpForm.command ?? ""}
                   onChange={(event) => setMcpForm((current) => ({ ...current, command: event.target.value }))}
-                  placeholder="command"
+                  placeholder={t("extensions.commandPlaceholder")}
                 />
                 <Input
                   value={(mcpForm.args ?? []).join(" ")}
@@ -1767,7 +1778,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         .filter(Boolean),
                     }))
                   }
-                  placeholder="args separated by spaces"
+                  placeholder={t("extensions.argsPlaceholder")}
                 />
               </>
             ) : (
@@ -1784,15 +1795,15 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                   className="min-h-28"
                 />
                 <div className="text-xs text-app-muted">
-                  Use one `Header: value` per line. Masked values are kept unless you replace or remove them.
+                  {t("extensions.headersHelper")}
                 </div>
               </>
             )}
 
             <div className="flex items-center justify-between rounded-xl border border-app-border bg-app-surface p-3">
               <div>
-                <div className="text-sm font-medium text-app-foreground">Enable on save</div>
-                <div className="text-xs text-app-muted">Disabled entries stay registered but won't start.</div>
+                <div className="text-sm font-medium text-app-foreground">{t("extensions.enableOnSave")}</div>
+                <div className="text-xs text-app-muted">{t("extensions.disabledEntryHint")}</div>
               </div>
               <Switch
                 checked={mcpForm.enabled}
@@ -1803,10 +1814,10 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setMcpDialogOpen(false)}>
-              Cancel
+              {t("extensions.cancelButton")}
             </Button>
             <Button onClick={() => void handleSubmitMcp()} disabled={isActionPending}>
-              {mcpDialogMode === "create" ? "Create" : "Save"}
+              {mcpDialogMode === "create" ? t("extensions.createButton") : t("extensions.saveButton")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1826,9 +1837,9 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
       >
         <DialogContent className="max-w-xl border-app-border bg-app-canvas">
           <DialogHeader>
-            <DialogTitle>Add marketplace source</DialogTitle>
+            <DialogTitle>{t("extensions.addMarketplaceSource")}</DialogTitle>
             <DialogDescription>
-              Register a git-backed plugin market and let Tiy scan its plugin directories dynamically.
+              {t("extensions.marketplaceSourceDesc")}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
@@ -1851,8 +1862,8 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
             />
             <div className="text-xs text-app-muted">
               {isMarketSourceSubmitting
-                ? "Adding source and syncing its repository..."
-                : "The source will be saved and synced before it appears in the plugin catalog."}
+                ? t("extensions.addingSourceStatus")
+                : t("extensions.addingSourceHelper")}
             </div>
           </div>
           <DialogFooter>
@@ -1861,7 +1872,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
               onClick={() => setMarketSourceDialogOpen(false)}
               disabled={isMarketSourceSubmitting}
             >
-              Cancel
+              {t("extensions.cancelButton")}
             </Button>
             <Button
               onClick={() => void handleSubmitMarketplaceSource()}
@@ -1874,10 +1885,10 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
               {isMarketSourceSubmitting ? (
                 <>
                   <RefreshCw className="size-4 animate-spin" />
-                  Adding source...
+                  {t("extensions.addingSource")}
                 </>
               ) : (
-                "Add source"
+                t("extensions.addSource")
               )}
             </Button>
           </DialogFooter>
@@ -1900,14 +1911,14 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
         <DialogContent className="max-w-xl border-app-border bg-app-canvas">
           <DialogHeader>
             <DialogTitle>
-              {removeSourcePlan && !removeSourcePlan.canRemove ? "Can't remove source" : "Remove source"}
+              {removeSourcePlan && !removeSourcePlan.canRemove ? t("extensions.cantRemoveSource") : t("extensions.removeSource")}
             </DialogTitle>
             <DialogDescription>
               {isRemoveSourcePreviewLoading
-                ? "Checking whether this source can be removed."
+                ? t("extensions.checkingRemovable")
                 : removeSourcePlan && !removeSourcePlan.canRemove
-                  ? "This source still has enabled plugins. Disable them before removing the source."
-                  : "Removing this source will also remove installed plugins from it that are not enabled."}
+                  ? t("extensions.hasEnabledPlugins")
+                  : t("extensions.removeWarning")}
             </DialogDescription>
           </DialogHeader>
 
@@ -1920,7 +1931,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
             {isRemoveSourcePreviewLoading ? (
               <div className="rounded-xl border border-app-border bg-app-surface px-4 py-5 text-sm text-app-muted">
-                Loading source removal details...
+                {t("extensions.loadingRemovalDetails")}
               </div>
             ) : null}
 
@@ -1934,7 +1945,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
                 {!removeSourcePlan.canRemove ? (
                   <div className="space-y-2">
-                    <div className="text-sm font-medium text-app-foreground">Enabled plugins blocking removal</div>
+                    <div className="text-sm font-medium text-app-foreground">{t("extensions.enabledPluginsBlocking")}</div>
                     <div className="space-y-2">
                       {removeSourcePlan.blockingPlugins.map((plugin) => (
                         <div
@@ -1945,14 +1956,14 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                             <div className="truncate text-sm font-medium text-app-foreground">{plugin.name}</div>
                             <div className="text-xs text-app-muted">v{plugin.version}</div>
                           </div>
-                          <Badge className="bg-app-success/12 text-app-success">enabled</Badge>
+                          <Badge className="bg-app-success/12 text-app-success">{t("extensions.enabledPluginBadge")}</Badge>
                         </div>
                       ))}
                     </div>
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <div className="text-sm font-medium text-app-foreground">Plugins to remove</div>
+                    <div className="text-sm font-medium text-app-foreground">{t("extensions.pluginsToRemove")}</div>
                     {removeSourcePlan.removableInstalledPlugins.length > 0 ? (
                       <div className="space-y-2">
                         {removeSourcePlan.removableInstalledPlugins.map((plugin) => (
@@ -1964,13 +1975,13 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                               <div className="truncate text-sm font-medium text-app-foreground">{plugin.name}</div>
                               <div className="text-xs text-app-muted">v{plugin.version}</div>
                             </div>
-                            <Badge variant="outline">installed</Badge>
+                            <Badge variant="outline">{t("extensions.installedBadge")}</Badge>
                           </div>
                         ))}
                       </div>
                     ) : (
                       <div className="rounded-xl border border-app-border bg-app-canvas/70 px-3 py-2 text-sm text-app-muted">
-                        No installed plugins from this source will be removed.
+                        {t("extensions.noPluginsToRemove")}
                       </div>
                     )}
                   </div>
@@ -1985,11 +1996,11 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
               onClick={() => setRemoveSourceDialogOpen(false)}
               disabled={isRemoveSourcePreviewLoading || isRemoveSourceSubmitting}
             >
-              {removeSourcePlan && !removeSourcePlan.canRemove ? "Close" : "Cancel"}
+              {removeSourcePlan && !removeSourcePlan.canRemove ? t("extensions.closeButton") : t("extensions.cancelButton")}
             </Button>
             {removeSourcePlan?.canRemove ? (
               <Button onClick={() => void handleConfirmRemoveSource()} disabled={isRemoveSourceSubmitting}>
-                Remove source
+                {t("extensions.removeSourceConfirm")}
               </Button>
             ) : null}
           </DialogFooter>
@@ -2009,9 +2020,10 @@ function DetailSection({ children, title }: { children: ReactNode; title: string
 }
 
 function EmptyDetailState({ isLoading, label }: { isLoading: boolean; label: string }) {
+  const t = useT();
   return (
     <div className="flex min-h-[220px] items-center justify-center rounded-2xl border border-dashed border-app-border bg-app-canvas/70 p-6 text-center text-sm text-app-muted">
-      {isLoading ? `Loading ${label.toLowerCase()} details...` : `Select a ${label.toLowerCase()} item to inspect details.`}
+      {isLoading ? t("extensions.loadingDetails", { label: label.toLowerCase() }) : t("extensions.selectToInspect", { label: label.toLowerCase() })}
     </div>
   );
 }

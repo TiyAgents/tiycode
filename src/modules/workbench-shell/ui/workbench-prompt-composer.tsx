@@ -60,6 +60,7 @@ import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settin
 import type { SkillRecord } from "@/shared/types/extensions";
 import type { RunMode } from "@/shared/types/api";
 import { indexFilterFiles, type FileFilterMatch } from "@/services/bridge";
+import { useT } from "@/i18n";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { ModelBrandIcon } from "@/shared/ui/model-brand-icon";
@@ -470,6 +471,7 @@ function AttachmentImageCard({
   onRemove?: (id: string) => void;
   compact?: boolean;
 }) {
+  const t = useT();
   const [imgFailed, setImgFailed] = useState(false);
 
   const handleImgError = (event: SyntheticEvent<HTMLImageElement>) => {
@@ -508,7 +510,7 @@ function AttachmentImageCard({
       {/* Remove button (composer mode) */}
       {onRemove ? (
         <button
-          aria-label={`移除附件 ${attachment.name}`}
+          aria-label={t("composer.removeAttachment", { name: attachment.name })}
           className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/50 text-white/90 opacity-0 backdrop-blur-sm transition group-hover:opacity-100"
           onClick={(event) => {
             event.preventDefault();
@@ -532,6 +534,7 @@ function AttachmentFileCard({
   onRemove?: (id: string) => void;
   tone?: "composer" | "message";
 }) {
+  const t = useT();
   const ext = getFileExtension(attachment.name);
 
   return (
@@ -565,7 +568,7 @@ function AttachmentFileCard({
       {/* Remove button */}
       {onRemove ? (
         <button
-          aria-label={`移除附件 ${attachment.name}`}
+          aria-label={t("composer.removeAttachment", { name: attachment.name })}
           className="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-app-subtle transition hover:bg-app-surface-hover hover:text-app-foreground"
           onClick={(event) => {
             event.preventDefault();
@@ -598,6 +601,7 @@ function AttachmentCard({
 }
 
 function ComposerAttachmentHeader() {
+  const t = useT();
   const attachments = usePromptInputAttachments();
 
   if (attachments.files.length === 0) {
@@ -609,14 +613,14 @@ function ComposerAttachmentHeader() {
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
         <Badge className="rounded-full px-2 py-0.5" variant="secondary">
           <PaperclipIcon className="size-3" />
-          {attachments.files.length} 个附件
+          {t("composer.attachmentCount", { count: attachments.files.length })}
         </Badge>
         {attachments.files.map((attachment) => (
           <AttachmentCard
             attachment={{
               id: attachment.id,
               mediaType: attachment.mediaType,
-              name: attachment.filename?.trim() || "未命名附件",
+              name: attachment.filename?.trim() || t("composer.unnamedAttachment"),
               url: attachment.url,
             }}
             compact
@@ -711,6 +715,8 @@ function ComposerReferencedFilesHeader({
   files: ReadonlyArray<ComposerReferencedFile>;
   onRemove: (path: string) => void;
 }) {
+  const t = useT();
+
   if (files.length === 0) {
     return null;
   }
@@ -720,7 +726,7 @@ function ComposerReferencedFilesHeader({
       <div className="flex flex-wrap items-center gap-2">
         <Badge className="gap-1.5 rounded-full border-app-info/30 bg-app-info/10 px-2.5 py-1 text-[11px] text-app-info">
           <FileSearchIcon className="size-3" />
-          {files.length} 个文件引用
+          {t("composer.fileReferenceCount", { count: files.length })}
         </Badge>
         {files.map((file) => (
           <Badge
@@ -730,7 +736,7 @@ function ComposerReferencedFilesHeader({
           >
             <span className="max-w-[240px] truncate" title={file.path}>{file.path}</span>
             <button
-              aria-label={`移除文件引用 ${file.path}`}
+              aria-label={t("composer.removeFileReference", { path: file.path })}
               className="inline-flex size-4 items-center justify-center rounded-full text-app-subtle transition-colors hover:bg-app-surface-muted hover:text-app-foreground"
               onClick={(event) => {
                 event.preventDefault();
@@ -748,11 +754,12 @@ function ComposerReferencedFilesHeader({
 }
 
 function ComposerAttachmentTrigger() {
+  const t = useT();
   const attachments = usePromptInputAttachments();
 
   return (
     <PromptInputButton
-      aria-label="上传文件或图片"
+      aria-label={t("composer.uploadFileOrImage")}
       className="px-2.5"
       onClick={(event) => {
         event.preventDefault();
@@ -956,6 +963,7 @@ export function WorkbenchPromptComposer({
   workspaceId,
   onValueChange,
 }: WorkbenchPromptComposerProps) {
+  const t = useT();
   const [isProfileSelectorOpen, setProfileSelectorOpen] = useState(false);
   const [selectedCommandKey, setSelectedCommandKey] = useState<string | null>(null);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
@@ -1094,7 +1102,7 @@ export function WorkbenchPromptComposer({
           setFileSearchResults([]);
           setSelectedFileIndex(0);
           setFileSearchLoading(false);
-          setFileSearchError(searchError instanceof Error ? searchError.message : "文件搜索失败，请稍后重试。");
+          setFileSearchError(searchError instanceof Error ? searchError.message : t("composer.fileSearchError"));
         });
     }, FILE_SEARCH_DEBOUNCE_MS);
 
@@ -1351,18 +1359,18 @@ export function WorkbenchPromptComposer({
                 <div className="w-full min-w-0 overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu p-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl dark:bg-app-menu/98">
                   <div className="max-h-[320px] overflow-y-auto">
                     {!workspaceId ? (
-                      <div className="px-3 py-3 text-sm text-app-subtle">当前未绑定 workspace，暂时无法搜索文件。</div>
+                      <div className="px-3 py-3 text-sm text-app-subtle">{t("composer.noWorkspaceBound")}</div>
                     ) : !mentionQuery ? (
-                      <div className="px-3 py-3 text-sm text-app-subtle">继续输入文件名或路径以搜索文件。</div>
+                      <div className="px-3 py-3 text-sm text-app-subtle">{t("composer.typeFileNameHint")}</div>
                     ) : isFileSearchLoading ? (
                       <div className="flex items-center gap-2 px-3 py-3 text-sm text-app-subtle">
                         <LoaderCircle className="size-4 animate-spin" />
-                        <span>正在搜索文件…</span>
+                        <span>{t("composer.searchingFiles")}</span>
                       </div>
                     ) : fileSearchError ? (
                       <div className="px-3 py-3 text-sm text-app-danger">{fileSearchError}</div>
                     ) : fileSearchResults.length === 0 ? (
-                      <div className="px-3 py-3 text-sm text-app-subtle">没有找到匹配的文件。</div>
+                      <div className="px-3 py-3 text-sm text-app-subtle">{t("composer.noMatchingFiles")}</div>
                     ) : (
                       <div className="flex flex-col gap-1">
                         {fileSearchResults.map((match, index) => {
@@ -1420,9 +1428,9 @@ export function WorkbenchPromptComposer({
                 <div className="w-full min-w-0 overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu p-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl dark:bg-app-menu/98">
                   <div className="max-h-[320px] overflow-y-auto">
                     {!mentionQuery ? (
-                      <div className="px-3 py-3 text-sm text-app-subtle">继续输入 skill 名称、标签或触发词以搜索已启用 skill。</div>
+                      <div className="px-3 py-3 text-sm text-app-subtle">{t("composer.typeSkillHint")}</div>
                     ) : filteredSkills.length === 0 ? (
-                      <div className="px-3 py-3 text-sm text-app-subtle">没有找到匹配的已启用 skill。</div>
+                      <div className="px-3 py-3 text-sm text-app-subtle">{t("composer.noMatchingSkills")}</div>
                     ) : (
                       <div className="flex flex-col gap-1">
                         {filteredSkills.map((skill, index) => {
@@ -1594,7 +1602,7 @@ export function WorkbenchPromptComposer({
                       <ModelSelectorContent commandProps={{ value: activeAgentProfileId ?? undefined }} title="Profile Selector">
                         <ModelSelectorInput placeholder="Search profiles..." />
                         <ModelSelectorList>
-                          <ModelSelectorEmpty>未找到可用的 profile。</ModelSelectorEmpty>
+                          <ModelSelectorEmpty>{t("composer.noProfileAvailable")}</ModelSelectorEmpty>
                           <ModelSelectorGroup heading="Agent Profiles">
                             {agentProfiles.map((profile) => (
                               <ProfileSelectorItem

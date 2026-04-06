@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Folder, FolderPlus } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useT } from "@/i18n";
 import { cn } from "@/shared/lib/utils";
 import { buildProjectOptionFromPath, formatProjectPathLabel } from "@/modules/workbench-shell/model/helpers";
 import type { ProjectOption } from "@/modules/workbench-shell/model/types";
@@ -16,6 +17,7 @@ export function NewThreadEmptyState({
   isOverlayOpen: boolean;
   onSelectProject: (project: ProjectOption) => void;
 }) {
+  const t = useT();
   const [isMenuOpen, setMenuOpen] = useState(false);
   const projectMenuRef = useRef<HTMLDivElement | null>(null);
   const activeProject = selectedProject ?? recentProjects[0] ?? null;
@@ -51,7 +53,7 @@ export function NewThreadEmptyState({
     const selectedPath = await open({
       directory: true,
       multiple: false,
-      title: "Choose project folder",
+      title: t("newThread.chooseFolderTitle"),
     });
 
     if (typeof selectedPath !== "string") {
@@ -82,10 +84,10 @@ export function NewThreadEmptyState({
 
         <div className="flex flex-col items-center gap-1 text-center">
           <h1 className="text-balance text-[1.45rem] font-medium tracking-[-0.035em] text-app-foreground">
-            Anything you need, through conversation.
+            {t("newThread.headline")}
           </h1>
           <p className="max-w-[30rem] text-sm leading-6 text-app-muted">
-            Pick a local workspace first so the next thread can stay grounded in files, commands, and runtime context.
+            {t("newThread.description")}
           </p>
         </div>
 
@@ -103,7 +105,7 @@ export function NewThreadEmptyState({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-[1rem] font-medium tracking-[-0.02em] text-app-foreground">
-                  {activeProject?.name ?? "Choose project"}
+                  {activeProject?.name ?? t("newThread.chooseProject")}
                 </span>
                 {activeProject ? (
                   <span className="shrink-0 rounded-full bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium text-app-subtle">
@@ -112,7 +114,7 @@ export function NewThreadEmptyState({
                 ) : null}
               </div>
               <p className="mt-0.5 truncate text-[12px] text-app-subtle" title={activeProject?.path}>
-                {activeProject ? formatProjectPathLabel(activeProject.path) : "Select a folder to start a workspace-backed thread"}
+                {activeProject ? formatProjectPathLabel(activeProject.path) : t("newThread.selectFolderHint")}
               </p>
             </div>
             <ChevronDown
@@ -127,10 +129,10 @@ export function NewThreadEmptyState({
             <div className="absolute inset-x-0 top-[calc(100%+0.55rem)] z-30 max-h-[18rem] overflow-hidden rounded-[1.1rem] border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
               <div className="flex max-h-[calc(18rem-0.75rem)] flex-col">
                 <div className="flex items-center justify-between gap-3 px-2.5 pb-1.5 pt-0.5">
-                  <span className="text-[11px] font-medium text-app-subtle">Recent projects</span>
+                  <span className="text-[11px] font-medium text-app-subtle">{t("newThread.recentProjects")}</span>
                   {activeProject ? (
                     <span className="rounded-full bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium text-app-subtle">
-                      Current
+                      {t("newThread.current")}
                     </span>
                   ) : null}
                 </div>
@@ -185,8 +187,8 @@ export function NewThreadEmptyState({
                     <FolderPlus className="size-4 shrink-0" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium">Choose new folder</div>
-                    <p className="mt-0.5 text-[11px] leading-5 text-app-subtle">Browse a local workspace that is not in the recent list</p>
+                    <div className="text-sm font-medium">{t("newThread.chooseNewFolder")}</div>
+                    <p className="mt-0.5 text-[11px] leading-5 text-app-subtle">{t("newThread.browseHint")}</p>
                   </div>
                 </button>
               </div>

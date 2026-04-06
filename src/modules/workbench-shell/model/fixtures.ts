@@ -9,9 +9,9 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
-import { AI_ELEMENTS_THREAD_TITLE } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
+import type { TranslationKey } from "@/i18n";
 import type {
   GitChangeFile,
   GitHistoryItem,
@@ -41,7 +41,7 @@ export const DRAWER_OVERFLOW_ACTION_CLASS =
 export const DRAWER_SECTION_HEADER_CLASS = "flex items-center justify-between gap-3 px-1.5";
 
 const THREAD_ITEMS = [
-  { name: AI_ELEMENTS_THREAD_TITLE, time: "59m", active: true, status: "running" },
+  { name: "Thread Demo", time: "59m", active: true, status: "running" },
   { name: "设计 Codex 风格工作台布局", time: "12m", active: false, status: "needs-reply" },
   { name: "配置打包与签名信息", time: "24h", active: false, status: "failed" },
   { name: "实现 Agent 会话与任务抽屉", time: "2d", active: false, status: "completed" },
@@ -182,32 +182,6 @@ export const RECENT_PROJECTS: ReadonlyArray<ProjectOption> = [
     lastOpenedLabel: "上周",
   },
 ];
-
-export const MESSAGE_SECTIONS = [
-  {
-    title: "运行验证",
-    bullets: [
-      "npm run build:web 通过",
-      "cargo check --manifest-path /Users/jorben/Documents/Codespace/TiyAgents/tiycode/src-tauri/Cargo.toml 通过",
-    ],
-  },
-  {
-    title: "现在启动",
-    bullets: [
-      "cd /Users/jorben/Documents/Codespace/TiyAgents/tiycode",
-      "npm run dev:app",
-    ],
-  },
-] as const;
-
-export const TERMINAL_LINES = [
-  "1:20:15 AM [vite] client hmr update /src/widgets/dashboard-overview/ui/dashboard-overview.tsx",
-  "Info File src-tauri/tauri.conf.json changed. Rebuilding application...",
-  "Running DevCommand (`cargo run --no-default-features --color always --`)",
-  "Compiling tiy-agent v0.1.0 (/Users/jorben/Documents/Codespace/TiyAgents/tiycode/src-tauri)",
-  "Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.27s",
-  "Running `target/debug/tiy-agent`",
-] as const;
 
 export const PROJECT_TREE_ITEMS: ReadonlyArray<ProjectTreeItem> = [
   { id: "dist", name: "dist", kind: "folder", icon: "folder", ignored: true },
@@ -460,13 +434,13 @@ export const MIN_WORKBENCH_HEIGHT = 500;
 export const TOPBAR_HEIGHT = 36;
 
 export const THEME_OPTIONS: Array<{
-  label: string;
+  labelKey: TranslationKey;
   value: ThemePreference;
   icon: typeof Monitor;
 }> = [
-  { label: "跟随系统", value: "system", icon: Monitor },
-  { label: "明亮", value: "light", icon: Sun },
-  { label: "暗黑", value: "dark", icon: Moon },
+  { labelKey: "theme.system", value: "system", icon: Monitor },
+  { labelKey: "theme.light", value: "light", icon: Sun },
+  { labelKey: "theme.dark", value: "dark", icon: Moon },
 ];
 
 export const LANGUAGE_OPTIONS: Array<{
@@ -476,7 +450,7 @@ export const LANGUAGE_OPTIONS: Array<{
 }> = [
   { label: "English", value: "en", icon: ALargeSmall },
   { label: "简体中文", value: "zh-CN", icon: Languages },
-];
+] as const;
 
 export const MENU_TRIGGER_CLASS =
   "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors hover:bg-app-surface-hover";
@@ -504,45 +478,33 @@ export const DEFAULT_PANEL_VISIBILITY_STATE: PanelVisibilityState = {
   isDrawerOpen: false,
 };
 
-export const CONTEXT_WINDOW_INFO = {
-  label: "Context Window",
-  used: "12K",
-  total: "128K",
-  usageRatio: 12 / 128,
-};
-
-export const CONTEXT_WINDOW_USAGE_DETAIL = {
-  usedPercent: Math.round(CONTEXT_WINDOW_INFO.usageRatio * 100),
-  leftPercent: 100 - Math.round(CONTEXT_WINDOW_INFO.usageRatio * 100),
-};
-
 export const THREAD_STATUS_META: Record<
   ThreadStatus,
   {
     icon: typeof LoaderCircle;
-    label: string;
+    labelKey: TranslationKey;
     spin?: boolean;
   }
 > = {
   running: {
     icon: LoaderCircle,
-    label: "进行中",
+    labelKey: "threadStatus.running",
     spin: true,
   },
   completed: {
     icon: Check,
-    label: "已完成",
+    labelKey: "threadStatus.completed",
   },
   "needs-reply": {
     icon: MessageCircleMore,
-    label: "待回应",
+    labelKey: "threadStatus.needsReply",
   },
   failed: {
     icon: CircleX,
-    label: "错误或失败",
+    labelKey: "threadStatus.failed",
   },
   interrupted: {
     icon: CircleX,
-    label: "已中断",
+    labelKey: "threadStatus.interrupted",
   },
 };
