@@ -467,6 +467,8 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
   const [mcpHeadersText, setMcpHeadersText] = useState("");
   const [marketSourceDialogOpen, setMarketSourceDialogOpen] = useState(false);
   const [marketSourceForm, setMarketSourceForm] = useState<MarketplaceSourceInput>({ name: "", url: "" });
+  const [marketSourceError, setMarketSourceError] = useState<string | null>(null);
+  const [isMarketSourceSubmitting, setMarketSourceSubmitting] = useState(false);
   const [removeSourceDialogOpen, setRemoveSourceDialogOpen] = useState(false);
   const [removeSourcePlan, setRemoveSourcePlan] = useState<MarketplaceRemoveSourcePlan | null>(null);
   const [removeSourceTargetId, setRemoveSourceTargetId] = useState<string | null>(null);
@@ -748,6 +750,20 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
         : props.onUpdateMcpServer(payload.id, payload),
     );
     setMcpDialogOpen(false);
+  };
+
+  const handleSubmitMarketplaceSource = async () => {
+    setMarketSourceSubmitting(true);
+    setMarketSourceError(null);
+    try {
+      await props.onAddMarketplaceSource(marketSourceForm);
+      setMarketSourceDialogOpen(false);
+      setMarketSourceForm({ name: "", url: "" });
+    } catch (error) {
+      setMarketSourceError(getInvokeErrorMessage(error, "Failed to add marketplace source"));
+    } finally {
+      setMarketSourceSubmitting(false);
+    }
   };
 
   const handleOpenRemoveSourceDialog = async (source: MarketplaceSource) => {
@@ -1796,7 +1812,18 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={marketSourceDialogOpen} onOpenChange={setMarketSourceDialogOpen}>
+      <Dialog
+        open={marketSourceDialogOpen}
+        onOpenChange={(open) => {
+          if (isMarketSourceSubmitting) {
+            return;
+          }
+          setMarketSourceDialogOpen(open);
+          if (!open) {
+            setMarketSourceError(null);
+          }
+        }}
+      >
         <DialogContent className="max-w-xl border-app-border bg-app-canvas">
           <DialogHeader>
             <DialogTitle>Add marketplace source</DialogTitle>
@@ -1805,31 +1832,53 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
+            {marketSourceError ? (
+              <div className="rounded-xl border border-app-danger/30 bg-app-danger/8 px-3 py-2 text-sm text-app-danger">
+                {marketSourceError}
+              </div>
+            ) : null}
             <Input
               value={marketSourceForm.name}
               onChange={(event) => setMarketSourceForm((current) => ({ ...current, name: event.target.value }))}
               placeholder="Anthropic Official Plugins"
+              disabled={isMarketSourceSubmitting}
             />
             <Input
               value={marketSourceForm.url}
               onChange={(event) => setMarketSourceForm((current) => ({ ...current, url: event.target.value }))}
               placeholder="https://github.com/anthropics/claude-plugins-official.git"
+              disabled={isMarketSourceSubmitting}
             />
+            <div className="text-xs text-app-muted">
+              {isMarketSourceSubmitting
+                ? "Adding source and syncing its repository..."
+                : "The source will be saved and synced before it appears in the plugin catalog."}
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setMarketSourceDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setMarketSourceDialogOpen(false)}
+              disabled={isMarketSourceSubmitting}
+            >
               Cancel
             </Button>
             <Button
-              onClick={() =>
-                void runAction(async () => {
-                  await props.onAddMarketplaceSource(marketSourceForm);
-                  setMarketSourceDialogOpen(false);
-                  setMarketSourceForm({ name: "", url: "" });
-                })
+              onClick={() => void handleSubmitMarketplaceSource()}
+              disabled={
+                isMarketSourceSubmitting
+                || marketSourceForm.name.trim().length === 0
+                || marketSourceForm.url.trim().length === 0
               }
             >
-              Add source
+              {isMarketSourceSubmitting ? (
+                <>
+                  <RefreshCw className="size-4 animate-spin" />
+                  Adding source...
+                </>
+              ) : (
+                "Add source"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
