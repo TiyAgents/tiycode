@@ -3,7 +3,13 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::model::errors::{AppError, ErrorSource};
 
-const BUILTIN_WRITABLE_ROOT_DIRS: &[&str] = &[".agents", ".tiy"];
+const BUILTIN_HOME_WRITABLE_ROOT_DIRS: &[&str] = &[".agents", ".tiy", ".cache"];
+
+#[cfg(unix)]
+const BUILTIN_SYSTEM_WRITABLE_ROOTS: &[&str] = &["/tmp"];
+
+#[cfg(not(unix))]
+const BUILTIN_SYSTEM_WRITABLE_ROOTS: &[&str] = &[];
 
 /// Canonicalize a workspace root and ensure it is a directory.
 pub fn canonicalize_workspace_root(
@@ -92,14 +98,25 @@ pub fn parse_writable_roots(value_json: &str) -> Vec<String> {
 
 /// Return builtin writable roots that should always be available at runtime.
 pub fn builtin_writable_roots() -> Vec<String> {
-    let Some(home_dir) = dirs::home_dir() else {
-        return Vec::new();
-    };
+    let mut roots = Vec::new();
 
-    BUILTIN_WRITABLE_ROOT_DIRS
-        .iter()
-        .map(|dir| home_dir.join(dir).to_string_lossy().into_owned())
-        .collect()
+    if let Some(home_dir) = dirs::home_dir() {
+        for dir in BUILTIN_HOME_WRITABLE_ROOT_DIRS {
+            push_unique_root(&mut roots, home_dir.join(dir));
+        }
+    }
+
+    for root in BUILTIN_SYSTEM_WRITABLE_ROOTS {
+        push_unique_root(&mut roots, PathBuf::from(root));
+    }
+
+    if let Some(tmpdir) = std::env::var_os("TMPDIR") {
+        if !tmpdir.is_empty() {
+            push_unique_root(&mut roots, PathBuf::from(tmpdir));
+        }
+    }
+
+    roots
 }
 
 /// Merge persisted writable roots with builtin runtime roots and de-duplicate them.
@@ -144,6 +161,13 @@ fn path_within_allowed_roots(
         || additional_roots
             .iter()
             .any(|root| resolved.starts_with(root))
+}
+
+fn push_unique_root(roots: &mut Vec<String>, path: PathBuf) {
+    let normalized = normalize_path(&path).to_string_lossy().into_owned();
+    if !roots.iter().any(|existing| existing == &normalized) {
+        roots.push(normalized);
+    }
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
@@ -201,8 +225,8 @@ fn normalize_path(path: &Path) -> PathBuf {
 mod tests {
     use super::{
         builtin_writable_roots, canonicalize_workspace_root, merge_writable_roots,
-        normalize_additional_roots, parse_writable_roots, resolve_path_within_roots,
-        resolve_path_within_workspace,
+        normalize_additional_roots, normalize_path, parse_writable_roots,
+        resolve_path_within_roots, resolve_path_within_workspace,
     };
     use crate::model::errors::ErrorSource;
 
@@ -328,16 +352,28 @@ mod tests {
     }
 
     #[test]
-    fn builtin_writable_roots_include_agents_and_tiy_when_home_exists() {
+    fn builtin_writable_roots_include_builtin_entries() {
         let roots = builtin_writable_roots();
 
         if let Some(home_dir) = dirs::home_dir() {
             let agents = home_dir.join(".agents").to_string_lossy().into_owned();
             let tiy = home_dir.join(".tiy").to_string_lossy().into_owned();
+            let cache = home_dir.join(".cache").to_string_lossy().into_owned();
             assert!(roots.contains(&agents));
             assert!(roots.contains(&tiy));
-        } else {
-            assert!(roots.is_empty());
+            assert!(roots.contains(&cache));
+        }
+
+        #[cfg(unix)]
+        assert!(roots.contains(&"/tmp".to_string()));
+
+        if let Some(tmpdir) = std::env::var_os("TMPDIR") {
+            if !tmpdir.is_empty() {
+                let normalized = normalize_path(&std::path::PathBuf::from(tmpdir))
+                    .to_string_lossy()
+                    .into_owned();
+                assert!(roots.contains(&normalized));
+            }
         }
     }
 
