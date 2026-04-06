@@ -1980,7 +1980,7 @@ function PatternItem({
               if (event.key === "Enter") onEdit();
               if (event.key === "Escape") onCancelEdit();
             }}
-            placeholder="e.g. rm -rf, curl *, Read"
+            placeholder={t("settings.permissions.patternPlaceholder")}
             className="h-8 text-[13px]"
           />
         ) : (

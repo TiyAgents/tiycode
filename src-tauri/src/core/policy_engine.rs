@@ -80,25 +80,21 @@ const READ_ONLY_TOOLS: &[&str] = &[
 
 const DANGEROUS_COMMAND_PATTERNS: &[&str] = &[
     "rm -rf /",
-    "rm -rf /*",
+    "rm -rf /\\**",
     "rm -rf ~",
-    "sudo ",
-    "mkfs",
-    "dd if=",
-    "curl|sh",
-    "curl |sh",
-    "curl | sh",
-    "wget|sh",
-    "wget |sh",
-    "wget | sh",
-    "curl|bash",
-    "curl |bash",
-    "curl | bash",
-    "wget|bash",
-    "wget |bash",
-    "wget | bash",
-    "> /dev/sd",
+    "rm -rf ~/\\**",
+    "sudo *",
+    "mkfs*",
+    "dd if=*",
+    "curl*|*sh",
+    "wget*|*sh",
+    "curl*|*bash",
+    "wget*|*bash",
+    "* > /dev/sd*",
+    "*> /dev/sd*",
+    "*>/dev/sd*",
     "chmod 777 /",
+    "chmod 777 /\\**",
     ":(){ :|:& };:",
 ];
 
@@ -133,7 +129,7 @@ impl PolicyEngine {
             if let Some(cmd) = tool_input["command"].as_str() {
                 let cmd_lower = cmd.to_lowercase();
                 for pattern in DANGEROUS_COMMAND_PATTERNS {
-                    if cmd_lower.contains(pattern) {
+                    if shell_command_matches_pattern(&cmd_lower, pattern) {
                         return Ok(PolicyCheck {
                             tool_name: tool_name.to_string(),
                             verdict: PolicyVerdict::Deny {
@@ -153,7 +149,9 @@ impl PolicyEngine {
                 if let Some(tool) = rule["tool"].as_str() {
                     if tool == tool_name || tool == "*" {
                         let pattern = rule["pattern"].as_str().unwrap_or("");
-                        if pattern.is_empty() || input_matches_pattern(tool_input, pattern) {
+                        if pattern.is_empty()
+                            || input_matches_pattern(tool_name, tool_input, pattern)
+                        {
                             return Ok(PolicyCheck {
                                 tool_name: tool_name.to_string(),
                                 verdict: PolicyVerdict::Deny {
@@ -222,7 +220,9 @@ impl PolicyEngine {
                 if let Some(tool) = rule["tool"].as_str() {
                     if tool == tool_name || tool == "*" {
                         let pattern = rule["pattern"].as_str().unwrap_or("");
-                        if !pattern.is_empty() && !input_matches_pattern(tool_input, pattern) {
+                        if !pattern.is_empty()
+                            && !input_matches_pattern(tool_name, tool_input, pattern)
+                        {
                             continue;
                         }
 
@@ -371,11 +371,175 @@ fn extract_target_path(tool_name: &str, input: &serde_json::Value) -> Option<Str
 }
 
 /// Simple pattern matching for deny/allow list rules.
-fn input_matches_pattern(input: &serde_json::Value, pattern: &str) -> bool {
+fn input_matches_pattern(tool_name: &str, input: &serde_json::Value, pattern: &str) -> bool {
     if pattern == "*" || pattern.is_empty() {
         return true;
     }
-    // Check if any string value in the input contains the pattern
-    let input_str = input.to_string();
-    input_str.contains(pattern)
+
+    if tool_name == "shell" {
+        return input["command"]
+            .as_str()
+            .is_some_and(|command| shell_command_matches_pattern(command, pattern));
+    }
+
+    json_value_matches_pattern(input, pattern)
+}
+
+fn shell_command_matches_pattern(command: &str, pattern: &str) -> bool {
+    let normalized_pattern = normalize_policy_text(pattern);
+    if normalized_pattern.is_empty() {
+        return true;
+    }
+
+    let normalized_command = normalize_policy_text(command);
+    if simple_glob_match(&normalized_pattern, &normalized_command) {
+        return true;
+    }
+
+    split_shell_command_segments(command)
+        .into_iter()
+        .map(|segment| normalize_policy_text(&segment))
+        .any(|segment| simple_glob_match(&normalized_pattern, &segment))
+}
+
+fn json_value_matches_pattern(input: &serde_json::Value, pattern: &str) -> bool {
+    match input {
+        serde_json::Value::String(value) => simple_glob_match(
+            &normalize_policy_text(pattern),
+            &normalize_policy_text(value),
+        ),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| json_value_matches_pattern(value, pattern)),
+        serde_json::Value::Object(map) => map
+            .values()
+            .any(|value| json_value_matches_pattern(value, pattern)),
+        serde_json::Value::Null => false,
+        other => simple_glob_match(
+            &normalize_policy_text(pattern),
+            &normalize_policy_text(&other.to_string()),
+        ),
+    }
+}
+
+fn normalize_policy_text(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn split_shell_command_segments(command: &str) -> Vec<String> {
+    let chars: Vec<char> = command.chars().collect();
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut index = 0;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    while index < chars.len() {
+        let ch = chars[index];
+
+        if in_single_quote {
+            current.push(ch);
+            if ch == '\'' {
+                in_single_quote = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if in_double_quote {
+            current.push(ch);
+            if ch == '\\' && index + 1 < chars.len() {
+                index += 1;
+                current.push(chars[index]);
+            } else if ch == '"' {
+                in_double_quote = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        match ch {
+            '\'' => {
+                in_single_quote = true;
+                current.push(ch);
+                index += 1;
+            }
+            '"' => {
+                in_double_quote = true;
+                current.push(ch);
+                index += 1;
+            }
+            '&' if chars.get(index + 1) == Some(&'&') => {
+                push_shell_segment(&mut segments, &mut current);
+                index += 2;
+            }
+            '|' if chars.get(index + 1) == Some(&'|') => {
+                push_shell_segment(&mut segments, &mut current);
+                index += 2;
+            }
+            ';' | '&' => {
+                push_shell_segment(&mut segments, &mut current);
+                index += 1;
+            }
+            _ => {
+                current.push(ch);
+                index += 1;
+            }
+        }
+    }
+
+    push_shell_segment(&mut segments, &mut current);
+    segments
+}
+
+fn push_shell_segment(segments: &mut Vec<String>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        segments.push(trimmed.to_string());
+    }
+    current.clear();
+}
+
+fn simple_glob_match(pattern: &str, text: &str) -> bool {
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+    let text_chars: Vec<char> = text.chars().collect();
+    let mut memo = vec![vec![None; text_chars.len() + 1]; pattern_chars.len() + 1];
+
+    fn matches_from(
+        pattern: &[char],
+        text: &[char],
+        pi: usize,
+        ti: usize,
+        memo: &mut [Vec<Option<bool>>],
+    ) -> bool {
+        if let Some(cached) = memo[pi][ti] {
+            return cached;
+        }
+
+        let result = if pi == pattern.len() {
+            ti == text.len()
+        } else if pattern[pi] == '\\' {
+            if pi + 1 >= pattern.len() {
+                ti < text.len()
+                    && text[ti] == '\\'
+                    && matches_from(pattern, text, pi + 1, ti + 1, memo)
+            } else {
+                ti < text.len()
+                    && text[ti] == pattern[pi + 1]
+                    && matches_from(pattern, text, pi + 2, ti + 1, memo)
+            }
+        } else if pattern[pi] == '*' {
+            matches_from(pattern, text, pi + 1, ti, memo)
+                || (ti < text.len() && matches_from(pattern, text, pi, ti + 1, memo))
+        } else {
+            ti < text.len()
+                && pattern[pi] == text[ti]
+                && matches_from(pattern, text, pi + 1, ti + 1, memo)
+        };
+
+        memo[pi][ti] = Some(result);
+        result
+    }
+
+    matches_from(&pattern_chars, &text_chars, 0, 0, &mut memo)
 }
