@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-04-07
+### :sparkles: New Features
+- [`833a5f4`](https://github.com/TiyAgents/tiycode/commit/833a5f45afbcbbd81e24f2bb6c0c0d173e11acbe) - **tauri**: ✨ bundle catalog snapshot for offline startup *(commit by [@jorben](https://github.com/jorben))*
+
+### :wrench: Chores
+- [`53af3a0`](https://github.com/TiyAgents/tiycode/commit/53af3a0891b5a5cfe7d90b500d177d16d52a9fc7) - **ci**: 🛠️ update macOS artifact naming and latest.json generation *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.2] - 2026-04-07
 ### :sparkles: New Features
 - [`893f66a`](https://github.com/TiyAgents/tiycode/commit/893f66a3911a5465d91a3c2f7fdbb8bd8ae1141a) - **api**: ✨ add default identification headers to LLM requests *(commit by [@jorben](https://github.com/jorben))*
@@ -287,3 +295,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.1.1]: https://github.com/TiyAgents/tiycode/compare/0.0.1...0.1.1
 [0.1.2]: https://github.com/TiyAgents/tiycode/compare/0.1.1...0.1.2
+[0.1.3]: https://github.com/TiyAgents/tiycode/compare/0.1.2...0.1.3
