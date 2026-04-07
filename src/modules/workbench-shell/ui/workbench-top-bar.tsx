@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import {
   Check,
-  CircleUserRound,
   Copy,
   Globe,
   LoaderCircle,
   LogOut,
   Minus,
   MoreHorizontal,
+  Settings,
   Moon,
   Palette,
   PanelBottom,
@@ -167,7 +167,7 @@ export function WorkbenchTopBar({
             aria-haspopup="menu"
             onClick={onToggleUserMenu}
           >
-            <CircleUserRound className="size-4" />
+            <Settings className="size-4" />
           </Button>
 
           {isUserMenuOpen ? (

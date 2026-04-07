@@ -297,8 +297,7 @@ const zhCN = {
   "settings.profile.delete": "删除",
 
   // ── Settings: About Panel ──────────────────────────────────
-  "settings.about.description":
-    "一款践行 AI First 理念的 desktop coding agent，围绕对话、执行与工作区协作而设计。",
+  "settings.about.description": "一款践行 AI First 理念的桌面版 Vibe-Coding Agent。",
   "settings.about.officialWebsite": "官方网站",
   "settings.about.license": "许可证",
   "settings.about.feedback": "反馈",

@@ -280,7 +280,7 @@ const en: Record<TranslationKey, string> = {
   "settings.profile.delete": "Delete",
 
   // ── Settings: About Panel ──────────────────────────────────
-  "settings.about.description": "An AI-first desktop coding agent designed around conversation, execution, and workspace collaboration.",
+  "settings.about.description": "TiyCode is an AI-first desktop coding agent.",
   "settings.about.officialWebsite": "Official Website",
   "settings.about.license": "License",
   "settings.about.feedback": "Feedback",
