@@ -239,18 +239,26 @@ jobs:
               fi
             done
 
-            cp "$BUNDLE_DIR"/msi/*.msi release-artifacts/ 2>/dev/null || true
-            cp "$BUNDLE_DIR"/nsis/*.exe release-artifacts/ 2>/dev/null || true
-            # Updater artifacts may be emitted directly in bundle/nsis and bundle/msi on Tauri v2.
-            cp "$BUNDLE_DIR"/nsis/*.zip release-artifacts/ 2>/dev/null || true
-            cp "$BUNDLE_DIR"/nsis/*.zip.sig release-artifacts/ 2>/dev/null || true
-            cp "$BUNDLE_DIR"/msi/*.zip release-artifacts/ 2>/dev/null || true
-            cp "$BUNDLE_DIR"/msi/*.zip.sig release-artifacts/ 2>/dev/null || true
-            # Keep fallback support for alternate updater directories if they appear.
-            cp "$BUNDLE_DIR"/nsis-updater/*.zip release-artifacts/ 2>/dev/null || true
-            cp "$BUNDLE_DIR"/nsis-updater/*.sig release-artifacts/ 2>/dev/null || true
-            cp "$BUNDLE_DIR"/msi-updater/*.zip release-artifacts/ 2>/dev/null || true
-            cp "$BUNDLE_DIR"/msi-updater/*.sig release-artifacts/ 2>/dev/null || true
+            copy_windows_artifacts() {
+              local dir="$1"
+              shift
+              [ -d "$dir" ] || return 0
+              for pattern in "$@"; do
+                while IFS= read -r file; do
+                  [ -n "$file" ] || continue
+                  echo "Copying $(basename "$file") from $dir"
+                  cp "$file" release-artifacts/
+                done < <(find "$dir" -maxdepth 1 -type f -name "$pattern" | sort)
+              done
+            }
+
+            copy_windows_artifacts "$BUNDLE_DIR"/msi '*.msi' '*.msi.sig' '*.zip' '*.zip.sig'
+            copy_windows_artifacts "$BUNDLE_DIR"/nsis '*.exe' '*.exe.sig' '*.zip' '*.zip.sig'
+            copy_windows_artifacts "$BUNDLE_DIR"/nsis-updater '*.zip' '*.zip.sig'
+            copy_windows_artifacts "$BUNDLE_DIR"/msi-updater '*.zip' '*.zip.sig'
+
+            echo "Windows release-artifacts contents after copy:"
+            find release-artifacts -maxdepth 1 -type f | sort || true
 
             if [[ "$VERSION" != *-* ]]; then
               if ! find release-artifacts -maxdepth 1 -type f \( -name '*.zip' -o -name '*.zip.sig' \) | grep -q .; then
