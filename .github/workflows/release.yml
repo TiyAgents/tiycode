@@ -322,6 +322,7 @@ jobs:
           source_file: tiycode.rb
           destination_repo: TiyAgents/homebrew-tap
           destination_folder: Casks
+          destination_branch: master
           user_email: github-actions[bot]@users.noreply.github.com
           user_name: github-actions[bot]
           commit_message: "Update TiyCode to ${{ env.VERSION }}"
