@@ -197,13 +197,10 @@ impl AgentSession {
         helper_orchestrator: Arc<HelperAgentOrchestrator>,
         event_tx: mpsc::UnboundedSender<ThreadStreamEvent>,
         spec: AgentSessionSpec,
+        max_turns: usize,
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak_self| {
             let agent = Arc::new(Agent::with_model(spec.model_plan.primary.model.clone()));
-            let pool_for_limits = pool.clone();
-            let max_turns = tauri::async_runtime::block_on(async {
-                crate::core::agent_runtime_limits::desktop_agent_max_turns(&pool_for_limits).await
-            });
             agent.set_max_turns(max_turns);
             configure_agent(&agent, &spec, weak_self.clone());
 

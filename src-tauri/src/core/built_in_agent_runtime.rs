@@ -35,12 +35,15 @@ impl BuiltInAgentRuntime {
         spec: AgentSessionSpec,
         event_tx: mpsc::UnboundedSender<ThreadStreamEvent>,
     ) -> Result<(), AppError> {
+        let max_turns =
+            crate::core::agent_runtime_limits::desktop_agent_max_turns(&self.pool).await;
         let session = AgentSession::new(
             self.pool.clone(),
             Arc::clone(&self.tool_gateway),
             Arc::clone(&self.helper_orchestrator),
             event_tx,
             spec.clone(),
+            max_turns,
         );
 
         {
