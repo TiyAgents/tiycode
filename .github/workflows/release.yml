@@ -180,6 +180,7 @@ jobs:
         with:
           tauriScript: npx tauri
           args: --target ${{ matrix.target }}
+          releaseId: ""
 
       - name: Submit notarization (async)
         if: matrix.platform == 'macos'
