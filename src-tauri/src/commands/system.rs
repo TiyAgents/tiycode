@@ -3,6 +3,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::fs;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
@@ -965,7 +966,7 @@ fn normalize_windows_target_path(target_path: &str) -> String {
     value
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn containing_directory_path(target_path: &str) -> Result<String, String> {
     let path = PathBuf::from(target_path);
 
