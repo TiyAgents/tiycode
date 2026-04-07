@@ -1,15 +1,18 @@
 name: Build and Upload Release Assets
 
 on:
+  workflow_run:
+    workflows: ["Create draft release"]
+    types: [completed]
   release:
-    types: [prereleased, released]
+    types: [released]
 
 permissions:
   contents: write
 
 jobs:
   build:
-    if: github.event.action == 'prereleased'
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -34,8 +37,21 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      - name: Resolve release tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          if [ -z "$TAG" ]; then
+            echo "::error::Failed to resolve release tag from workflow_run.head_branch"
+            exit 1
+          fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "Resolved release tag: $TAG"
+
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -103,7 +119,7 @@ jobs:
       - name: Set version from tag
         shell: bash
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          VERSION=${RELEASE_TAG#v}
           # MSI requires pure numeric version (no pre-release suffix like -rc.1)
           # Strip pre-release suffix for bundle version on Windows
           BUNDLE_VERSION=$(echo "$VERSION" | sed 's/-.*//')
@@ -226,6 +242,7 @@ jobs:
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: release-artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -239,25 +256,37 @@ jobs:
 
   # Publish stable release: generate and upload update manifest when promoted from prerelease
   publish-stable:
-    if: github.event.action == 'released'
+    if: github.event_name == 'release' && github.event.action == 'released'
     runs-on: ubuntu-latest
     steps:
-      - name: Download artifacts from prereleased workflow run
+      - name: Resolve release tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then
+            echo "::error::Failed to resolve release tag from release event"
+            exit 1
+          fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "Resolved release tag: $TAG"
+
+      - name: Download artifacts from prerelease build workflow run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          echo "Looking for prereleased workflow run for tag: $TAG"
+          TAG="${RELEASE_TAG}"
+          echo "Looking for prerelease build workflow run for tag: $TAG"
 
           RUN_ID=$(gh run list \
             --repo "${{ github.repository }}" \
             --workflow "release.yml" \
+            --event workflow_run \
             --json databaseId,conclusion,headBranch \
             --jq ".[] | select(.headBranch == \"$TAG\" and .conclusion == \"success\") | .databaseId" \
             | head -n 1)
 
           if [ -z "$RUN_ID" ]; then
-            echo "::warning::No successful prereleased workflow run found for tag $TAG. Skipping manifest upload."
+            echo "::warning::No successful prerelease build workflow run found for tag $TAG. Skipping manifest upload."
             exit 0
           fi
 
@@ -275,7 +304,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${RELEASE_TAG}"
           VERSION="${TAG#v}"
           REPO="${{ github.repository }}"
           BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
@@ -356,7 +385,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${RELEASE_TAG}"
           # Also upload updater artifacts (.tar.gz, .zip, .sig) that were in prereleased
           # They should already be on the release from the build step, but upload latest.json
           gh release upload "$TAG" latest.json \
@@ -365,26 +394,37 @@ jobs:
 
   # Update Homebrew Cask when release is published
   update-homebrew:
-    if: github.event.action == 'released'
+    if: github.event_name == 'release' && github.event.action == 'released'
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve release tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then
+            echo "::error::Failed to resolve release tag from release event"
+            exit 1
+          fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "Resolved release tag: $TAG"
+
       - name: Download macOS DMGs and compute SHA256
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          VERSION="${VERSION}"
 
           # Download aarch64 DMG
           DMG_ARM="TiyCode_${VERSION}_aarch64.dmg"
-          gh release download "$GITHUB_REF_NAME" \
+          gh release download "$RELEASE_TAG" \
             --repo "${{ github.repository }}" \
             --pattern "$DMG_ARM" \
             --dir .
 
           # Download x64 DMG
           DMG_X64="TiyCode_${VERSION}_x64.dmg"
-          gh release download "$GITHUB_REF_NAME" \
+          gh release download "$RELEASE_TAG" \
             --repo "${{ github.repository }}" \
             --pattern "$DMG_X64" \
             --dir .
