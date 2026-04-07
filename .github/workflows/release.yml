@@ -270,32 +270,28 @@ jobs:
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
           echo "Resolved release tag: $TAG"
 
-      - name: Download artifacts from prerelease build workflow run
+      - name: Download updater artifacts from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${RELEASE_TAG}"
-          echo "Looking for prerelease build workflow run for tag: $TAG"
+          REPO="${{ github.repository }}"
+          mkdir -p artifacts
 
-          RUN_ID=$(gh run list \
-            --repo "${{ github.repository }}" \
-            --workflow "release.yml" \
-            --event workflow_run \
-            --json databaseId,conclusion,headBranch \
-            --jq ".[] | select(.headBranch == \"$TAG\" and .conclusion == \"success\") | .databaseId" \
-            | head -n 1)
+          echo "Downloading updater artifacts from release ${TAG}..."
 
-          if [ -z "$RUN_ID" ]; then
-            echo "::warning::No successful prerelease build workflow run found for tag $TAG. Skipping manifest upload."
-            exit 0
-          fi
-
-          echo "Found workflow run: $RUN_ID"
-
-          gh run download "$RUN_ID" \
-            --repo "${{ github.repository }}" \
-            --pattern "release-*" \
-            --dir artifacts
+          # Download all updater-related files (.app.tar.gz, .sig, .nsis.zip, .AppImage.tar.gz, etc.)
+          # These were already uploaded to the release by the build job via softprops/action-gh-release
+          gh release download "$TAG" \
+            --repo "$REPO" \
+            --pattern "*.app.tar.gz" \
+            --pattern "*.app.tar.gz.sig" \
+            --pattern "*x64-setup.exe.zip" \
+            --pattern "*x64-setup.exe.zip.sig" \
+            --pattern "*.AppImage.tar.gz" \
+            --pattern "*.AppImage.tar.gz.sig" \
+            --dir artifacts \
+            --clobber 2>/dev/null || true
 
           echo "Downloaded artifacts:"
           find artifacts -type f | sort
@@ -329,14 +325,17 @@ jobs:
           pub_date = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
           def find_file(pattern):
-              """Find first file matching glob pattern, excluding .sig files."""
-              matches = [f for f in glob.glob(f"artifacts/**/{pattern}", recursive=True)
+              """Find first file matching glob pattern, excluding .sig files.
+              Searches both flat artifacts/ and nested artifacts/**/ for compatibility."""
+              matches = [f for f in glob.glob(f"artifacts/{pattern}")
+                         + glob.glob(f"artifacts/**/{pattern}", recursive=True)
                          if not f.endswith(".sig")]
               return matches[0] if matches else None
 
           def read_sig(pattern):
               """Read signature content from .sig file matching pattern."""
-              matches = glob.glob(f"artifacts/**/{pattern}", recursive=True)
+              matches = glob.glob(f"artifacts/{pattern}") + \
+                        glob.glob(f"artifacts/**/{pattern}", recursive=True)
               if matches and os.path.isfile(matches[0]):
                   return open(matches[0]).read().strip()
               return None
