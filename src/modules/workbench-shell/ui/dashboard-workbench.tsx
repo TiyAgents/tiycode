@@ -40,6 +40,8 @@ import {
 } from "@/modules/settings-center/model/use-settings-controller";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
 import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
+import { useAppUpdater } from "@/modules/workbench-shell/hooks/use-app-updater";
+import { UpdateAvailableDialog } from "@/modules/workbench-shell/ui/update-available-dialog";
 import type {
   MessageAttachmentDto,
   RunMode,
@@ -475,8 +477,12 @@ export function DashboardWorkbench() {
   >(null);
   const [isUserMenuOpen, setUserMenuOpen] = useState(false);
   const [userSession, setUserSession] = useState(() => readStoredUserSession());
-  const [isCheckingUpdates, setCheckingUpdates] = useState(false);
-  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const appUpdater = useAppUpdater();
+  const isCheckingUpdates = appUpdater.phase === "checking";
+  const updateStatus =
+    appUpdater.phase === "upToDate"
+      ? t("dashboard.upToDate", { version: data?.version ?? "0.1.0" })
+      : null;
   const [terminalBootstrapError, setTerminalBootstrapError] = useState<
     string | null
   >(null);
@@ -1379,16 +1385,16 @@ export function DashboardWorkbench() {
   }, [panelVisibilityState]);
 
   useEffect(() => {
-    if (!updateStatus || typeof window === "undefined") {
+    if (appUpdater.phase !== "upToDate" || typeof window === "undefined") {
       return;
     }
 
     const timeout = window.setTimeout(() => {
-      setUpdateStatus(null);
+      appUpdater.dismiss();
     }, UPDATE_STATUS_DURATION);
 
     return () => window.clearTimeout(timeout);
-  }, [updateStatus]);
+  }, [appUpdater.phase, appUpdater.dismiss]);
 
   useEffect(() => {
     if (!selectedDiffSelection || typeof window === "undefined") {
@@ -2174,18 +2180,7 @@ export function DashboardWorkbench() {
     setUserMenuOpen(false);
   };
 
-  const handleCheckUpdates = () => {
-    if (isCheckingUpdates) {
-      return;
-    }
-
-    setCheckingUpdates(true);
-
-    window.setTimeout(() => {
-      setCheckingUpdates(false);
-      setUpdateStatus(t("dashboard.upToDate", { version: data?.version ?? "0.1.0" }));
-    }, 900);
-  };
+  const handleCheckUpdates = appUpdater.checkForUpdates;
 
   const workspaceOpenLabel = t("sidebar.openInFileManager");
   const canOpenWorkspaceInSystem = isTauri() && (isMacOS || isWindows);
@@ -2964,6 +2959,17 @@ export function DashboardWorkbench() {
           skills={extensionSkills}
         />
       ) : null}
+
+      <UpdateAvailableDialog
+        phase={appUpdater.phase}
+        updateInfo={appUpdater.updateInfo}
+        downloadProgress={appUpdater.downloadProgress}
+        errorMessage={appUpdater.errorMessage}
+        onDownloadAndInstall={appUpdater.downloadAndInstall}
+        onRestart={appUpdater.restartApp}
+        onRetry={appUpdater.checkForUpdates}
+        onDismiss={appUpdater.dismiss}
+      />
     </main>
   );
 }

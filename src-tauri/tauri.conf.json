@@ -29,9 +29,7 @@
         "decorations": true,
         "transparent": false,
         "windowEffects": {
-          "effects": [
-            "titlebar"
-          ],
+          "effects": ["titlebar"],
           "state": "followsWindowActiveState"
         }
       }
@@ -54,9 +52,8 @@
     "publisher": "Tiy AI",
     "homepage": "https://tiy.ai",
     "category": "Productivity",
-    "externalBin": [
-      "target/tiy-rg/rg"
-    ],
+    "createUpdaterArtifacts": "v1Compatible",
+    "externalBin": ["target/tiy-rg/rg"],
     "shortDescription": "An AI-first desktop coding agent.",
     "longDescription": "TiyCode is an AI-first desktop coding agent built for a new coding collaboration paradigm, where humans work through conversation and agents drive execution in a real workspace.",
     "copyright": "© 2026 Tiy AI",
@@ -64,5 +61,13 @@
       "infoPlist": "Info.plist"
     }
   },
-  "mainBinaryName": "TiyCode"
+  "mainBinaryName": "TiyCode",
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY3MTVGMjk0NkQ5MURGNzYKUldSMjM1RnRsUElWOXliUU5iMzBxeUFnTVM5YjgxQ3ZMbVU0OGp3aFZFYUFHMTZubFR4emVnbTQK",
+      "endpoints": [
+        "https://github.com/TiyAgents/tiycode/releases/latest/download/latest.json"
+      ]
+    }
+  }
 }

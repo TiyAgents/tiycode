@@ -291,6 +291,23 @@ const en: Record<TranslationKey, string> = {
   "settings.about.termsOfService": "Terms of Service",
   "settings.about.privacyPolicy": "Privacy Policy",
 
+  // ── In-app Updater ───────────────────────────────────────────
+  "update.newVersionAvailable": "New Version Available",
+  "update.currentVersion": "Current version: v{{version}}",
+  "update.newVersion": "v{{version}}",
+  "update.releaseNotes": "Release Notes",
+  "update.downloadAndInstall": "Download & Install",
+  "update.later": "Later",
+  "update.downloading": "Downloading Update...",
+  "update.downloadProgress": "{{progress}}% completed",
+  "update.readyToRestart": "Update Ready",
+  "update.readyToRestartDesc": "The update has been downloaded and installed. Restart the app to apply.",
+  "update.restartNow": "Restart Now",
+  "update.restartLater": "Restart Later",
+  "update.errorTitle": "Update Failed",
+  "update.retry": "Retry",
+  "update.close": "Close",
+
   // ── Settings: Commands Panel ───────────────────────────────
   "settings.commands.addPrompt": "Add Prompt",
   "settings.commands.createHint": "Create quick prompts that can be triggered by typing / in the chat",

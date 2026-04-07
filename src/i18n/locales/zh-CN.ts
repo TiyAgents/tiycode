@@ -308,6 +308,23 @@ const zhCN = {
   "settings.about.termsOfService": "服务条款",
   "settings.about.privacyPolicy": "隐私政策",
 
+  // ── In-app Updater ───────────────────────────────────────────
+  "update.newVersionAvailable": "发现新版本",
+  "update.currentVersion": "当前版本: v{{version}}",
+  "update.newVersion": "v{{version}}",
+  "update.releaseNotes": "更新日志",
+  "update.downloadAndInstall": "下载并安装",
+  "update.later": "稍后",
+  "update.downloading": "正在下载更新...",
+  "update.downloadProgress": "已完成 {{progress}}%",
+  "update.readyToRestart": "更新就绪",
+  "update.readyToRestartDesc": "更新已下载并安装完成，重启应用以生效。",
+  "update.restartNow": "立即重启",
+  "update.restartLater": "稍后重启",
+  "update.errorTitle": "更新失败",
+  "update.retry": "重试",
+  "update.close": "关闭",
+
   // ── Settings: Commands Panel ───────────────────────────────
   "settings.commands.addPrompt": "添加提示词",
   "settings.commands.createHint": "创建在聊天中输入 / 时可触发的快捷提示词",

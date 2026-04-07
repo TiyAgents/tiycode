@@ -13,6 +13,8 @@
     "core:window:allow-close",
     "core:window:allow-is-maximized",
     "dialog:default",
-    "opener:default"
+    "opener:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

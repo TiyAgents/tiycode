@@ -126,6 +126,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater signing key (required for createUpdaterArtifacts)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Only sign, do NOT notarize via tauri-action (we submit async below)
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -160,13 +163,24 @@ jobs:
 
           if [ "${{ matrix.platform }}" = "macos" ]; then
             cp "$BUNDLE_DIR"/dmg/*.dmg release-artifacts/ 2>/dev/null || true
+            # Updater artifacts: .app.tar.gz + .sig
+            cp "$BUNDLE_DIR"/macos/*.app.tar.gz release-artifacts/ 2>/dev/null || true
+            cp "$BUNDLE_DIR"/macos/*.app.tar.gz.sig release-artifacts/ 2>/dev/null || true
           elif [ "${{ matrix.platform }}" = "windows" ]; then
             cp "$BUNDLE_DIR"/msi/*.msi release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/nsis/*.exe release-artifacts/ 2>/dev/null || true
+            # Updater artifacts: .nsis.zip + .msi.zip + .sig
+            cp "$BUNDLE_DIR"/nsis-updater/*.zip release-artifacts/ 2>/dev/null || true
+            cp "$BUNDLE_DIR"/nsis-updater/*.sig release-artifacts/ 2>/dev/null || true
+            cp "$BUNDLE_DIR"/msi-updater/*.zip release-artifacts/ 2>/dev/null || true
+            cp "$BUNDLE_DIR"/msi-updater/*.sig release-artifacts/ 2>/dev/null || true
           elif [ "${{ matrix.platform }}" = "linux" ]; then
             cp "$BUNDLE_DIR"/deb/*.deb release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/rpm/*.rpm release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/appimage/*.AppImage release-artifacts/ 2>/dev/null || true
+            # Updater artifacts: .AppImage.tar.gz + .sig
+            cp "$BUNDLE_DIR"/appimage/*.AppImage.tar.gz release-artifacts/ 2>/dev/null || true
+            cp "$BUNDLE_DIR"/appimage/*.AppImage.tar.gz.sig release-artifacts/ 2>/dev/null || true
           fi
 
           if [ "$BUNDLE_VERSION" != "$VERSION" ]; then
@@ -196,7 +210,7 @@ jobs:
           path: release-artifacts/*
           retention-days: 30
 
-  # Publish stable release: upload update manifests when promoted from prerelease
+  # Publish stable release: generate and upload update manifest when promoted from prerelease
   publish-stable:
     if: github.event.action == 'released'
     runs-on: ubuntu-latest
@@ -229,6 +243,120 @@ jobs:
 
           echo "Downloaded artifacts:"
           find artifacts -type f | sort
+
+      - name: Generate updater manifest (latest.json)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          REPO="${{ github.repository }}"
+          BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
+
+          # Get release notes from GitHub
+          NOTES=$(gh release view "$TAG" --repo "$REPO" --json body -q '.body' 2>/dev/null || echo "")
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Read signatures from .sig files
+          read_sig() {
+            local pattern="$1"
+            local sig_file
+            sig_file=$(find artifacts -name "$pattern" -type f 2>/dev/null | head -n 1)
+            if [ -n "$sig_file" ] && [ -f "$sig_file" ]; then
+              cat "$sig_file"
+            else
+              echo ""
+            fi
+          }
+
+          # Find actual artifact filenames (handle version renaming)
+          find_artifact_name() {
+            local pattern="$1"
+            local name
+            name=$(find artifacts -name "$pattern" -type f 2>/dev/null | head -n 1)
+            if [ -n "$name" ]; then
+              basename "$name"
+            else
+              echo ""
+            fi
+          }
+
+          # macOS aarch64
+          MACOS_ARM_SIG=$(read_sig "*aarch64*.app.tar.gz.sig")
+          MACOS_ARM_NAME=$(find_artifact_name "*aarch64*.app.tar.gz" | grep -v '.sig$' | head -n 1)
+
+          # macOS x86_64
+          MACOS_X64_SIG=$(read_sig "*x64*.app.tar.gz.sig")
+          MACOS_X64_NAME=$(find_artifact_name "*x64*.app.tar.gz" | grep -v '.sig$' | head -n 1)
+
+          # Windows NSIS x86_64
+          WIN_NSIS_SIG=$(read_sig "*x64-setup.exe.zip.sig")
+          WIN_NSIS_NAME=$(find_artifact_name "*x64-setup.exe.zip" | grep -v '.sig$' | head -n 1)
+
+          # Linux AppImage x86_64
+          LINUX_SIG=$(read_sig "*amd64*.AppImage.tar.gz.sig")
+          if [ -z "$LINUX_SIG" ]; then
+            LINUX_SIG=$(read_sig "*x86_64*.AppImage.tar.gz.sig")
+          fi
+          LINUX_NAME=$(find_artifact_name "*AppImage.tar.gz" | grep -v '.sig$' | head -n 1)
+
+          # Escape notes for JSON (replace newlines, quotes, backslashes)
+          NOTES_ESCAPED=$(echo "$NOTES" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+
+          # Build latest.json
+          cat > latest.json << MANIFEST
+          {
+            "version": "${VERSION}",
+            "notes": ${NOTES_ESCAPED},
+            "pub_date": "${PUB_DATE}",
+            "platforms": {
+          MANIFEST
+
+          FIRST=true
+
+          add_platform() {
+            local key="$1" sig="$2" name="$3"
+            if [ -n "$sig" ] && [ -n "$name" ]; then
+              if [ "$FIRST" = true ]; then
+                FIRST=false
+              else
+                echo "," >> latest.json
+              fi
+              cat >> latest.json << ENTRY
+              "${key}": {
+                "signature": "${sig}",
+                "url": "${BASE_URL}/${name}"
+              }
+          ENTRY
+            fi
+          }
+
+          add_platform "darwin-aarch64" "$MACOS_ARM_SIG" "$MACOS_ARM_NAME"
+          add_platform "darwin-x86_64" "$MACOS_X64_SIG" "$MACOS_X64_NAME"
+          add_platform "windows-x86_64" "$WIN_NSIS_SIG" "$WIN_NSIS_NAME"
+          add_platform "linux-x86_64" "$LINUX_SIG" "$LINUX_NAME"
+
+          cat >> latest.json << 'FOOTER'
+            }
+          }
+          FOOTER
+
+          # Pretty-print and validate
+          python3 -m json.tool latest.json > latest_formatted.json && mv latest_formatted.json latest.json
+
+          echo "Generated latest.json:"
+          cat latest.json
+
+      - name: Upload latest.json to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Also upload updater artifacts (.tar.gz, .zip, .sig) that were in prereleased
+          # They should already be on the release from the build step, but upload latest.json
+          gh release upload "$TAG" latest.json \
+            --repo "${{ github.repository }}" \
+            --clobber
 
   # Update Homebrew Cask when release is published
   update-homebrew:
