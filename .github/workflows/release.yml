@@ -108,14 +108,20 @@ jobs:
           if [ "${{ matrix.platform }}" = "linux" ]; then
             sudo apt-get install -y ripgrep
           elif [ "${{ matrix.platform }}" = "macos" ]; then
-            brew install ripgrep
-            RG_PATH="$(brew --prefix ripgrep)/bin/rg"
-            if [ ! -x "$RG_PATH" ]; then
-              echo "::error::ripgrep installed but rg not found at $RG_PATH"
+            brew install ripgrep || true
+            RG_PATH=""
+            if command -v rg >/dev/null 2>&1; then
+              RG_PATH="$(command -v rg)"
+            else
+              CELLAR_DIR="$(brew --cellar ripgrep)"
+              RG_PATH="$(find "$CELLAR_DIR" -path '*/bin/rg' -type f | sort -V | tail -n 1)"
+            fi
+            if [ -z "$RG_PATH" ] || [ ! -x "$RG_PATH" ]; then
+              echo "::error::ripgrep installed but rg could not be resolved from PATH or Homebrew Cellar"
               exit 1
             fi
             echo "TIY_BUILD_RG_PATH=$RG_PATH" >> "$GITHUB_ENV"
-            echo "$RG_PATH"
+            echo "Using rg at: $RG_PATH"
           else
             choco install ripgrep -y
           fi
