@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-04-07
+### :sparkles: New Features
+- [`893f66a`](https://github.com/TiyAgents/tiycode/commit/893f66a3911a5465d91a3c2f7fdbb8bd8ae1141a) - **api**: ✨ add default identification headers to LLM requests *(commit by [@jorben](https://github.com/jorben))*
+- [`2eb84a6`](https://github.com/TiyAgents/tiycode/commit/2eb84a6f344c52cf602cfbccdf688b71551de0b0) - **updater**: ✨ add in-app auto-update support *(commit by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`d556895`](https://github.com/TiyAgents/tiycode/commit/d55689550268618474b7fc12218d539aad663ec1) - **agent**: 🐛 pass max_turns into AgentSession creation
+
+### :wrench: Chores
+- [`6b40ce7`](https://github.com/TiyAgents/tiycode/commit/6b40ce7b5b3bb945b1c01bf7aeea079d02242410) - **ci**: 🔧 set Homebrew tap destination branch to master
+- [`8b43541`](https://github.com/TiyAgents/tiycode/commit/8b43541b3b8cf9f3e6a08ad9d840d0da731f736c) - **i18n**: ✨ update About description copy *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.1] - 2026-04-07
 ### :boom: BREAKING CHANGES
 - due to [`e37d5ec`](https://github.com/TiyAgents/tiycode/commit/e37d5eca168edf9a4ce9532c0758fa8d66bcdf73) - ✨ add runtime response controls and improve crash recovery *(commit by [@jorben](https://github.com/jorben))*:
@@ -273,3 +286,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [`6b00b65`](https://github.com/TiyAgents/tiycode/commit/6b00b65b06b1284c5ce17e3d1ba4c0218b92db8e) - **db**: 🔧 seed latest default settings *(commit by [@jorben](https://github.com/jorben))*
 
 [0.1.1]: https://github.com/TiyAgents/tiycode/compare/0.0.1...0.1.1
+[0.1.2]: https://github.com/TiyAgents/tiycode/compare/0.1.1...0.1.2
