@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-04-07
+### :wrench: Chores
+- [`8807286`](https://github.com/TiyAgents/tiycode/commit/8807286959f25de2e3b862e749cc975281119dea) - **ci**: 🔧 install ripgrep in CI environment *(commit by [@jorben](https://github.com/jorben))*
+- [`49ae5de`](https://github.com/TiyAgents/tiycode/commit/49ae5de38f3265c73578ed6536c7d20db2486b7b) - **ci**: 🔧 export release metadata for Python subprocess *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.4] - 2026-04-07
 ### :sparkles: New Features
 - [`7075a5b`](https://github.com/TiyAgents/tiycode/commit/7075a5b96651552197f8523d4cfcb9aa1cd43566) - **icons**: ✨ generate macOS iconset and update Tauri config *(commit by [@jorben](https://github.com/jorben))*
@@ -305,3 +311,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.2]: https://github.com/TiyAgents/tiycode/compare/0.1.1...0.1.2
 [0.1.3]: https://github.com/TiyAgents/tiycode/compare/0.1.2...0.1.3
 [0.1.4]: https://github.com/TiyAgents/tiycode/compare/0.1.3...0.1.4
+[0.1.5]: https://github.com/TiyAgents/tiycode/compare/0.1.4...0.1.5
