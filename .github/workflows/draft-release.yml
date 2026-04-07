@@ -47,7 +47,8 @@ jobs:
         uses: ncipollo/release-action@v1.12.0
         with:
           allowUpdates: true
-          draft: true
+          draft: false
+          prerelease: true
           makeLatest: false
           name: ${{ github.ref_name }}
           body: ${{ steps.changelog.outputs.changes }}
