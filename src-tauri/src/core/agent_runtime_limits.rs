@@ -46,9 +46,7 @@ fn parse_desktop_agent_max_turns_value(value_json: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_desktop_agent_max_turns_value, DEFAULT_DESKTOP_AGENT_MAX_TURNS,
-    };
+    use super::{parse_desktop_agent_max_turns_value, DEFAULT_DESKTOP_AGENT_MAX_TURNS};
 
     #[test]
     fn desktop_agent_max_turns_defaults_to_4096() {

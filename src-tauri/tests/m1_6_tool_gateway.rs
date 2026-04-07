@@ -1139,12 +1139,8 @@ async fn test_search_repo_treats_regex_metacharacters_as_literal_text() {
     .unwrap();
     let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
 
-    test_helpers::seed_workspace(
-        &pool,
-        "ws-search-literal",
-        workspace_root.to_str().unwrap(),
-    )
-    .await;
+    test_helpers::seed_workspace(&pool, "ws-search-literal", workspace_root.to_str().unwrap())
+        .await;
     test_helpers::seed_thread(&pool, "t-search-literal", "ws-search-literal").await;
     test_helpers::seed_run(
         &pool,
