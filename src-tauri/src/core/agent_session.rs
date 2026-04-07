@@ -941,6 +941,9 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
         agent.set_api_key(api_key);
     }
 
+    // Inject default TiyCode identification headers for all LLM API requests.
+    agent.set_custom_headers(crate::core::tiycode_default_headers());
+
     if let Some(provider_options) = spec.model_plan.primary.provider_options.clone() {
         agent.set_on_payload(move |payload, _model| {
             let provider_options = provider_options.clone();
@@ -2364,10 +2367,12 @@ pub async fn resolve_runtime_model_role(
         })
         .cost(Cost::default());
 
-    if let Some(headers) = role.custom_headers.clone() {
-        if !headers.is_empty() {
-            builder = builder.headers(headers);
+    {
+        let mut headers = crate::core::tiycode_default_headers();
+        if let Some(user_headers) = role.custom_headers.clone() {
+            headers.extend(user_headers);
         }
+        builder = builder.headers(headers);
     }
 
     let model = builder.build().map_err(|error| {

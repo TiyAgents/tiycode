@@ -136,6 +136,9 @@ impl HelperAgentOrchestrator {
             agent.set_api_key(api_key);
         }
 
+        // Inject default TiyCode identification headers for all LLM API requests.
+        agent.set_custom_headers(crate::core::tiycode_default_headers());
+
         if let Some(provider_options) = request.model_role.provider_options.clone() {
             agent.set_on_payload(move |payload, _model| {
                 let provider_options = provider_options.clone();

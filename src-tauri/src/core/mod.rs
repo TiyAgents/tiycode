@@ -22,3 +22,14 @@ pub mod thread_manager;
 pub mod tool_gateway;
 pub mod workspace_manager;
 pub mod workspace_paths;
+
+/// Returns the default HTTP headers that identify TiyCode in every LLM API request.
+pub fn tiycode_default_headers() -> std::collections::HashMap<String, String> {
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("X-Title".to_string(), "TiyCode".to_string());
+    headers.insert(
+        "HTTP-Referer".to_string(),
+        "https://github.com/TiyAgents/tiycode".to_string(),
+    );
+    headers
+}

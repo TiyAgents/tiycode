@@ -12,6 +12,7 @@ use crate::core::agent_session::{
     resolve_runtime_model_role, ResolvedModelRole, RuntimeModelPlan, RuntimeModelRole,
 };
 use crate::core::app_state::AppState;
+use crate::core::tiycode_default_headers;
 use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
 use crate::ipc::frontend_channels::GitStreamEvent;
 use crate::model::errors::{AppError, ErrorCategory, ErrorSource};
@@ -806,6 +807,7 @@ async fn generate_commit_message(
     let options = TiyStreamOptions {
         api_key: model_role.api_key.clone(),
         max_tokens: Some(COMMIT_MESSAGE_MAX_TOKENS),
+        headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
         ..TiyStreamOptions::default()
     };

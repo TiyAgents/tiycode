@@ -173,6 +173,19 @@ fn parse_custom_headers_map(custom_headers_json: Option<&str>) -> Option<HashMap
     })
 }
 
+/// Injects default TiyCode identification headers (`X-Title` and `HTTP-Referer`)
+/// into the given headers map, preserving any user-supplied overrides.
+fn inject_default_headers(
+    existing: Option<HashMap<String, String>>,
+) -> HashMap<String, String> {
+    let mut headers = crate::core::tiycode_default_headers();
+    if let Some(user_headers) = existing {
+        // User-supplied headers take precedence over defaults.
+        headers.extend(user_headers);
+    }
+    headers
+}
+
 fn parse_provider_options_value(provider_options_json: Option<&str>) -> Option<serde_json::Value> {
     provider_options_json.and_then(|json| {
         serde_json::from_str::<serde_json::Value>(json)
@@ -403,7 +416,9 @@ fn build_provider_model_test_request(
         max_tokens: Some(PROVIDER_MODEL_TEST_MIN_MAX_TOKENS),
         api_key: provider.api_key_encrypted.clone(),
         base_url: normalize_optional_string(Some(provider.base_url.clone())),
-        headers: parse_custom_headers_map(provider.custom_headers_json.as_deref()),
+        headers: Some(inject_default_headers(
+            parse_custom_headers_map(provider.custom_headers_json.as_deref()),
+        )),
         session_id: None,
         security: None,
         on_payload: build_provider_options_payload_hook(model.provider_options_json.as_deref()),
@@ -674,7 +689,9 @@ impl SettingsManager {
             provider: provider_type,
             api_key: provider.api_key_encrypted.clone(),
             base_url: Some(provider.base_url.clone()),
-            headers: parse_custom_headers_map(provider.custom_headers_json.as_deref()),
+            headers: Some(inject_default_headers(
+                parse_custom_headers_map(provider.custom_headers_json.as_deref()),
+            )),
         };
         let store = self.load_catalog_store_best_effort(true).await;
         let list_result = if let Some(store) = store.as_ref() {

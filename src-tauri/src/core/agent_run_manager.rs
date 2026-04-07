@@ -20,6 +20,7 @@ use crate::core::agent_session::{
     normalize_profile_response_style, trim_history_to_current_context, ProfileResponseStyle,
     ResolvedModelRole,
 };
+use crate::core::tiycode_default_headers;
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
 use crate::core::context_compression::summarize_messages;
 use crate::core::plan_checkpoint::{
@@ -1501,6 +1502,7 @@ async fn generate_compact_summary(
     let options = TiyStreamOptions {
         api_key: model_role.api_key.clone(),
         max_tokens: Some(COMPACT_SUMMARY_MAX_TOKENS),
+        headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
         ..TiyStreamOptions::default()
     };
@@ -1898,6 +1900,7 @@ async fn generate_thread_title(
     let options = TiyStreamOptions {
         api_key: model_role.api_key.clone(),
         max_tokens: Some(TITLE_GENERATION_MAX_TOKENS),
+        headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
         ..TiyStreamOptions::default()
     };
