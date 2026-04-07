@@ -241,16 +241,21 @@ jobs:
 
             cp "$BUNDLE_DIR"/msi/*.msi release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/nsis/*.exe release-artifacts/ 2>/dev/null || true
-            # Updater artifacts: .nsis.zip + .msi.zip + .sig
+            # Updater artifacts may be emitted directly in bundle/nsis and bundle/msi on Tauri v2.
+            cp "$BUNDLE_DIR"/nsis/*.zip release-artifacts/ 2>/dev/null || true
+            cp "$BUNDLE_DIR"/nsis/*.zip.sig release-artifacts/ 2>/dev/null || true
+            cp "$BUNDLE_DIR"/msi/*.zip release-artifacts/ 2>/dev/null || true
+            cp "$BUNDLE_DIR"/msi/*.zip.sig release-artifacts/ 2>/dev/null || true
+            # Keep fallback support for alternate updater directories if they appear.
             cp "$BUNDLE_DIR"/nsis-updater/*.zip release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/nsis-updater/*.sig release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/msi-updater/*.zip release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/msi-updater/*.sig release-artifacts/ 2>/dev/null || true
 
             if [[ "$VERSION" != *-* ]]; then
-              if ! find release-artifacts -maxdepth 1 -type f \( -name '*.zip' -o -name '*.sig' \) | grep -q .; then
+              if ! find release-artifacts -maxdepth 1 -type f \( -name '*.zip' -o -name '*.zip.sig' \) | grep -q .; then
                 echo "::error::Stable Windows release is missing updater zip/sig artifacts."
-                echo "Expected files from nsis-updater or msi-updater, but none were collected."
+                echo "Expected files from bundle/nsis, bundle/msi, nsis-updater, or msi-updater, but none were collected."
                 exit 1
               fi
             fi
@@ -323,8 +328,10 @@ jobs:
             --repo "$REPO" \
             --pattern "*.app.tar.gz" \
             --pattern "*.app.tar.gz.sig" \
-            --pattern "*x64-setup.exe.zip" \
-            --pattern "*x64-setup.exe.zip.sig" \
+            --pattern "*.nsis.zip" \
+            --pattern "*.nsis.zip.sig" \
+            --pattern "*.msi.zip" \
+            --pattern "*.msi.zip.sig" \
             --pattern "*.AppImage.tar.gz" \
             --pattern "*.AppImage.tar.gz.sig" \
             --dir artifacts \
@@ -369,12 +376,30 @@ jobs:
                          if not f.endswith(".sig")]
               return matches[0] if matches else None
 
-          def read_sig(pattern):
-              """Read signature content from .sig file matching pattern."""
+          def find_files(pattern):
+              """Find all files matching glob pattern in deterministic order."""
               matches = glob.glob(f"artifacts/{pattern}") + \
                         glob.glob(f"artifacts/**/{pattern}", recursive=True)
-              if matches and os.path.isfile(matches[0]):
+              return sorted([f for f in matches if os.path.isfile(f)])
+
+          def read_sig(pattern):
+              """Read signature content from .sig file matching pattern."""
+              matches = find_files(pattern)
+              if matches:
                   return open(matches[0]).read().strip()
+              return None
+
+          def paired_updater_entry(file_patterns):
+              """Return the first updater artifact with its matching .sig.
+              file_patterns should be ordered by preference."""
+              for pattern in file_patterns:
+                  for file_path in find_files(pattern):
+                      sig_path = f"{file_path}.sig"
+                      if os.path.isfile(sig_path):
+                          return {
+                              "signature": open(sig_path).read().strip(),
+                              "url": f"{base_url}/{os.path.basename(file_path)}",
+                          }
               return None
 
           platforms = {}
@@ -391,11 +416,14 @@ jobs:
           if f and s:
               platforms["darwin-x86_64"] = {"signature": s, "url": f"{base_url}/{os.path.basename(f)}"}
 
-          # Windows NSIS x86_64
-          f = find_file("*x64-setup.exe.zip")
-          s = read_sig("*x64-setup.exe.zip.sig")
-          if f and s:
-              platforms["windows-x86_64"] = {"signature": s, "url": f"{base_url}/{os.path.basename(f)}"}
+          # Windows updater x86_64 — prefer NSIS, fall back to MSI, keep zip/sig paired
+          windows_entry = paired_updater_entry([
+              "*.nsis.zip",
+              "*.msi.zip",
+              "*setup.exe.zip",
+          ])
+          if windows_entry:
+              platforms["windows-x86_64"] = windows_entry
 
           # Linux AppImage x86_64
           f = find_file("*AppImage.tar.gz")
