@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-04-07
+### :bug: Bug Fixes
+- [`483c5c5`](https://github.com/TiyAgents/tiycode/commit/483c5c57081d289af6c993ad47a0691e71b17e92) - **system**: 🐛 include tests in containing_directory_path cfg *(commit by [@jorben](https://github.com/jorben))*
+
+### :wrench: Chores
+- [`13fb1e0`](https://github.com/TiyAgents/tiycode/commit/13fb1e097533294f5b6423ec180a3ebf8506992b) - **ci**: 📦 Download updater artifacts from release tag *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.5] - 2026-04-07
 ### :wrench: Chores
 - [`8807286`](https://github.com/TiyAgents/tiycode/commit/8807286959f25de2e3b862e749cc975281119dea) - **ci**: 🔧 install ripgrep in CI environment *(commit by [@jorben](https://github.com/jorben))*
@@ -312,3 +320,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.3]: https://github.com/TiyAgents/tiycode/compare/0.1.2...0.1.3
 [0.1.4]: https://github.com/TiyAgents/tiycode/compare/0.1.3...0.1.4
 [0.1.5]: https://github.com/TiyAgents/tiycode/compare/0.1.4...0.1.5
+[0.1.6]: https://github.com/TiyAgents/tiycode/compare/0.1.5...0.1.6
