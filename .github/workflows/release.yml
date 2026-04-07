@@ -312,6 +312,9 @@ jobs:
           # Get release notes from GitHub
           NOTES=$(gh release view "$TAG" --repo "$REPO" --json body -q '.body' 2>/dev/null || echo "")
 
+          # Export so Python subprocess can read them via os.environ
+          export VERSION BASE_URL NOTES
+
           # Debug: list all downloaded artifacts
           echo "=== All artifacts ==="
           find artifacts -type f | sort
