@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tauri::Manager;
+
 use sqlx::SqlitePool;
 use tiycore::catalog::{
     enrich_manual_model, list_models, list_models_with_enrichment, load_catalog_metadata_store,
@@ -175,9 +177,7 @@ fn parse_custom_headers_map(custom_headers_json: Option<&str>) -> Option<HashMap
 
 /// Injects default TiyCode identification headers (`X-Title` and `HTTP-Referer`)
 /// into the given headers map, preserving any user-supplied overrides.
-fn inject_default_headers(
-    existing: Option<HashMap<String, String>>,
-) -> HashMap<String, String> {
+fn inject_default_headers(existing: Option<HashMap<String, String>>) -> HashMap<String, String> {
     let mut headers = crate::core::tiycode_default_headers();
     if let Some(user_headers) = existing {
         // User-supplied headers take precedence over defaults.
@@ -416,9 +416,9 @@ fn build_provider_model_test_request(
         max_tokens: Some(PROVIDER_MODEL_TEST_MIN_MAX_TOKENS),
         api_key: provider.api_key_encrypted.clone(),
         base_url: normalize_optional_string(Some(provider.base_url.clone())),
-        headers: Some(inject_default_headers(
-            parse_custom_headers_map(provider.custom_headers_json.as_deref()),
-        )),
+        headers: Some(inject_default_headers(parse_custom_headers_map(
+            provider.custom_headers_json.as_deref(),
+        ))),
         session_id: None,
         security: None,
         on_payload: build_provider_options_payload_hook(model.provider_options_json.as_deref()),
@@ -689,9 +689,9 @@ impl SettingsManager {
             provider: provider_type,
             api_key: provider.api_key_encrypted.clone(),
             base_url: Some(provider.base_url.clone()),
-            headers: Some(inject_default_headers(
-                parse_custom_headers_map(provider.custom_headers_json.as_deref()),
-            )),
+            headers: Some(inject_default_headers(parse_custom_headers_map(
+                provider.custom_headers_json.as_deref(),
+            ))),
         };
         let store = self.load_catalog_store_best_effort(true).await;
         let list_result = if let Some(store) = store.as_ref() {
@@ -1364,6 +1364,102 @@ impl SettingsManager {
         }
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Bundled catalog: apply build-time catalog snapshot when it is newer
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct BundledCatalogManifest {
+    version: String,
+}
+
+/// Read the manifest embedded in the Tauri resource directory.
+fn load_bundled_manifest(app: &tauri::AppHandle) -> Option<BundledCatalogManifest> {
+    let path = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("bundled-catalog")
+        .join("catalog.manifest.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Read the manifest stored in the local `~/.tiy/catalog/` directory.
+fn load_local_catalog_manifest() -> Option<BundledCatalogManifest> {
+    let path = catalog_snapshot_path()
+        .parent()?
+        .join("catalog.manifest.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Compare the bundled catalog snapshot (shipped with the app binary) against
+/// the locally cached snapshot.  If the bundled version is newer — or there is
+/// no local snapshot at all — copy the bundled files into the local cache so
+/// they are available immediately, even without network access.
+///
+/// This is called **synchronously** during startup, **before** the async
+/// background refresh, so that a fresh install or an app update always has
+/// usable catalog data.
+pub fn apply_bundled_catalog_if_newer(app: &tauri::AppHandle) {
+    let bundled = match load_bundled_manifest(app) {
+        Some(m) => m,
+        None => {
+            tracing::debug!("no bundled catalog found, skipping");
+            return;
+        }
+    };
+
+    // A version of "0" comes from the build.rs placeholder and should never
+    // overwrite real data.
+    if bundled.version == "0" {
+        tracing::debug!("bundled catalog is a placeholder (version 0), skipping");
+        return;
+    }
+
+    let should_apply = match load_local_catalog_manifest() {
+        None => true,
+        Some(local) => bundled.version > local.version,
+    };
+
+    if !should_apply {
+        tracing::debug!(
+            bundled_version = %bundled.version,
+            "local catalog is up-to-date, skipping bundled catalog"
+        );
+        return;
+    }
+
+    let resource_dir = match app.path().resource_dir() {
+        Ok(dir) => dir,
+        Err(_) => return,
+    };
+    let catalog_dir = catalog_snapshot_path()
+        .parent()
+        .expect("catalog snapshot path must have a parent")
+        .to_path_buf();
+
+    for filename in ["catalog.json", "catalog.manifest.json"] {
+        let src = resource_dir.join("bundled-catalog").join(filename);
+        let dst = catalog_dir.join(filename);
+        if src.is_file() {
+            if let Err(e) = std::fs::copy(&src, &dst) {
+                tracing::warn!(
+                    error = %e,
+                    file = filename,
+                    "failed to copy bundled catalog file to local cache"
+                );
+            }
+        }
+    }
+
+    tracing::info!(
+        version = %bundled.version,
+        "applied bundled catalog snapshot to local cache"
+    );
 }
 
 #[cfg(test)]

@@ -20,7 +20,6 @@ use crate::core::agent_session::{
     normalize_profile_response_style, trim_history_to_current_context, ProfileResponseStyle,
     ResolvedModelRole,
 };
-use crate::core::tiycode_default_headers;
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
 use crate::core::context_compression::summarize_messages;
 use crate::core::plan_checkpoint::{
@@ -30,6 +29,7 @@ use crate::core::plan_checkpoint::{
 };
 use crate::core::sleep_manager::SleepManager;
 use crate::core::task_board_manager;
+use crate::core::tiycode_default_headers;
 use crate::ipc::app_events::{
     self, ThreadRunFinishedPayload, ThreadRunStartedPayload, ThreadTitleUpdatedPayload,
 };

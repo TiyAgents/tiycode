@@ -12,8 +12,8 @@ use crate::core::agent_session::{
     resolve_runtime_model_role, ResolvedModelRole, RuntimeModelPlan, RuntimeModelRole,
 };
 use crate::core::app_state::AppState;
-use crate::core::tiycode_default_headers;
 use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
+use crate::core::tiycode_default_headers;
 use crate::ipc::frontend_channels::GitStreamEvent;
 use crate::model::errors::{AppError, ErrorCategory, ErrorSource};
 use crate::model::git::{

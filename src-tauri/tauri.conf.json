@@ -54,6 +54,10 @@
     "category": "Productivity",
     "createUpdaterArtifacts": "v1Compatible",
     "externalBin": ["target/tiy-rg/rg"],
+    "resources": [
+      "bundled-catalog/catalog.json",
+      "bundled-catalog/catalog.manifest.json"
+    ],
     "shortDescription": "An AI-first desktop coding agent.",
     "longDescription": "TiyCode is an AI-first desktop coding agent built for a new coding collaboration paradigm, where humans work through conversation and agents drive execution in a real workspace.",
     "copyright": "© 2026 Tiy AI",

@@ -458,6 +458,11 @@ pub fn run() {
                 Ok::<(), crate::model::errors::AppError>(())
             })?;
 
+            // Apply bundled catalog snapshot if it is newer than the local cache.
+            // This ensures a usable catalog is available even without network access
+            // (e.g. fresh install or app update in an offline environment).
+            crate::core::settings_manager::apply_bundled_catalog_if_newer(app.handle());
+
             tauri::async_runtime::spawn(async {
                 crate::core::settings_manager::SettingsManager::refresh_catalog_snapshot_silently()
                     .await;

@@ -122,6 +122,21 @@ jobs:
           rm -f src-tauri/Cargo.toml.bak
           echo "Tag version: $VERSION, Bundle version: $BUNDLE_VERSION"
 
+      - name: Fetch catalog snapshot for bundling
+        shell: bash
+        run: |
+          mkdir -p src-tauri/bundled-catalog
+          CATALOG_BASE="https://tiyagents.github.io/tiycore/catalog"
+          curl -sSfL "$CATALOG_BASE/manifest.json" \
+            -o src-tauri/bundled-catalog/catalog.manifest.json \
+            --retry 3 --max-time 30
+          curl -sSfL "$CATALOG_BASE/catalog.json" \
+            -o src-tauri/bundled-catalog/catalog.json \
+            --retry 3 --max-time 60
+          echo "Catalog snapshot bundled:"
+          ls -la src-tauri/bundled-catalog/
+          cat src-tauri/bundled-catalog/catalog.manifest.json
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
