@@ -109,6 +109,13 @@ jobs:
             sudo apt-get install -y ripgrep
           elif [ "${{ matrix.platform }}" = "macos" ]; then
             brew install ripgrep
+            RG_PATH="$(brew --prefix ripgrep)/bin/rg"
+            if [ ! -x "$RG_PATH" ]; then
+              echo "::error::ripgrep installed but rg not found at $RG_PATH"
+              exit 1
+            fi
+            echo "TIY_BUILD_RG_PATH=$RG_PATH" >> "$GITHUB_ENV"
+            echo "$RG_PATH"
           else
             choco install ripgrep -y
           fi
