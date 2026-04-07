@@ -59,7 +59,7 @@
     "publisher": "Tiy AI",
     "homepage": "https://tiy.ai",
     "category": "Productivity",
-    "createUpdaterArtifacts": "v1Compatible",
+    "createUpdaterArtifacts": true,
     "externalBin": ["target/tiy-rg/rg"],
     "resources": [
       "bundled-catalog/catalog.json",

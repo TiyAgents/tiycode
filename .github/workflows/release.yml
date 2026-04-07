@@ -223,6 +223,22 @@ jobs:
               cp "$f" "release-artifacts/${RENAMED}"
             done
           elif [ "${{ matrix.platform }}" = "windows" ]; then
+            echo "Inspecting Windows bundle directories for updater artifacts..."
+            for dir in \
+              "$BUNDLE_DIR" \
+              "$BUNDLE_DIR"/nsis \
+              "$BUNDLE_DIR"/nsis-updater \
+              "$BUNDLE_DIR"/msi \
+              "$BUNDLE_DIR"/msi-updater
+            do
+              if [ -d "$dir" ]; then
+                echo "--- $dir"
+                find "$dir" -maxdepth 1 -type f | sort || true
+              else
+                echo "--- $dir (missing)"
+              fi
+            done
+
             cp "$BUNDLE_DIR"/msi/*.msi release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/nsis/*.exe release-artifacts/ 2>/dev/null || true
             # Updater artifacts: .nsis.zip + .msi.zip + .sig
@@ -230,6 +246,14 @@ jobs:
             cp "$BUNDLE_DIR"/nsis-updater/*.sig release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/msi-updater/*.zip release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/msi-updater/*.sig release-artifacts/ 2>/dev/null || true
+
+            if [[ "$VERSION" != *-* ]]; then
+              if ! find release-artifacts -maxdepth 1 -type f \( -name '*.zip' -o -name '*.sig' \) | grep -q .; then
+                echo "::error::Stable Windows release is missing updater zip/sig artifacts."
+                echo "Expected files from nsis-updater or msi-updater, but none were collected."
+                exit 1
+              fi
+            fi
           elif [ "${{ matrix.platform }}" = "linux" ]; then
             cp "$BUNDLE_DIR"/deb/*.deb release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/rpm/*.rpm release-artifacts/ 2>/dev/null || true
