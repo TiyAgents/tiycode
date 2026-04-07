@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-04-07
+### :sparkles: New Features
+- [`7075a5b`](https://github.com/TiyAgents/tiycode/commit/7075a5b96651552197f8523d4cfcb9aa1cd43566) - **icons**: ✨ generate macOS iconset and update Tauri config *(commit by [@jorben](https://github.com/jorben))*
+
+### :wrench: Chores
+- [`ecfbb29`](https://github.com/TiyAgents/tiycode/commit/ecfbb29c9f4c8df7b24bbb2a745cad9ac1086d7d) - **icons**: ✨ generate multi-platform app icons *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.3] - 2026-04-07
 ### :sparkles: New Features
 - [`833a5f4`](https://github.com/TiyAgents/tiycode/commit/833a5f45afbcbbd81e24f2bb6c0c0d173e11acbe) - **tauri**: ✨ bundle catalog snapshot for offline startup *(commit by [@jorben](https://github.com/jorben))*
@@ -296,3 +304,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.1]: https://github.com/TiyAgents/tiycode/compare/0.0.1...0.1.1
 [0.1.2]: https://github.com/TiyAgents/tiycode/compare/0.1.1...0.1.2
 [0.1.3]: https://github.com/TiyAgents/tiycode/compare/0.1.2...0.1.3
+[0.1.4]: https://github.com/TiyAgents/tiycode/compare/0.1.3...0.1.4
