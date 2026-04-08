@@ -1127,14 +1127,12 @@ impl SettingsManager {
         // Step 2: Clean up duplicates within each builtin provider key
         // Keep only the most recent one (by updated_at, then by ID)
         for entry in BUILTIN_PROVIDER_CATALOG {
-            let all_with_key = provider_repo::find_all_by_key(&self.pool, entry.provider_key).await?;
-            
-            // Find the one to keep (most recent)
-            if let Some(primary) = all_with_key.first() {
-                // Delete all others
-                for duplicate in all_with_key.iter().skip(1) {
-                    provider_repo::delete(&self.pool, &duplicate.id).await?;
-                }
+            let all_with_key =
+                provider_repo::find_all_by_key(&self.pool, entry.provider_key).await?;
+
+            // Keep the first (most recent) and delete all others
+            for duplicate in all_with_key.iter().skip(1) {
+                provider_repo::delete(&self.pool, &duplicate.id).await?;
             }
         }
 
