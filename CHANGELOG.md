@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - 2026-04-08
+### :wrench: Chores
+- [`e2ea8c0`](https://github.com/TiyAgents/tiycode/commit/e2ea8c078b932ce642171e74237c41d433cffc09) - **release**: ♻️ tighten updater artifact collection and signing in workflow *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.16] - 2026-04-08
 ### :bug: Bug Fixes
 - [`df048d6`](https://github.com/TiyAgents/tiycode/commit/df048d64dbf81c4ddfb12062281bbad57570575e) - **workbench-shell**: 🐛 Prevent tool state regressions during snapshot merges *(commit by [@jorben](https://github.com/jorben))*
@@ -352,3 +357,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.13]: https://github.com/TiyAgents/tiycode/compare/0.1.12...0.1.13
 [0.1.14]: https://github.com/TiyAgents/tiycode/compare/0.1.13...0.1.14
 [0.1.16]: https://github.com/TiyAgents/tiycode/compare/0.1.15...0.1.16
+[0.1.17]: https://github.com/TiyAgents/tiycode/compare/0.1.16...0.1.17
