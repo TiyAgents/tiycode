@@ -21,5 +21,8 @@ No frontend unit test runner is configured yet, so every UI change should pass `
 ## Commit & Pull Request Guidelines
 Follow Conventional Commits: `type(scope): short summary`, for example `feat(agent-session): enhance workspace context`. Common types include `feat`, `fix`, `refactor`, and `chore`. Keep scopes tied to the area changed. Pull requests should include a concise summary, linked issue or design doc when relevant, commands run, and screenshots or GIFs for visible UI changes. Call out migrations, capability updates, or setup steps explicitly.
 
+## Post-Implementation Checklist
+After completing a task, always run the relevant formatting and validation commands before committing: `cargo fmt --manifest-path src-tauri/Cargo.toml` for any Rust changes, and `npm run typecheck` for any TypeScript/TSX changes. Fix all warnings and errors before finalizing the commit.
+
 ## Agent-Specific Instructions
 Address the user as `Jorben` in all collaborator-facing responses for this repository.
