@@ -20,8 +20,12 @@ Around that collaboration model, TiyCode brings together Agent Profiles, workspa
 
 - **AI-first coding collaboration.** TiyCode is designed around the idea that humans express intent through conversation while agents take the lead in execution.
 - **Agent Profiles.** Mix models from different providers, tune response style, language, and custom instructions, and switch profiles flexibly for different kinds of work.
+- **Three-tier model architecture.** Each profile supports a Primary model for core reasoning, an Auxiliary model for helper tasks, and a Lightweight model for fast operations — with automatic fallback chains across tiers.
+- **Multi-provider support.** Connect to 13+ LLM providers out of the box — OpenAI, Anthropic, Google, Ollama, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi, and more — or add any OpenAI-compatible endpoint as a custom provider.
 - **Workspace-centered execution.** Threads stay grounded in the local workspace and connect naturally to code review, version control, repository inspection, and terminal workflows.
+- **Real-time execution streaming.** A rich thread stream event system delivers live updates — message deltas, tool calls, reasoning steps, subagent progress, and plan updates — all rendered through purpose-built AI Elements components.
 - **Operator-friendly experience.** Slash commands, smart conversation titles, context compression controls, and commit message generation help the product feel fast and practical in day-to-day use.
+- **Bilingual interface.** Full i18n coverage with English and Simplified Chinese, switchable at any time.
 - **Extensible by design.** Plugins, MCP servers, and Skills are treated as first-class building blocks through the `Extensions Center`.
 - **Built-in runtime path.** The main execution flow is `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`.
 
@@ -30,8 +34,10 @@ Around that collaboration model, TiyCode brings together Agent Profiles, workspa
 - **Desktop shell:** Tauri 2
 - **Frontend:** React 19, TypeScript, Vite
 - **Backend / native core:** Rust
-- **AI runtime:** `tiycore`
-- **UI foundation:** Tailwind CSS v4, shadcn/ui, AI Elements-style thread components
+- **AI runtime:** [`tiycore`](https://github.com/TiyAgents/tiycore)
+- **UI foundation:** Tailwind CSS v4, shadcn/ui (Radix UI primitives), Vercel AI SDK (UI types), Lucide React icons, Motion animations
+- **Terminal:** xterm.js with addon-fit
+- **Code highlighting:** Shiki
 - **Persistence:** SQLite
 
 ## Quick Start
@@ -104,26 +110,34 @@ flowchart LR
   UI[React + TypeScript UI] --> TAURI[Tauri Rust Core]
   TAURI --> RUNTIME[BuiltInAgentRuntime]
   RUNTIME --> CORE[tiycore]
-  TAURI --> TOOLS[Workspace / Git / Terminal / Extensions]
+  TAURI --> TOOLS[Workspace / Git / Terminal]
+  TAURI --> EXT[Extension Host]
+  EXT --> PLUGINS[Plugins / MCP / Skills]
   CORE --> LLM[LLM Providers]
+  TAURI --> DB[(SQLite)]
+  UI -.->|Thread Stream| TAURI
 ```
 
 At a high level:
 
-1. The **React UI** handles workbench rendering, thread interactions, and streaming updates.
-2. The **Rust core** is the source of truth for system access, policy decisions, persistence, and performance-sensitive local operations.
-3. The **built-in runtime** manages agent sessions, helper orchestration, tool profiles, and event folding.
-4. The **extension host** integrates plugin, MCP, and skill capabilities into the desktop product model.
+1. The **React UI** handles workbench rendering, thread interactions, and streaming updates. AI Elements components render messages, code blocks, reasoning, tool calls, and plans in a purpose-built thread surface.
+2. The **Rust core** is the source of truth for system access, policy decisions, persistence, and performance-sensitive local operations. All settings, threads, and provider configurations are persisted in SQLite.
+3. The **built-in runtime** manages agent sessions, helper orchestration, tool profiles, and event folding. The three-tier model plan (Primary / Auxiliary / Lightweight) is resolved from Agent Profiles at run time.
+4. The **extension host** integrates plugin, MCP, and skill capabilities into the desktop product model, governed by tool gateways, policy checks, and approval boundaries.
 
 ## Repository Structure
 
 ```text
 src/
-  app/         app bootstrap, routing, providers, and global styles
-  modules/     domain modules such as workbench, settings, marketplace, and extensions center
-  features/    platform-facing capabilities such as terminal and system metadata
-  shared/      reusable UI, helpers, config, and shared types
-  services/    bridge and streaming integrations
+  app/           app bootstrap, routing, providers (theme, language), and global styles
+  modules/       domain modules: workbench shell, settings center, marketplace, extensions center
+  features/      platform-facing capabilities: terminal (xterm.js), system metadata
+  components/    AI Elements — message, code-block, reasoning, plan, tool, confirmation, etc.
+  shared/        reusable UI primitives (shadcn/ui), helpers, types, and config
+  services/
+    bridge/      Tauri invoke commands (settings, agents, threads, git, terminal, extensions)
+    thread-stream/  real-time event streaming between Rust core and React UI
+  i18n/          internationalization — English and Simplified Chinese locale files
 src-tauri/
   src/commands/    Rust command modules
   src/extensions/  extension host, registries, and runtime integration
