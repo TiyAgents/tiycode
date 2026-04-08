@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 use git2::Repository;
 
 use super::ToolOutput;
+use crate::core::windows_process::configure_background_std_command;
 use crate::model::errors::{AppError, ErrorCategory, ErrorSource};
 use crate::model::git::{GitCommandResultDto, GitMutationAction};
 
@@ -172,7 +173,10 @@ fn run_git_command(
     action: GitMutationAction,
     args: Vec<String>,
 ) -> Result<GitCommandResultDto, AppError> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    configure_background_std_command(&mut command);
+
+    let output = command
         .args(&args)
         .current_dir(repo_root)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -295,7 +299,10 @@ fn discover_repo_root(workspace_root: &Path) -> Result<PathBuf, AppError> {
 }
 
 fn ensure_git_cli_available() -> Result<(), AppError> {
-    let available = Command::new("git")
+    let mut command = Command::new("git");
+    configure_background_std_command(&mut command);
+
+    let available = command
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

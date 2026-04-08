@@ -2,6 +2,7 @@ use tokio::process::Command;
 
 use super::truncation::{truncate_tail_bytes, COMMAND_MAX_BYTES, COMMAND_MAX_LINES};
 use super::ToolOutput;
+use crate::core::windows_process::configure_background_tokio_command;
 use crate::model::errors::AppError;
 
 /// Default timeout for shell (60 seconds).
@@ -32,6 +33,7 @@ pub async fn run_command(
         #[cfg(target_os = "windows")]
         {
             let mut c = Command::new("cmd.exe");
+            configure_background_tokio_command(&mut c);
             c.arg("/C").arg(command);
             c
         }

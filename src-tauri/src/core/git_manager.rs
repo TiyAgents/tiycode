@@ -11,6 +11,7 @@ use git2::{
 use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::core::executors::git as git_executor;
+use crate::core::windows_process::configure_background_std_command;
 use crate::ipc::frontend_channels::GitStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::git::{
@@ -1070,7 +1071,10 @@ fn is_repo_available(workspace_root: &Path) -> Result<bool, AppError> {
 }
 
 fn is_git_cli_available() -> bool {
-    std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    configure_background_std_command(&mut command);
+
+    command
         .arg("--version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use tokio::fs;
 
+use crate::core::windows_process::configure_background_tokio_command;
 use crate::core::workspace_paths::{
     canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
 };
@@ -437,15 +438,15 @@ pub async fn find_files(
                 effective_limit.saturating_add(1),
             );
 
-            tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                tokio::process::Command::new("powershell.exe")
-                    .args(["-NoProfile", "-NonInteractive", "-Command", &ps_command])
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .output(),
-            )
-            .await
+            let mut command = tokio::process::Command::new("powershell.exe");
+            configure_background_tokio_command(&mut command);
+            let future = command
+                .args(["-NoProfile", "-NonInteractive", "-Command", &ps_command])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output();
+
+            tokio::time::timeout(std::time::Duration::from_secs(30), future).await
         }
         #[cfg(not(target_os = "windows"))]
         {

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use tokio::process::Command;
 
+use crate::core::windows_process::configure_background_tokio_command;
+
 /// Execute ripgrep with a resilient lookup strategy.
 ///
 /// Search order:
@@ -36,6 +38,7 @@ async fn spawn_rg(
     current_dir: Option<&Path>,
 ) -> io::Result<std::process::Output> {
     let mut cmd = Command::new(program);
+    configure_background_tokio_command(&mut cmd);
     if let Some(current_dir) = current_dir {
         cmd.current_dir(current_dir);
     }
@@ -112,7 +115,9 @@ async fn find_from_login_shell() -> Option<PathBuf> {
 
 #[cfg(target_os = "windows")]
 async fn find_from_login_shell() -> Option<PathBuf> {
-    let output = Command::new("where.exe")
+    let mut command = Command::new("where.exe");
+    configure_background_tokio_command(&mut command);
+    let output = command
         .arg("rg")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())

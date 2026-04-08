@@ -14,6 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 use crate::core::executors::ToolOutput;
+use crate::core::windows_process::configure_background_tokio_command;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::extensions::{
     ExtensionActivityEventDto, ExtensionCommandDto, ExtensionDetailDto, ExtensionHealth,
@@ -2182,6 +2183,7 @@ impl ExtensionsManager {
         }
 
         let mut command = Command::new("git");
+        configure_background_tokio_command(&mut command);
         if cache_dir.exists() {
             command
                 .arg("-C")

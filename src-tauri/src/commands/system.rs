@@ -13,6 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
+#[cfg(target_os = "windows")]
+use crate::core::windows_process::configure_background_std_command;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemMetadata {
@@ -1097,7 +1100,9 @@ fn build_windows_icon_data_url(executable_path: &Path, app_id: &str) -> Option<S
          finally {{ $bitmap.Dispose(); $icon.Dispose() }}"
     );
 
-    let status = Command::new("powershell.exe")
+    let mut command = Command::new("powershell.exe");
+    configure_background_std_command(&mut command);
+    let status = command
         .args([
             "-NoProfile",
             "-NonInteractive",
