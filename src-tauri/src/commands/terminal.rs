@@ -19,7 +19,14 @@ pub async fn terminal_create_or_attach(
 ) -> Result<TerminalAttachDto, AppError> {
     let attachment = state
         .terminal_manager
-        .create_or_attach(&thread_id, cols, rows, shell_path.as_deref(), shell_args.as_deref(), term_env.as_deref())
+        .create_or_attach(
+            &thread_id,
+            cols,
+            rows,
+            shell_path.as_deref(),
+            shell_args.as_deref(),
+            term_env.as_deref(),
+        )
         .await?;
 
     let mut event_rx = attachment.receiver;
@@ -66,7 +73,14 @@ pub async fn terminal_restart(
 ) -> Result<TerminalAttachDto, AppError> {
     let attachment = state
         .terminal_manager
-        .restart(&thread_id, cols, rows, shell_path.as_deref(), shell_args.as_deref(), term_env.as_deref())
+        .restart(
+            &thread_id,
+            cols,
+            rows,
+            shell_path.as_deref(),
+            shell_args.as_deref(),
+            term_env.as_deref(),
+        )
         .await?;
 
     let mut event_rx = attachment.receiver;

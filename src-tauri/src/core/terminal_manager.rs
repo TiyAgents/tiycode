@@ -375,7 +375,8 @@ impl TerminalManager {
         data: &str,
     ) -> Result<TerminalSessionDto, AppError> {
         if self.get_session(thread_id).await.is_none() {
-            self.create_or_attach(thread_id, None, None, None, None, None).await?;
+            self.create_or_attach(thread_id, None, None, None, None, None)
+                .await?;
         }
 
         self.write_input(thread_id, data).await?;
@@ -420,7 +421,8 @@ impl TerminalManager {
         term_env: Option<&str>,
     ) -> Result<TerminalAttachment, AppError> {
         self.close(thread_id).await?;
-        self.create_or_attach(thread_id, cols, rows, shell_path, shell_args, term_env).await
+        self.create_or_attach(thread_id, cols, rows, shell_path, shell_args, term_env)
+            .await
     }
 
     pub async fn close(&self, thread_id: &str) -> Result<(), AppError> {
@@ -876,7 +878,10 @@ pub fn list_available_shells() -> Vec<ShellOption> {
         }
 
         // Windows PowerShell (5.x)
-        let ps_path = format!(r"{}\System32\WindowsPowerShell\v1.0\powershell.exe", system_root);
+        let ps_path = format!(
+            r"{}\System32\WindowsPowerShell\v1.0\powershell.exe",
+            system_root
+        );
         if Path::new(&ps_path).exists() {
             shells.push(ShellOption {
                 path: ps_path,
@@ -885,7 +890,8 @@ pub fn list_available_shells() -> Vec<ShellOption> {
         }
 
         // PowerShell Core (7+)
-        let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
+        let program_files =
+            std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
         let pwsh_path = format!(r"{}\PowerShell\7\pwsh.exe", program_files);
         if Path::new(&pwsh_path).exists() {
             shells.push(ShellOption {
