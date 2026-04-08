@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - 2026-04-08
+### :bug: Bug Fixes
+- [`df048d6`](https://github.com/TiyAgents/tiycode/commit/df048d64dbf81c4ddfb12062281bbad57570575e) - **workbench-shell**: 🐛 Prevent tool state regressions during snapshot merges *(commit by [@jorben](https://github.com/jorben))*
+- [`599cdde`](https://github.com/TiyAgents/tiycode/commit/599cddecb3f68244002fc4b5df3155ecfd9e824e) - **workbench-shell**: 🐛 reload runtime snapshot on lost run-finished events *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.14] - 2026-04-08
 ### :wrench: Chores
 - [`273f575`](https://github.com/TiyAgents/tiycode/commit/273f575be1204a063eb728c308d4f7c50a4b3c8f) - **ci**: ✨ streamline Windows artifact collection in release workflow *(commit by [@jorben](https://github.com/jorben))*
@@ -345,3 +351,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.11]: https://github.com/TiyAgents/tiycode/compare/0.1.10...0.1.11
 [0.1.13]: https://github.com/TiyAgents/tiycode/compare/0.1.12...0.1.13
 [0.1.14]: https://github.com/TiyAgents/tiycode/compare/0.1.13...0.1.14
+[0.1.16]: https://github.com/TiyAgents/tiycode/compare/0.1.15...0.1.16
