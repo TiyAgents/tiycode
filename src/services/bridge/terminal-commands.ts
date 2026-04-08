@@ -9,11 +9,18 @@ const requireTauri = (cmd: string) => {
   if (!isTauri()) throw new Error(`${cmd} requires Tauri runtime`);
 };
 
+export type TerminalShellConfig = {
+  shellPath?: string;
+  shellArgs?: string;
+  termEnv?: string;
+};
+
 export async function terminalCreateOrAttach(
   threadId: string,
   onEvent: (event: TerminalStreamEvent) => void,
   cols?: number,
   rows?: number,
+  shellConfig?: TerminalShellConfig,
 ): Promise<TerminalAttachDto> {
   requireTauri("terminal_create_or_attach");
 
@@ -24,6 +31,9 @@ export async function terminalCreateOrAttach(
     threadId,
     cols: cols ?? null,
     rows: rows ?? null,
+    shellPath: shellConfig?.shellPath || null,
+    shellArgs: shellConfig?.shellArgs || null,
+    termEnv: shellConfig?.termEnv || null,
     onEvent: channel,
   });
 }
@@ -50,6 +60,7 @@ export async function terminalRestart(
   onEvent: (event: TerminalStreamEvent) => void,
   cols?: number,
   rows?: number,
+  shellConfig?: TerminalShellConfig,
 ): Promise<TerminalAttachDto> {
   requireTauri("terminal_restart");
 
@@ -60,6 +71,9 @@ export async function terminalRestart(
     threadId,
     cols: cols ?? null,
     rows: rows ?? null,
+    shellPath: shellConfig?.shellPath || null,
+    shellArgs: shellConfig?.shellArgs || null,
+    termEnv: shellConfig?.termEnv || null,
     onEvent: channel,
   });
 }

@@ -40,6 +40,7 @@ import {
 } from "@/modules/settings-center/model/use-settings-controller";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
 import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
+import { TerminalSettingsContext } from "@/features/terminal/model/terminal-settings-context";
 import { useAppUpdater } from "@/modules/workbench-shell/hooks/use-app-updater";
 import { UpdateAvailableDialog } from "@/modules/workbench-shell/ui/update-available-dialog";
 import type {
@@ -416,6 +417,8 @@ export function DashboardWorkbench() {
     providerCatalog,
     providers,
     commands,
+    terminal,
+    availableShells,
     policy,
     updateGeneralPreference,
     addWorkspace,
@@ -446,6 +449,7 @@ export function DashboardWorkbench() {
     addCommand,
     removeCommand,
     updateCommand,
+    updateTerminalSetting,
   } = useSettingsController();
   const [workspaces, setWorkspaces] = useState<Array<WorkspaceItem>>(() =>
     isTauri() ? [] : buildInitialWorkspaces(),
@@ -2848,6 +2852,7 @@ export function DashboardWorkbench() {
                   isTerminalCollapsed ? "opacity-0" : "opacity-100 delay-75",
                 )}
               >
+                <TerminalSettingsContext.Provider value={terminal}>
                 <ThreadTerminalPanel
                   threadId={resolvedTerminalThreadId}
                   threadTitle={activeThread?.name ?? t("dashboard.newThread")}
@@ -2857,6 +2862,7 @@ export function DashboardWorkbench() {
                   idleMessage={newThreadTerminalIdleMessage}
                   onCollapse={() => setTerminalCollapsed(true)}
                 />
+                </TerminalSettingsContext.Provider>
               </div>
             </section>
           </div>
@@ -2881,6 +2887,8 @@ export function DashboardWorkbench() {
           isCheckingUpdates={isCheckingUpdates}
           language={language}
           policy={policy}
+          terminal={terminal}
+          availableShells={availableShells}
           commands={commands}
           providerCatalog={providerCatalog}
           providers={providers}
@@ -2920,6 +2928,7 @@ export function DashboardWorkbench() {
           onUpdateGeneralPreference={updateGeneralPreference}
           onUpdatePolicySetting={updatePolicySetting}
           onUpdateProvider={updateProvider}
+          onUpdateTerminalSetting={updateTerminalSetting}
           onFetchProviderModels={fetchProviderModels}
           onTestProviderModelConnection={testProviderModelConnection}
           onUpdateWritableRoot={updateWritableRoot}

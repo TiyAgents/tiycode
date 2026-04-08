@@ -353,6 +353,7 @@ pub fn run() {
             commands::terminal::terminal_restart,
             commands::terminal::terminal_close,
             commands::terminal::terminal_list,
+            commands::terminal::terminal_list_available_shells,
         ])
         .setup(move |app| {
             configure_ripgrep_path(app);

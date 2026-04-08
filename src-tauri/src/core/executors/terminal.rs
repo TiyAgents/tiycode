@@ -50,7 +50,7 @@ pub async fn execute(
         "term_restart" => {
             let cols = input["cols"].as_u64().map(|value| value as u16);
             let rows = input["rows"].as_u64().map(|value| value as u16);
-            let attachment = terminal_manager.restart(thread_id, cols, rows).await?;
+            let attachment = terminal_manager.restart(thread_id, cols, rows, None, None, None).await?;
             Ok(ToolOutput {
                 success: true,
                 result: serde_json::to_value(attachment.attach.session)

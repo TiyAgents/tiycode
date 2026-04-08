@@ -179,6 +179,9 @@ impl TerminalManager {
         thread_id: &str,
         cols: Option<u16>,
         rows: Option<u16>,
+        shell_path: Option<&str>,
+        shell_args: Option<&str>,
+        term_env: Option<&str>,
     ) -> Result<TerminalAttachment, AppError> {
         if let Some(existing) = self.get_session(thread_id).await {
             let receiver = existing.broadcaster.subscribe();
@@ -195,7 +198,7 @@ impl TerminalManager {
         let cols = cols.unwrap_or(DEFAULT_TERMINAL_COLS);
         let rows = rows.unwrap_or(DEFAULT_TERMINAL_ROWS);
         let (thread, workspace) = self.resolve_context(thread_id).await?;
-        let shell = resolve_shell();
+        let shell = resolve_shell(shell_path);
         let cwd = PathBuf::from(&workspace.canonical_path);
         let session_id = uuid::Uuid::now_v7().to_string();
         let created_at = Utc::now().to_rfc3339();
@@ -232,7 +235,20 @@ impl TerminalManager {
 
         let mut command = CommandBuilder::new(shell.clone());
         command.cwd(cwd.clone());
-        command.env("TERM", "xterm-256color");
+
+        if let Some(args) = shell_args {
+            let args = args.trim();
+            if !args.is_empty() {
+                for arg in args.split_whitespace() {
+                    command.arg(arg);
+                }
+            }
+        }
+
+        let term_value = term_env
+            .filter(|v| !v.is_empty())
+            .unwrap_or("xterm-256color");
+        command.env("TERM", term_value);
         command.env("COLORTERM", "truecolor");
 
         let child = pair.slave.spawn_command(command).map_err(|error| {
@@ -359,7 +375,7 @@ impl TerminalManager {
         data: &str,
     ) -> Result<TerminalSessionDto, AppError> {
         if self.get_session(thread_id).await.is_none() {
-            self.create_or_attach(thread_id, None, None).await?;
+            self.create_or_attach(thread_id, None, None, None, None, None).await?;
         }
 
         self.write_input(thread_id, data).await?;
@@ -399,9 +415,12 @@ impl TerminalManager {
         thread_id: &str,
         cols: Option<u16>,
         rows: Option<u16>,
+        shell_path: Option<&str>,
+        shell_args: Option<&str>,
+        term_env: Option<&str>,
     ) -> Result<TerminalAttachment, AppError> {
         self.close(thread_id).await?;
-        self.create_or_attach(thread_id, cols, rows).await
+        self.create_or_attach(thread_id, cols, rows, shell_path, shell_args, term_env).await
     }
 
     pub async fn close(&self, thread_id: &str) -> Result<(), AppError> {
@@ -809,7 +828,14 @@ fn sanitize_terminal_output_for_agent(raw: &str) -> String {
     output
 }
 
-fn resolve_shell() -> String {
+fn resolve_shell(override_path: Option<&str>) -> String {
+    if let Some(path) = override_path {
+        let path = path.trim();
+        if !path.is_empty() {
+            return path.to_string();
+        }
+    }
+
     std::env::var("SHELL")
         .ok()
         .filter(|value| !value.is_empty())
@@ -823,6 +849,125 @@ fn resolve_shell() -> String {
                 "/bin/zsh".to_string()
             }
         })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellOption {
+    pub path: String,
+    pub name: String,
+}
+
+pub fn list_available_shells() -> Vec<ShellOption> {
+    let mut shells = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::path::Path;
+
+        // cmd.exe - always available on Windows
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        let cmd_path = format!(r"{}\System32\cmd.exe", system_root);
+        if Path::new(&cmd_path).exists() {
+            shells.push(ShellOption {
+                path: cmd_path,
+                name: "Command Prompt".to_string(),
+            });
+        }
+
+        // Windows PowerShell (5.x)
+        let ps_path = format!(r"{}\System32\WindowsPowerShell\v1.0\powershell.exe", system_root);
+        if Path::new(&ps_path).exists() {
+            shells.push(ShellOption {
+                path: ps_path,
+                name: "Windows PowerShell".to_string(),
+            });
+        }
+
+        // PowerShell Core (7+)
+        let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
+        let pwsh_path = format!(r"{}\PowerShell\7\pwsh.exe", program_files);
+        if Path::new(&pwsh_path).exists() {
+            shells.push(ShellOption {
+                path: pwsh_path,
+                name: "PowerShell 7".to_string(),
+            });
+        }
+
+        // Git Bash
+        let git_bash_candidates = [
+            format!(r"{}\Git\bin\bash.exe", program_files),
+            format!(r"{}\Git\usr\bin\bash.exe", program_files),
+            r"C:\Program Files (x86)\Git\bin\bash.exe".to_string(),
+        ];
+        for candidate in &git_bash_candidates {
+            if Path::new(candidate).exists() {
+                shells.push(ShellOption {
+                    path: candidate.clone(),
+                    name: "Git Bash".to_string(),
+                });
+                break;
+            }
+        }
+
+        // WSL
+        let wsl_path = format!(r"{}\System32\wsl.exe", system_root);
+        if Path::new(&wsl_path).exists() {
+            shells.push(ShellOption {
+                path: wsl_path,
+                name: "WSL".to_string(),
+            });
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::path::Path;
+
+        // Try to read /etc/shells
+        if let Ok(content) = std::fs::read_to_string("/etc/shells") {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if Path::new(line).exists() {
+                    let name = Path::new(line)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(line)
+                        .to_string();
+                    // Avoid duplicates
+                    if !shells.iter().any(|s: &ShellOption| s.path == line) {
+                        shells.push(ShellOption {
+                            path: line.to_string(),
+                            name,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Fallback if /etc/shells is empty or unreadable
+        if shells.is_empty() {
+            let common_shells = [
+                ("/bin/zsh", "zsh"),
+                ("/bin/bash", "bash"),
+                ("/bin/sh", "sh"),
+                ("/usr/bin/fish", "fish"),
+            ];
+            for (path, name) in &common_shells {
+                if Path::new(path).exists() {
+                    shells.push(ShellOption {
+                        path: path.to_string(),
+                        name: name.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    shells
 }
 
 #[cfg(test)]

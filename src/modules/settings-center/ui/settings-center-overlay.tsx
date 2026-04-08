@@ -30,6 +30,7 @@ import {
   Settings2,
   ShieldCheck,
   Star,
+  TerminalSquare,
   Trash2,
   Wrench,
   X,
@@ -66,6 +67,8 @@ import type {
   ProviderModel,
   ProviderModelCapabilities,
   SettingsCategory,
+  TerminalCursorStyle,
+  TerminalSettings,
   WorkspaceEntry,
   WritableRootEntry,
 } from "@/modules/settings-center/model/use-settings-controller";
@@ -128,6 +131,8 @@ type SettingsCenterOverlayProps = {
   language: LanguagePreference;
   commands: CommandSettings;
   policy: PolicySettings;
+  terminal: TerminalSettings;
+  availableShells: Array<{ path: string; name: string }>;
   providerCatalog: Array<ProviderCatalogEntry>;
   providers: Array<ProviderEntry>;
   systemMetadata: SystemMetadata | null;
@@ -171,6 +176,7 @@ type SettingsCenterOverlayProps = {
     modelId: string,
   ) => Promise<ProviderModelConnectionTestResultDto>;
   onUpdateProvider: (id: string, patch: Partial<Omit<ProviderEntry, "id">>) => void;
+  onUpdateTerminalSetting: <Key extends keyof TerminalSettings>(key: Key, value: TerminalSettings[Key]) => void;
   onUpdateWritableRoot: (id: string, patch: Partial<Omit<WritableRootEntry, "id">>) => void;
 };
 
@@ -201,6 +207,12 @@ function getCategoryMeta(t: TFunc) {
       title: t("settings.category.commands"),
       description: t("settings.category.commandsDesc"),
       icon: Zap,
+    },
+    {
+      key: "terminal" as SettingsCategory,
+      title: t("settings.category.terminal"),
+      description: t("settings.category.terminalDesc"),
+      icon: TerminalSquare,
     },
     {
       key: "policy" as SettingsCategory,
@@ -270,6 +282,8 @@ export function SettingsCenterOverlay({
   language,
   commands,
   policy,
+  terminal,
+  availableShells,
   providerCatalog,
   providers,
   systemMetadata,
@@ -310,6 +324,7 @@ export function SettingsCenterOverlay({
   onFetchProviderModels,
   onTestProviderModelConnection,
   onUpdateProvider,
+  onUpdateTerminalSetting,
   onUpdateWritableRoot,
 }: SettingsCenterOverlayProps) {
   const t = useT();
@@ -474,6 +489,15 @@ export function SettingsCenterOverlay({
                     onAddCommand={onAddCommand}
                     onRemoveCommand={onRemoveCommand}
                     onUpdateCommand={onUpdateCommand}
+                  />
+                ) : null}
+
+                {activeCategory === "terminal" ? (
+                  <TerminalSettingsPanel
+                    description={activeMeta.description}
+                    terminal={terminal}
+                    availableShells={availableShells}
+                    onUpdateTerminalSetting={onUpdateTerminalSetting}
                   />
                 ) : null}
 
@@ -3565,6 +3589,235 @@ function WorkspaceActionButton({
     >
       <Icon className={cn("size-3.5", active && "fill-current")} />
     </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Terminal Settings Panel
+// ---------------------------------------------------------------------------
+
+function TerminalSettingsPanel({
+  description,
+  terminal,
+  availableShells,
+  onUpdateTerminalSetting,
+}: {
+  description: string;
+  terminal: TerminalSettings;
+  availableShells: Array<{ path: string; name: string }>;
+  onUpdateTerminalSetting: <Key extends keyof TerminalSettings>(key: Key, value: TerminalSettings[Key]) => void;
+}) {
+  const t = useT();
+  const [customShellPath, setCustomShellPath] = useState(terminal.shellPath);
+  const isCustomShell = terminal.shellPath !== "" && !availableShells.some((s) => s.path === terminal.shellPath);
+
+  const CURSOR_STYLE_OPTIONS: ReadonlyArray<{ label: string; value: TerminalCursorStyle }> = useMemo(
+    () => [
+      { label: t("settings.terminal.cursorStyleBlock"), value: "block" },
+      { label: t("settings.terminal.cursorStyleUnderline"), value: "underline" },
+      { label: t("settings.terminal.cursorStyleBar"), value: "bar" },
+    ],
+    [t],
+  );
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHeading title={t("settings.category.terminal")} description={description} />
+
+      {/* ── Shell ── */}
+      <SettingsSection title={t("settings.terminal.shell")}>
+        <SettingsRow
+          label={t("settings.terminal.shellLabel")}
+          description={t("settings.terminal.shellDesc")}
+          control={
+            <select
+              className="h-8 min-w-[200px] rounded-lg border border-app-border bg-app-surface px-2.5 text-[13px] text-app-foreground outline-none transition-colors hover:border-app-border-strong focus:border-app-accent"
+              value={isCustomShell ? "__custom__" : terminal.shellPath}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value === "__custom__") {
+                  setCustomShellPath("");
+                  onUpdateTerminalSetting("shellPath", "");
+                } else {
+                  onUpdateTerminalSetting("shellPath", value);
+                }
+              }}
+            >
+              <option value="">{t("settings.terminal.shellAutoDetect")}</option>
+              {availableShells.map((shell) => (
+                <option key={shell.path} value={shell.path}>
+                  {shell.name} ({shell.path})
+                </option>
+              ))}
+              <option value="__custom__">{t("settings.terminal.shellCustom")}</option>
+            </select>
+          }
+        />
+        {isCustomShell || terminal.shellPath === "" ? null : null}
+        {(isCustomShell || (terminal.shellPath === "" ? false : !availableShells.some((s) => s.path === terminal.shellPath))) ? (
+          <>
+            <SectionDivider />
+            <SettingsRow
+              label={t("settings.terminal.shellCustom")}
+              description=""
+              control={
+                <Input
+                  className="h-8 w-[320px] text-[13px]"
+                  placeholder="/path/to/shell"
+                  value={customShellPath}
+                  onChange={(event) => setCustomShellPath(event.target.value)}
+                  onBlur={() => onUpdateTerminalSetting("shellPath", customShellPath.trim())}
+                />
+              }
+            />
+          </>
+        ) : null}
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.terminal.shellArgsLabel")}
+          description={t("settings.terminal.shellArgsDesc")}
+          control={
+            <Input
+              className="h-8 w-[240px] text-[13px]"
+              placeholder={t("settings.terminal.shellArgsPlaceholder")}
+              defaultValue={terminal.shellArgs}
+              onBlur={(event) => onUpdateTerminalSetting("shellArgs", event.target.value.trim())}
+            />
+          }
+        />
+      </SettingsSection>
+
+      {/* ── Appearance ── */}
+      <SettingsSection title={t("settings.terminal.appearance")}>
+        <SettingsRow
+          label={t("settings.terminal.fontFamilyLabel")}
+          description={t("settings.terminal.fontFamilyDesc")}
+          control={
+            <Input
+              className="h-8 w-[320px] text-[13px]"
+              defaultValue={terminal.fontFamily}
+              onBlur={(event) => {
+                const value = event.target.value.trim();
+                if (value) onUpdateTerminalSetting("fontFamily", value);
+              }}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.terminal.fontSizeLabel")}
+          description={t("settings.terminal.fontSizeDesc")}
+          control={
+            <Input
+              type="number"
+              min={8}
+              max={32}
+              className="h-8 w-[80px] text-[13px]"
+              defaultValue={terminal.fontSize}
+              onBlur={(event) => {
+                const value = Math.min(32, Math.max(8, Number(event.target.value) || 12));
+                onUpdateTerminalSetting("fontSize", value);
+              }}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.terminal.lineHeightLabel")}
+          description={t("settings.terminal.lineHeightDesc")}
+          control={
+            <Input
+              type="number"
+              min={1.0}
+              max={2.0}
+              step={0.05}
+              className="h-8 w-[80px] text-[13px]"
+              defaultValue={terminal.lineHeight}
+              onBlur={(event) => {
+                const value = Math.min(2.0, Math.max(1.0, Number(event.target.value) || 1.35));
+                onUpdateTerminalSetting("lineHeight", Math.round(value * 100) / 100);
+              }}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.terminal.cursorStyleLabel")}
+          description={t("settings.terminal.cursorStyleDesc")}
+          control={
+            <ChoiceGroup
+              options={CURSOR_STYLE_OPTIONS}
+              value={terminal.cursorStyle}
+              onValueChange={(value) => onUpdateTerminalSetting("cursorStyle", value as TerminalCursorStyle)}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.terminal.cursorBlinkLabel")}
+          description={t("settings.terminal.cursorBlinkDesc")}
+          control={
+            <Switch
+              size="sm"
+              checked={terminal.cursorBlink}
+              onCheckedChange={(checked) => onUpdateTerminalSetting("cursorBlink", checked)}
+            />
+          }
+        />
+      </SettingsSection>
+
+      {/* ── Behavior ── */}
+      <SettingsSection title={t("settings.terminal.behavior")}>
+        <SettingsRow
+          label={t("settings.terminal.scrollbackLabel")}
+          description={t("settings.terminal.scrollbackDesc")}
+          control={
+            <Input
+              type="number"
+              min={500}
+              max={100000}
+              step={500}
+              className="h-8 w-[120px] text-[13px]"
+              defaultValue={terminal.scrollback}
+              onBlur={(event) => {
+                const value = Math.min(100000, Math.max(500, Number(event.target.value) || 5000));
+                onUpdateTerminalSetting("scrollback", value);
+              }}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.terminal.copyOnSelectLabel")}
+          description={t("settings.terminal.copyOnSelectDesc")}
+          control={
+            <Switch
+              size="sm"
+              checked={terminal.copyOnSelect}
+              onCheckedChange={(checked) => onUpdateTerminalSetting("copyOnSelect", checked)}
+            />
+          }
+        />
+      </SettingsSection>
+
+      {/* ── Environment ── */}
+      <SettingsSection title={t("settings.terminal.environment")}>
+        <SettingsRow
+          label={t("settings.terminal.termEnvLabel")}
+          description={t("settings.terminal.termEnvDesc")}
+          control={
+            <Input
+              className="h-8 w-[200px] text-[13px]"
+              defaultValue={terminal.termEnv}
+              onBlur={(event) => {
+                const value = event.target.value.trim();
+                if (value) onUpdateTerminalSetting("termEnv", value);
+              }}
+            />
+          }
+        />
+      </SettingsSection>
+    </div>
   );
 }
 

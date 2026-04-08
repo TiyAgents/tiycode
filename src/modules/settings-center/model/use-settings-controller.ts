@@ -1,4 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import {
   DEFAULT_AGENT_PROFILES,
@@ -7,6 +8,16 @@ import {
   GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY,
   DEFAULT_POLICY_SETTINGS,
   GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
+  TERMINAL_SHELL_PATH_SETTING_KEY,
+  TERMINAL_SHELL_ARGS_SETTING_KEY,
+  TERMINAL_FONT_FAMILY_SETTING_KEY,
+  TERMINAL_FONT_SIZE_SETTING_KEY,
+  TERMINAL_LINE_HEIGHT_SETTING_KEY,
+  TERMINAL_CURSOR_STYLE_SETTING_KEY,
+  TERMINAL_CURSOR_BLINK_SETTING_KEY,
+  TERMINAL_SCROLLBACK_SETTING_KEY,
+  TERMINAL_COPY_ON_SELECT_SETTING_KEY,
+  TERMINAL_TERM_ENV_SETTING_KEY,
 } from "@/modules/settings-center/model/defaults";
 import {
   persistLocalUiSettings,
@@ -23,6 +34,7 @@ import type {
   ProviderCatalogEntry,
   ProviderEntry,
   SettingsState,
+  TerminalSettings,
   WorkspaceEntry,
   WritableRootEntry,
 } from "@/modules/settings-center/model/types";
@@ -83,6 +95,52 @@ function mapGeneralPreferencesFromSettings(
       values.get(GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY),
       fallback.minimizeToTray,
     ),
+  };
+}
+
+const TERMINAL_SETTING_KEY_MAP: Record<keyof TerminalSettings, string> = {
+  shellPath: TERMINAL_SHELL_PATH_SETTING_KEY,
+  shellArgs: TERMINAL_SHELL_ARGS_SETTING_KEY,
+  fontFamily: TERMINAL_FONT_FAMILY_SETTING_KEY,
+  fontSize: TERMINAL_FONT_SIZE_SETTING_KEY,
+  lineHeight: TERMINAL_LINE_HEIGHT_SETTING_KEY,
+  cursorStyle: TERMINAL_CURSOR_STYLE_SETTING_KEY,
+  cursorBlink: TERMINAL_CURSOR_BLINK_SETTING_KEY,
+  scrollback: TERMINAL_SCROLLBACK_SETTING_KEY,
+  copyOnSelect: TERMINAL_COPY_ON_SELECT_SETTING_KEY,
+  termEnv: TERMINAL_TERM_ENV_SETTING_KEY,
+};
+
+function mapTerminalSettingsFromDb(
+  settings: ReadonlyArray<import("@/shared/types/api").SettingDto>,
+  fallback: TerminalSettings,
+): TerminalSettings {
+  const values = new Map(settings.map((entry) => [entry.key, entry.value]));
+
+  const str = (key: string, fb: string) => {
+    const v = values.get(key);
+    return typeof v === "string" ? v : fb;
+  };
+  const num = (key: string, fb: number) => {
+    const v = values.get(key);
+    return typeof v === "number" ? v : fb;
+  };
+  const bool = (key: string, fb: boolean) => {
+    const v = values.get(key);
+    return typeof v === "boolean" ? v : fb;
+  };
+
+  return {
+    shellPath: str(TERMINAL_SHELL_PATH_SETTING_KEY, fallback.shellPath),
+    shellArgs: str(TERMINAL_SHELL_ARGS_SETTING_KEY, fallback.shellArgs),
+    fontFamily: str(TERMINAL_FONT_FAMILY_SETTING_KEY, fallback.fontFamily),
+    fontSize: num(TERMINAL_FONT_SIZE_SETTING_KEY, fallback.fontSize),
+    lineHeight: num(TERMINAL_LINE_HEIGHT_SETTING_KEY, fallback.lineHeight),
+    cursorStyle: str(TERMINAL_CURSOR_STYLE_SETTING_KEY, fallback.cursorStyle) as TerminalSettings["cursorStyle"],
+    cursorBlink: bool(TERMINAL_CURSOR_BLINK_SETTING_KEY, fallback.cursorBlink),
+    scrollback: num(TERMINAL_SCROLLBACK_SETTING_KEY, fallback.scrollback),
+    copyOnSelect: bool(TERMINAL_COPY_ON_SELECT_SETTING_KEY, fallback.copyOnSelect),
+    termEnv: str(TERMINAL_TERM_ENV_SETTING_KEY, fallback.termEnv),
   };
 }
 
@@ -349,6 +407,7 @@ export function useSettingsController() {
   const storedSettingsRef = useRef<SettingsState>(readStoredSettings());
   const [settings, setSettings] = useState<SettingsState>(() => storedSettingsRef.current);
   const [providerCatalog, setProviderCatalog] = useState<Array<ProviderCatalogEntry>>([]);
+  const [availableShells, setAvailableShells] = useState<Array<{ path: string; name: string }>>([]);
   const [backendHydrated, setBackendHydrated] = useState(!isTauri());
   const [generalSettingsHydrated, setGeneralSettingsHydrated] = useState(!isTauri());
   const settingsRef = useRef(settings);
@@ -493,6 +552,15 @@ export function useSettingsController() {
         }
 
         const resolvedGeneral = mapGeneralPreferencesFromSettings(storedSettings, localGeneral);
+        const resolvedTerminal = mapTerminalSettingsFromDb(storedSettings, storedSettingsRef.current.terminal);
+
+        // Fetch available shells
+        let shells: Array<{ path: string; name: string }> = [];
+        try {
+          shells = await invoke<Array<{ path: string; name: string }>>("terminal_list_available_shells");
+        } catch (shellError) {
+          console.warn("Failed to list available shells", shellError);
+        }
 
         const resolvedActiveProfileId = resolveActiveProfileId(
           mappedProfiles,
@@ -517,9 +585,11 @@ export function useSettingsController() {
         const nextGeneral = resolvedGeneral;
 
         setProviderCatalog(mappedCatalog);
+        setAvailableShells(shells);
         setSettings((current) => ({
           ...current,
           general: nextGeneral,
+          terminal: resolvedTerminal,
           workspaces: workspaceEntries.map(mapWorkspaceDto),
           providers: mappedProviders,
           policy: resolvedPolicy,
@@ -602,6 +672,23 @@ export function useSettingsController() {
         [key]: value,
       },
     }));
+  };
+
+  const updateTerminalSetting = <Key extends keyof TerminalSettings>(key: Key, value: TerminalSettings[Key]) => {
+    setSettings((current) => ({
+      ...current,
+      terminal: {
+        ...current.terminal,
+        [key]: value,
+      },
+    }));
+
+    if (isTauri()) {
+      const dbKey = TERMINAL_SETTING_KEY_MAP[key];
+      void settingsSet(dbKey, JSON.stringify(value)).catch((error) => {
+        console.warn(`Failed to persist terminal setting ${key}`, error);
+      });
+    }
   };
 
   const addAgentProfile = (entry: Omit<AgentProfile, "id">) => {
@@ -1277,6 +1364,8 @@ export function useSettingsController() {
     providerCatalog,
     providers: settings.providers,
     commands: settings.commands,
+    terminal: settings.terminal,
+    availableShells,
     policy: settings.policy,
     updateGeneralPreference,
     addWorkspace,
@@ -1288,6 +1377,7 @@ export function useSettingsController() {
     fetchProviderModels,
     testProviderModelConnection,
     updateCommandSetting,
+    updateTerminalSetting,
     agentProfiles: settings.agentProfiles,
     activeAgentProfileId: settings.activeAgentProfileId,
     addAgentProfile,

@@ -1,6 +1,7 @@
 use tauri::{ipc::Channel, State};
 
 use crate::core::app_state::AppState;
+use crate::core::terminal_manager::ShellOption;
 use crate::ipc::frontend_channels::TerminalStreamEvent;
 use crate::model::errors::AppError;
 use crate::model::terminal::{TerminalAttachDto, TerminalSessionDto};
@@ -11,11 +12,14 @@ pub async fn terminal_create_or_attach(
     thread_id: String,
     cols: Option<u16>,
     rows: Option<u16>,
+    shell_path: Option<String>,
+    shell_args: Option<String>,
+    term_env: Option<String>,
     on_event: Channel<TerminalStreamEvent>,
 ) -> Result<TerminalAttachDto, AppError> {
     let attachment = state
         .terminal_manager
-        .create_or_attach(&thread_id, cols, rows)
+        .create_or_attach(&thread_id, cols, rows, shell_path.as_deref(), shell_args.as_deref(), term_env.as_deref())
         .await?;
 
     let mut event_rx = attachment.receiver;
@@ -55,11 +59,14 @@ pub async fn terminal_restart(
     thread_id: String,
     cols: Option<u16>,
     rows: Option<u16>,
+    shell_path: Option<String>,
+    shell_args: Option<String>,
+    term_env: Option<String>,
     on_event: Channel<TerminalStreamEvent>,
 ) -> Result<TerminalAttachDto, AppError> {
     let attachment = state
         .terminal_manager
-        .restart(&thread_id, cols, rows)
+        .restart(&thread_id, cols, rows, shell_path.as_deref(), shell_args.as_deref(), term_env.as_deref())
         .await?;
 
     let mut event_rx = attachment.receiver;
@@ -84,4 +91,9 @@ pub async fn terminal_list(
     state: State<'_, AppState>,
 ) -> Result<Vec<TerminalSessionDto>, AppError> {
     Ok(state.terminal_manager.list().await)
+}
+
+#[tauri::command]
+pub async fn terminal_list_available_shells() -> Result<Vec<ShellOption>, AppError> {
+    Ok(crate::core::terminal_manager::list_available_shells())
 }

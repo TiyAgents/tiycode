@@ -10,6 +10,7 @@ import {
   terminalResize,
   terminalRestart,
   terminalWriteInput,
+  type TerminalShellConfig,
 } from "@/services/bridge";
 
 export const terminalClient = {
@@ -18,8 +19,9 @@ export const terminalClient = {
     onEvent: (event: TerminalStreamEvent) => void,
     cols?: number,
     rows?: number,
+    shellConfig?: TerminalShellConfig,
   ): Promise<TerminalAttachDto> {
-    return terminalCreateOrAttach(threadId, onEvent, cols, rows);
+    return terminalCreateOrAttach(threadId, onEvent, cols, rows, shellConfig);
   },
   writeInput(threadId: string, data: string): Promise<void> {
     return terminalWriteInput(threadId, data);
@@ -32,8 +34,9 @@ export const terminalClient = {
     onEvent: (event: TerminalStreamEvent) => void,
     cols?: number,
     rows?: number,
+    shellConfig?: TerminalShellConfig,
   ): Promise<TerminalAttachDto> {
-    return terminalRestart(threadId, onEvent, cols, rows);
+    return terminalRestart(threadId, onEvent, cols, rows, shellConfig);
   },
   close(threadId: string): Promise<void> {
     return terminalClose(threadId);

@@ -1,4 +1,4 @@
-export type SettingsCategory = "account" | "general" | "workspace" | "providers" | "commands" | "policy" | "about";
+export type SettingsCategory = "account" | "general" | "workspace" | "providers" | "commands" | "terminal" | "policy" | "about";
 export type PromptResponseStyle = "balanced" | "concise" | "guide";
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";
 export type PatternEntry = { id: string; pattern: string };
@@ -118,11 +118,27 @@ export type PolicySettings = {
   writableRoots: Array<WritableRootEntry>;
 };
 
+export type TerminalCursorStyle = "block" | "underline" | "bar";
+
+export type TerminalSettings = {
+  shellPath: string;
+  shellArgs: string;
+  fontFamily: string;
+  fontSize: number;
+  lineHeight: number;
+  cursorStyle: TerminalCursorStyle;
+  cursorBlink: boolean;
+  scrollback: number;
+  copyOnSelect: boolean;
+  termEnv: string;
+};
+
 export type SettingsState = {
   general: GeneralPreferences;
   workspaces: Array<WorkspaceEntry>;
   providers: Array<ProviderEntry>;
   commands: CommandSettings;
+  terminal: TerminalSettings;
   policy: PolicySettings;
   agentProfiles: Array<AgentProfile>;
   activeAgentProfileId: string;

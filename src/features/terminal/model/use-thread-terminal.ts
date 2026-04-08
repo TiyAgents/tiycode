@@ -9,6 +9,8 @@ import type {
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { terminalClient } from "@/features/terminal/api/terminal-client";
 import { terminalStore, useTerminalStore } from "@/features/terminal/model/terminal-store";
+import { useTerminalSettings } from "@/features/terminal/model/terminal-settings-context";
+import type { TerminalShellConfig } from "@/services/bridge";
 
 type UseThreadTerminalOptions = {
   threadId: string | null;
@@ -32,6 +34,7 @@ export function useThreadTerminal({
   onExit,
 }: UseThreadTerminalOptions) {
   const t = useT();
+  const terminalSettings = useTerminalSettings();
   const [error, setError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const attachGenerationRef = useRef(0);
@@ -118,8 +121,14 @@ export function useThreadTerminal({
       }
     };
 
+    const shellConfig: TerminalShellConfig = {
+      shellPath: terminalSettings.shellPath || undefined,
+      shellArgs: terminalSettings.shellArgs || undefined,
+      termEnv: terminalSettings.termEnv || undefined,
+    };
+
     void terminalClient
-      .createOrAttach(threadId, handleEvent, cols, rows)
+      .createOrAttach(threadId, handleEvent, cols, rows, shellConfig)
       .then((payload) => {
         if (cancelled) {
           return;
@@ -186,6 +195,12 @@ export function useThreadTerminal({
           return;
         }
 
+        const restartShellConfig: TerminalShellConfig = {
+          shellPath: terminalSettings.shellPath || undefined,
+          shellArgs: terminalSettings.shellArgs || undefined,
+          termEnv: terminalSettings.termEnv || undefined,
+        };
+
         setError(null);
         const payload = await terminalClient.restart(
           threadId,
@@ -218,6 +233,7 @@ export function useThreadTerminal({
           },
           nextCols ?? cols,
           nextRows ?? rows,
+          restartShellConfig,
         );
 
         terminalStore.upsertSession(payload.session);

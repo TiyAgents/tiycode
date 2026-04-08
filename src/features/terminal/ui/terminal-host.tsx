@@ -11,6 +11,7 @@ import { Terminal } from "xterm";
 import "xterm/css/xterm.css";
 import { useT } from "@/i18n";
 import { useThreadTerminal } from "@/features/terminal/model/use-thread-terminal";
+import { useTerminalSettings } from "@/features/terminal/model/terminal-settings-context";
 
 type TerminalHostProps = {
   threadId: string | null;
@@ -29,6 +30,7 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
   ref,
 ) {
   const t = useT();
+  const terminalSettings = useTerminalSettings();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -47,13 +49,14 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
 
     const fitAddon = new FitAddon();
     const terminal = new Terminal({
-      cursorBlink: true,
+      cursorBlink: terminalSettings.cursorBlink,
+      cursorStyle: terminalSettings.cursorStyle,
       convertEol: false,
       allowTransparency: true,
-      fontFamily: '"SFMono-Regular", "JetBrains Mono", "Menlo", monospace',
-      fontSize: 12,
-      lineHeight: 1.35,
-      scrollback: 5000,
+      fontFamily: terminalSettings.fontFamily,
+      fontSize: terminalSettings.fontSize,
+      lineHeight: terminalSettings.lineHeight,
+      scrollback: terminalSettings.scrollback,
       theme: {
         background: "#0b1220",
         foreground: "#d8e1f3",
@@ -89,6 +92,27 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
       terminal.dispose();
     };
   }, []);
+
+  // ── copyOnSelect: copy selected text to clipboard automatically ──
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal || !terminalSettings.copyOnSelect) {
+      return;
+    }
+
+    const disposable = terminal.onSelectionChange(() => {
+      const selection = terminal.getSelection();
+      if (selection) {
+        void navigator.clipboard.writeText(selection).catch(() => {
+          // Silently ignore clipboard write failures
+        });
+      }
+    });
+
+    return () => {
+      disposable.dispose();
+    };
+  }, [terminalSettings.copyOnSelect]);
 
   useEffect(() => {
     if (!active || !isTerminalReady) {

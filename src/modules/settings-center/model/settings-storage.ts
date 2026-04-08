@@ -4,6 +4,7 @@ import {
   DEFAULT_GENERAL_PREFERENCES,
   DEFAULT_POLICY_SETTINGS,
   DEFAULT_SETTINGS,
+  DEFAULT_TERMINAL_SETTINGS,
   DEFAULT_WORKSPACES,
   SETTINGS_STORAGE_KEY,
   SETTINGS_STORAGE_SCHEMA_VERSION,
@@ -11,6 +12,7 @@ import {
 import type {
   AgentProfile,
   SettingsState,
+  TerminalCursorStyle,
 } from "@/modules/settings-center/model/types";
 import {
   type ApprovalPolicy,
@@ -27,6 +29,10 @@ function isPromptResponseStyle(value: unknown): value is PromptResponseStyle {
 
 function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
   return value === "untrusted" || value === "on-request" || value === "never";
+}
+
+function isTerminalCursorStyle(value: unknown): value is TerminalCursorStyle {
+  return value === "block" || value === "underline" || value === "bar";
 }
 
 function parseAgentProfileEntry(raw: Record<string, unknown>): AgentProfile {
@@ -95,6 +101,7 @@ export function readStoredSettings(): SettingsState {
     const generalRaw = isRecord(parsed.general) ? parsed.general : {};
     const workspaces = Array.isArray(parsed.workspaces) ? parsed.workspaces : null;
     const commandsRaw = isRecord(parsed.commands) ? parsed.commands : {};
+    const terminalRaw = isRecord(parsed.terminal) ? parsed.terminal : {};
     const policyRaw = isRecord(parsed.policy) ? parsed.policy : {};
 
     return {
@@ -137,6 +144,18 @@ export function readStoredSettings(): SettingsState {
               })
             : DEFAULT_COMMAND_SETTINGS.commands;
         })(),
+      },
+      terminal: {
+        shellPath: typeof terminalRaw.shellPath === "string" ? terminalRaw.shellPath : DEFAULT_TERMINAL_SETTINGS.shellPath,
+        shellArgs: typeof terminalRaw.shellArgs === "string" ? terminalRaw.shellArgs : DEFAULT_TERMINAL_SETTINGS.shellArgs,
+        fontFamily: typeof terminalRaw.fontFamily === "string" ? terminalRaw.fontFamily : DEFAULT_TERMINAL_SETTINGS.fontFamily,
+        fontSize: typeof terminalRaw.fontSize === "number" ? terminalRaw.fontSize : DEFAULT_TERMINAL_SETTINGS.fontSize,
+        lineHeight: typeof terminalRaw.lineHeight === "number" ? terminalRaw.lineHeight : DEFAULT_TERMINAL_SETTINGS.lineHeight,
+        cursorStyle: isTerminalCursorStyle(terminalRaw.cursorStyle) ? terminalRaw.cursorStyle : DEFAULT_TERMINAL_SETTINGS.cursorStyle,
+        cursorBlink: typeof terminalRaw.cursorBlink === "boolean" ? terminalRaw.cursorBlink : DEFAULT_TERMINAL_SETTINGS.cursorBlink,
+        scrollback: typeof terminalRaw.scrollback === "number" ? terminalRaw.scrollback : DEFAULT_TERMINAL_SETTINGS.scrollback,
+        copyOnSelect: typeof terminalRaw.copyOnSelect === "boolean" ? terminalRaw.copyOnSelect : DEFAULT_TERMINAL_SETTINGS.copyOnSelect,
+        termEnv: typeof terminalRaw.termEnv === "string" ? terminalRaw.termEnv : DEFAULT_TERMINAL_SETTINGS.termEnv,
       },
       ...parseAgentProfiles(parsed),
       policy: {
@@ -190,6 +209,7 @@ export function persistLocalUiSettings(settings: SettingsState) {
     general: settings.general,
     workspaces: settings.workspaces,
     commands: settings.commands,
+    terminal: settings.terminal,
     providers: [],
   }));
 }

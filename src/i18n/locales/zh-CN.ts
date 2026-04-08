@@ -210,6 +210,9 @@ const zhCN = {
   "settings.category.commands": "快捷命令",
   "settings.category.commandsDesc":
     "创建在聊天中输入 / 时出现的可复用提示快捷方式。",
+  "settings.category.terminal": "终端",
+  "settings.category.terminalDesc":
+    "配置内嵌终端的 Shell、外观和行为设置。",
   "settings.category.permissions": "权限配置",
   "settings.category.permissionsDesc":
     "控制审批模式、允许和拒绝规则、沙盒访问、网络访问和可写路径。",
@@ -342,6 +345,38 @@ const zhCN = {
   "settings.commands.commandPromptLabel": "命令提示词",
   "settings.commands.commandPromptPlaceholder":
     "编写此命令被使用时发送给模型的展开提示词...",
+
+  // ── Settings: Terminal Panel ──────────────────────────────
+  "settings.terminal.shell": "Shell",
+  "settings.terminal.shellLabel": "默认 Shell",
+  "settings.terminal.shellDesc": "选择内嵌终端使用的 Shell。保留为自动将使用系统默认值。",
+  "settings.terminal.shellAutoDetect": "自动（系统默认）",
+  "settings.terminal.shellCustom": "自定义",
+  "settings.terminal.shellArgsLabel": "Shell 参数",
+  "settings.terminal.shellArgsDesc": "启动 Shell 时传递的额外参数（如 --login）。",
+  "settings.terminal.shellArgsPlaceholder": "例如 --login",
+  "settings.terminal.appearance": "外观",
+  "settings.terminal.fontFamilyLabel": "字体",
+  "settings.terminal.fontFamilyDesc": "用于渲染终端文本的字体系列。",
+  "settings.terminal.fontSizeLabel": "字号",
+  "settings.terminal.fontSizeDesc": "终端文本大小，单位像素（8 - 32）。",
+  "settings.terminal.lineHeightLabel": "行高",
+  "settings.terminal.lineHeightDesc": "终端行间距倍数（1.0 - 2.0）。",
+  "settings.terminal.cursorStyleLabel": "光标样式",
+  "settings.terminal.cursorStyleDesc": "终端光标的形状。",
+  "settings.terminal.cursorStyleBlock": "方块",
+  "settings.terminal.cursorStyleUnderline": "下划线",
+  "settings.terminal.cursorStyleBar": "竖线",
+  "settings.terminal.cursorBlinkLabel": "光标闪烁",
+  "settings.terminal.cursorBlinkDesc": "终端光标是否闪烁。",
+  "settings.terminal.behavior": "行为",
+  "settings.terminal.scrollbackLabel": "回滚行数",
+  "settings.terminal.scrollbackDesc": "滚动缓冲区保留的最大行数（500 - 100,000）。",
+  "settings.terminal.copyOnSelectLabel": "选中即复制",
+  "settings.terminal.copyOnSelectDesc": "自动将选中的文本复制到剪贴板。",
+  "settings.terminal.environment": "环境变量",
+  "settings.terminal.termEnvLabel": "TERM 变量",
+  "settings.terminal.termEnvDesc": "发送给 Shell 的 TERM 环境变量值。",
 
   // ── Settings: Permissions Panel ────────────────────────────
   "settings.permissions.execution": "执行",

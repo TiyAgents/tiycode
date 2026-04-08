@@ -5,6 +5,7 @@ import type {
   PolicySettings,
   ProviderEntry,
   SettingsState,
+  TerminalSettings,
   WorkspaceEntry,
 } from "@/modules/settings-center/model/types";
 
@@ -14,6 +15,17 @@ export const GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY = "general.launch_at_login";
 export const GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY =
   "general.prevent_sleep_while_running";
 export const GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY = "general.minimize_to_tray";
+
+export const TERMINAL_SHELL_PATH_SETTING_KEY = "terminal.shell_path";
+export const TERMINAL_SHELL_ARGS_SETTING_KEY = "terminal.shell_args";
+export const TERMINAL_FONT_FAMILY_SETTING_KEY = "terminal.font_family";
+export const TERMINAL_FONT_SIZE_SETTING_KEY = "terminal.font_size";
+export const TERMINAL_LINE_HEIGHT_SETTING_KEY = "terminal.line_height";
+export const TERMINAL_CURSOR_STYLE_SETTING_KEY = "terminal.cursor_style";
+export const TERMINAL_CURSOR_BLINK_SETTING_KEY = "terminal.cursor_blink";
+export const TERMINAL_SCROLLBACK_SETTING_KEY = "terminal.scrollback";
+export const TERMINAL_COPY_ON_SELECT_SETTING_KEY = "terminal.copy_on_select";
+export const TERMINAL_TERM_ENV_SETTING_KEY = "terminal.term_env";
 
 const DEFAULT_CUSTOM_INSTRUCTIONS =
   "Keep answers grounded in the local workspace. Prefer workspace-aware tools over shell commands for exploration. When a task involves risk or ambiguity, surface it before acting.";
@@ -227,11 +239,25 @@ export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
   writableRoots: [],
 };
 
+export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
+  shellPath: "",
+  shellArgs: "",
+  fontFamily: '"SFMono-Regular", "JetBrains Mono", "Menlo", monospace',
+  fontSize: 12,
+  lineHeight: 1.35,
+  cursorStyle: "block",
+  cursorBlink: true,
+  scrollback: 5000,
+  copyOnSelect: false,
+  termEnv: "xterm-256color",
+};
+
 export const DEFAULT_SETTINGS: SettingsState = {
   general: DEFAULT_GENERAL_PREFERENCES,
   workspaces: DEFAULT_WORKSPACES,
   providers: DEFAULT_PROVIDERS,
   commands: DEFAULT_COMMAND_SETTINGS,
+  terminal: DEFAULT_TERMINAL_SETTINGS,
   policy: DEFAULT_POLICY_SETTINGS,
   agentProfiles: DEFAULT_AGENT_PROFILES,
   activeAgentProfileId: "default-profile",
