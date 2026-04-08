@@ -19,7 +19,7 @@ async fn test_terminal_session_lifecycle_and_output() {
 
     let manager = Arc::new(TerminalManager::new(pool.clone()));
     let attachment = manager
-        .create_or_attach("thread-terminal", Some(80), Some(24))
+        .create_or_attach("thread-terminal", Some(80), Some(24), None, None, None)
         .await
         .expect("terminal attach should succeed");
 
