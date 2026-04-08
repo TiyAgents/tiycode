@@ -37,8 +37,7 @@ pub async fn run_command(
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let shell =
-                std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
             let mut c = Command::new(shell);
             c.arg("-c").arg(command);
             c
@@ -48,11 +47,8 @@ pub async fn run_command(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        cmd.output(),
-    )
-    .await;
+    let result =
+        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await;
 
     match result {
         Ok(Ok(output)) => {

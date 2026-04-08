@@ -449,8 +449,7 @@ pub async fn find_files(
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let shell =
-                std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
             let quoted_dir = shell_quote(&search_dir.to_string_lossy());
             let quoted_pattern = shell_quote(pattern);
 
