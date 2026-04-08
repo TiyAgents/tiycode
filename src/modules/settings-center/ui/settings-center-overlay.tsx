@@ -62,6 +62,7 @@ import type {
   PatternEntry,
   PolicySettings,
   PromptResponseStyle,
+  ThinkingLevel,
   ProviderCatalogEntry,
   ProviderEntry,
   ProviderModel,
@@ -251,6 +252,17 @@ function getResponseStyleOptions(t: TFunc) {
     { value: "concise" as PromptResponseStyle, label: t("settings.responseStyle.concise"), description: t("settings.responseStyle.conciseDesc") },
     { value: "balanced" as PromptResponseStyle, label: t("settings.responseStyle.balanced"), description: t("settings.responseStyle.balancedDesc") },
     { value: "guide" as PromptResponseStyle, label: t("settings.responseStyle.guided"), description: t("settings.responseStyle.guidedDesc") },
+  ];
+}
+
+function getThinkingLevelOptions(t: TFunc) {
+  return [
+    { value: "off" as ThinkingLevel, label: t("settings.thinkingLevel.off"), description: t("settings.thinkingLevel.offDesc") },
+    { value: "minimal" as ThinkingLevel, label: t("settings.thinkingLevel.minimal"), description: t("settings.thinkingLevel.minimalDesc") },
+    { value: "low" as ThinkingLevel, label: t("settings.thinkingLevel.low"), description: t("settings.thinkingLevel.lowDesc") },
+    { value: "medium" as ThinkingLevel, label: t("settings.thinkingLevel.medium"), description: t("settings.thinkingLevel.mediumDesc") },
+    { value: "high" as ThinkingLevel, label: t("settings.thinkingLevel.high"), description: t("settings.thinkingLevel.highDesc") },
+    { value: "xhigh" as ThinkingLevel, label: t("settings.thinkingLevel.xhigh"), description: t("settings.thinkingLevel.xhighDesc") },
   ];
 }
 
@@ -1152,6 +1164,7 @@ function GeneralSettingsPanel({
 }) {
   const t = useT();
   const RESPONSE_STYLE_OPTIONS = useMemo(() => getResponseStyleOptions(t), [t]);
+  const THINKING_LEVEL_OPTIONS = useMemo(() => getThinkingLevelOptions(t), [t]);
 
   const availableModels = useMemo(() => {
     const models: Array<{
@@ -1185,6 +1198,7 @@ function GeneralSettingsPanel({
 
   const activeProfile = agentProfiles.find((p) => p.id === activeAgentProfileId) ?? agentProfiles[0];
   const selectedStyle = RESPONSE_STYLE_OPTIONS.find((option) => option.value === activeProfile.responseStyle) ?? RESPONSE_STYLE_OPTIONS[0];
+  const selectedThinking = THINKING_LEVEL_OPTIONS.find((option) => option.value === activeProfile.thinkingLevel) ?? THINKING_LEVEL_OPTIONS[0];
 
   const handleAddProfile = () => {
     onAddAgentProfile({
@@ -1192,6 +1206,7 @@ function GeneralSettingsPanel({
       customInstructions: "",
       commitMessagePrompt: activeProfile.commitMessagePrompt,
       responseStyle: "balanced",
+      thinkingLevel: "off",
       responseLanguage: "English",
       commitMessageLanguage: "English",
       primaryProviderId: "",
@@ -1342,6 +1357,18 @@ function GeneralSettingsPanel({
             primaryProviderId: providerId,
             primaryModelId: modelRecordId,
           })}
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.thinkingLevel")}
+          description={selectedThinking.description}
+          control={
+            <ChoiceGroup
+              options={THINKING_LEVEL_OPTIONS.map(({ label, value }) => ({ label, value }))}
+              value={activeProfile.thinkingLevel}
+              onValueChange={(value) => onUpdateAgentProfile(activeProfile.id, { thinkingLevel: value as ThinkingLevel })}
+            />
+          }
         />
         <SectionDivider />
         <ModelSelectRow

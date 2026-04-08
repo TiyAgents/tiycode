@@ -256,6 +256,8 @@ const en: Record<TranslationKey, string> = {
   "settings.general.commitLanguageDesc": "The language used when the Git panel generates commit messages.",
   "settings.general.primaryModel": "Primary model",
   "settings.general.primaryModelDesc": "Handles the main task flow, deep reasoning, and the Plan Agent.",
+  "settings.general.thinkingLevel": "Thinking level",
+  "settings.general.thinkingLevelDesc": "Controls reasoning depth for the primary model. Higher levels use more tokens.",
   "settings.general.auxiliaryModel": "Auxiliary model",
   "settings.general.auxiliaryModelDesc": "Supports Explore and Review helper agents, with fallback to Primary when unset.",
   "settings.general.lightweightModel": "Lightweight model",
@@ -274,6 +276,20 @@ const en: Record<TranslationKey, string> = {
   "settings.responseStyle.balancedDesc": "Compact by default, with extra detail only when it helps.",
   "settings.responseStyle.guided": "Guided",
   "settings.responseStyle.guidedDesc": "Explanatory replies with reasoning, tradeoffs, and next steps.",
+
+  // ── Settings: Thinking Level Options ─────────────────────
+  "settings.thinkingLevel.off": "Off",
+  "settings.thinkingLevel.offDesc": "No extended thinking. Standard response.",
+  "settings.thinkingLevel.minimal": "Minimal",
+  "settings.thinkingLevel.minimalDesc": "Light reasoning for straightforward tasks.",
+  "settings.thinkingLevel.low": "Low",
+  "settings.thinkingLevel.lowDesc": "Basic reasoning with modest token usage.",
+  "settings.thinkingLevel.medium": "Medium",
+  "settings.thinkingLevel.mediumDesc": "Balanced reasoning for most tasks.",
+  "settings.thinkingLevel.high": "High",
+  "settings.thinkingLevel.highDesc": "Deep reasoning for complex tasks.",
+  "settings.thinkingLevel.xhigh": "Extra High",
+  "settings.thinkingLevel.xhighDesc": "Maximum reasoning depth. Uses the most tokens.",
 
   // ── Settings: Profile Picker ───────────────────────────────
   "settings.profile.currentProfile": "Current Profile:",

@@ -269,6 +269,8 @@ const zhCN = {
     "Git 面板生成 Commit 消息时使用的语言。",
   "settings.general.primaryModel": "主模型",
   "settings.general.primaryModelDesc": "处理主任务流、深度推理和 Plan Agent。",
+  "settings.general.thinkingLevel": "推理级别",
+  "settings.general.thinkingLevelDesc": "控制主模型的推理深度，级别越高消耗 token 越多。",
   "settings.general.auxiliaryModel": "辅助模型",
   "settings.general.auxiliaryModelDesc":
     "支持 Explore 和 Review 辅助 Agent，未设置时回退到主模型。",
@@ -292,6 +294,20 @@ const zhCN = {
   "settings.responseStyle.guided": "引导",
   "settings.responseStyle.guidedDesc":
     "解释性回复，包含推理、权衡和下一步建议。",
+
+  // ── Settings: Thinking Level Options ─────────────────────
+  "settings.thinkingLevel.off": "关闭",
+  "settings.thinkingLevel.offDesc": "不使用扩展思考，标准回复。",
+  "settings.thinkingLevel.minimal": "极简",
+  "settings.thinkingLevel.minimalDesc": "轻量推理，适合简单任务。",
+  "settings.thinkingLevel.low": "低",
+  "settings.thinkingLevel.lowDesc": "基础推理，适度消耗 token。",
+  "settings.thinkingLevel.medium": "中",
+  "settings.thinkingLevel.mediumDesc": "均衡推理，适合大多数任务。",
+  "settings.thinkingLevel.high": "高",
+  "settings.thinkingLevel.highDesc": "深度推理，适合复杂任务。",
+  "settings.thinkingLevel.xhigh": "极高",
+  "settings.thinkingLevel.xhighDesc": "最大推理深度，消耗最多 token。",
 
   // ── Settings: Profile Picker ───────────────────────────────
   "settings.profile.currentProfile": "当前 Profile：",

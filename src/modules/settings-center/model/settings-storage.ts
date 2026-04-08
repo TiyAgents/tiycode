@@ -17,6 +17,7 @@ import type {
 import {
   type ApprovalPolicy,
   type PromptResponseStyle,
+  type ThinkingLevel,
 } from "@/modules/settings-center/model/types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -25,6 +26,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isPromptResponseStyle(value: unknown): value is PromptResponseStyle {
   return value === "balanced" || value === "concise" || value === "guide";
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
 }
 
 function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
@@ -44,6 +49,7 @@ function parseAgentProfileEntry(raw: Record<string, unknown>): AgentProfile {
     customInstructions: typeof raw.customInstructions === "string" ? raw.customInstructions : defaultProfile.customInstructions,
     commitMessagePrompt: typeof raw.commitMessagePrompt === "string" ? raw.commitMessagePrompt : defaultProfile.commitMessagePrompt,
     responseStyle: isPromptResponseStyle(raw.responseStyle) ? raw.responseStyle : defaultProfile.responseStyle,
+    thinkingLevel: isThinkingLevel(raw.thinkingLevel) ? raw.thinkingLevel : defaultProfile.thinkingLevel,
     responseLanguage: typeof raw.responseLanguage === "string" ? raw.responseLanguage : defaultProfile.responseLanguage,
     commitMessageLanguage:
       typeof raw.commitMessageLanguage === "string"

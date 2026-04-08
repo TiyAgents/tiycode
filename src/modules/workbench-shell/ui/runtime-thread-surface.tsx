@@ -864,6 +864,24 @@ function getSnapshotRuntimeError(snapshot: ThreadSnapshotDto): SurfaceRuntimeErr
   };
 }
 
+/**
+ * Message status progression order.  A live-stream message whose status is
+ * further along in this list should NOT be overwritten by a stale snapshot
+ * that still shows an earlier status.
+ */
+const MESSAGE_STATUS_ORDER: Record<string, number> = {
+  streaming: 0,
+  completed: 1,
+  discarded: 2,
+  failed: 3,
+};
+
+function isMoreAdvancedMessageStatus(localStatus: string, snapshotStatus: string): boolean {
+  const localRank = MESSAGE_STATUS_ORDER[localStatus] ?? -1;
+  const snapshotRank = MESSAGE_STATUS_ORDER[snapshotStatus] ?? -1;
+  return localRank > snapshotRank;
+}
+
 function appendOrReplaceMessage(
   messages: Array<SurfaceMessage>,
   nextMessage: SurfaceMessage,
@@ -2168,9 +2186,47 @@ export function RuntimeThreadSurface({
         // its first API response yet.
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
       }
-      // Use functional update to ensure we replace the entire list atomically,
-      // discarding any local-user optimistic messages that may still be in state.
-      setMessages(() => snapshotMessages);
+      // Use snapshot as the base but preserve any live-streamed message that
+      // the snapshot hasn't caught up with yet.  This prevents a stale snapshot
+      // (loaded while the DB write is still in-flight) from overwriting a
+      // message that the user already saw streaming.
+      setMessages((currentMessages) => {
+        if (currentMessages.length === 0) {
+          return snapshotMessages;
+        }
+
+        // Start from the snapshot list, then merge any local messages that
+        // are more "advanced" than the snapshot version or completely absent.
+        const merged = snapshotMessages.slice();
+        for (const localMsg of currentMessages) {
+          const snapshotIdx = merged.findIndex((m) => m.id === localMsg.id);
+          if (snapshotIdx === -1) {
+            // Message exists locally but not in snapshot — keep it when it
+            // has meaningful content (streaming or completed assistant reply).
+            if (
+              localMsg.role === "assistant"
+              && (localMsg.status === "streaming" || localMsg.status === "completed")
+              && localMsg.content.length > 0
+            ) {
+              merged.push(localMsg);
+            }
+          } else if (
+            isMoreAdvancedMessageStatus(localMsg.status, merged[snapshotIdx].status)
+          ) {
+            merged[snapshotIdx] = localMsg;
+          } else if (
+            merged[snapshotIdx].status === localMsg.status
+            && merged[snapshotIdx].role === "assistant"
+            && merged[snapshotIdx].content.length === 0
+            && localMsg.content.length > 0
+          ) {
+            // Snapshot has same status but empty content while local has
+            // content — keep the local version (DB write not yet committed).
+            merged[snapshotIdx] = localMsg;
+          }
+        }
+        return merged;
+      });
       setHasMoreMessages(snapshot.hasMoreMessages);
       setApprovingPlanMessageId(null);
       setTools((currentTools) => {

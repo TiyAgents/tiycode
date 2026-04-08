@@ -2307,7 +2307,7 @@ async fn resolve_model_plan(
         )
     })?;
 
-    let primary = resolve_runtime_model_role(pool, primary).await?;
+    let mut primary = resolve_runtime_model_role(pool, primary).await?;
     let auxiliary = match raw_plan.auxiliary.clone() {
         Some(role) => Some(resolve_runtime_model_role(pool, role).await?),
         None => None,
@@ -2317,12 +2317,23 @@ async fn resolve_model_plan(
         None => None,
     };
 
+    let thinking_level = raw_plan
+        .thinking_level
+        .as_deref()
+        .map(ThinkingLevel::from)
+        .unwrap_or(ThinkingLevel::Off);
+
+    // When the user has selected a thinking level, ensure the primary model
+    // has its `reasoning` flag enabled so that the protocol layer actually
+    // includes the reasoning parameters in the API request.  Without this
+    // the protocol guard (`if !model.reasoning { return None; }`) silently
+    // drops the thinking configuration.
+    if thinking_level != ThinkingLevel::Off && !primary.model.reasoning {
+        primary.model.reasoning = true;
+    }
+
     Ok(ResolvedRuntimeModelPlan {
-        thinking_level: raw_plan
-            .thinking_level
-            .as_deref()
-            .map(ThinkingLevel::from)
-            .unwrap_or(ThinkingLevel::Off),
+        thinking_level,
         transport: parse_transport(raw_plan.transport.as_deref()),
         raw: raw_plan,
         primary,
@@ -2572,6 +2583,7 @@ mod tests {
             response_style: Some("balanced".to_string()),
             response_language: Some("English".to_string()),
             commit_message_language: Some("English".to_string()),
+            thinking_level: None,
             primary_provider_id: None,
             primary_model_id: None,
             auxiliary_provider_id: None,

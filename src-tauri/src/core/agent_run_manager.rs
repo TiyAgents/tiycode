@@ -889,7 +889,15 @@ impl AgentRunManager {
                 ..
             } => {
                 let persisted_id = self.ensure_streaming_message(run_id, message_id).await?;
-                message_repo::replace_content(&self.pool, &persisted_id, content).await?;
+                // Only replace content when the completed snapshot is non-empty.
+                // With extended-thinking models the final `text_content()` may
+                // return an empty string (it excludes Thinking blocks) even though
+                // streaming deltas have already been appended to the DB.  In that
+                // case, keep the delta-accumulated content instead of overwriting
+                // it with an empty string.
+                if !content.is_empty() {
+                    message_repo::replace_content(&self.pool, &persisted_id, content).await?;
+                }
                 message_repo::update_status(&self.pool, &persisted_id, "completed").await?;
 
                 let mut runs = self.active_runs.lock().await;

@@ -183,6 +183,7 @@ export const DEFAULT_AGENT_PROFILES: Array<AgentProfile> = [
     customInstructions: DEFAULT_CUSTOM_INSTRUCTIONS,
     commitMessagePrompt: DEFAULT_COMMIT_MESSAGE_PROMPT,
     responseStyle: "balanced",
+    thinkingLevel: "off",
     responseLanguage: "English",
     commitMessageLanguage: "English",
     primaryProviderId: "",

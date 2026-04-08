@@ -1,5 +1,6 @@
 export type SettingsCategory = "account" | "general" | "workspace" | "providers" | "commands" | "terminal" | "policy" | "about";
 export type PromptResponseStyle = "balanced" | "concise" | "guide";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";
 export type PatternEntry = { id: string; pattern: string };
 export type WritableRootEntry = { id: string; path: string };
@@ -91,6 +92,7 @@ export type AgentProfile = {
   customInstructions: string;
   commitMessagePrompt: string;
   responseStyle: PromptResponseStyle;
+  thinkingLevel: ThinkingLevel;
   responseLanguage: string;
   commitMessageLanguage: string;
   primaryProviderId: string;

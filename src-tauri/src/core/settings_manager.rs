@@ -1288,6 +1288,7 @@ impl SettingsManager {
             response_style: input.response_style,
             response_language: input.response_language,
             commit_message_language: input.commit_message_language,
+            thinking_level: input.thinking_level,
             primary_provider_id: input.primary_provider_id,
             primary_model_id: input.primary_model_id,
             auxiliary_provider_id: input.auxiliary_provider_id,
@@ -1331,6 +1332,7 @@ impl SettingsManager {
             commit_message_language: input
                 .commit_message_language
                 .or(existing.commit_message_language),
+            thinking_level: input.thinking_level.or(existing.thinking_level),
             primary_provider_id: input.primary_provider_id.or(existing.primary_provider_id),
             primary_model_id: input.primary_model_id.or(existing.primary_model_id),
             auxiliary_provider_id: input

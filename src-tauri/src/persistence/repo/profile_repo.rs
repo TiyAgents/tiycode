@@ -13,6 +13,7 @@ struct ProfileRow {
     response_style: Option<String>,
     response_language: Option<String>,
     commit_message_language: Option<String>,
+    thinking_level: Option<String>,
     primary_provider_id: Option<String>,
     primary_model_id: Option<String>,
     auxiliary_provider_id: Option<String>,
@@ -34,6 +35,7 @@ impl ProfileRow {
             response_style: self.response_style,
             response_language: self.response_language,
             commit_message_language: self.commit_message_language,
+            thinking_level: self.thinking_level,
             primary_provider_id: self.primary_provider_id,
             primary_model_id: self.primary_model_id,
             auxiliary_provider_id: self.auxiliary_provider_id,
@@ -50,7 +52,7 @@ impl ProfileRow {
 pub async fn list_all(pool: &SqlitePool) -> Result<Vec<AgentProfileRecord>, AppError> {
     let rows = sqlx::query_as::<_, ProfileRow>(
         "SELECT id, name, custom_instructions, commit_message_prompt, response_style, response_language,
-                commit_message_language,
+                commit_message_language, thinking_level,
                 primary_provider_id, primary_model_id,
                 auxiliary_provider_id, auxiliary_model_id,
                 lightweight_provider_id, lightweight_model_id,
@@ -69,7 +71,7 @@ pub async fn find_by_id(
 ) -> Result<Option<AgentProfileRecord>, AppError> {
     let row = sqlx::query_as::<_, ProfileRow>(
         "SELECT id, name, custom_instructions, commit_message_prompt, response_style, response_language,
-                commit_message_language,
+                commit_message_language, thinking_level,
                 primary_provider_id, primary_model_id,
                 auxiliary_provider_id, auxiliary_model_id,
                 lightweight_provider_id, lightweight_model_id,
@@ -87,11 +89,12 @@ pub async fn insert(pool: &SqlitePool, record: &AgentProfileRecord) -> Result<()
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT INTO agent_profiles (id, name, custom_instructions, commit_message_prompt, response_style,
-                response_language, commit_message_language, primary_provider_id, primary_model_id,
+                response_language, commit_message_language, thinking_level,
+                primary_provider_id, primary_model_id,
                 auxiliary_provider_id, auxiliary_model_id,
                 lightweight_provider_id, lightweight_model_id,
                 is_default, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.name)
@@ -100,6 +103,7 @@ pub async fn insert(pool: &SqlitePool, record: &AgentProfileRecord) -> Result<()
     .bind(&record.response_style)
     .bind(&record.response_language)
     .bind(&record.commit_message_language)
+    .bind(&record.thinking_level)
     .bind(&record.primary_provider_id)
     .bind(&record.primary_model_id)
     .bind(&record.auxiliary_provider_id)
@@ -119,7 +123,8 @@ pub async fn update(pool: &SqlitePool, record: &AgentProfileRecord) -> Result<()
     let now = Utc::now().to_rfc3339();
     let result = sqlx::query(
         "UPDATE agent_profiles SET name = ?, custom_instructions = ?, commit_message_prompt = ?, response_style = ?,
-                response_language = ?, commit_message_language = ?, primary_provider_id = ?, primary_model_id = ?,
+                response_language = ?, commit_message_language = ?, thinking_level = ?,
+                primary_provider_id = ?, primary_model_id = ?,
                 auxiliary_provider_id = ?, auxiliary_model_id = ?,
                 lightweight_provider_id = ?, lightweight_model_id = ?,
                 is_default = ?, updated_at = ?
@@ -131,6 +136,7 @@ pub async fn update(pool: &SqlitePool, record: &AgentProfileRecord) -> Result<()
     .bind(&record.response_style)
     .bind(&record.response_language)
     .bind(&record.commit_message_language)
+    .bind(&record.thinking_level)
     .bind(&record.primary_provider_id)
     .bind(&record.primary_model_id)
     .bind(&record.auxiliary_provider_id)

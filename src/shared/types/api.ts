@@ -130,6 +130,7 @@ export interface AgentProfileDto {
   customInstructions: string | null;
   commitMessagePrompt: string | null;
   responseStyle: string | null;
+  thinkingLevel: string | null;
   responseLanguage: string | null;
   commitMessageLanguage: string | null;
   primaryProviderId: string | null;
@@ -148,6 +149,7 @@ export interface AgentProfileInput {
   customInstructions?: string;
   commitMessagePrompt?: string;
   responseStyle?: string;
+  thinkingLevel?: string;
   responseLanguage?: string;
   commitMessageLanguage?: string;
   primaryProviderId?: string;
@@ -182,6 +184,7 @@ export interface RunModelPlanDto {
   profileName?: string | null;
   customInstructions?: string | null;
   responseStyle?: string | null;
+  thinkingLevel?: string | null;
   responseLanguage?: string | null;
   primary?: RunModelPlanRoleDto | null;
   auxiliary?: RunModelPlanRoleDto | null;
