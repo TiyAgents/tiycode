@@ -6,6 +6,8 @@
   <p>
     <a href="./README_zh.md">简体中文</a>
   </p>
+  <br />
+  <img src="https://github.com/user-attachments/assets/e0f3fdb3-58a9-4216-ac6f-f67bb95ee4e5" alt="TiyCode screenshot" width="960" />
 </div>
 
 ## Why TiyCode
@@ -21,7 +23,7 @@ Around that collaboration model, TiyCode brings together Agent Profiles, workspa
 - **Workspace-centered execution.** Threads stay grounded in the local workspace and connect naturally to code review, version control, repository inspection, and terminal workflows.
 - **Operator-friendly experience.** Slash commands, smart conversation titles, context compression controls, and commit message generation help the product feel fast and practical in day-to-day use.
 - **Extensible by design.** Plugins, MCP servers, and Skills are treated as first-class building blocks through the `Extensions Center`.
-- **Built-in runtime path.** The main execution flow is `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`, so agent runs do not depend on a separate sidecar process.
+- **Built-in runtime path.** The main execution flow is `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`.
 
 ## Tech Stack
 
@@ -34,10 +36,26 @@ Around that collaboration model, TiyCode brings together Agent Profiles, workspa
 
 ## Quick Start
 
-> [!IMPORTANT]
-> TiyCode currently targets a source-first workflow. There is no verified packaged installation path documented in this repository yet.
+### Install via Homebrew (macOS)
 
-### Prerequisites
+```bash
+brew tap TiyAgents/tap
+brew install --cask tiycode
+```
+
+To upgrade later:
+
+```bash
+brew upgrade tiycode
+```
+
+### Download from GitHub Releases
+
+Pre-built binaries for macOS, Windows, and Linux are available on the [Releases](https://github.com/TiyAgents/tiycode/releases) page.
+
+### Build from Source
+
+#### Prerequisites
 
 Before running the app, make sure your environment has the toolchain needed for a Tauri 2 project:
 
@@ -45,33 +63,33 @@ Before running the app, make sure your environment has the toolchain needed for 
 - Rust toolchain
 - Platform dependencies required by Tauri
 
-### Run in development
+#### Run in development
 
 ```bash
 npm install
 npm run dev
 ```
 
-### Run the web UI only
+#### Run the web UI only
 
 ```bash
 npm install
 npm run dev:web
 ```
 
-### Build
+#### Build
 
 ```bash
 npm run build
 ```
 
-### Type-check the frontend
+#### Type-check the frontend
 
 ```bash
 npm run typecheck
 ```
 
-### Run Rust tests
+#### Run Rust tests
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml
