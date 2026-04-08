@@ -92,6 +92,24 @@ pub async fn find_by_key(
     Ok(row.map(|r| r.into_record()))
 }
 
+pub async fn find_all_by_key(
+    pool: &SqlitePool,
+    provider_key: &str,
+) -> Result<Vec<ProviderRecord>, AppError> {
+    let rows = sqlx::query_as::<_, ProviderRow>(
+        "SELECT id, provider_kind, provider_key, protocol_type, name, base_url,
+                api_key_encrypted, enabled, mapping_locked, custom_headers_json,
+                created_at, updated_at
+         FROM providers WHERE provider_key = ?
+         ORDER BY updated_at DESC, id DESC",
+    )
+    .bind(provider_key)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|r| r.into_record()).collect())
+}
+
 pub async fn insert(pool: &SqlitePool, record: &ProviderRecord) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(

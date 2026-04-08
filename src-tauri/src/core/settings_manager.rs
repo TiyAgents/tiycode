@@ -28,7 +28,7 @@ use crate::model::settings::SettingRecord;
 use crate::persistence::repo::{profile_repo, provider_repo, settings_repo};
 
 const PROVIDER_SCHEMA_VERSION_KEY: &str = "providers.schema_version";
-const PROVIDER_SCHEMA_VERSION: u32 = 3;
+const PROVIDER_SCHEMA_VERSION: u32 = 4;
 const TIY_CATALOG_SNAPSHOT_FILE: &str = "catalog.json";
 const PROVIDER_MODEL_TEST_PROMPT: &str = "Ping from TiyCode.";
 const PROVIDER_MODEL_TEST_MIN_MAX_TOKENS: u32 = 16;
@@ -1076,6 +1076,26 @@ impl SettingsManager {
                 .await?;
         }
 
+        if current_version < 4 {
+            // Clean up duplicate providers (keep most recent by updated_at, then ID)
+            sqlx::query(
+                "DELETE FROM providers WHERE id IN (
+                    WITH ranked_providers AS (
+                        SELECT 
+                            id,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY provider_key 
+                                ORDER BY updated_at DESC, id DESC
+                            ) as rn
+                        FROM providers
+                    )
+                    SELECT id FROM ranked_providers WHERE rn > 1
+                )",
+            )
+            .execute(&self.pool)
+            .await?;
+        }
+
         if current_version != PROVIDER_SCHEMA_VERSION {
             settings_repo::set(
                 &self.pool,
@@ -1089,11 +1109,13 @@ impl SettingsManager {
     }
 
     async fn seed_builtin_providers(&self) -> Result<(), AppError> {
+        // Get the set of provider keys that should exist
         let builtin_keys = BUILTIN_PROVIDER_CATALOG
             .iter()
             .map(|entry| entry.provider_key)
             .collect::<HashSet<_>>();
 
+        // Step 1: Delete builtin providers that are no longer in the catalog (cleanup orphans)
         for record in provider_repo::list_all(&self.pool).await? {
             if record.provider_kind == ProviderKind::Builtin
                 && !builtin_keys.contains(record.provider_key.as_str())
@@ -1102,10 +1124,26 @@ impl SettingsManager {
             }
         }
 
+        // Step 2: Clean up duplicates within each builtin provider key
+        // Keep only the most recent one (by updated_at, then by ID)
+        for entry in BUILTIN_PROVIDER_CATALOG {
+            let all_with_key = provider_repo::find_all_by_key(&self.pool, entry.provider_key).await?;
+            
+            // Find the one to keep (most recent)
+            if let Some(primary) = all_with_key.first() {
+                // Delete all others
+                for duplicate in all_with_key.iter().skip(1) {
+                    provider_repo::delete(&self.pool, &duplicate.id).await?;
+                }
+            }
+        }
+
+        // Step 3: Upsert each builtin provider from the catalog
         for entry in BUILTIN_PROVIDER_CATALOG {
             let existing = provider_repo::find_by_key(&self.pool, entry.provider_key).await?;
 
             let provider_id = if let Some(record) = existing {
+                // Update existing provider
                 let updated = ProviderRecord {
                     id: record.id.clone(),
                     provider_kind: ProviderKind::Builtin,
@@ -1127,6 +1165,7 @@ impl SettingsManager {
                 provider_repo::update(&self.pool, &updated).await?;
                 updated.id
             } else {
+                // Create new provider
                 let provider_id = uuid::Uuid::now_v7().to_string();
                 let created = ProviderRecord {
                     id: provider_id.clone(),
