@@ -3,6 +3,7 @@
 import type { ChatStatus } from "ai";
 import { AlertCircleIcon, BotIcon, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useT, type TranslationKey } from "@/i18n";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import {
@@ -2801,6 +2802,40 @@ export function RuntimeThreadSurface({
     threadId,
   ]);
 
+  // Global "thread-run-finished" listener acts as a safety net.
+  // If the per-stream `onRunStateChange` callback misses a terminal event
+  // (e.g. the stream was disposed during an effect re-run or the broadcast
+  // channel lagged), this listener will still fire because it is emitted as
+  // a Tauri app-wide event, independent of the broadcast channel.
+  useEffect(() => {
+    if (!threadId) {
+      return;
+    }
+
+    const setup = listen<{ threadId: string; runId: string; status: string }>(
+      "thread-run-finished",
+      (event) => {
+        if (event.payload.threadId !== threadId) {
+          return;
+        }
+
+        // Only reload if we still think the run is active — avoids
+        // unnecessary snapshot loads when the stream already handled it.
+        setRunState((current) => {
+          if (current === "running" || current === "waiting_approval" || current === "needs_reply") {
+            void loadSnapshot();
+          }
+
+          return current;
+        });
+      },
+    );
+
+    return () => {
+      setup.then((fn) => fn());
+    };
+  }, [loadSnapshot, threadId]);
+
   const submitPrompt = useCallback(async (
     submissionOrPrompt: ComposerSubmission | string,
     runModeOverride?: RunMode,
@@ -4219,6 +4254,12 @@ export function RuntimeThreadSurface({
               // the next `onRunStateChange` + `loadSnapshot` will render the
               // correct state and this timer becomes a harmless no-op.
               return () => clearTimeout(timer);
+            }).catch(() => {
+              // The cancel request failed — most likely the run already
+              // finished on the backend but the terminal event was lost or
+              // hasn't arrived yet.  Reload the snapshot to reconcile the
+              // UI with the actual backend state.
+              void loadSnapshot();
             });
           }}
           onSubmit={handleSubmit}
