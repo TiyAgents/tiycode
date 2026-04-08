@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.14] - 2026-04-08
+### :wrench: Chores
+- [`273f575`](https://github.com/TiyAgents/tiycode/commit/273f575be1204a063eb728c308d4f7c50a4b3c8f) - **ci**: ✨ streamline Windows artifact collection in release workflow *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.13] - 2026-04-07
 ### :wrench: Chores
 - [`674201f`](https://github.com/TiyAgents/tiycode/commit/674201fe97c2413a819988e31d27e06c50e10adb) - **ci**: 🔧 add empty releaseId to tauri release workflow *(commit by [@jorben](https://github.com/jorben))*
@@ -339,3 +344,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.8]: https://github.com/TiyAgents/tiycode/compare/0.1.7...0.1.8
 [0.1.11]: https://github.com/TiyAgents/tiycode/compare/0.1.10...0.1.11
 [0.1.13]: https://github.com/TiyAgents/tiycode/compare/0.1.12...0.1.13
+[0.1.14]: https://github.com/TiyAgents/tiycode/compare/0.1.13...0.1.14
