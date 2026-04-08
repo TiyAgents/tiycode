@@ -21,7 +21,7 @@ jobs:
             platform: macos
             arch: aarch64
             target: aarch64-apple-darwin
-          - os: macos-14
+          - os: macos-13
             platform: macos
             arch: x86_64
             target: x86_64-apple-darwin
@@ -224,38 +224,12 @@ jobs:
               cp "$f" "release-artifacts/${RENAMED}"
             done
           elif [ "${{ matrix.platform }}" = "windows" ]; then
-            echo "Inspecting Windows bundle directories for updater artifacts..."
-            for dir in \
-              "$BUNDLE_DIR" \
-              "$BUNDLE_DIR"/nsis \
-              "$BUNDLE_DIR"/nsis-updater \
-              "$BUNDLE_DIR"/msi \
-              "$BUNDLE_DIR"/msi-updater
-            do
-              if [ -d "$dir" ]; then
-                echo "--- $dir"
-                find "$dir" -maxdepth 1 -type f | sort || true
-              else
-                echo "--- $dir (missing)"
-              fi
-            done
-
-            echo "Collecting Windows artifacts from bundle root using PowerShell allowlist..."
-            powershell -NoProfile -Command '
-              $bundleDir = "src-tauri/target/${{ matrix.target }}/release/bundle"
-              $outDir = "release-artifacts"
-              $allowed = @(".exe", ".msi", ".zip", ".exe.sig", ".msi.sig", ".zip.sig")
-              $escaped = $allowed | ForEach-Object { [regex]::Escape($_) }
-              $suffixRe = "(" + ($escaped -join "|") + ")$"
-
-              Get-ChildItem -Path $bundleDir -Recurse -File |
-                Where-Object { $_.Name.ToLowerInvariant() -match $suffixRe } |
-                Sort-Object FullName |
-                ForEach-Object {
-                  Write-Host "Copying $($_.Name) from $($_.DirectoryName)"
-                  Copy-Item -LiteralPath $_.FullName -Destination $outDir -Force
-                }
-            '
+            # NSIS installer + updater signature
+            cp "$BUNDLE_DIR"/nsis/*-setup.exe release-artifacts/ 2>/dev/null || true
+            cp "$BUNDLE_DIR"/nsis/*-setup.exe.sig release-artifacts/ 2>/dev/null || true
+            # MSI installer + updater signature
+            cp "$BUNDLE_DIR"/msi/*.msi release-artifacts/ 2>/dev/null || true
+            cp "$BUNDLE_DIR"/msi/*.msi.sig release-artifacts/ 2>/dev/null || true
 
             echo "Windows release-artifacts contents after copy:"
             find release-artifacts -maxdepth 1 -type f | sort || true
@@ -271,10 +245,9 @@ jobs:
           elif [ "${{ matrix.platform }}" = "linux" ]; then
             cp "$BUNDLE_DIR"/deb/*.deb release-artifacts/ 2>/dev/null || true
             cp "$BUNDLE_DIR"/rpm/*.rpm release-artifacts/ 2>/dev/null || true
-            cp "$BUNDLE_DIR"/appimage/*.AppImage release-artifacts/ 2>/dev/null || true
-            # Updater artifacts: .AppImage.tar.gz + .sig
-            cp "$BUNDLE_DIR"/appimage/*.AppImage.tar.gz release-artifacts/ 2>/dev/null || true
-            cp "$BUNDLE_DIR"/appimage/*.AppImage.tar.gz.sig release-artifacts/ 2>/dev/null || true
+            # AppImage + updater signature (critical — fail if missing)
+            cp "$BUNDLE_DIR"/appimage/*.AppImage release-artifacts/
+            cp "$BUNDLE_DIR"/appimage/*.AppImage.sig release-artifacts/
           fi
 
           if [ "$BUNDLE_VERSION" != "$VERSION" ]; then
@@ -321,7 +294,7 @@ jobs:
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
           echo "Resolved release tag: $TAG"
 
-      - name: Download updater artifacts from release
+      - name: Download updater signatures from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -329,29 +302,23 @@ jobs:
           REPO="${{ github.repository }}"
           mkdir -p artifacts
 
-          echo "Downloading updater artifacts from release ${TAG}..."
+          echo "Downloading .sig files from release ${TAG}..."
 
-          # Download all updater-related files (.app.tar.gz, .sig, .nsis.zip, .AppImage.tar.gz, etc.)
-          # These were already uploaded to the release by the build job via softprops/action-gh-release
+          # Only download .sig files (~200 bytes each) — no need for full installers
           gh release download "$TAG" \
             --repo "$REPO" \
-            --pattern "*.app.tar.gz" \
-            --pattern "*.app.tar.gz.sig" \
-            --pattern "*-setup.exe" \
-            --pattern "*-setup.exe.sig" \
-            --pattern "*.msi" \
-            --pattern "*.msi.sig" \
-            --pattern "*.nsis.zip" \
-            --pattern "*.nsis.zip.sig" \
-            --pattern "*.msi.zip" \
-            --pattern "*.msi.zip.sig" \
-            --pattern "*.AppImage.tar.gz" \
-            --pattern "*.AppImage.tar.gz.sig" \
+            --pattern "*.sig" \
             --dir artifacts \
-            --clobber 2>/dev/null || true
+            --clobber
 
-          echo "Downloaded artifacts:"
-          find artifacts -type f | sort
+          # Save full asset name list for the Python script to match against
+          gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' \
+            > artifacts/asset-list.txt
+
+          echo "Downloaded signatures:"
+          find artifacts -type f -name '*.sig' | sort
+          echo "Release asset list:"
+          cat artifacts/asset-list.txt
 
       - name: Generate updater manifest (latest.json)
         env:
@@ -365,86 +332,78 @@ jobs:
           # Get release notes from GitHub
           NOTES=$(gh release view "$TAG" --repo "$REPO" --json body -q '.body' 2>/dev/null || echo "")
 
-          # Export so Python subprocess can read them via os.environ
           export VERSION BASE_URL NOTES
 
-          # Debug: list all downloaded artifacts
-          echo "=== All artifacts ==="
-          find artifacts -type f | sort
-          echo "===================="
-
           python3 << 'PYSCRIPT'
-          import json, glob, os, datetime
+          import json, os, datetime, fnmatch, sys
 
           base_url = os.environ.get("BASE_URL", "")
           version = os.environ.get("VERSION", "")
           notes = os.environ.get("NOTES", "")
           pub_date = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-          def find_file(pattern):
-              """Find first file matching glob pattern, excluding .sig files.
-              Searches both flat artifacts/ and nested artifacts/**/ for compatibility."""
-              matches = [f for f in glob.glob(f"artifacts/{pattern}")
-                         + glob.glob(f"artifacts/**/{pattern}", recursive=True)
-                         if not f.endswith(".sig")]
-              return matches[0] if matches else None
-
-          def find_files(pattern):
-              """Find all files matching glob pattern in deterministic order."""
-              matches = glob.glob(f"artifacts/{pattern}") + \
-                        glob.glob(f"artifacts/**/{pattern}", recursive=True)
-              return sorted([f for f in matches if os.path.isfile(f)])
+          # Load release asset names (for URL construction)
+          asset_names = set()
+          asset_list_path = "artifacts/asset-list.txt"
+          if os.path.isfile(asset_list_path):
+              asset_names = {line.strip() for line in open(asset_list_path) if line.strip()}
 
           def read_sig(pattern):
-              """Read signature content from .sig file matching pattern."""
-              matches = find_files(pattern)
+              """Read .sig content matching pattern from downloaded artifacts."""
+              import glob
+              matches = sorted(glob.glob(f"artifacts/{pattern}"))
               if matches:
                   return open(matches[0]).read().strip()
               return None
 
-          def paired_updater_entry(file_patterns):
-              """Return the first updater artifact with its matching .sig.
+          def find_asset(pattern):
+              """Find a release asset name matching the glob pattern."""
+              for name in sorted(asset_names):
+                  if fnmatch.fnmatch(name, pattern):
+                      return name
+              return None
+
+          def updater_entry(file_patterns):
+              """Return the first updater entry where both the asset and its .sig exist.
               file_patterns should be ordered by preference."""
               for pattern in file_patterns:
-                  for file_path in find_files(pattern):
-                      sig_path = f"{file_path}.sig"
-                      if os.path.isfile(sig_path):
-                          return {
-                              "signature": open(sig_path).read().strip(),
-                              "url": f"{base_url}/{os.path.basename(file_path)}",
-                          }
+                  asset = find_asset(pattern)
+                  if asset:
+                      sig = read_sig(f"{asset}.sig")
+                      if sig:
+                          return {"signature": sig, "url": f"{base_url}/{asset}"}
               return None
 
           platforms = {}
 
-          # macOS aarch64 — renamed in collect step to *_aarch64.app.tar.gz
-          f = find_file("*_aarch64.app.tar.gz")
-          s = read_sig("*_aarch64.app.tar.gz.sig")
-          if f and s:
-              platforms["darwin-aarch64"] = {"signature": s, "url": f"{base_url}/{os.path.basename(f)}"}
+          # macOS aarch64
+          entry = updater_entry(["*_aarch64.app.tar.gz"])
+          if entry:
+              platforms["darwin-aarch64"] = entry
 
-          # macOS x86_64 — renamed in collect step to *_x86_64.app.tar.gz
-          f = find_file("*_x86_64.app.tar.gz")
-          s = read_sig("*_x86_64.app.tar.gz.sig")
-          if f and s:
-              platforms["darwin-x86_64"] = {"signature": s, "url": f"{base_url}/{os.path.basename(f)}"}
+          # macOS x86_64
+          entry = updater_entry(["*_x86_64.app.tar.gz"])
+          if entry:
+              platforms["darwin-x86_64"] = entry
 
-          # Windows updater x86_64 — Tauri v2 createUpdaterArtifacts signs installers directly
-          # Prefer NSIS .exe, fall back to MSI, then legacy .zip formats
-          windows_entry = paired_updater_entry([
-              "*-setup.exe",
-              "*.nsis.zip",
-              "*_en-US.msi",
-              "*.msi.zip",
-          ])
-          if windows_entry:
-              platforms["windows-x86_64"] = windows_entry
+          # Windows x86_64 (Tauri v2: signed NSIS .exe / MSI directly)
+          entry = updater_entry(["*-setup.exe", "*_en-US.msi"])
+          if entry:
+              platforms["windows-x86_64"] = entry
 
-          # Linux AppImage x86_64
-          f = find_file("*AppImage.tar.gz")
-          s = read_sig("*AppImage.tar.gz.sig")
-          if f and s:
-              platforms["linux-x86_64"] = {"signature": s, "url": f"{base_url}/{os.path.basename(f)}"}
+          # Linux x86_64 (Tauri v2: signed AppImage directly)
+          entry = updater_entry(["*amd64.AppImage"])
+          if entry:
+              platforms["linux-x86_64"] = entry
+
+          # Validate all expected platforms are present
+          expected = {"darwin-aarch64", "darwin-x86_64", "windows-x86_64", "linux-x86_64"}
+          missing = expected - set(platforms.keys())
+          if missing:
+              print(f"::error::Missing updater platforms: {sorted(missing)}")
+              print(f"Available assets: {sorted(asset_names)}")
+              print(f"Downloaded sigs: {sorted(os.listdir('artifacts'))}")
+              sys.exit(1)
 
           manifest = {
               "version": version,
@@ -458,9 +417,7 @@ jobs:
 
           print("Generated latest.json:")
           print(json.dumps(manifest, indent=2, ensure_ascii=False))
-          print(f"\nPlatforms found: {list(platforms.keys())}")
-          if not platforms:
-              print("::warning::No platform entries found — updater manifest will be empty!")
+          print(f"\nPlatforms: {sorted(platforms.keys())}")
           PYSCRIPT
 
       - name: Upload latest.json to release
@@ -468,8 +425,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${RELEASE_TAG}"
-          # Also upload updater artifacts (.tar.gz, .zip, .sig) that were in prereleased
-          # They should already be on the release from the build step, but upload latest.json
           gh release upload "$TAG" latest.json \
             --repo "${{ github.repository }}" \
             --clobber
@@ -497,17 +452,12 @@ jobs:
         run: |
           VERSION="${VERSION}"
 
-          # Download aarch64 DMG
           DMG_ARM="TiyCode_${VERSION}_aarch64.dmg"
+          DMG_X64="TiyCode_${VERSION}_x64.dmg"
+
           gh release download "$RELEASE_TAG" \
             --repo "${{ github.repository }}" \
             --pattern "$DMG_ARM" \
-            --dir .
-
-          # Download x64 DMG
-          DMG_X64="TiyCode_${VERSION}_x64.dmg"
-          gh release download "$RELEASE_TAG" \
-            --repo "${{ github.repository }}" \
             --pattern "$DMG_X64" \
             --dir .
 
