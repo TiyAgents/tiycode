@@ -954,8 +954,8 @@ fn open_workspace_in_powershell_windows(
 #[cfg(target_os = "windows")]
 fn normalize_windows_target_path(target_path: &str) -> String {
     // Use dunce to canonicalize without the \\?\ UNC prefix
-    let normalized = dunce::canonicalize(target_path)
-        .unwrap_or_else(|_| PathBuf::from(target_path));
+    let normalized =
+        dunce::canonicalize(target_path).unwrap_or_else(|_| PathBuf::from(target_path));
 
     normalized.to_string_lossy().replace('/', "\\")
 }
