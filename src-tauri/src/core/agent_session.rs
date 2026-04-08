@@ -2949,7 +2949,19 @@ Used for prompt assembly coverage.
         assert!(prompt.contains("## Skills"));
         assert!(prompt.contains("### Available skills"));
         assert!(prompt.contains("test-skill: Helps with local skill prompt injection tests."));
-        assert!(prompt.contains(&skill_dir.join("SKILL.md").display().to_string()));
+        // The prompt path is built by joining workspace_path with ".tiy/skills" and then
+        // reading child dirs, which may mix separators on Windows.  Match the production
+        // path construction instead of canonicalizing.
+        let expected_skill_path = std::path::Path::new(&workspace_root.to_string_lossy().into_owned())
+            .join(".tiy/skills")
+            .join("test-skill")
+            .join("SKILL.md");
+        assert!(
+            prompt.contains(&expected_skill_path.display().to_string()),
+            "prompt does not contain skill path.\nExpected: {}\nPrompt skills line: {}",
+            expected_skill_path.display(),
+            prompt.lines().find(|l| l.contains("test-skill")).unwrap_or("(not found)")
+        );
         assert!(prompt.contains("### How to use skills"));
     }
 

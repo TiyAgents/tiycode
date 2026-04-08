@@ -986,9 +986,10 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
     match outcome.result {
         ToolGatewayResult::Executed { output, .. } => {
             let directory = output.result["directory"].as_str().unwrap_or_default();
+            let dir_path = std::path::Path::new(directory);
             assert!(
-                directory.ends_with("/src-tauri"),
-                "search should execute inside the requested relative directory"
+                dir_path.ends_with("src-tauri"),
+                "search should execute inside the requested relative directory, got: {directory}"
             );
 
             if !output.success {

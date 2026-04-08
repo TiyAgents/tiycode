@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn resolves_relative_paths_inside_workspace() {
         let tmp = tempfile::tempdir().expect("should create tempdir");
-        let workspace = std::fs::canonicalize(tmp.path()).expect("workspace should canonicalize");
+        let workspace = dunce::canonicalize(tmp.path()).expect("workspace should canonicalize");
         let nested = workspace.join("src-tauri");
         std::fs::create_dir_all(&nested).expect("should create nested dir");
 
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn rejects_parent_traversal_outside_workspace() {
         let tmp = tempfile::tempdir().expect("should create tempdir");
-        let workspace = std::fs::canonicalize(tmp.path()).expect("workspace should canonicalize");
+        let workspace = dunce::canonicalize(tmp.path()).expect("workspace should canonicalize");
 
         let error = resolve_path_within_workspace(
             &workspace,
@@ -273,7 +273,7 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let tmp = tempfile::tempdir().expect("should create tempdir");
-        let workspace = std::fs::canonicalize(tmp.path()).expect("workspace should canonicalize");
+        let workspace = dunce::canonicalize(tmp.path()).expect("workspace should canonicalize");
         let outside = tempfile::tempdir().expect("should create outside dir");
         let link_path = workspace.join("linked-outside");
         symlink(outside.path(), &link_path).expect("should create symlink");
@@ -311,9 +311,9 @@ mod tests {
         let workspace = tempfile::tempdir().expect("workspace");
         let writable_root = tempfile::tempdir().expect("writable root");
         let workspace_root =
-            std::fs::canonicalize(workspace.path()).expect("workspace should canonicalize");
+            dunce::canonicalize(workspace.path()).expect("workspace should canonicalize");
         let writable_root_path =
-            std::fs::canonicalize(writable_root.path()).expect("writable root canonicalize");
+            dunce::canonicalize(writable_root.path()).expect("writable root canonicalize");
 
         let resolved = resolve_path_within_roots(
             &workspace_root,
@@ -334,9 +334,9 @@ mod tests {
         let writable_root = tempfile::tempdir().expect("writable root");
         let outside = tempfile::tempdir().expect("outside");
         let workspace_root =
-            std::fs::canonicalize(workspace.path()).expect("workspace should canonicalize");
+            dunce::canonicalize(workspace.path()).expect("workspace should canonicalize");
         let writable_root_path =
-            std::fs::canonicalize(writable_root.path()).expect("writable root canonicalize");
+            dunce::canonicalize(writable_root.path()).expect("writable root canonicalize");
         let outside_path = outside.path().join("escape.txt");
 
         let error = resolve_path_within_roots(

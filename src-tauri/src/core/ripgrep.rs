@@ -251,8 +251,12 @@ fn is_executable_file(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundled_rg_candidates, executable_name, find_on_explicit_paths};
+    use super::{executable_name, find_on_explicit_paths};
     use std::ffi::OsString;
+
+    #[cfg(target_os = "macos")]
+    use super::bundled_rg_candidates;
+    #[cfg(target_os = "macos")]
     use std::path::PathBuf;
 
     #[test]
@@ -278,6 +282,7 @@ mod tests {
         assert_eq!(result, rg_path);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn includes_macos_bundle_resource_candidates() {
         let current_exe = PathBuf::from("/Applications/TiyCode.app/Contents/MacOS/TiyCode");

@@ -847,7 +847,7 @@ fn node_name(path: &Path, root: &Path) -> String {
 
 fn relative_path(path: &Path, root: &Path) -> String {
     path.strip_prefix(root)
-        .map(|value| value.to_string_lossy().to_string())
+        .map(|value| value.to_string_lossy().replace('\\', "/"))
         .unwrap_or_default()
 }
 
@@ -986,7 +986,7 @@ fn parse_rg_json(output: &str, workspace_path: &str) -> Vec<SearchResult> {
 
                 let rel_path = Path::new(abs_path)
                     .strip_prefix(workspace_path)
-                    .map(|p| p.to_string_lossy().to_string())
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
                     .unwrap_or_else(|_| abs_path.to_string());
 
                 results.push(SearchResult {
