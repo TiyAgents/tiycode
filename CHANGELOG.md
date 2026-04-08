@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [`674201f`](https://github.com/TiyAgents/tiycode/commit/674201fe97c2413a819988e31d27e06c50e10adb) - **ci**: 🔧 add empty releaseId to tauri release workflow *(commit by [@jorben](https://github.com/jorben))*
 
 
+## [0.1.11] - 2026-04-07
+### :wrench: Chores
+- [`84bafec`](https://github.com/TiyAgents/tiycode/commit/84bafeca7afddc45b25e9fffed636ac54c823221) - **ci**: 🔧 refactor Windows release artifact copying in workflow *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.8] - 2026-04-07
 ### :wrench: Chores
 - [`145365d`](https://github.com/TiyAgents/tiycode/commit/145365db4b731895bb6c12febb070b9527618ccf) - **ci**: 🔧 resolve ripgrep path reliably on macOS *(commit by [@jorben](https://github.com/jorben))*
@@ -332,4 +337,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.5]: https://github.com/TiyAgents/tiycode/compare/0.1.4...0.1.5
 [0.1.6]: https://github.com/TiyAgents/tiycode/compare/0.1.5...0.1.6
 [0.1.8]: https://github.com/TiyAgents/tiycode/compare/0.1.7...0.1.8
+[0.1.11]: https://github.com/TiyAgents/tiycode/compare/0.1.10...0.1.11
 [0.1.13]: https://github.com/TiyAgents/tiycode/compare/0.1.12...0.1.13
