@@ -672,6 +672,61 @@ const zhCN = {
   "marketplace.installFromUrl": "从 URL 安装",
   "marketplace.installFromUrlDesc":
     "粘贴包 URL、Git 仓库或托管源端点以直接安装。",
+
+  // ── Onboarding Wizard ──────────────────────────────────
+  "onboarding.welcome": "欢迎使用 TiyCode",
+  "onboarding.welcomeDesc": "让我们花一分钟完成初始配置，以获得最佳体验。",
+  "onboarding.skip": "跳过引导",
+  "onboarding.next": "下一步",
+  "onboarding.back": "上一步",
+  "onboarding.finish": "开始使用",
+  "onboarding.stepOf": "第 {{current}} 步，共 {{total}} 步",
+
+  // ── Step 1: Language & Theme ───────────────────────────
+  "onboarding.langTheme.title": "语言 & 主题",
+  "onboarding.langTheme.desc": "选择界面语言和外观主题。回复语言将自动与界面语言保持一致。",
+  "onboarding.langTheme.languageLabel": "界面语言",
+  "onboarding.langTheme.themeLabel": "外观主题",
+  "onboarding.langTheme.themeAuto": "跟随系统",
+  "onboarding.langTheme.themeDark": "暗黑",
+  "onboarding.langTheme.themeLight": "明亮",
+
+  // ── Step 2: Configure Provider ─────────────────────────
+  "onboarding.provider.title": "配置模型服务商",
+  "onboarding.provider.desc": "选择一个服务商，输入 API Key，然后加载并启用模型。",
+  "onboarding.provider.selectProvider": "选择服务商",
+  "onboarding.provider.addCustom": "新建自定义服务商",
+  "onboarding.provider.apiKeyLabel": "API Key",
+  "onboarding.provider.apiKeyPlaceholder": "输入你的 API Key",
+  "onboarding.provider.baseUrlLabel": "Base URL",
+  "onboarding.provider.saveKey": "保存 Key",
+  "onboarding.provider.fetchModels": "加载模型列表",
+  "onboarding.provider.fetchingModels": "加载中...",
+  "onboarding.provider.fetchSuccess": "成功加载 {{count}} 个模型",
+  "onboarding.provider.fetchError": "加载模型失败：{{message}}",
+  "onboarding.provider.modelsLabel": "模型列表",
+  "onboarding.provider.searchModels": "搜索模型",
+  "onboarding.provider.noModels": "暂无模型，请先加载模型列表。",
+  "onboarding.provider.enableAtLeastOne": "请至少启用一个模型后继续。",
+  "onboarding.provider.providerTypeLabel": "服务商类型",
+  "onboarding.provider.displayNameLabel": "显示名称",
+
+  // ── Step 3: Configure Profile ──────────────────────────
+  "onboarding.profile.title": "配置模型方案",
+  "onboarding.profile.desc": "为默认方案分配三级模型。你可以稍后在设置中修改。",
+  "onboarding.profile.primaryLabel": "主力模型 (Primary)",
+  "onboarding.profile.primaryDesc": "执行核心任务的主要模型，如代码生成、复杂推理和多步骤编排。",
+  "onboarding.profile.auxiliaryLabel": "辅助模型 (Auxiliary)",
+  "onboarding.profile.auxiliaryDesc": "协助主力模型的辅助模型，用于代码审查、测试生成和上下文摘要。",
+  "onboarding.profile.liteLabel": "轻量模型 (Light)",
+  "onboarding.profile.liteDesc": "用于快速操作的轻量模型，如 commit message 生成、简短问答和格式化。",
+  "onboarding.profile.selectModel": "选择模型",
+  "onboarding.profile.noEnabledModels": "暂无已启用的模型，请返回上一步启用模型。",
+
+  // ── Step 4: Complete ───────────────────────────────────
+  "onboarding.complete.title": "一切就绪！",
+  "onboarding.complete.desc": "配置已完成。你可以随时在设置中调整这些选项。",
+  "onboarding.complete.tip": "提示：使用顶部菜单栏快速切换主题和语言。",
 } as const;
 
 export type TranslationKey = keyof typeof zhCN;

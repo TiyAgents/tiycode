@@ -43,6 +43,8 @@ import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-pane
 import { TerminalSettingsContext } from "@/features/terminal/model/terminal-settings-context";
 import { useAppUpdater } from "@/modules/workbench-shell/hooks/use-app-updater";
 import { UpdateAvailableDialog } from "@/modules/workbench-shell/ui/update-available-dialog";
+import { isOnboardingCompleted } from "@/modules/onboarding/model/use-onboarding";
+import { OnboardingWizard } from "@/modules/onboarding/ui/onboarding-wizard";
 import type {
   MessageAttachmentDto,
   RunMode,
@@ -459,6 +461,7 @@ export function DashboardWorkbench() {
   );
   const [isNewThreadMode, setNewThreadMode] = useState(true);
   const [activeOverlay, setActiveOverlay] = useState<WorkbenchOverlay>(null);
+  const [showOnboarding, setShowOnboarding] = useState(() => !isOnboardingCompleted());
   const [activeSettingsCategory, setActiveSettingsCategory] =
     useState<SettingsCategory>("general");
   const [panelVisibilityState, setPanelVisibilityState] =
@@ -2979,6 +2982,24 @@ export function DashboardWorkbench() {
         onRetry={appUpdater.checkForUpdates}
         onDismiss={appUpdater.dismiss}
       />
+
+      {showOnboarding ? (
+        <OnboardingWizard
+          language={language}
+          theme={theme}
+          providerCatalog={providerCatalog}
+          providers={providers}
+          agentProfiles={agentProfiles}
+          activeAgentProfileId={activeAgentProfileId}
+          onSelectLanguage={setLanguage}
+          onSelectTheme={setTheme}
+          onAddProvider={addProvider}
+          onUpdateProvider={updateProvider}
+          onFetchProviderModels={fetchProviderModels}
+          onUpdateAgentProfile={updateAgentProfile}
+          onDismiss={() => setShowOnboarding(false)}
+        />
+      ) : null}
     </main>
   );
 }

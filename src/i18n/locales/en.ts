@@ -634,6 +634,61 @@ const en: Record<TranslationKey, string> = {
   "marketplace.customSourceDesc": "Register organization catalogs, internal package feeds, or curated team bundles.",
   "marketplace.installFromUrl": "Install from URL",
   "marketplace.installFromUrlDesc": "Paste a package URL, git repository, or managed source endpoint to install directly.",
+
+  // ── Onboarding Wizard ──────────────────────────────────
+  "onboarding.welcome": "Welcome to TiyCode",
+  "onboarding.welcomeDesc": "Let\u2019s take a minute to configure your setup for the best experience.",
+  "onboarding.skip": "Skip setup",
+  "onboarding.next": "Next",
+  "onboarding.back": "Back",
+  "onboarding.finish": "Get started",
+  "onboarding.stepOf": "Step {{current}} of {{total}}",
+
+  // ── Step 1: Language & Theme ───────────────────────────
+  "onboarding.langTheme.title": "Language & Theme",
+  "onboarding.langTheme.desc": "Choose your interface language and appearance. Response language will match your interface language automatically.",
+  "onboarding.langTheme.languageLabel": "Interface language",
+  "onboarding.langTheme.themeLabel": "Appearance",
+  "onboarding.langTheme.themeAuto": "System",
+  "onboarding.langTheme.themeDark": "Dark",
+  "onboarding.langTheme.themeLight": "Light",
+
+  // ── Step 2: Configure Provider ─────────────────────────
+  "onboarding.provider.title": "Configure model provider",
+  "onboarding.provider.desc": "Select a provider, enter your API key, then load and enable models.",
+  "onboarding.provider.selectProvider": "Select a provider",
+  "onboarding.provider.addCustom": "Add custom provider",
+  "onboarding.provider.apiKeyLabel": "API Key",
+  "onboarding.provider.apiKeyPlaceholder": "Enter your API key",
+  "onboarding.provider.baseUrlLabel": "Base URL",
+  "onboarding.provider.saveKey": "Save key",
+  "onboarding.provider.fetchModels": "Load models",
+  "onboarding.provider.fetchingModels": "Loading...",
+  "onboarding.provider.fetchSuccess": "Loaded {{count}} models successfully",
+  "onboarding.provider.fetchError": "Failed to load models: {{message}}",
+  "onboarding.provider.modelsLabel": "Models",
+  "onboarding.provider.searchModels": "Search models",
+  "onboarding.provider.noModels": "No models available. Load models first.",
+  "onboarding.provider.enableAtLeastOne": "Enable at least one model to continue.",
+  "onboarding.provider.providerTypeLabel": "Provider type",
+  "onboarding.provider.displayNameLabel": "Display name",
+
+  // ── Step 3: Configure Profile ──────────────────────────
+  "onboarding.profile.title": "Configure model profile",
+  "onboarding.profile.desc": "Assign three tiers of models to the default profile. You can change this later in settings.",
+  "onboarding.profile.primaryLabel": "Primary model",
+  "onboarding.profile.primaryDesc": "Main model for core tasks: code generation, complex reasoning, and multi-step orchestration.",
+  "onboarding.profile.auxiliaryLabel": "Auxiliary model",
+  "onboarding.profile.auxiliaryDesc": "Supporting model for code review, test generation, and context summarization.",
+  "onboarding.profile.liteLabel": "Light model",
+  "onboarding.profile.liteDesc": "Lightweight model for fast tasks: commit messages, quick Q&A, and formatting.",
+  "onboarding.profile.selectModel": "Select a model",
+  "onboarding.profile.noEnabledModels": "No enabled models found. Go back and enable at least one model.",
+
+  // ── Step 4: Complete ───────────────────────────────────
+  "onboarding.complete.title": "All set!",
+  "onboarding.complete.desc": "Configuration complete. You can adjust these settings anytime.",
+  "onboarding.complete.tip": "Tip: Use the top menu bar to quickly switch theme and language.",
 };
 
 export default en;

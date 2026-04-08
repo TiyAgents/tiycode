@@ -451,6 +451,17 @@ export function useSettingsController() {
           ]);
 
         const mappedProviders = providers.map(mapProviderDto);
+
+        // Deduplicate providers by providerKey, keeping first occurrence
+        const seenProviderKeys = new Set<string>();
+        const dedupedProviders = mappedProviders.filter((provider) => {
+          if (seenProviderKeys.has(provider.providerKey)) {
+            return false;
+          }
+          seenProviderKeys.add(provider.providerKey);
+          return true;
+        });
+
         const mappedCatalog = catalog.map((entry) => ({
           providerKey: entry.providerKey as ProviderCatalogEntry["providerKey"],
           providerType: entry.providerType as ProviderCatalogEntry["providerType"],
@@ -594,7 +605,7 @@ export function useSettingsController() {
           general: nextGeneral,
           terminal: resolvedTerminal,
           workspaces: workspaceEntries.map(mapWorkspaceDto),
-          providers: mappedProviders,
+          providers: dedupedProviders,
           policy: resolvedPolicy,
           agentProfiles: mappedProfiles.length > 0 ? mappedProfiles : DEFAULT_AGENT_PROFILES,
           activeAgentProfileId: mappedProfiles.length > 0
@@ -755,18 +766,27 @@ export function useSettingsController() {
   };
 
   const updateAgentProfile = (id: string, patch: Partial<Omit<AgentProfile, "id">>) => {
-    setSettings((current) => ({
-      ...current,
-      agentProfiles: current.agentProfiles.map((p) =>
+    // Calculate the next settings state
+    const currentSettings = settingsRef.current;
+    const nextSettings: SettingsState = {
+      ...currentSettings,
+      agentProfiles: currentSettings.agentProfiles.map((p) =>
         p.id === id ? { ...p, ...patch } : p,
       ),
-    }));
+    };
+
+    // Update React state immediately for UI responsiveness
+    setSettings(nextSettings);
 
     if (!isTauri()) {
+      // In non-Tauri environments, persist to localStorage immediately
+      // This ensures changes survive component unmounting and page reloads
+      persistSettings(nextSettings);
       return;
     }
 
-    const currentProfile = settingsRef.current.agentProfiles.find((profile) => profile.id === id);
+    // In Tauri environments, sync to backend database
+    const currentProfile = currentSettings.agentProfiles.find((profile) => profile.id === id);
     if (!currentProfile) {
       return;
     }
