@@ -1,11 +1,14 @@
 import { useCallback, useRef, useState } from "react";
 
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+
+import type { InstallSource } from "@/shared/types/system";
 
 type UpdatePhase =
   | "idle"
   | "checking"
   | "available"
+  | "brewInstalled"
   | "downloading"
   | "readyToRestart"
   | "upToDate"
@@ -23,6 +26,7 @@ export interface AppUpdater {
   updateInfo: UpdateInfo | null;
   downloadProgress: number;
   errorMessage: string | null;
+  installSource: InstallSource;
   checkForUpdates: () => void;
   downloadAndInstall: () => void;
   restartApp: () => void;
@@ -56,6 +60,7 @@ export function useAppUpdater(): AppUpdater {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [installSource, setInstallSource] = useState<InstallSource>("standalone");
 
   // Hold the Update instance across renders so downloadAndInstall can use it
   const updateRef = useRef<Awaited<
@@ -81,6 +86,13 @@ export function useAppUpdater(): AppUpdater {
           return;
         }
 
+        // Detect install source (Homebrew vs standalone)
+        const isHomebrew = await invoke<boolean>("is_homebrew_installed").catch(
+          () => false,
+        );
+        const source: InstallSource = isHomebrew ? "homebrew" : "standalone";
+        setInstallSource(source);
+
         const { check } = await import("@tauri-apps/plugin-updater");
         const update = await check({ timeout: 15_000 });
 
@@ -96,7 +108,13 @@ export function useAppUpdater(): AppUpdater {
           date: update.date ?? null,
           currentVersion: update.currentVersion,
         });
-        setPhase("available");
+
+        // If installed via Homebrew, show brew upgrade hint instead of in-app download
+        if (source === "homebrew") {
+          setPhase("brewInstalled");
+        } else {
+          setPhase("available");
+        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error);
@@ -196,6 +214,7 @@ export function useAppUpdater(): AppUpdater {
     updateInfo,
     downloadProgress,
     errorMessage,
+    installSource,
     checkForUpdates,
     downloadAndInstall,
     restartApp,

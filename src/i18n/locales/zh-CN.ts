@@ -334,6 +334,7 @@ const zhCN = {
   "update.releaseNotes": "更新日志",
   "update.downloadAndInstall": "下载并安装",
   "update.later": "稍后",
+  "update.brewDetected": "检测到当前应用通过 Homebrew 安装，请在终端中运行以下命令更新：",
   "update.downloading": "正在下载更新...",
   "update.downloadProgress": "已完成 {{progress}}%",
   "update.readyToRestart": "更新就绪",

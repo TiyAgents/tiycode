@@ -44,6 +44,30 @@ pub fn get_system_metadata() -> SystemMetadata {
 }
 
 #[tauri::command]
+pub fn is_homebrew_installed() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        // Check if the running binary lives under a Homebrew Cellar / Caskroom prefix.
+        // Homebrew cask installs symlink into /opt/homebrew/Caskroom (Apple Silicon)
+        // or /usr/local/Caskroom (Intel).  The actual .app bundle is placed inside
+        // the Caskroom directory tree, so checking the current executable path is
+        // the most reliable indicator.
+        if let Ok(exe_path) = std::env::current_exe() {
+            let path_str = exe_path.to_string_lossy();
+            return path_str.contains("/Caskroom/")
+                || path_str.contains("/Cellar/")
+                || path_str.contains("/homebrew/");
+        }
+        false
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+#[tauri::command]
 pub fn get_workspace_open_apps() -> Vec<WorkspaceOpenApp> {
     #[cfg(target_os = "macos")]
     {

@@ -316,6 +316,7 @@ const en: Record<TranslationKey, string> = {
   "update.releaseNotes": "Release Notes",
   "update.downloadAndInstall": "Download & Install",
   "update.later": "Later",
+  "update.brewDetected": "This app was installed via Homebrew. Please run the following command in your terminal to update:",
   "update.downloading": "Downloading Update...",
   "update.downloadProgress": "{{progress}}% completed",
   "update.readyToRestart": "Update Ready",

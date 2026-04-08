@@ -250,6 +250,7 @@ pub fn run() {
             commands::attachment::attachment_read_files,
             // System
             commands::system::get_system_metadata,
+            commands::system::is_homebrew_installed,
             commands::system::get_workspace_open_apps,
             commands::system::open_workspace_in_app,
             commands::system::open_tree_path_in_app,

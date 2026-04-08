@@ -5,3 +5,5 @@ export type SystemMetadata = {
   arch: string;
   runtime: string;
 };
+
+export type InstallSource = "homebrew" | "standalone";
