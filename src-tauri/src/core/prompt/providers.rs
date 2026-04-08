@@ -261,14 +261,13 @@ impl PromptSectionProvider for ProfileProvider {
             order_in_phase: 30,
         });
 
-        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        // NOTE: Dynamic values like the current date are intentionally excluded from
+        // the system prompt to keep it stable for LLM prompt prefix caching.
+        // The date is injected via the runtime context message in agent_session.rs.
         sections.push(PromptSection {
             key: "runtime_context",
             title: "Runtime Context",
-            body: format!(
-                "Current date: {date}\nWorkspace path: {}",
-                ctx.workspace_path
-            ),
+            body: format!("Workspace path: {}", ctx.workspace_path),
             phase: PromptPhase::RuntimeContext,
             order_in_phase: 40,
         });
