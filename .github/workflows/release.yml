@@ -240,23 +240,17 @@ jobs:
               fi
             done
 
-            copy_windows_artifacts() {
-              local dir="$1"
-              shift
-              [ -d "$dir" ] || return 0
-              for pattern in "$@"; do
-                while IFS= read -r file; do
-                  [ -n "$file" ] || continue
-                  echo "Copying $(basename "$file") from $dir"
+            echo "Collecting Windows artifacts from bundle root using suffix allowlist..."
+            while IFS= read -r file; do
+              [ -n "$file" ] || continue
+              name="$(basename "$file")"
+              case "$name" in
+                *.exe|*.exe.sig|*.msi|*.msi.sig|*.zip|*.zip.sig)
+                  echo "Copying $name"
                   cp "$file" release-artifacts/
-                done < <(find "$dir" -maxdepth 1 -type f -name "$pattern" | sort)
-              done
-            }
-
-            copy_windows_artifacts "$BUNDLE_DIR"/msi '*.msi' '*.msi.sig' '*.zip' '*.zip.sig'
-            copy_windows_artifacts "$BUNDLE_DIR"/nsis '*.exe' '*.exe.sig' '*.zip' '*.zip.sig'
-            copy_windows_artifacts "$BUNDLE_DIR"/nsis-updater '*.zip' '*.zip.sig'
-            copy_windows_artifacts "$BUNDLE_DIR"/msi-updater '*.zip' '*.zip.sig'
+                  ;;
+              esac
+            done < <(find "$BUNDLE_DIR" -type f | sort)
 
             echo "Windows release-artifacts contents after copy:"
             find release-artifacts -maxdepth 1 -type f | sort || true
