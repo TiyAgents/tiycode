@@ -226,13 +226,12 @@ pub async fn tool_approval_respond(
         .await?;
 
     if !found {
-        return Err(AppError::recoverable(
-            crate::model::errors::ErrorSource::Tool,
-            "tool.approval.not_found",
-            format!(
-                "No pending approval was found for tool call '{tool_call_id}' in run '{run_id}'"
-            ),
-        ));
+        // Silently ignore duplicate approval responses (e.g. user double-clicked the button).
+        tracing::warn!(
+            tool_call_id = %tool_call_id,
+            run_id = %run_id,
+            "Ignoring duplicate tool approval response — no pending approval found"
+        );
     }
 
     Ok(())
