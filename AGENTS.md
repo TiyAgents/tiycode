@@ -25,4 +25,4 @@ Follow Conventional Commits: `type(scope): short summary`, for example `feat(age
 After completing a task, always run the relevant formatting and validation commands before committing: `cargo fmt --manifest-path src-tauri/Cargo.toml` for any Rust changes, and `npm run typecheck` for any TypeScript/TSX changes. Fix all warnings and errors before finalizing the commit.
 
 ## Agent-Specific Instructions
-Address the user as `Jorben` in all collaborator-facing responses for this repository.
+Address the user as `Buddy` in all collaborator-facing responses for this repository. Pay special attention to cross-platform differences when coding, and preserve cross-platform compatibility in implementation choices.
