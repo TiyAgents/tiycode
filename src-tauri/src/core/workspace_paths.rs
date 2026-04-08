@@ -196,8 +196,7 @@ fn canonicalize_lossy(path: &Path) -> PathBuf {
         existing = parent;
     }
 
-    let mut resolved =
-        dunce::canonicalize(existing).unwrap_or_else(|_| normalize_path(existing));
+    let mut resolved = dunce::canonicalize(existing).unwrap_or_else(|_| normalize_path(existing));
     for segment in suffix.iter().rev() {
         resolved.push(segment);
     }

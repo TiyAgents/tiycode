@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### :zap: Performance Improvements
 - [`5008c49`](https://github.com/TiyAgents/tiycode/commit/5008c495b90857aaab3934031f9cf60fe5153497) - **prompt**: ⚡️ move dynamic date out of system prompt for stable prefix caching *(commit by [@jorben](https://github.com/jorben))*
 
+## [0.2.1] - 2026-04-08
+### :sparkles: New Features
+- [`828c573`](https://github.com/TiyAgents/tiycode/commit/828c573d365c5a04be9cd0a1e4e2ddafc2311da3) - **windows**: 🪟 add comprehensive Windows compatibility improvements *(commit by [@jorben](https://github.com/jorben))*
+
+### :white_check_mark: Tests
+- [`6d3864e`](https://github.com/TiyAgents/tiycode/commit/6d3864ea30003c175ea356a52995b7adc1bc0e0c) - **terminal**: ✅ update create_or_attach call to match new signature *(commit by [@jorben](https://github.com/jorben))*
+
 
 ## [0.2.0] - 2026-04-08
 ### :sparkles: New Features
@@ -375,4 +382,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.17]: https://github.com/TiyAgents/tiycode/compare/0.1.16...0.1.17
 [0.1.19]: https://github.com/TiyAgents/tiycode/compare/0.1.18...0.1.19
 [0.2.0]: https://github.com/TiyAgents/tiycode/compare/0.1.19...0.2.0
+[0.2.1]: https://github.com/TiyAgents/tiycode/compare/0.2.0...0.2.1
 [0.2.2]: https://github.com/TiyAgents/tiycode/compare/0.2.1...0.2.2
