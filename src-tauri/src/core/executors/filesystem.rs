@@ -414,38 +414,74 @@ pub async fn find_files(
         None => workspace_root.clone(),
     };
 
-    // Use `find` on Unix or fall back to walkdir-style approach via shell
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let quoted_dir = shell_quote(&search_dir.to_string_lossy());
-    let quoted_pattern = shell_quote(pattern);
+    // Build a platform-appropriate find command
+    let result = {
+        #[cfg(target_os = "windows")]
+        {
+            // On Windows, use cmd.exe /C with `where` style or `dir /S /B` for file search.
+            // We use PowerShell for reliable glob + exclusion support.
+            let search_dir_str = search_dir.to_string_lossy().replace('\'', "''");
+            let ps_command = format!(
+                "Get-ChildItem -Path '{}' -Recurse -Filter '{}' -ErrorAction SilentlyContinue \
+                 | Where-Object {{ \
+                     $_.FullName -notmatch '[\\\\/]\\.git[\\\\/]' -and \
+                     $_.FullName -notmatch '[\\\\/]node_modules[\\\\/]' -and \
+                     $_.FullName -notmatch '[\\\\/]target[\\\\/]' -and \
+                     $_.FullName -notmatch '[\\\\/]__pycache__[\\\\/]' -and \
+                     $_.FullName -notmatch '[\\\\/]\\.next[\\\\/]' -and \
+                     $_.FullName -notmatch '[\\\\/]dist[\\\\/]' \
+                 }} \
+                 | Select-Object -First {} -ExpandProperty FullName",
+                search_dir_str,
+                pattern.replace('\'', "''"),
+                effective_limit.saturating_add(1),
+            );
 
-    // Build a find command that respects .gitignore-like patterns
-    // We use `find` with `-name` for the glob pattern, excluding common directories
-    let find_command = format!(
-        "find {} -name {} \
-         -not -path '*/.git/*' \
-         -not -path '*/node_modules/*' \
-         -not -path '*/target/*' \
-         -not -path '*/__pycache__/*' \
-         -not -path '*/.next/*' \
-         -not -path '*/dist/*' \
-         -not -path '*/.DS_Store' \
-         2>/dev/null | head -n {}",
-        quoted_dir,
-        quoted_pattern,
-        effective_limit.saturating_add(1),
-    );
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                tokio::process::Command::new("powershell.exe")
+                    .args(["-NoProfile", "-NonInteractive", "-Command", &ps_command])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output(),
+            )
+            .await
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let shell =
+                std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+            let quoted_dir = shell_quote(&search_dir.to_string_lossy());
+            let quoted_pattern = shell_quote(pattern);
 
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        tokio::process::Command::new(&shell)
-            .arg("-c")
-            .arg(&find_command)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output(),
-    )
-    .await;
+            // Build a find command that respects .gitignore-like patterns
+            let find_command = format!(
+                "find {} -name {} \
+                 -not -path '*/.git/*' \
+                 -not -path '*/node_modules/*' \
+                 -not -path '*/target/*' \
+                 -not -path '*/__pycache__/*' \
+                 -not -path '*/.next/*' \
+                 -not -path '*/dist/*' \
+                 -not -path '*/.DS_Store' \
+                 2>/dev/null | head -n {}",
+                quoted_dir,
+                quoted_pattern,
+                effective_limit.saturating_add(1),
+            );
+
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                tokio::process::Command::new(&shell)
+                    .arg("-c")
+                    .arg(&find_command)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output(),
+            )
+            .await
+        }
+    };
 
     match result {
         Ok(Ok(output)) => {
@@ -462,7 +498,7 @@ pub async fn find_files(
                 .map(|p| {
                     let trimmed = p.trim();
                     if let Some(rel) = trimmed.strip_prefix(workspace_prefix.as_ref()) {
-                        rel.trim_start_matches('/').to_string()
+                        rel.trim_start_matches(['/', '\\']).to_string()
                     } else {
                         trimmed.to_string()
                     }
@@ -597,6 +633,7 @@ fn read_positive_integer(input: &serde_json::Value, key: &str) -> Option<usize> 
     input[key].as_i64().map(|value| value.max(1) as usize)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

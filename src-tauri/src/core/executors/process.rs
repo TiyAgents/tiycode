@@ -27,18 +27,30 @@ pub async fn run_command(
 
     let timeout_secs = input["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
-    // Use the user's default shell
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    // Use the platform-appropriate shell
+    let mut cmd = {
+        #[cfg(target_os = "windows")]
+        {
+            let mut c = Command::new("cmd.exe");
+            c.arg("/C").arg(command);
+            c
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let shell =
+                std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+            let mut c = Command::new(shell);
+            c.arg("-c").arg(command);
+            c
+        }
+    };
+    cmd.current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
 
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
-        Command::new(&shell)
-            .arg("-c")
-            .arg(command)
-            .current_dir(cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output(),
+        cmd.output(),
     )
     .await;
 

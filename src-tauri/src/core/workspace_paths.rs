@@ -171,7 +171,8 @@ fn push_unique_root(roots: &mut Vec<String>, path: PathBuf) {
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
-    if let Ok(canonical) = std::fs::canonicalize(path) {
+    // Use dunce::canonicalize to avoid Windows UNC path prefix (\\?\).
+    if let Ok(canonical) = dunce::canonicalize(path) {
         return canonical;
     }
 
@@ -195,7 +196,8 @@ fn canonicalize_lossy(path: &Path) -> PathBuf {
         existing = parent;
     }
 
-    let mut resolved = std::fs::canonicalize(existing).unwrap_or_else(|_| normalize_path(existing));
+    let mut resolved =
+        dunce::canonicalize(existing).unwrap_or_else(|_| normalize_path(existing));
     for segment in suffix.iter().rev() {
         resolved.push(segment);
     }

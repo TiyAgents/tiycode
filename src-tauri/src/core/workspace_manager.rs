@@ -24,8 +24,9 @@ impl WorkspaceManager {
     pub async fn add(&self, input: WorkspaceAddInput) -> Result<WorkspaceRecord, AppError> {
         let raw_path = Path::new(&input.path);
 
-        // Canonicalize the path (resolves symlinks, makes absolute)
-        let canonical = raw_path.canonicalize().map_err(|e| {
+        // Canonicalize the path (resolves symlinks, makes absolute).
+        // Use dunce to avoid Windows extended-length path prefix (\\?\).
+        let canonical = dunce::canonicalize(raw_path).map_err(|e| {
             AppError::recoverable(
                 ErrorSource::Workspace,
                 "workspace.path.invalid",
