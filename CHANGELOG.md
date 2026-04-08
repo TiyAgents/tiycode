@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-08
+### :sparkles: New Features
+- [`d7d883c`](https://github.com/TiyAgents/tiycode/commit/d7d883ccecec031250ff2672c7be034cfb5f3913) - **agent**: ✨ add thinking level setting to agent profiles *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.19] - 2026-04-08
 ### :sparkles: New Features
 - [`a1715b7`](https://github.com/TiyAgents/tiycode/commit/a1715b76ab80a157afa1dafc76565b1b7f80adb0) - **terminal**: ✨ add configurable terminal settings *(commit by [@jorben](https://github.com/jorben))*
@@ -364,3 +369,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.16]: https://github.com/TiyAgents/tiycode/compare/0.1.15...0.1.16
 [0.1.17]: https://github.com/TiyAgents/tiycode/compare/0.1.16...0.1.17
 [0.1.19]: https://github.com/TiyAgents/tiycode/compare/0.1.18...0.1.19
+[0.2.0]: https://github.com/TiyAgents/tiycode/compare/0.1.19...0.2.0
