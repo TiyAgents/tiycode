@@ -261,9 +261,10 @@ jobs:
             find release-artifacts -maxdepth 1 -type f | sort || true
 
             if [[ "$VERSION" != *-* ]]; then
-              if ! find release-artifacts -maxdepth 1 -type f \( -name '*.zip' -o -name '*.zip.sig' \) | grep -q .; then
-                echo "::error::Stable Windows release is missing updater zip/sig artifacts."
-                echo "Expected files from bundle/nsis, bundle/msi, nsis-updater, or msi-updater, but none were collected."
+              # Tauri v2 createUpdaterArtifacts: true signs installers directly (no .zip wrapping)
+              if ! find release-artifacts -maxdepth 1 -type f \( -name '*-setup.exe.sig' -o -name '*.msi.sig' \) | grep -q .; then
+                echo "::error::Stable Windows release is missing updater signature artifacts."
+                echo "Expected .exe.sig or .msi.sig files, but none were collected."
                 exit 1
               fi
             fi
@@ -336,6 +337,10 @@ jobs:
             --repo "$REPO" \
             --pattern "*.app.tar.gz" \
             --pattern "*.app.tar.gz.sig" \
+            --pattern "*-setup.exe" \
+            --pattern "*-setup.exe.sig" \
+            --pattern "*.msi" \
+            --pattern "*.msi.sig" \
             --pattern "*.nsis.zip" \
             --pattern "*.nsis.zip.sig" \
             --pattern "*.msi.zip" \
@@ -424,11 +429,13 @@ jobs:
           if f and s:
               platforms["darwin-x86_64"] = {"signature": s, "url": f"{base_url}/{os.path.basename(f)}"}
 
-          # Windows updater x86_64 — prefer NSIS, fall back to MSI, keep zip/sig paired
+          # Windows updater x86_64 — Tauri v2 createUpdaterArtifacts signs installers directly
+          # Prefer NSIS .exe, fall back to MSI, then legacy .zip formats
           windows_entry = paired_updater_entry([
+              "*-setup.exe",
               "*.nsis.zip",
+              "*_en-US.msi",
               "*.msi.zip",
-              "*setup.exe.zip",
           ])
           if windows_entry:
               platforms["windows-x86_64"] = windows_entry
