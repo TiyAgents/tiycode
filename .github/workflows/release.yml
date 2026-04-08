@@ -240,17 +240,22 @@ jobs:
               fi
             done
 
-            echo "Collecting Windows artifacts from bundle root using suffix allowlist..."
-            while IFS= read -r file; do
-              [ -n "$file" ] || continue
-              name="$(basename "$file")"
-              case "$name" in
-                *.exe|*.exe.sig|*.msi|*.msi.sig|*.zip|*.zip.sig)
-                  echo "Copying $name"
-                  cp "$file" release-artifacts/
-                  ;;
-              esac
-            done < <(find "$BUNDLE_DIR" -type f | sort)
+            echo "Collecting Windows artifacts from bundle root using PowerShell allowlist..."
+            powershell -NoProfile -Command '
+              $bundleDir = "src-tauri/target/${{ matrix.target }}/release/bundle"
+              $outDir = "release-artifacts"
+              $allowed = @(".exe", ".msi", ".zip", ".exe.sig", ".msi.sig", ".zip.sig")
+              $escaped = $allowed | ForEach-Object { [regex]::Escape($_) }
+              $suffixRe = "(" + ($escaped -join "|") + ")$"
+
+              Get-ChildItem -Path $bundleDir -Recurse -File |
+                Where-Object { $_.Name.ToLowerInvariant() -match $suffixRe } |
+                Sort-Object FullName |
+                ForEach-Object {
+                  Write-Host "Copying $($_.Name) from $($_.DirectoryName)"
+                  Copy-Item -LiteralPath $_.FullName -Destination $outDir -Force
+                }
+            '
 
             echo "Windows release-artifacts contents after copy:"
             find release-artifacts -maxdepth 1 -type f | sort || true
