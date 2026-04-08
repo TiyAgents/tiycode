@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-04-08
+### :sparkles: New Features
+- [`c8043ce`](https://github.com/TiyAgents/tiycode/commit/c8043ce0731d5d7810c4d17d03c2cc2b721bdd56) - **updater**: ✨ detect Homebrew install and show brew upgrade command *(commit by [@jorben](https://github.com/jorben))*
+- [`4429b2d`](https://github.com/TiyAgents/tiycode/commit/4429b2d5624a6286010674f9f720f51ae1ec128e) - **onboarding**: ✨ add first-time onboarding wizard *(commit by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`115cf04`](https://github.com/TiyAgents/tiycode/commit/115cf042c9bc193a324ddc2f4981c4a4314e9d7f) - **provider**: 🐛 enforce provider_key uniqueness and deduplicate existing records *(commit by [@jorben](https://github.com/jorben))*
+
+### :zap: Performance Improvements
+- [`e25d61f`](https://github.com/TiyAgents/tiycode/commit/e25d61fee2c59042a4ef62ae9c40fb31f87d43df) - **prompt**: ⚡️ move dynamic date out of system prompt for stable prefix caching *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.2.2] - 2026-04-08
 ### :zap: Performance Improvements
 - [`5008c49`](https://github.com/TiyAgents/tiycode/commit/5008c495b90857aaab3934031f9cf60fe5153497) - **prompt**: ⚡️ move dynamic date out of system prompt for stable prefix caching *(commit by [@jorben](https://github.com/jorben))*
@@ -384,3 +396,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.0]: https://github.com/TiyAgents/tiycode/compare/0.1.19...0.2.0
 [0.2.1]: https://github.com/TiyAgents/tiycode/compare/0.2.0...0.2.1
 [0.2.2]: https://github.com/TiyAgents/tiycode/compare/0.2.1...0.2.2
+[0.2.3]: https://github.com/TiyAgents/tiycode/compare/0.2.2...0.2.3
