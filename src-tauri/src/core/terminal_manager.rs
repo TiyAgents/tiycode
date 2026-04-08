@@ -36,7 +36,7 @@ struct TerminalSessionRuntime {
     state: Mutex<TerminalSessionState>,
     broadcaster: broadcast::Sender<TerminalStreamEvent>,
     writer: Mutex<Box<dyn Write + Send>>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     finished: AtomicBool,
 }
@@ -301,7 +301,7 @@ impl TerminalManager {
             }),
             broadcaster: sender.clone(),
             writer: Mutex::new(writer),
-            master: Mutex::new(pair.master),
+            master: Mutex::new(Some(pair.master)),
             killer: Mutex::new(killer),
             finished: AtomicBool::new(false),
         });
@@ -393,6 +393,14 @@ impl TerminalManager {
             .master
             .lock()
             .expect("terminal session master poisoned")
+            .as_ref()
+            .ok_or_else(|| {
+                AppError::recoverable(
+                    ErrorSource::Terminal,
+                    "terminal.resize_failed",
+                    "Terminal master PTY already closed".to_string(),
+                )
+            })?
             .resize(PtySize {
                 rows,
                 cols,
@@ -461,6 +469,16 @@ impl TerminalManager {
             tracing::warn!(thread_id, error = %error, "failed to kill terminal session");
         }
 
+        // Drop the master PTY so the reader task receives EOF and can exit.
+        // Without this the blocking reader keeps the runtime alive on shutdown.
+        drop(
+            session
+                .master
+                .lock()
+                .expect("terminal session master poisoned")
+                .take(),
+        );
+
         Ok(())
     }
 
@@ -523,7 +541,11 @@ impl TerminalManager {
         session: Arc<TerminalSessionRuntime>,
         mut reader: Box<dyn Read + Send>,
     ) {
-        tokio::task::spawn_blocking(move || {
+        // Use an OS thread instead of `spawn_blocking` so that the tokio
+        // runtime can shut down without waiting for the reader to finish.
+        // On Windows, ConPTY readers may remain blocked even after the child
+        // process is killed and the master PTY is dropped.
+        std::thread::spawn(move || {
             let mut buffer = [0_u8; 8192];
             let mut pending_utf8 = Vec::new();
 
@@ -540,7 +562,21 @@ impl TerminalManager {
                         break;
                     }
                     Ok(size) => {
-                        let chunk = decode_utf8_chunk(&mut pending_utf8, &buffer[..size]);
+                        let raw = &buffer[..size];
+
+                        // Windows ConPTY sends DSR (Device Status Report) requests
+                        // (\x1b[6n) at startup and blocks until a cursor position
+                        // response is received.  Reply with row 1, col 1 so the
+                        // shell can continue initialising.
+                        if raw == b"\x1b[6n" || raw.windows(4).any(|w| w == b"\x1b[6n") {
+                            let _ = session
+                                .writer
+                                .lock()
+                                .expect("writer poisoned")
+                                .write_all(b"\x1b[1;1R");
+                        }
+
+                        let chunk = decode_utf8_chunk(&mut pending_utf8, raw);
                         if !chunk.is_empty() {
                             session.push_output(&chunk);
                             let _ = session.broadcaster.send(TerminalStreamEvent::StdoutChunk {

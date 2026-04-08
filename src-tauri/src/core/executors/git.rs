@@ -497,7 +497,7 @@ fn workspace_path_to_repo_path(
         )
     })?;
 
-    Ok(repo_relative.to_string_lossy().to_string())
+    Ok(repo_relative.to_string_lossy().replace('\\', "/"))
 }
 
 fn normalize_workspace_relative_paths(paths: &[String]) -> Result<Vec<String>, AppError> {

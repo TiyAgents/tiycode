@@ -6,7 +6,27 @@ use std::time::Duration;
 use sqlx::Row;
 use tiycode::core::terminal_manager::TerminalManager;
 
-#[tokio::test]
+/// Resolve a shell binary that works in the Windows PTY environment.
+/// In MSYS2/Git-Bash `$SHELL` is an MSYS path (`/bin/bash.exe`) which the
+/// Win32 PTY layer cannot spawn.  We fall back to `cmd.exe` on Windows.
+fn test_shell() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        "cmd.exe".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+    }
+}
+
+/// Build a command string that echoes a marker, compatible with both
+/// bash and cmd.exe.  The trailing `\r\n` is important for cmd.exe.
+fn echo_marker_command() -> &'static str {
+    "echo __TIY_TERMINAL_TEST__\r\n"
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_terminal_session_lifecycle_and_output() {
     let pool = test_helpers::setup_test_pool().await;
     let workspace_path = std::env::current_dir()
@@ -17,23 +37,34 @@ async fn test_terminal_session_lifecycle_and_output() {
     test_helpers::seed_workspace(&pool, "ws-terminal", &workspace_path).await;
     test_helpers::seed_thread(&pool, "thread-terminal", "ws-terminal").await;
 
+    let shell = test_shell();
     let manager = Arc::new(TerminalManager::new(pool.clone()));
     let attachment = manager
-        .create_or_attach("thread-terminal", Some(80), Some(24), None, None, None)
+        .create_or_attach(
+            "thread-terminal",
+            Some(80),
+            Some(24),
+            Some(&shell),
+            None,
+            None,
+        )
         .await
         .expect("terminal attach should succeed");
 
     assert_eq!(attachment.attach.session.thread_id, "thread-terminal");
     assert_eq!(attachment.attach.session.status.as_str(), "running");
 
+    // Give the shell time to start up before sending input.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
     manager
-        .write_input("thread-terminal", "printf '__TIY_TERMINAL_TEST__\\n'\n")
+        .write_input("thread-terminal", echo_marker_command())
         .await
         .expect("terminal write should succeed");
 
     let mut output = String::new();
-    for _ in 0..20 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(200)).await;
         output = manager
             .get_recent_output("thread-terminal")
             .await
@@ -43,16 +74,15 @@ async fn test_terminal_session_lifecycle_and_output() {
         }
     }
 
+    // Always close the terminal to avoid blocking the test runtime on exit.
+    let close_result = manager.close("thread-terminal").await;
+
     assert!(
         output.contains("__TIY_TERMINAL_TEST__"),
         "expected terminal output to contain marker, got: {output:?}"
     );
 
-    manager
-        .close("thread-terminal")
-        .await
-        .expect("terminal close should succeed");
-
+    close_result.expect("terminal close should succeed");
     assert!(manager.list().await.is_empty());
 }
 

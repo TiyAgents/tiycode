@@ -456,7 +456,7 @@ fn collect_workspace_overlay(workspace_root: &Path) -> Result<WorkspaceGitOverla
             continue;
         };
 
-        let key = workspace_relative_path.to_string_lossy().to_string();
+        let key = workspace_relative_path.to_string_lossy().replace('\\', "/");
         let state = map_overlay_status(entry.status());
 
         if state == GitFileState::Ignored {
@@ -1041,7 +1041,7 @@ fn workspace_path_to_repo_path(
         )
     })?;
 
-    Ok(repo_relative.to_string_lossy().to_string())
+    Ok(repo_relative.to_string_lossy().replace('\\', "/"))
 }
 
 fn repo_path_to_workspace_path(
@@ -1051,7 +1051,7 @@ fn repo_path_to_workspace_path(
 ) -> Option<String> {
     let absolute = repo_root.join(repo_relative_path);
     let workspace_relative = absolute.strip_prefix(workspace_root).ok()?;
-    Some(workspace_relative.to_string_lossy().to_string())
+    Some(workspace_relative.to_string_lossy().replace('\\', "/"))
 }
 
 fn normalize_workspace_relative_path(path: &str) -> String {
