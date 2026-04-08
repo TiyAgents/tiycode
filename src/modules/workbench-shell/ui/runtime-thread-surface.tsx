@@ -1024,6 +1024,34 @@ function isCompletedToolState(state: SurfaceToolState) {
   );
 }
 
+/**
+ * Defines a rough ordering of tool states through their lifecycle.
+ * Higher numbers mean the tool is further along.
+ */
+const TOOL_STATE_ORDER: Record<SurfaceToolState, number> = {
+  "input-streaming": 0,
+  "input-available": 1,
+  "clarify-requested": 2,
+  "approval-requested": 3,
+  "approval-responded": 4,
+  "output-available": 5,
+  "output-denied": 5,
+  "output-error": 5,
+};
+
+/**
+ * Returns true if `liveState` is further along in the tool lifecycle
+ * than `snapshotState`. Used during snapshot merging to avoid regressing
+ * a tool's state when a stale snapshot resolves after live stream events
+ * have already advanced the tool.
+ */
+function isMoreAdvancedToolState(
+  liveState: SurfaceToolState,
+  snapshotState: SurfaceToolState,
+): boolean {
+  return TOOL_STATE_ORDER[liveState] > TOOL_STATE_ORDER[snapshotState];
+}
+
 function stringifyToolValue(value: unknown) {
   if (typeof value === "string") {
     return value;
@@ -2144,7 +2172,32 @@ export function RuntimeThreadSurface({
       setMessages(() => snapshotMessages);
       setHasMoreMessages(snapshot.hasMoreMessages);
       setApprovingPlanMessageId(null);
-      setTools((snapshot.toolCalls ?? []).map(mapSnapshotTool));
+      setTools((currentTools) => {
+        const snapshotTools = (snapshot.toolCalls ?? []).map(mapSnapshotTool);
+
+        // On fresh mount (no current tools), use snapshot directly.
+        if (currentTools.length === 0) {
+          return snapshotTools;
+        }
+
+        // Merge: use snapshot as base but preserve any tool that the live
+        // stream has already advanced further in its lifecycle.  This avoids
+        // a stale snapshot overwriting an approval-requested state that was
+        // set by a stream event while the async snapshot fetch was in flight.
+        return snapshotTools.map((snapshotTool) => {
+          const liveTool = currentTools.find((t) => t.id === snapshotTool.id);
+
+          if (!liveTool) {
+            return snapshotTool;
+          }
+
+          if (isMoreAdvancedToolState(liveTool.state, snapshotTool.state)) {
+            return liveTool;
+          }
+
+          return snapshotTool;
+        });
+      });
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
@@ -2250,7 +2303,27 @@ export function RuntimeThreadSurface({
       setMessages((current) => appendOrReplaceMessage(current, mappedMessage));
 
       const nextState = mapSnapshotToRunState(snapshot);
-      setTools((snapshot.toolCalls ?? []).map(mapSnapshotTool));
+      setTools((currentTools) => {
+        const snapshotTools = (snapshot.toolCalls ?? []).map(mapSnapshotTool);
+
+        if (currentTools.length === 0) {
+          return snapshotTools;
+        }
+
+        return snapshotTools.map((snapshotTool) => {
+          const liveTool = currentTools.find((t) => t.id === snapshotTool.id);
+
+          if (!liveTool) {
+            return snapshotTool;
+          }
+
+          if (isMoreAdvancedToolState(liveTool.state, snapshotTool.state)) {
+            return liveTool;
+          }
+
+          return snapshotTool;
+        });
+      });
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
@@ -2565,6 +2638,13 @@ export function RuntimeThreadSurface({
           case "running":
             return updateTool(current, event.toolCallId, (entry) => {
               if (entry && isCompletedToolState(entry.state)) {
+                return entry;
+              }
+
+              // Preserve approval-requested state — the tool_running event
+              // can arrive after approval_required has already set the state,
+              // so we must not regress it to input-available.
+              if (entry?.state === "approval-requested") {
                 return entry;
               }
 
