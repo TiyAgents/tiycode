@@ -101,6 +101,115 @@ npm run typecheck
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+## Shell 环境配置
+
+TiyCode 内置的 Agent Shell 可能以 **非交互、非登录** 模式启动。在该模式下，只有最基础的系统路径（如 `/usr/bin:/bin`）可用。通过版本管理器安装的工具（如 `node`、`npm`、`bun`、`cargo`、`go`）将无法被识别，需要正确配置 Shell 启动文件才能解决。
+
+### Shell 配置文件加载规则
+
+不同的 Shell 调用模式会加载不同的配置文件。下表列出了各模式下的加载情况：
+
+**Zsh（macOS 默认 / Linux）**
+
+| 文件 | 非交互 | 登录 | 交互 | 交互 + 登录 |
+|------|:-:|:-:|:-:|:-:|
+| `~/.zshenv` | ✅ | ✅ | ✅ | ✅ |
+| `~/.zprofile` | ❌ | ✅ | ❌ | ✅ |
+| `~/.zshrc` | ❌ | ❌ | ✅ | ✅ |
+
+**Bash（Linux 默认）**
+
+| 文件 | 非交互 | 登录 | 交互 | 交互 + 登录 |
+|------|:-:|:-:|:-:|:-:|
+| `~/.bashrc` | ❌ | ❌ | ✅ | ❌ ¹ |
+| `~/.bash_profile` | ❌ | ✅ | ❌ | ✅ |
+| `$BASH_ENV` | ✅ | ❌ | ❌ | ❌ |
+
+<sub>¹ 大多数发行版会在 `~/.bash_profile` 中 source `~/.bashrc`，因此实际上登录 shell 也会执行它。</sub>
+
+TiyCode 的 Agent Shell 属于 **非交互** 一列 —— 只有 `~/.zshenv`（zsh）或 `$BASH_ENV`（bash）能保证被加载。
+
+### 解决方法：确保所有 Shell 模式都能加载环境变量
+
+<details>
+<summary><strong>macOS / Linux（Zsh）</strong></summary>
+
+1. **将所有 `export` 语句和 PATH 修改** 从 `~/.zshrc` 移到 `~/.zprofile`。仅将交互式配置（alias、补全、oh-my-zsh、主题、提示符）留在 `~/.zshrc` 中。
+
+2. **在 `~/.zshenv` 中 source `~/.zprofile`**，使非交互式 shell 也能获取环境变量：
+
+```bash
+# ~/.zshenv
+if [ -z "$__ZPROFILE_LOADED" ] && [ -f "$HOME/.zprofile" ]; then
+  export __ZPROFILE_LOADED=1
+  source "$HOME/.zprofile"
+fi
+```
+
+`__ZPROFILE_LOADED` 守卫变量可防止在「登录 + 交互」模式下重复加载。
+
+常见需要移入 `~/.zprofile` 的内容：
+
+```bash
+# ~/.zprofile — 示例
+eval "$(/opt/homebrew/bin/brew shellenv)"           # Homebrew（macOS）
+export NVM_DIR="$HOME/.nvm"                         # nvm（Node.js）
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+export BUN_INSTALL="$HOME/.bun"                     # Bun
+export PATH="$BUN_INSTALL/bin:$PATH"
+. "$HOME/.local/bin/env"                            # Rust / Cargo
+export PATH="/usr/local/go/bin:$PATH"               # Go
+```
+
+</details>
+
+<details>
+<summary><strong>Linux（Bash）</strong></summary>
+
+1. 将环境变量保留在 `~/.bash_profile`（或 `~/.profile`）中。
+2. 设置 `BASH_ENV` 指向一个会 source 你的 profile 的文件：
+
+```bash
+# ~/.bash_profile — 在顶部添加：
+export BASH_ENV="$HOME/.bash_env"
+```
+
+```bash
+# ~/.bash_env — 新文件
+if [ -z "$__BASH_PROFILE_LOADED" ] && [ -f "$HOME/.bash_profile" ]; then
+  export __BASH_PROFILE_LOADED=1
+  source "$HOME/.bash_profile"
+fi
+```
+
+</details>
+
+<details>
+<summary><strong>Windows（PowerShell）</strong></summary>
+
+在 Windows 上，TiyCode 通常会继承通过 **系统设置 > 环境变量** 配置的系统和用户环境变量。如果你通过官方安装器安装了 Node.js、Rust 等工具，它们应该已经在 PATH 中。
+
+如果你使用的是版本管理器（如 **nvm-windows**、**fnm** 或 **volta**），请确保 shim 目录已添加到系统环境变量中的 **用户 PATH**，而不是仅在 PowerShell profile 中设置。
+
+验证当前 PATH：
+
+```powershell
+$env:PATH -split ';'
+```
+
+</details>
+
+### 配置后验证
+
+更新 Shell 配置文件后，**重启 TiyCode**（完全退出后重新启动，而非仅开启新会话），然后让 Agent 执行：
+
+```
+echo $PATH
+which <你的工具>   # 例如 node、cargo、go、bun、python ...
+```
+
+如果输出中包含预期的路径且工具能被找到，说明环境配置已生效。
+
 ## 架构速览
 
 TiyCode 将界面渲染、桌面编排和 Agent 执行拆分为清晰的几层：

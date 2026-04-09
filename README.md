@@ -101,6 +101,115 @@ npm run typecheck
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+## Shell Environment Setup
+
+TiyCode's built-in agent shell may launch as a **non-interactive, non-login** shell. In this mode, only minimal system paths (e.g. `/usr/bin:/bin`) are available. Tools installed via version managers — such as `node`, `npm`, `bun`, `cargo`, or `go` — will not be found unless you configure your shell startup files correctly.
+
+### How Shell Config Files Are Loaded
+
+Different shell invocation modes load different config files. The table below shows which files are sourced in each mode:
+
+**Zsh (macOS default / Linux)**
+
+| File | Non-interactive | Login | Interactive | Interactive + Login |
+|------|:-:|:-:|:-:|:-:|
+| `~/.zshenv` | ✅ | ✅ | ✅ | ✅ |
+| `~/.zprofile` | ❌ | ✅ | ❌ | ✅ |
+| `~/.zshrc` | ❌ | ❌ | ✅ | ✅ |
+
+**Bash (Linux default)**
+
+| File | Non-interactive | Login | Interactive | Interactive + Login |
+|------|:-:|:-:|:-:|:-:|
+| `~/.bashrc` | ❌ | ❌ | ✅ | ❌ ¹ |
+| `~/.bash_profile` | ❌ | ✅ | ❌ | ✅ |
+| `$BASH_ENV` | ✅ | ❌ | ❌ | ❌ |
+
+<sub>¹ Most distros source `~/.bashrc` from `~/.bash_profile`, so in practice it runs for login shells too.</sub>
+
+TiyCode's agent shell falls into the **non-interactive** column — only `~/.zshenv` (zsh) or `$BASH_ENV` (bash) is guaranteed to load.
+
+### Fix: Ensure Environment Variables Load for All Shell Modes
+
+<details>
+<summary><strong>macOS / Linux (Zsh)</strong></summary>
+
+1. **Move all `export` statements and PATH modifications** from `~/.zshrc` into `~/.zprofile`. Keep interactive-only settings (aliases, completions, oh-my-zsh, themes, prompt) in `~/.zshrc`.
+
+2. **Source `~/.zprofile` from `~/.zshenv`** so that non-interactive shells also get the environment:
+
+```bash
+# ~/.zshenv
+if [ -z "$__ZPROFILE_LOADED" ] && [ -f "$HOME/.zprofile" ]; then
+  export __ZPROFILE_LOADED=1
+  source "$HOME/.zprofile"
+fi
+```
+
+The `__ZPROFILE_LOADED` guard prevents double-loading in login + interactive shells.
+
+Common items to move into `~/.zprofile`:
+
+```bash
+# ~/.zprofile — examples
+eval "$(/opt/homebrew/bin/brew shellenv)"           # Homebrew (macOS)
+export NVM_DIR="$HOME/.nvm"                         # nvm (Node.js)
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+export BUN_INSTALL="$HOME/.bun"                     # Bun
+export PATH="$BUN_INSTALL/bin:$PATH"
+. "$HOME/.local/bin/env"                            # Rust / Cargo
+export PATH="/usr/local/go/bin:$PATH"               # Go
+```
+
+</details>
+
+<details>
+<summary><strong>Linux (Bash)</strong></summary>
+
+1. Keep environment variables in `~/.bash_profile` (or `~/.profile`).
+2. Set `BASH_ENV` to point to a file that sources your profile:
+
+```bash
+# ~/.bash_profile — add at the top:
+export BASH_ENV="$HOME/.bash_env"
+```
+
+```bash
+# ~/.bash_env — new file
+if [ -z "$__BASH_PROFILE_LOADED" ] && [ -f "$HOME/.bash_profile" ]; then
+  export __BASH_PROFILE_LOADED=1
+  source "$HOME/.bash_profile"
+fi
+```
+
+</details>
+
+<details>
+<summary><strong>Windows (PowerShell)</strong></summary>
+
+On Windows, TiyCode typically inherits the system and user environment variables set via **System Settings > Environment Variables**. If you installed Node.js, Rust, or other tools via their official installers, they should already be on PATH.
+
+If you use a version manager like **nvm-windows**, **fnm**, or **volta**, make sure the shim directory is added to your **User PATH** in system environment variables — not only in a PowerShell profile.
+
+To verify your current PATH in PowerShell:
+
+```powershell
+$env:PATH -split ';'
+```
+
+</details>
+
+### Verify After Configuration
+
+After updating your shell config files, **restart TiyCode** (a full quit + relaunch, not just a new thread) and ask the agent to run:
+
+```
+echo $PATH
+which <your-tool>   # e.g. node, cargo, go, bun, python ...
+```
+
+If the output includes the expected paths and the tool is found, your environment is correctly configured.
+
 ## Architecture at a Glance
 
 TiyCode separates UI rendering, desktop orchestration, and agent execution into distinct layers:

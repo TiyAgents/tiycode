@@ -58,6 +58,28 @@ fn forward_thread_stream_events(
     });
 }
 
+async fn handle_tool_approval_response(
+    tool_gateway: &crate::core::tool_gateway::ToolGateway,
+    tool_call_id: &str,
+    run_id: &str,
+    approved: bool,
+) -> Result<(), AppError> {
+    let found = tool_gateway
+        .resolve_approval(tool_call_id, approved)
+        .await?;
+
+    if !found {
+        // Silently ignore duplicate approval responses (e.g. user double-clicked the button).
+        tracing::warn!(
+            tool_call_id = %tool_call_id,
+            run_id = %run_id,
+            "Ignoring duplicate tool approval response — no pending approval found"
+        );
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn thread_start_run(
     state: State<'_, AppState>,
@@ -143,9 +165,124 @@ pub async fn thread_execute_approved_plan(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use std::str::FromStr;
+    use std::sync::Arc;
 
-    use super::extract_run_model_refs;
+    use serde_json::json;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::Row;
+
+    use super::{extract_run_model_refs, handle_tool_approval_response};
+    use crate::core::terminal_manager::TerminalManager;
+    use crate::core::tool_gateway::{
+        ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
+    };
+
+    async fn setup_test_pool() -> sqlx::SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        pool
+    }
+
+    async fn seed_workspace(pool: &sqlx::SqlitePool, id: &str, canonical_path: &str) {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 0, 0, 0, 'ready', ?, ?)",
+        )
+        .bind(id)
+        .bind("Test Workspace")
+        .bind(canonical_path)
+        .bind(canonical_path)
+        .bind(canonical_path)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .expect("failed to seed workspace");
+    }
+
+    async fn seed_thread(pool: &sqlx::SqlitePool, thread_id: &str, workspace_id: &str) {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, last_active_at, created_at, updated_at)
+             VALUES (?, ?, 'Test Thread', 'idle', ?, ?, ?)",
+        )
+        .bind(thread_id)
+        .bind(workspace_id)
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .expect("failed to seed thread");
+    }
+
+    async fn seed_run(
+        pool: &sqlx::SqlitePool,
+        run_id: &str,
+        thread_id: &str,
+        status: &str,
+        run_mode: &str,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(run_id)
+        .bind(thread_id)
+        .bind(run_mode)
+        .bind(status)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .expect("failed to seed run");
+    }
+
+    async fn seed_tool_call(
+        pool: &sqlx::SqlitePool,
+        tool_call_id: &str,
+        run_id: &str,
+        thread_id: &str,
+        tool_name: &str,
+        status: &str,
+    ) {
+        sqlx::query(
+            "INSERT INTO tool_calls (id, run_id, thread_id, tool_name, tool_input_json, status, started_at)
+             VALUES (?, ?, ?, ?, '{}', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        )
+        .bind(tool_call_id)
+        .bind(run_id)
+        .bind(thread_id)
+        .bind(tool_name)
+        .bind(status)
+        .execute(pool)
+        .await
+        .expect("failed to seed tool call");
+    }
+
+    async fn seed_policy(pool: &sqlx::SqlitePool, key: &str, value_json: &str) {
+        sqlx::query("INSERT OR REPLACE INTO policies (key, value_json) VALUES (?, ?)")
+            .bind(key)
+            .bind(value_json)
+            .execute(pool)
+            .await
+            .expect("failed to seed policy");
+    }
 
     #[test]
     fn extracts_profile_and_primary_refs_from_model_plan() {
@@ -178,6 +315,122 @@ mod tests {
 
         assert_eq!(provider_id.as_deref(), Some("provider-1"));
         assert_eq!(model_id.as_deref(), Some("gpt-5"));
+    }
+
+    #[tokio::test]
+    async fn duplicate_tool_approval_responses_are_ignored_after_first_success() {
+        let pool = setup_test_pool().await;
+        let workspace_root = tempfile::tempdir().expect("failed to create temp dir");
+        let workspace_path = workspace_root.path().join("workspace");
+        std::fs::create_dir_all(&workspace_path).expect("failed to create workspace directory");
+
+        let target_file = workspace_path.join("README.md");
+        std::fs::write(&target_file, "hello\n").expect("failed to write test file");
+
+        let workspace_path =
+            std::fs::canonicalize(&workspace_path).expect("failed to canonicalize workspace");
+        let target_file =
+            std::fs::canonicalize(&target_file).expect("failed to canonicalize test file");
+
+        seed_workspace(&pool, "ws-dup-approval", workspace_path.to_str().unwrap()).await;
+        seed_thread(&pool, "t-dup-approval", "ws-dup-approval").await;
+        seed_run(
+            &pool,
+            "r-dup-approval",
+            "t-dup-approval",
+            "running",
+            "default",
+        )
+        .await;
+        seed_tool_call(
+            &pool,
+            "tc-dup-approval",
+            "r-dup-approval",
+            "t-dup-approval",
+            "write",
+            "requested",
+        )
+        .await;
+        seed_policy(&pool, "approval_policy", r#""require_all""#).await;
+
+        let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+        let gateway = Arc::new(ToolGateway::new(pool.clone(), terminal_manager));
+        let (approval_requested_tx, approval_requested_rx) = tokio::sync::oneshot::channel();
+
+        let execution_gateway = Arc::clone(&gateway);
+        let workspace_path_text = workspace_path.display().to_string();
+        let target_file_text = target_file.display().to_string();
+        let execution = tokio::spawn(async move {
+            execution_gateway
+                .execute_tool_call(
+                    ToolExecutionRequest {
+                        run_id: "r-dup-approval".into(),
+                        thread_id: "t-dup-approval".into(),
+                        tool_call_id: "tc-dup-approval".into(),
+                        tool_name: "write".into(),
+                        tool_input: serde_json::json!({
+                            "path": target_file_text,
+                            "content": "updated by approval\n",
+                        }),
+                        workspace_path: workspace_path_text,
+                        run_mode: "default".into(),
+                    },
+                    tiycore::agent::AbortSignal::new(),
+                    ToolExecutionOptions::default(),
+                    {
+                        let mut approval_requested_tx = Some(approval_requested_tx);
+                        move |_| {
+                            if let Some(tx) = approval_requested_tx.take() {
+                                let _ = tx.send(());
+                            }
+                        }
+                    },
+                    || {},
+                )
+                .await
+        });
+
+        approval_requested_rx
+            .await
+            .expect("approval should have been requested");
+
+        handle_tool_approval_response(gateway.as_ref(), "tc-dup-approval", "r-dup-approval", true)
+            .await
+            .expect("first approval response should succeed");
+
+        handle_tool_approval_response(gateway.as_ref(), "tc-dup-approval", "r-dup-approval", true)
+            .await
+            .expect("duplicate approval response should be ignored");
+
+        let outcome = execution
+            .await
+            .expect("execution task should join")
+            .expect("tool execution should succeed");
+
+        match outcome.result {
+            ToolGatewayResult::Executed { .. } => {}
+            other => panic!(
+                "expected executed outcome after approval, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+
+        let row = sqlx::query(
+            "SELECT status, approval_status FROM tool_calls WHERE id = 'tc-dup-approval'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("tool call row should exist");
+
+        assert_eq!(row.get::<String, _>("status"), "completed");
+        assert_eq!(
+            row.get::<Option<String>, _>("approval_status").unwrap(),
+            "approved"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target_file).expect("failed to read updated file"),
+            "updated by approval\n"
+        );
     }
 }
 
@@ -220,22 +473,13 @@ pub async fn tool_approval_respond(
     run_id: String,
     approved: bool,
 ) -> Result<(), AppError> {
-    let found = state
-        .tool_gateway
-        .resolve_approval(&tool_call_id, approved)
-        .await?;
-
-    if !found {
-        return Err(AppError::recoverable(
-            crate::model::errors::ErrorSource::Tool,
-            "tool.approval.not_found",
-            format!(
-                "No pending approval was found for tool call '{tool_call_id}' in run '{run_id}'"
-            ),
-        ));
-    }
-
-    Ok(())
+    handle_tool_approval_response(
+        state.tool_gateway.as_ref(),
+        &tool_call_id,
+        &run_id,
+        approved,
+    )
+    .await
 }
 
 #[tauri::command]

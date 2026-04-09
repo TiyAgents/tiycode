@@ -1071,6 +1071,48 @@ function isMoreAdvancedToolState(
   return TOOL_STATE_ORDER[liveState] > TOOL_STATE_ORDER[snapshotState];
 }
 
+/**
+ * Merge snapshot tools with live tools.  Uses the snapshot as the base but:
+ * 1. Preserves any live tool whose state is more advanced than its snapshot
+ *    counterpart (avoids regressing state from a stale snapshot).
+ * 2. Appends live-only tools that are not yet present in the snapshot (e.g.
+ *    a tool_requested / approval_required event arrived via the stream while
+ *    the async snapshot fetch was in flight).
+ */
+function mergeSnapshotTools(
+  snapshotTools: Array<SurfaceToolEntry>,
+  liveTools: Array<SurfaceToolEntry>,
+): Array<SurfaceToolEntry> {
+  if (liveTools.length === 0) {
+    return snapshotTools;
+  }
+
+  const snapshotIds = new Set(snapshotTools.map((t) => t.id));
+
+  const merged = snapshotTools.map((snapshotTool) => {
+    const liveTool = liveTools.find((t) => t.id === snapshotTool.id);
+
+    if (!liveTool) {
+      return snapshotTool;
+    }
+
+    if (isMoreAdvancedToolState(liveTool.state, snapshotTool.state)) {
+      return liveTool;
+    }
+
+    return snapshotTool;
+  });
+
+  // Append tools that exist in the live state but not in the snapshot.
+  for (const liveTool of liveTools) {
+    if (!snapshotIds.has(liveTool.id)) {
+      merged.push(liveTool);
+    }
+  }
+
+  return merged;
+}
+
 function stringifyToolValue(value: unknown) {
   if (typeof value === "string") {
     return value;
@@ -2231,29 +2273,7 @@ export function RuntimeThreadSurface({
       setApprovingPlanMessageId(null);
       setTools((currentTools) => {
         const snapshotTools = (snapshot.toolCalls ?? []).map(mapSnapshotTool);
-
-        // On fresh mount (no current tools), use snapshot directly.
-        if (currentTools.length === 0) {
-          return snapshotTools;
-        }
-
-        // Merge: use snapshot as base but preserve any tool that the live
-        // stream has already advanced further in its lifecycle.  This avoids
-        // a stale snapshot overwriting an approval-requested state that was
-        // set by a stream event while the async snapshot fetch was in flight.
-        return snapshotTools.map((snapshotTool) => {
-          const liveTool = currentTools.find((t) => t.id === snapshotTool.id);
-
-          if (!liveTool) {
-            return snapshotTool;
-          }
-
-          if (isMoreAdvancedToolState(liveTool.state, snapshotTool.state)) {
-            return liveTool;
-          }
-
-          return snapshotTool;
-        });
+        return mergeSnapshotTools(snapshotTools, currentTools);
       });
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
@@ -2362,24 +2382,7 @@ export function RuntimeThreadSurface({
       const nextState = mapSnapshotToRunState(snapshot);
       setTools((currentTools) => {
         const snapshotTools = (snapshot.toolCalls ?? []).map(mapSnapshotTool);
-
-        if (currentTools.length === 0) {
-          return snapshotTools;
-        }
-
-        return snapshotTools.map((snapshotTool) => {
-          const liveTool = currentTools.find((t) => t.id === snapshotTool.id);
-
-          if (!liveTool) {
-            return snapshotTool;
-          }
-
-          if (isMoreAdvancedToolState(liveTool.state, snapshotTool.state)) {
-            return liveTool;
-          }
-
-          return snapshotTool;
-        });
+        return mergeSnapshotTools(snapshotTools, currentTools);
       });
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
