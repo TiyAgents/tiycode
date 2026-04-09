@@ -181,7 +181,7 @@ const en: Record<TranslationKey, string> = {
   "sidebar.deleting": "Deleting",
 
   // ── New Thread Empty State ─────────────────────────────────
-  "newThread.headline": "Anything you need, just ask.",
+  "newThread.headline": "Whenever you need, Tiy is here.",
   "newThread.description": "Choose a local workspace and start your next goal here.",
   "newThread.chooseProject": "Choose project",
   "newThread.selectFolderHint": "Select a folder to start a workspace-backed thread",
