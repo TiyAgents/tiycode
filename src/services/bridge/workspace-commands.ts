@@ -14,6 +14,13 @@ export async function workspaceAdd(
   return invoke<WorkspaceDto>("workspace_add", { path, name });
 }
 
+export async function workspaceEnsureDefault(): Promise<WorkspaceDto> {
+  if (!isTauri()) {
+    throw new Error("workspace_ensure_default requires Tauri runtime");
+  }
+  return invoke<WorkspaceDto>("workspace_ensure_default");
+}
+
 export async function workspaceRemove(id: string): Promise<void> {
   if (!isTauri()) throw new Error("workspace_remove requires Tauri runtime");
   return invoke("workspace_remove", { id });

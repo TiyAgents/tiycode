@@ -1,6 +1,7 @@
 use chrono::Utc;
 use sqlx::SqlitePool;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::workspace::{WorkspaceAddInput, WorkspaceRecord, WorkspaceStatus};
@@ -93,6 +94,17 @@ impl WorkspaceManager {
         Ok(record)
     }
 
+    /// Ensure the built-in default workspace exists at `~/.tiy/workspace/Default`.
+    pub async fn ensure_default_thread_workspace(&self) -> Result<WorkspaceRecord, AppError> {
+        let home_dir = dirs::home_dir().ok_or_else(|| {
+            AppError::internal(ErrorSource::Workspace, "cannot resolve HOME directory")
+        })?;
+        let workspace_path = default_thread_workspace_path_for_home(&home_dir);
+
+        self.ensure_workspace_at_path(&workspace_path, DEFAULT_THREAD_WORKSPACE_NAME)
+            .await
+    }
+
     /// Remove a workspace by ID.
     pub async fn remove(&self, id: &str) -> Result<(), AppError> {
         let deleted = workspace_repo::delete(&self.pool, id).await?;
@@ -160,6 +172,79 @@ impl WorkspaceManager {
         }
         Ok(())
     }
+
+    async fn ensure_workspace_at_path(
+        &self,
+        workspace_path: &Path,
+        name: &str,
+    ) -> Result<WorkspaceRecord, AppError> {
+        if workspace_path.exists() && !workspace_path.is_dir() {
+            return Err(AppError::recoverable(
+                ErrorSource::Workspace,
+                "workspace.path.not_directory",
+                format!("'{}' is not a directory", workspace_path.display()),
+            ));
+        }
+
+        fs::create_dir_all(workspace_path).map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Workspace,
+                "workspace.path.create_failed",
+                format!(
+                    "Cannot create workspace '{}': {error}",
+                    workspace_path.display()
+                ),
+            )
+        })?;
+
+        let canonical = workspace_path.canonicalize().map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Workspace,
+                "workspace.path.invalid",
+                format!(
+                    "Cannot resolve path '{}': {error}",
+                    workspace_path.display()
+                ),
+            )
+        })?;
+        let canonical_str = canonical.to_string_lossy().to_string();
+
+        if let Some(existing) =
+            workspace_repo::find_by_canonical_path(&self.pool, &canonical_str).await?
+        {
+            return Ok(existing);
+        }
+
+        match self
+            .add(WorkspaceAddInput {
+                path: workspace_path.to_string_lossy().to_string(),
+                name: Some(name.to_string()),
+            })
+            .await
+        {
+            Ok(record) => Ok(record),
+            Err(error) if error.error_code == "workspace.duplicate" => {
+                workspace_repo::find_by_canonical_path(&self.pool, &canonical_str)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::internal(
+                            ErrorSource::Workspace,
+                            "workspace already exists but could not be loaded",
+                        )
+                    })
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+const DEFAULT_THREAD_WORKSPACE_NAME: &str = "Default";
+
+fn default_thread_workspace_path_for_home(home_dir: &Path) -> PathBuf {
+    home_dir
+        .join(".tiy")
+        .join("workspace")
+        .join(DEFAULT_THREAD_WORKSPACE_NAME)
 }
 
 /// Derive a human-readable name from the last path component.
@@ -178,4 +263,20 @@ fn derive_display_path(path: &Path) -> String {
         }
     }
     path.display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_default_thread_workspace_path_under_tiy_workspace_directory() {
+        let home_dir = Path::new("/tmp/jorben");
+        let workspace_path = default_thread_workspace_path_for_home(home_dir);
+
+        assert_eq!(
+            workspace_path,
+            PathBuf::from("/tmp/jorben/.tiy/workspace/Default")
+        );
+    }
 }

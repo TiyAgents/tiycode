@@ -183,7 +183,7 @@ const zhCN = {
   // ── New Thread Empty State ─────────────────────────────────
   "newThread.headline": "一切所需，聊聊即达。",
   "newThread.description":
-    "选择一个本地工作区，从这里开始你的下一项目标。",
+    "直接开始对话，或选择一个本地工作区后开启对话",
   "newThread.chooseProject": "选择项目",
   "newThread.selectFolderHint": "选择一个文件夹以启动基于工作区的对话",
   "newThread.recentProjects": "最近的项目",

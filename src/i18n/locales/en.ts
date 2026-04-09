@@ -182,9 +182,9 @@ const en: Record<TranslationKey, string> = {
 
   // ── New Thread Empty State ─────────────────────────────────
   "newThread.headline": "Whenever you need, Tiy is here.",
-  "newThread.description": "Choose a local workspace and start your next goal here.",
+  "newThread.description": "Start chatting right away, or pick a local workspace first.",
   "newThread.chooseProject": "Choose project",
-  "newThread.selectFolderHint": "Select a folder to start a workspace-backed thread",
+  "newThread.selectFolderHint": "Pick a folder as a workspace, or start without one",
   "newThread.recentProjects": "Recent projects",
   "newThread.current": "Current",
   "newThread.chooseNewFolder": "Choose new folder",

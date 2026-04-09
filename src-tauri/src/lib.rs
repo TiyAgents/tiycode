@@ -74,6 +74,7 @@ fn init_directories(base: &PathBuf) -> std::io::Result<()> {
         base.join("prompts"),
         base.join("plugins"),
         base.join("automations"),
+        base.join("workspace"),
         base.join("cache"),
         base.join("cache/index"),
         base.join("catalog"),
@@ -257,6 +258,7 @@ pub fn run() {
             // Workspace
             commands::workspace::workspace_list,
             commands::workspace::workspace_add,
+            commands::workspace::workspace_ensure_default,
             commands::workspace::workspace_remove,
             commands::workspace::workspace_set_default,
             commands::workspace::workspace_validate,
