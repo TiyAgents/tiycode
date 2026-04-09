@@ -17,6 +17,8 @@ triggers:
   - theme
   - shell environment
   - command not found
+  - introduce yourself
+  - self-introduction
 tools:
   - read
   - write
