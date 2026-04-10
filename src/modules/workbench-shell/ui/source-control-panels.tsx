@@ -804,6 +804,7 @@ export function GitPanel({
     }
 
     let cancelled = false;
+    let unsubscribe: (() => Promise<void>) | null = null;
     setIsLoading(true);
     setError(null);
     setActionAlert(null);
@@ -862,17 +863,28 @@ export function GitPanel({
       if (event.type === "refresh_completed") {
         setIsRefreshing(false);
       }
-    }).catch((subscriptionError) => {
-      if (cancelled) {
-        return;
-      }
+    })
+      .then((nextUnsubscribe) => {
+        if (cancelled) {
+          void nextUnsubscribe().catch(() => {});
+          return;
+        }
+        unsubscribe = nextUnsubscribe;
+      })
+      .catch((subscriptionError) => {
+        if (cancelled) {
+          return;
+        }
 
-      const message = formatUiError(subscriptionError, t("sourceControl.failedSubscribeGit"));
-      setError(message);
-    });
+        const message = formatUiError(subscriptionError, t("sourceControl.failedSubscribeGit"));
+        setError(message);
+      });
 
     return () => {
       cancelled = true;
+      if (unsubscribe) {
+        void unsubscribe().catch(() => {});
+      }
     };
   }, [isMockMode, workspaceId]);
 

@@ -341,6 +341,7 @@ pub fn run() {
             commands::git::git_get_diff,
             commands::git::git_get_file_status,
             commands::git::git_subscribe,
+            commands::git::git_unsubscribe,
             commands::git::git_refresh,
             commands::git::git_stage,
             commands::git::git_unstage,

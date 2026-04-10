@@ -1462,6 +1462,7 @@ export function DashboardWorkbench() {
     }
 
     let cancelled = false;
+    let unsubscribe: (() => Promise<void>) | null = null;
 
     // Subscribe first so we don't miss events during the initial fetch
     void gitSubscribe(resolvedWorkspaceId, (event) => {
@@ -1469,7 +1470,15 @@ export function DashboardWorkbench() {
       if (event.type === "snapshot_updated") {
         setTopBarGitSnapshot(event.snapshot);
       }
-    }).catch(() => {});
+    })
+      .then((nextUnsubscribe) => {
+        if (cancelled) {
+          void nextUnsubscribe().catch(() => {});
+          return;
+        }
+        unsubscribe = nextUnsubscribe;
+      })
+      .catch(() => {});
 
     // Then fetch the initial snapshot to fill the gap before subscription delivers
     void gitGetSnapshot(resolvedWorkspaceId)
@@ -1482,6 +1491,9 @@ export function DashboardWorkbench() {
 
     return () => {
       cancelled = true;
+      if (unsubscribe) {
+        void unsubscribe().catch(() => {});
+      }
     };
   }, [resolvedWorkspaceId]);
 

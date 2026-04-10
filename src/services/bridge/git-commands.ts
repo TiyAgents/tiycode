@@ -10,6 +10,8 @@ import type {
   RunModelPlanDto,
 } from "@/shared/types/api";
 
+export type GitUnsubscribe = () => Promise<void>;
+
 const requireTauri = (cmd: string) => {
   if (!isTauri()) throw new Error(`${cmd} requires Tauri runtime`);
 };
@@ -59,7 +61,7 @@ export async function gitGetFileStatus(
 export async function gitSubscribe(
   workspaceId: string,
   onEvent: (event: GitStreamEvent) => void,
-): Promise<void> {
+): Promise<GitUnsubscribe> {
   requireTauri("git_subscribe");
 
   const channel = new Channel<GitStreamEvent>();
@@ -69,6 +71,18 @@ export async function gitSubscribe(
     workspaceId,
     onEvent: channel,
   });
+
+  let unsubscribed = false;
+  return async () => {
+    if (unsubscribed) {
+      return;
+    }
+    unsubscribed = true;
+    await invoke("git_unsubscribe", {
+      workspaceId,
+      subscriptionId: channel.id,
+    });
+  };
 }
 
 export async function gitRefresh(workspaceId: string): Promise<GitSnapshotDto> {

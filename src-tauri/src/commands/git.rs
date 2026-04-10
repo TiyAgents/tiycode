@@ -236,14 +236,40 @@ pub async fn git_subscribe(
     on_event: Channel<GitStreamEvent>,
 ) -> Result<(), AppError> {
     let mut receiver = state.git_manager.subscribe(&workspace_id).await;
+    let subscription_id = on_event.id();
+    let git_manager = state.git_manager.clone();
+    let workspace_id_for_cleanup = workspace_id.clone();
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         while let Ok(event) = receiver.recv().await {
             if on_event.send(event).is_err() {
                 break;
             }
         }
+
+        git_manager
+            .finish_subscription(&workspace_id_for_cleanup, subscription_id)
+            .await;
     });
+
+    state
+        .git_manager
+        .register_subscription(&workspace_id, subscription_id, handle)
+        .await;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_unsubscribe(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    subscription_id: u32,
+) -> Result<(), AppError> {
+    state
+        .git_manager
+        .unregister_subscription(&workspace_id, subscription_id)
+        .await;
 
     Ok(())
 }

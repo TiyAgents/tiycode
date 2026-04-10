@@ -547,14 +547,6 @@ export function BranchSelector({
                         {showRemoteBranches
                           ? filteredRemote.map((branch) => {
                               const isSwitching = switchingBranch === branch.name;
-                              // Strip remote prefix to get the local branch name.
-                              // git2 returns remote branches as "<remote>/<branch>" where
-                              // remote names never contain "/", so splitting on the first
-                              // "/" is safe even for multi-segment branch names like "feat/foo".
-                              const slashIdx = branch.name.indexOf("/");
-                              const localName = slashIdx >= 0
-                                ? branch.name.substring(slashIdx + 1)
-                                : branch.name;
 
                               return (
                                 <button
@@ -565,7 +557,7 @@ export function BranchSelector({
                                     isSwitching && "cursor-wait opacity-70",
                                   )}
                                   disabled={!!switchingBranch}
-                                  onClick={() => void handleCheckout(localName)}
+                                  onClick={() => void handleCheckout(branch.name)}
                                 >
                                   <GitBranch className="size-3.5 shrink-0 text-app-subtle" />
                                   <span className="min-w-0 flex-1 truncate">{branch.name}</span>

@@ -9,6 +9,7 @@ use git2::{
     StatusOptions,
 };
 use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::task::JoinHandle;
 
 use crate::core::executors::git as git_executor;
 use crate::core::windows_process::configure_background_std_command;
@@ -54,6 +55,7 @@ struct SnapshotParts {
 #[derive(Clone)]
 pub struct GitManager {
     streams: Arc<Mutex<HashMap<String, broadcast::Sender<GitStreamEvent>>>>,
+    subscriptions: Arc<Mutex<HashMap<(String, u32), JoinHandle<()>>>>,
     overlay_cache: Arc<RwLock<HashMap<String, OverlayCacheEntry>>>,
 }
 
@@ -61,6 +63,7 @@ impl GitManager {
     pub fn new() -> Self {
         Self {
             streams: Arc::new(Mutex::new(HashMap::new())),
+            subscriptions: Arc::new(Mutex::new(HashMap::new())),
             overlay_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -68,6 +71,32 @@ impl GitManager {
     pub async fn subscribe(&self, workspace_id: &str) -> broadcast::Receiver<GitStreamEvent> {
         let sender = self.get_or_create_sender(workspace_id).await;
         sender.subscribe()
+    }
+
+    pub async fn register_subscription(
+        &self,
+        workspace_id: &str,
+        subscription_id: u32,
+        handle: JoinHandle<()>,
+    ) {
+        let key = (workspace_id.to_string(), subscription_id);
+        let mut subscriptions = self.subscriptions.lock().await;
+        if let Some(existing) = subscriptions.insert(key, handle) {
+            existing.abort();
+        }
+    }
+
+    pub async fn unregister_subscription(&self, workspace_id: &str, subscription_id: u32) {
+        let key = (workspace_id.to_string(), subscription_id);
+        let mut subscriptions = self.subscriptions.lock().await;
+        if let Some(handle) = subscriptions.remove(&key) {
+            handle.abort();
+        }
+    }
+
+    pub async fn finish_subscription(&self, workspace_id: &str, subscription_id: u32) {
+        let key = (workspace_id.to_string(), subscription_id);
+        self.subscriptions.lock().await.remove(&key);
     }
 
     pub async fn refresh(
