@@ -15,7 +15,10 @@ use super::section::{PromptPhase, PromptSection, PromptSectionProvider};
 
 const WORKSPACE_INSTRUCTION_FILE_NAMES: &[&str] = &["AGENTS.md", "CLAUDE.md", "AGENT.MD"];
 const WORKSPACE_INSTRUCTION_MAX_CHARS: usize = 12_800;
-const SHELL_GUIDE_TOOL_NAMES: &[&str] = &["python3", "python", "node", "npm", "uv", "git", "rg"];
+const SHELL_GUIDE_TOOL_NAMES: &[&str] = &[
+    "node", "bun", "npx", "npm", "pnpm", "yarn", "python", "uv", "uvx", "pip", "python3", "pip3",
+    "git", "rg",
+];
 
 #[derive(Debug, Clone)]
 struct WorkspaceInstructionSnippet {
@@ -28,6 +31,7 @@ struct WorkspaceInstructionSnippet {
 struct ToolAvailability {
     name: &'static str,
     path: Option<PathBuf>,
+    version: Option<String>,
 }
 
 pub struct BaseProvider;
@@ -84,11 +88,13 @@ impl PromptSectionProvider for WorkspaceProvider {
 
 impl PromptSectionProvider for EnvironmentProvider {
     async fn collect(&self, ctx: &PromptBuildContext<'_>) -> Result<Vec<PromptSection>, AppError> {
+        let tools = detect_shell_tools_via_login_shell().await;
+
         Ok(vec![
             PromptSection {
                 key: "system_environment",
                 title: "System Environment",
-                body: build_system_environment_body(),
+                body: build_system_environment_body(&tools),
                 phase: PromptPhase::RuntimeContext,
                 order_in_phase: 10,
             },
@@ -103,7 +109,7 @@ impl PromptSectionProvider for EnvironmentProvider {
             PromptSection {
                 key: "shell_tooling_guide",
                 title: "Shell Tooling Guide",
-                body: build_shell_tooling_guide_body(),
+                body: build_shell_tooling_guide_body(&tools),
                 phase: PromptPhase::Capability,
                 order_in_phase: 10,
             },
@@ -405,13 +411,16 @@ fn truncate_chars(value: &str, max_chars: usize) -> (String, bool) {
     (truncated.trim_end().to_string(), true)
 }
 
-fn build_system_environment_body() -> String {
+fn build_system_environment_body(tools: &[ToolAvailability]) -> String {
     let shell = current_shell();
-    let tool_lines = detect_shell_tools()
-        .into_iter()
-        .map(|tool| match tool.path {
-            Some(path) => format!("- {}: available at {}", tool.name, path.display()),
-            None => format!("- {}: not found on PATH", tool.name),
+    let tool_lines = tools
+        .iter()
+        .map(|tool| match (&tool.path, &tool.version) {
+            (Some(path), Some(version)) => {
+                format!("- {}: {} (at {})", tool.name, version, path.display())
+            }
+            (Some(path), None) => format!("- {}: available at {}", tool.name, path.display()),
+            (None, _) => format!("- {}: not found on PATH", tool.name),
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -425,54 +434,89 @@ fn build_system_environment_body() -> String {
     )
 }
 
-fn build_shell_tooling_guide_body() -> String {
-    let tool_lookup = detect_shell_tools()
-        .into_iter()
+fn build_shell_tooling_guide_body(tools: &[ToolAvailability]) -> String {
+    let tool_available: HashMap<&str, bool> = tools
+        .iter()
         .map(|tool| (tool.name, tool.path.is_some()))
-        .collect::<HashMap<_, _>>();
+        .collect();
 
-    let python_hint = if tool_lookup.get("python3").copied().unwrap_or(false) {
+    let is_avail = |name: &str| tool_available.get(name).copied().unwrap_or(false);
+
+    let python_hint = if is_avail("python3") {
         "Prefer `python3` for Python commands in shell examples."
-    } else if tool_lookup.get("python").copied().unwrap_or(false) {
+    } else if is_avail("python") {
         "Use `python` for Python commands in shell examples."
     } else {
         "Do not assume Python is available; verify before proposing Python shell commands."
     };
 
-    let node_hint = if tool_lookup.get("node").copied().unwrap_or(false)
-        || tool_lookup.get("npm").copied().unwrap_or(false)
-    {
-        "Node tooling is available. Prefer `npm` scripts when the workspace defines them."
+    let pip_hint = if is_avail("pip3") || is_avail("pip") {
+        let cmd = if is_avail("pip3") { "pip3" } else { "pip" };
+        format!("Use `{cmd}` for Python package installation when needed.")
+    } else {
+        "Do not assume `pip` is available.".to_string()
+    };
+
+    let node_hint = if is_avail("node") || is_avail("npm") {
+        let mut parts = vec!["Node tooling is available."];
+        if is_avail("npm") {
+            parts.push("Prefer `npm` scripts when the workspace defines them.");
+        }
+        if is_avail("bun") {
+            parts.push("`bun` is available as an alternative runtime.");
+        }
+        if is_avail("pnpm") {
+            parts.push("`pnpm` is available.");
+        }
+        if is_avail("yarn") {
+            parts.push("`yarn` is available.");
+        }
+        if is_avail("npx") {
+            parts.push("Use `npx` for one-off package execution.");
+        }
+        parts.join(" ")
     } else {
         "Do not assume Node tooling is available; verify before proposing Node shell commands."
+            .to_string()
     };
 
-    let uv_hint = if tool_lookup.get("uv").copied().unwrap_or(false) {
-        "Use `uv` for lightweight Python environment and script execution when that fits the task."
+    let uv_hint = if is_avail("uv") {
+        let mut parts = vec![
+            "Use `uv` for lightweight Python environment and script execution when that fits the task.",
+        ];
+        if is_avail("uvx") {
+            parts.push("`uvx` is available for running Python CLI tools without installing them.");
+        }
+        parts.join(" ")
     } else {
-        "Do not assume `uv` is available."
+        "Do not assume `uv` is available.".to_string()
     };
 
-    let rg_hint = if tool_lookup.get("rg").copied().unwrap_or(false) {
+    let rg_hint = if is_avail("rg") {
         "Prefer `rg` for text search and file discovery before broader shell commands."
     } else {
         "If `rg` is unavailable, fall back to the built-in search and find tools before broad shell scans."
     };
 
-    let git_hint = if tool_lookup.get("git").copied().unwrap_or(false) {
+    let git_hint = if is_avail("git") {
         "Use `git` for repo status, diff, and history checks when repository context matters."
     } else {
         "Do not assume `git` is available in shell commands."
     };
 
-    format!(
-        "- Shell commands run through the user's default shell (`{}`).\n- This section is a shell command selection and boundary guide. Prefer workspace-aware tools (`read`, `list`, `search`, `find`, `edit`) before shell when they fit.\n- Use `shell` for one-shot non-interactive commands in the workspace.\n- Use `term_status`, `term_output`, `term_write`, `term_restart`, and `term_close` only for the desktop app's embedded Terminal panel session for the current thread. They inspect or control that persistent panel session and do not replace one-shot `shell` execution.\n- {}\n- {}\n- {}\n- {}\n- {}",
-        current_shell(),
-        rg_hint,
-        python_hint,
+    let hints = [
+        rg_hint.to_string(),
+        python_hint.to_string(),
+        pip_hint,
         node_hint,
         uv_hint,
-        git_hint
+        git_hint.to_string(),
+    ];
+
+    format!(
+        "- Shell commands run through the user's default shell (`{}`).\n- This section is a shell command selection and boundary guide. Prefer workspace-aware tools (`read`, `list`, `search`, `find`, `edit`) before shell when they fit.\n- Use `shell` for one-shot non-interactive commands in the workspace.\n- Use `term_status`, `term_output`, `term_write`, `term_restart`, and `term_close` only for the desktop app's embedded Terminal panel session for the current thread. They inspect or control that persistent panel session and do not replace one-shot `shell` execution.\n- {}",
+        current_shell(),
+        hints.join("\n- ")
     )
 }
 
@@ -480,14 +524,131 @@ fn current_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
 }
 
-fn detect_shell_tools() -> Vec<ToolAvailability> {
+async fn detect_shell_tools_via_login_shell() -> Vec<ToolAvailability> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        detect_shell_tools_unix().await
+    }
+    #[cfg(target_os = "windows")]
+    {
+        detect_shell_tools_windows()
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn detect_shell_tools_unix() -> Vec<ToolAvailability> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let tool_names = SHELL_GUIDE_TOOL_NAMES.join(" ");
+
+    // One login-shell call: detect path + version for all tools at once.
+    // Per-command timeout (5s) prevents individual --version from hanging;
+    // overall tokio timeout (10s) guards against shell startup issues.
+    let script = format!(
+        r#"for cmd in {tool_names}; do
+  path=$(command -v "$cmd" 2>/dev/null) || true
+  if [ -n "$path" ]; then
+    ver=$(timeout 5 "$cmd" --version 2>&1 | head -1) || true
+    printf '%s|%s|%s\n' "$cmd" "$path" "$ver"
+  else
+    printf '%s||\n' "$cmd"
+  fi
+done"#
+    );
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::process::Command::new(&shell)
+            .arg("-l")
+            .arg("-c")
+            .arg(&script)
+            .output(),
+    )
+    .await;
+
+    match output {
+        Ok(Ok(output)) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            parse_tool_detection_output(&stdout)
+        }
+        _ => {
+            // Fallback to process PATH detection
+            SHELL_GUIDE_TOOL_NAMES
+                .iter()
+                .map(|name| ToolAvailability {
+                    name,
+                    path: find_command_on_path(name),
+                    version: None,
+                })
+                .collect()
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn detect_shell_tools_windows() -> Vec<ToolAvailability> {
     SHELL_GUIDE_TOOL_NAMES
         .iter()
         .map(|name| ToolAvailability {
             name,
             path: find_command_on_path(name),
+            version: None,
         })
         .collect()
+}
+
+fn parse_tool_detection_output(stdout: &str) -> Vec<ToolAvailability> {
+    let mut results = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.splitn(3, '|').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let name = parts[0].trim();
+        let path_str = parts[1].trim();
+        let version_str = if parts.len() > 2 {
+            let v = parts[2].trim();
+            if v.is_empty() {
+                None
+            } else {
+                Some(v.to_string())
+            }
+        } else {
+            None
+        };
+
+        let name_static = SHELL_GUIDE_TOOL_NAMES.iter().find(|&&n| n == name).copied();
+        if let Some(name_static) = name_static {
+            let path = if path_str.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(path_str))
+            };
+            results.push(ToolAvailability {
+                name: name_static,
+                path,
+                version: version_str,
+            });
+        }
+    }
+
+    // Ensure all tool names are present even if missing from output
+    let detected_names: Vec<&str> = results.iter().map(|t| t.name).collect();
+    for &name in SHELL_GUIDE_TOOL_NAMES {
+        if !detected_names.contains(&name) {
+            results.push(ToolAvailability {
+                name,
+                path: None,
+                version: None,
+            });
+        }
+    }
+
+    results
 }
 
 fn find_command_on_path(command: &str) -> Option<PathBuf> {
