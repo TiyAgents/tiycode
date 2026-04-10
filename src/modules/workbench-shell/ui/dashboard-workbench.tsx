@@ -2170,10 +2170,10 @@ export function DashboardWorkbench() {
         setTerminalBootstrapError(null);
 
         try {
-          await workspaceRemove(workspace.id);
           if (workspace.path) {
             removedWorkspacePathsRef.current.add(workspace.path);
           }
+          await workspaceRemove(workspace.id);
 
           if (isRemovingActiveWorkspace) {
             setNewThreadMode(true);
@@ -2245,6 +2245,9 @@ export function DashboardWorkbench() {
             preserveSelectedProjectIfMissing: shouldPreserveSelectedProject,
           });
         } catch (error) {
+          if (workspace.path) {
+            removedWorkspacePathsRef.current.delete(workspace.path);
+          }
           const message = getInvokeErrorMessage(
             error,
             `Failed to remove ${workspace.name}`,
