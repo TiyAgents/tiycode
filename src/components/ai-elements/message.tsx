@@ -11,6 +11,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/shared/ui/tooltip";
+import { streamdownLinkSafety } from "@/shared/lib/streamdown-link-safety";
 import { cn } from "@/shared/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
@@ -332,6 +333,7 @@ export const MessageResponse = memo(
         className
       )}
       controls={streamdownControls}
+      linkSafety={streamdownLinkSafety}
       plugins={streamdownPlugins}
       {...props}
     />

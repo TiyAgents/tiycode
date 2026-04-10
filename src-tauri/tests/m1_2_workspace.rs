@@ -21,13 +21,27 @@ fn home_env_lock() -> &'static Mutex<()> {
 
 struct HomeEnvGuard {
     original_home: Option<OsString>,
+    #[cfg(target_os = "windows")]
+    original_userprofile: Option<OsString>,
 }
 
 impl HomeEnvGuard {
     fn set(home: &Path) -> Self {
         let original_home = std::env::var_os("HOME");
         std::env::set_var("HOME", home);
-        Self { original_home }
+
+        #[cfg(target_os = "windows")]
+        let original_userprofile = {
+            let prev = std::env::var_os("USERPROFILE");
+            std::env::set_var("USERPROFILE", home);
+            prev
+        };
+
+        Self {
+            original_home,
+            #[cfg(target_os = "windows")]
+            original_userprofile,
+        }
     }
 }
 
@@ -36,6 +50,12 @@ impl Drop for HomeEnvGuard {
         match &self.original_home {
             Some(home) => std::env::set_var("HOME", home),
             None => std::env::remove_var("HOME"),
+        }
+
+        #[cfg(target_os = "windows")]
+        match &self.original_userprofile {
+            Some(profile) => std::env::set_var("USERPROFILE", profile),
+            None => std::env::remove_var("USERPROFILE"),
         }
     }
 }

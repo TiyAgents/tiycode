@@ -24,6 +24,7 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { streamdownLinkSafety } from "@/shared/lib/streamdown-link-safety";
 
 import { Shimmer } from "./shimmer";
 
@@ -217,7 +218,11 @@ export const ReasoningContent = memo(
       )}
       {...props}
     >
-      <Streamdown controls={streamdownControls} plugins={streamdownPlugins}>
+      <Streamdown
+        controls={streamdownControls}
+        linkSafety={streamdownLinkSafety}
+        plugins={streamdownPlugins}
+      >
         {children}
       </Streamdown>
     </CollapsibleContent>

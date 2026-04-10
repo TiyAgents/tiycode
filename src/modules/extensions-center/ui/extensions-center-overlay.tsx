@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
+import { streamdownLinkSafety } from "@/shared/lib/streamdown-link-safety";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -1701,6 +1702,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                 <Streamdown
                   className="w-full min-w-0 max-w-full break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:break-all [&_code]:break-all [&_p]:[overflow-wrap:anywhere] [&_li]:[overflow-wrap:anywhere] [&_blockquote]:[overflow-wrap:anywhere]"
                   controls={streamdownControls}
+                  linkSafety={streamdownLinkSafety}
                   plugins={streamdownPlugins}
                 >
                   {selectedSkillPreview.body}

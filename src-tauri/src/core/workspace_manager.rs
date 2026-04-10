@@ -2,6 +2,7 @@ use chrono::Utc;
 use sqlx::SqlitePool;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tokio::{fs, task};
 
 use crate::model::errors::{AppError, ErrorSource};
@@ -299,16 +300,21 @@ fn derive_name_from_path(path: &Path) -> String {
 
 /// Derive a display-friendly path using `~` for the home directory.
 async fn derive_display_path(path: &Path) -> String {
+    /// Lazily compute and cache the canonical home directory.
+    fn cached_canonical_home() -> Option<&'static PathBuf> {
+        static CANONICAL_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
+        CANONICAL_HOME
+            .get_or_init(|| dirs::home_dir().and_then(|home| dunce::canonicalize(&home).ok()))
+            .as_ref()
+    }
+
     if let Some(home) = dirs::home_dir() {
         if let Ok(relative) = path.strip_prefix(&home) {
             return format!("~/{}", relative.display());
         }
 
-        let home_for_canonicalize = home.clone();
-        if let Ok(Ok(canonical_home)) =
-            task::spawn_blocking(move || dunce::canonicalize(&home_for_canonicalize)).await
-        {
-            if let Ok(relative) = path.strip_prefix(&canonical_home) {
+        if let Some(canonical_home) = cached_canonical_home() {
+            if let Ok(relative) = path.strip_prefix(canonical_home) {
                 return format!("~/{}", relative.display());
             }
         }
