@@ -9,7 +9,36 @@
 mod test_helpers;
 
 use sqlx::Row;
+use std::ffi::OsString;
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use tiycode::core::workspace_manager::WorkspaceManager;
+
+fn home_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct HomeEnvGuard {
+    original_home: Option<OsString>,
+}
+
+impl HomeEnvGuard {
+    fn set(home: &Path) -> Self {
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        Self { original_home }
+    }
+}
+
+impl Drop for HomeEnvGuard {
+    fn drop(&mut self) {
+        match &self.original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+}
 
 // =========================================================================
 // T1.2.1 — Workspace CRUD operations (repo layer)
@@ -52,6 +81,82 @@ async fn test_workspace_duplicate_canonical_path_rejected() {
         result.is_err(),
         "Duplicate canonical_path should be rejected by UNIQUE constraint"
     );
+}
+
+#[tokio::test]
+async fn test_workspace_ensure_default_creates_and_reuses_default_workspace() {
+    let _home_lock = home_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let temp_home = tempfile::tempdir().expect("should create temp home");
+    let _home_guard = HomeEnvGuard::set(temp_home.path());
+
+    let pool = test_helpers::setup_test_pool().await;
+    let manager = WorkspaceManager::new(pool.clone());
+
+    let record = manager.ensure_default_thread_workspace().await.unwrap();
+    let expected_path = temp_home
+        .path()
+        .join(".tiy")
+        .join("workspace")
+        .join("Default");
+    let expected_canonical = dunce::canonicalize(&expected_path)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let expected_display = format!(
+        "~/{}",
+        Path::new(".tiy")
+            .join("workspace")
+            .join("Default")
+            .display()
+    );
+
+    assert_eq!(record.name, "Default");
+    assert_eq!(record.path, expected_path.to_string_lossy().to_string());
+    assert_eq!(record.canonical_path, expected_canonical);
+    assert_eq!(record.display_path, expected_display);
+    assert!(expected_path.is_dir());
+
+    let reused = manager.ensure_default_thread_workspace().await.unwrap();
+    assert_eq!(reused.id, record.id);
+
+    let row = sqlx::query("SELECT COUNT(*) as count FROM workspaces WHERE canonical_path = ?")
+        .bind(&expected_canonical)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(row.get::<i64, _>("count"), 1);
+}
+
+#[tokio::test]
+async fn test_workspace_ensure_default_rejects_file_at_default_path() {
+    let _home_lock = home_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let temp_home = tempfile::tempdir().expect("should create temp home");
+    let _home_guard = HomeEnvGuard::set(temp_home.path());
+
+    let default_path = temp_home
+        .path()
+        .join(".tiy")
+        .join("workspace")
+        .join("Default");
+    tokio::fs::create_dir_all(default_path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&default_path, b"not-a-directory")
+        .await
+        .unwrap();
+
+    let pool = test_helpers::setup_test_pool().await;
+    let manager = WorkspaceManager::new(pool.clone());
+
+    let error = manager.ensure_default_thread_workspace().await.unwrap_err();
+    assert_eq!(error.error_code, "workspace.path.not_directory");
+
+    let row = sqlx::query("SELECT COUNT(*) as count FROM workspaces")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<i64, _>("count"), 0);
 }
 
 #[tokio::test]
