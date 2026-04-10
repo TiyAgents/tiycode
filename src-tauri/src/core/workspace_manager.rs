@@ -1,7 +1,8 @@
 use chrono::Utc;
 use sqlx::SqlitePool;
-use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use tokio::{fs, task};
 
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::workspace::{WorkspaceAddInput, WorkspaceRecord, WorkspaceStatus};
@@ -27,13 +28,23 @@ impl WorkspaceManager {
 
         // Canonicalize the path (resolves symlinks, makes absolute).
         // Use dunce to avoid Windows extended-length path prefix (\\?\).
-        let canonical = dunce::canonicalize(raw_path).map_err(|e| {
-            AppError::recoverable(
-                ErrorSource::Workspace,
-                "workspace.path.invalid",
-                format!("Cannot resolve path '{}': {e}", input.path),
-            )
-        })?;
+        let raw_path_buf = raw_path.to_path_buf();
+        let input_path_for_error = input.path.clone();
+        let canonical = task::spawn_blocking(move || dunce::canonicalize(&raw_path_buf))
+            .await
+            .map_err(|error| {
+                AppError::internal(
+                    ErrorSource::Workspace,
+                    format!("workspace path canonicalization task failed: {error}"),
+                )
+            })?
+            .map_err(|error| {
+                AppError::recoverable(
+                    ErrorSource::Workspace,
+                    "workspace.path.invalid",
+                    format!("Cannot resolve path '{}': {error}", input_path_for_error),
+                )
+            })?;
 
         let canonical_str = canonical.to_string_lossy().to_string();
 
@@ -50,7 +61,14 @@ impl WorkspaceManager {
         }
 
         // Validate path is a directory
-        if !canonical.is_dir() {
+        let metadata = fs::metadata(&canonical).await.map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Workspace,
+                "workspace.path.invalid",
+                format!("Cannot inspect path '{}': {error}", input.path),
+            )
+        })?;
+        if !metadata.is_dir() {
             return Err(AppError::recoverable(
                 ErrorSource::Workspace,
                 "workspace.path.not_directory",
@@ -62,10 +80,10 @@ impl WorkspaceManager {
         let name = input
             .name
             .unwrap_or_else(|| derive_name_from_path(&canonical));
-        let display_path = derive_display_path(&canonical);
+        let display_path = derive_display_path(&canonical).await;
 
         // Detect git repository
-        let is_git = canonical.join(".git").exists();
+        let is_git = fs::metadata(canonical.join(".git")).await.is_ok();
 
         let record = WorkspaceRecord {
             id: uuid::Uuid::now_v7().to_string(),
@@ -131,18 +149,21 @@ impl WorkspaceManager {
         let canonical = Path::new(&record.canonical_path);
         let now = Utc::now();
 
-        let new_status = if !canonical.exists() {
-            WorkspaceStatus::Missing
-        } else if !canonical.is_dir() {
-            WorkspaceStatus::Invalid
-        } else if std::fs::read_dir(canonical).is_err() {
-            WorkspaceStatus::Inaccessible
-        } else {
-            WorkspaceStatus::Ready
+        let new_status = match fs::metadata(canonical).await {
+            Ok(metadata) if !metadata.is_dir() => WorkspaceStatus::Invalid,
+            Ok(_) => {
+                if fs::read_dir(canonical).await.is_err() {
+                    WorkspaceStatus::Inaccessible
+                } else {
+                    WorkspaceStatus::Ready
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => WorkspaceStatus::Missing,
+            Err(_) => WorkspaceStatus::Inaccessible,
         };
 
         // Update git detection as well
-        let is_git = canonical.join(".git").exists();
+        let is_git = fs::metadata(canonical.join(".git")).await.is_ok();
         if is_git != record.is_git {
             workspace_repo::update_is_git(&self.pool, id, is_git).await?;
         }
@@ -178,15 +199,29 @@ impl WorkspaceManager {
         workspace_path: &Path,
         name: &str,
     ) -> Result<WorkspaceRecord, AppError> {
-        if workspace_path.exists() && !workspace_path.is_dir() {
-            return Err(AppError::recoverable(
-                ErrorSource::Workspace,
-                "workspace.path.not_directory",
-                format!("'{}' is not a directory", workspace_path.display()),
-            ));
+        match fs::metadata(workspace_path).await {
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(AppError::recoverable(
+                    ErrorSource::Workspace,
+                    "workspace.path.not_directory",
+                    format!("'{}' is not a directory", workspace_path.display()),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(AppError::recoverable(
+                    ErrorSource::Workspace,
+                    "workspace.path.invalid",
+                    format!(
+                        "Cannot inspect path '{}': {error}",
+                        workspace_path.display()
+                    ),
+                ));
+            }
         }
 
-        fs::create_dir_all(workspace_path).map_err(|error| {
+        fs::create_dir_all(workspace_path).await.map_err(|error| {
             AppError::recoverable(
                 ErrorSource::Workspace,
                 "workspace.path.create_failed",
@@ -197,16 +232,23 @@ impl WorkspaceManager {
             )
         })?;
 
-        let canonical = workspace_path.canonicalize().map_err(|error| {
-            AppError::recoverable(
-                ErrorSource::Workspace,
-                "workspace.path.invalid",
-                format!(
-                    "Cannot resolve path '{}': {error}",
-                    workspace_path.display()
-                ),
-            )
-        })?;
+        let workspace_path_buf = workspace_path.to_path_buf();
+        let workspace_path_display = workspace_path.display().to_string();
+        let canonical = task::spawn_blocking(move || dunce::canonicalize(&workspace_path_buf))
+            .await
+            .map_err(|error| {
+                AppError::internal(
+                    ErrorSource::Workspace,
+                    format!("workspace path canonicalization task failed: {error}"),
+                )
+            })?
+            .map_err(|error| {
+                AppError::recoverable(
+                    ErrorSource::Workspace,
+                    "workspace.path.invalid",
+                    format!("Cannot resolve path '{}': {error}", workspace_path_display),
+                )
+            })?;
         let canonical_str = canonical.to_string_lossy().to_string();
 
         if let Some(existing) =
@@ -256,10 +298,19 @@ fn derive_name_from_path(path: &Path) -> String {
 }
 
 /// Derive a display-friendly path using `~` for the home directory.
-fn derive_display_path(path: &Path) -> String {
+async fn derive_display_path(path: &Path) -> String {
     if let Some(home) = dirs::home_dir() {
         if let Ok(relative) = path.strip_prefix(&home) {
             return format!("~/{}", relative.display());
+        }
+
+        let home_for_canonicalize = home.clone();
+        if let Ok(Ok(canonical_home)) =
+            task::spawn_blocking(move || dunce::canonicalize(&home_for_canonicalize)).await
+        {
+            if let Ok(relative) = path.strip_prefix(&canonical_home) {
+                return format!("~/{}", relative.display());
+            }
         }
     }
     path.display().to_string()

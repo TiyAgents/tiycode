@@ -185,7 +185,7 @@ const zhCN = {
   "newThread.description":
     "直接开始对话，或选择一个本地工作区后开启对话",
   "newThread.chooseProject": "选择项目",
-  "newThread.selectFolderHint": "选择一个文件夹以启动基于工作区的对话",
+  "newThread.selectFolderHint": "选择一个文件夹作为工作区，或直接开启对话",
   "newThread.recentProjects": "最近的项目",
   "newThread.current": "当前",
   "newThread.chooseNewFolder": "选择新文件夹",
