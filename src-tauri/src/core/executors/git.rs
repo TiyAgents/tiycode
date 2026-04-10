@@ -129,12 +129,50 @@ pub async fn pull(workspace_path: &str) -> Result<GitCommandResultDto, AppError>
 }
 
 pub async fn push(workspace_path: &str) -> Result<GitCommandResultDto, AppError> {
-    run_git_action(
-        workspace_path,
-        GitMutationAction::Push,
-        vec!["push".to_string()],
-    )
+    let workspace_root = canonicalize_workspace(workspace_path);
+
+    // Check if the current branch has an upstream; if not, push with --set-upstream
+    let args = tokio::task::spawn_blocking(move || -> Result<Vec<String>, AppError> {
+        let repo = open_repository(&workspace_root)?;
+        let head = repo.head().map_err(|e| {
+            git_error("git.push.head_failed", format!("Cannot read HEAD: {e}"), true)
+        })?;
+
+        if !head.is_branch() {
+            return Ok(vec!["push".to_string()]);
+        }
+
+        let branch_name = head.shorthand().unwrap_or("HEAD").to_string();
+        let branch = repo.find_branch(&branch_name, git2::BranchType::Local);
+
+        let has_upstream = branch
+            .ok()
+            .and_then(|b| b.upstream().ok())
+            .is_some();
+
+        if has_upstream {
+            Ok(vec!["push".to_string()])
+        } else {
+            // Determine the remote — use "origin" as default, or the first available remote
+            let remote_name = repo
+                .remotes()
+                .ok()
+                .and_then(|remotes| remotes.get(0).map(str::to_string))
+                .unwrap_or_else(|| "origin".to_string());
+
+            Ok(vec![
+                "push".to_string(),
+                "--set-upstream".to_string(),
+                remote_name,
+                branch_name,
+            ])
+        }
+    })
     .await
+    .map_err(|e| AppError::internal(ErrorSource::Git, format!("Git push check failed: {e}")))?
+    ?;
+
+    run_git_action(workspace_path, GitMutationAction::Push, args).await
 }
 
 pub async fn checkout_branch(
