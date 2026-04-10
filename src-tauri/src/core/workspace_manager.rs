@@ -304,9 +304,7 @@ async fn derive_display_path(path: &Path) -> String {
     fn cached_canonical_home() -> Option<&'static PathBuf> {
         static CANONICAL_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
         CANONICAL_HOME
-            .get_or_init(|| {
-                dirs::home_dir().and_then(|home| dunce::canonicalize(&home).ok())
-            })
+            .get_or_init(|| dirs::home_dir().and_then(|home| dunce::canonicalize(&home).ok()))
             .as_ref()
     }
 
