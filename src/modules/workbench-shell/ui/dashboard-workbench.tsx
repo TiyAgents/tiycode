@@ -27,7 +27,7 @@ import {
 } from "@/app/providers/language-provider";
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
 import { useT } from "@/i18n";
-import { useExtensionsController } from "@/modules/extensions-center/model/use-extensions-controller";
+import { useExtensionsController, type ExtensionScope } from "@/modules/extensions-center/model/use-extensions-controller";
 import { ExtensionsCenterOverlay } from "@/modules/extensions-center/ui/extensions-center-overlay";
 import {
   buildProfileModelPlan,
@@ -397,8 +397,8 @@ export function DashboardWorkbench() {
     skills: extensionSkills,
     uninstallExtension,
     updateMcpServer,
-  } = useExtensionsController();
-  const currentExtensionScope = "global";
+  } = useExtensionsController(selectedProject?.path ?? null);
+  const currentExtensionScope: ExtensionScope = selectedProject ? "workspace" : "global";
   const extensionDetailById = useMemo<Record<string, ExtensionDetail>>(() => {
     return Object.fromEntries(
       Object.entries(extensionDetailByKey)
