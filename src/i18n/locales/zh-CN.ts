@@ -167,7 +167,7 @@ const zhCN = {
   "sourceControl.branch.localBranches": "本地分支",
   "sourceControl.branch.remoteBranches": "远程分支",
   "sourceControl.branch.createBranch": "创建分支",
-  "sourceControl.branch.smartCreate": "智能创建分支",
+  "sourceControl.branch.smartCreate": "创建分支",
   "sourceControl.branch.newBranchName": "新分支名称",
   "sourceControl.branch.create": "创建",
   "sourceControl.branch.cancel": "取消",

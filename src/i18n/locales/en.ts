@@ -167,7 +167,7 @@ const en: Record<TranslationKey, string> = {
   "sourceControl.branch.localBranches": "Local",
   "sourceControl.branch.remoteBranches": "Remote",
   "sourceControl.branch.createBranch": "Create branch",
-  "sourceControl.branch.smartCreate": "Smart create branch",
+  "sourceControl.branch.smartCreate": "Create branch",
   "sourceControl.branch.newBranchName": "New branch name",
   "sourceControl.branch.create": "Create",
   "sourceControl.branch.cancel": "Cancel",

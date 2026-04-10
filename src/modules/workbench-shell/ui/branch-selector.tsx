@@ -547,8 +547,13 @@ export function BranchSelector({
                         {showRemoteBranches
                           ? filteredRemote.map((branch) => {
                               const isSwitching = switchingBranch === branch.name;
-                              const localName = branch.name.includes("/")
-                                ? branch.name.substring(branch.name.indexOf("/") + 1)
+                              // Strip remote prefix to get the local branch name.
+                              // git2 returns remote branches as "<remote>/<branch>" where
+                              // remote names never contain "/", so splitting on the first
+                              // "/" is safe even for multi-segment branch names like "feat/foo".
+                              const slashIdx = branch.name.indexOf("/");
+                              const localName = slashIdx >= 0
+                                ? branch.name.substring(slashIdx + 1)
                                 : branch.name;
 
                               return (

@@ -179,14 +179,7 @@ pub async fn checkout_branch(
     workspace_path: &str,
     branch_name: &str,
 ) -> Result<GitCommandResultDto, AppError> {
-    let trimmed = branch_name.trim();
-    if trimmed.is_empty() {
-        return Err(git_error(
-            "git.checkout.branch_invalid",
-            "Branch name cannot be empty",
-            false,
-        ));
-    }
+    let trimmed = validate_branch_name(branch_name)?;
 
     run_git_action(
         workspace_path,
@@ -200,14 +193,7 @@ pub async fn create_branch(
     workspace_path: &str,
     branch_name: &str,
 ) -> Result<GitCommandResultDto, AppError> {
-    let trimmed = branch_name.trim();
-    if trimmed.is_empty() {
-        return Err(git_error(
-            "git.create_branch.name_invalid",
-            "Branch name cannot be empty",
-            false,
-        ));
-    }
+    let trimmed = validate_branch_name(branch_name)?;
 
     run_git_action(
         workspace_path,
@@ -662,5 +648,28 @@ fn git_error(code: &str, message: impl Into<String>, retryable: bool) -> AppErro
         user_message: message.into(),
         detail: None,
         retryable,
+    }
+}
+
+fn validate_branch_name(name: &str) -> Result<&str, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(git_error(
+            "git.branch.name_empty",
+            "Branch name cannot be empty",
+            false,
+        ));
+    }
+
+    // Use git2's reference validation: a valid branch is refs/heads/<name>
+    let full_ref = format!("refs/heads/{trimmed}");
+    if git2::Reference::is_valid_name(&full_ref) {
+        Ok(trimmed)
+    } else {
+        Err(git_error(
+            "git.branch.name_invalid",
+            format!("'{}' is not a valid branch name", trimmed),
+            false,
+        ))
     }
 }
