@@ -16,5 +16,9 @@ export async function openExternalUrl(url: string): Promise<void> {
   const openedWindow = window.open(url, "_blank", "noopener,noreferrer");
   if (openedWindow) {
     openedWindow.opener = null;
+  } else {
+    throw new Error(
+      "The browser blocked the popup. Please allow popups for this site and try again.",
+    );
   }
 }
