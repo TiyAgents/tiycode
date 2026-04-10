@@ -17,8 +17,8 @@ use crate::core::tiycode_default_headers;
 use crate::ipc::frontend_channels::GitStreamEvent;
 use crate::model::errors::{AppError, ErrorCategory, ErrorSource};
 use crate::model::git::{
-    GitCommandResultDto, GitCommitSummaryDto, GitDiffDto, GitFileChangeDto, GitFileStatusDto,
-    GitMutationAction, GitMutationResponseDto, GitSnapshotDto,
+    GitBranchDto, GitCommandResultDto, GitCommitSummaryDto, GitDiffDto, GitFileChangeDto,
+    GitFileStatusDto, GitMutationAction, GitMutationResponseDto, GitSnapshotDto,
 };
 use crate::model::workspace::WorkspaceRecord;
 use crate::persistence::repo::{audit_repo, workspace_repo};
@@ -432,6 +432,124 @@ pub async fn git_push(
     .await
 }
 
+#[tauri::command]
+pub async fn git_list_branches(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> Result<Vec<GitBranchDto>, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+
+    state
+        .git_manager
+        .list_branches(&workspace.canonical_path)
+        .await
+}
+
+#[tauri::command]
+pub async fn git_checkout_branch(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    branch: String,
+    approved: Option<bool>,
+) -> Result<GitMutationResponseDto, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+    let git_manager = state.git_manager.clone();
+    let workspace_id_for_run = workspace_id.clone();
+    let workspace_path = workspace.canonical_path.clone();
+    let branch_for_run = branch.clone();
+    let input = serde_json::json!({ "branch": branch.trim() });
+
+    authorize_and_run_git_mutation(
+        &state,
+        &workspace,
+        GitMutationAction::Checkout,
+        &input,
+        approved.unwrap_or(false),
+        move || async move {
+            git_manager
+                .checkout_branch(&workspace_id_for_run, &workspace_path, &branch_for_run)
+                .await
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn git_create_branch(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    branch: String,
+    approved: Option<bool>,
+) -> Result<GitMutationResponseDto, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+    let git_manager = state.git_manager.clone();
+    let workspace_id_for_run = workspace_id.clone();
+    let workspace_path = workspace.canonical_path.clone();
+    let branch_for_run = branch.clone();
+    let input = serde_json::json!({ "branch": branch.trim() });
+
+    authorize_and_run_git_mutation(
+        &state,
+        &workspace,
+        GitMutationAction::CreateBranch,
+        &input,
+        approved.unwrap_or(false),
+        move || async move {
+            git_manager
+                .create_branch(&workspace_id_for_run, &workspace_path, &branch_for_run)
+                .await
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn git_generate_branch_name(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    model_plan: serde_json::Value,
+) -> Result<String, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+    let raw_plan: RuntimeModelPlan = serde_json::from_value(model_plan).unwrap_or_default();
+    let selected_model = select_commit_message_model_role(&raw_plan)?;
+    let model_role = resolve_runtime_model_role(&state.pool, selected_model).await?;
+    let snapshot = state
+        .git_manager
+        .get_snapshot(&workspace_id, &workspace.canonical_path)
+        .await?;
+    let branches = state
+        .git_manager
+        .list_branches(&workspace.canonical_path)
+        .await?;
+    let prompt = build_branch_name_prompt(&snapshot, &branches);
+
+    generate_with_lite_model(
+        &model_role,
+        "You generate a single Git branch name. Return ONLY the branch name, nothing else. No explanation, no markdown.",
+        &prompt,
+    )
+    .await
+    .and_then(|raw| {
+        let cleaned = raw
+            .trim()
+            .trim_matches('`')
+            .trim()
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if cleaned.is_empty() {
+            return Err(AppError::recoverable(
+                ErrorSource::Git,
+                "git.branch_name.empty",
+                "The model returned an empty branch name. Try again.",
+            ));
+        }
+        Ok(cleaned)
+    })
+}
+
 async fn load_workspace(state: &AppState, workspace_id: &str) -> Result<WorkspaceRecord, AppError> {
     workspace_repo::find_by_id(&state.pool, workspace_id)
         .await?
@@ -780,9 +898,108 @@ fn git_diff_status_label(diff: &GitDiffDto) -> &'static str {
     }
 }
 
+fn build_branch_name_prompt(
+    snapshot: &GitSnapshotDto,
+    branches: &[GitBranchDto],
+) -> String {
+    let current_branch = snapshot
+        .head_ref
+        .as_deref()
+        .unwrap_or("(detached HEAD)");
+
+    // Collect existing local branch names for naming convention analysis
+    let local_branch_names: Vec<&str> = branches
+        .iter()
+        .filter(|b| !b.is_remote)
+        .map(|b| b.name.as_str())
+        .collect();
+
+    // Summarize changed files
+    let staged_summary: Vec<String> = snapshot
+        .staged_files
+        .iter()
+        .take(15)
+        .map(|f| format!("  [staged] {} ({})", f.path, git_change_kind_label(f)))
+        .collect();
+    let unstaged_summary: Vec<String> = snapshot
+        .unstaged_files
+        .iter()
+        .take(15)
+        .map(|f| format!("  [modified] {} ({})", f.path, git_change_kind_label(f)))
+        .collect();
+    let untracked_summary: Vec<String> = snapshot
+        .untracked_files
+        .iter()
+        .take(10)
+        .map(|f| format!("  [new] {}", f.path))
+        .collect();
+
+    let all_changes = [staged_summary, unstaged_summary, untracked_summary].concat();
+    let changes_section = if all_changes.is_empty() {
+        "No local changes detected.".to_string()
+    } else {
+        all_changes.join("\n")
+    };
+
+    let branches_section = if local_branch_names.is_empty() {
+        "No existing branches.".to_string()
+    } else {
+        local_branch_names
+            .iter()
+            .take(30)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    format!(
+        r#"Generate a Git branch name for the following context.
+
+## Rules
+- Follow the naming convention of existing branches (e.g. feat/xxx, fix/xxx, chore/xxx).
+- If no convention is apparent, use conventional style: <type>/<short-description>
+- Types: feat, fix, refactor, chore, docs, style, test, perf, ci, build
+- Use lowercase, hyphens for spaces, no special characters.
+- Keep it concise (under 40 chars total).
+- Return ONLY the branch name. No explanation.
+
+## Current branch
+{current_branch}
+
+## Existing local branches
+{branches_section}
+
+## Local changes
+{changes_section}
+"#
+    )
+}
+
 async fn generate_commit_message(
     model_role: &ResolvedModelRole,
     prompt: &str,
+) -> Result<String, AppError> {
+    generate_with_lite_model(
+        model_role,
+        "You generate a single commit message from Git changes. Return only the commit message.",
+        prompt,
+    )
+    .await
+    .and_then(|raw| {
+        normalize_generated_commit_message(&raw).ok_or_else(|| {
+            AppError::recoverable(
+                ErrorSource::Settings,
+                "settings.commit_message.empty",
+                "The model returned an empty commit message. Try again.",
+            )
+        })
+    })
+}
+
+async fn generate_with_lite_model(
+    model_role: &ResolvedModelRole,
+    system_prompt: &str,
+    user_prompt: &str,
 ) -> Result<String, AppError> {
     let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
         AppError::recoverable(
@@ -796,11 +1013,8 @@ async fn generate_commit_message(
     })?;
 
     let context = TiyContext {
-        system_prompt: Some(
-            "You generate a single commit message from Git changes. Return only the commit message."
-                .to_string(),
-        ),
-        messages: vec![TiyMessage::User(UserMessage::text(prompt.to_string()))],
+        system_prompt: Some(system_prompt.to_string()),
+        messages: vec![TiyMessage::User(UserMessage::text(user_prompt.to_string()))],
         tools: None,
     };
 
@@ -843,8 +1057,8 @@ async fn generate_commit_message(
     normalize_generated_commit_message(&message.text_content()).ok_or_else(|| {
         AppError::recoverable(
             ErrorSource::Settings,
-            "settings.commit_message.empty",
-            "The model returned an empty commit message. Try again.",
+            "settings.lite_model.empty",
+            "The model returned an empty response. Try again.",
         )
     })
 }

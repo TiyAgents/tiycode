@@ -1,5 +1,6 @@
 import { invoke, isTauri, Channel } from "@tauri-apps/api/core";
 import type {
+  GitBranchDto,
   GitCommitSummaryDto,
   GitDiffDto,
   GitFileStatusDto,
@@ -149,5 +150,49 @@ export async function gitPush(
   return invoke<GitMutationResponseDto>("git_push", {
     workspaceId,
     approved: approved ?? null,
+  });
+}
+
+export async function gitListBranches(
+  workspaceId: string,
+): Promise<GitBranchDto[]> {
+  if (!isTauri()) return [];
+  return invoke<GitBranchDto[]>("git_list_branches", { workspaceId });
+}
+
+export async function gitCheckoutBranch(
+  workspaceId: string,
+  branch: string,
+  approved?: boolean,
+): Promise<GitMutationResponseDto> {
+  requireTauri("git_checkout_branch");
+  return invoke<GitMutationResponseDto>("git_checkout_branch", {
+    workspaceId,
+    branch,
+    approved: approved ?? null,
+  });
+}
+
+export async function gitCreateBranch(
+  workspaceId: string,
+  branch: string,
+  approved?: boolean,
+): Promise<GitMutationResponseDto> {
+  requireTauri("git_create_branch");
+  return invoke<GitMutationResponseDto>("git_create_branch", {
+    workspaceId,
+    branch,
+    approved: approved ?? null,
+  });
+}
+
+export async function gitGenerateBranchName(
+  workspaceId: string,
+  modelPlan: RunModelPlanDto,
+): Promise<string> {
+  requireTauri("git_generate_branch_name");
+  return invoke<string>("git_generate_branch_name", {
+    workspaceId,
+    modelPlan,
   });
 }

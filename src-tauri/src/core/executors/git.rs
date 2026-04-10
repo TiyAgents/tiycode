@@ -67,6 +67,22 @@ pub async fn execute(
                 result: serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({})),
             })
         }
+        "git_checkout_branch" => {
+            let branch = input["branch"].as_str().unwrap_or_default();
+            let result = checkout_branch(workspace_path, branch).await?;
+            Ok(ToolOutput {
+                success: true,
+                result: serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({})),
+            })
+        }
+        "git_create_branch" => {
+            let branch = input["branch"].as_str().unwrap_or_default();
+            let result = create_branch(workspace_path, branch).await?;
+            Ok(ToolOutput {
+                success: true,
+                result: serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({})),
+            })
+        }
         _ => Ok(ToolOutput {
             success: false,
             result: serde_json::json!({
@@ -117,6 +133,52 @@ pub async fn push(workspace_path: &str) -> Result<GitCommandResultDto, AppError>
         workspace_path,
         GitMutationAction::Push,
         vec!["push".to_string()],
+    )
+    .await
+}
+
+pub async fn checkout_branch(
+    workspace_path: &str,
+    branch_name: &str,
+) -> Result<GitCommandResultDto, AppError> {
+    let trimmed = branch_name.trim();
+    if trimmed.is_empty() {
+        return Err(git_error(
+            "git.checkout.branch_invalid",
+            "Branch name cannot be empty",
+            false,
+        ));
+    }
+
+    run_git_action(
+        workspace_path,
+        GitMutationAction::Checkout,
+        vec!["checkout".to_string(), trimmed.to_string()],
+    )
+    .await
+}
+
+pub async fn create_branch(
+    workspace_path: &str,
+    branch_name: &str,
+) -> Result<GitCommandResultDto, AppError> {
+    let trimmed = branch_name.trim();
+    if trimmed.is_empty() {
+        return Err(git_error(
+            "git.create_branch.name_invalid",
+            "Branch name cannot be empty",
+            false,
+        ));
+    }
+
+    run_git_action(
+        workspace_path,
+        GitMutationAction::CreateBranch,
+        vec![
+            "checkout".to_string(),
+            "-b".to_string(),
+            trimmed.to_string(),
+        ],
     )
     .await
 }
@@ -398,6 +460,40 @@ fn map_cli_failure(action: GitMutationAction, stdout: &str, stderr: &str) -> App
         );
     }
 
+    if action == GitMutationAction::Checkout || action == GitMutationAction::CreateBranch {
+        if combined.contains("your local changes to the following files would be overwritten") {
+            return git_error(
+                "git.checkout.blocked_by_local_changes",
+                "Branch switch was blocked by uncommitted local changes",
+                false,
+            );
+        }
+
+        if combined.contains("already exists") {
+            return git_error(
+                "git.create_branch.already_exists",
+                "A branch with that name already exists",
+                false,
+            );
+        }
+
+        if combined.contains("is not a valid branch name") {
+            return git_error(
+                "git.branch.invalid_name",
+                "The branch name is invalid",
+                false,
+            );
+        }
+
+        if combined.contains("did not match any") {
+            return git_error(
+                "git.checkout.not_found",
+                "The specified branch was not found",
+                false,
+            );
+        }
+    }
+
     git_error(
         &format!("git.{}.failed", action.as_str()),
         format!(
@@ -428,6 +524,8 @@ fn success_summary(action: GitMutationAction) -> String {
         GitMutationAction::Fetch => "Fetched remote updates".to_string(),
         GitMutationAction::Pull => "Pulled remote updates".to_string(),
         GitMutationAction::Push => "Pushed local commits".to_string(),
+        GitMutationAction::Checkout => "Switched branch".to_string(),
+        GitMutationAction::CreateBranch => "Created and switched to new branch".to_string(),
     }
 }
 

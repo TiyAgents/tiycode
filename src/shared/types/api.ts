@@ -548,6 +548,13 @@ export interface GitSnapshotDto {
   lastRefreshedAt: string;
 }
 
+export interface GitBranchDto {
+  name: string;
+  isHead: boolean;
+  isRemote: boolean;
+  upstream: string | null;
+}
+
 export type GitDiffLineKind = "context" | "add" | "remove";
 
 export interface GitDiffLineDto {

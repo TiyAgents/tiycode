@@ -162,6 +162,22 @@ const zhCN = {
   "sourceControl.untracked": "未跟踪",
   "sourceControl.failedLoadFileDiff": "加载文件差异失败",
 
+  // ── Branch Selector ────────────────────────────────────────
+  "sourceControl.branch.search": "搜索分支...",
+  "sourceControl.branch.localBranches": "本地分支",
+  "sourceControl.branch.remoteBranches": "远程分支",
+  "sourceControl.branch.createBranch": "创建分支",
+  "sourceControl.branch.smartCreate": "智能创建分支",
+  "sourceControl.branch.newBranchName": "新分支名称",
+  "sourceControl.branch.create": "创建",
+  "sourceControl.branch.cancel": "取消",
+  "sourceControl.branch.confirm": "确认",
+  "sourceControl.branch.detachedHead": "游离 HEAD",
+  "sourceControl.branch.loading": "正在加载分支...",
+  "sourceControl.branch.checkoutFailed": "切换分支失败",
+  "sourceControl.branch.createFailed": "创建分支失败",
+  "sourceControl.branch.noResults": "没有匹配的分支",
+
   // ── Workspace Apps ───────────────────────────────────────
   "workspaceApps.error.readApps": "读取可用应用失败",
 
