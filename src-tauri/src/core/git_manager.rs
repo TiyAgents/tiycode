@@ -309,10 +309,7 @@ impl GitManager {
         Ok((result, snapshot))
     }
 
-    pub async fn list_branches(
-        &self,
-        workspace_path: &str,
-    ) -> Result<Vec<GitBranchDto>, AppError> {
+    pub async fn list_branches(&self, workspace_path: &str) -> Result<Vec<GitBranchDto>, AppError> {
         let workspace_root = canonicalize_workspace(workspace_path);
 
         tokio::task::spawn_blocking(move || {
@@ -1273,7 +1270,9 @@ fn state_priority(state: &GitFileState) -> u8 {
 
 fn collect_branches(repo: &Repository) -> Result<Vec<GitBranchDto>, AppError> {
     let head = repo.head().ok();
-    let head_shorthand = head.as_ref().and_then(|r| r.shorthand().map(str::to_string));
+    let head_shorthand = head
+        .as_ref()
+        .and_then(|r| r.shorthand().map(str::to_string));
     let is_detached = repo.head_detached().unwrap_or(false);
 
     let branches = repo.branches(None).map_err(|error| {

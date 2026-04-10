@@ -521,7 +521,8 @@ pub async fn git_generate_branch_name(
         .git_manager
         .list_branches(&workspace.canonical_path)
         .await?;
-    let prompt = build_branch_name_prompt(&snapshot, &branches);
+    let prompt =
+        build_branch_name_prompt(&state, &workspace.canonical_path, &snapshot, &branches).await?;
 
     generate_with_lite_model(
         &model_role,
@@ -898,14 +899,18 @@ fn git_diff_status_label(diff: &GitDiffDto) -> &'static str {
     }
 }
 
-fn build_branch_name_prompt(
+/// Files at or below this threshold get detailed diffs in the branch name prompt.
+const BRANCH_NAME_DIFF_FILE_THRESHOLD: usize = 8;
+/// Character budget for diffs in the branch name prompt (smaller than commit messages).
+const BRANCH_NAME_DIFF_CHAR_BUDGET: usize = 16_000;
+
+async fn build_branch_name_prompt(
+    state: &AppState,
+    workspace_path: &str,
     snapshot: &GitSnapshotDto,
     branches: &[GitBranchDto],
-) -> String {
-    let current_branch = snapshot
-        .head_ref
-        .as_deref()
-        .unwrap_or("(detached HEAD)");
+) -> Result<String, AppError> {
+    let current_branch = snapshot.head_ref.as_deref().unwrap_or("(detached HEAD)");
 
     // Collect existing local branch names for naming convention analysis
     let local_branch_names: Vec<&str> = branches
@@ -914,31 +919,77 @@ fn build_branch_name_prompt(
         .map(|b| b.name.as_str())
         .collect();
 
-    // Summarize changed files
-    let staged_summary: Vec<String> = snapshot
-        .staged_files
-        .iter()
-        .take(15)
-        .map(|f| format!("  [staged] {} ({})", f.path, git_change_kind_label(f)))
-        .collect();
-    let unstaged_summary: Vec<String> = snapshot
-        .unstaged_files
-        .iter()
-        .take(15)
-        .map(|f| format!("  [modified] {} ({})", f.path, git_change_kind_label(f)))
-        .collect();
-    let untracked_summary: Vec<String> = snapshot
-        .untracked_files
-        .iter()
-        .take(10)
-        .map(|f| format!("  [new] {}", f.path))
-        .collect();
+    // Collect changes — staged take priority (same logic as commit message)
+    let (source_label, staged, changes): (&str, bool, Vec<GitFileChangeDto>) =
+        if !snapshot.staged_files.is_empty() {
+            ("staged changes", true, snapshot.staged_files.clone())
+        } else {
+            let wt: Vec<GitFileChangeDto> = snapshot
+                .unstaged_files
+                .iter()
+                .chain(snapshot.untracked_files.iter())
+                .cloned()
+                .collect();
+            ("working tree changes", false, wt)
+        };
 
-    let all_changes = [staged_summary, unstaged_summary, untracked_summary].concat();
-    let changes_section = if all_changes.is_empty() {
+    // File summary (always included)
+    let change_summary = changes
+        .iter()
+        .take(20)
+        .map(|f| {
+            format!(
+                "- {} [{}] (+{} -{})",
+                f.path,
+                git_change_kind_label(f),
+                f.additions,
+                f.deletions,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let changes_section = if change_summary.is_empty() {
         "No local changes detected.".to_string()
     } else {
-        all_changes.join("\n")
+        format!("Source: {source_label}\n{change_summary}")
+    };
+
+    // Detailed diffs — only when file count is small enough to keep context short
+    let diffs_section = if !changes.is_empty() && changes.len() <= BRANCH_NAME_DIFF_FILE_THRESHOLD {
+        let mut remaining_budget = BRANCH_NAME_DIFF_CHAR_BUDGET;
+        let mut rendered_diffs = Vec::new();
+
+        for change in &changes {
+            if remaining_budget == 0 {
+                break;
+            }
+
+            let diff = state
+                .git_manager
+                .get_diff(workspace_path, &change.path, staged)
+                .await?;
+            let rendered = render_diff_for_commit_prompt(&diff);
+
+            if rendered.len() > remaining_budget {
+                rendered_diffs.push(truncate_to_char_boundary(&rendered, remaining_budget));
+                break;
+            }
+
+            remaining_budget -= rendered.len();
+            rendered_diffs.push(rendered);
+        }
+
+        if rendered_diffs.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n## Detailed diffs\n```\n{}\n```\n",
+                rendered_diffs.join("\n\n")
+            )
+        }
+    } else {
+        String::new()
     };
 
     let branches_section = if local_branch_names.is_empty() {
@@ -952,7 +1003,7 @@ fn build_branch_name_prompt(
             .join(", ")
     };
 
-    format!(
+    Ok(format!(
         r#"Generate a Git branch name for the following context.
 
 ## Rules
@@ -971,8 +1022,8 @@ fn build_branch_name_prompt(
 
 ## Local changes
 {changes_section}
-"#
-    )
+{diffs_section}"#
+    ))
 }
 
 async fn generate_commit_message(
