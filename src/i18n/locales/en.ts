@@ -162,6 +162,22 @@ const en: Record<TranslationKey, string> = {
   "sourceControl.untracked": "Untracked",
   "sourceControl.failedLoadFileDiff": "Failed to load file diff",
 
+  // ── Branch Selector ────────────────────────────────────────
+  "sourceControl.branch.search": "Search branches...",
+  "sourceControl.branch.localBranches": "Local",
+  "sourceControl.branch.remoteBranches": "Remote",
+  "sourceControl.branch.createBranch": "Create branch",
+  "sourceControl.branch.smartCreate": "Create branch",
+  "sourceControl.branch.newBranchName": "New branch name",
+  "sourceControl.branch.create": "Create",
+  "sourceControl.branch.cancel": "Cancel",
+  "sourceControl.branch.confirm": "Confirm",
+  "sourceControl.branch.detachedHead": "Detached HEAD",
+  "sourceControl.branch.loading": "Loading branches...",
+  "sourceControl.branch.checkoutFailed": "Failed to switch branch",
+  "sourceControl.branch.createFailed": "Failed to create branch",
+  "sourceControl.branch.noResults": "No matching branches",
+
   // ── Workspace Apps ───────────────────────────────────────
   "workspaceApps.error.readApps": "Failed to read available apps",
 

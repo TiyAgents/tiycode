@@ -17,8 +17,8 @@ use crate::core::tiycode_default_headers;
 use crate::ipc::frontend_channels::GitStreamEvent;
 use crate::model::errors::{AppError, ErrorCategory, ErrorSource};
 use crate::model::git::{
-    GitCommandResultDto, GitCommitSummaryDto, GitDiffDto, GitFileChangeDto, GitFileStatusDto,
-    GitMutationAction, GitMutationResponseDto, GitSnapshotDto,
+    GitBranchDto, GitCommandResultDto, GitCommitSummaryDto, GitDiffDto, GitFileChangeDto,
+    GitFileStatusDto, GitMutationAction, GitMutationResponseDto, GitSnapshotDto,
 };
 use crate::model::workspace::WorkspaceRecord;
 use crate::persistence::repo::{audit_repo, workspace_repo};
@@ -236,14 +236,40 @@ pub async fn git_subscribe(
     on_event: Channel<GitStreamEvent>,
 ) -> Result<(), AppError> {
     let mut receiver = state.git_manager.subscribe(&workspace_id).await;
+    let subscription_id = on_event.id();
+    let git_manager = state.git_manager.clone();
+    let workspace_id_for_cleanup = workspace_id.clone();
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         while let Ok(event) = receiver.recv().await {
             if on_event.send(event).is_err() {
                 break;
             }
         }
+
+        git_manager
+            .finish_subscription(&workspace_id_for_cleanup, subscription_id)
+            .await;
     });
+
+    state
+        .git_manager
+        .register_subscription(&workspace_id, subscription_id, handle)
+        .await;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_unsubscribe(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    subscription_id: u32,
+) -> Result<(), AppError> {
+    state
+        .git_manager
+        .unregister_subscription(&workspace_id, subscription_id)
+        .await;
 
     Ok(())
 }
@@ -430,6 +456,125 @@ pub async fn git_push(
         },
     )
     .await
+}
+
+#[tauri::command]
+pub async fn git_list_branches(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> Result<Vec<GitBranchDto>, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+
+    state
+        .git_manager
+        .list_branches(&workspace.canonical_path)
+        .await
+}
+
+#[tauri::command]
+pub async fn git_checkout_branch(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    branch: String,
+    approved: Option<bool>,
+) -> Result<GitMutationResponseDto, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+    let git_manager = state.git_manager.clone();
+    let workspace_id_for_run = workspace_id.clone();
+    let workspace_path = workspace.canonical_path.clone();
+    let branch_for_run = branch.clone();
+    let input = serde_json::json!({ "branch": branch.trim() });
+
+    authorize_and_run_git_mutation(
+        &state,
+        &workspace,
+        GitMutationAction::Checkout,
+        &input,
+        approved.unwrap_or(false),
+        move || async move {
+            git_manager
+                .checkout_branch(&workspace_id_for_run, &workspace_path, &branch_for_run)
+                .await
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn git_create_branch(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    branch: String,
+    approved: Option<bool>,
+) -> Result<GitMutationResponseDto, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+    let git_manager = state.git_manager.clone();
+    let workspace_id_for_run = workspace_id.clone();
+    let workspace_path = workspace.canonical_path.clone();
+    let branch_for_run = branch.clone();
+    let input = serde_json::json!({ "branch": branch.trim() });
+
+    authorize_and_run_git_mutation(
+        &state,
+        &workspace,
+        GitMutationAction::CreateBranch,
+        &input,
+        approved.unwrap_or(false),
+        move || async move {
+            git_manager
+                .create_branch(&workspace_id_for_run, &workspace_path, &branch_for_run)
+                .await
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn git_generate_branch_name(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    model_plan: serde_json::Value,
+) -> Result<String, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+    let raw_plan: RuntimeModelPlan = serde_json::from_value(model_plan).unwrap_or_default();
+    let selected_model = select_commit_message_model_role(&raw_plan)?;
+    let model_role = resolve_runtime_model_role(&state.pool, selected_model).await?;
+    let snapshot = state
+        .git_manager
+        .get_snapshot(&workspace_id, &workspace.canonical_path)
+        .await?;
+    let branches = state
+        .git_manager
+        .list_branches(&workspace.canonical_path)
+        .await?;
+    let prompt =
+        build_branch_name_prompt(&state, &workspace.canonical_path, &snapshot, &branches).await?;
+
+    generate_with_lite_model(
+        &model_role,
+        "You generate a single Git branch name. Return ONLY the branch name, nothing else. No explanation, no markdown.",
+        &prompt,
+    )
+    .await
+    .and_then(|raw| {
+        let cleaned = raw
+            .trim()
+            .trim_matches('`')
+            .trim()
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if cleaned.is_empty() {
+            return Err(AppError::recoverable(
+                ErrorSource::Git,
+                "git.branch_name.empty",
+                "The model returned an empty branch name. Try again.",
+            ));
+        }
+        Ok(cleaned)
+    })
 }
 
 async fn load_workspace(state: &AppState, workspace_id: &str) -> Result<WorkspaceRecord, AppError> {
@@ -780,9 +925,158 @@ fn git_diff_status_label(diff: &GitDiffDto) -> &'static str {
     }
 }
 
+/// Files at or below this threshold get detailed diffs in the branch name prompt.
+const BRANCH_NAME_DIFF_FILE_THRESHOLD: usize = 8;
+/// Character budget for diffs in the branch name prompt (smaller than commit messages).
+const BRANCH_NAME_DIFF_CHAR_BUDGET: usize = 16_000;
+
+async fn build_branch_name_prompt(
+    state: &AppState,
+    workspace_path: &str,
+    snapshot: &GitSnapshotDto,
+    branches: &[GitBranchDto],
+) -> Result<String, AppError> {
+    let current_branch = snapshot.head_ref.as_deref().unwrap_or("(detached HEAD)");
+
+    // Collect existing local branch names for naming convention analysis
+    let local_branch_names: Vec<&str> = branches
+        .iter()
+        .filter(|b| !b.is_remote)
+        .map(|b| b.name.as_str())
+        .collect();
+
+    // Collect changes — staged take priority (same logic as commit message)
+    let (source_label, staged, changes): (&str, bool, Vec<GitFileChangeDto>) =
+        if !snapshot.staged_files.is_empty() {
+            ("staged changes", true, snapshot.staged_files.clone())
+        } else {
+            let wt: Vec<GitFileChangeDto> = snapshot
+                .unstaged_files
+                .iter()
+                .chain(snapshot.untracked_files.iter())
+                .cloned()
+                .collect();
+            ("working tree changes", false, wt)
+        };
+
+    // File summary (always included)
+    let change_summary = changes
+        .iter()
+        .take(20)
+        .map(|f| {
+            format!(
+                "- {} [{}] (+{} -{})",
+                f.path,
+                git_change_kind_label(f),
+                f.additions,
+                f.deletions,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let changes_section = if change_summary.is_empty() {
+        "No local changes detected.".to_string()
+    } else {
+        format!("Source: {source_label}\n{change_summary}")
+    };
+
+    // Detailed diffs — only when file count is small enough to keep context short
+    let diffs_section = if !changes.is_empty() && changes.len() <= BRANCH_NAME_DIFF_FILE_THRESHOLD {
+        let mut remaining_budget = BRANCH_NAME_DIFF_CHAR_BUDGET;
+        let mut rendered_diffs = Vec::new();
+
+        for change in &changes {
+            if remaining_budget == 0 {
+                break;
+            }
+
+            let diff = state
+                .git_manager
+                .get_diff(workspace_path, &change.path, staged)
+                .await?;
+            let rendered = render_diff_for_commit_prompt(&diff);
+
+            if rendered.len() > remaining_budget {
+                rendered_diffs.push(truncate_to_char_boundary(&rendered, remaining_budget));
+                break;
+            }
+
+            remaining_budget -= rendered.len();
+            rendered_diffs.push(rendered);
+        }
+
+        if rendered_diffs.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n## Detailed diffs\n```\n{}\n```\n",
+                rendered_diffs.join("\n\n")
+            )
+        }
+    } else {
+        String::new()
+    };
+
+    let branches_section = if local_branch_names.is_empty() {
+        "No existing branches.".to_string()
+    } else {
+        local_branch_names
+            .iter()
+            .take(30)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    Ok(format!(
+        r#"Generate a Git branch name for the following context.
+
+## Rules
+- Follow the naming convention of existing branches (e.g. feat/xxx, fix/xxx, chore/xxx).
+- If no convention is apparent, use conventional style: <type>/<short-description>
+- Types: feat, fix, refactor, chore, docs, style, test, perf, ci, build
+- Use lowercase, hyphens for spaces, no special characters.
+- Keep it concise (under 40 chars total).
+- Return ONLY the branch name. No explanation.
+
+## Current branch
+{current_branch}
+
+## Existing local branches
+{branches_section}
+
+## Local changes
+{changes_section}
+{diffs_section}"#
+    ))
+}
+
 async fn generate_commit_message(
     model_role: &ResolvedModelRole,
     prompt: &str,
+) -> Result<String, AppError> {
+    generate_with_lite_model(
+        model_role,
+        "You generate a single commit message from Git changes. Return only the commit message.",
+        prompt,
+    )
+    .await
+    .and_then(|raw| {
+        normalize_generated_commit_message(&raw).ok_or_else(|| {
+            AppError::recoverable(
+                ErrorSource::Settings,
+                "settings.commit_message.empty",
+                "The model returned an empty commit message. Try again.",
+            )
+        })
+    })
+}
+
+async fn generate_with_lite_model(
+    model_role: &ResolvedModelRole,
+    system_prompt: &str,
+    user_prompt: &str,
 ) -> Result<String, AppError> {
     let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
         AppError::recoverable(
@@ -796,11 +1090,8 @@ async fn generate_commit_message(
     })?;
 
     let context = TiyContext {
-        system_prompt: Some(
-            "You generate a single commit message from Git changes. Return only the commit message."
-                .to_string(),
-        ),
-        messages: vec![TiyMessage::User(UserMessage::text(prompt.to_string()))],
+        system_prompt: Some(system_prompt.to_string()),
+        messages: vec![TiyMessage::User(UserMessage::text(user_prompt.to_string()))],
         tools: None,
     };
 
@@ -843,8 +1134,8 @@ async fn generate_commit_message(
     normalize_generated_commit_message(&message.text_content()).ok_or_else(|| {
         AppError::recoverable(
             ErrorSource::Settings,
-            "settings.commit_message.empty",
-            "The model returned an empty commit message. Try again.",
+            "settings.lite_model.empty",
+            "The model returned an empty response. Try again.",
         )
     })
 }

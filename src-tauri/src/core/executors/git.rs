@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use git2::Repository;
+use git2::{BranchType, Repository};
 
 use super::ToolOutput;
 use crate::core::windows_process::configure_background_std_command;
@@ -67,6 +67,22 @@ pub async fn execute(
                 result: serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({})),
             })
         }
+        "git_checkout_branch" => {
+            let branch = input["branch"].as_str().unwrap_or_default();
+            let result = checkout_branch(workspace_path, branch).await?;
+            Ok(ToolOutput {
+                success: true,
+                result: serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({})),
+            })
+        }
+        "git_create_branch" => {
+            let branch = input["branch"].as_str().unwrap_or_default();
+            let result = create_branch(workspace_path, branch).await?;
+            Ok(ToolOutput {
+                success: true,
+                result: serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({})),
+            })
+        }
         _ => Ok(ToolOutput {
             success: false,
             result: serde_json::json!({
@@ -113,10 +129,82 @@ pub async fn pull(workspace_path: &str) -> Result<GitCommandResultDto, AppError>
 }
 
 pub async fn push(workspace_path: &str) -> Result<GitCommandResultDto, AppError> {
+    let workspace_root = canonicalize_workspace(workspace_path);
+
+    // Check if the current branch has an upstream; if not, push with --set-upstream
+    let args = tokio::task::spawn_blocking(move || -> Result<Vec<String>, AppError> {
+        let repo = open_repository(&workspace_root)?;
+        let head = repo.head().map_err(|e| {
+            git_error(
+                "git.push.head_failed",
+                format!("Cannot read HEAD: {e}"),
+                true,
+            )
+        })?;
+
+        if !head.is_branch() {
+            return Ok(vec!["push".to_string()]);
+        }
+
+        let branch_name = head.shorthand().unwrap_or("HEAD").to_string();
+        let branch = repo.find_branch(&branch_name, git2::BranchType::Local);
+
+        let has_upstream = branch.ok().and_then(|b| b.upstream().ok()).is_some();
+
+        if has_upstream {
+            Ok(vec!["push".to_string()])
+        } else {
+            let remote_name = resolve_push_remote(&repo, &branch_name)?;
+
+            Ok(vec![
+                "push".to_string(),
+                "--set-upstream".to_string(),
+                remote_name,
+                branch_name,
+            ])
+        }
+    })
+    .await
+    .map_err(|e| AppError::internal(ErrorSource::Git, format!("Git push check failed: {e}")))??;
+
+    run_git_action(workspace_path, GitMutationAction::Push, args).await
+}
+
+pub async fn checkout_branch(
+    workspace_path: &str,
+    branch_name: &str,
+) -> Result<GitCommandResultDto, AppError> {
+    let workspace_root = canonicalize_workspace(workspace_path);
+    let branch_name = branch_name.to_string();
+    let args = tokio::task::spawn_blocking(move || -> Result<Vec<String>, AppError> {
+        let repo = open_repository(&workspace_root)?;
+        build_checkout_args(&repo, &branch_name)
+    })
+    .await
+    .map_err(|error| {
+        AppError::internal(
+            ErrorSource::Git,
+            format!("Git checkout branch resolution failed: {error}"),
+        )
+    })??;
+
+    run_git_action(workspace_path, GitMutationAction::Checkout, args).await
+}
+
+pub async fn create_branch(
+    workspace_path: &str,
+    branch_name: &str,
+) -> Result<GitCommandResultDto, AppError> {
+    let trimmed = validate_local_branch_name(branch_name)?;
+
     run_git_action(
         workspace_path,
-        GitMutationAction::Push,
-        vec!["push".to_string()],
+        GitMutationAction::CreateBranch,
+        vec![
+            "checkout".to_string(),
+            "-b".to_string(),
+            trimmed.to_string(),
+        ],
     )
     .await
 }
@@ -398,6 +486,40 @@ fn map_cli_failure(action: GitMutationAction, stdout: &str, stderr: &str) -> App
         );
     }
 
+    if action == GitMutationAction::Checkout || action == GitMutationAction::CreateBranch {
+        if combined.contains("your local changes to the following files would be overwritten") {
+            return git_error(
+                "git.checkout.blocked_by_local_changes",
+                "Branch switch was blocked by uncommitted local changes",
+                false,
+            );
+        }
+
+        if combined.contains("already exists") {
+            return git_error(
+                "git.create_branch.already_exists",
+                "A branch with that name already exists",
+                false,
+            );
+        }
+
+        if combined.contains("is not a valid branch name") {
+            return git_error(
+                "git.branch.invalid_name",
+                "The branch name is invalid",
+                false,
+            );
+        }
+
+        if combined.contains("did not match any") {
+            return git_error(
+                "git.checkout.not_found",
+                "The specified branch was not found",
+                false,
+            );
+        }
+    }
+
     git_error(
         &format!("git.{}.failed", action.as_str()),
         format!(
@@ -428,6 +550,8 @@ fn success_summary(action: GitMutationAction) -> String {
         GitMutationAction::Fetch => "Fetched remote updates".to_string(),
         GitMutationAction::Pull => "Pulled remote updates".to_string(),
         GitMutationAction::Push => "Pushed local commits".to_string(),
+        GitMutationAction::Checkout => "Switched branch".to_string(),
+        GitMutationAction::CreateBranch => "Created and switched to new branch".to_string(),
     }
 }
 
@@ -456,6 +580,109 @@ fn open_repository(workspace_root: &Path) -> Result<Repository, AppError> {
             )
         }
     })
+}
+
+fn build_checkout_args(repo: &Repository, branch_name: &str) -> Result<Vec<String>, AppError> {
+    let trimmed = require_branch_name(branch_name)?;
+
+    if repo.find_branch(trimmed, BranchType::Local).is_ok() {
+        return Ok(vec!["checkout".to_string(), trimmed.to_string()]);
+    }
+
+    if repo.find_branch(trimmed, BranchType::Remote).is_ok() {
+        let local_branch_name = local_branch_name_from_remote(trimmed)?;
+        if local_branch_tracks_remote(repo, local_branch_name, trimmed)? {
+            return Ok(vec!["checkout".to_string(), local_branch_name.to_string()]);
+        }
+
+        if repo
+            .find_branch(local_branch_name, BranchType::Local)
+            .is_ok()
+        {
+            return Err(git_error(
+                "git.checkout.remote_conflict",
+                format!(
+                    "Local branch '{}' already exists and is not tracking '{}'",
+                    local_branch_name, trimmed
+                ),
+                false,
+            ));
+        }
+
+        return Ok(vec![
+            "checkout".to_string(),
+            "--track".to_string(),
+            trimmed.to_string(),
+        ]);
+    }
+
+    let trimmed = validate_local_branch_name(trimmed)?;
+    Ok(vec!["checkout".to_string(), trimmed.to_string()])
+}
+
+fn resolve_push_remote(repo: &Repository, branch_name: &str) -> Result<String, AppError> {
+    let remotes = repo
+        .remotes()
+        .map_err(|error| {
+            git_error(
+                "git.remote.list_failed",
+                format!("Unable to read Git remotes: {error}"),
+                true,
+            )
+        })?
+        .iter()
+        .flatten()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    let config = repo.config().ok();
+    let branch_push_remote = config.as_ref().and_then(|cfg| {
+        cfg.get_string(&format!("branch.{branch_name}.pushRemote"))
+            .ok()
+    });
+    let remote_push_default = config
+        .as_ref()
+        .and_then(|cfg| cfg.get_string("remote.pushDefault").ok());
+
+    select_push_remote(
+        &remotes,
+        branch_push_remote
+            .as_deref()
+            .or(remote_push_default.as_deref()),
+    )
+}
+
+fn select_push_remote(
+    remotes: &[String],
+    preferred_remote: Option<&str>,
+) -> Result<String, AppError> {
+    if remotes.is_empty() {
+        return Err(git_error(
+            "git.push.no_remote",
+            "No Git remotes are configured for this repository",
+            false,
+        ));
+    }
+
+    if let Some(remote) =
+        preferred_remote.filter(|remote| remotes.iter().any(|name| name == remote))
+    {
+        return Ok(remote.to_string());
+    }
+
+    if remotes.iter().any(|name| name == "origin") {
+        return Ok("origin".to_string());
+    }
+
+    if remotes.len() == 1 {
+        return Ok(remotes[0].clone());
+    }
+
+    Err(git_error(
+        "git.push.remote_ambiguous",
+        "Multiple Git remotes are configured. Set remote.pushDefault before pushing a branch without an upstream.",
+        false,
+    ))
 }
 
 fn repo_workdir(repo: &Repository) -> Result<PathBuf, AppError> {
@@ -526,5 +753,146 @@ fn git_error(code: &str, message: impl Into<String>, retryable: bool) -> AppErro
         user_message: message.into(),
         detail: None,
         retryable,
+    }
+}
+
+fn require_branch_name(name: &str) -> Result<&str, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(git_error(
+            "git.branch.name_empty",
+            "Branch name cannot be empty",
+            false,
+        ));
+    }
+
+    Ok(trimmed)
+}
+
+fn validate_local_branch_name(name: &str) -> Result<&str, AppError> {
+    let trimmed = require_branch_name(name)?;
+
+    // Use git2's reference validation: a valid branch is refs/heads/<name>
+    let full_ref = format!("refs/heads/{trimmed}");
+    if git2::Reference::is_valid_name(&full_ref) {
+        Ok(trimmed)
+    } else {
+        Err(git_error(
+            "git.branch.name_invalid",
+            format!("'{}' is not a valid branch name", trimmed),
+            false,
+        ))
+    }
+}
+
+fn local_branch_name_from_remote(remote_branch_name: &str) -> Result<&str, AppError> {
+    let trimmed = require_branch_name(remote_branch_name)?;
+    let Some((_, local_branch_name)) = trimmed.split_once('/') else {
+        return Err(git_error(
+            "git.checkout.not_found",
+            "The specified remote branch was not found",
+            false,
+        ));
+    };
+
+    validate_local_branch_name(local_branch_name)
+}
+
+fn local_branch_tracks_remote(
+    repo: &Repository,
+    local_branch_name: &str,
+    remote_branch_name: &str,
+) -> Result<bool, AppError> {
+    let branch = match repo.find_branch(local_branch_name, BranchType::Local) {
+        Ok(branch) => branch,
+        Err(_) => return Ok(false),
+    };
+
+    let upstream_name = branch
+        .upstream()
+        .ok()
+        .and_then(|upstream| upstream.name().ok().flatten().map(str::to_string));
+
+    Ok(upstream_matches_remote(
+        upstream_name.as_deref(),
+        remote_branch_name,
+    ))
+}
+
+fn upstream_matches_remote(upstream_name: Option<&str>, remote_branch_name: &str) -> bool {
+    upstream_name == Some(remote_branch_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{select_push_remote, upstream_matches_remote, validate_local_branch_name};
+
+    #[test]
+    fn validate_local_branch_name_accepts_conventional_names() {
+        assert_eq!(
+            validate_local_branch_name("feat/git-branch-selector").unwrap(),
+            "feat/git-branch-selector"
+        );
+        assert_eq!(
+            validate_local_branch_name("fix/worktree").unwrap(),
+            "fix/worktree"
+        );
+    }
+
+    #[test]
+    fn validate_local_branch_name_rejects_invalid_names() {
+        for branch_name in ["", "my branch", "/branch", "branch/", "invalid..name"] {
+            assert!(
+                validate_local_branch_name(branch_name).is_err(),
+                "{branch_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn select_push_remote_prefers_configured_remote() {
+        let remotes = vec!["upstream".to_string(), "origin".to_string()];
+        assert_eq!(
+            select_push_remote(&remotes, Some("upstream")).unwrap(),
+            "upstream"
+        );
+    }
+
+    #[test]
+    fn select_push_remote_prefers_origin_before_first_remote() {
+        let remotes = vec!["upstream".to_string(), "origin".to_string()];
+        assert_eq!(select_push_remote(&remotes, None).unwrap(), "origin");
+    }
+
+    #[test]
+    fn select_push_remote_uses_single_remote() {
+        let remotes = vec!["backup".to_string()];
+        assert_eq!(select_push_remote(&remotes, None).unwrap(), "backup");
+    }
+
+    #[test]
+    fn select_push_remote_errors_when_no_remote_exists() {
+        let error = select_push_remote(&[], None).unwrap_err();
+        assert_eq!(error.error_code, "git.push.no_remote");
+    }
+
+    #[test]
+    fn select_push_remote_errors_when_multiple_remotes_are_ambiguous() {
+        let remotes = vec!["upstream".to_string(), "backup".to_string()];
+        let error = select_push_remote(&remotes, None).unwrap_err();
+        assert_eq!(error.error_code, "git.push.remote_ambiguous");
+    }
+
+    #[test]
+    fn upstream_matches_remote_requires_exact_remote_ref_match() {
+        assert!(upstream_matches_remote(
+            Some("origin/feat/foo"),
+            "origin/feat/foo"
+        ));
+        assert!(!upstream_matches_remote(
+            Some("upstream/feat/foo"),
+            "origin/feat/foo"
+        ));
+        assert!(!upstream_matches_remote(None, "origin/feat/foo"));
     }
 }

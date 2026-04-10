@@ -341,6 +341,7 @@ pub fn run() {
             commands::git::git_get_diff,
             commands::git::git_get_file_status,
             commands::git::git_subscribe,
+            commands::git::git_unsubscribe,
             commands::git::git_refresh,
             commands::git::git_stage,
             commands::git::git_unstage,
@@ -349,6 +350,10 @@ pub fn run() {
             commands::git::git_fetch,
             commands::git::git_pull,
             commands::git::git_push,
+            commands::git::git_list_branches,
+            commands::git::git_checkout_branch,
+            commands::git::git_create_branch,
+            commands::git::git_generate_branch_name,
             // Terminal
             commands::terminal::terminal_create_or_attach,
             commands::terminal::terminal_write_input,

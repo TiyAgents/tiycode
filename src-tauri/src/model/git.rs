@@ -126,6 +126,16 @@ pub struct GitFileStatusDto {
     pub is_ignored: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchDto {
+    pub name: String,
+    pub is_head: bool,
+    pub is_remote: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GitMutationAction {
@@ -133,6 +143,8 @@ pub enum GitMutationAction {
     Fetch,
     Pull,
     Push,
+    Checkout,
+    CreateBranch,
 }
 
 impl GitMutationAction {
@@ -142,6 +154,8 @@ impl GitMutationAction {
             Self::Fetch => "fetch",
             Self::Pull => "pull",
             Self::Push => "push",
+            Self::Checkout => "checkout",
+            Self::CreateBranch => "create_branch",
         }
     }
 
@@ -151,6 +165,8 @@ impl GitMutationAction {
             Self::Fetch => "git_fetch",
             Self::Pull => "git_pull",
             Self::Push => "git_push",
+            Self::Checkout => "git_checkout_branch",
+            Self::CreateBranch => "git_create_branch",
         }
     }
 }

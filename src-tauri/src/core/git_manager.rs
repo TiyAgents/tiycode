@@ -9,15 +9,16 @@ use git2::{
     StatusOptions,
 };
 use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::task::JoinHandle;
 
 use crate::core::executors::git as git_executor;
 use crate::core::windows_process::configure_background_std_command;
 use crate::ipc::frontend_channels::GitStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::git::{
-    GitChangeKind, GitCommandResultDto, GitCommitSummaryDto, GitDiffDto, GitDiffHunkDto,
-    GitDiffLineDto, GitDiffLineKind, GitFileChangeDto, GitFileState, GitFileStatusDto,
-    GitRepoCapabilitiesDto, GitSnapshotDto,
+    GitBranchDto, GitChangeKind, GitCommandResultDto, GitCommitSummaryDto, GitDiffDto,
+    GitDiffHunkDto, GitDiffLineDto, GitDiffLineKind, GitFileChangeDto, GitFileState,
+    GitFileStatusDto, GitRepoCapabilitiesDto, GitSnapshotDto,
 };
 
 const DEFAULT_HISTORY_LIMIT: usize = 24;
@@ -54,6 +55,7 @@ struct SnapshotParts {
 #[derive(Clone)]
 pub struct GitManager {
     streams: Arc<Mutex<HashMap<String, broadcast::Sender<GitStreamEvent>>>>,
+    subscriptions: Arc<Mutex<HashMap<(String, u32), JoinHandle<()>>>>,
     overlay_cache: Arc<RwLock<HashMap<String, OverlayCacheEntry>>>,
 }
 
@@ -61,6 +63,7 @@ impl GitManager {
     pub fn new() -> Self {
         Self {
             streams: Arc::new(Mutex::new(HashMap::new())),
+            subscriptions: Arc::new(Mutex::new(HashMap::new())),
             overlay_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -68,6 +71,32 @@ impl GitManager {
     pub async fn subscribe(&self, workspace_id: &str) -> broadcast::Receiver<GitStreamEvent> {
         let sender = self.get_or_create_sender(workspace_id).await;
         sender.subscribe()
+    }
+
+    pub async fn register_subscription(
+        &self,
+        workspace_id: &str,
+        subscription_id: u32,
+        handle: JoinHandle<()>,
+    ) {
+        let key = (workspace_id.to_string(), subscription_id);
+        let mut subscriptions = self.subscriptions.lock().await;
+        if let Some(existing) = subscriptions.insert(key, handle) {
+            existing.abort();
+        }
+    }
+
+    pub async fn unregister_subscription(&self, workspace_id: &str, subscription_id: u32) {
+        let key = (workspace_id.to_string(), subscription_id);
+        let mut subscriptions = self.subscriptions.lock().await;
+        if let Some(handle) = subscriptions.remove(&key) {
+            handle.abort();
+        }
+    }
+
+    pub async fn finish_subscription(&self, workspace_id: &str, subscription_id: u32) {
+        let key = (workspace_id.to_string(), subscription_id);
+        self.subscriptions.lock().await.remove(&key);
     }
 
     pub async fn refresh(
@@ -305,6 +334,44 @@ impl GitManager {
         workspace_path: &str,
     ) -> Result<(GitCommandResultDto, GitSnapshotDto), AppError> {
         let result = git_executor::push(workspace_path).await?;
+        let snapshot = self.refresh(workspace_id, workspace_path).await?;
+        Ok((result, snapshot))
+    }
+
+    pub async fn list_branches(&self, workspace_path: &str) -> Result<Vec<GitBranchDto>, AppError> {
+        let workspace_root = canonicalize_workspace(workspace_path);
+
+        tokio::task::spawn_blocking(move || {
+            let repo = open_repository(&workspace_root)?;
+            collect_branches(&repo)
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal(
+                ErrorSource::Git,
+                format!("Git list branches task failed: {error}"),
+            )
+        })?
+    }
+
+    pub async fn checkout_branch(
+        &self,
+        workspace_id: &str,
+        workspace_path: &str,
+        branch_name: &str,
+    ) -> Result<(GitCommandResultDto, GitSnapshotDto), AppError> {
+        let result = git_executor::checkout_branch(workspace_path, branch_name).await?;
+        let snapshot = self.refresh(workspace_id, workspace_path).await?;
+        Ok((result, snapshot))
+    }
+
+    pub async fn create_branch(
+        &self,
+        workspace_id: &str,
+        workspace_path: &str,
+        branch_name: &str,
+    ) -> Result<(GitCommandResultDto, GitSnapshotDto), AppError> {
+        let result = git_executor::create_branch(workspace_path, branch_name).await?;
         let snapshot = self.refresh(workspace_id, workspace_path).await?;
         Ok((result, snapshot))
     }
@@ -1228,4 +1295,72 @@ fn state_priority(state: &GitFileState) -> u8 {
         GitFileState::Modified => 3,
         GitFileState::Untracked => 4,
     }
+}
+
+fn collect_branches(repo: &Repository) -> Result<Vec<GitBranchDto>, AppError> {
+    let head = repo.head().ok();
+    let head_shorthand = head
+        .as_ref()
+        .and_then(|r| r.shorthand().map(str::to_string));
+    let is_detached = repo.head_detached().unwrap_or(false);
+
+    let branches = repo.branches(None).map_err(|error| {
+        AppError::recoverable(
+            ErrorSource::Git,
+            "git.branch.list_failed",
+            format!("Unable to list branches: {error}"),
+        )
+    })?;
+
+    let mut result = Vec::new();
+
+    for branch_entry in branches {
+        let (branch, branch_type) = branch_entry.map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Git,
+                "git.branch.read_failed",
+                format!("Unable to read branch entry: {error}"),
+            )
+        })?;
+
+        let Some(name) = branch.name().ok().flatten() else {
+            continue;
+        };
+
+        let is_remote = branch_type == BranchType::Remote;
+        let is_head = if is_detached {
+            false
+        } else {
+            !is_remote && head_shorthand.as_deref() == Some(name)
+        };
+
+        let upstream = if !is_remote {
+            branch
+                .upstream()
+                .ok()
+                .and_then(|u| u.name().ok().flatten().map(str::to_string))
+        } else {
+            None
+        };
+
+        result.push(GitBranchDto {
+            name: name.to_string(),
+            is_head,
+            is_remote,
+            upstream,
+        });
+    }
+
+    // Sort: head first, then local branches alphabetically, then remote branches
+    result.sort_by(|a, b| {
+        if a.is_head != b.is_head {
+            return b.is_head.cmp(&a.is_head);
+        }
+        if a.is_remote != b.is_remote {
+            return a.is_remote.cmp(&b.is_remote);
+        }
+        a.name.cmp(&b.name)
+    });
+
+    Ok(result)
 }

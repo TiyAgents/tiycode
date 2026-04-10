@@ -11,7 +11,6 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Boxes,
-  ChevronDown,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -46,6 +45,7 @@ import { UpdateAvailableDialog } from "@/modules/workbench-shell/ui/update-avail
 import { isOnboardingCompleted } from "@/modules/onboarding/model/use-onboarding";
 import { OnboardingWizard } from "@/modules/onboarding/ui/onboarding-wizard";
 import type {
+  GitSnapshotDto,
   MessageAttachmentDto,
   RunMode,
   ThreadSummaryDto,
@@ -60,6 +60,8 @@ import {
   workspaceList,
   workspaceRemove,
   workspaceSetDefault,
+  gitGetSnapshot,
+  gitSubscribe,
 } from "@/services/bridge";
 import type { RunState } from "@/services/thread-stream";
 import {
@@ -105,6 +107,7 @@ import type {
 import type { ExtensionDetail, SkillPreview } from "@/shared/types/extensions";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
+import { BranchSelector } from "@/modules/workbench-shell/ui/branch-selector";
 import {
   RuntimeThreadSurface,
   type ThreadContextUsage,
@@ -555,6 +558,7 @@ export function DashboardWorkbench() {
     useState<DrawerPanel>("project");
   const [selectedDiffSelection, setSelectedDiffSelection] =
     useState<GitDiffSelection | null>(null);
+  const [topBarGitSnapshot, setTopBarGitSnapshot] = useState<GitSnapshotDto | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
   const overlayContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
@@ -662,6 +666,23 @@ export function DashboardWorkbench() {
       ),
     [workspaces],
   );
+
+  const branchSnapshot = useMemo(() => {
+    if (!topBarGitSnapshot) return null;
+    return {
+      headRef: topBarGitSnapshot.headRef,
+      isDetached: topBarGitSnapshot.isDetached,
+      stagedFiles: topBarGitSnapshot.stagedFiles,
+      unstagedFiles: topBarGitSnapshot.unstagedFiles,
+      untrackedFiles: topBarGitSnapshot.untrackedFiles,
+    };
+  }, [
+    topBarGitSnapshot?.headRef,
+    topBarGitSnapshot?.isDetached,
+    topBarGitSnapshot?.stagedFiles,
+    topBarGitSnapshot?.unstagedFiles,
+    topBarGitSnapshot?.untrackedFiles,
+  ]);
 
   useEffect(() => {
     workspaceThreadDisplayCountsRef.current = workspaceThreadDisplayCounts;
@@ -1432,6 +1453,49 @@ export function DashboardWorkbench() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedDiffSelection]);
+
+  // ── Git snapshot subscription for branch display in thread title bar ──
+  useEffect(() => {
+    if (!isTauri() || !resolvedWorkspaceId) {
+      setTopBarGitSnapshot(null);
+      return;
+    }
+
+    let cancelled = false;
+    let unsubscribe: (() => Promise<void>) | null = null;
+
+    // Subscribe first so we don't miss events during the initial fetch
+    void gitSubscribe(resolvedWorkspaceId, (event) => {
+      if (cancelled) return;
+      if (event.type === "snapshot_updated") {
+        setTopBarGitSnapshot(event.snapshot);
+      }
+    })
+      .then((nextUnsubscribe) => {
+        if (cancelled) {
+          void nextUnsubscribe().catch(() => {});
+          return;
+        }
+        unsubscribe = nextUnsubscribe;
+      })
+      .catch(() => {});
+
+    // Then fetch the initial snapshot to fill the gap before subscription delivers
+    void gitGetSnapshot(resolvedWorkspaceId)
+      .then((snapshot) => {
+        if (!cancelled && snapshot) {
+          setTopBarGitSnapshot((current) => current ?? snapshot);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      if (unsubscribe) {
+        void unsubscribe().catch(() => {});
+      }
+    };
+  }, [resolvedWorkspaceId]);
 
   useEffect(() => {
     if (!activeOverlay || typeof window === "undefined") {
@@ -2806,14 +2870,11 @@ export function DashboardWorkbench() {
                               ) : null}
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1.5 text-xs text-app-subtle transition-colors hover:text-app-foreground"
-                          >
-                            <GitBranch className="size-3.5" />
-                            <span>main</span>
-                            <ChevronDown className="size-3.5" />
-                          </button>
+                          <BranchSelector
+                            workspaceId={resolvedWorkspaceId}
+                            snapshot={branchSnapshot}
+                            modelPlan={commitMessageModelPlan}
+                          />
                         </div>
                       </div>
 
