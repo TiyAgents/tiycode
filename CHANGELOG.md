@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-04-10
+### :sparkles: New Features
+- [`91979fb`](https://github.com/TiyAgents/tiycode/commit/91979fb531dd57baa3169959353d8e25447e3919) - ✨ add shell setup docs and duplicate approval handling *(commit by [@jorben](https://github.com/jorben))*
+- [`2036f1e`](https://github.com/TiyAgents/tiycode/commit/2036f1e4a92b8f72d8e23475465d255db7460d41) - **i18n**: 📝 update new thread headline copy *(commit by [@jorben](https://github.com/jorben))*
+- [`dba0f8f`](https://github.com/TiyAgents/tiycode/commit/dba0f8fd4f148e3794aa248a2c60ec840a85161f) - **workspaces**: ✨ ensure default thread workspace on dashboard init *(commit by [@jorben](https://github.com/jorben))*
+- [`77f75b6`](https://github.com/TiyAgents/tiycode/commit/77f75b6f34ecd7256249c55d7cf18fef39417b46) - **workspace**: ✨ add async path handling and default workspace tests *(commit by [@jorben](https://github.com/jorben))*
+- [`dad8424`](https://github.com/TiyAgents/tiycode/commit/dad8424512ad05a6532e55bf9b9b0a8dc41301c7) - **prompt**: ✨ enhance shell tool detection with version info and broader tool support *(commit by [@jorben](https://github.com/jorben))*
+- [`8a342be`](https://github.com/TiyAgents/tiycode/commit/8a342be50855b289b18c60c498e6d49c1b51b336) - **workbench**: add external link safety dialog and default thread workspace *(PR [#21](https://github.com/TiyAgents/tiycode/pull/21) by [@HayWolf](https://github.com/HayWolf))*
+- [`96d50da`](https://github.com/TiyAgents/tiycode/commit/96d50da6a1fad4982793b2b151a5935ed7728aa5) - **git**: add branch selector with checkout, create and AI-powered naming *(PR [#23](https://github.com/TiyAgents/tiycode/pull/23) by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`f9e1129`](https://github.com/TiyAgents/tiycode/commit/f9e1129799a120e84a47920d0379545a2da32cca) - **approval**: 🐛 fix approval UI race conditions causing missing buttons and duplicate errors *(commit by [@jorben](https://github.com/jorben))*
+- [`ac82dc3`](https://github.com/TiyAgents/tiycode/commit/ac82dc3f5c220fc0d330200e59ffb69fa8de1011) - **i18n**: 🐛 update zh-CN thread folder hint *(commit by [@jorben](https://github.com/jorben))*
+- [`999dd0d`](https://github.com/TiyAgents/tiycode/commit/999dd0d4385fc4939d8ca3e396f68b752ca7c5db) - **extensions**: 🐛 Pass workspace path to extensions controller for skill discovery *(commit by [@jorben](https://github.com/jorben))*
+- [`455fed3`](https://github.com/TiyAgents/tiycode/commit/455fed390dcad1f7f3e183fa1a5918ab7591594c) - **workbench**: 🐛 revert workspace path tracking on removal failure *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.2.4] - 2026-04-08
 ### :bug: Bug Fixes
 - [`36c1cac`](https://github.com/TiyAgents/tiycode/commit/36c1cac7fb0f4423d19c34beba4e11baf2996ac2) - **provider**: 🐛 enforce provider_key uniqueness and deduplicate existing records *(commit by [@jorben](https://github.com/jorben))*
@@ -410,3 +427,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.2]: https://github.com/TiyAgents/tiycode/compare/0.2.1...0.2.2
 [0.2.3]: https://github.com/TiyAgents/tiycode/compare/0.2.2...0.2.3
 [0.2.4]: https://github.com/TiyAgents/tiycode/compare/0.2.3...0.2.4
+[0.2.5]: https://github.com/TiyAgents/tiycode/compare/0.2.4...0.2.5
