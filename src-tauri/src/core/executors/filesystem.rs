@@ -2,6 +2,7 @@ use std::path::Path;
 
 use tokio::fs;
 
+#[cfg(target_os = "windows")]
 use crate::core::windows_process::configure_background_tokio_command;
 use crate::core::workspace_paths::{
     canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,

@@ -2,6 +2,7 @@ use tokio::process::Command;
 
 use super::truncation::{truncate_tail_bytes, COMMAND_MAX_BYTES, COMMAND_MAX_LINES};
 use super::ToolOutput;
+#[cfg(target_os = "windows")]
 use crate::core::windows_process::configure_background_tokio_command;
 use crate::model::errors::AppError;
 

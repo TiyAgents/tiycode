@@ -22,6 +22,17 @@ pub async fn workspace_add(
 }
 
 #[tauri::command]
+pub async fn workspace_ensure_default(
+    state: State<'_, AppState>,
+) -> Result<WorkspaceDto, AppError> {
+    let record = state
+        .workspace_manager
+        .ensure_default_thread_workspace()
+        .await?;
+    Ok(WorkspaceDto::from(record))
+}
+
+#[tauri::command]
 pub async fn workspace_remove(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     state.workspace_manager.remove(&id).await
 }

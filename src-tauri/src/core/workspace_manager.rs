@@ -1,6 +1,8 @@
 use chrono::Utc;
 use sqlx::SqlitePool;
-use std::path::Path;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use tokio::{fs, task};
 
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::workspace::{WorkspaceAddInput, WorkspaceRecord, WorkspaceStatus};
@@ -26,13 +28,23 @@ impl WorkspaceManager {
 
         // Canonicalize the path (resolves symlinks, makes absolute).
         // Use dunce to avoid Windows extended-length path prefix (\\?\).
-        let canonical = dunce::canonicalize(raw_path).map_err(|e| {
-            AppError::recoverable(
-                ErrorSource::Workspace,
-                "workspace.path.invalid",
-                format!("Cannot resolve path '{}': {e}", input.path),
-            )
-        })?;
+        let raw_path_buf = raw_path.to_path_buf();
+        let input_path_for_error = input.path.clone();
+        let canonical = task::spawn_blocking(move || dunce::canonicalize(&raw_path_buf))
+            .await
+            .map_err(|error| {
+                AppError::internal(
+                    ErrorSource::Workspace,
+                    format!("workspace path canonicalization task failed: {error}"),
+                )
+            })?
+            .map_err(|error| {
+                AppError::recoverable(
+                    ErrorSource::Workspace,
+                    "workspace.path.invalid",
+                    format!("Cannot resolve path '{}': {error}", input_path_for_error),
+                )
+            })?;
 
         let canonical_str = canonical.to_string_lossy().to_string();
 
@@ -49,7 +61,14 @@ impl WorkspaceManager {
         }
 
         // Validate path is a directory
-        if !canonical.is_dir() {
+        let metadata = fs::metadata(&canonical).await.map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Workspace,
+                "workspace.path.invalid",
+                format!("Cannot inspect path '{}': {error}", input.path),
+            )
+        })?;
+        if !metadata.is_dir() {
             return Err(AppError::recoverable(
                 ErrorSource::Workspace,
                 "workspace.path.not_directory",
@@ -61,10 +80,10 @@ impl WorkspaceManager {
         let name = input
             .name
             .unwrap_or_else(|| derive_name_from_path(&canonical));
-        let display_path = derive_display_path(&canonical);
+        let display_path = derive_display_path(&canonical).await;
 
         // Detect git repository
-        let is_git = canonical.join(".git").exists();
+        let is_git = fs::metadata(canonical.join(".git")).await.is_ok();
 
         let record = WorkspaceRecord {
             id: uuid::Uuid::now_v7().to_string(),
@@ -93,6 +112,17 @@ impl WorkspaceManager {
         Ok(record)
     }
 
+    /// Ensure the built-in default workspace exists at `~/.tiy/workspace/Default`.
+    pub async fn ensure_default_thread_workspace(&self) -> Result<WorkspaceRecord, AppError> {
+        let home_dir = dirs::home_dir().ok_or_else(|| {
+            AppError::internal(ErrorSource::Workspace, "cannot resolve HOME directory")
+        })?;
+        let workspace_path = default_thread_workspace_path_for_home(&home_dir);
+
+        self.ensure_workspace_at_path(&workspace_path, DEFAULT_THREAD_WORKSPACE_NAME)
+            .await
+    }
+
     /// Remove a workspace by ID.
     pub async fn remove(&self, id: &str) -> Result<(), AppError> {
         let deleted = workspace_repo::delete(&self.pool, id).await?;
@@ -119,18 +149,21 @@ impl WorkspaceManager {
         let canonical = Path::new(&record.canonical_path);
         let now = Utc::now();
 
-        let new_status = if !canonical.exists() {
-            WorkspaceStatus::Missing
-        } else if !canonical.is_dir() {
-            WorkspaceStatus::Invalid
-        } else if std::fs::read_dir(canonical).is_err() {
-            WorkspaceStatus::Inaccessible
-        } else {
-            WorkspaceStatus::Ready
+        let new_status = match fs::metadata(canonical).await {
+            Ok(metadata) if !metadata.is_dir() => WorkspaceStatus::Invalid,
+            Ok(_) => {
+                if fs::read_dir(canonical).await.is_err() {
+                    WorkspaceStatus::Inaccessible
+                } else {
+                    WorkspaceStatus::Ready
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => WorkspaceStatus::Missing,
+            Err(_) => WorkspaceStatus::Inaccessible,
         };
 
         // Update git detection as well
-        let is_git = canonical.join(".git").exists();
+        let is_git = fs::metadata(canonical.join(".git")).await.is_ok();
         if is_git != record.is_git {
             workspace_repo::update_is_git(&self.pool, id, is_git).await?;
         }
@@ -160,6 +193,100 @@ impl WorkspaceManager {
         }
         Ok(())
     }
+
+    async fn ensure_workspace_at_path(
+        &self,
+        workspace_path: &Path,
+        name: &str,
+    ) -> Result<WorkspaceRecord, AppError> {
+        match fs::metadata(workspace_path).await {
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(AppError::recoverable(
+                    ErrorSource::Workspace,
+                    "workspace.path.not_directory",
+                    format!("'{}' is not a directory", workspace_path.display()),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(AppError::recoverable(
+                    ErrorSource::Workspace,
+                    "workspace.path.invalid",
+                    format!(
+                        "Cannot inspect path '{}': {error}",
+                        workspace_path.display()
+                    ),
+                ));
+            }
+        }
+
+        fs::create_dir_all(workspace_path).await.map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Workspace,
+                "workspace.path.create_failed",
+                format!(
+                    "Cannot create workspace '{}': {error}",
+                    workspace_path.display()
+                ),
+            )
+        })?;
+
+        let workspace_path_buf = workspace_path.to_path_buf();
+        let workspace_path_display = workspace_path.display().to_string();
+        let canonical = task::spawn_blocking(move || dunce::canonicalize(&workspace_path_buf))
+            .await
+            .map_err(|error| {
+                AppError::internal(
+                    ErrorSource::Workspace,
+                    format!("workspace path canonicalization task failed: {error}"),
+                )
+            })?
+            .map_err(|error| {
+                AppError::recoverable(
+                    ErrorSource::Workspace,
+                    "workspace.path.invalid",
+                    format!("Cannot resolve path '{}': {error}", workspace_path_display),
+                )
+            })?;
+        let canonical_str = canonical.to_string_lossy().to_string();
+
+        if let Some(existing) =
+            workspace_repo::find_by_canonical_path(&self.pool, &canonical_str).await?
+        {
+            return Ok(existing);
+        }
+
+        match self
+            .add(WorkspaceAddInput {
+                path: workspace_path.to_string_lossy().to_string(),
+                name: Some(name.to_string()),
+            })
+            .await
+        {
+            Ok(record) => Ok(record),
+            Err(error) if error.error_code == "workspace.duplicate" => {
+                workspace_repo::find_by_canonical_path(&self.pool, &canonical_str)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::internal(
+                            ErrorSource::Workspace,
+                            "workspace already exists but could not be loaded",
+                        )
+                    })
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+const DEFAULT_THREAD_WORKSPACE_NAME: &str = "Default";
+
+fn default_thread_workspace_path_for_home(home_dir: &Path) -> PathBuf {
+    home_dir
+        .join(".tiy")
+        .join("workspace")
+        .join(DEFAULT_THREAD_WORKSPACE_NAME)
 }
 
 /// Derive a human-readable name from the last path component.
@@ -171,11 +298,36 @@ fn derive_name_from_path(path: &Path) -> String {
 }
 
 /// Derive a display-friendly path using `~` for the home directory.
-fn derive_display_path(path: &Path) -> String {
+async fn derive_display_path(path: &Path) -> String {
     if let Some(home) = dirs::home_dir() {
         if let Ok(relative) = path.strip_prefix(&home) {
             return format!("~/{}", relative.display());
         }
+
+        let home_for_canonicalize = home.clone();
+        if let Ok(Ok(canonical_home)) =
+            task::spawn_blocking(move || dunce::canonicalize(&home_for_canonicalize)).await
+        {
+            if let Ok(relative) = path.strip_prefix(&canonical_home) {
+                return format!("~/{}", relative.display());
+            }
+        }
     }
     path.display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_default_thread_workspace_path_under_tiy_workspace_directory() {
+        let home_dir = Path::new("/tmp/jorben");
+        let workspace_path = default_thread_workspace_path_for_home(home_dir);
+
+        assert_eq!(
+            workspace_path,
+            PathBuf::from("/tmp/jorben/.tiy/workspace/Default")
+        );
+    }
 }

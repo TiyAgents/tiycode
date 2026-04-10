@@ -56,6 +56,7 @@ import {
   threadDelete,
   threadList,
   workspaceAdd,
+  workspaceEnsureDefault,
   workspaceList,
   workspaceRemove,
   workspaceSetDefault,
@@ -174,6 +175,15 @@ function buildProjectOptionFromWorkspace(workspace: WorkspaceDto) {
     ...project,
     id: workspace.id,
     name: workspace.name,
+  };
+}
+
+function buildWorkspaceBindingsForEntry(
+  workspace: Pick<WorkspaceDto, "id" | "path" | "canonicalPath">,
+) {
+  return {
+    [workspace.path]: workspace.id,
+    [workspace.canonicalPath]: workspace.id,
   };
 }
 
@@ -556,6 +566,7 @@ export function DashboardWorkbench() {
     isTauri() ? {} : buildInitialWorkspaceThreadDisplayCounts(),
   );
   const newThreadCreationRef = useRef<Record<string, Promise<string>>>({});
+  const removedWorkspacePathsRef = useRef<Set<string>>(new Set());
 
   const activeThread = getActiveThread(workspaces);
   const selectedProjectWorkspaceId =
@@ -1214,6 +1225,10 @@ export function DashboardWorkbench() {
       return;
     }
 
+    if (removedWorkspacePathsRef.current.has(currentProject.path)) {
+      return;
+    }
+
     if (terminalWorkspaceBindings[currentProject.path]) {
       return;
     }
@@ -1584,6 +1599,7 @@ export function DashboardWorkbench() {
       lastOpenedLabel: t("time.justNow"),
     };
 
+    removedWorkspacePathsRef.current.delete(nextProject.path);
     setSelectedProject(nextProject);
     setRecentProjects((current) => mergeRecentProjects(current, nextProject));
   };
@@ -1609,6 +1625,7 @@ export function DashboardWorkbench() {
       lastOpenedLabel: t("time.justNow"),
     };
 
+    removedWorkspacePathsRef.current.delete(nextProject.path);
     setSelectedProject(nextProject);
     setRecentProjects((current) => mergeRecentProjects(current, nextProject));
     setOpenWorkspaces((current) => ({
@@ -1800,24 +1817,71 @@ export function DashboardWorkbench() {
       }
 
       void (async () => {
-        if (!selectedProject) {
+        let nextProject = selectedProject;
+        let nextWorkspaceId = resolvedWorkspaceId;
+
+        if (isTauri() && !nextWorkspaceId) {
+          try {
+            const projectToEnsure = nextProject;
+            const ensuredWorkspace = projectToEnsure
+              ? await workspaceList().then((workspaceEntries) => {
+                  const existingWorkspace =
+                    workspaceEntries.find(
+                      (workspace) =>
+                        workspace.path === projectToEnsure.path ||
+                        workspace.canonicalPath === projectToEnsure.path,
+                    ) ?? null;
+
+                  return (
+                    existingWorkspace ??
+                    workspaceAdd(projectToEnsure.path, projectToEnsure.name)
+                  );
+                })
+              : await workspaceEnsureDefault();
+            const ensuredProject =
+              buildProjectOptionFromWorkspace(ensuredWorkspace) ?? {
+                id: ensuredWorkspace.id,
+                name: ensuredWorkspace.name,
+                path: ensuredWorkspace.canonicalPath || ensuredWorkspace.path,
+                lastOpenedLabel: t("time.justNow"),
+              };
+
+            nextProject = ensuredProject;
+            nextWorkspaceId = ensuredWorkspace.id;
+
+            setSelectedProject(ensuredProject);
+            setRecentProjects((current) =>
+              mergeRecentProjects(current, {
+                ...ensuredProject,
+                lastOpenedLabel: t("time.justNow"),
+              }),
+            );
+            setTerminalWorkspaceBindings((current) => ({
+              ...current,
+              ...buildWorkspaceBindingsForEntry(ensuredWorkspace),
+            }));
+          } catch (error) {
+            const message = getInvokeErrorMessage(
+              error,
+              t("dashboard.error.workspaceInit"),
+            );
+            setComposerError(message);
+            return;
+          }
+        }
+
+        if (!nextProject) {
           return;
         }
 
-        if (isTauri() && !resolvedWorkspaceId) {
-          setComposerError(
-            "Workspace is still preparing. Try again in a moment.",
-          );
-          return;
-        }
-
+        removedWorkspacePathsRef.current.delete(nextProject.path);
         const project = {
-          ...selectedProject,
+          ...nextProject,
           lastOpenedLabel: t("time.justNow"),
         };
         const existingWorkspace = workspaces.find(
           (workspace) =>
-            workspace.id === resolvedWorkspaceId ||
+            workspace.id === nextWorkspaceId ||
             workspace.id === project.id ||
             workspace.name === project.name ||
             (workspace.path && workspace.path === project.path),
@@ -1828,15 +1892,18 @@ export function DashboardWorkbench() {
             : `${Date.now()}`;
 
         let persistedThreadId =
-          newThreadTerminalBindingKey === null
+          nextWorkspaceId === null
             ? null
-            : (terminalThreadBindings[newThreadTerminalBindingKey] ?? null);
+            : (terminalThreadBindings[
+                getNewThreadTerminalBindingKey(nextWorkspaceId)
+              ] ?? null);
         const nextThreadName = buildThreadTitle(trimmedValue || effectivePrompt);
 
         try {
-          if (isTauri() && resolvedWorkspaceId) {
+          if (isTauri() && nextWorkspaceId) {
             if (!persistedThreadId) {
-              persistedThreadId = await getOrCreateNewThreadId(resolvedWorkspaceId);
+              persistedThreadId =
+                await getOrCreateNewThreadId(nextWorkspaceId);
             }
           }
         } catch (error) {
@@ -1873,7 +1940,7 @@ export function DashboardWorkbench() {
 
           return [
             {
-              id: resolvedWorkspaceId ?? project.id,
+              id: nextWorkspaceId ?? project.id,
               name: project.name,
               defaultOpen: true,
               path: project.path,
@@ -1884,7 +1951,7 @@ export function DashboardWorkbench() {
         });
         setOpenWorkspaces((current) => ({
           ...current,
-          [existingWorkspace?.id ?? resolvedWorkspaceId ?? project.id]: true,
+          [existingWorkspace?.id ?? nextWorkspaceId ?? project.id]: true,
         }));
 
         if (activeTerminalStateKey) {
@@ -1904,17 +1971,19 @@ export function DashboardWorkbench() {
 
         if (persistedThreadId) {
           setTerminalThreadBindings((current) => {
-            if (!newThreadTerminalBindingKey || !persistedThreadId) {
+            if (!nextWorkspaceId || !persistedThreadId) {
               return current;
             }
 
-            if (current[newThreadTerminalBindingKey] === persistedThreadId) {
+            const bindingKey = getNewThreadTerminalBindingKey(nextWorkspaceId);
+
+            if (current[bindingKey] === persistedThreadId) {
               return current;
             }
 
             return {
               ...current,
-              [newThreadTerminalBindingKey]: persistedThreadId,
+              [bindingKey]: persistedThreadId,
             };
           });
 
@@ -1993,6 +2062,7 @@ export function DashboardWorkbench() {
           return;
         }
 
+        removedWorkspacePathsRef.current.delete(nextProject.path);
         const workspaceEntries = await workspaceList();
         const existingWorkspace =
           workspaceEntries.find(
@@ -2073,6 +2143,15 @@ export function DashboardWorkbench() {
         const nextThreadBindingKey = getNewThreadTerminalBindingKey(
           workspace.id,
         );
+        const isRemovingSelectedProject =
+          selectedProject?.id === workspace.id ||
+          selectedProject?.path === workspace.path;
+        const fallbackSelectedProject = isRemovingSelectedProject
+          ? (recentProjects.find(
+              (project) =>
+                project.id !== workspace.id && project.path !== workspace.path,
+            ) ?? null)
+          : selectedProject;
         newThreadCreationRef.current = Object.fromEntries(
           Object.entries(newThreadCreationRef.current).filter(
             ([candidateWorkspaceId]) => candidateWorkspaceId !== workspace.id,
@@ -2091,6 +2170,9 @@ export function DashboardWorkbench() {
         setTerminalBootstrapError(null);
 
         try {
+          if (workspace.path) {
+            removedWorkspacePathsRef.current.add(workspace.path);
+          }
           await workspaceRemove(workspace.id);
 
           if (isRemovingActiveWorkspace) {
@@ -2099,6 +2181,21 @@ export function DashboardWorkbench() {
             setComposerError(null);
             setSelectedDiffSelection(null);
           }
+
+          if (isRemovingSelectedProject) {
+            if (fallbackSelectedProject?.path) {
+              removedWorkspacePathsRef.current.delete(
+                fallbackSelectedProject.path,
+              );
+            }
+            setSelectedProject(fallbackSelectedProject);
+          }
+          setRecentProjects((current) =>
+            current.filter(
+              (project) =>
+                project.id !== workspace.id && project.path !== workspace.path,
+            ),
+          );
 
           setPendingDeleteThreadId((current) =>
             current && workspaceThreadIds.has(current) ? null : current,
@@ -2148,6 +2245,9 @@ export function DashboardWorkbench() {
             preserveSelectedProjectIfMissing: shouldPreserveSelectedProject,
           });
         } catch (error) {
+          if (workspace.path) {
+            removedWorkspacePathsRef.current.delete(workspace.path);
+          }
           const message = getInvokeErrorMessage(
             error,
             `Failed to remove ${workspace.name}`,
@@ -2160,6 +2260,7 @@ export function DashboardWorkbench() {
     },
     [
       activeThreadWorkspace?.id,
+      recentProjects,
       selectedProject?.id,
       selectedProject?.path,
       syncWorkspaceSidebar,
