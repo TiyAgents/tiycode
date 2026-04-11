@@ -326,6 +326,23 @@ async fn test_provider_settings_seed_builtin_catalog() {
                 && entry.supports_custom),
         "OpenAI Compatible should still be available as a custom provider type"
     );
+    let openai_compatible_index = catalog
+        .iter()
+        .position(|entry| entry.provider_type == "openai-compatible")
+        .expect("OpenAI Compatible should exist in the provider catalog");
+    let openai_responses_index = catalog
+        .iter()
+        .position(|entry| entry.provider_type == "openai-responses")
+        .expect("OpenAI Responses should exist in the provider catalog");
+    assert_eq!(
+        openai_responses_index,
+        openai_compatible_index + 1,
+        "OpenAI Responses should appear immediately after OpenAI Compatible"
+    );
+    assert!(
+        !catalog[openai_responses_index].builtin && catalog[openai_responses_index].supports_custom,
+        "OpenAI Responses should be available only as a custom provider type"
+    );
 }
 
 #[tokio::test]

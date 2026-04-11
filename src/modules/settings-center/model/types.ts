@@ -18,6 +18,7 @@ export type ProviderKind = "builtin" | "custom";
 export type ProviderType =
   | "openai"
   | "openai-compatible"
+  | "openai-responses"
   | "anthropic"
   | "google"
   | "ollama"
@@ -30,7 +31,12 @@ export type ProviderType =
   | "deepseek"
   | "zenmux";
 
-export type CustomProviderType = "openai-compatible" | "anthropic" | "google" | "ollama";
+export type CustomProviderType =
+  | "openai-compatible"
+  | "openai-responses"
+  | "anthropic"
+  | "google"
+  | "ollama";
 
 export type ProviderCatalogEntry = {
   providerKey: ProviderType;
