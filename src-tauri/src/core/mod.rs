@@ -13,6 +13,7 @@ pub mod policy_engine;
 pub mod prompt;
 pub mod ripgrep;
 pub mod settings_manager;
+pub mod shell_runtime;
 pub mod sleep_manager;
 pub mod startup_manager;
 pub mod subagent;
