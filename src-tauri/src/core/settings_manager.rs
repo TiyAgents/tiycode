@@ -126,6 +126,12 @@ const CUSTOM_PROVIDER_TYPE_CATALOG: &[ProviderCatalogEntry] = &[
         default_base_url: "https://api.example.com/v1",
     },
     ProviderCatalogEntry {
+        provider_key: "openai-responses",
+        provider_type: "openai-responses",
+        display_name: "OpenAI Responses",
+        default_base_url: "https://api.example.com/v1",
+    },
+    ProviderCatalogEntry {
         provider_key: "anthropic",
         provider_type: "anthropic",
         display_name: "Anthropic",
