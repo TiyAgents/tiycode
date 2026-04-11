@@ -1,10 +1,16 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+#[cfg(not(target_os = "windows"))]
+use tokio::task::JoinSet;
 
 use crate::core::agent_session::{
     normalize_profile_response_language, response_style_system_instruction, ProfileResponseStyle,
 };
+#[cfg(not(target_os = "windows"))]
+use crate::core::shell_runtime::{build_unix_shell_command, UnixShellMode};
+use crate::core::shell_runtime::{current_shell, find_command_on_path};
 use crate::core::subagent::TERM_PANEL_USAGE_NOTE;
 use crate::extensions::{ConfigScope, ExtensionsManager};
 use crate::model::errors::AppError;
@@ -15,6 +21,14 @@ use super::section::{PromptPhase, PromptSection, PromptSectionProvider};
 
 const WORKSPACE_INSTRUCTION_FILE_NAMES: &[&str] = &["AGENTS.md", "CLAUDE.md", "AGENT.MD"];
 const WORKSPACE_INSTRUCTION_MAX_CHARS: usize = 12_800;
+#[cfg(not(target_os = "windows"))]
+const LOGIN_SHELL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(not(target_os = "windows"))]
+const TOOL_VERSION_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(not(target_os = "windows"))]
+const LOGIN_SHELL_MARKER_START: &str = "__TIYCODE_TOOL_START__";
+#[cfg(not(target_os = "windows"))]
+const LOGIN_SHELL_MARKER_END: &str = "__TIYCODE_TOOL_END__";
 const SHELL_GUIDE_TOOL_NAMES: &[&str] = &[
     "node", "bun", "npx", "npm", "pnpm", "yarn", "python", "uv", "uvx", "pip", "python3", "pip3",
     "git", "rg",
@@ -520,10 +534,6 @@ fn build_shell_tooling_guide_body(tools: &[ToolAvailability]) -> String {
     )
 }
 
-fn current_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
-}
-
 async fn detect_shell_tools_via_login_shell() -> Vec<ToolAvailability> {
     #[cfg(not(target_os = "windows"))]
     {
@@ -537,51 +547,150 @@ async fn detect_shell_tools_via_login_shell() -> Vec<ToolAvailability> {
 
 #[cfg(not(target_os = "windows"))]
 async fn detect_shell_tools_unix() -> Vec<ToolAvailability> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let tool_names = SHELL_GUIDE_TOOL_NAMES.join(" ");
+    let discovered_paths = discover_tool_paths_from_login_shell().await;
+    let mut tools_by_index = vec![None; SHELL_GUIDE_TOOL_NAMES.len()];
+    let mut version_tasks = JoinSet::new();
 
-    // One login-shell call: detect path + version for all tools at once.
-    // Per-command timeout (5s) prevents individual --version from hanging;
-    // overall tokio timeout (10s) guards against shell startup issues.
-    let script = format!(
-        r#"for cmd in {tool_names}; do
-  path=$(command -v "$cmd" 2>/dev/null) || true
-  if [ -n "$path" ]; then
-    ver=$(timeout 5 "$cmd" --version 2>&1 | head -1) || true
-    printf '%s|%s|%s\n' "$cmd" "$path" "$ver"
-  else
-    printf '%s||\n' "$cmd"
-  fi
-done"#
-    );
+    for (index, &name) in SHELL_GUIDE_TOOL_NAMES.iter().enumerate() {
+        let login_shell_path = discovered_paths.get(name).cloned();
+        let path = login_shell_path.or_else(|| find_command_on_path(name));
 
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        tokio::process::Command::new(&shell)
-            .arg("-l")
-            .arg("-c")
-            .arg(&script)
-            .output(),
-    )
-    .await;
-
-    match output {
-        Ok(Ok(output)) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            parse_tool_detection_output(&stdout)
+        if let Some(path_for_version) = path.clone() {
+            version_tasks.spawn(async move {
+                let version = detect_tool_version_from_path(&path_for_version).await;
+                (index, version)
+            });
         }
-        _ => {
-            // Fallback to process PATH detection
-            SHELL_GUIDE_TOOL_NAMES
-                .iter()
-                .map(|name| ToolAvailability {
-                    name,
-                    path: find_command_on_path(name),
-                    version: None,
-                })
-                .collect()
+
+        tools_by_index[index] = Some(ToolAvailability {
+            name,
+            path,
+            version: None,
+        });
+    }
+
+    while let Some(result) = version_tasks.join_next().await {
+        let Ok((index, version)) = result else {
+            continue;
+        };
+
+        if let Some(tool) = tools_by_index.get_mut(index).and_then(Option::as_mut) {
+            tool.version = version;
         }
     }
+
+    tools_by_index.into_iter().flatten().collect()
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn discover_tool_paths_from_login_shell() -> HashMap<&'static str, PathBuf> {
+    let tool_names = SHELL_GUIDE_TOOL_NAMES.join(" ");
+    let script = format!(
+        r#"printf '%s\n' '{LOGIN_SHELL_MARKER_START}'
+for cmd in {tool_names}; do
+  path=$(command -v -- "$cmd" 2>/dev/null) || true
+  printf '%s|%s\n' "$cmd" "$path"
+done
+printf '%s\n' '{LOGIN_SHELL_MARKER_END}'"#
+    );
+    let mut command = build_unix_shell_command(&script, UnixShellMode::Login);
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+
+    let output = match tokio::time::timeout(LOGIN_SHELL_DISCOVERY_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => output,
+        _ => return HashMap::new(),
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    parse_login_shell_tool_paths(&stdout)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_login_shell_tool_paths(output: &str) -> HashMap<&'static str, PathBuf> {
+    let Some(section) =
+        lines_between_markers(output, LOGIN_SHELL_MARKER_START, LOGIN_SHELL_MARKER_END)
+    else {
+        return HashMap::new();
+    };
+
+    let mut paths = HashMap::new();
+
+    for line in section
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let mut parts = line.splitn(2, '|');
+        let Some(name) = parts.next().map(str::trim) else {
+            continue;
+        };
+        let Some(path_str) = parts.next().map(str::trim) else {
+            continue;
+        };
+        if path_str.is_empty() {
+            continue;
+        }
+        let Some(name) = SHELL_GUIDE_TOOL_NAMES
+            .iter()
+            .find(|&&candidate| candidate == name)
+            .copied()
+        else {
+            continue;
+        };
+
+        let path = PathBuf::from(path_str);
+        if path.is_file() {
+            paths.insert(name, path);
+        }
+    }
+
+    paths
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn detect_tool_version_from_path(path: &Path) -> Option<String> {
+    let mut command = tokio::process::Command::new(path);
+    command
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let output = tokio::time::timeout(TOOL_VERSION_TIMEOUT, command.output())
+        .await
+        .ok()?
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    first_non_empty_output_line(&output.stdout, &output.stderr)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn lines_between_markers<'a>(
+    output: &'a str,
+    start_marker: &str,
+    end_marker: &str,
+) -> Option<&'a str> {
+    let (_, after_start) = output.split_once(start_marker)?;
+    let (between, _) = after_start.split_once(end_marker)?;
+    Some(between)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn first_non_empty_output_line(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+
+    stdout
+        .lines()
+        .chain(stderr.lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(target_os = "windows")]
@@ -594,105 +703,6 @@ fn detect_shell_tools_windows() -> Vec<ToolAvailability> {
             version: None,
         })
         .collect()
-}
-
-fn parse_tool_detection_output(stdout: &str) -> Vec<ToolAvailability> {
-    let mut results = Vec::new();
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = line.splitn(3, '|').collect();
-        if parts.len() < 2 {
-            continue;
-        }
-        let name = parts[0].trim();
-        let path_str = parts[1].trim();
-        let version_str = if parts.len() > 2 {
-            let v = parts[2].trim();
-            if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            }
-        } else {
-            None
-        };
-
-        let name_static = SHELL_GUIDE_TOOL_NAMES.iter().find(|&&n| n == name).copied();
-        if let Some(name_static) = name_static {
-            let path = if path_str.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(path_str))
-            };
-            results.push(ToolAvailability {
-                name: name_static,
-                path,
-                version: version_str,
-            });
-        }
-    }
-
-    // Ensure all tool names are present even if missing from output
-    let detected_names: Vec<&str> = results.iter().map(|t| t.name).collect();
-    for &name in SHELL_GUIDE_TOOL_NAMES {
-        if !detected_names.contains(&name) {
-            results.push(ToolAvailability {
-                name,
-                path: None,
-                version: None,
-            });
-        }
-    }
-
-    results
-}
-
-fn find_command_on_path(command: &str) -> Option<PathBuf> {
-    let path_value = std::env::var_os("PATH")?;
-    let candidates = executable_candidates(command);
-
-    for directory in std::env::split_paths(&path_value) {
-        for candidate in &candidates {
-            let path = directory.join(candidate);
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-    }
-
-    None
-}
-
-fn executable_candidates(command: &str) -> Vec<OsString> {
-    #[cfg(target_os = "windows")]
-    {
-        if Path::new(command).extension().is_some() {
-            return vec![OsString::from(command)];
-        }
-
-        let pathext =
-            std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
-        let mut candidates = vec![OsString::from(command)];
-
-        for ext in pathext.to_string_lossy().split(';') {
-            let trimmed = ext.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            candidates.push(OsString::from(format!("{command}{trimmed}")));
-        }
-
-        candidates
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        vec![OsString::from(command)]
-    }
 }
 
 fn build_profile_response_prompt_parts_from_runtime(
@@ -720,6 +730,62 @@ fn normalize_profile_response_style(value: Option<&str>) -> ProfileResponseStyle
         "concise" => ProfileResponseStyle::Concise,
         "guide" | "guided" => ProfileResponseStyle::Guide,
         _ => ProfileResponseStyle::Balanced,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn parse_login_shell_tool_paths_ignores_noise_and_keeps_known_tools() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let node_path = temp_dir.path().join("node");
+        std::fs::write(&node_path, "#!/bin/sh\nexit 0\n").expect("write fake node");
+
+        let output = format!(
+            "noise before\n{start}\nnode|{node}\nunknown|/tmp/unknown\nnpm|\n{end}\nnoise after",
+            start = LOGIN_SHELL_MARKER_START,
+            node = node_path.display(),
+            end = LOGIN_SHELL_MARKER_END,
+        );
+
+        let parsed = parse_login_shell_tool_paths(&output);
+
+        assert_eq!(parsed.get("node"), Some(&node_path));
+        assert!(!parsed.contains_key("unknown"));
+        assert!(!parsed.contains_key("npm"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn first_non_empty_output_line_prefers_stdout_then_stderr() {
+        let value = first_non_empty_output_line(b"\nnode v1.2.3\n", b"stderr line\n")
+            .expect("should find version line");
+
+        assert_eq!(value, "node v1.2.3");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn lines_between_markers_returns_section_body() {
+        let output = format!(
+            "before\n{start}\n\n/path/to/node\n{end}\nafter",
+            start = LOGIN_SHELL_MARKER_START,
+            end = LOGIN_SHELL_MARKER_END,
+        );
+
+        let section =
+            lines_between_markers(&output, LOGIN_SHELL_MARKER_START, LOGIN_SHELL_MARKER_END)
+                .expect("should find marker section");
+        let value = section
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .expect("should find line");
+
+        assert_eq!(value, "/path/to/node");
     }
 }
 

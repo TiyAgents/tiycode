@@ -1,7 +1,10 @@
+#[cfg(target_os = "windows")]
 use tokio::process::Command;
 
 use super::truncation::{truncate_tail_bytes, COMMAND_MAX_BYTES, COMMAND_MAX_LINES};
 use super::ToolOutput;
+#[cfg(not(target_os = "windows"))]
+use crate::core::shell_runtime::{build_unix_shell_command, UnixShellMode};
 #[cfg(target_os = "windows")]
 use crate::core::windows_process::configure_background_tokio_command;
 use crate::model::errors::AppError;
@@ -40,10 +43,7 @@ pub async fn run_command(
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-            let mut c = Command::new(shell);
-            c.arg("-c").arg(command);
-            c
+            build_unix_shell_command(command, UnixShellMode::NonLogin)
         }
     };
     cmd.current_dir(cwd)

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ChatStatus } from "ai";
-import { AlertCircleIcon, BotIcon, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
+import { AlertCircleIcon, BotIcon, Info, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useT, type TranslationKey } from "@/i18n";
@@ -995,24 +995,27 @@ function formatToolCallCount(count: number) {
   return `${count} tool call${count === 1 ? "" : "s"}`;
 }
 
-function formatToolStatusLabel(state: SurfaceToolState) {
+function formatToolStatusLabel(
+  state: SurfaceToolState,
+  t: (key: TranslationKey) => string,
+) {
   switch (state) {
     case "approval-requested":
-      return "approval";
+      return t("tool.runtimeStatus.approval");
     case "approval-responded":
-      return "approved";
+      return t("tool.runtimeStatus.approved");
     case "clarify-requested":
-      return "reply";
+      return t("tool.runtimeStatus.reply");
     case "input-available":
-      return "running";
+      return t("tool.runtimeStatus.running");
     case "input-streaming":
-      return "pending";
+      return t("tool.runtimeStatus.pending");
     case "output-available":
-      return "done";
+      return t("tool.runtimeStatus.done");
     case "output-denied":
-      return "denied";
+      return t("tool.runtimeStatus.denied");
     case "output-error":
-      return "error";
+      return t("tool.runtimeStatus.error");
   }
 }
 
@@ -1740,17 +1743,20 @@ function buildPlainPreviewRows(content: string): Array<DiffPreviewRow> {
   }));
 }
 
-function getApprovalTagLabel(tool: SurfaceToolEntry) {
+function getApprovalTagLabel(
+  tool: SurfaceToolEntry,
+  t: (key: TranslationKey) => string,
+) {
   if (tool.state === "approval-requested") {
-    return "Approval";
+    return t("tool.tag.approval");
   }
 
   if (isApprovalDenied(tool.approval)) {
-    return "Denied";
+    return t("tool.tag.denied");
   }
 
   if (tool.approval && "approved" in tool.approval && tool.approval.approved) {
-    return "Approved";
+    return t("tool.tag.approved");
   }
 
   return null;
@@ -3332,7 +3338,7 @@ export function RuntimeThreadSurface({
     const queryTool = getQueryToolPresentation(tool);
     const listTool = getListToolPresentation(tool);
     const commandOutputTool = getCommandOutputToolPresentation(tool);
-    const approvalTagLabel = getApprovalTagLabel(tool);
+    const approvalTagLabel = getApprovalTagLabel(tool, t);
     const showStatusLabel = !fileMutation || tool.state !== "output-available";
     const showGenericInput = !fileMutation && !commandOutputTool && tool.input !== undefined;
     const showGenericOutput =
@@ -3438,7 +3444,7 @@ export function RuntimeThreadSurface({
                 </span>
               </div>
               <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
-                {formatToolStatusLabel(tool.state)}
+                {formatToolStatusLabel(tool.state, t)}
               </span>
             </div>
           </MessageContent>
@@ -3471,7 +3477,7 @@ export function RuntimeThreadSurface({
                 ) : null}
               </div>
               <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
-                {formatToolStatusLabel(tool.state)}
+                {formatToolStatusLabel(tool.state, t)}
               </span>
             </div>
           </MessageContent>
@@ -3501,7 +3507,7 @@ export function RuntimeThreadSurface({
                 ) : null}
               </div>
               <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
-                {formatToolStatusLabel(tool.state)}
+                {formatToolStatusLabel(tool.state, t)}
               </span>
             </div>
           </MessageContent>
@@ -3529,7 +3535,7 @@ export function RuntimeThreadSurface({
               )}
               trailing={showStatusLabel ? (
                 <span className={cn("shrink-0 text-xs", getToolStatusClass(tool.state))}>
-                  {formatToolStatusLabel(tool.state)}
+                  {formatToolStatusLabel(tool.state, t)}
                 </span>
               ) : null}
             >
@@ -3628,7 +3634,7 @@ export function RuntimeThreadSurface({
                     className="space-y-1.5"
                     codeBlockContentClassName={TOOL_DETAIL_CODE_BLOCK_CONTENT_CLASS}
                     input={tool.input}
-                    label="Input"
+                    label={t("tool.label.input")}
                   />
                 ) : null}
 
@@ -3648,13 +3654,13 @@ export function RuntimeThreadSurface({
                   >
                     <ConfirmationTitle className="text-sm text-app-muted">
                       <ConfirmationRequest>
-                        This tool requires approval before continuing the run.
+                        {t("tool.approval.request")}
                       </ConfirmationRequest>
                       <ConfirmationAccepted>
-                        <span>{getApprovalReason(tool.approval) || "Approval granted. Execution resumed."}</span>
+                        <span>{getApprovalReason(tool.approval) || t("tool.approval.granted")}</span>
                       </ConfirmationAccepted>
                       <ConfirmationRejected>
-                        <span>{tool.error || getApprovalReason(tool.approval) || "Approval denied."}</span>
+                        <span>{tool.error || getApprovalReason(tool.approval) || t("tool.approval.denied")}</span>
                       </ConfirmationRejected>
                     </ConfirmationTitle>
 
@@ -3671,7 +3677,7 @@ export function RuntimeThreadSurface({
                         size="sm"
                         variant="ghost"
                       >
-                        Reject
+                        {t("tool.action.reject")}
                       </ConfirmationAction>
                       <ConfirmationAction
                         className="h-7 px-2.5 text-xs"
@@ -3685,7 +3691,7 @@ export function RuntimeThreadSurface({
                         size="sm"
                         variant="outline"
                       >
-                        Approve
+                        {t("tool.action.approve")}
                       </ConfirmationAction>
                     </ConfirmationActions>
                   </Confirmation>
@@ -3695,9 +3701,9 @@ export function RuntimeThreadSurface({
                   <ToolOutput
                     className="space-y-1.5"
                     codeBlockContentClassName={TOOL_DETAIL_CODE_BLOCK_CONTENT_CLASS}
-                    errorLabel="Error"
+                    errorLabel={t("tool.label.error")}
                     errorText={tool.state === "output-available" ? undefined : tool.error}
-                    label="Output"
+                    label={t("tool.label.output")}
                     output={stringifyToolValue(tool.state === "output-available" ? tool.result : tool.error ?? tool.result)}
                   />
                 ) : null}
@@ -3716,7 +3722,7 @@ export function RuntimeThreadSurface({
                       size="sm"
                       variant="ghost"
                     >
-                      Reject
+                      {t("tool.action.reject")}
                     </ConfirmationAction>
                     <ConfirmationAction
                       className="h-7 px-2.5 text-xs"
@@ -3730,7 +3736,7 @@ export function RuntimeThreadSurface({
                       size="sm"
                       variant="outline"
                     >
-                      Approve
+                      {t("tool.action.approve")}
                     </ConfirmationAction>
                   </div>
                 ) : null}
@@ -3740,7 +3746,7 @@ export function RuntimeThreadSurface({
         </MessageContent>
       </Message>
     );
-  }, [completedToolOpen, handleCompletedToolOpenChange, respondToClarify]);
+  }, [completedToolOpen, handleCompletedToolOpenChange, respondToClarify, t]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">
@@ -4021,12 +4027,12 @@ export function RuntimeThreadSurface({
                         {message.role === "assistant" && message.status === "discarded" ? (
                           <div className="rounded-2xl border border-app-warning/22 bg-app-warning/10 px-4 py-3 text-app-foreground">
                             <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-app-warning/12 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-app-warning">
-                              <RefreshCcwIcon className="size-3.5" />
-                              Discarded
+                              <Info className="size-3.5" />
+                              {t("tool.discarded.title")}
                             </div>
                             <MessageResponse>{message.content}</MessageResponse>
                             <p className="mt-3 text-xs leading-5 text-app-warning/90">
-                              This partial response was dropped from model history after the stream ended before protocol completion.
+                              {t("tool.discarded.description")}
                             </p>
                           </div>
                         ) : (
