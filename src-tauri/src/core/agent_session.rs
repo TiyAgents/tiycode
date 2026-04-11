@@ -10,7 +10,7 @@ use tiycore::agent::{
 use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{
     AssistantMessage, AssistantMessageEvent, ContentBlock, Cost, ImageContent, InputType, Model,
-    Provider, StopReason, TextContent, Transport, Usage, UserMessage,
+    OpenAICompletionsCompat, Provider, StopReason, TextContent, Transport, Usage, UserMessage,
 };
 use tokio::sync::mpsc;
 
@@ -2386,6 +2386,7 @@ pub async fn resolve_runtime_model_role(
         .name(&model_name)
         .provider(Provider::from(role.provider_type.clone()))
         .base_url(&role.base_url)
+        .reasoning(false)
         .context_window(context_window)
         .max_tokens(max_output_tokens)
         .input({
@@ -2403,6 +2404,10 @@ pub async fn resolve_runtime_model_role(
             headers.extend(user_headers);
         }
         builder = builder.headers(headers);
+    }
+
+    if let Some(compat) = default_openai_compatible_compat(&role.provider_type) {
+        builder = builder.compat(compat);
     }
 
     let model = builder.build().map_err(|error| {
@@ -2443,6 +2448,16 @@ fn plan_mode_missing_checkpoint_error(
     } else {
         None
     }
+}
+
+fn default_openai_compatible_compat(provider_type: &str) -> Option<OpenAICompletionsCompat> {
+    if !provider_type.eq_ignore_ascii_case("openai-compatible") {
+        return None;
+    }
+
+    let mut compat = OpenAICompletionsCompat::default();
+    compat.supports_developer_role = false;
+    Some(compat)
 }
 
 pub fn build_profile_response_prompt_parts(profile: &AgentProfileRecord) -> Vec<String> {
