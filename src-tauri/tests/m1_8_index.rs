@@ -2,7 +2,7 @@
 //!
 //! Acceptance criteria:
 //! - File tree loads for medium repo < 300ms
-//! - ripgrep search returns file path + line number + context
+//! - local search returns file path + line number + context
 //! - Tree scan hides .git and noisy files while keeping large directories performant
 //! - File filter can find deep files beyond the eagerly loaded tree
 
@@ -229,12 +229,12 @@ async fn test_file_tree_nonexistent_path() {
 }
 
 // =========================================================================
-// T1.8.2 — ripgrep search integration
+// T1.8.2 — local search integration
 // =========================================================================
 
 #[tokio::test]
 async fn test_search_repo_basic() {
-    use tiycode::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::{IndexManager, SearchOptions};
 
     let manager = IndexManager::new();
 
@@ -253,35 +253,22 @@ async fn test_search_repo_basic() {
     .unwrap();
 
     let result = manager
-        .search(&base.to_string_lossy(), "hello", None, None)
-        .await;
+        .search(&base.to_string_lossy(), "hello", SearchOptions::default())
+        .await
+        .expect("local search should succeed");
 
-    // If ripgrep is installed, this should succeed
-    match result {
-        Ok(response) => {
-            assert_eq!(response.query, "hello");
-            assert!(response.count > 0, "Should find 'hello' in test files");
-            // Verify result structure
-            for r in &response.results {
-                assert!(!r.path.is_empty());
-                assert!(r.line_number > 0);
-                assert!(!r.line_text.is_empty());
-            }
-        }
-        Err(e) => {
-            // ripgrep might not be installed in CI
-            let err_msg = format!("{e}");
-            assert!(
-                err_msg.contains("not found") || err_msg.contains("No such file"),
-                "If search fails, it should be because ripgrep is not installed: {e}"
-            );
-        }
+    assert_eq!(result.query, "hello");
+    assert!(result.count > 0, "Should find 'hello' in test files");
+    for r in &result.results {
+        assert!(!r.path.is_empty());
+        assert!(r.line_number > 0);
+        assert!(!r.line_text.is_empty());
     }
 }
 
 #[tokio::test]
 async fn test_search_repo_no_results() {
-    use tiycode::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::{IndexManager, SearchOptions};
 
     let manager = IndexManager::new();
 
@@ -293,25 +280,18 @@ async fn test_search_repo_no_results() {
         .search(
             &base.to_string_lossy(),
             "xyzzy_nonexistent_pattern",
-            None,
-            None,
+            SearchOptions::default(),
         )
-        .await;
+        .await
+        .expect("local search should succeed");
 
-    match result {
-        Ok(response) => {
-            assert_eq!(response.count, 0, "Should find no results");
-            assert!(response.results.is_empty());
-        }
-        Err(_) => {
-            // ripgrep not installed — acceptable in some environments
-        }
-    }
+    assert_eq!(result.count, 0, "Should find no results");
+    assert!(result.results.is_empty());
 }
 
 #[tokio::test]
 async fn test_search_repo_respects_global_max_results() {
-    use tiycode::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::{IndexManager, SearchOptions};
 
     let manager = IndexManager::new();
 
@@ -322,31 +302,24 @@ async fn test_search_repo_respects_global_max_results() {
     std::fs::write(base.join("c.rs"), "fn c() { println!(\"hello\"); }\n").unwrap();
 
     let result = manager
-        .search(&base.to_string_lossy(), "hello", None, Some(1))
-        .await;
+        .search(
+            &base.to_string_lossy(),
+            "hello",
+            SearchOptions {
+                max_results: Some(1),
+                ..SearchOptions::default()
+            },
+        )
+        .await
+        .expect("local search should succeed");
 
-    match result {
-        Ok(response) => {
-            assert_eq!(
-                response.results.len(),
-                1,
-                "preview should honor max_results"
-            );
-            assert_eq!(response.count, 1, "count should match the returned preview");
-        }
-        Err(e) => {
-            let err_msg = format!("{e}");
-            assert!(
-                err_msg.contains("not found") || err_msg.contains("No such file"),
-                "If search fails, it should be because ripgrep is not installed: {e}"
-            );
-        }
-    }
+    assert_eq!(result.results.len(), 1, "preview should honor max_results");
+    assert_eq!(result.count, 1, "count should match the returned preview");
 }
 
 #[tokio::test]
 async fn test_search_repo_path_based_file_pattern_is_resolved_from_workspace_root() {
-    use tiycode::core::index_manager::IndexManager;
+    use tiycode::core::index_manager::{IndexManager, SearchOptions};
 
     let manager = IndexManager::new();
 
@@ -363,28 +336,212 @@ async fn test_search_repo_path_based_file_pattern_is_resolved_from_workspace_roo
         .search(
             &base.to_string_lossy(),
             "needle",
-            Some("src/components/widget.tsx"),
-            Some(20),
+            SearchOptions {
+                file_pattern: Some("src/components/widget.tsx".to_string()),
+                max_results: Some(20),
+                ..SearchOptions::default()
+            },
         )
-        .await;
+        .await
+        .expect("local search should succeed");
 
-    match result {
-        Ok(response) => {
-            assert_eq!(
-                response.count, 1,
-                "path-based filePattern should still match"
-            );
-            assert_eq!(response.results.len(), 1, "should return the matching file");
-            assert_eq!(response.results[0].path, "src/components/widget.tsx");
-        }
-        Err(e) => {
-            let err_msg = format!("{e}");
-            assert!(
-                err_msg.contains("not found") || err_msg.contains("No such file"),
-                "If search fails, it should be because ripgrep is not installed: {e}"
-            );
-        }
+    assert_eq!(result.count, 1, "path-based filePattern should still match");
+    assert_eq!(result.results.len(), 1, "should return the matching file");
+    assert_eq!(result.results[0].path, "src/components/widget.tsx");
+}
+
+#[tokio::test]
+async fn test_search_repo_multiline_returns_block_metadata() {
+    use tiycode::core::index_manager::{IndexManager, SearchOptions};
+
+    let manager = IndexManager::new();
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+    std::fs::write(
+        base.join("query.ts"),
+        "const sql = `\nSELECT *\nFROM users\nWHERE active = true\n`;\n",
+    )
+    .unwrap();
+
+    let result = manager
+        .search(
+            &base.to_string_lossy(),
+            "SELECT *\nFROM users",
+            SearchOptions {
+                multiline: true,
+                ..SearchOptions::default()
+            },
+        )
+        .await
+        .expect("multiline search should succeed");
+
+    assert_eq!(result.count, 1);
+    assert_eq!(result.results[0].line_number, 2);
+    assert_eq!(result.results[0].end_line_number, Some(3));
+    assert_eq!(
+        result.results[0].match_text.as_deref(),
+        Some("SELECT *\nFROM users")
+    );
+}
+
+#[tokio::test]
+async fn test_search_repo_supports_extended_search_options() {
+    use tiycode::core::index_manager::{IndexManager, SearchOptions};
+    use tiycode::core::local_search::{SearchOutputMode, SearchQueryMode};
+
+    let manager = IndexManager::new();
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+    std::fs::write(base.join("a.ts"), "const value = 'HELLO';\n").unwrap();
+    std::fs::write(base.join("b.rs"), "const value = 'HELLO';\n").unwrap();
+
+    let result = manager
+        .search(
+            &base.to_string_lossy(),
+            "value\\s*=\\s*'hello'",
+            SearchOptions {
+                file_type: Some("typescript".to_string()),
+                query_mode: SearchQueryMode::Regex,
+                output_mode: SearchOutputMode::FilesWithMatches,
+                case_insensitive: true,
+                ..SearchOptions::default()
+            },
+        )
+        .await
+        .expect("search with passthrough options should succeed");
+
+    assert_eq!(result.query_mode, "regex");
+    assert_eq!(result.output_mode, "files_with_matches");
+    assert_eq!(result.count, 1);
+    assert_eq!(result.total_count, 1);
+    assert_eq!(result.files.len(), 1);
+    assert_eq!(result.files[0].path, "a.ts");
+    assert!(result.results.is_empty());
+    assert!(result.file_counts.is_empty());
+}
+
+#[tokio::test]
+async fn test_search_repo_timeout_passthrough_marks_partial_response() {
+    use std::time::Duration;
+    use tiycode::core::index_manager::{IndexManager, SearchOptions};
+
+    let manager = IndexManager::new();
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+    std::fs::write(base.join("a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(base.join("b.rs"), "fn b() {}\n").unwrap();
+
+    let result = manager
+        .search(
+            &base.to_string_lossy(),
+            "fn",
+            SearchOptions {
+                timeout: Some(Duration::ZERO),
+                ..SearchOptions::default()
+            },
+        )
+        .await
+        .expect("timed search should succeed");
+
+    assert!(result.timed_out);
+    assert!(result.partial);
+    assert!(!result.completed);
+}
+
+#[tokio::test]
+async fn test_search_stream_emits_incremental_batches() {
+    use std::sync::{Arc, Mutex};
+    use tiycode::core::index_manager::{IndexManager, SearchOptions};
+
+    let manager = IndexManager::new();
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+    std::fs::write(base.join("a.rs"), "fn a() { println!(\"hello\"); }\n").unwrap();
+    std::fs::write(base.join("b.rs"), "fn b() { println!(\"hello\"); }\n").unwrap();
+
+    let batches = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&batches);
+
+    let result = manager
+        .search_stream(
+            &base.to_string_lossy(),
+            "hello",
+            SearchOptions::default(),
+            move |batch| {
+                captured.lock().unwrap().push(batch);
+                Ok(())
+            },
+        )
+        .await
+        .expect("streaming search should succeed");
+
+    assert_eq!(result.count, 2);
+    assert!(!batches.lock().unwrap().is_empty());
+    assert_eq!(batches.lock().unwrap().last().unwrap().count, 2);
+}
+
+#[tokio::test]
+async fn test_search_stream_can_be_cancelled_mid_scan() {
+    use std::sync::{Arc, Mutex};
+    use tiycode::core::index_manager::{IndexManager, SearchOptions};
+
+    let manager = IndexManager::new();
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+    for index in 0..32 {
+        std::fs::write(
+            base.join(format!("file-{index:02}.rs")),
+            "fn demo() { println!(\"hello\"); }\n",
+        )
+        .unwrap();
     }
+
+    let cancellation = manager.register_stream_search(42).await;
+    let seen_batches = Arc::new(Mutex::new(0usize));
+    let seen_batches_for_callback = Arc::clone(&seen_batches);
+    let cancellation_for_callback = cancellation.clone();
+
+    let result = manager
+        .search_stream(
+            &base.to_string_lossy(),
+            "hello",
+            SearchOptions {
+                cancellation: Some(cancellation),
+                ..SearchOptions::default()
+            },
+            move |_batch| {
+                let mut batches = seen_batches_for_callback.lock().unwrap();
+                *batches += 1;
+                if *batches == 1 {
+                    cancellation_for_callback.cancel();
+                }
+                Ok(())
+            },
+        )
+        .await
+        .expect("streaming search should succeed");
+
+    manager.finish_stream_search(42).await;
+
+    assert!(result.cancelled, "search should report cancellation");
+    assert!(
+        !result.completed,
+        "cancelled search should not report completion"
+    );
+    assert!(result.partial, "cancelled search should be marked partial");
+    assert!(
+        *seen_batches.lock().unwrap() >= 1,
+        "should emit at least one batch"
+    );
+    assert!(
+        result.count < 32,
+        "cancelled search should stop before collecting every file"
+    );
 }
 
 #[tokio::test]

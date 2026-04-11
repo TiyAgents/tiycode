@@ -1,10 +1,10 @@
-//! Workspace file tree cache and ripgrep text search.
+//! Workspace file tree cache and local text search.
 //!
 //! Phase 2 scope:
 //! - Shallow tree scan optimized for first paint
 //! - On-demand child loading for expandable directories
 //! - Workspace-wide file manifest for complete path filtering
-//! - Ripgrep subprocess for text search
+//! - Shared in-process search engine for text search
 
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -12,9 +12,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
-use crate::core::ripgrep::run_rg_in;
+use crate::core::local_search::{
+    normalize_file_pattern as normalize_search_file_pattern, run_local_search, stream_local_search,
+    LocalSearchBatch, LocalSearchCancellation, LocalSearchOutcome, LocalSearchRequest,
+    SearchFileCount as LocalSearchFileCount, SearchFileMatch as LocalSearchFileMatch,
+    SearchOutputMode, SearchQueryMode,
+};
 use crate::core::workspace_paths::{canonicalize_workspace_root, resolve_path_within_workspace};
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::git::GitFileState;
@@ -129,15 +134,89 @@ pub struct SearchResult {
     pub path: String,
     pub absolute_path: String,
     pub line_number: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line_number: Option<u64>,
     pub line_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileMatch {
+    pub path: String,
+    pub absolute_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileCount {
+    pub path: String,
+    pub absolute_path: String,
+    pub count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
     pub query: String,
+    pub query_mode: String,
+    pub output_mode: String,
     pub results: Vec<SearchResult>,
+    pub files: Vec<SearchFileMatch>,
+    pub file_counts: Vec<SearchFileCount>,
     pub count: usize,
+    pub total_count: usize,
+    pub total_files: usize,
+    pub completed: bool,
+    pub cancelled: bool,
+    pub timed_out: bool,
+    pub partial: bool,
+    pub elapsed_ms: u64,
+    pub searched_files: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchBatchResponse {
+    pub query: String,
+    pub output_mode: String,
+    pub results: Vec<SearchResult>,
+    pub files: Vec<SearchFileMatch>,
+    pub file_counts: Vec<SearchFileCount>,
+    pub count: usize,
+    pub total_count: usize,
+    pub total_files: usize,
+    pub searched_files: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchOptions {
+    pub file_pattern: Option<String>,
+    pub file_type: Option<String>,
+    pub max_results: Option<usize>,
+    pub query_mode: SearchQueryMode,
+    pub output_mode: SearchOutputMode,
+    pub case_insensitive: bool,
+    pub multiline: bool,
+    pub timeout: Option<Duration>,
+    pub cancellation: Option<LocalSearchCancellation>,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            file_pattern: None,
+            file_type: None,
+            max_results: None,
+            query_mode: SearchQueryMode::Literal,
+            output_mode: SearchOutputMode::Content,
+            case_insensitive: false,
+            multiline: false,
+            timeout: None,
+            cancellation: None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +247,7 @@ struct DirectoryEntry {
 pub struct IndexManager {
     manifest_cache: Arc<RwLock<HashMap<String, ManifestCacheEntry>>>,
     canonical_cache: Arc<RwLock<HashMap<String, PathBuf>>>,
+    stream_cancellations: Arc<Mutex<HashMap<u32, LocalSearchCancellation>>>,
 }
 
 impl FileTreeNode {
@@ -181,7 +261,31 @@ impl IndexManager {
         Self {
             manifest_cache: Arc::new(RwLock::new(HashMap::new())),
             canonical_cache: Arc::new(RwLock::new(HashMap::new())),
+            stream_cancellations: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub async fn register_stream_search(&self, search_id: u32) -> LocalSearchCancellation {
+        let cancellation = LocalSearchCancellation::new();
+        let mut searches = self.stream_cancellations.lock().await;
+        searches.insert(search_id, cancellation.clone());
+        cancellation
+    }
+
+    pub async fn cancel_stream_search(&self, search_id: u32) {
+        if let Some(cancellation) = self
+            .stream_cancellations
+            .lock()
+            .await
+            .get(&search_id)
+            .cloned()
+        {
+            cancellation.cancel();
+        }
+    }
+
+    pub async fn finish_stream_search(&self, search_id: u32) {
+        self.stream_cancellations.lock().await.remove(&search_id);
     }
 
     /// Canonicalize a workspace path with in-memory caching to avoid repeated
@@ -381,13 +485,12 @@ impl IndexManager {
         })
     }
 
-    /// Search workspace files using ripgrep.
+    /// Search workspace files using the shared in-process search engine.
     pub async fn search(
         &self,
         workspace_path: &str,
         query: &str,
-        file_pattern: Option<&str>,
-        max_results: Option<usize>,
+        options: SearchOptions,
     ) -> Result<SearchResponse, AppError> {
         if query.is_empty() {
             return Err(AppError::recoverable(
@@ -398,62 +501,55 @@ impl IndexManager {
         }
 
         let workspace_root = self.cached_canonicalize(workspace_path).await?;
-        let limit = max_results.unwrap_or(50).max(1);
-        let normalized_file_pattern = normalize_search_file_pattern(file_pattern);
+        let query_mode = options.query_mode;
+        let request = build_search_request(&workspace_root, query, options);
+        let outcome = run_local_search(request).await.map_err(|e| {
+            AppError::recoverable(
+                ErrorSource::Index,
+                "index.search.failed",
+                format!("local search failed: {e}"),
+            )
+        })?;
 
-        let mut args = vec![
-            "--json".into(),
-            "--max-count".into(),
-            limit.to_string().into(),
-            "--max-filesize=1M".into(),
-            query.into(),
-            workspace_root.as_os_str().to_os_string(),
-        ];
-        if let Some(pattern) = normalized_file_pattern {
-            args.push("--glob".into());
-            args.push(pattern.into());
-        }
+        Ok(search_response_from_outcome(query_mode, outcome))
+    }
 
-        let output = run_rg_in(args, Some(workspace_root.as_path()))
-            .await
-            .map_err(|e| {
-                AppError::recoverable(
-                    ErrorSource::Index,
-                    "index.search.rg_failed",
-                    format!(
-                        "ripgrep failed: {e}. Ensure 'rg' is installed, reachable from a login shell, or bundled with the app."
-                    ),
-                )
-            })?;
-
-        if !output.status.success() && output.status.code() != Some(1) {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let message = stderr.trim();
-
+    pub async fn search_stream<F>(
+        &self,
+        workspace_path: &str,
+        query: &str,
+        options: SearchOptions,
+        mut on_batch: F,
+    ) -> Result<SearchResponse, AppError>
+    where
+        F: FnMut(SearchBatchResponse) -> Result<(), AppError>,
+    {
+        if query.is_empty() {
             return Err(AppError::recoverable(
                 ErrorSource::Index,
-                "index.search.rg_failed",
-                if message.is_empty() {
-                    format!("ripgrep search failed with status {}", output.status)
-                } else {
-                    format!("ripgrep search failed: {message}")
-                },
+                "index.search.empty_query",
+                "Search query cannot be empty",
             ));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let workspace_root_display = workspace_root.to_string_lossy().to_string();
-        let mut results = parse_rg_json(&stdout, &workspace_root_display);
-        if results.len() > limit {
-            results.truncate(limit);
-        }
-        let count = results.len();
+        let workspace_root = self.cached_canonicalize(workspace_path).await?;
+        let query_mode = options.query_mode;
+        let request = build_search_request(&workspace_root, query, options);
+        let mut stream = stream_local_search(request);
 
-        Ok(SearchResponse {
-            query: query.to_string(),
-            results,
-            count,
-        })
+        while let Some(batch) = stream.receiver.recv().await {
+            on_batch(search_batch_response_from_batch(query, batch))?;
+        }
+
+        let outcome = stream.finish().await.map_err(|e| {
+            AppError::recoverable(
+                ErrorSource::Index,
+                "index.search.failed",
+                format!("local search failed: {e}"),
+            )
+        })?;
+
+        Ok(search_response_from_outcome(query_mode, outcome))
     }
 
     async fn get_or_build_manifest(
@@ -495,6 +591,135 @@ impl IndexManager {
 // ---------------------------------------------------------------------------
 // Tree loading
 // ---------------------------------------------------------------------------
+
+fn build_search_request(
+    workspace_root: &Path,
+    query: &str,
+    options: SearchOptions,
+) -> LocalSearchRequest {
+    let limit = options.max_results.unwrap_or(50).max(1);
+    let query_mode = options.query_mode;
+    let output_mode = options.output_mode;
+
+    LocalSearchRequest {
+        workspace_root: workspace_root.to_path_buf(),
+        search_root: workspace_root.to_path_buf(),
+        query: query.to_string(),
+        file_pattern: normalize_search_file_pattern(options.file_pattern.as_deref())
+            .map(str::to_string),
+        file_type: options.file_type,
+        query_mode,
+        output_mode,
+        case_insensitive: options.case_insensitive,
+        multiline: options.multiline,
+        context_before: 0,
+        context_after: 0,
+        offset: 0,
+        max_results: limit,
+        timeout: options.timeout,
+        cancellation: options.cancellation,
+    }
+}
+
+fn search_result_from_match(search_match: crate::core::local_search::SearchMatch) -> SearchResult {
+    SearchResult {
+        path: search_match.path,
+        absolute_path: search_match.absolute_path,
+        line_number: search_match.line_number,
+        end_line_number: search_match.end_line_number,
+        line_text: search_match.line_text,
+        match_text: search_match.match_text,
+    }
+}
+
+fn search_file_from_match(file: LocalSearchFileMatch) -> SearchFileMatch {
+    SearchFileMatch {
+        path: file.path,
+        absolute_path: file.absolute_path,
+    }
+}
+
+fn search_file_count_from_match(file_count: LocalSearchFileCount) -> SearchFileCount {
+    SearchFileCount {
+        path: file_count.path,
+        absolute_path: file_count.absolute_path,
+        count: file_count.count,
+    }
+}
+
+fn search_batch_response_from_batch(query: &str, batch: LocalSearchBatch) -> SearchBatchResponse {
+    let total_count = match batch.output_mode {
+        SearchOutputMode::Content => batch.total_matches,
+        SearchOutputMode::FilesWithMatches | SearchOutputMode::Count => batch.total_files,
+    };
+
+    SearchBatchResponse {
+        query: query.to_string(),
+        output_mode: batch.output_mode.as_str().to_string(),
+        results: batch
+            .results
+            .into_iter()
+            .map(search_result_from_match)
+            .collect(),
+        files: batch
+            .files
+            .into_iter()
+            .map(search_file_from_match)
+            .collect(),
+        file_counts: batch
+            .file_counts
+            .into_iter()
+            .map(search_file_count_from_match)
+            .collect(),
+        count: batch.count,
+        total_count,
+        total_files: batch.total_files,
+        searched_files: batch.searched_files,
+    }
+}
+
+fn search_response_from_outcome(
+    query_mode: SearchQueryMode,
+    outcome: LocalSearchOutcome,
+) -> SearchResponse {
+    let total_count = match outcome.output_mode {
+        SearchOutputMode::Content => outcome.total_matches,
+        SearchOutputMode::FilesWithMatches | SearchOutputMode::Count => outcome.total_files,
+    };
+
+    SearchResponse {
+        query: outcome.query,
+        query_mode: match query_mode {
+            SearchQueryMode::Literal => "literal".to_string(),
+            SearchQueryMode::Regex => "regex".to_string(),
+        },
+        output_mode: outcome.output_mode.as_str().to_string(),
+        results: outcome
+            .results
+            .into_iter()
+            .map(search_result_from_match)
+            .collect(),
+        files: outcome
+            .files
+            .into_iter()
+            .map(search_file_from_match)
+            .collect(),
+        file_counts: outcome
+            .file_counts
+            .into_iter()
+            .map(search_file_count_from_match)
+            .collect(),
+        count: outcome.shown_count,
+        total_count,
+        total_files: outcome.total_files,
+        completed: outcome.completed,
+        cancelled: outcome.cancelled,
+        timed_out: outcome.timed_out,
+        partial: outcome.partial,
+        elapsed_ms: outcome.elapsed_ms,
+        searched_files: outcome.searched_files,
+    }
+}
 
 fn canonicalize_workspace(workspace_path: &str) -> Result<PathBuf, AppError> {
     canonicalize_workspace_root(
@@ -949,51 +1174,5 @@ fn git_state_priority(state: GitFileState) -> u8 {
         GitFileState::Tracked => 2,
         GitFileState::Modified => 3,
         GitFileState::Untracked => 4,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Ripgrep JSON output parser
-// ---------------------------------------------------------------------------
-
-fn parse_rg_json(output: &str, workspace_path: &str) -> Vec<SearchResult> {
-    let mut results = Vec::new();
-
-    for line in output.lines() {
-        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
-            if entry["type"].as_str() == Some("match") {
-                let data = &entry["data"];
-                let abs_path = data["path"]["text"].as_str().unwrap_or("");
-                let line_number = data["line_number"].as_u64().unwrap_or(0);
-                let line_text = data["lines"]["text"]
-                    .as_str()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-
-                let rel_path = Path::new(abs_path)
-                    .strip_prefix(workspace_path)
-                    .map(|p| p.to_string_lossy().replace('\\', "/"))
-                    .unwrap_or_else(|_| abs_path.to_string());
-
-                results.push(SearchResult {
-                    path: rel_path,
-                    absolute_path: abs_path.to_string(),
-                    line_number,
-                    line_text,
-                });
-            }
-        }
-    }
-
-    results
-}
-
-fn normalize_search_file_pattern(file_pattern: Option<&str>) -> Option<&str> {
-    let trimmed = file_pattern?.trim();
-    if trimmed.is_empty() || matches!(trimmed, "*" | "**" | "**/*" | "./*" | "./**/*") {
-        None
-    } else {
-        Some(trimmed)
     }
 }

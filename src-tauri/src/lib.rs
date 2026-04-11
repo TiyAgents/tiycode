@@ -22,7 +22,6 @@ use crate::core::app_state::AppState;
 use crate::core::desktop_runtime::{
     DesktopRuntimeState, LAUNCH_AT_LOGIN_SETTING_KEY, MINIMIZE_TO_TRAY_SETTING_KEY,
 };
-use crate::core::ripgrep::find_bundled_rg_in_dirs;
 use crate::core::sleep_manager::PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY;
 #[cfg(target_os = "macos")]
 use crate::core::startup_manager;
@@ -121,21 +120,6 @@ fn init_logging() {
                 .compact(),
         )
         .init();
-}
-
-fn configure_ripgrep_path<R: tauri::Runtime>(app: &tauri::App<R>) {
-    let dirs: Vec<PathBuf> = [
-        app.path().executable_dir().ok(),
-        app.path().resource_dir().ok(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
-    if let Some(candidate) = find_bundled_rg_in_dirs(&dirs) {
-        std::env::set_var("TIY_RG_PATH", &candidate);
-        tracing::info!(path = %candidate.display(), "configured bundled ripgrep");
-    }
 }
 
 fn parse_bool_setting(record: Option<crate::model::settings::SettingRecord>, key: &str) -> bool {
@@ -317,6 +301,8 @@ pub fn run() {
             commands::index::index_filter_files,
             commands::index::index_reveal_path,
             commands::index::index_search,
+            commands::index::index_search_stream,
+            commands::index::index_cancel_search_stream,
             // Git
             commands::git::git_get_snapshot,
             commands::git::git_get_history,
@@ -346,8 +332,6 @@ pub fn run() {
             commands::terminal::terminal_list_available_shells,
         ])
         .setup(move |app| {
-            configure_ripgrep_path(app);
-
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
             let db_path = tiy_home.join("db/tiy-agent.db");
 

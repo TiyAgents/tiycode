@@ -1,12 +1,15 @@
-use tauri::State;
+use tauri::{ipc::Channel, State};
 
 use crate::core::app_state::AppState;
 use crate::core::index_manager::{
     DirectoryChildrenResponse, FileFilterResponse, FileTreeNode, FileTreeResponse,
-    RevealPathResponse, SearchResponse,
+    RevealPathResponse, SearchBatchResponse, SearchOptions, SearchResponse,
 };
+use crate::core::local_search::{SearchOutputMode, SearchQueryMode};
+use crate::ipc::frontend_channels::SearchStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::persistence::repo::workspace_repo;
+use std::time::Duration;
 
 #[tauri::command]
 pub async fn index_get_tree(
@@ -155,7 +158,13 @@ pub async fn index_search(
     workspace_id: String,
     query: String,
     file_pattern: Option<String>,
+    file_type: Option<String>,
     max_results: Option<usize>,
+    query_mode: Option<String>,
+    output_mode: Option<String>,
+    case_insensitive: Option<bool>,
+    multiline: Option<bool>,
+    timeout_ms: Option<u64>,
 ) -> Result<SearchResponse, AppError> {
     let workspace = workspace_repo::find_by_id(&state.pool, &workspace_id)
         .await?
@@ -166,8 +175,120 @@ pub async fn index_search(
         .search(
             &workspace.canonical_path,
             &query,
-            file_pattern.as_deref(),
-            max_results,
+            SearchOptions {
+                file_pattern,
+                file_type,
+                max_results,
+                query_mode: SearchQueryMode::from_str(query_mode.as_deref()),
+                output_mode: SearchOutputMode::from_str(output_mode.as_deref()),
+                case_insensitive: case_insensitive.unwrap_or(false),
+                multiline: multiline.unwrap_or(false),
+                timeout: timeout_ms.map(Duration::from_millis),
+                cancellation: None,
+            },
         )
         .await
+}
+
+#[tauri::command]
+pub async fn index_search_stream(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    query: String,
+    file_pattern: Option<String>,
+    file_type: Option<String>,
+    max_results: Option<usize>,
+    query_mode: Option<String>,
+    output_mode: Option<String>,
+    case_insensitive: Option<bool>,
+    multiline: Option<bool>,
+    timeout_ms: Option<u64>,
+    on_event: Channel<SearchStreamEvent>,
+) -> Result<(), AppError> {
+    let workspace = workspace_repo::find_by_id(&state.pool, &workspace_id)
+        .await?
+        .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
+
+    let search_id = on_event.id();
+    let cancellation = state.index_manager.register_stream_search(search_id).await;
+    let workspace_id_for_events = workspace_id.clone();
+    let query_for_events = query.clone();
+    let index_manager = state.index_manager.clone();
+    let workspace_path = workspace.canonical_path.clone();
+
+    tokio::spawn(async move {
+        if on_event
+            .send(SearchStreamEvent::Started {
+                workspace_id: workspace_id_for_events.clone(),
+                query: query_for_events.clone(),
+            })
+            .is_err()
+        {
+            index_manager.finish_stream_search(search_id).await;
+            return;
+        }
+
+        let result = index_manager
+            .search_stream(
+                &workspace_path,
+                &query_for_events,
+                SearchOptions {
+                    file_pattern,
+                    file_type,
+                    max_results,
+                    query_mode: SearchQueryMode::from_str(query_mode.as_deref()),
+                    output_mode: SearchOutputMode::from_str(output_mode.as_deref()),
+                    case_insensitive: case_insensitive.unwrap_or(false),
+                    multiline: multiline.unwrap_or(false),
+                    timeout: timeout_ms.map(Duration::from_millis),
+                    cancellation: Some(cancellation.clone()),
+                },
+                |batch: SearchBatchResponse| {
+                    on_event
+                        .send(SearchStreamEvent::Batch {
+                            workspace_id: workspace_id_for_events.clone(),
+                            batch,
+                        })
+                        .map_err(|error| {
+                            AppError::internal(
+                                ErrorSource::Index,
+                                format!("search stream channel closed: {error}"),
+                            )
+                        })
+                },
+            )
+            .await;
+
+        index_manager.finish_stream_search(search_id).await;
+
+        match result {
+            Ok(response) => {
+                if response.cancelled {
+                    return;
+                }
+                let _ = on_event.send(SearchStreamEvent::Completed {
+                    workspace_id: workspace_id_for_events,
+                    response,
+                });
+            }
+            Err(error) => {
+                let _ = on_event.send(SearchStreamEvent::Failed {
+                    workspace_id: workspace_id_for_events,
+                    query: query_for_events,
+                    error: error.to_string(),
+                });
+            }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn index_cancel_search_stream(
+    state: State<'_, AppState>,
+    search_id: u32,
+) -> Result<(), AppError> {
+    state.index_manager.cancel_stream_search(search_id).await;
+    Ok(())
 }
