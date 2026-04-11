@@ -584,6 +584,160 @@ async fn test_build_session_spec_adds_plan_mode_guardrails() {
 }
 
 #[tokio::test]
+async fn test_build_session_spec_keeps_reasoning_disabled_when_thinking_level_is_off() {
+    use tiycode::core::agent_session::build_session_spec;
+    use tiycore::thinking::ThinkingLevel;
+
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-thinking-off", "/tmp/thinking-off").await;
+    test_helpers::seed_thread(&pool, "t-thinking-off", "ws-thinking-off").await;
+
+    sqlx::query(
+        "INSERT INTO providers (
+            id, provider_kind, provider_key, name, protocol_type, base_url,
+            api_key_encrypted, enabled, mapping_locked
+         ) VALUES ('prov-thinking-off', 'builtin', 'openai', 'OpenAI', 'openai',
+                   'https://api.openai.com/v1', 'sk-test', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let model_plan = serde_json::json!({
+        "thinkingLevel": "off",
+        "primary": {
+            "providerId": "prov-thinking-off",
+            "modelRecordId": "model-record-thinking-off",
+            "providerType": "openai",
+            "providerName": "OpenAI",
+            "model": "gpt-5",
+            "modelId": "gpt-5",
+            "modelDisplayName": "GPT-5",
+            "baseUrl": "https://api.openai.com/v1"
+        }
+    });
+
+    let spec = build_session_spec(
+        &pool,
+        "run-thinking-off",
+        "t-thinking-off",
+        "/tmp/thinking-off",
+        "default",
+        &model_plan,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(spec.model_plan.thinking_level, ThinkingLevel::Off);
+    assert!(!spec.model_plan.primary.model.reasoning);
+}
+
+#[tokio::test]
+async fn test_build_session_spec_enables_reasoning_when_thinking_level_is_set() {
+    use tiycode::core::agent_session::build_session_spec;
+    use tiycore::thinking::ThinkingLevel;
+
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-thinking-on", "/tmp/thinking-on").await;
+    test_helpers::seed_thread(&pool, "t-thinking-on", "ws-thinking-on").await;
+
+    sqlx::query(
+        "INSERT INTO providers (
+            id, provider_kind, provider_key, name, protocol_type, base_url,
+            api_key_encrypted, enabled, mapping_locked
+         ) VALUES ('prov-thinking-on', 'builtin', 'openai', 'OpenAI', 'openai',
+                   'https://api.openai.com/v1', 'sk-test', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let model_plan = serde_json::json!({
+        "thinkingLevel": "minimal",
+        "primary": {
+            "providerId": "prov-thinking-on",
+            "modelRecordId": "model-record-thinking-on",
+            "providerType": "openai",
+            "providerName": "OpenAI",
+            "model": "gpt-5",
+            "modelId": "gpt-5",
+            "modelDisplayName": "GPT-5",
+            "baseUrl": "https://api.openai.com/v1"
+        }
+    });
+
+    let spec = build_session_spec(
+        &pool,
+        "run-thinking-on",
+        "t-thinking-on",
+        "/tmp/thinking-on",
+        "default",
+        &model_plan,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(spec.model_plan.thinking_level, ThinkingLevel::Minimal);
+    assert!(spec.model_plan.primary.model.reasoning);
+}
+
+#[tokio::test]
+async fn test_build_session_spec_defaults_openai_compatible_to_system_role_compat() {
+    use tiycode::core::agent_session::build_session_spec;
+
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-openai-compat", "/tmp/openai-compat").await;
+    test_helpers::seed_thread(&pool, "t-openai-compat", "ws-openai-compat").await;
+
+    sqlx::query(
+        "INSERT INTO providers (
+            id, provider_kind, provider_key, name, protocol_type, base_url,
+            api_key_encrypted, enabled, mapping_locked
+         ) VALUES ('prov-openai-compat', 'custom', 'custom-openai-compat', 'My Gateway', 'openai-compatible',
+                   'https://gateway.example.com/v1', 'sk-test', 1, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let model_plan = serde_json::json!({
+        "thinkingLevel": "minimal",
+        "primary": {
+            "providerId": "prov-openai-compat",
+            "modelRecordId": "model-record-openai-compat",
+            "providerType": "openai-compatible",
+            "providerName": "My Gateway",
+            "model": "gpt-5-compatible",
+            "modelId": "gpt-5-compatible",
+            "modelDisplayName": "GPT-5 Compatible",
+            "baseUrl": "https://gateway.example.com/v1"
+        }
+    });
+
+    let spec = build_session_spec(
+        &pool,
+        "run-openai-compat",
+        "t-openai-compat",
+        "/tmp/openai-compat",
+        "default",
+        &model_plan,
+    )
+    .await
+    .unwrap();
+
+    let compat = spec
+        .model_plan
+        .primary
+        .model
+        .compat
+        .as_ref()
+        .expect("openai-compatible models should set explicit compat defaults");
+
+    assert!(spec.model_plan.primary.model.reasoning);
+    assert!(!compat.supports_developer_role);
+}
+
+#[tokio::test]
 async fn test_build_session_spec_includes_structured_runtime_context_sections() {
     use tiycode::core::agent_session::build_session_spec;
 
