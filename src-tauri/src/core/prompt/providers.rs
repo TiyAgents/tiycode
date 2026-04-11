@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(not(target_os = "windows"))]
+use tokio::task::JoinSet;
+
 use crate::core::agent_session::{
     normalize_profile_response_language, response_style_system_instruction, ProfileResponseStyle,
 };
@@ -545,24 +548,38 @@ async fn detect_shell_tools_via_login_shell() -> Vec<ToolAvailability> {
 #[cfg(not(target_os = "windows"))]
 async fn detect_shell_tools_unix() -> Vec<ToolAvailability> {
     let discovered_paths = discover_tool_paths_from_login_shell().await;
-    let mut tools = Vec::with_capacity(SHELL_GUIDE_TOOL_NAMES.len());
+    let mut tools_by_index = vec![None; SHELL_GUIDE_TOOL_NAMES.len()];
+    let mut version_tasks = JoinSet::new();
 
-    for &name in SHELL_GUIDE_TOOL_NAMES {
+    for (index, &name) in SHELL_GUIDE_TOOL_NAMES.iter().enumerate() {
         let login_shell_path = discovered_paths.get(name).cloned();
         let path = login_shell_path.or_else(|| find_command_on_path(name));
-        let version = match path.as_deref() {
-            Some(path) => detect_tool_version_from_path(path).await,
-            None => None,
-        };
 
-        tools.push(ToolAvailability {
+        if let Some(path_for_version) = path.clone() {
+            version_tasks.spawn(async move {
+                let version = detect_tool_version_from_path(&path_for_version).await;
+                (index, version)
+            });
+        }
+
+        tools_by_index[index] = Some(ToolAvailability {
             name,
             path,
-            version,
+            version: None,
         });
     }
 
-    tools
+    while let Some(result) = version_tasks.join_next().await {
+        let Ok((index, version)) = result else {
+            continue;
+        };
+
+        if let Some(tool) = tools_by_index.get_mut(index).and_then(Option::as_mut) {
+            tool.version = version;
+        }
+    }
+
+    tools_by_index.into_iter().flatten().collect()
 }
 
 #[cfg(not(target_os = "windows"))]

@@ -74,12 +74,17 @@ function getStatusLabel(status: ToolPart["state"], t: ReturnType<typeof useT>) {
   }
 }
 
-export const getStatusBadge = (status: ToolPart["state"], t: ReturnType<typeof useT>) => (
-  <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
-    {statusIcons[status]}
-    {getStatusLabel(status, t)}
-  </Badge>
-);
+function getStatusBadge(
+  status: ToolPart["state"],
+  t: ReturnType<typeof useT>
+) {
+  return (
+    <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
+      {statusIcons[status]}
+      {getStatusLabel(status, t)}
+    </Badge>
+  );
+}
 
 export const ToolHeader = ({
   className,
