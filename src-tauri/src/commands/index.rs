@@ -17,15 +17,13 @@ pub async fn index_get_tree(
         .await?
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
-    let mut tree = state
-        .index_manager
-        .get_tree(&workspace.canonical_path)
-        .await?;
+    let (tree_result, overlay_result) = tokio::join!(
+        state.index_manager.get_tree(&workspace.canonical_path),
+        state.git_manager.get_workspace_overlay(&workspace.canonical_path)
+    );
 
-    let overlay = state
-        .git_manager
-        .get_workspace_overlay(&workspace.canonical_path)
-        .await?;
+    let mut tree = tree_result?;
+    let overlay = overlay_result?;
 
     tree.apply_git_overlay(&overlay.states);
 
@@ -47,6 +45,19 @@ pub async fn index_get_children(
         .await?
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
+    let (children_result, overlay_result) = tokio::join!(
+        state.index_manager.get_children(
+            &workspace.canonical_path,
+            &directory_path,
+            offset,
+            max_results,
+        ),
+        state.git_manager.get_workspace_overlay(&workspace.canonical_path)
+    );
+
+    let response = children_result?;
+    let overlay = overlay_result?;
+
     let mut overlay_root = FileTreeNode {
         name: workspace.name.clone(),
         path: String::new(),
@@ -55,23 +66,8 @@ pub async fn index_get_children(
         children_has_more: false,
         children_next_offset: None,
         git_state: None,
-        children: None,
+        children: Some(response.children),
     };
-    let response = state
-        .index_manager
-        .get_children(
-            &workspace.canonical_path,
-            &directory_path,
-            offset,
-            max_results,
-        )
-        .await?;
-    overlay_root.children = Some(response.children);
-
-    let overlay = state
-        .git_manager
-        .get_workspace_overlay(&workspace.canonical_path)
-        .await?;
 
     overlay_root.apply_git_overlay(&overlay.states);
 
@@ -109,15 +105,17 @@ pub async fn index_reveal_path(
         .await?
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
-    let mut response = state
-        .index_manager
-        .reveal_path(&workspace.canonical_path, &target_path)
-        .await?;
+    let (response_result, overlay_result) = tokio::join!(
+        state
+            .index_manager
+            .reveal_path(&workspace.canonical_path, &target_path),
+        state
+            .git_manager
+            .get_workspace_overlay(&workspace.canonical_path)
+    );
 
-    let overlay = state
-        .git_manager
-        .get_workspace_overlay(&workspace.canonical_path)
-        .await?;
+    let mut response = response_result?;
+    let overlay = overlay_result?;
 
     for segment in &mut response.segments {
         let mut overlay_root = FileTreeNode {

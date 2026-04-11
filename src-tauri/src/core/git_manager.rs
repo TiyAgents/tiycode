@@ -24,7 +24,7 @@ use crate::model::git::{
 const DEFAULT_HISTORY_LIMIT: usize = 24;
 const MAX_DIFF_LINES: usize = 1200;
 const GIT_STREAM_BUFFER: usize = 32;
-const OVERLAY_CACHE_TTL: Duration = Duration::from_secs(2);
+const OVERLAY_CACHE_TTL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceGitOverlay {
@@ -57,6 +57,7 @@ pub struct GitManager {
     streams: Arc<Mutex<HashMap<String, broadcast::Sender<GitStreamEvent>>>>,
     subscriptions: Arc<Mutex<HashMap<(String, u32), JoinHandle<()>>>>,
     overlay_cache: Arc<RwLock<HashMap<String, OverlayCacheEntry>>>,
+    canonical_cache: Arc<RwLock<HashMap<String, PathBuf>>>,
 }
 
 impl GitManager {
@@ -65,7 +66,29 @@ impl GitManager {
             streams: Arc::new(Mutex::new(HashMap::new())),
             subscriptions: Arc::new(Mutex::new(HashMap::new())),
             overlay_cache: Arc::new(RwLock::new(HashMap::new())),
+            canonical_cache: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Canonicalize a workspace path with in-memory caching and dunce to avoid
+    /// Windows UNC path prefixes and repeated expensive syscalls.
+    async fn cached_canonicalize(&self, workspace_path: &str) -> PathBuf {
+        {
+            let cache = self.canonical_cache.read().await;
+            if let Some(cached) = cache.get(workspace_path) {
+                return cached.clone();
+            }
+        }
+
+        let canonical =
+            dunce::canonicalize(workspace_path).unwrap_or_else(|_| PathBuf::from(workspace_path));
+
+        self.canonical_cache
+            .write()
+            .await
+            .insert(workspace_path.to_string(), canonical.clone());
+
+        canonical
     }
 
     pub async fn subscribe(&self, workspace_id: &str) -> broadcast::Receiver<GitStreamEvent> {
@@ -127,7 +150,7 @@ impl GitManager {
         &self,
         workspace_path: &str,
     ) -> Result<Arc<WorkspaceGitOverlay>, AppError> {
-        let workspace_root = canonicalize_workspace(workspace_path);
+        let workspace_root = self.cached_canonicalize(workspace_path).await;
         let cache_key = workspace_root.to_string_lossy().to_string();
 
         if let Some(cached) = self.overlay_cache.read().await.get(&cache_key) {
@@ -163,7 +186,7 @@ impl GitManager {
         workspace_id: &str,
         workspace_path: &str,
     ) -> Result<GitSnapshotDto, AppError> {
-        let workspace_root = canonicalize_workspace(workspace_path);
+        let workspace_root = self.cached_canonicalize(workspace_path).await;
         let workspace_id = workspace_id.to_string();
 
         tokio::task::spawn_blocking(move || {
@@ -193,7 +216,7 @@ impl GitManager {
         workspace_path: &str,
         limit: Option<usize>,
     ) -> Result<Vec<GitCommitSummaryDto>, AppError> {
-        let workspace_root = canonicalize_workspace(workspace_path);
+        let workspace_root = self.cached_canonicalize(workspace_path).await;
         let history_limit = limit.unwrap_or(DEFAULT_HISTORY_LIMIT);
 
         tokio::task::spawn_blocking(move || {
@@ -215,7 +238,7 @@ impl GitManager {
         path: &str,
         staged: bool,
     ) -> Result<GitDiffDto, AppError> {
-        let workspace_root = canonicalize_workspace(workspace_path);
+        let workspace_root = self.cached_canonicalize(workspace_path).await;
         let workspace_relative = normalize_workspace_relative_path(path);
 
         tokio::task::spawn_blocking(move || {
@@ -237,7 +260,7 @@ impl GitManager {
         workspace_path: &str,
         path: &str,
     ) -> Result<GitFileStatusDto, AppError> {
-        let workspace_root = canonicalize_workspace(workspace_path);
+        let workspace_root = self.cached_canonicalize(workspace_path).await;
         let workspace_relative = normalize_workspace_relative_path(path);
 
         tokio::task::spawn_blocking(move || {
@@ -339,7 +362,7 @@ impl GitManager {
     }
 
     pub async fn list_branches(&self, workspace_path: &str) -> Result<Vec<GitBranchDto>, AppError> {
-        let workspace_root = canonicalize_workspace(workspace_path);
+        let workspace_root = self.cached_canonicalize(workspace_path).await;
 
         tokio::task::spawn_blocking(move || {
             let repo = open_repository(&workspace_root)?;
@@ -389,7 +412,7 @@ impl GitManager {
     }
 
     async fn invalidate_workspace_overlay(&self, workspace_path: &str) {
-        let cache_key = canonicalize_workspace(workspace_path)
+        let cache_key = self.cached_canonicalize(workspace_path).await
             .to_string_lossy()
             .to_string();
         self.overlay_cache.write().await.remove(&cache_key);
@@ -1071,7 +1094,7 @@ fn open_repository(workspace_root: &Path) -> Result<Repository, AppError> {
 
 fn repo_workdir(repo: &Repository) -> Result<PathBuf, AppError> {
     repo.workdir()
-        .map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
+        .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
         .ok_or_else(|| {
             AppError::recoverable(
                 ErrorSource::Git,
@@ -1079,10 +1102,6 @@ fn repo_workdir(repo: &Repository) -> Result<PathBuf, AppError> {
                 "Bare repositories are not supported in the workspace Git drawer",
             )
         })
-}
-
-fn canonicalize_workspace(workspace_path: &str) -> PathBuf {
-    std::fs::canonicalize(workspace_path).unwrap_or_else(|_| PathBuf::from(workspace_path))
 }
 
 fn workspace_path_to_repo_path(

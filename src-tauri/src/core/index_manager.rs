@@ -167,6 +167,7 @@ struct DirectoryEntry {
 #[derive(Clone)]
 pub struct IndexManager {
     manifest_cache: Arc<RwLock<HashMap<String, ManifestCacheEntry>>>,
+    canonical_cache: Arc<RwLock<HashMap<String, PathBuf>>>,
 }
 
 impl FileTreeNode {
@@ -179,12 +180,33 @@ impl IndexManager {
     pub fn new() -> Self {
         Self {
             manifest_cache: Arc::new(RwLock::new(HashMap::new())),
+            canonical_cache: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Canonicalize a workspace path with in-memory caching to avoid repeated
+    /// `dunce::canonicalize` syscalls on Windows.
+    async fn cached_canonicalize(&self, workspace_path: &str) -> Result<PathBuf, AppError> {
+        {
+            let cache = self.canonical_cache.read().await;
+            if let Some(cached) = cache.get(workspace_path) {
+                return Ok(cached.clone());
+            }
+        }
+
+        let canonical = canonicalize_workspace(workspace_path)?;
+
+        self.canonical_cache
+            .write()
+            .await
+            .insert(workspace_path.to_string(), canonical.clone());
+
+        Ok(canonical)
     }
 
     /// Scan workspace directory and return a shallow, expandable file tree.
     pub async fn get_tree(&self, workspace_path: &str) -> Result<FileTreeNode, AppError> {
-        let root = canonicalize_workspace(workspace_path)?;
+        let root = self.cached_canonicalize(workspace_path).await?;
 
         tokio::task::spawn_blocking(move || build_initial_tree(&root))
             .await
@@ -204,7 +226,7 @@ impl IndexManager {
         offset: Option<usize>,
         max_results: Option<usize>,
     ) -> Result<DirectoryChildrenResponse, AppError> {
-        let root = canonicalize_workspace(workspace_path)?;
+        let root = self.cached_canonicalize(workspace_path).await?;
         let target = resolve_workspace_directory(&root, directory_path)?;
         let page_offset = offset.unwrap_or(0);
         let page_size = max_results.unwrap_or(DIRECTORY_PAGE_SIZE);
@@ -237,7 +259,7 @@ impl IndexManager {
             ));
         }
 
-        let root = canonicalize_workspace(workspace_path)?;
+        let root = self.cached_canonicalize(workspace_path).await?;
         let manifest = self.get_or_build_manifest(&root).await?;
         let limit = max_results.unwrap_or(DEFAULT_FILTER_LIMIT);
 
@@ -292,7 +314,7 @@ impl IndexManager {
             ));
         }
 
-        let root = canonicalize_workspace(workspace_path)?;
+        let root = self.cached_canonicalize(workspace_path).await?;
         let target = resolve_workspace_entry(&root, normalized_target)?;
         let relative_target = relative_path(&target, &root);
         let components = relative_target
@@ -375,7 +397,7 @@ impl IndexManager {
             ));
         }
 
-        let workspace_root = canonicalize_workspace(workspace_path)?;
+        let workspace_root = self.cached_canonicalize(workspace_path).await?;
         let limit = max_results.unwrap_or(50).max(1);
         let normalized_file_pattern = normalize_search_file_pattern(file_pattern);
 
@@ -724,9 +746,7 @@ fn read_directory_entries_page(
                 nodes.push(make_directory_placeholder(
                     &entry.path,
                     root,
-                    skipped,
-                    tree_lazy_only,
-                )?);
+                ));
             }
         } else {
             nodes.push(make_file_node(&entry.path, root));
@@ -771,19 +791,17 @@ fn make_preloaded_directory_node(
 fn make_directory_placeholder(
     path: &Path,
     root: &Path,
-    skipped: &HashSet<&str>,
-    tree_lazy_only: &HashSet<&str>,
-) -> Result<FileTreeNode, AppError> {
-    Ok(FileTreeNode {
+) -> FileTreeNode {
+    FileTreeNode {
         name: node_name(path, root),
         path: relative_path(path, root),
         is_dir: true,
-        is_expandable: directory_has_visible_entries(path, skipped, tree_lazy_only)?,
+        is_expandable: true,
         children_has_more: false,
         children_next_offset: None,
         git_state: None,
         children: None,
-    })
+    }
 }
 
 fn make_file_node(path: &Path, root: &Path) -> FileTreeNode {
@@ -797,31 +815,6 @@ fn make_file_node(path: &Path, root: &Path) -> FileTreeNode {
         git_state: None,
         children: None,
     }
-}
-
-fn directory_has_visible_entries(
-    path: &Path,
-    skipped: &HashSet<&str>,
-    _tree_lazy_only: &HashSet<&str>,
-) -> Result<bool, AppError> {
-    for entry in fs::read_dir(path).map_err(|error| {
-        AppError::internal(ErrorSource::Index, format!("Failed to read dir: {error}"))
-    })? {
-        let entry = entry.map_err(|error| {
-            AppError::internal(
-                ErrorSource::Index,
-                format!("Failed to read dir entry: {error}"),
-            )
-        })?;
-        let entry_name = entry.file_name().to_string_lossy().to_string();
-        if skipped.contains(entry_name.as_str()) {
-            continue;
-        }
-
-        return Ok(true);
-    }
-
-    Ok(false)
 }
 
 fn sort_directory_entries(nodes: &mut [DirectoryEntry]) {
