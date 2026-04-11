@@ -22,6 +22,7 @@ use crate::core::app_state::AppState;
 use crate::core::desktop_runtime::{
     DesktopRuntimeState, LAUNCH_AT_LOGIN_SETTING_KEY, MINIMIZE_TO_TRAY_SETTING_KEY,
 };
+use crate::core::ripgrep::find_bundled_rg_in_dirs;
 use crate::core::sleep_manager::PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY;
 #[cfg(target_os = "macos")]
 use crate::core::startup_manager;
@@ -122,37 +123,18 @@ fn init_logging() {
         .init();
 }
 
-fn bundled_rg_name() -> &'static str {
-    #[cfg(target_os = "windows")]
-    {
-        "rg.exe"
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        "rg"
-    }
-}
-
 fn configure_ripgrep_path<R: tauri::Runtime>(app: &tauri::App<R>) {
-    let bundled_name = bundled_rg_name();
-    let candidates = [
-        app.path()
-            .executable_dir()
-            .ok()
-            .map(|path| path.join(bundled_name)),
-        app.path()
-            .resource_dir()
-            .ok()
-            .map(|path| path.join(bundled_name)),
-    ];
+    let dirs: Vec<PathBuf> = [
+        app.path().executable_dir().ok(),
+        app.path().resource_dir().ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
-    for candidate in candidates.into_iter().flatten() {
-        if candidate.is_file() {
-            std::env::set_var("TIY_RG_PATH", &candidate);
-            tracing::info!(path = %candidate.display(), "configured bundled ripgrep");
-            return;
-        }
+    if let Some(candidate) = find_bundled_rg_in_dirs(&dirs) {
+        std::env::set_var("TIY_RG_PATH", &candidate);
+        tracing::info!(path = %candidate.display(), "configured bundled ripgrep");
     }
 }
 

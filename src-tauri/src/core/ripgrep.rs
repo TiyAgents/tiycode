@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use tokio::process::Command;
 
@@ -10,10 +11,11 @@ use crate::core::windows_process::configure_background_tokio_command;
 /// Execute ripgrep with a resilient lookup strategy.
 ///
 /// Search order:
-/// 1. `rg` already available on the current process PATH
-/// 2. `TIY_RG_PATH` override
-/// 3. `command -v rg` from a login shell (helps GUI apps on macOS)
-/// 4. bundled app resource locations near the current executable
+/// 1. `TIY_RG_PATH` override
+/// 2. bundled app resource locations near the current executable
+/// 3. `rg` available on the current process PATH
+/// 4. `command -v rg` / `where.exe` from a login shell
+/// 5. common install locations
 pub async fn run_rg(args: Vec<OsString>) -> io::Result<std::process::Output> {
     run_rg_in(args, None::<&Path>).await
 }
@@ -22,14 +24,8 @@ pub async fn run_rg_in(
     args: Vec<OsString>,
     current_dir: Option<&Path>,
 ) -> io::Result<std::process::Output> {
-    match spawn_rg("rg", &args, current_dir).await {
-        Ok(output) => Ok(output),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            let resolved = resolve_rg_executable().await?;
-            spawn_rg(&resolved, &args, current_dir).await
-        }
-        Err(error) => Err(error),
-    }
+    let resolved = resolve_rg_executable().await?;
+    spawn_rg(&resolved, &args, current_dir).await
 }
 
 async fn spawn_rg(
@@ -49,23 +45,67 @@ async fn spawn_rg(
 }
 
 async fn resolve_rg_executable() -> io::Result<PathBuf> {
-    if let Some(path) = find_env_override("TIY_RG_PATH") {
+    let search_dirs = current_bundled_rg_search_dirs();
+    let path_value = std::env::var_os("PATH");
+    let env_override = find_env_override("TIY_RG_PATH");
+
+    resolve_rg_executable_with(&search_dirs, path_value.as_deref(), env_override).await
+}
+
+async fn resolve_rg_executable_with(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+    env_override: Option<PathBuf>,
+) -> io::Result<PathBuf> {
+    let login_shell_candidate = find_from_login_shell().await;
+    let common_install_candidate = find_common_install_locations();
+
+    resolve_rg_executable_with_fallbacks(
+        search_dirs,
+        path_value,
+        env_override,
+        login_shell_candidate,
+        common_install_candidate,
+    )
+}
+
+fn resolve_rg_executable_with_fallbacks(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+    env_override: Option<PathBuf>,
+    login_shell_candidate: Option<PathBuf>,
+    common_install_candidate: Option<PathBuf>,
+) -> io::Result<PathBuf> {
+    if let Some(path) = env_override {
         return Ok(path);
     }
 
-    if let Some(path) = find_on_path(executable_name()) {
+    if let Some(path) = get_cached_resolved_rg_path() {
         return Ok(path);
     }
 
-    if let Some(path) = find_from_login_shell().await {
-        return Ok(path);
-    }
+    let resolved = resolve_rg_from_sources_with_fallbacks(
+        search_dirs,
+        path_value,
+        login_shell_candidate,
+        common_install_candidate,
+    )?;
+    cache_resolved_rg_path(resolved.clone());
+    Ok(resolved)
+}
 
-    if let Some(path) = find_common_install_locations() {
-        return Ok(path);
-    }
-
-    if let Some(path) = find_bundled_rg() {
+fn resolve_rg_from_sources_with_fallbacks(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+    login_shell_candidate: Option<PathBuf>,
+    common_install_candidate: Option<PathBuf>,
+) -> io::Result<PathBuf> {
+    if let Some(path) = resolve_rg_with_fallbacks(
+        search_dirs,
+        path_value,
+        login_shell_candidate,
+        common_install_candidate,
+    ) {
         return Ok(path);
     }
 
@@ -75,15 +115,69 @@ async fn resolve_rg_executable() -> io::Result<PathBuf> {
     ))
 }
 
+fn current_bundled_rg_search_dirs() -> Vec<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .map(|current_exe| bundled_rg_search_dirs(&current_exe))
+        .unwrap_or_default()
+}
+
+fn resolve_rg_without_shell(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+) -> Option<PathBuf> {
+    if let Some(path) = find_bundled_rg_in_dirs(search_dirs) {
+        return Some(path);
+    }
+
+    path_value.and_then(|value| find_on_explicit_paths(value, executable_name()))
+}
+
+fn resolve_rg_with_fallbacks(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+    login_shell_candidate: Option<PathBuf>,
+    common_install_candidate: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(path) = resolve_rg_without_shell(search_dirs, path_value) {
+        return Some(path);
+    }
+
+    login_shell_candidate.or(common_install_candidate)
+}
+
+fn resolved_rg_path_cache() -> &'static Mutex<Option<PathBuf>> {
+    static RESOLVED_RG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    RESOLVED_RG_PATH.get_or_init(|| Mutex::new(None))
+}
+
+fn get_cached_resolved_rg_path() -> Option<PathBuf> {
+    resolved_rg_path_cache()
+        .lock()
+        .expect("resolved rg path cache should lock")
+        .clone()
+}
+
+fn cache_resolved_rg_path(path: PathBuf) {
+    let mut cache = resolved_rg_path_cache()
+        .lock()
+        .expect("resolved rg path cache should lock");
+    if cache.is_none() {
+        *cache = Some(path);
+    }
+}
+
+#[cfg(test)]
+fn clear_cached_resolved_rg_path() {
+    *resolved_rg_path_cache()
+        .lock()
+        .expect("resolved rg path cache should lock") = None;
+}
+
 fn find_env_override(name: &str) -> Option<PathBuf> {
     let value = std::env::var_os(name)?;
     let path = PathBuf::from(value);
     is_executable_file(&path).then_some(path)
-}
-
-fn find_on_path(executable_name: &str) -> Option<PathBuf> {
-    let path_value = std::env::var_os("PATH")?;
-    find_on_explicit_paths(&path_value, executable_name)
 }
 
 fn find_on_explicit_paths(path_value: &OsStr, executable_name: &str) -> Option<PathBuf> {
@@ -134,11 +228,21 @@ async fn find_from_login_shell() -> Option<PathBuf> {
     is_executable_file(&candidate).then_some(candidate)
 }
 
-fn find_bundled_rg() -> Option<PathBuf> {
-    let current_exe = std::env::current_exe().ok()?;
-    bundled_rg_candidates(&current_exe)
-        .into_iter()
-        .find(|candidate| is_executable_file(candidate))
+pub(crate) fn find_bundled_rg_in_dirs(dirs: &[PathBuf]) -> Option<PathBuf> {
+    let mut seen = HashSet::new();
+
+    for dir in dirs {
+        for candidate in bundled_rg_candidates_in_dir(dir) {
+            if !seen.insert(candidate.clone()) {
+                continue;
+            }
+            if is_executable_file(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
 }
 
 fn find_common_install_locations() -> Option<PathBuf> {
@@ -177,36 +281,65 @@ fn common_install_locations() -> Vec<PathBuf> {
     candidates
 }
 
-fn bundled_rg_candidates(current_exe: &Path) -> Vec<PathBuf> {
-    let executable_name = executable_name();
+fn bundled_rg_search_dirs(current_exe: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
     let mut seen = HashSet::new();
-    let mut candidates = Vec::new();
 
     if let Some(exe_dir) = current_exe.parent() {
-        push_candidate(&mut candidates, &mut seen, exe_dir.join(executable_name));
-        push_candidate(
-            &mut candidates,
-            &mut seen,
-            exe_dir.join("bin").join(executable_name),
-        );
+        push_candidate(&mut dirs, &mut seen, exe_dir.to_path_buf());
+        push_candidate(&mut dirs, &mut seen, exe_dir.join("resources"));
+        push_candidate(&mut dirs, &mut seen, exe_dir.join("Resources"));
     }
 
     for ancestor in current_exe.ancestors() {
         if ancestor.file_name() == Some(OsStr::new("Contents")) {
-            push_candidate(
-                &mut candidates,
-                &mut seen,
-                ancestor.join("Resources").join(executable_name),
-            );
-            push_candidate(
-                &mut candidates,
-                &mut seen,
-                ancestor.join("Resources").join("bin").join(executable_name),
-            );
+            push_candidate(&mut dirs, &mut seen, ancestor.join("Resources"));
         }
     }
 
+    dirs
+}
+
+fn bundled_rg_candidates_in_dir(dir: &Path) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+
+    push_bundled_rg_entries(&mut candidates, &mut seen, dir);
+    push_bundled_rg_entries(&mut candidates, &mut seen, &dir.join("bin"));
+
     candidates
+}
+
+fn push_bundled_rg_entries(candidates: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, dir: &Path) {
+    push_candidate(candidates, seen, dir.join(executable_name()));
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        if is_bundled_rg_file_name(&file_name) {
+            push_candidate(candidates, seen, entry.path());
+        }
+    }
+}
+
+fn is_bundled_rg_file_name(file_name: &OsStr) -> bool {
+    let Some(name) = file_name.to_str() else {
+        return false;
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        name.eq_ignore_ascii_case("rg.exe")
+            || (name.starts_with("rg-") && name.to_ascii_lowercase().ends_with(".exe"))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        name == "rg" || name.starts_with("rg-")
+    }
 }
 
 fn push_candidate(candidates: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: PathBuf) {
@@ -251,30 +384,19 @@ fn is_executable_file(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{executable_name, find_on_explicit_paths};
-    use std::ffi::OsString;
-
-    #[cfg(target_os = "macos")]
-    use super::bundled_rg_candidates;
-    #[cfg(target_os = "macos")]
-    use std::path::PathBuf;
+    use super::{
+        bundled_rg_search_dirs, clear_cached_resolved_rg_path, executable_name,
+        find_bundled_rg_in_dirs, find_on_explicit_paths, is_bundled_rg_file_name,
+        resolve_rg_executable_with_fallbacks, resolve_rg_from_sources_with_fallbacks,
+    };
+    use std::ffi::{OsStr, OsString};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn finds_rg_on_explicit_path_list() {
         let tmp = tempfile::tempdir().expect("should create tempdir");
         let rg_path = tmp.path().join(executable_name());
-        std::fs::write(&rg_path, "#!/bin/sh\n").expect("should create fake rg");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            let mut permissions = std::fs::metadata(&rg_path)
-                .expect("fake rg should exist")
-                .permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&rg_path, permissions).expect("should set executable bit");
-        }
+        write_fake_executable(&rg_path);
 
         let result = find_on_explicit_paths(&OsString::from(tmp.path()), executable_name())
             .expect("rg should be discoverable");
@@ -282,17 +404,166 @@ mod tests {
         assert_eq!(result, rg_path);
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
-    fn includes_macos_bundle_resource_candidates() {
-        let current_exe = PathBuf::from("/Applications/TiyCode.app/Contents/MacOS/TiyCode");
-        let candidates = bundled_rg_candidates(&current_exe);
+    fn finds_target_suffixed_bundled_rg_in_directory() {
+        let tmp = tempfile::tempdir().expect("should create tempdir");
+        let rg_path = tmp.path().join(test_bundled_rg_name());
+        write_fake_executable(&rg_path);
+
+        let result = find_bundled_rg_in_dirs(&[tmp.path().to_path_buf()])
+            .expect("bundled rg should be discoverable");
+
+        assert_eq!(result, rg_path);
+    }
+
+    #[tokio::test]
+    async fn resolution_full_chain_prefers_env_override_then_bundled_then_path() {
+        clear_cached_resolved_rg_path();
+        let env_dir = tempfile::tempdir().expect("should create env tempdir");
+        let bundled_dir = tempfile::tempdir().expect("should create bundle tempdir");
+        let path_dir = tempfile::tempdir().expect("should create path tempdir");
+
+        let env_rg = env_dir.path().join(executable_name());
+        let bundled_rg = bundled_dir.path().join(test_bundled_rg_name());
+        let path_rg = path_dir.path().join(executable_name());
+        write_fake_executable(&env_rg);
+        write_fake_executable(&bundled_rg);
+        write_fake_executable(&path_rg);
+
+        let path_value = OsString::from(path_dir.path());
+        let env_override = resolve_rg_executable_with_fallbacks(
+            &[bundled_dir.path().to_path_buf()],
+            Some(path_value.as_os_str()),
+            Some(env_rg.clone()),
+            None,
+            None,
+        )
+        .expect("env override should win");
+        assert_eq!(env_override, env_rg);
+
+        let bundled = resolve_rg_from_sources_with_fallbacks(
+            &[bundled_dir.path().to_path_buf()],
+            Some(path_value.as_os_str()),
+            None,
+            None,
+        )
+        .expect("bundled rg should win over PATH");
+        assert_eq!(bundled, bundled_rg);
+
+        clear_cached_resolved_rg_path();
+        let path_only =
+            resolve_rg_from_sources_with_fallbacks(&[], Some(path_value.as_os_str()), None, None)
+                .expect("PATH rg should be used when bundled rg is absent");
+        assert_eq!(path_only, path_rg);
+        clear_cached_resolved_rg_path();
+    }
+
+    #[test]
+    fn failed_resolution_is_not_cached() {
+        clear_cached_resolved_rg_path();
+
+        let error = resolve_rg_executable_with_fallbacks(&[], None, None, None, None)
+            .expect_err("resolution should fail without any candidates");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+        let recovered_dir = tempfile::tempdir().expect("should create tempdir");
+        let recovered_rg = recovered_dir.path().join(test_bundled_rg_name());
+        write_fake_executable(&recovered_rg);
+
+        let recovered = resolve_rg_executable_with_fallbacks(
+            &[recovered_dir.path().to_path_buf()],
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("subsequent resolution should retry after failure");
+        assert_eq!(recovered, recovered_rg);
+
+        clear_cached_resolved_rg_path();
+    }
+
+    #[test]
+    fn bundled_rg_file_name_matching_is_precise() {
+        for name in positive_bundled_rg_names() {
+            assert!(
+                is_bundled_rg_file_name(OsStr::new(name)),
+                "expected '{name}' to match bundled rg naming"
+            );
+        }
+
+        for name in ["rg.bak", "rghost", "README", "cargo-rg"] {
+            assert!(
+                !is_bundled_rg_file_name(OsStr::new(name)),
+                "expected '{name}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_bundle_search_dirs_include_resources_directory() {
+        let current_exe = PathBuf::from_iter([
+            "Applications",
+            "TiyCode.app",
+            "Contents",
+            "MacOS",
+            "TiyCode",
+        ]);
+        let expected = PathBuf::from_iter(["Applications", "TiyCode.app", "Contents", "Resources"]);
+        let search_dirs = bundled_rg_search_dirs(&current_exe);
 
         assert!(
-            candidates.contains(&PathBuf::from(
-                "/Applications/TiyCode.app/Contents/Resources/rg"
-            )),
-            "expected bundled resources candidate in macOS app bundle"
+            search_dirs.contains(&expected),
+            "expected macOS bundle resources directory in search dirs: {search_dirs:?}"
         );
+    }
+
+    fn test_bundled_rg_name() -> &'static str {
+        #[cfg(target_os = "windows")]
+        {
+            "rg-x86_64-pc-windows-msvc.exe"
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            "rg-aarch64-apple-darwin"
+        }
+
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+        {
+            "rg-x86_64-unknown-linux-gnu"
+        }
+    }
+
+    fn positive_bundled_rg_names() -> &'static [&'static str] {
+        #[cfg(target_os = "windows")]
+        {
+            &["rg.exe", "RG.EXE", "rg-x86_64-pc-windows-msvc.exe"]
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            &["rg", "rg-aarch64-apple-darwin"]
+        }
+
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+        {
+            &["rg", "rg-x86_64-unknown-linux-gnu"]
+        }
+    }
+
+    fn write_fake_executable(path: &Path) {
+        std::fs::write(path, "#!/bin/sh\n").expect("should create fake executable");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(path)
+                .expect("fake executable should exist")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(path, permissions).expect("should set executable bit");
+        }
     }
 }
