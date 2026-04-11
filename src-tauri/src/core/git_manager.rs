@@ -412,7 +412,9 @@ impl GitManager {
     }
 
     async fn invalidate_workspace_overlay(&self, workspace_path: &str) {
-        let cache_key = self.cached_canonicalize(workspace_path).await
+        let cache_key = self
+            .cached_canonicalize(workspace_path)
+            .await
             .to_string_lossy()
             .to_string();
         self.overlay_cache.write().await.remove(&cache_key);

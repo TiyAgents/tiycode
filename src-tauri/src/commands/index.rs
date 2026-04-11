@@ -19,7 +19,9 @@ pub async fn index_get_tree(
 
     let (tree_result, overlay_result) = tokio::join!(
         state.index_manager.get_tree(&workspace.canonical_path),
-        state.git_manager.get_workspace_overlay(&workspace.canonical_path)
+        state
+            .git_manager
+            .get_workspace_overlay(&workspace.canonical_path)
     );
 
     let mut tree = tree_result?;
@@ -52,7 +54,9 @@ pub async fn index_get_children(
             offset,
             max_results,
         ),
-        state.git_manager.get_workspace_overlay(&workspace.canonical_path)
+        state
+            .git_manager
+            .get_workspace_overlay(&workspace.canonical_path)
     );
 
     let response = children_result?;

@@ -743,10 +743,7 @@ fn read_directory_entries_page(
                     tree_lazy_only,
                 )?);
             } else {
-                nodes.push(make_directory_placeholder(
-                    &entry.path,
-                    root,
-                ));
+                nodes.push(make_directory_placeholder(&entry.path, root));
             }
         } else {
             nodes.push(make_file_node(&entry.path, root));
@@ -788,10 +785,7 @@ fn make_preloaded_directory_node(
     })
 }
 
-fn make_directory_placeholder(
-    path: &Path,
-    root: &Path,
-) -> FileTreeNode {
+fn make_directory_placeholder(path: &Path, root: &Path) -> FileTreeNode {
     FileTreeNode {
         name: node_name(path, root),
         path: relative_path(path, root),
