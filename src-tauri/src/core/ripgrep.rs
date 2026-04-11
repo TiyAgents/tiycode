@@ -4,6 +4,7 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
 use tokio::process::Command;
+use tokio::sync::OnceCell;
 
 use crate::core::windows_process::configure_background_tokio_command;
 
@@ -48,36 +49,67 @@ async fn resolve_rg_executable() -> io::Result<PathBuf> {
         return Ok(path);
     }
 
-    if let Some(path) = find_bundled_rg() {
+    if let Some(path) = cached_resolved_rg_path().await {
         return Ok(path);
     }
 
-    if let Some(path) = find_on_path(executable_name()) {
-        return Ok(path);
-    }
-
-    if let Some(path) = find_from_login_shell().await {
-        return Ok(path);
-    }
-
-    if let Some(path) = find_common_install_locations() {
-        return Ok(path);
-    }
     Err(io::Error::new(
         ErrorKind::NotFound,
         "ripgrep executable was not found on PATH, in a login shell, or in bundled resources",
     ))
 }
 
+async fn cached_resolved_rg_path() -> Option<PathBuf> {
+    static RESOLVED_RG_PATH: OnceCell<Option<PathBuf>> = OnceCell::const_new();
+
+    RESOLVED_RG_PATH
+        .get_or_init(resolve_non_override_rg_executable)
+        .await
+        .clone()
+}
+
+async fn resolve_non_override_rg_executable() -> Option<PathBuf> {
+    let current_exe = std::env::current_exe().ok()?;
+    let search_dirs = bundled_rg_search_dirs(&current_exe);
+    let path_value = std::env::var_os("PATH");
+
+    resolve_rg_with_search_dirs(&search_dirs, path_value.as_deref()).await
+}
+
+async fn resolve_rg_with_search_dirs(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+) -> Option<PathBuf> {
+    if let Some(path) = resolve_rg_without_shell(search_dirs, path_value) {
+        return Some(path);
+    }
+
+    if let Some(path) = find_from_login_shell().await {
+        return Some(path);
+    }
+
+    if let Some(path) = find_common_install_locations() {
+        return Some(path);
+    }
+
+    None
+}
+
+fn resolve_rg_without_shell(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+) -> Option<PathBuf> {
+    if let Some(path) = find_bundled_rg_in_dirs(search_dirs) {
+        return Some(path);
+    }
+
+    path_value.and_then(|value| find_on_explicit_paths(value, executable_name()))
+}
+
 fn find_env_override(name: &str) -> Option<PathBuf> {
     let value = std::env::var_os(name)?;
     let path = PathBuf::from(value);
     is_executable_file(&path).then_some(path)
-}
-
-fn find_on_path(executable_name: &str) -> Option<PathBuf> {
-    let path_value = std::env::var_os("PATH")?;
-    find_on_explicit_paths(&path_value, executable_name)
 }
 
 fn find_on_explicit_paths(path_value: &OsStr, executable_name: &str) -> Option<PathBuf> {
@@ -126,11 +158,6 @@ async fn find_from_login_shell() -> Option<PathBuf> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let candidate = PathBuf::from(stdout.lines().next()?.trim());
     is_executable_file(&candidate).then_some(candidate)
-}
-
-fn find_bundled_rg() -> Option<PathBuf> {
-    let current_exe = std::env::current_exe().ok()?;
-    find_bundled_rg_in_dirs(&bundled_rg_search_dirs(&current_exe))
 }
 
 pub(crate) fn find_bundled_rg_in_dirs(dirs: &[PathBuf]) -> Option<PathBuf> {
@@ -289,25 +316,21 @@ fn is_executable_file(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{executable_name, find_bundled_rg_in_dirs, find_on_explicit_paths};
-    use std::ffi::OsString;
+    use super::{
+        bundled_rg_search_dirs, executable_name, find_bundled_rg_in_dirs, find_on_explicit_paths,
+        is_bundled_rg_file_name, resolve_rg_without_shell,
+    };
+    use std::ffi::{OsStr, OsString};
+    use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
+
+    static ENV_LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
 
     #[test]
     fn finds_rg_on_explicit_path_list() {
         let tmp = tempfile::tempdir().expect("should create tempdir");
         let rg_path = tmp.path().join(executable_name());
-        std::fs::write(&rg_path, "#!/bin/sh\n").expect("should create fake rg");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            let mut permissions = std::fs::metadata(&rg_path)
-                .expect("fake rg should exist")
-                .permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&rg_path, permissions).expect("should set executable bit");
-        }
+        write_fake_executable(&rg_path);
 
         let result = find_on_explicit_paths(&OsString::from(tmp.path()), executable_name())
             .expect("rg should be discoverable");
@@ -319,23 +342,81 @@ mod tests {
     fn finds_target_suffixed_bundled_rg_in_directory() {
         let tmp = tempfile::tempdir().expect("should create tempdir");
         let rg_path = tmp.path().join(test_bundled_rg_name());
-        std::fs::write(&rg_path, "#!/bin/sh\n").expect("should create fake bundled rg");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            let mut permissions = std::fs::metadata(&rg_path)
-                .expect("fake rg should exist")
-                .permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&rg_path, permissions).expect("should set executable bit");
-        }
+        write_fake_executable(&rg_path);
 
         let result = find_bundled_rg_in_dirs(&[tmp.path().to_path_buf()])
             .expect("bundled rg should be discoverable");
 
         assert_eq!(result, rg_path);
+    }
+
+    #[test]
+    fn resolution_priority_prefers_env_override_then_bundled_then_path() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+
+        let env_dir = tempfile::tempdir().expect("should create env tempdir");
+        let bundled_dir = tempfile::tempdir().expect("should create bundle tempdir");
+        let path_dir = tempfile::tempdir().expect("should create path tempdir");
+
+        let env_rg = env_dir.path().join(executable_name());
+        let bundled_rg = bundled_dir.path().join(test_bundled_rg_name());
+        let path_rg = path_dir.path().join(executable_name());
+        write_fake_executable(&env_rg);
+        write_fake_executable(&bundled_rg);
+        write_fake_executable(&path_rg);
+
+        std::env::set_var("TIY_RG_PATH", &env_rg);
+        let env_override =
+            super::find_env_override("TIY_RG_PATH").expect("env override should win");
+        assert_eq!(env_override, env_rg);
+        std::env::remove_var("TIY_RG_PATH");
+
+        let path_value = OsString::from(path_dir.path());
+        let bundled = resolve_rg_without_shell(
+            &[bundled_dir.path().to_path_buf()],
+            Some(path_value.as_os_str()),
+        )
+        .expect("bundled rg should win over PATH");
+        assert_eq!(bundled, bundled_rg);
+
+        let path_only = resolve_rg_without_shell(&[], Some(path_value.as_os_str()))
+            .expect("PATH rg should be used when bundled rg is absent");
+        assert_eq!(path_only, path_rg);
+    }
+
+    #[test]
+    fn bundled_rg_file_name_matching_is_precise() {
+        for name in positive_bundled_rg_names() {
+            assert!(
+                is_bundled_rg_file_name(OsStr::new(name)),
+                "expected '{name}' to match bundled rg naming"
+            );
+        }
+
+        for name in ["rg.bak", "rghost", "README", "cargo-rg"] {
+            assert!(
+                !is_bundled_rg_file_name(OsStr::new(name)),
+                "expected '{name}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_bundle_search_dirs_include_resources_directory() {
+        let current_exe = PathBuf::from_iter([
+            "Applications",
+            "TiyCode.app",
+            "Contents",
+            "MacOS",
+            "TiyCode",
+        ]);
+        let expected = PathBuf::from_iter(["Applications", "TiyCode.app", "Contents", "Resources"]);
+        let search_dirs = bundled_rg_search_dirs(&current_exe);
+
+        assert!(
+            search_dirs.contains(&expected),
+            "expected macOS bundle resources directory in search dirs: {search_dirs:?}"
+        );
     }
 
     fn test_bundled_rg_name() -> &'static str {
@@ -353,5 +434,41 @@ mod tests {
         {
             "rg-x86_64-unknown-linux-gnu"
         }
+    }
+
+    fn positive_bundled_rg_names() -> &'static [&'static str] {
+        #[cfg(target_os = "windows")]
+        {
+            &["rg.exe", "RG.EXE", "rg-x86_64-pc-windows-msvc.exe"]
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            &["rg", "rg-aarch64-apple-darwin"]
+        }
+
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+        {
+            &["rg", "rg-x86_64-unknown-linux-gnu"]
+        }
+    }
+
+    fn write_fake_executable(path: &Path) {
+        std::fs::write(path, "#!/bin/sh\n").expect("should create fake executable");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(path)
+                .expect("fake executable should exist")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(path, permissions).expect("should set executable bit");
+        }
+    }
+
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        ENV_LOCK.get_or_init(|| std::sync::Mutex::new(()))
     }
 }
