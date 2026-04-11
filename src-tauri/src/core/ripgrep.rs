@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use tokio::process::Command;
-use tokio::sync::OnceCell;
 
 use crate::core::windows_process::configure_background_tokio_command;
 
@@ -45,11 +45,67 @@ async fn spawn_rg(
 }
 
 async fn resolve_rg_executable() -> io::Result<PathBuf> {
-    if let Some(path) = find_env_override("TIY_RG_PATH") {
+    let search_dirs = current_bundled_rg_search_dirs();
+    let path_value = std::env::var_os("PATH");
+    let env_override = find_env_override("TIY_RG_PATH");
+
+    resolve_rg_executable_with(&search_dirs, path_value.as_deref(), env_override).await
+}
+
+async fn resolve_rg_executable_with(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+    env_override: Option<PathBuf>,
+) -> io::Result<PathBuf> {
+    let login_shell_candidate = find_from_login_shell().await;
+    let common_install_candidate = find_common_install_locations();
+
+    resolve_rg_executable_with_fallbacks(
+        search_dirs,
+        path_value,
+        env_override,
+        login_shell_candidate,
+        common_install_candidate,
+    )
+}
+
+fn resolve_rg_executable_with_fallbacks(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+    env_override: Option<PathBuf>,
+    login_shell_candidate: Option<PathBuf>,
+    common_install_candidate: Option<PathBuf>,
+) -> io::Result<PathBuf> {
+    if let Some(path) = env_override {
         return Ok(path);
     }
 
-    if let Some(path) = cached_resolved_rg_path().await {
+    if let Some(path) = get_cached_resolved_rg_path() {
+        return Ok(path);
+    }
+
+    let resolved = resolve_rg_from_sources_with_fallbacks(
+        search_dirs,
+        path_value,
+        login_shell_candidate,
+        common_install_candidate,
+    )?;
+    cache_resolved_rg_path(resolved.clone());
+    Ok(resolved)
+}
+
+fn resolve_rg_from_sources_with_fallbacks(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+    login_shell_candidate: Option<PathBuf>,
+    common_install_candidate: Option<PathBuf>,
+) -> io::Result<PathBuf> {
+    if let Some(path) = resolve_rg_with_fallbacks(
+        search_dirs,
+        path_value,
+        login_shell_candidate,
+        common_install_candidate,
+    ) {
         return Ok(path);
     }
 
@@ -59,40 +115,11 @@ async fn resolve_rg_executable() -> io::Result<PathBuf> {
     ))
 }
 
-async fn cached_resolved_rg_path() -> Option<PathBuf> {
-    static RESOLVED_RG_PATH: OnceCell<Option<PathBuf>> = OnceCell::const_new();
-
-    RESOLVED_RG_PATH
-        .get_or_init(resolve_non_override_rg_executable)
-        .await
-        .clone()
-}
-
-async fn resolve_non_override_rg_executable() -> Option<PathBuf> {
-    let current_exe = std::env::current_exe().ok()?;
-    let search_dirs = bundled_rg_search_dirs(&current_exe);
-    let path_value = std::env::var_os("PATH");
-
-    resolve_rg_with_search_dirs(&search_dirs, path_value.as_deref()).await
-}
-
-async fn resolve_rg_with_search_dirs(
-    search_dirs: &[PathBuf],
-    path_value: Option<&OsStr>,
-) -> Option<PathBuf> {
-    if let Some(path) = resolve_rg_without_shell(search_dirs, path_value) {
-        return Some(path);
-    }
-
-    if let Some(path) = find_from_login_shell().await {
-        return Some(path);
-    }
-
-    if let Some(path) = find_common_install_locations() {
-        return Some(path);
-    }
-
-    None
+fn current_bundled_rg_search_dirs() -> Vec<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .map(|current_exe| bundled_rg_search_dirs(&current_exe))
+        .unwrap_or_default()
 }
 
 fn resolve_rg_without_shell(
@@ -104,6 +131,47 @@ fn resolve_rg_without_shell(
     }
 
     path_value.and_then(|value| find_on_explicit_paths(value, executable_name()))
+}
+
+fn resolve_rg_with_fallbacks(
+    search_dirs: &[PathBuf],
+    path_value: Option<&OsStr>,
+    login_shell_candidate: Option<PathBuf>,
+    common_install_candidate: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(path) = resolve_rg_without_shell(search_dirs, path_value) {
+        return Some(path);
+    }
+
+    login_shell_candidate.or(common_install_candidate)
+}
+
+fn resolved_rg_path_cache() -> &'static Mutex<Option<PathBuf>> {
+    static RESOLVED_RG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    RESOLVED_RG_PATH.get_or_init(|| Mutex::new(None))
+}
+
+fn get_cached_resolved_rg_path() -> Option<PathBuf> {
+    resolved_rg_path_cache()
+        .lock()
+        .expect("resolved rg path cache should lock")
+        .clone()
+}
+
+fn cache_resolved_rg_path(path: PathBuf) {
+    let mut cache = resolved_rg_path_cache()
+        .lock()
+        .expect("resolved rg path cache should lock");
+    if cache.is_none() {
+        *cache = Some(path);
+    }
+}
+
+#[cfg(test)]
+fn clear_cached_resolved_rg_path() {
+    *resolved_rg_path_cache()
+        .lock()
+        .expect("resolved rg path cache should lock") = None;
 }
 
 fn find_env_override(name: &str) -> Option<PathBuf> {
@@ -317,14 +385,12 @@ fn is_executable_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        bundled_rg_search_dirs, executable_name, find_bundled_rg_in_dirs, find_on_explicit_paths,
-        is_bundled_rg_file_name, resolve_rg_without_shell,
+        bundled_rg_search_dirs, clear_cached_resolved_rg_path, executable_name,
+        find_bundled_rg_in_dirs, find_on_explicit_paths, is_bundled_rg_file_name,
+        resolve_rg_executable_with_fallbacks, resolve_rg_from_sources_with_fallbacks,
     };
     use std::ffi::{OsStr, OsString};
     use std::path::{Path, PathBuf};
-    use std::sync::OnceLock;
-
-    static ENV_LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
 
     #[test]
     fn finds_rg_on_explicit_path_list() {
@@ -350,10 +416,9 @@ mod tests {
         assert_eq!(result, rg_path);
     }
 
-    #[test]
-    fn resolution_priority_prefers_env_override_then_bundled_then_path() {
-        let _guard = env_lock().lock().expect("env lock should be available");
-
+    #[tokio::test]
+    async fn resolution_full_chain_prefers_env_override_then_bundled_then_path() {
+        clear_cached_resolved_rg_path();
         let env_dir = tempfile::tempdir().expect("should create env tempdir");
         let bundled_dir = tempfile::tempdir().expect("should create bundle tempdir");
         let path_dir = tempfile::tempdir().expect("should create path tempdir");
@@ -365,23 +430,57 @@ mod tests {
         write_fake_executable(&bundled_rg);
         write_fake_executable(&path_rg);
 
-        std::env::set_var("TIY_RG_PATH", &env_rg);
-        let env_override =
-            super::find_env_override("TIY_RG_PATH").expect("env override should win");
-        assert_eq!(env_override, env_rg);
-        std::env::remove_var("TIY_RG_PATH");
-
         let path_value = OsString::from(path_dir.path());
-        let bundled = resolve_rg_without_shell(
+        let env_override = resolve_rg_executable_with_fallbacks(
             &[bundled_dir.path().to_path_buf()],
             Some(path_value.as_os_str()),
+            Some(env_rg.clone()),
+            None,
+            None,
+        )
+        .expect("env override should win");
+        assert_eq!(env_override, env_rg);
+
+        let bundled = resolve_rg_from_sources_with_fallbacks(
+            &[bundled_dir.path().to_path_buf()],
+            Some(path_value.as_os_str()),
+            None,
+            None,
         )
         .expect("bundled rg should win over PATH");
         assert_eq!(bundled, bundled_rg);
 
-        let path_only = resolve_rg_without_shell(&[], Some(path_value.as_os_str()))
-            .expect("PATH rg should be used when bundled rg is absent");
+        clear_cached_resolved_rg_path();
+        let path_only =
+            resolve_rg_from_sources_with_fallbacks(&[], Some(path_value.as_os_str()), None, None)
+                .expect("PATH rg should be used when bundled rg is absent");
         assert_eq!(path_only, path_rg);
+        clear_cached_resolved_rg_path();
+    }
+
+    #[test]
+    fn failed_resolution_is_not_cached() {
+        clear_cached_resolved_rg_path();
+
+        let error = resolve_rg_executable_with_fallbacks(&[], None, None, None, None)
+            .expect_err("resolution should fail without any candidates");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+        let recovered_dir = tempfile::tempdir().expect("should create tempdir");
+        let recovered_rg = recovered_dir.path().join(test_bundled_rg_name());
+        write_fake_executable(&recovered_rg);
+
+        let recovered = resolve_rg_executable_with_fallbacks(
+            &[recovered_dir.path().to_path_buf()],
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("subsequent resolution should retry after failure");
+        assert_eq!(recovered, recovered_rg);
+
+        clear_cached_resolved_rg_path();
     }
 
     #[test]
@@ -466,9 +565,5 @@ mod tests {
             permissions.set_mode(0o755);
             std::fs::set_permissions(path, permissions).expect("should set executable bit");
         }
-    }
-
-    fn env_lock() -> &'static std::sync::Mutex<()> {
-        ENV_LOCK.get_or_init(|| std::sync::Mutex::new(()))
     }
 }
