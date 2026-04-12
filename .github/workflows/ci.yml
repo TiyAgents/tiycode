@@ -72,6 +72,9 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Run frontend unit tests
+        run: npm run test:unit
+
       - name: Build web assets
         run: npm run build:web
 
