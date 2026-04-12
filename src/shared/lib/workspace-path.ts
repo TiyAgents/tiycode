@@ -1,6 +1,7 @@
 function normalizePathSegments(
   segments: ReadonlyArray<string>,
   clampAboveRoot: boolean,
+  protectedSegmentCount = 0,
 ) {
   const normalized: string[] = [];
 
@@ -10,7 +11,12 @@ function normalizePathSegments(
     }
 
     if (segment === "..") {
-      if (normalized.length > 0) {
+      const lastSegment = normalized[normalized.length - 1];
+      if (
+        lastSegment &&
+        lastSegment !== ".." &&
+        normalized.length > protectedSegmentCount
+      ) {
         normalized.pop();
       } else if (!clampAboveRoot) {
         normalized.push("..");
@@ -24,28 +30,40 @@ function normalizePathSegments(
   return normalized;
 }
 
-function normalizeUncWorkspacePath(path: string) {
-  const segments = path.replace(/^\/+/, "").split("/").filter(Boolean);
+function normalizeWindowsSegments(segments: ReadonlyArray<string>) {
+  return segments.map((segment) =>
+    segment === "." || segment === ".." ? segment : segment.toLowerCase(),
+  );
+}
 
-  if (segments.length === 0) {
+function normalizeUncWorkspacePath(path: string) {
+  const segments = normalizeWindowsSegments(
+    path.replace(/^\/+/, "").split("/").filter(Boolean),
+  );
+  const normalizedSegments = normalizePathSegments(
+    segments,
+    true,
+    Math.min(2, segments.length),
+  );
+
+  if (normalizedSegments.length === 0) {
     return "//";
   }
 
-  if (segments.length === 1) {
-    return `//${segments[0]}`;
+  if (normalizedSegments.length === 1) {
+    return `//${normalizedSegments[0]}`;
   }
 
-  const [server, share, ...remainder] = segments;
-  const normalizedRemainder = normalizePathSegments(remainder, true);
+  const [server, share, ...remainder] = normalizedSegments;
 
-  return `//${server}/${share}${normalizedRemainder.length > 0 ? `/${normalizedRemainder.join("/")}` : ""}`;
+  return `//${server}/${share}${remainder.length > 0 ? `/${remainder.join("/")}` : ""}`;
 }
 
 function normalizeDriveWorkspacePath(path: string, driveLetter: string) {
   const remainder = path.slice(2).replace(/\/{2,}/g, "/");
   const isAbsolute = remainder.startsWith("/");
   const normalizedSegments = normalizePathSegments(
-    remainder.split("/").filter(Boolean),
+    normalizeWindowsSegments(remainder.split("/").filter(Boolean)),
     isAbsolute,
   );
   let normalized = isAbsolute ? `${driveLetter}:/` : `${driveLetter}:`;

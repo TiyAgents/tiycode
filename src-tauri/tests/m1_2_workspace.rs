@@ -134,6 +134,7 @@ async fn test_workspace_manager_add_reuses_existing_workspace_for_same_canonical
     assert_eq!(second.id, first.id);
     assert_eq!(second.canonical_path, first.canonical_path);
     assert_eq!(second.path, first.path);
+    assert_eq!(second.name, first.name);
 
     let row = sqlx::query("SELECT COUNT(*) as count FROM workspaces WHERE canonical_path = ?")
         .bind(&first.canonical_path)
