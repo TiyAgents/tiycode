@@ -336,7 +336,12 @@ Return format:\n\
                         "properties": {
                             "path": { "type": "string", "description": "Optional relative path to inspect." },
                             "staged": { "type": "boolean", "description": "Set true to inspect staged changes instead of working tree changes." },
-                            "contextLines": { "type": "integer", "description": "Optional number of unified diff context lines. Defaults to 3 and is capped for safety." }
+                            "contextLines": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 20,
+                                "description": "Optional number of unified diff context lines. Defaults to 3 and is capped for safety."
+                            }
                         }
                     }),
                 ),
@@ -348,7 +353,12 @@ Return format:\n\
                         "type": "object",
                         "properties": {
                             "path": { "type": "string", "description": "Optional relative path to filter history." },
-                            "limit": { "type": "integer", "description": "Optional maximum number of commits to return. Defaults to 10 and is capped for safety." }
+                            "limit": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 100,
+                                "description": "Optional maximum number of commits to return. Defaults to 10 and is capped for safety."
+                            }
                         }
                     }),
                 ),
@@ -464,6 +474,30 @@ mod tests {
         assert!(tool.description.contains("verification results"));
         assert!(task_description.contains("type-check or test commands"));
         assert_eq!(review_scope_enum.len(), 2);
+    }
+
+    #[test]
+    fn review_git_tool_schema_exposes_numeric_safety_bounds() {
+        let tools = SubagentProfile::Review.helper_tools();
+        let git_diff = tools
+            .iter()
+            .find(|tool| tool.name == "git_diff")
+            .expect("git_diff tool");
+        let git_log = tools
+            .iter()
+            .find(|tool| tool.name == "git_log")
+            .expect("git_log tool");
+
+        assert_eq!(
+            git_diff.parameters["properties"]["contextLines"]["minimum"],
+            1
+        );
+        assert_eq!(
+            git_diff.parameters["properties"]["contextLines"]["maximum"],
+            20
+        );
+        assert_eq!(git_log.parameters["properties"]["limit"]["minimum"], 1);
+        assert_eq!(git_log.parameters["properties"]["limit"]["maximum"], 100);
     }
 
     #[test]

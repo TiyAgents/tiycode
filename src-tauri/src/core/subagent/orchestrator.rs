@@ -375,11 +375,11 @@ impl HelperAgentOrchestrator {
         unsubscribe();
         self.remove_helper(&request.run_id, &agent).await;
 
-        if let Some(summary) = take_escalation_summary(&escalation_summary) {
+        if let Some(raw_summary) = take_escalation_summary(&escalation_summary) {
             let usage = Usage::default();
             let snapshot = snapshot_from_progress(&progress_state);
+            let summary = finalize_helper_summary(helper_profile, &raw_summary);
             run_helper_repo::mark_completed(&self.pool, &helper_id, &summary, &usage).await?;
-            let raw_summary = summary.clone();
 
             let _ = request.event_tx.send(ThreadStreamEvent::SubagentCompleted {
                 run_id: request.run_id,
@@ -401,13 +401,7 @@ impl HelperAgentOrchestrator {
             Ok(messages) => {
                 let raw_summary = extract_summary(&messages)
                     .unwrap_or_else(|| "Helper completed without a textual summary.".to_string());
-                let summary = if helper_profile == SubagentProfile::Review {
-                    extract_review_report(&raw_summary)
-                        .map(|report| render_parent_summary(&report))
-                        .unwrap_or_else(|| raw_summary.clone())
-                } else {
-                    raw_summary.clone()
-                };
+                let summary = finalize_helper_summary(helper_profile, &raw_summary);
                 let usage = extract_usage(&messages).unwrap_or_default();
                 let snapshot = snapshot_from_progress(&progress_state);
 
@@ -477,6 +471,16 @@ impl HelperAgentOrchestrator {
                 active.remove(run_id);
             }
         }
+    }
+}
+
+fn finalize_helper_summary(helper_profile: SubagentProfile, raw_summary: &str) -> String {
+    if helper_profile == SubagentProfile::Review {
+        extract_review_report(raw_summary)
+            .map(|report| render_parent_summary(&report))
+            .unwrap_or_else(|| raw_summary.to_string())
+    } else {
+        raw_summary.to_string()
     }
 }
 
@@ -885,7 +889,8 @@ fn helper_agent_error_result(message: impl Into<String>) -> AgentToolResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_helper_system_prompt, collect_prompt_sections, inherited_helper_prompt_sections,
+        build_helper_system_prompt, collect_prompt_sections, describe_subagent_action,
+        finalize_helper_summary, inherited_helper_prompt_sections,
     };
     use crate::core::subagent::SubagentProfile;
 
@@ -954,5 +959,29 @@ mod tests {
         assert_eq!(sections[1].0, "Two");
         assert!(sections[1].1.contains("beta\nline two"));
         assert_eq!(sections[2].0, "Three");
+    }
+
+    #[test]
+    fn finalize_helper_summary_renders_review_json() {
+        let summary = finalize_helper_summary(
+            SubagentProfile::Review,
+            r#"{"verdict":"pass","directFindings":[],"globalFindings":[],"verification":[],"coverage":{"diffReviewed":true,"globalScanPerformed":false,"changedFilesReviewed":[],"scannedPaths":[],"unscannedPaths":[],"limitations":[]},"followUp":[]}"#,
+        );
+
+        assert!(summary.contains("Verdict: PASS"));
+        assert!(summary.contains("Direct Diff Findings"));
+    }
+
+    #[test]
+    fn describe_subagent_action_supports_git_tools_with_and_without_paths() {
+        let status = describe_subagent_action("git_status", &serde_json::json!({}));
+        assert_eq!(status.current_action, "checking git status for repository");
+
+        let diff =
+            describe_subagent_action("git_diff", &serde_json::json!({ "path": "src/lib.rs" }));
+        assert_eq!(diff.current_action, "reading git diff for src/lib.rs");
+
+        let log = describe_subagent_action("git_log", &serde_json::json!({ "path": "" }));
+        assert_eq!(log.current_action, "reading git history for repository");
     }
 }

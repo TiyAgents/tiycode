@@ -17,7 +17,7 @@ pub async fn execute(
 ) -> Result<ToolOutput, AppError> {
     match tool_name {
         "git_status" => {
-            let path = read_optional_path(input);
+            let path = read_optional_path(input)?;
             let result = git_status(workspace_path, path.as_deref()).await?;
             Ok(ToolOutput {
                 success: true,
@@ -25,7 +25,7 @@ pub async fn execute(
             })
         }
         "git_diff" => {
-            let path = read_optional_path(input);
+            let path = read_optional_path(input)?;
             let staged = input["staged"].as_bool().unwrap_or(false);
             let context_lines = read_context_lines(input)?;
             let result = git_diff(workspace_path, path.as_deref(), staged, context_lines).await?;
@@ -35,7 +35,7 @@ pub async fn execute(
             })
         }
         "git_log" => {
-            let path = read_optional_path(input);
+            let path = read_optional_path(input)?;
             let limit = read_log_limit(input)?;
             let result = git_log(workspace_path, path.as_deref(), limit).await?;
             Ok(ToolOutput {
@@ -478,12 +478,17 @@ fn read_paths(input: &serde_json::Value) -> Result<Vec<String>, AppError> {
     Ok(paths)
 }
 
-fn read_optional_path(input: &serde_json::Value) -> Option<String> {
-    input["path"]
+fn read_optional_path(input: &serde_json::Value) -> Result<Option<String>, AppError> {
+    let Some(path) = input["path"]
         .as_str()
         .map(str::trim)
         .filter(|path| !path.is_empty())
-        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+
+    validate_relative_git_path(path)?;
+    Ok(Some(path.to_string()))
 }
 
 fn read_context_lines(input: &serde_json::Value) -> Result<u32, AppError> {
@@ -510,6 +515,34 @@ fn read_log_limit(input: &serde_json::Value) -> Result<u32, AppError> {
     }
 
     Ok(raw as u32)
+}
+
+fn validate_relative_git_path(path: &str) -> Result<(), AppError> {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        return Err(git_error(
+            "git.path.absolute_disallowed",
+            "Git helper path must be relative to the workspace",
+            false,
+        ));
+    }
+
+    if candidate.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err(git_error(
+            "git.path.traversal_disallowed",
+            "Git helper path must not escape the workspace",
+            false,
+        ));
+    }
+
+    Ok(())
 }
 
 fn stage_paths_sync(workspace_root: &Path, workspace_paths: &[String]) -> Result<(), AppError> {
@@ -1016,7 +1049,10 @@ fn upstream_matches_remote(upstream_name: Option<&str>, remote_branch_name: &str
 
 #[cfg(test)]
 mod tests {
-    use super::{select_push_remote, upstream_matches_remote, validate_local_branch_name};
+    use super::{
+        select_push_remote, upstream_matches_remote, validate_local_branch_name,
+        validate_relative_git_path,
+    };
 
     #[test]
     fn validate_local_branch_name_accepts_conventional_names() {
@@ -1038,6 +1074,21 @@ mod tests {
                 "{branch_name}"
             );
         }
+    }
+
+    #[test]
+    fn validate_relative_git_path_accepts_normal_relative_paths() {
+        assert!(validate_relative_git_path("src/lib.rs").is_ok());
+        assert!(validate_relative_git_path("src/nested/module.rs").is_ok());
+    }
+
+    #[test]
+    fn validate_relative_git_path_rejects_absolute_and_traversal_paths() {
+        let absolute = validate_relative_git_path("/tmp/outside.rs").unwrap_err();
+        assert_eq!(absolute.error_code, "git.path.absolute_disallowed");
+
+        let traversal = validate_relative_git_path("../outside.rs").unwrap_err();
+        assert_eq!(traversal.error_code, "git.path.traversal_disallowed");
     }
 
     #[test]

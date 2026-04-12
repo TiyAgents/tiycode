@@ -132,9 +132,9 @@ impl ReviewRequest {
             return Err("missing helper task".to_string());
         }
 
-        let target = parse_target(tool_input.get("target"));
-        let review_scope = parse_scope(tool_input.get("reviewScope"), target);
-        let global_scan_mode = parse_global_scan(tool_input.get("globalScanMode"), review_scope);
+        let target = parse_target(tool_input.get("target"))?;
+        let review_scope = parse_scope(tool_input.get("reviewScope"), target)?;
+        let global_scan_mode = parse_global_scan(tool_input.get("globalScanMode"), review_scope)?;
 
         Ok(Self {
             task,
@@ -183,7 +183,7 @@ Return exactly one JSON object with this contract:
       \"title\": \"short title\",
       \"severity\": \"critical|high|medium|low\",
       \"path\": \"optional/path\",
-      \"line\": 123,
+      \"line\": null,
       \"summary\": \"what is wrong and why it matters\",
       \"evidence\": [\"specific evidence\"],
       \"suggestion\": \"optional concrete fix\"
@@ -194,7 +194,7 @@ Return exactly one JSON object with this contract:
       \"title\": \"short title\",
       \"severity\": \"critical|high|medium|low\",
       \"path\": \"optional/path\",
-      \"line\": 123,
+      \"line\": null,
       \"summary\": \"diff-adjacent system risk\",
       \"evidence\": [\"specific evidence\"],
       \"suggestion\": \"optional concrete fix\"
@@ -263,31 +263,37 @@ pub fn render_parent_summary(report: &ReviewReport) -> String {
     lines.join("\n\n")
 }
 
-fn parse_target(value: Option<&serde_json::Value>) -> ReviewTarget {
+fn parse_target(value: Option<&serde_json::Value>) -> Result<ReviewTarget, String> {
     match value.and_then(serde_json::Value::as_str).unwrap_or("code") {
-        "diff" => ReviewTarget::Diff,
-        _ => ReviewTarget::Code,
+        "code" => Ok(ReviewTarget::Code),
+        "diff" => Ok(ReviewTarget::Diff),
+        other => Err(format!("invalid review target: {other}")),
     }
 }
 
-fn parse_scope(value: Option<&serde_json::Value>, target: ReviewTarget) -> ReviewScope {
+fn parse_scope(
+    value: Option<&serde_json::Value>,
+    target: ReviewTarget,
+) -> Result<ReviewScope, String> {
     match value.and_then(serde_json::Value::as_str) {
-        Some("local") => ReviewScope::Local,
-        Some("diff_first_global") => ReviewScope::DiffFirstGlobal,
-        _ if target == ReviewTarget::Diff => ReviewScope::DiffFirstGlobal,
-        _ => ReviewScope::Local,
+        Some("local") => Ok(ReviewScope::Local),
+        Some("diff_first_global") => Ok(ReviewScope::DiffFirstGlobal),
+        Some(other) => Err(format!("invalid review scope: {other}")),
+        None if target == ReviewTarget::Diff => Ok(ReviewScope::DiffFirstGlobal),
+        None => Ok(ReviewScope::Local),
     }
 }
 
 fn parse_global_scan(
     value: Option<&serde_json::Value>,
     review_scope: ReviewScope,
-) -> GlobalScanMode {
+) -> Result<GlobalScanMode, String> {
     match value.and_then(serde_json::Value::as_str) {
-        Some("off") => GlobalScanMode::Off,
-        Some("auto") => GlobalScanMode::Auto,
-        _ if review_scope == ReviewScope::DiffFirstGlobal => GlobalScanMode::Auto,
-        _ => GlobalScanMode::Off,
+        Some("off") => Ok(GlobalScanMode::Off),
+        Some("auto") => Ok(GlobalScanMode::Auto),
+        Some(other) => Err(format!("invalid global scan mode: {other}")),
+        None if review_scope == ReviewScope::DiffFirstGlobal => Ok(GlobalScanMode::Auto),
+        None => Ok(GlobalScanMode::Off),
     }
 }
 
@@ -300,6 +306,7 @@ fn read_string_array(value: Option<&serde_json::Value>) -> Vec<String> {
                 .filter_map(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|item| !item.is_empty())
+                .take(100)
                 .map(str::to_string)
                 .collect::<Vec<_>>()
         })
@@ -524,6 +531,62 @@ mod tests {
         .expect("report should parse");
 
         assert_eq!(report.verdict, ReviewVerdict::Pass);
+    }
+
+    #[test]
+    fn review_request_honors_explicit_scope_scan_and_arrays() {
+        let request = ReviewRequest::from_tool_input(&serde_json::json!({
+            "task": "review with explicit knobs",
+            "target": "diff",
+            "reviewScope": "local",
+            "globalScanMode": "off",
+            "changedFiles": ["src/a.ts", " ", "", "src/b.ts"],
+            "preferredChecks": ["npm run typecheck", "   ", "cargo test"],
+            "riskHints": ["cross_platform", "", " persistence "]
+        }))
+        .expect("request should parse");
+
+        assert_eq!(request.target, ReviewTarget::Diff);
+        assert_eq!(request.review_scope, ReviewScope::Local);
+        assert_eq!(request.global_scan_mode, GlobalScanMode::Off);
+        assert_eq!(request.changed_files, vec!["src/a.ts", "src/b.ts"]);
+        assert_eq!(
+            request.preferred_checks,
+            vec!["npm run typecheck", "cargo test"]
+        );
+        assert_eq!(request.risk_hints, vec!["cross_platform", "persistence"]);
+    }
+
+    #[test]
+    fn review_request_rejects_missing_task_and_invalid_enums() {
+        assert!(ReviewRequest::from_tool_input(&serde_json::json!({})).is_err());
+        assert!(ReviewRequest::from_tool_input(&serde_json::json!({
+            "task": "review",
+            "target": "unknown"
+        }))
+        .is_err());
+        assert!(ReviewRequest::from_tool_input(&serde_json::json!({
+            "task": "review",
+            "reviewScope": "wide"
+        }))
+        .is_err());
+        assert!(ReviewRequest::from_tool_input(&serde_json::json!({
+            "task": "review",
+            "globalScanMode": "sometimes"
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn extract_review_report_rejects_malformed_or_incomplete_inputs() {
+        assert!(extract_review_report("").is_none());
+        assert!(extract_review_report("   ").is_none());
+        assert!(extract_review_report("{not json").is_none());
+        assert!(extract_review_report(r#"{"directFindings":[]}"#).is_none());
+        assert!(extract_review_report("```json\n{\"verdict\":\"pass\"}").is_none());
+        assert!(
+            extract_review_report("before\n```json\n{\"verdict\":\"pass\"}\n```\nafter").is_none()
+        );
     }
 
     #[test]
