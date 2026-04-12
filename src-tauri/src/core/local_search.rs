@@ -3,6 +3,8 @@ use globset::{Glob, GlobMatcher};
 use ignore::WalkBuilder;
 use regex::RegexBuilder;
 use serde::Serialize;
+use std::cmp::Ordering as CmpOrdering;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -269,52 +271,84 @@ where
     let context_before = request.capped_context_before();
     let context_after = request.capped_context_after();
     let deadline = SearchDeadline::new(request.effective_timeout());
-
-    let (mut candidate_files, mut timed_out, mut cancelled) = enumerate_candidate_files(
-        &request.search_root,
-        &request.workspace_root,
-        deadline,
-        request.cancellation.as_ref(),
-    )?;
-
-    candidate_files.sort_by(|left, right| {
-        relative_sort_key(left, &request.workspace_root)
-            .cmp(&relative_sort_key(right, &request.workspace_root))
-    });
-
     let mut collector = SearchCollector::new(&request);
+    let mut timed_out = false;
+    let mut cancelled = false;
 
-    for file_path in candidate_files {
-        if request
+    if request.search_root.is_file() {
+        cancelled = request
             .cancellation
             .as_ref()
-            .is_some_and(LocalSearchCancellation::is_cancelled)
-        {
-            cancelled = true;
-            break;
+            .is_some_and(LocalSearchCancellation::is_cancelled);
+        timed_out = deadline.is_expired();
+
+        if !cancelled && !timed_out {
+            collector.files_scanned += 1;
+            collector = search_file(
+                &request.workspace_root,
+                &request.search_root,
+                &request.search_root,
+                &matcher,
+                file_matcher.as_ref(),
+                file_type_matcher.as_ref(),
+                collector,
+                request.output_mode,
+                request.multiline,
+                context_before,
+                context_after,
+            )?;
+
+            if let Some(batch) = collector.take_pending_batch() {
+                on_batch(batch);
+            }
         }
+    } else {
+        for entry in build_candidate_walk(&request.search_root, &request.workspace_root) {
+            if request
+                .cancellation
+                .as_ref()
+                .is_some_and(LocalSearchCancellation::is_cancelled)
+            {
+                cancelled = true;
+                break;
+            }
 
-        if deadline.is_expired() {
-            timed_out = true;
-            break;
-        }
+            if deadline.is_expired() {
+                timed_out = true;
+                break;
+            }
 
-        collector.files_scanned += 1;
-        collector = search_file(
-            &request.workspace_root,
-            &request.search_root,
-            &file_path,
-            &matcher,
-            file_matcher.as_ref(),
-            file_type_matcher.as_ref(),
-            collector,
-            request.multiline,
-            context_before,
-            context_after,
-        )?;
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
 
-        if let Some(batch) = collector.take_pending_batch() {
-            on_batch(batch);
+            let Some(file_type) = entry.file_type() else {
+                continue;
+            };
+
+            if !file_type.is_file() {
+                continue;
+            }
+
+            collector.files_scanned += 1;
+            collector = search_file(
+                &request.workspace_root,
+                &request.search_root,
+                &entry.into_path(),
+                &matcher,
+                file_matcher.as_ref(),
+                file_type_matcher.as_ref(),
+                collector,
+                request.output_mode,
+                request.multiline,
+                context_before,
+                context_after,
+            )?;
+
+            if let Some(batch) = collector.take_pending_batch() {
+                on_batch(batch);
+            }
         }
     }
 
@@ -328,17 +362,7 @@ where
     ))
 }
 
-fn enumerate_candidate_files(
-    search_root: &Path,
-    workspace_root: &Path,
-    deadline: SearchDeadline,
-    cancellation: Option<&LocalSearchCancellation>,
-) -> Result<(Vec<PathBuf>, bool, bool)> {
-    if search_root.is_file() {
-        let cancelled = cancellation.is_some_and(LocalSearchCancellation::is_cancelled);
-        return Ok((vec![search_root.to_path_buf()], false, cancelled));
-    }
-
+fn build_candidate_walk(search_root: &Path, workspace_root: &Path) -> ignore::Walk {
     let root_for_filter = search_root.to_path_buf();
     let workspace_root = workspace_root.to_path_buf();
     let mut walk = WalkBuilder::new(search_root);
@@ -349,38 +373,18 @@ fn enumerate_candidate_files(
         .git_exclude(true)
         .parents(true)
         .follow_links(false)
+        .sort_by_file_name(compare_entry_names_case_insensitive)
         .filter_entry(move |entry| should_descend(entry.path(), &root_for_filter, &workspace_root));
+    walk.build()
+}
 
-    let mut files = Vec::new();
-    let mut timed_out = false;
-    let mut cancelled = false;
+fn compare_entry_names_case_insensitive(left: &OsStr, right: &OsStr) -> CmpOrdering {
+    let left = left.to_string_lossy();
+    let right = right.to_string_lossy();
 
-    for entry in walk.build() {
-        if cancellation.is_some_and(LocalSearchCancellation::is_cancelled) {
-            cancelled = true;
-            break;
-        }
-
-        if deadline.is_expired() {
-            timed_out = true;
-            break;
-        }
-
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-
-        let Some(file_type) = entry.file_type() else {
-            continue;
-        };
-
-        if file_type.is_file() {
-            files.push(entry.into_path());
-        }
-    }
-
-    Ok((files, timed_out, cancelled))
+    left.to_ascii_lowercase()
+        .cmp(&right.to_ascii_lowercase())
+        .then_with(|| left.cmp(&right))
 }
 
 fn should_descend(path: &Path, search_root: &Path, workspace_root: &Path) -> bool {
@@ -417,6 +421,7 @@ fn search_file(
     file_matcher: Option<&CompiledFileMatcher>,
     file_type_matcher: Option<&CompiledFileType>,
     mut collector: SearchCollector,
+    output_mode: SearchOutputMode,
     multiline: bool,
     context_before: usize,
     context_after: usize,
@@ -450,22 +455,34 @@ fn search_file(
         return Ok(collector);
     }
 
-    let matches = collect_search_matches(
-        &content,
-        &lines,
-        matcher,
-        multiline,
-        context_before,
-        context_after,
-    );
-    if matches.is_empty() {
-        return Ok(collector);
-    }
-
     let display_path = display_path_for(file_path, workspace_root);
     let absolute_path = file_path.to_string_lossy().to_string();
 
-    collector.record_file_match(display_path, absolute_path, matches);
+    match output_mode {
+        SearchOutputMode::Content => {
+            let matches = collect_content_matches(
+                &content,
+                &lines,
+                matcher,
+                multiline,
+                context_before,
+                context_after,
+            );
+            if matches.is_empty() {
+                return Ok(collector);
+            }
+
+            collector.record_file_match(display_path, absolute_path, matches);
+        }
+        SearchOutputMode::FilesWithMatches | SearchOutputMode::Count => {
+            let match_count = count_search_matches(&content, &lines, matcher, multiline);
+            if match_count == 0 {
+                return Ok(collector);
+            }
+
+            collector.record_file_match_count(display_path, absolute_path, match_count);
+        }
+    }
 
     Ok(collector)
 }
@@ -494,7 +511,7 @@ fn collect_lines(content: &str) -> Vec<SearchLine<'_>> {
     lines
 }
 
-fn collect_search_matches(
+fn collect_content_matches(
     content: &str,
     lines: &[SearchLine<'_>],
     matcher: &regex::Regex,
@@ -506,6 +523,19 @@ fn collect_search_matches(
         collect_multiline_matches(content, lines, matcher, context_before, context_after)
     } else {
         collect_line_matches(lines, matcher, context_before, context_after)
+    }
+}
+
+fn count_search_matches(
+    content: &str,
+    lines: &[SearchLine<'_>],
+    matcher: &regex::Regex,
+    multiline: bool,
+) -> usize {
+    if multiline {
+        count_multiline_matches(content, lines, matcher)
+    } else {
+        count_line_matches(lines, matcher)
     }
 }
 
@@ -572,6 +602,25 @@ fn collect_multiline_matches(
             })
         })
         .collect()
+}
+
+fn count_line_matches(lines: &[SearchLine<'_>], matcher: &regex::Regex) -> usize {
+    lines
+        .iter()
+        .filter(|line| matcher.is_match(line.text))
+        .count()
+}
+
+fn count_multiline_matches(
+    _content: &str,
+    lines: &[SearchLine<'_>],
+    matcher: &regex::Regex,
+) -> usize {
+    let normalized_content = build_normalized_multiline_content(lines);
+    matcher
+        .find_iter(&normalized_content)
+        .filter(|matched| matched.start() != matched.end())
+        .count()
 }
 
 fn line_index_for_start_offsets(starts: &[usize], offset: usize) -> usize {
@@ -891,10 +940,6 @@ fn display_path_for(path: &Path, workspace_root: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().replace('\\', "/"))
 }
 
-fn relative_sort_key(path: &Path, workspace_root: &Path) -> String {
-    display_path_for(path, workspace_root).to_ascii_lowercase()
-}
-
 pub fn normalize_file_pattern(pattern: Option<&str>) -> Option<&str> {
     let trimmed = pattern?.trim();
     if trimmed.is_empty() || is_noop_file_pattern(trimmed) {
@@ -973,6 +1018,45 @@ impl SearchCollector {
                     self.results.push(search_match);
                 }
             }
+            SearchOutputMode::FilesWithMatches => {
+                let ordinal = self.total_files - 1;
+                if ordinal < self.offset || self.files.len() >= self.max_results {
+                    return;
+                }
+                let file = SearchFileMatch {
+                    path: display_path,
+                    absolute_path,
+                };
+                self.pending_files.push(file.clone());
+                self.files.push(file);
+            }
+            SearchOutputMode::Count => {
+                let ordinal = self.total_files - 1;
+                if ordinal < self.offset || self.file_counts.len() >= self.max_results {
+                    return;
+                }
+                let file_count = SearchFileCount {
+                    path: display_path,
+                    absolute_path,
+                    count: file_match_count,
+                };
+                self.pending_file_counts.push(file_count.clone());
+                self.file_counts.push(file_count);
+            }
+        }
+    }
+
+    fn record_file_match_count(
+        &mut self,
+        display_path: String,
+        absolute_path: String,
+        file_match_count: usize,
+    ) {
+        self.total_matches += file_match_count;
+        self.total_files += 1;
+
+        match self.output_mode {
+            SearchOutputMode::Content => {}
             SearchOutputMode::FilesWithMatches => {
                 let ordinal = self.total_files - 1;
                 if ordinal < self.offset || self.files.len() >= self.max_results {
@@ -1275,7 +1359,7 @@ mod tests {
         )
         .unwrap();
 
-        let matches = collect_search_matches(content, &lines, &regex, true, 0, 1);
+        let matches = collect_content_matches(content, &lines, &regex, true, 0, 1);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].line_number, 2);
         assert_eq!(matches[0].end_line_number, Some(3));
@@ -1298,7 +1382,7 @@ mod tests {
         )
         .unwrap();
 
-        let matches = collect_search_matches(content, &lines, &regex, true, 0, 0);
+        let matches = collect_content_matches(content, &lines, &regex, true, 0, 0);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].line_number, 2);
         assert_eq!(matches[0].end_line_number, Some(3));
@@ -1312,6 +1396,21 @@ mod tests {
     fn decodes_utf16le_bom_content() {
         let bytes = vec![0xFF, 0xFE, b'h', 0x00, b'i', 0x00];
         assert_eq!(decode_text_contents(&bytes).as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn count_mode_preserves_multiline_match_counts_without_building_context() {
+        let content = "const query = `\nSELECT *\nFROM users\n`;\n";
+        let lines = collect_lines(content);
+        let regex = build_regex_matcher(
+            "SELECT \\*\\nFROM users",
+            SearchQueryMode::Regex,
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(count_search_matches(content, &lines, &regex, true), 1);
     }
 
     #[tokio::test]
@@ -1373,5 +1472,37 @@ mod tests {
 
         assert_eq!(outcome.files.len(), 1);
         assert_eq!(outcome.files[0].path, "b.rs");
+    }
+
+    #[tokio::test]
+    async fn content_mode_is_sorted_for_stable_pagination() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(workspace.path().join("a")).unwrap();
+        std::fs::write(workspace.path().join("b.rs"), "hello\n").unwrap();
+        std::fs::write(workspace.path().join("a").join("a.rs"), "hello\n").unwrap();
+        std::fs::write(workspace.path().join("a").join("z.rs"), "hello\n").unwrap();
+
+        let outcome = run_local_search(LocalSearchRequest {
+            workspace_root: workspace.path().to_path_buf(),
+            search_root: workspace.path().to_path_buf(),
+            query: "hello".to_string(),
+            file_pattern: None,
+            file_type: None,
+            query_mode: SearchQueryMode::Literal,
+            output_mode: SearchOutputMode::Content,
+            case_insensitive: false,
+            multiline: false,
+            context_before: 0,
+            context_after: 0,
+            offset: 1,
+            max_results: 1,
+            timeout: None,
+            cancellation: None,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].path, "a/z.rs");
     }
 }
