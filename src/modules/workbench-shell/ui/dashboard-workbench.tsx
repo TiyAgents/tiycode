@@ -96,6 +96,16 @@ import {
   readStoredUserSession,
   selectContainerContents,
 } from "@/modules/workbench-shell/model/helpers";
+import {
+  addRemovedWorkspacePath,
+  buildWorkspaceBindings,
+  buildWorkspaceBindingsForEntry,
+  deleteRemovedWorkspacePath,
+  findWorkspaceByPath,
+  getWorkspaceBindingId,
+  hasRemovedWorkspacePath,
+  resolveProjectForWorkspace,
+} from "@/modules/workbench-shell/model/workspace-path-bindings";
 import type {
   DrawerPanel,
   PanelVisibilityState,
@@ -123,11 +133,7 @@ import { WorkbenchTopBar } from "@/modules/workbench-shell/ui/workbench-top-bar"
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 import { cn } from "@/shared/lib/utils";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
-import {
-  buildWorkspacePathKeys,
-  isSameWorkspacePath,
-  normalizeWorkspacePath,
-} from "@/shared/lib/workspace-path";
+import { isSameWorkspacePath } from "@/shared/lib/workspace-path";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import { terminalStore } from "@/features/terminal/model/terminal-store";
 
@@ -160,25 +166,6 @@ function getNewThreadTerminalBindingKey(workspaceId: string) {
   return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
 }
 
-function buildWorkspaceBindingEntries(
-  workspaceId: string,
-  ...paths: Array<string | null | undefined>
-) {
-  return Object.fromEntries(
-    buildWorkspacePathKeys(...paths).map((pathKey) => [pathKey, workspaceId]),
-  );
-}
-
-function buildWorkspaceBindings(workspaceEntries: ReadonlyArray<WorkspaceDto>) {
-  const bindings: Record<string, string> = {};
-
-  for (const workspace of workspaceEntries) {
-    Object.assign(bindings, buildWorkspaceBindingsForEntry(workspace));
-  }
-
-  return bindings;
-}
-
 function buildProjectOptionFromWorkspace(workspace: WorkspaceDto) {
   const project = buildProjectOptionFromPath(
     workspace.canonicalPath || workspace.path,
@@ -194,69 +181,6 @@ function buildProjectOptionFromWorkspace(workspace: WorkspaceDto) {
   };
 }
 
-function buildWorkspaceBindingsForEntry(
-  workspace: Pick<WorkspaceDto, "id" | "path" | "canonicalPath">,
-  ...additionalPaths: Array<string | null | undefined>
-) {
-  return buildWorkspaceBindingEntries(
-    workspace.id,
-    workspace.path,
-    workspace.canonicalPath,
-    ...additionalPaths,
-  );
-}
-
-function findWorkspaceByPath<T extends { path?: string | null; canonicalPath?: string | null }>(
-  workspaces: ReadonlyArray<T>,
-  path: string | null | undefined,
-) {
-  return (
-    workspaces.find(
-      (workspace) =>
-        isSameWorkspacePath(workspace.path, path)
-        || isSameWorkspacePath(workspace.canonicalPath, path),
-    ) ?? null
-  );
-}
-
-function getWorkspaceBindingId(
-  bindings: Readonly<Record<string, string>>,
-  path: string | null | undefined,
-) {
-  return bindings[normalizeWorkspacePath(path)] ?? null;
-}
-
-function hasRemovedWorkspacePath(
-  removedPaths: ReadonlySet<string>,
-  path: string | null | undefined,
-) {
-  return removedPaths.has(normalizeWorkspacePath(path));
-}
-
-function addRemovedWorkspacePath(
-  removedPaths: Set<string>,
-  path: string | null | undefined,
-) {
-  const pathKey = normalizeWorkspacePath(path);
-  if (!pathKey) {
-    return;
-  }
-
-  removedPaths.add(pathKey);
-}
-
-function deleteRemovedWorkspacePath(
-  removedPaths: Set<string>,
-  path: string | null | undefined,
-) {
-  const pathKey = normalizeWorkspacePath(path);
-  if (!pathKey) {
-    return;
-  }
-
-  removedPaths.delete(pathKey);
-}
-
 function findWorkspaceForThread(
   workspaces: ReadonlyArray<WorkspaceItem>,
   threadId: string | null,
@@ -270,32 +194,6 @@ function findWorkspaceForThread(
       workspace.threads.some((thread) => thread.id === threadId),
     ) ?? null
   );
-}
-
-function resolveProjectForWorkspace(
-  workspace: WorkspaceItem | null,
-  recentProjects: ReadonlyArray<ProjectOption>,
-) {
-  if (!workspace) {
-    return null;
-  }
-
-  const matchedProject = recentProjects.find(
-    (project) =>
-      isSameWorkspacePath(project.path, workspace.path)
-      || project.id === workspace.id
-      || project.name === workspace.name,
-  );
-
-  if (matchedProject) {
-    return matchedProject;
-  }
-
-  if (!workspace.path) {
-    return null;
-  }
-
-  return buildProjectOptionFromPath(workspace.path);
 }
 
 function mergeLocalFallbackThreads(options: {

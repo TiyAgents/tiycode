@@ -9,7 +9,8 @@
     "build": "tauri build",
     "build:web": "tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run"
   },
   "dependencies": {
     "@radix-ui/react-separator": "^1.1.7",
@@ -51,6 +52,7 @@
     "@vitejs/plugin-react": "^4.6.0",
     "tailwindcss": "^4.1.12",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.4"
   }
 }
