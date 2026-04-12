@@ -123,6 +123,11 @@ import { WorkbenchTopBar } from "@/modules/workbench-shell/ui/workbench-top-bar"
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 import { cn } from "@/shared/lib/utils";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
+import {
+  buildWorkspacePathKeys,
+  isSameWorkspacePath,
+  normalizeWorkspacePath,
+} from "@/shared/lib/workspace-path";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import { terminalStore } from "@/features/terminal/model/terminal-store";
 
@@ -155,13 +160,21 @@ function getNewThreadTerminalBindingKey(workspaceId: string) {
   return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
 }
 
+function buildWorkspaceBindingEntries(
+  workspaceId: string,
+  ...paths: Array<string | null | undefined>
+) {
+  return Object.fromEntries(
+    buildWorkspacePathKeys(...paths).map((pathKey) => [pathKey, workspaceId]),
+  );
+}
+
 function buildWorkspaceBindings(workspaceEntries: ReadonlyArray<WorkspaceDto>) {
   return workspaceEntries.reduce<Record<string, string>>(
-    (bindings, workspace) => {
-      bindings[workspace.path] = workspace.id;
-      bindings[workspace.canonicalPath] = workspace.id;
-      return bindings;
-    },
+    (bindings, workspace) => ({
+      ...bindings,
+      ...buildWorkspaceBindingsForEntry(workspace),
+    }),
     {},
   );
 }
@@ -183,11 +196,65 @@ function buildProjectOptionFromWorkspace(workspace: WorkspaceDto) {
 
 function buildWorkspaceBindingsForEntry(
   workspace: Pick<WorkspaceDto, "id" | "path" | "canonicalPath">,
+  ...additionalPaths: Array<string | null | undefined>
 ) {
-  return {
-    [workspace.path]: workspace.id,
-    [workspace.canonicalPath]: workspace.id,
-  };
+  return buildWorkspaceBindingEntries(
+    workspace.id,
+    workspace.path,
+    workspace.canonicalPath,
+    ...additionalPaths,
+  );
+}
+
+function findWorkspaceByPath<T extends { path?: string | null; canonicalPath?: string | null }>(
+  workspaces: ReadonlyArray<T>,
+  path: string | null | undefined,
+) {
+  return (
+    workspaces.find(
+      (workspace) =>
+        isSameWorkspacePath(workspace.path, path)
+        || isSameWorkspacePath(workspace.canonicalPath, path),
+    ) ?? null
+  );
+}
+
+function getWorkspaceBindingId(
+  bindings: Readonly<Record<string, string>>,
+  path: string | null | undefined,
+) {
+  return bindings[normalizeWorkspacePath(path)] ?? null;
+}
+
+function hasRemovedWorkspacePath(
+  removedPaths: ReadonlySet<string>,
+  path: string | null | undefined,
+) {
+  return removedPaths.has(normalizeWorkspacePath(path));
+}
+
+function addRemovedWorkspacePath(
+  removedPaths: Set<string>,
+  path: string | null | undefined,
+) {
+  const pathKey = normalizeWorkspacePath(path);
+  if (!pathKey) {
+    return;
+  }
+
+  removedPaths.add(pathKey);
+}
+
+function deleteRemovedWorkspacePath(
+  removedPaths: Set<string>,
+  path: string | null | undefined,
+) {
+  const pathKey = normalizeWorkspacePath(path);
+  if (!pathKey) {
+    return;
+  }
+
+  removedPaths.delete(pathKey);
 }
 
 function findWorkspaceForThread(
@@ -215,9 +282,9 @@ function resolveProjectForWorkspace(
 
   const matchedProject = recentProjects.find(
     (project) =>
-      (workspace.path && project.path === workspace.path) ||
-      project.id === workspace.id ||
-      project.name === workspace.name,
+      isSameWorkspacePath(project.path, workspace.path)
+      || project.id === workspace.id
+      || project.name === workspace.name,
   );
 
   if (matchedProject) {
@@ -573,10 +640,10 @@ export function DashboardWorkbench() {
   const removedWorkspacePathsRef = useRef<Set<string>>(new Set());
 
   const activeThread = getActiveThread(workspaces);
-  const selectedProjectWorkspaceId =
-    selectedProject === null
-      ? null
-      : (terminalWorkspaceBindings[selectedProject.path] ?? null);
+  const selectedProjectWorkspaceId = getWorkspaceBindingId(
+    terminalWorkspaceBindings,
+    selectedProject?.path ?? null,
+  );
   const activeThreadWorkspace = findWorkspaceForThread(
     workspaces,
     activeThread?.id ?? null,
@@ -588,10 +655,10 @@ export function DashboardWorkbench() {
   const currentProject = isNewThreadMode
     ? selectedProject
     : activeThreadProject;
-  const resolvedWorkspaceId =
-    currentProject === null
-      ? null
-      : (terminalWorkspaceBindings[currentProject.path] ?? null);
+  const resolvedWorkspaceId = getWorkspaceBindingId(
+    terminalWorkspaceBindings,
+    currentProject?.path ?? null,
+  );
   const newThreadTerminalBindingKey =
     selectedProjectWorkspaceId === null
       ? null
@@ -926,9 +993,9 @@ export function DashboardWorkbench() {
           ? null
           : (nextProjects.find(
               (project) =>
-                project.id === defaultWorkspace.id ||
-                project.path === defaultWorkspace.canonicalPath ||
-                project.path === defaultWorkspace.path,
+                project.id === defaultWorkspace.id
+                || isSameWorkspacePath(project.path, defaultWorkspace.canonicalPath)
+                || isSameWorkspacePath(project.path, defaultWorkspace.path),
             ) ?? null);
 
       setTerminalWorkspaceBindings(nextBindings);
@@ -949,7 +1016,8 @@ export function DashboardWorkbench() {
           const matchingProject =
             nextProjects.find(
               (project) =>
-                project.id === current.id || project.path === current.path,
+                project.id === current.id
+                || isSameWorkspacePath(project.path, current.path),
             ) ?? null;
 
           if (matchingProject) {
@@ -1246,11 +1314,11 @@ export function DashboardWorkbench() {
       return;
     }
 
-    if (removedWorkspacePathsRef.current.has(currentProject.path)) {
+    if (hasRemovedWorkspacePath(removedWorkspacePathsRef.current, currentProject.path)) {
       return;
     }
 
-    if (terminalWorkspaceBindings[currentProject.path]) {
+    if (getWorkspaceBindingId(terminalWorkspaceBindings, currentProject.path)) {
       return;
     }
 
@@ -1259,11 +1327,7 @@ export function DashboardWorkbench() {
 
     void workspaceList()
       .then(async (workspaces) => {
-        const existing = workspaces.find(
-          (workspace) =>
-            workspace.path === currentProject.path ||
-            workspace.canonicalPath === currentProject.path,
-        );
+        const existing = findWorkspaceByPath(workspaces, currentProject.path);
         if (existing) {
           return existing;
         }
@@ -1277,17 +1341,15 @@ export function DashboardWorkbench() {
 
         setTerminalWorkspaceBindings((current) => {
           if (
-            current[currentProject.path] &&
-            current[workspace.canonicalPath]
+            getWorkspaceBindingId(current, currentProject.path)
+            && getWorkspaceBindingId(current, workspace.canonicalPath)
           ) {
             return current;
           }
 
           return {
             ...current,
-            [currentProject.path]: workspace.id,
-            [workspace.path]: workspace.id,
-            [workspace.canonicalPath]: workspace.id,
+            ...buildWorkspaceBindingsForEntry(workspace, currentProject.path),
           };
         });
         void syncWorkspaceSidebar().catch((refreshError) => {
@@ -1663,7 +1725,7 @@ export function DashboardWorkbench() {
       lastOpenedLabel: t("time.justNow"),
     };
 
-    removedWorkspacePathsRef.current.delete(nextProject.path);
+    deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
     setSelectedProject(nextProject);
     setRecentProjects((current) => mergeRecentProjects(current, nextProject));
   };
@@ -1689,7 +1751,7 @@ export function DashboardWorkbench() {
       lastOpenedLabel: t("time.justNow"),
     };
 
-    removedWorkspacePathsRef.current.delete(nextProject.path);
+    deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
     setSelectedProject(nextProject);
     setRecentProjects((current) => mergeRecentProjects(current, nextProject));
     setOpenWorkspaces((current) => ({
@@ -1889,12 +1951,10 @@ export function DashboardWorkbench() {
             const projectToEnsure = nextProject;
             const ensuredWorkspace = projectToEnsure
               ? await workspaceList().then((workspaceEntries) => {
-                  const existingWorkspace =
-                    workspaceEntries.find(
-                      (workspace) =>
-                        workspace.path === projectToEnsure.path ||
-                        workspace.canonicalPath === projectToEnsure.path,
-                    ) ?? null;
+                  const existingWorkspace = findWorkspaceByPath(
+                    workspaceEntries,
+                    projectToEnsure.path,
+                  );
 
                   return (
                     existingWorkspace ??
@@ -1922,7 +1982,10 @@ export function DashboardWorkbench() {
             );
             setTerminalWorkspaceBindings((current) => ({
               ...current,
-              ...buildWorkspaceBindingsForEntry(ensuredWorkspace),
+              ...buildWorkspaceBindingsForEntry(
+                ensuredWorkspace,
+                projectToEnsure?.path,
+              ),
             }));
           } catch (error) {
             const message = getInvokeErrorMessage(
@@ -1938,18 +2001,19 @@ export function DashboardWorkbench() {
           return;
         }
 
-        removedWorkspacePathsRef.current.delete(nextProject.path);
+        deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
         const project = {
           ...nextProject,
           lastOpenedLabel: t("time.justNow"),
         };
-        const existingWorkspace = workspaces.find(
-          (workspace) =>
-            workspace.id === nextWorkspaceId ||
-            workspace.id === project.id ||
-            workspace.name === project.name ||
-            (workspace.path && workspace.path === project.path),
-        );
+        const existingWorkspace =
+          workspaces.find(
+            (workspace) =>
+              workspace.id === nextWorkspaceId
+              || workspace.id === project.id
+              || workspace.name === project.name
+              || isSameWorkspacePath(workspace.path, project.path),
+          ) ?? null;
         const nextPendingRunId =
           typeof crypto !== "undefined" && "randomUUID" in crypto
             ? crypto.randomUUID()
@@ -2126,14 +2190,12 @@ export function DashboardWorkbench() {
           return;
         }
 
-        removedWorkspacePathsRef.current.delete(nextProject.path);
+        deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
         const workspaceEntries = await workspaceList();
-        const existingWorkspace =
-          workspaceEntries.find(
-            (workspace) =>
-              workspace.path === selectedPath ||
-              workspace.canonicalPath === selectedPath,
-          ) ?? null;
+        const existingWorkspace = findWorkspaceByPath(
+          workspaceEntries,
+          selectedPath,
+        );
         const workspace =
           existingWorkspace ??
           (await workspaceAdd(selectedPath, nextProject.name));
@@ -2208,12 +2270,13 @@ export function DashboardWorkbench() {
           workspace.id,
         );
         const isRemovingSelectedProject =
-          selectedProject?.id === workspace.id ||
-          selectedProject?.path === workspace.path;
+          selectedProject?.id === workspace.id
+          || isSameWorkspacePath(selectedProject?.path, workspace.path);
         const fallbackSelectedProject = isRemovingSelectedProject
           ? (recentProjects.find(
               (project) =>
-                project.id !== workspace.id && project.path !== workspace.path,
+                project.id !== workspace.id
+                && !isSameWorkspacePath(project.path, workspace.path),
             ) ?? null)
           : selectedProject;
         newThreadCreationRef.current = Object.fromEntries(
@@ -2224,8 +2287,8 @@ export function DashboardWorkbench() {
         const isRemovingActiveWorkspace =
           activeThreadWorkspace?.id === workspace.id;
         const shouldPreserveSelectedProject =
-          selectedProject?.id !== workspace.id &&
-          selectedProject?.path !== workspace.path;
+          selectedProject?.id !== workspace.id
+          && !isSameWorkspacePath(selectedProject?.path, workspace.path);
 
         setWorkspaceAction({
           workspaceId: workspace.id,
@@ -2235,7 +2298,7 @@ export function DashboardWorkbench() {
 
         try {
           if (workspace.path) {
-            removedWorkspacePathsRef.current.add(workspace.path);
+            addRemovedWorkspacePath(removedWorkspacePathsRef.current, workspace.path);
           }
           await workspaceRemove(workspace.id);
 
@@ -2248,7 +2311,8 @@ export function DashboardWorkbench() {
 
           if (isRemovingSelectedProject) {
             if (fallbackSelectedProject?.path) {
-              removedWorkspacePathsRef.current.delete(
+              deleteRemovedWorkspacePath(
+                removedWorkspacePathsRef.current,
                 fallbackSelectedProject.path,
               );
             }
@@ -2257,7 +2321,8 @@ export function DashboardWorkbench() {
           setRecentProjects((current) =>
             current.filter(
               (project) =>
-                project.id !== workspace.id && project.path !== workspace.path,
+                project.id !== workspace.id
+                && !isSameWorkspacePath(project.path, workspace.path),
             ),
           );
 
@@ -2310,7 +2375,7 @@ export function DashboardWorkbench() {
           });
         } catch (error) {
           if (workspace.path) {
-            removedWorkspacePathsRef.current.delete(workspace.path);
+            deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, workspace.path);
           }
           const message = getInvokeErrorMessage(
             error,

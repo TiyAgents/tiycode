@@ -49,16 +49,10 @@ impl WorkspaceManager {
 
         let canonical_str = canonical.to_string_lossy().to_string();
 
-        // Check for duplicates
-        if workspace_repo::find_by_canonical_path(&self.pool, &canonical_str)
-            .await?
-            .is_some()
+        if let Some(existing) =
+            workspace_repo::find_by_canonical_path(&self.pool, &canonical_str).await?
         {
-            return Err(AppError::recoverable(
-                ErrorSource::Workspace,
-                "workspace.duplicate",
-                format!("Workspace '{}' already exists", canonical_str),
-            ));
+            return Ok(existing);
         }
 
         // Validate path is a directory
@@ -258,26 +252,11 @@ impl WorkspaceManager {
             return Ok(existing);
         }
 
-        match self
-            .add(WorkspaceAddInput {
-                path: workspace_path.to_string_lossy().to_string(),
-                name: Some(name.to_string()),
-            })
-            .await
-        {
-            Ok(record) => Ok(record),
-            Err(error) if error.error_code == "workspace.duplicate" => {
-                workspace_repo::find_by_canonical_path(&self.pool, &canonical_str)
-                    .await?
-                    .ok_or_else(|| {
-                        AppError::internal(
-                            ErrorSource::Workspace,
-                            "workspace already exists but could not be loaded",
-                        )
-                    })
-            }
-            Err(error) => Err(error),
-        }
+        self.add(WorkspaceAddInput {
+            path: workspace_path.to_string_lossy().to_string(),
+            name: Some(name.to_string()),
+        })
+        .await
     }
 }
 
