@@ -166,7 +166,7 @@ Tool-use protocol:\n\
 - If a tool call fails because your arguments were invalid, do not repeat the same invalid call. Read the error, correct the arguments, and only then try again.\n\
 - Do not claim that tools are unavailable, broken, or unusable unless you have evidence of a system-level failure. A single invalid tool call means your arguments were wrong, not that the tool system is broken.\n\
 - For this helper, pay special attention to required fields: `read` requires `path`, `find` requires `pattern`, and `search` requires `query`. `list` may omit `path`, but include it when it helps narrow the scope.\n\
-- `search` may interpret the query as a regex-like pattern. Prefer simple literal keywords first. If the text includes regex-special characters, simplify the query or escape it before searching.\n\
+- `search` defaults to literal matching. Only treat the query as a regular expression when you explicitly set `queryMode` to `regex`. Prefer simple literal keywords first, and only opt into regex when you need pattern matching.\n\
 \n\
 Examples:\n\
 - Bad tool calls: `search {}`, `read {}`, `find {}`, `search {\"path\":\"src\"}`, `read {\"query\":\"title\"}`.\n\

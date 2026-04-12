@@ -389,11 +389,11 @@ fn test_app_error_recoverable_format() {
 
     let err = AppError::recoverable(
         ErrorSource::Workspace,
-        "workspace.duplicate",
-        "Already exists",
+        "workspace.path.invalid",
+        "Invalid path",
     );
 
-    assert_eq!(err.error_code, "workspace.duplicate");
+    assert_eq!(err.error_code, "workspace.path.invalid");
     assert!(matches!(err.category, ErrorCategory::Recoverable));
     assert!(err.retryable);
 }
