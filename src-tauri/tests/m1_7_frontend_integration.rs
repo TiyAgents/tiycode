@@ -629,8 +629,8 @@ fn test_app_error_serialization_camel_case() {
 
     let err = AppError::recoverable(
         ErrorSource::Workspace,
-        "workspace.duplicate",
-        "Already exists",
+        "workspace.path.invalid",
+        "Invalid path",
     );
 
     let json = serde_json::to_value(&err).unwrap();

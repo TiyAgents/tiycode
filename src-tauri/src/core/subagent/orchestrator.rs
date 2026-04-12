@@ -679,7 +679,6 @@ const HELPER_INHERITED_SECTION_TITLES: &[&str] = &[
     "Profile Instructions",
     "System Environment",
     "Sandbox & Permissions",
-    "Shell Tooling Guide",
     "Runtime Context",
 ];
 
@@ -695,26 +694,40 @@ fn build_helper_system_prompt(
     helper_profile: SubagentProfile,
 ) -> String {
     let inherited_prompt = inherited_helper_prompt_sections(parent_system_prompt);
+    let helper_shell_tooling_guide = helper_shell_tooling_guide(helper_profile);
 
     if inherited_prompt.trim().is_empty() {
-        format!(
-            "{}\n\nYour output will be consumed by the parent agent, not the user. \
-Follow any response language and response style instructions inherited above unless the parent explicitly overrides them. \
-If the inherited prompt specifies a response language, write your entire output in that language. \
-Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
-Reference specific file paths and code locations where relevant. Skip preamble.",
-            helper_profile.system_prompt()
-        )
-    } else {
         format!(
             "{}\n\n{}\n\nYour output will be consumed by the parent agent, not the user. \
 Follow any response language and response style instructions inherited above unless the parent explicitly overrides them. \
 If the inherited prompt specifies a response language, write your entire output in that language. \
 Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
 Reference specific file paths and code locations where relevant. Skip preamble.",
-            inherited_prompt,
+            helper_shell_tooling_guide,
             helper_profile.system_prompt()
         )
+    } else {
+        format!(
+            "{}\n\n{}\n\n{}\n\nYour output will be consumed by the parent agent, not the user. \
+Follow any response language and response style instructions inherited above unless the parent explicitly overrides them. \
+If the inherited prompt specifies a response language, write your entire output in that language. \
+Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
+Reference specific file paths and code locations where relevant. Skip preamble.",
+            inherited_prompt,
+            helper_shell_tooling_guide,
+            helper_profile.system_prompt()
+        )
+    }
+}
+
+fn helper_shell_tooling_guide(helper_profile: SubagentProfile) -> &'static str {
+    match helper_profile {
+        SubagentProfile::Explore => {
+            "## Shell Tooling Guide\n- This helper does not have `shell`, `edit`, or Terminal panel control tools.\n- Use the workspace-aware tools you actually have: `read`, `list`, `find`, and `search`.\n- Prefer `find` to locate likely files, `search` to locate relevant text or symbols, and `read` to inspect exact implementation details.\n- `search` defaults to literal matching. Set `queryMode` to `regex` only when you intentionally need regular expressions."
+        }
+        SubagentProfile::Review => {
+            "## Shell Tooling Guide\n- This helper may use `read`, `list`, `find`, `search`, `term_status`, `term_output`, and `shell`.\n- Use `shell` only for non-interactive diagnostic and verification commands in the workspace, such as type-checks, test suites, diffs, or other read-only inspection.\n- `term_status` and `term_output` refer only to the desktop app's embedded Terminal panel for the current thread.\n- This helper does not have `edit`, `term_write`, `term_restart`, or `term_close`."
+        }
     }
 }
 
@@ -843,16 +856,18 @@ mod tests {
 
     #[test]
     fn helper_system_prompt_inherits_only_allowed_sections() {
-        let parent_prompt = "## Role\nYou are TiyCode.\n\n## Project Context (workspace instructions)\nFollow AGENTS.md.\n\n## Behavioral Guidelines\nUse clarify when needed.\n\n## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.\n\n## Sandbox & Permissions\n- Approval policy: auto.\n\n## Final Response Structure\nUse structured markdown.";
+        let parent_prompt = "## Role\nYou are TiyCode.\n\n## Project Context (workspace instructions)\nFollow AGENTS.md.\n\n## Behavioral Guidelines\nUse clarify when needed.\n\n## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.\n\n## Sandbox & Permissions\n- Approval policy: auto.\n\n## Shell Tooling Guide\n- Generic shell guidance.\n\n## Final Response Structure\nUse structured markdown.";
 
         let prompt = build_helper_system_prompt(parent_prompt, SubagentProfile::Explore);
 
         assert!(prompt.contains("## Project Context (workspace instructions)"));
         assert!(prompt.contains("## Profile Instructions"));
         assert!(prompt.contains("## Sandbox & Permissions"));
+        assert!(prompt.contains("## Shell Tooling Guide"));
         assert!(!prompt.contains("## Role\nYou are TiyCode."));
         assert!(!prompt.contains("## Behavioral Guidelines"));
         assert!(!prompt.contains("## Final Response Structure"));
+        assert!(!prompt.contains("Generic shell guidance."));
     }
 
     #[test]
@@ -864,6 +879,31 @@ mod tests {
         assert!(inherited.contains("## System Environment"));
         assert!(inherited.contains("## Runtime Context"));
         assert!(!inherited.contains("## Run Mode"));
+    }
+
+    #[test]
+    fn explore_helper_shell_guide_only_mentions_read_only_tools() {
+        let prompt = build_helper_system_prompt("", SubagentProfile::Explore);
+
+        assert!(prompt.contains(
+            "This helper does not have `shell`, `edit`, or Terminal panel control tools."
+        ));
+        assert!(prompt.contains("`read`, `list`, `find`, and `search`"));
+        assert!(prompt.contains("`search` defaults to literal matching."));
+        assert!(!prompt.contains("`term_write`"));
+        assert!(!prompt.contains("`term_restart`"));
+        assert!(!prompt.contains("`term_close`"));
+    }
+
+    #[test]
+    fn review_helper_shell_guide_matches_review_tool_whitelist() {
+        let prompt = build_helper_system_prompt("", SubagentProfile::Review);
+
+        assert!(prompt.contains("`term_status`, `term_output`, and `shell`"));
+        assert!(
+            prompt.contains("does not have `edit`, `term_write`, `term_restart`, or `term_close`")
+        );
+        assert!(!prompt.contains("This helper may use `term_write`"));
     }
 
     #[test]
