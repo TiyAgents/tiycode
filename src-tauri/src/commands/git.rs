@@ -24,6 +24,7 @@ use crate::model::workspace::WorkspaceRecord;
 use crate::persistence::repo::{audit_repo, workspace_repo};
 
 const COMMIT_MESSAGE_MAX_TOKENS: u32 = 512;
+const COMMIT_MESSAGE_MAX_TOKENS_REASONING: u32 = 1536;
 const COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMIT_MESSAGE_FILE_LIMIT: usize = 24;
 const COMMIT_MESSAGE_DIFF_CHAR_BUDGET: usize = 48_000;
@@ -1078,6 +1079,16 @@ async fn generate_with_lite_model(
     system_prompt: &str,
     user_prompt: &str,
 ) -> Result<String, AppError> {
+    // Lightweight generation (commit messages, branch names) does not benefit from
+    // reasoning/thinking tokens.  Disable reasoning so the protocol layer omits
+    // thinking/reasoning parameters, preventing reasoning tokens from consuming
+    // the COMMIT_MESSAGE_MAX_TOKENS budget.
+    // If the original model had reasoning enabled, bump max_tokens as a fallback —
+    // some reasoning-only models ignore the disable and still produce reasoning tokens.
+    let was_reasoning = model_role.model.reasoning;
+    let mut model_role = model_role.clone();
+    model_role.model.reasoning = false;
+
     let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
         AppError::recoverable(
             ErrorSource::Settings,
@@ -1097,7 +1108,11 @@ async fn generate_with_lite_model(
 
     let options = TiyStreamOptions {
         api_key: model_role.api_key.clone(),
-        max_tokens: Some(COMMIT_MESSAGE_MAX_TOKENS),
+        max_tokens: Some(if was_reasoning {
+            COMMIT_MESSAGE_MAX_TOKENS_REASONING
+        } else {
+            COMMIT_MESSAGE_MAX_TOKENS
+        }),
         headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
         ..TiyStreamOptions::default()

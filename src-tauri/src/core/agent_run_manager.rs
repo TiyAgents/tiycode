@@ -41,7 +41,9 @@ use crate::persistence::repo::{message_repo, profile_repo, run_repo, thread_repo
 const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(12);
 const COMPACT_SUMMARY_TIMEOUT: Duration = Duration::from_secs(20);
 const TITLE_GENERATION_MAX_TOKENS: u32 = 32;
+const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 512;
 const COMPACT_SUMMARY_MAX_TOKENS: u32 = 700;
+const COMPACT_SUMMARY_MAX_TOKENS_REASONING: u32 = 2048;
 const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
 const COMPACT_SUMMARY_CONTEXT_MAX_CHARS: usize = 18_000;
 const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
@@ -1490,6 +1492,15 @@ async fn generate_compact_summary(
     history: &[AgentMessage],
     instructions: Option<&str>,
 ) -> Result<Option<String>, AppError> {
+    // Compact summary generation does not benefit from reasoning/thinking tokens.
+    // Disable reasoning so the protocol layer omits thinking/reasoning parameters,
+    // preventing reasoning tokens from consuming the COMPACT_SUMMARY_MAX_TOKENS budget.
+    // If the original model had reasoning enabled, bump max_tokens as a fallback —
+    // some reasoning-only models ignore the disable and still produce reasoning tokens.
+    let was_reasoning = model_role.model.reasoning;
+    let mut model_role = model_role.clone();
+    model_role.model.reasoning = false;
+
     let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
         AppError::recoverable(
             ErrorSource::Settings,
@@ -1509,7 +1520,11 @@ async fn generate_compact_summary(
 
     let options = TiyStreamOptions {
         api_key: model_role.api_key.clone(),
-        max_tokens: Some(COMPACT_SUMMARY_MAX_TOKENS),
+        max_tokens: Some(if was_reasoning {
+            COMPACT_SUMMARY_MAX_TOKENS_REASONING
+        } else {
+            COMPACT_SUMMARY_MAX_TOKENS
+        }),
         headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
         ..TiyStreamOptions::default()
@@ -1880,6 +1895,22 @@ async fn generate_thread_title(
     response_language: Option<&str>,
     response_style: ProfileResponseStyle,
 ) -> Result<Option<String>, AppError> {
+    // Lightweight title generation does not benefit from reasoning/thinking tokens.
+    // When the lightweight model is a reasoning-capable model (e.g. DeepSeek R1, o1),
+    // the reasoning tokens count against `max_tokens` and can exhaust the entire
+    // token budget (TITLE_GENERATION_MAX_TOKENS = 32), leaving no room for the
+    // actual title output.
+    //
+    // Strategy: 1) Explicitly disable reasoning so the protocol layer omits
+    // thinking/reasoning parameters from the API request.  2) If the original
+    // model had reasoning enabled, bump max_tokens as a fallback — some
+    // reasoning-only models (e.g. o1) ignore the disable and still produce
+    // reasoning tokens, so the larger budget ensures the title can still be
+    // returned.
+    let was_reasoning = model_role.model.reasoning;
+    let mut model_role = model_role.clone();
+    model_role.model.reasoning = false;
+
     let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
         AppError::recoverable(
             ErrorSource::Settings,
@@ -1907,7 +1938,11 @@ async fn generate_thread_title(
 
     let options = TiyStreamOptions {
         api_key: model_role.api_key.clone(),
-        max_tokens: Some(TITLE_GENERATION_MAX_TOKENS),
+        max_tokens: Some(if was_reasoning {
+            TITLE_GENERATION_MAX_TOKENS_REASONING
+        } else {
+            TITLE_GENERATION_MAX_TOKENS
+        }),
         headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
         ..TiyStreamOptions::default()
