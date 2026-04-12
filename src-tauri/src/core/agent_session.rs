@@ -20,8 +20,8 @@ use crate::core::plan_checkpoint::{
 };
 use crate::core::prompt;
 use crate::core::subagent::{
-    runtime_orchestration_tools, HelperAgentOrchestrator, HelperRunRequest,
-    RuntimeOrchestrationTool, SubagentProfile, TERM_CLOSE_TOOL_DESCRIPTION,
+    extract_review_report, runtime_orchestration_tools, HelperAgentOrchestrator, HelperRunRequest,
+    ReviewRequest, RuntimeOrchestrationTool, SubagentProfile, TERM_CLOSE_TOOL_DESCRIPTION,
     TERM_OUTPUT_TOOL_DESCRIPTION, TERM_RESTART_TOOL_DESCRIPTION, TERM_STATUS_TOOL_DESCRIPTION,
     TERM_WRITE_TOOL_DESCRIPTION,
 };
@@ -607,12 +607,30 @@ impl AgentSession {
         tool_call_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
-        let task = tool_input
-            .get("task")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        let (task, review_request) = if tool == RuntimeOrchestrationTool::Review {
+            match ReviewRequest::from_tool_input(tool_input) {
+                Ok(request) => (request.to_helper_prompt(), Some(request)),
+                Err(error) => {
+                    tool_call_repo::update_result(
+                        &self.pool,
+                        tool_call_id,
+                        &serde_json::json!({ "error": error }).to_string(),
+                        "failed",
+                    )
+                    .await
+                    .ok();
+                    return agent_error_result(error);
+                }
+            }
+        } else {
+            let task = tool_input
+                .get("task")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            (task, None)
+        };
 
         if task.is_empty() {
             tool_call_repo::update_result(
@@ -648,9 +666,21 @@ impl AgentSession {
 
         match result {
             Ok(summary) => {
+                let review_report = if tool == RuntimeOrchestrationTool::Review {
+                    summary
+                        .raw_summary
+                        .as_deref()
+                        .and_then(extract_review_report)
+                } else {
+                    None
+                };
+
                 let result = serde_json::json!({
                     "summary": summary.summary.clone(),
+                    "rawSummary": summary.raw_summary.clone(),
                     "snapshot": summary.snapshot,
+                    "reviewRequest": review_request,
+                    "reviewReport": review_report,
                 });
                 tool_call_repo::update_result(
                     &self.pool,

@@ -99,7 +99,32 @@ impl RuntimeOrchestrationTool {
                     "target": {
                         "type": "string",
                         "enum": ["code", "diff"],
-                        "description": "Review focus. Use 'code' for the current implementation or 'diff' for a patch-oriented pass. If omitted, review defaults to code-level review."
+                        "description": "Review focus. Use 'code' for the current implementation or 'diff' for a patch-oriented pass. Diff reviews default to a diff-first, global-aware pass."
+                    },
+                    "reviewScope": {
+                        "type": "string",
+                        "enum": ["local", "diff_first_global"],
+                        "description": "Choose 'local' for a focused implementation review or 'diff_first_global' to start from the diff and then do a bounded global impact scan."
+                    },
+                    "globalScanMode": {
+                        "type": "string",
+                        "enum": ["off", "auto"],
+                        "description": "Control the bounded global impact probe. Use 'auto' to inspect adjacent dependencies, exports, and tests when the diff suggests broader risk."
+                    },
+                    "changedFiles": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional relative file paths that are already known to be in scope for the review."
+                    },
+                    "preferredChecks": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional verification commands the helper should try first when they fit the active repository."
+                    },
+                    "riskHints": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional risk cues such as cross_platform, persistence, schema, runtime, config, or tests."
                     }
                 },
                 "required": ["task"]
@@ -123,7 +148,7 @@ impl SubagentProfile {
         }
     }
 
-    pub fn system_prompt(self) -> &'static str {
+    pub fn system_prompt(self) -> String {
         match self {
             Self::Explore => {
                 "You are an internal explore helper. Your job is to investigate the workspace and gather context for the parent agent.\n\
@@ -147,14 +172,17 @@ Examples:\n\
 - Bad tool calls: `search {}`, `read {}`, `find {}`, `search {\"path\":\"src\"}`, `read {\"query\":\"title\"}`.\n\
 - Good tool calls: `search {\"query\":\"thread title\"}`, `find {\"pattern\":\"*thread*title*\",\"path\":\"src\"}`, `read {\"path\":\"src/modules/workbench-shell/ui/runtime-thread-surface.tsx\"}`.\n\
 - Prefer this workflow when investigating code: first use `find` to locate likely files, then use `search` to locate relevant text or symbols, then use `read` to inspect the exact implementation. Only call a tool once you know the required arguments."
+                    .to_string()
             }
             Self::Review => {
                 "You are an internal review helper. Your job is to evaluate implemented code or diffs, run verification commands, and provide constructive feedback.\n\
 Guidelines:\n\
 - Do not modify any files. Only use the shell tool for read-only diagnostic commands.\n\
-- Use repository inspection tools. Check the current thread's Terminal panel output when it directly supports the review.\n\
-- Focus on correctness, edge cases, error handling, and consistency with existing patterns.\n\
-- Distinguish critical issues from suggestions. Be specific: reference file paths and line ranges.\n\
+- Prefer repository inspection tools over shell whenever they fit. Use `git_status`, `git_diff`, and `git_log` for Git-aware inspection, then `read`, `search`, and `find` for exact implementation context.\n\
+- Check the current thread's Terminal panel output when it directly supports the review.\n\
+- Focus on correctness, edge cases, error handling, consistency with existing patterns, and repository-appropriate conventions for the active project.\n\
+- Adapt to the current stack. Infer build, test, and project structure from repository files and instructions instead of assuming a particular framework.\n\
+- Distinguish direct diff problems from wider system-impact risks. Be specific: reference file paths and line ranges when available.\n\
 \n\
 Verification:\n\
 - After reviewing code or diffs, determine the necessary project type-check and test commands, then run them with the shell tool (e.g. `npm run typecheck`, `cargo test`, or whatever the project uses). This is mandatory, not optional.\n\
@@ -162,14 +190,25 @@ Verification:\n\
 - Treat this verification work as part of your core responsibility so the parent agent does not need to duplicate it by default.\n\
 - If the shell tool is unavailable or a command is rejected by the approval policy, explicitly state in your summary that manual verification is still needed and list the exact commands the parent agent should run.\n\
 \n\
+Diff-first, global-aware review behavior:\n\
+- When the request target is `diff`, begin from the current workspace changes. Use `git_status` and `git_diff` when the changed file list is not already provided.\n\
+- Review the changed code first.\n\
+- If the request asks for a bounded global scan, inspect adjacent callers, exports, shared types, tests, configs, or runtime boundaries that are plausibly affected by the diff.\n\
+- Keep that global scan bounded: at most one dependency hop and at most 8 additional files unless a smaller set is sufficient.\n\
+- If the bounded global scan cannot be completed, record that in the coverage limitations instead of pretending the review is complete.\n\
+\n\
 Return format:\n\
-- Structure your response so the parent agent can quickly assess implementation status.\n\
-- Lead with an overall verdict: PASS, FAIL, or NEEDS ATTENTION.\n\
-- Section 1 — Review findings: critical issues, warnings, and suggestions with file paths and line ranges.\n\
-- Section 2 — Verification results: for each command run, state the command, whether it passed or failed, and quote key error output (truncated if long). If verification was skipped, say so and list the commands that need manual execution.\n\
-- Section 3 — Parent agent follow-up: say `none` when verification is complete and the parent agent does not need to rerun the same type-check or test commands. Otherwise list the exact remaining verification commands, why they still need manual execution, and any other action the parent agent should take.\n\
-- Keep the summary concise. The parent agent needs actionable signal, not exhaustive logs.\n\
-- When reviewing documents, architecture specs, or design proposals (as opposed to code), prefer a discursive, paragraph-oriented format over bullet-heavy enumeration. Group related observations into themed paragraphs with clear topic sentences. Reserve bullet lists for genuinely discrete, independent items like a checklist of action items."
+- Return exactly one JSON object. Do not wrap it in markdown fences and do not add any prose before or after it.\n\
+- Required top-level keys: `verdict`, `directFindings`, `globalFindings`, `verification`, `coverage`, `followUp`.\n\
+- `verdict` must be one of `pass`, `fail`, or `needs_attention`.\n\
+- Findings must stay concrete, actionable, and repository-specific.\n\
+- Use `directFindings` for issues directly supported by the changed code or diff.\n\
+- Use `globalFindings` for bounded downstream or cross-cutting risks discovered during the global impact probe.\n\
+- `verification` must list every verification command you attempted, with command, status, summary, and key output when useful.\n\
+- `coverage` must say whether diff review happened, whether the global scan happened, which paths were scanned, which were left unscanned, and what limitations remain.\n\
+- `followUp` should be `[]` when nothing remains, otherwise list exact next steps for the parent agent or user.\n\
+- Keep the JSON concise. The parent agent needs actionable signal, not exhaustive logs."
+                    .to_string()
             }
         }
     }
@@ -278,6 +317,52 @@ Return format:\n\
         if self == Self::Review {
             tools.extend([
                 AgentTool::new(
+                    "git_status",
+                    "Git Status",
+                    "Inspect repository status in the current workspace without modifying anything. Use this to enumerate changed files before reading diffs.",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Optional relative path to narrow the status query." }
+                        }
+                    }),
+                ),
+                AgentTool::new(
+                    "git_diff",
+                    "Git Diff",
+                    "Read the current Git diff in the workspace, optionally scoped to a path or staged changes. Prefer this over shelling out for diff inspection.",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Optional relative path to inspect." },
+                            "staged": { "type": "boolean", "description": "Set true to inspect staged changes instead of working tree changes." },
+                            "contextLines": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 20,
+                                "description": "Optional number of unified diff context lines. Defaults to 3 and is capped for safety."
+                            }
+                        }
+                    }),
+                ),
+                AgentTool::new(
+                    "git_log",
+                    "Git Log",
+                    "Inspect recent Git history in the current workspace without modifying anything. Useful for understanding prior behavior or nearby changes.",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Optional relative path to filter history." },
+                            "limit": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 100,
+                                "description": "Optional maximum number of commits to return. Defaults to 10 and is capped for safety."
+                            }
+                        }
+                    }),
+                ),
+                AgentTool::new(
                     "term_status",
                     "Terminal Status",
                     TERM_STATUS_TOOL_DESCRIPTION,
@@ -338,6 +423,9 @@ mod tests {
         let tools = SubagentProfile::Review.helper_tools();
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
+        assert!(tool_names.contains(&"git_status"));
+        assert!(tool_names.contains(&"git_diff"));
+        assert!(tool_names.contains(&"git_log"));
         assert!(tool_names.contains(&"term_status"));
         assert!(tool_names.contains(&"term_output"));
     }
@@ -378,10 +466,38 @@ mod tests {
         let task_description = tool.parameters["properties"]["task"]["description"]
             .as_str()
             .expect("task description should exist");
+        let review_scope_enum = tool.parameters["properties"]["reviewScope"]["enum"]
+            .as_array()
+            .expect("reviewScope enum should exist");
 
         assert!(tool.description.contains("type-check and test commands"));
         assert!(tool.description.contains("verification results"));
         assert!(task_description.contains("type-check or test commands"));
+        assert_eq!(review_scope_enum.len(), 2);
+    }
+
+    #[test]
+    fn review_git_tool_schema_exposes_numeric_safety_bounds() {
+        let tools = SubagentProfile::Review.helper_tools();
+        let git_diff = tools
+            .iter()
+            .find(|tool| tool.name == "git_diff")
+            .expect("git_diff tool");
+        let git_log = tools
+            .iter()
+            .find(|tool| tool.name == "git_log")
+            .expect("git_log tool");
+
+        assert_eq!(
+            git_diff.parameters["properties"]["contextLines"]["minimum"],
+            1
+        );
+        assert_eq!(
+            git_diff.parameters["properties"]["contextLines"]["maximum"],
+            20
+        );
+        assert_eq!(git_log.parameters["properties"]["limit"]["minimum"], 1);
+        assert_eq!(git_log.parameters["properties"]["limit"]["maximum"], 100);
     }
 
     #[test]
@@ -390,7 +506,8 @@ mod tests {
 
         assert!(prompt.contains("This is mandatory, not optional"));
         assert!(prompt.contains("parent agent does not need to duplicate it by default"));
-        assert!(prompt.contains("Section 3 — Parent agent follow-up"));
-        assert!(prompt.contains("does not need to rerun the same type-check or test commands"));
+        assert!(prompt.contains("Return exactly one JSON object"));
+        assert!(prompt.contains("globalFindings"));
+        assert!(prompt.contains("followUp"));
     }
 }

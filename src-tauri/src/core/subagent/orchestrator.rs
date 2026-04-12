@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 
 use crate::core::agent_session::ResolvedModelRole;
 use crate::core::executors::ToolOutput;
+use crate::core::subagent::review_contract::{extract_review_report, render_parent_summary};
 use crate::core::subagent::runtime_orchestration::{RuntimeOrchestrationTool, SubagentProfile};
 use crate::core::tool_gateway::{
     ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
@@ -36,6 +37,7 @@ pub struct HelperRunRequest {
 
 pub struct HelperRunResult {
     pub summary: String,
+    pub raw_summary: Option<String>,
     pub snapshot: SubagentProgressSnapshot,
 }
 
@@ -373,9 +375,10 @@ impl HelperAgentOrchestrator {
         unsubscribe();
         self.remove_helper(&request.run_id, &agent).await;
 
-        if let Some(summary) = take_escalation_summary(&escalation_summary) {
+        if let Some(raw_summary) = take_escalation_summary(&escalation_summary) {
             let usage = Usage::default();
             let snapshot = snapshot_from_progress(&progress_state);
+            let summary = finalize_helper_summary(helper_profile, &raw_summary);
             run_helper_repo::mark_completed(&self.pool, &helper_id, &summary, &usage).await?;
 
             let _ = request.event_tx.send(ThreadStreamEvent::SubagentCompleted {
@@ -387,13 +390,18 @@ impl HelperAgentOrchestrator {
                 snapshot: snapshot.clone(),
             });
 
-            return Ok(HelperRunResult { summary, snapshot });
+            return Ok(HelperRunResult {
+                summary,
+                raw_summary: Some(raw_summary),
+                snapshot,
+            });
         }
 
         match result {
             Ok(messages) => {
-                let summary = extract_summary(&messages)
+                let raw_summary = extract_summary(&messages)
                     .unwrap_or_else(|| "Helper completed without a textual summary.".to_string());
+                let summary = finalize_helper_summary(helper_profile, &raw_summary);
                 let usage = extract_usage(&messages).unwrap_or_default();
                 let snapshot = snapshot_from_progress(&progress_state);
 
@@ -408,7 +416,11 @@ impl HelperAgentOrchestrator {
                     snapshot: snapshot.clone(),
                 });
 
-                Ok(HelperRunResult { summary, snapshot })
+                Ok(HelperRunResult {
+                    summary,
+                    raw_summary: Some(raw_summary),
+                    snapshot,
+                })
             }
             Err(error) => {
                 let interrupted = error.to_string().to_lowercase().contains("aborted");
@@ -459,6 +471,16 @@ impl HelperAgentOrchestrator {
                 active.remove(run_id);
             }
         }
+    }
+}
+
+fn finalize_helper_summary(helper_profile: SubagentProfile, raw_summary: &str) -> String {
+    if helper_profile == SubagentProfile::Review {
+        extract_review_report(raw_summary)
+            .map(|report| render_parent_summary(&report))
+            .unwrap_or_else(|| raw_summary.to_string())
+    } else {
+        raw_summary.to_string()
     }
 }
 
@@ -602,6 +624,45 @@ fn describe_subagent_action(
                 failed_message: format!("Failed finding files matching \"{pattern}\""),
             }
         }
+        "git_status" => {
+            let path = input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("repository");
+            SubagentActionDescriptor {
+                current_action: format!("checking git status for {path}"),
+                started_message: format!("Checking git status for {path}"),
+                succeeded_message: format!("Finished checking git status for {path}"),
+                failed_message: format!("Failed checking git status for {path}"),
+            }
+        }
+        "git_diff" => {
+            let path = input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("current changes");
+            SubagentActionDescriptor {
+                current_action: format!("reading git diff for {path}"),
+                started_message: format!("Reading git diff for {path}"),
+                succeeded_message: format!("Finished reading git diff for {path}"),
+                failed_message: format!("Failed reading git diff for {path}"),
+            }
+        }
+        "git_log" => {
+            let path = input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("repository");
+            SubagentActionDescriptor {
+                current_action: format!("reading git history for {path}"),
+                started_message: format!("Reading git history for {path}"),
+                succeeded_message: format!("Finished reading git history for {path}"),
+                failed_message: format!("Failed reading git history for {path}"),
+            }
+        }
         "term_status" => SubagentActionDescriptor {
             current_action: "checking the thread Terminal panel status".to_string(),
             started_message: "Inspecting the thread Terminal panel status".to_string(),
@@ -695,27 +756,36 @@ fn build_helper_system_prompt(
 ) -> String {
     let inherited_prompt = inherited_helper_prompt_sections(parent_system_prompt);
     let helper_shell_tooling_guide = helper_shell_tooling_guide(helper_profile);
+    let output_tail = match helper_profile {
+        SubagentProfile::Explore => {
+            "Your output will be consumed by the parent agent, not the user. \
+Follow any response language and response style instructions inherited above unless the parent explicitly overrides them. \
+If the inherited prompt specifies a response language, write your entire output in that language. \
+Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
+Reference specific file paths and code locations where relevant. Skip preamble."
+        }
+        SubagentProfile::Review => {
+            "Your output will be consumed by the parent agent, not the user. \
+Follow any response language instructions inherited above unless the parent explicitly overrides them. \
+If the inherited prompt specifies a response language, use that language in all natural-language JSON fields. \
+Follow the review helper's JSON contract exactly. Do not add markdown fences, headings, or prose outside the JSON object."
+        }
+    };
 
     if inherited_prompt.trim().is_empty() {
         format!(
-            "{}\n\n{}\n\nYour output will be consumed by the parent agent, not the user. \
-Follow any response language and response style instructions inherited above unless the parent explicitly overrides them. \
-If the inherited prompt specifies a response language, write your entire output in that language. \
-Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
-Reference specific file paths and code locations where relevant. Skip preamble.",
+            "{}\n\n{}\n\n{}",
             helper_shell_tooling_guide,
-            helper_profile.system_prompt()
+            helper_profile.system_prompt(),
+            output_tail
         )
     } else {
         format!(
-            "{}\n\n{}\n\n{}\n\nYour output will be consumed by the parent agent, not the user. \
-Follow any response language and response style instructions inherited above unless the parent explicitly overrides them. \
-If the inherited prompt specifies a response language, write your entire output in that language. \
-Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
-Reference specific file paths and code locations where relevant. Skip preamble.",
+            "{}\n\n{}\n\n{}\n\n{}",
             inherited_prompt,
             helper_shell_tooling_guide,
-            helper_profile.system_prompt()
+            helper_profile.system_prompt(),
+            output_tail
         )
     }
 }
@@ -836,7 +906,8 @@ fn helper_agent_error_result(message: impl Into<String>) -> AgentToolResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_helper_system_prompt, collect_prompt_sections, inherited_helper_prompt_sections,
+        build_helper_system_prompt, collect_prompt_sections, describe_subagent_action,
+        finalize_helper_summary, inherited_helper_prompt_sections,
     };
     use crate::core::subagent::SubagentProfile;
 
@@ -932,5 +1003,29 @@ mod tests {
         assert_eq!(sections[1].0, "Two");
         assert!(sections[1].1.contains("beta\nline two"));
         assert_eq!(sections[2].0, "Three");
+    }
+
+    #[test]
+    fn finalize_helper_summary_renders_review_json() {
+        let summary = finalize_helper_summary(
+            SubagentProfile::Review,
+            r#"{"verdict":"pass","directFindings":[],"globalFindings":[],"verification":[],"coverage":{"diffReviewed":true,"globalScanPerformed":false,"changedFilesReviewed":[],"scannedPaths":[],"unscannedPaths":[],"limitations":[]},"followUp":[]}"#,
+        );
+
+        assert!(summary.contains("Verdict: PASS"));
+        assert!(summary.contains("Direct Diff Findings"));
+    }
+
+    #[test]
+    fn describe_subagent_action_supports_git_tools_with_and_without_paths() {
+        let status = describe_subagent_action("git_status", &serde_json::json!({}));
+        assert_eq!(status.current_action, "checking git status for repository");
+
+        let diff =
+            describe_subagent_action("git_diff", &serde_json::json!({ "path": "src/lib.rs" }));
+        assert_eq!(diff.current_action, "reading git diff for src/lib.rs");
+
+        let log = describe_subagent_action("git_log", &serde_json::json!({ "path": "" }));
+        assert_eq!(log.current_action, "reading git history for repository");
     }
 }
