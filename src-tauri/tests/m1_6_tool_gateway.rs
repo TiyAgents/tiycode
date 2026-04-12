@@ -995,7 +995,7 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
             if !output.success {
                 let error = output.result["error"].as_str().unwrap_or_default();
                 assert!(
-                    error.contains("ripgrep execution failed"),
+                    error.contains("local search failed"),
                     "unexpected search failure: {error}"
                 );
             }
@@ -1091,7 +1091,7 @@ async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
             if !output.success {
                 let error = output.result["error"].as_str().unwrap_or_default();
                 assert!(
-                    error.contains("ripgrep"),
+                    error.contains("local search failed"),
                     "unexpected search failure: {error}"
                 );
                 return;
@@ -1192,7 +1192,7 @@ async fn test_search_repo_treats_regex_metacharacters_as_literal_text() {
             if !output.success {
                 let error = output.result["error"].as_str().unwrap_or_default();
                 assert!(
-                    error.contains("ripgrep execution failed"),
+                    error.contains("local search failed"),
                     "regex metacharacter query should not fail with regex parse errors: {error}"
                 );
                 return;
@@ -1218,6 +1218,97 @@ async fn test_search_repo_treats_regex_metacharacters_as_literal_text() {
         }
         ToolGatewayResult::Cancelled { .. } => {
             panic!("literal metacharacter search should not be cancelled");
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_search_repo_supports_regex_count_mode_and_case_insensitive_matching() {
+    use tiycode::core::terminal_manager::TerminalManager;
+    use tiycode::core::tool_gateway::{
+        ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
+    };
+
+    let pool = test_helpers::setup_test_pool().await;
+    let workspace_root =
+        std::env::temp_dir().join(format!("tiy-search-regex-count-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::write(
+        workspace_root.join("macros.rs"),
+        "fn demo() {\n    WARN!(\"hello\");\n    warn!(\"again\");\n}\n",
+    )
+    .unwrap();
+    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+
+    test_helpers::seed_workspace(
+        &pool,
+        "ws-search-regex-count",
+        workspace_root.to_str().unwrap(),
+    )
+    .await;
+    test_helpers::seed_thread(&pool, "t-search-regex-count", "ws-search-regex-count").await;
+    test_helpers::seed_run(
+        &pool,
+        "r-search-regex-count",
+        "t-search-regex-count",
+        "running",
+        "default",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-search-regex-count",
+        "r-search-regex-count",
+        "t-search-regex-count",
+        "search",
+        "requested",
+    )
+    .await;
+
+    let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+    let gateway = ToolGateway::new(pool, terminal_manager);
+
+    let outcome = gateway
+        .execute_tool_call(
+            ToolExecutionRequest {
+                run_id: "r-search-regex-count".into(),
+                thread_id: "t-search-regex-count".into(),
+                tool_call_id: "tc-search-regex-count".into(),
+                tool_name: "search".into(),
+                tool_input: serde_json::json!({
+                    "query": "warn!\\(",
+                    "queryMode": "regex",
+                    "outputMode": "count",
+                    "caseInsensitive": true,
+                    "filePattern": "*.rs",
+                }),
+                workspace_path: workspace_root.display().to_string(),
+                run_mode: "default".into(),
+            },
+            tiycore::agent::AbortSignal::new(),
+            ToolExecutionOptions::default(),
+            |_| {},
+            || {},
+        )
+        .await
+        .unwrap();
+
+    match outcome.result {
+        ToolGatewayResult::Executed { output, .. } => {
+            assert!(output.success, "regex count-mode search should succeed");
+            assert_eq!(output.result["outputMode"].as_str(), Some("count"));
+            assert_eq!(output.result["count"].as_u64(), Some(2));
+            assert_eq!(output.result["totalFiles"].as_u64(), Some(1));
+            assert_eq!(output.result["fileCounts"][0]["count"].as_u64(), Some(2));
+        }
+        ToolGatewayResult::Denied { reason, .. } => {
+            panic!("regex count-mode search should not be denied: {reason}");
+        }
+        ToolGatewayResult::EscalationRequired { reason, .. } => {
+            panic!("regex count-mode search should not require approval: {reason}");
+        }
+        ToolGatewayResult::Cancelled { .. } => {
+            panic!("regex count-mode search should not be cancelled");
         }
     }
 }

@@ -44,6 +44,9 @@ dirs = "6"
 dunce = "1"
 thiserror = "2"
 anyhow = "1"
+globset = "0.4"
+ignore = "0.4"
+regex = "1"
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 keepawake = "0.6"

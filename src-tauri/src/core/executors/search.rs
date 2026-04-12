@@ -1,13 +1,36 @@
-use super::truncation::{truncate_line, GREP_MAX_LINE_LENGTH, GREP_MAX_MATCHES};
+use super::truncation::GREP_MAX_MATCHES;
 use super::ToolOutput;
-use crate::core::ripgrep::run_rg_in;
+use crate::core::local_search::{
+    is_noop_file_pattern, normalize_file_pattern, run_local_search, LocalSearchOutcome,
+    LocalSearchRequest, SearchOutputMode, SearchQueryMode,
+};
 use crate::core::workspace_paths::{
     canonicalize_workspace_root, normalize_additional_roots, resolve_path_within_roots,
 };
 use crate::model::errors::{AppError, ErrorSource};
+use std::time::Duration;
 
-/// Search workspace files using ripgrep.
-/// Input: { "query": "literal search term", "directory": "optional/path", "filePattern": "*.rs" }
+const MAX_CONTEXT_LINES: usize = 20;
+const MAX_SEARCH_TIMEOUT_MS: u64 = 120_000;
+
+/// Search workspace files with an in-process matcher.
+/// Input:
+/// {
+///   "query": "search term",
+///   "directory": "optional/path",
+///   "filePattern": "*.rs",
+///   "queryMode": "literal|regex",
+///   "outputMode": "content|files_with_matches|count",
+///   "type": "rust|ts|py|...",
+///   "caseInsensitive": false,
+///   "multiline": false,
+///   "context": 2,
+///   "beforeContext": 1,
+///   "afterContext": 1,
+///   "timeoutMs": 20000,
+///   "offset": 0,
+///   "maxResults": 100
+/// }
 pub async fn search_repo(
     input: &serde_json::Value,
     workspace_path: &str,
@@ -44,203 +67,359 @@ pub async fn search_repo(
         .as_u64()
         .map(|value| value.clamp(1, GREP_MAX_MATCHES as u64) as usize)
         .unwrap_or(GREP_MAX_MATCHES);
+    let offset = input["offset"].as_u64().unwrap_or(0) as usize;
     let normalized_file_pattern = normalize_file_pattern(input["filePattern"].as_str());
+    let file_type = input["type"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let output_mode = SearchOutputMode::from_str(input["outputMode"].as_str());
+    let query_mode = SearchQueryMode::from_str(input["queryMode"].as_str());
+    let case_insensitive = input["caseInsensitive"].as_bool().unwrap_or(false);
+    let multiline = input["multiline"].as_bool().unwrap_or(false);
+    let shared_context = input["context"]
+        .as_u64()
+        .map(|value| value.min(MAX_CONTEXT_LINES as u64) as usize)
+        .unwrap_or(0);
+    let context_before = input["beforeContext"]
+        .as_u64()
+        .map(|value| value.min(MAX_CONTEXT_LINES as u64) as usize)
+        .unwrap_or(shared_context);
+    let context_after = input["afterContext"]
+        .as_u64()
+        .map(|value| value.min(MAX_CONTEXT_LINES as u64) as usize)
+        .unwrap_or(shared_context);
+    let timeout = input["timeoutMs"]
+        .as_u64()
+        .map(|value| Duration::from_millis(value.min(MAX_SEARCH_TIMEOUT_MS)));
 
-    let mut args = vec![
-        "--json".into(),
-        "--fixed-strings".into(),
-        format!("--max-count={}", max_results).into(),
-        "--max-filesize=1M".into(),
-        query.into(),
-        search_dir.as_os_str().to_os_string(),
-    ];
-    if let Some(pattern) = normalized_file_pattern {
-        args.push("--glob".into());
-        args.push(pattern.into());
-    }
-
-    match run_rg_in(args, Some(workspace_root.as_path())).await {
-        Ok(output) => {
-            if !output.status.success() && output.status.code() != Some(1) {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let message = stderr.trim();
-
-                return Ok(ToolOutput {
-                    success: false,
-                    result: serde_json::json!({
-                        "error": if message.is_empty() {
-                            format!("ripgrep search failed with status {}", output.status)
-                        } else {
-                            format!("ripgrep search failed: {message}")
-                        },
-                        "query": query,
-                        "directory": search_dir.to_string_lossy().to_string(),
-                    }),
-                });
-            }
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let parsed = parse_rg_json(&stdout, &workspace_root, max_results);
-            let shown_count = parsed.results.len();
-            let mut notices = Vec::new();
-
-            let mut result = serde_json::json!({
-                "query": query,
-                "directory": search_dir.to_string_lossy().to_string(),
-                "results": parsed.results,
-                "count": parsed.total_count,
-                "shownCount": shown_count,
-                "truncated": parsed.truncated,
+    let outcome = match run_local_search(LocalSearchRequest {
+        workspace_root: workspace_root.clone(),
+        search_root: search_dir.clone(),
+        query: query.to_string(),
+        file_pattern: normalized_file_pattern.map(ToOwned::to_owned),
+        file_type: file_type.map(ToOwned::to_owned),
+        query_mode,
+        output_mode,
+        case_insensitive,
+        multiline,
+        context_before,
+        context_after,
+        offset,
+        max_results,
+        timeout,
+        cancellation: None,
+    })
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            return Ok(ToolOutput {
+                success: false,
+                result: serde_json::json!({
+                    "error": format!("local search failed: {error}"),
+                    "query": query,
+                    "directory": search_dir.to_string_lossy().to_string(),
+                }),
             });
-
-            if parsed.truncated {
-                notices.push(format!(
-                    "Showing first {} of {} matches. Refine the query, directory, or filePattern for a narrower result set.",
-                    shown_count, parsed.total_count
-                ));
-            }
-
-            if let Some(raw_pattern) = input["filePattern"].as_str() {
-                if normalized_file_pattern.is_none() && is_noop_file_pattern(raw_pattern) {
-                    notices.push(format!(
-                        "Ignored filePattern '{}'; omit wildcard-only patterns because search already covers the selected directory.",
-                        raw_pattern.trim()
-                    ));
-                }
-            }
-
-            if !notices.is_empty() {
-                result["notice"] = serde_json::json!(notices.join(" "));
-            }
-
-            Ok(ToolOutput {
-                success: true,
-                result,
-            })
         }
-        Err(e) => Ok(ToolOutput {
-            success: false,
-            result: serde_json::json!({
-                "error": format!("ripgrep execution failed: {e}"),
-                "hint": "Ensure 'rg' (ripgrep) is installed, reachable from a login shell, or bundled with the app",
-            }),
-        }),
-    }
-}
+    };
 
-/// Parse ripgrep JSON output into structured results.
-fn parse_rg_json(
-    output: &str,
-    workspace_root: &std::path::Path,
-    max_results: usize,
-) -> ParsedSearchResults {
-    let mut results = Vec::new();
-    let mut total_count = 0usize;
-
-    for line in output.lines() {
-        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
-            if entry["type"].as_str() == Some("match") {
-                total_count += 1;
-
-                let data = &entry["data"];
-                let path = data["path"]["text"].as_str().unwrap_or("");
-                let line_number = data["line_number"].as_u64().unwrap_or(0);
-                let raw_line_text = data["lines"]["text"].as_str().unwrap_or("").trim();
-
-                // Truncate long match lines (pi-mono style)
-                let line_text = truncate_line(raw_line_text, GREP_MAX_LINE_LENGTH);
-
-                // Make path relative to workspace for display
-                let display_path = std::path::Path::new(path)
-                    .strip_prefix(workspace_root)
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| path.to_string());
-
-                if results.len() < max_results {
-                    results.push(serde_json::json!({
-                        "path": display_path,
-                        "absolutePath": path,
-                        "lineNumber": line_number,
-                        "lineText": line_text,
-                    }));
-                }
-            }
-        }
-    }
-
-    ParsedSearchResults {
-        truncated: total_count > results.len(),
-        total_count,
+    let LocalSearchOutcome {
+        query,
+        output_mode,
         results,
+        files,
+        file_counts,
+        total_matches,
+        total_files,
+        shown_count,
+        truncated,
+        completed,
+        cancelled: _,
+        timed_out,
+        partial,
+        elapsed_ms,
+        searched_files,
+    } = outcome;
+
+    let mut notices = Vec::new();
+    let mut result = serde_json::json!({
+        "query": query,
+        "directory": search_dir.to_string_lossy().to_string(),
+        "queryMode": match query_mode {
+            SearchQueryMode::Literal => "literal",
+            SearchQueryMode::Regex => "regex",
+        },
+        "outputMode": output_mode.as_str(),
+        "count": total_matches,
+        "shownCount": shown_count,
+        "truncated": truncated,
+        "completed": completed,
+        "timedOut": timed_out,
+        "partial": partial,
+        "elapsedMs": elapsed_ms,
+        "searchedFiles": searched_files,
+        "totalFiles": total_files,
+    });
+
+    match output_mode {
+        SearchOutputMode::Content => {
+            let results = results
+                .into_iter()
+                .map(|search_match| {
+                    serde_json::json!({
+                        "path": search_match.path,
+                        "absolutePath": search_match.absolute_path,
+                        "lineNumber": search_match.line_number,
+                        "endLineNumber": search_match.end_line_number,
+                        "lineText": search_match.line_text,
+                        "matchText": search_match.match_text,
+                        "beforeContext": search_match.before_context.into_iter().map(|line| serde_json::json!({
+                            "lineNumber": line.line_number,
+                            "lineText": line.line_text,
+                        })).collect::<Vec<_>>(),
+                        "afterContext": search_match.after_context.into_iter().map(|line| serde_json::json!({
+                            "lineNumber": line.line_number,
+                            "lineText": line.line_text,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            result["results"] = serde_json::json!(results);
+        }
+        SearchOutputMode::FilesWithMatches => {
+            result["files"] = serde_json::json!(files
+                .into_iter()
+                .map(|file| serde_json::json!({
+                    "path": file.path,
+                    "absolutePath": file.absolute_path,
+                }))
+                .collect::<Vec<_>>());
+            result["count"] = serde_json::json!(total_files);
+        }
+        SearchOutputMode::Count => {
+            result["fileCounts"] = serde_json::json!(file_counts
+                .into_iter()
+                .map(|file| serde_json::json!({
+                    "path": file.path,
+                    "absolutePath": file.absolute_path,
+                    "count": file.count,
+                }))
+                .collect::<Vec<_>>());
+        }
     }
-}
 
-fn normalize_file_pattern(pattern: Option<&str>) -> Option<&str> {
-    let trimmed = pattern?.trim();
-    if trimmed.is_empty() || is_noop_file_pattern(trimmed) {
-        None
-    } else {
-        Some(trimmed)
+    if truncated {
+        let total_units = match output_mode {
+            SearchOutputMode::Content => total_matches,
+            SearchOutputMode::FilesWithMatches | SearchOutputMode::Count => total_files,
+        };
+        notices.push(format!(
+            "Showing {} results starting at offset {} out of {}. Refine the query, directory, or filePattern for a narrower result set.",
+            shown_count, offset, total_units
+        ));
     }
-}
 
-fn is_noop_file_pattern(pattern: &str) -> bool {
-    matches!(pattern.trim(), "*" | "**" | "**/*" | "./*" | "./**/*")
-}
+    if timed_out {
+        notices.push(format!(
+            "Search timed out after {} ms and returned partial results from {} scanned files. Narrow the scope or refine the query to finish in one pass.",
+            elapsed_ms, searched_files
+        ));
+    }
 
-struct ParsedSearchResults {
-    truncated: bool,
-    total_count: usize,
-    results: Vec<serde_json::Value>,
+    if let Some(raw_pattern) = input["filePattern"].as_str() {
+        if normalized_file_pattern.is_none() && is_noop_file_pattern(raw_pattern) {
+            notices.push(format!(
+                "Ignored filePattern '{}'; omit wildcard-only patterns because search already covers the selected directory.",
+                raw_pattern.trim()
+            ));
+        }
+    }
+
+    if let Some(raw_type) = file_type {
+        result["type"] = serde_json::json!(raw_type);
+    }
+
+    if !notices.is_empty() {
+        result["notice"] = serde_json::json!(notices.join(" "));
+    }
+
+    Ok(ToolOutput {
+        success: true,
+        result,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_noop_file_pattern, normalize_file_pattern, parse_rg_json};
-    use std::path::Path;
+    use super::search_repo;
 
-    #[test]
-    fn normalize_file_pattern_drops_wildcard_only_values() {
-        assert_eq!(normalize_file_pattern(Some("*")), None);
-        assert_eq!(normalize_file_pattern(Some(" **/* ")), None);
-        assert_eq!(normalize_file_pattern(Some("")), None);
-        assert_eq!(normalize_file_pattern(Some("*.rs")), Some("*.rs"));
+    #[tokio::test]
+    async fn content_mode_includes_context_lines() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workspace.path().join("example.rs"),
+            "line one\nwarn!(\"hello\")\nline three\n",
+        )
+        .unwrap();
+
+        let output = search_repo(
+            &serde_json::json!({
+                "query": "warn!(",
+                "context": 1,
+            }),
+            workspace.path().to_str().unwrap(),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert!(output.success);
+        let first = &output.result["results"][0];
+        assert_eq!(first["beforeContext"][0]["lineNumber"].as_u64(), Some(1));
+        assert_eq!(first["afterContext"][0]["lineNumber"].as_u64(), Some(3));
     }
 
-    #[test]
-    fn wildcard_only_pattern_detection_is_narrow() {
-        assert!(is_noop_file_pattern("*"));
-        assert!(is_noop_file_pattern("./**/*"));
-        assert!(!is_noop_file_pattern("*.ts"));
-        assert!(!is_noop_file_pattern("src/**/*.rs"));
+    #[tokio::test]
+    async fn files_mode_returns_unique_matching_files() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("a.ts"), "hello\nhello\n").unwrap();
+        std::fs::write(workspace.path().join("b.ts"), "hello\n").unwrap();
+
+        let output = search_repo(
+            &serde_json::json!({
+                "query": "hello",
+                "outputMode": "files_with_matches",
+            }),
+            workspace.path().to_str().unwrap(),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert!(output.success);
+        assert_eq!(output.result["count"].as_u64(), Some(2));
+        assert_eq!(output.result["files"].as_array().unwrap().len(), 2);
     }
 
-    #[test]
-    fn parse_rg_json_caps_preview_but_preserves_total_count() {
-        let output = r#"{"type":"match","data":{"path":{"text":"/workspace/src/a.rs"},"line_number":3,"lines":{"text":"let tauri = true;\n"}}}
-{"type":"match","data":{"path":{"text":"/workspace/src/b.rs"},"line_number":8,"lines":{"text":"tauri::Builder::default();\n"}}}"#;
+    #[tokio::test]
+    async fn type_filter_limits_results() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("a.ts"), "hello\n").unwrap();
+        std::fs::write(workspace.path().join("b.rs"), "hello\n").unwrap();
 
-        let parsed = parse_rg_json(output, Path::new("/workspace"), 1);
+        let output = search_repo(
+            &serde_json::json!({
+                "query": "hello",
+                "type": "rust",
+                "outputMode": "files_with_matches",
+            }),
+            workspace.path().to_str().unwrap(),
+            &[],
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(parsed.total_count, 2);
-        assert_eq!(parsed.results.len(), 1);
-        assert!(parsed.truncated);
-        assert_eq!(parsed.results[0]["path"].as_str(), Some("src/a.rs"));
+        assert!(output.success);
+        assert_eq!(output.result["count"].as_u64(), Some(1));
+        assert_eq!(output.result["files"][0]["path"].as_str(), Some("b.rs"));
     }
 
-    #[test]
-    fn literal_queries_can_include_regex_metacharacters() {
-        let query = "warn!(";
-        let args = vec![
-            "--json".to_string(),
-            "--fixed-strings".to_string(),
-            "--max-count=100".to_string(),
-            "--max-filesize=1M".to_string(),
-            query.to_string(),
-            "/workspace".to_string(),
-        ];
+    #[tokio::test]
+    async fn context_is_capped_to_keep_output_bounded() {
+        let workspace = tempfile::tempdir().unwrap();
+        let content = (1..=60)
+            .map(|index| {
+                if index == 31 {
+                    "needle".to_string()
+                } else {
+                    format!("line {index}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(workspace.path().join("example.txt"), content).unwrap();
 
-        assert!(args.iter().any(|arg| arg == "--fixed-strings"));
-        assert_eq!(args[4], query);
+        let output = search_repo(
+            &serde_json::json!({
+                "query": "needle",
+                "context": 999,
+            }),
+            workspace.path().to_str().unwrap(),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert!(output.success);
+        assert_eq!(
+            output.result["results"][0]["beforeContext"]
+                .as_array()
+                .unwrap()
+                .len(),
+            20
+        );
+        assert_eq!(
+            output.result["results"][0]["afterContext"]
+                .as_array()
+                .unwrap()
+                .len(),
+            20
+        );
+    }
+
+    #[tokio::test]
+    async fn regex_mode_supports_regular_expressions() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("a.ts"), "const name = 'hello';\n").unwrap();
+
+        let output = search_repo(
+            &serde_json::json!({
+                "query": "name\\s*=\\s*'hello'",
+                "queryMode": "regex",
+            }),
+            workspace.path().to_str().unwrap(),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert!(output.success);
+        assert_eq!(output.result["count"].as_u64(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn multiline_mode_returns_match_metadata() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workspace.path().join("query.sql"),
+            "SELECT *\nFROM users\nWHERE active = true;\n",
+        )
+        .unwrap();
+
+        let output = search_repo(
+            &serde_json::json!({
+                "query": "SELECT \\*\\nFROM users",
+                "queryMode": "regex",
+                "multiline": true,
+            }),
+            workspace.path().to_str().unwrap(),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert!(output.success);
+        assert_eq!(output.result["results"][0]["lineNumber"].as_u64(), Some(1));
+        assert_eq!(
+            output.result["results"][0]["endLineNumber"].as_u64(),
+            Some(2)
+        );
+        assert_eq!(
+            output.result["results"][0]["matchText"].as_str(),
+            Some("SELECT *\nFROM users")
+        );
     }
 }

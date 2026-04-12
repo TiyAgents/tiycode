@@ -72,22 +72,6 @@ jobs:
           cache-all-crates: true
           key: ${{ matrix.target }}
 
-      - name: Cache Homebrew downloads
-        if: matrix.platform == 'macos'
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/Homebrew
-            /opt/homebrew/Cellar/ripgrep
-          key: brew-ripgrep-${{ matrix.arch }}
-
-      - name: Cache Chocolatey packages
-        if: matrix.platform == 'windows'
-        uses: actions/cache@v4
-        with:
-          path: C:\Users\runneradmin\AppData\Local\Temp\chocolatey
-          key: choco-ripgrep
-
       - name: Install Linux dependencies
         if: matrix.platform == 'linux'
         run: |
@@ -101,30 +85,6 @@ jobs:
             libgtk-3-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
-
-      - name: Install ripgrep
-        shell: bash
-        run: |
-          if [ "${{ matrix.platform }}" = "linux" ]; then
-            sudo apt-get install -y ripgrep
-          elif [ "${{ matrix.platform }}" = "macos" ]; then
-            brew install ripgrep || true
-            RG_PATH=""
-            if command -v rg >/dev/null 2>&1; then
-              RG_PATH="$(command -v rg)"
-            else
-              CELLAR_DIR="$(brew --cellar ripgrep)"
-              RG_PATH="$(find "$CELLAR_DIR" -path '*/bin/rg' -type f | sort -V | tail -n 1)"
-            fi
-            if [ -z "$RG_PATH" ] || [ ! -x "$RG_PATH" ]; then
-              echo "::error::ripgrep installed but rg could not be resolved from PATH or Homebrew Cellar"
-              exit 1
-            fi
-            echo "TIY_BUILD_RG_PATH=$RG_PATH" >> "$GITHUB_ENV"
-            echo "Using rg at: $RG_PATH"
-          else
-            choco install ripgrep -y
-          fi
 
       - name: Install dependencies
         run: npm ci

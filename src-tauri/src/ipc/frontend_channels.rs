@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 
+use crate::core::index_manager::{SearchBatchResponse, SearchResponse};
 use crate::core::subagent::{SubagentActivityStatus, SubagentProgressSnapshot};
 use crate::model::git::GitSnapshotDto;
 use crate::model::task_board::TaskBoardDto;
@@ -222,5 +223,32 @@ pub enum GitStreamEvent {
     RefreshCompleted {
         #[serde(rename = "workspaceId")]
         workspace_id: String,
+    },
+}
+
+/// Events sent to the frontend index search surface for progressive results.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SearchStreamEvent {
+    Started {
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+        query: String,
+    },
+    Batch {
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+        batch: SearchBatchResponse,
+    },
+    Completed {
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+        response: SearchResponse,
+    },
+    Failed {
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+        query: String,
+        error: String,
     },
 }

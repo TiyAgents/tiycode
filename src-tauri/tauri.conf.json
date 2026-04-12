@@ -60,7 +60,6 @@
     "homepage": "https://tiy.ai",
     "category": "Productivity",
     "createUpdaterArtifacts": true,
-    "externalBin": ["target/tiy-rg/rg"],
     "resources": [
       "bundled-catalog/catalog.json",
       "bundled-catalog/catalog.manifest.json"

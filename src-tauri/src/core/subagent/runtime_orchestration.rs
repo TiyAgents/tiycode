@@ -211,13 +211,13 @@ Return format:\n\
             AgentTool::new(
                 "search",
                 "Search Repo",
-                "Search the current workspace with ripgrep. Results are preview-limited for safety; omit wildcard-only filePattern values like '*' or '**/*'.",
+                "Search the current workspace with a built-in cross-platform search engine. Supports literal or regex queries, optional context lines, file glob filters, and files/count output modes. Results are preview-limited for safety; omit wildcard-only filePattern values like '*' or '**/*'.",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Literal text to search for. Special regex characters are matched as plain text by default."
+                            "description": "Search text or regex pattern. Defaults to literal mode, so special regex characters are matched as plain text unless queryMode='regex'."
                         },
                         "directory": {
                             "type": "string",
@@ -227,9 +227,47 @@ Return format:\n\
                             "type": "string",
                             "description": "Optional glob filter such as '*.rs' or 'src/**/*.ts'. Omit it to search all files; do not pass '*' or '**/*'."
                         },
+                        "type": {
+                            "type": "string",
+                            "description": "Optional file type filter such as 'rust', 'ts', 'js', 'py', 'go', or 'json'. More natural than filePattern for language-targeted searches."
+                        },
                         "maxResults": {
                             "type": "integer",
                             "description": "Optional preview limit for returned matches. Defaults to 100 and is capped for context safety."
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Optional number of matches or files to skip before collecting results."
+                        },
+                        "queryMode": {
+                            "type": "string",
+                            "enum": ["literal", "regex"],
+                            "description": "Use 'literal' for plain text matching (default) or 'regex' for regular expression search."
+                        },
+                        "outputMode": {
+                            "type": "string",
+                            "enum": ["content", "files_with_matches", "count"],
+                            "description": "Choose 'content' for matching lines, 'files_with_matches' for unique matching files, or 'count' for per-file match counts."
+                        },
+                        "caseInsensitive": {
+                            "type": "boolean",
+                            "description": "Set true for case-insensitive matching."
+                        },
+                        "context": {
+                            "type": "integer",
+                            "description": "Optional number of context lines to include before and after each match in content mode."
+                        },
+                        "beforeContext": {
+                            "type": "integer",
+                            "description": "Optional number of lines to include before each match in content mode. Overrides the shared context value for the before side."
+                        },
+                        "afterContext": {
+                            "type": "integer",
+                            "description": "Optional number of lines to include after each match in content mode. Overrides the shared context value for the after side."
+                        },
+                        "timeoutMs": {
+                            "type": "integer",
+                            "description": "Optional search timeout in milliseconds. When the timeout is hit, the tool returns partial results and marks the response as incomplete."
                         }
                     },
                     "required": ["query"]
