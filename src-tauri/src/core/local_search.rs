@@ -222,7 +222,9 @@ impl LocalSearchStream {
 }
 
 pub async fn run_local_search(request: LocalSearchRequest) -> Result<LocalSearchOutcome> {
-    stream_local_search(request).finish().await
+    tokio::task::spawn_blocking(move || run_local_search_blocking(request, |_| {}))
+        .await
+        .context("local search task failed to join")?
 }
 
 pub fn stream_local_search(request: LocalSearchRequest) -> LocalSearchStream {
