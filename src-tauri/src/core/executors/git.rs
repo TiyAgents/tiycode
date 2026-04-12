@@ -16,6 +16,33 @@ pub async fn execute(
     workspace_path: &str,
 ) -> Result<ToolOutput, AppError> {
     match tool_name {
+        "git_status" => {
+            let path = read_optional_path(input);
+            let result = git_status(workspace_path, path.as_deref()).await?;
+            Ok(ToolOutput {
+                success: true,
+                result,
+            })
+        }
+        "git_diff" => {
+            let path = read_optional_path(input);
+            let staged = input["staged"].as_bool().unwrap_or(false);
+            let context_lines = read_context_lines(input)?;
+            let result = git_diff(workspace_path, path.as_deref(), staged, context_lines).await?;
+            Ok(ToolOutput {
+                success: true,
+                result,
+            })
+        }
+        "git_log" => {
+            let path = read_optional_path(input);
+            let limit = read_log_limit(input)?;
+            let result = git_log(workspace_path, path.as_deref(), limit).await?;
+            Ok(ToolOutput {
+                success: true,
+                result,
+            })
+        }
         "git_add" | "git_stage" => {
             let paths = read_paths(input)?;
             stage_paths(workspace_path, &paths).await?;
@@ -90,6 +117,30 @@ pub async fn execute(
             }),
         }),
     }
+}
+
+pub async fn git_status(
+    workspace_path: &str,
+    path: Option<&str>,
+) -> Result<serde_json::Value, AppError> {
+    run_git_read_only(workspace_path, build_status_args(path)).await
+}
+
+pub async fn git_diff(
+    workspace_path: &str,
+    path: Option<&str>,
+    staged: bool,
+    context_lines: u32,
+) -> Result<serde_json::Value, AppError> {
+    run_git_read_only(workspace_path, build_diff_args(path, staged, context_lines)).await
+}
+
+pub async fn git_log(
+    workspace_path: &str,
+    path: Option<&str>,
+    limit: u32,
+) -> Result<serde_json::Value, AppError> {
+    run_git_read_only(workspace_path, build_log_args(path, limit)).await
 }
 
 pub async fn commit(workspace_path: &str, message: &str) -> Result<GitCommandResultDto, AppError> {
@@ -256,6 +307,27 @@ async fn run_git_action(
     })?
 }
 
+async fn run_git_read_only(
+    workspace_path: &str,
+    args: Vec<String>,
+) -> Result<serde_json::Value, AppError> {
+    ensure_git_cli_available()?;
+
+    let workspace_root = canonicalize_workspace(workspace_path);
+
+    tokio::task::spawn_blocking(move || {
+        let repo_root = discover_repo_root(&workspace_root)?;
+        run_git_read_only_command(&repo_root, args)
+    })
+    .await
+    .map_err(|error| {
+        AppError::internal(
+            ErrorSource::Git,
+            format!("Git read-only CLI task failed: {error}"),
+        )
+    })?
+}
+
 fn run_git_command(
     repo_root: &Path,
     action: GitMutationAction,
@@ -295,6 +367,91 @@ fn run_git_command(
     })
 }
 
+fn run_git_read_only_command(
+    repo_root: &Path,
+    args: Vec<String>,
+) -> Result<serde_json::Value, AppError> {
+    let mut command = Command::new("git");
+    configure_background_std_command(&mut command);
+
+    let output = command
+        .args(&args)
+        .current_dir(repo_root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_PAGER", "cat")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| {
+            git_error(
+                "git.cli.spawn_failed",
+                format!("Failed to launch Git CLI: {error}"),
+                true,
+            )
+        })?;
+
+    let stdout = trim_output(&String::from_utf8_lossy(&output.stdout));
+    let stderr = trim_output(&String::from_utf8_lossy(&output.stderr));
+
+    if !output.status.success() {
+        return Err(git_error(
+            "git.read_only.failed",
+            format!(
+                "Git read-only command failed{}",
+                render_cli_hint(&stdout, &stderr)
+            ),
+            true,
+        ));
+    }
+
+    Ok(serde_json::json!({
+        "command": format!("git {}", args.join(" ")),
+        "stdout": stdout,
+        "stderr": stderr,
+    }))
+}
+
+fn build_status_args(path: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "status".to_string(),
+        "--short".to_string(),
+        "--branch".to_string(),
+        "--untracked-files=normal".to_string(),
+    ];
+    append_optional_path(&mut args, path);
+    args
+}
+
+fn build_diff_args(path: Option<&str>, staged: bool, context_lines: u32) -> Vec<String> {
+    let mut args = vec![
+        "diff".to_string(),
+        "--no-ext-diff".to_string(),
+        format!("--unified={context_lines}"),
+    ];
+    if staged {
+        args.push("--cached".to_string());
+    }
+    append_optional_path(&mut args, path);
+    args
+}
+
+fn build_log_args(path: Option<&str>, limit: u32) -> Vec<String> {
+    let mut args = vec![
+        "log".to_string(),
+        "--oneline".to_string(),
+        format!("-n{limit}"),
+    ];
+    append_optional_path(&mut args, path);
+    args
+}
+
+fn append_optional_path(args: &mut Vec<String>, path: Option<&str>) {
+    if let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) {
+        args.push("--".to_string());
+        args.push(path.to_string());
+    }
+}
+
 fn read_paths(input: &serde_json::Value) -> Result<Vec<String>, AppError> {
     let Some(values) = input["paths"].as_array() else {
         return Err(git_error(
@@ -319,6 +476,40 @@ fn read_paths(input: &serde_json::Value) -> Result<Vec<String>, AppError> {
     }
 
     Ok(paths)
+}
+
+fn read_optional_path(input: &serde_json::Value) -> Option<String> {
+    input["path"]
+        .as_str()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+}
+
+fn read_context_lines(input: &serde_json::Value) -> Result<u32, AppError> {
+    let raw = input["contextLines"].as_u64().unwrap_or(3);
+    if raw == 0 || raw > 20 {
+        return Err(git_error(
+            "git.diff.context_invalid",
+            "Git diff contextLines must be between 1 and 20",
+            false,
+        ));
+    }
+
+    Ok(raw as u32)
+}
+
+fn read_log_limit(input: &serde_json::Value) -> Result<u32, AppError> {
+    let raw = input["limit"].as_u64().unwrap_or(10);
+    if raw == 0 || raw > 100 {
+        return Err(git_error(
+            "git.log.limit_invalid",
+            "Git log limit must be between 1 and 100",
+            false,
+        ));
+    }
+
+    Ok(raw as u32)
 }
 
 fn stage_paths_sync(workspace_root: &Path, workspace_paths: &[String]) -> Result<(), AppError> {
