@@ -170,13 +170,13 @@ function buildWorkspaceBindingEntries(
 }
 
 function buildWorkspaceBindings(workspaceEntries: ReadonlyArray<WorkspaceDto>) {
-  return workspaceEntries.reduce<Record<string, string>>(
-    (bindings, workspace) => ({
-      ...bindings,
-      ...buildWorkspaceBindingsForEntry(workspace),
-    }),
-    {},
-  );
+  const bindings: Record<string, string> = {};
+
+  for (const workspace of workspaceEntries) {
+    Object.assign(bindings, buildWorkspaceBindingsForEntry(workspace));
+  }
+
+  return bindings;
 }
 
 function buildProjectOptionFromWorkspace(workspace: WorkspaceDto) {

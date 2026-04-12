@@ -13,6 +13,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use tiycode::core::workspace_manager::WorkspaceManager;
+use tiycode::model::workspace::WorkspaceAddInput;
 
 fn home_env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -101,6 +102,46 @@ async fn test_workspace_duplicate_canonical_path_rejected() {
         result.is_err(),
         "Duplicate canonical_path should be rejected by UNIQUE constraint"
     );
+}
+
+#[tokio::test]
+async fn test_workspace_manager_add_reuses_existing_workspace_for_same_canonical_path() {
+    let workspace_root = tempfile::tempdir().expect("should create temp workspace root");
+    let workspace_path = workspace_root.path().join("project");
+    tokio::fs::create_dir_all(&workspace_path)
+        .await
+        .expect("should create workspace directory");
+
+    let pool = test_helpers::setup_test_pool().await;
+    let manager = WorkspaceManager::new(pool.clone());
+
+    let first = manager
+        .add(WorkspaceAddInput {
+            path: workspace_path.to_string_lossy().to_string(),
+            name: Some("Project".to_string()),
+        })
+        .await
+        .expect("first workspace add should succeed");
+
+    let second = manager
+        .add(WorkspaceAddInput {
+            path: workspace_path.join(".").to_string_lossy().to_string(),
+            name: Some("Project Duplicate".to_string()),
+        })
+        .await
+        .expect("second workspace add should reuse existing workspace");
+
+    assert_eq!(second.id, first.id);
+    assert_eq!(second.canonical_path, first.canonical_path);
+    assert_eq!(second.path, first.path);
+
+    let row = sqlx::query("SELECT COUNT(*) as count FROM workspaces WHERE canonical_path = ?")
+        .bind(&first.canonical_path)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(row.get::<i64, _>("count"), 1);
 }
 
 #[tokio::test]

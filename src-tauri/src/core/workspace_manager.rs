@@ -2,7 +2,6 @@ use chrono::Utc;
 use sqlx::SqlitePool;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use tokio::{fs, task};
 
 use crate::model::errors::{AppError, ErrorSource};
@@ -24,6 +23,10 @@ impl WorkspaceManager {
     }
 
     /// Add a new workspace from a user-provided path.
+    ///
+    /// This operation is idempotent on the workspace canonical path: if the
+    /// canonicalized target already exists in the database, the existing record
+    /// is returned instead of raising a duplicate error.
     pub async fn add(&self, input: WorkspaceAddInput) -> Result<WorkspaceRecord, AppError> {
         let raw_path = Path::new(&input.path);
 
@@ -279,21 +282,13 @@ fn derive_name_from_path(path: &Path) -> String {
 
 /// Derive a display-friendly path using `~` for the home directory.
 async fn derive_display_path(path: &Path) -> String {
-    /// Lazily compute and cache the canonical home directory.
-    fn cached_canonical_home() -> Option<&'static PathBuf> {
-        static CANONICAL_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
-        CANONICAL_HOME
-            .get_or_init(|| dirs::home_dir().and_then(|home| dunce::canonicalize(&home).ok()))
-            .as_ref()
-    }
-
     if let Some(home) = dirs::home_dir() {
         if let Ok(relative) = path.strip_prefix(&home) {
             return format!("~/{}", relative.display());
         }
 
-        if let Some(canonical_home) = cached_canonical_home() {
-            if let Ok(relative) = path.strip_prefix(canonical_home) {
+        if let Ok(canonical_home) = dunce::canonicalize(&home) {
+            if let Ok(relative) = path.strip_prefix(&canonical_home) {
                 return format!("~/{}", relative.display());
             }
         }
@@ -304,6 +299,54 @@ async fn derive_display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
+
+    fn home_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct HomeEnvGuard {
+        original_home: Option<OsString>,
+        #[cfg(target_os = "windows")]
+        original_userprofile: Option<OsString>,
+    }
+
+    impl HomeEnvGuard {
+        fn set(home: &Path) -> Self {
+            let original_home = std::env::var_os("HOME");
+            std::env::set_var("HOME", home);
+
+            #[cfg(target_os = "windows")]
+            let original_userprofile = {
+                let prev = std::env::var_os("USERPROFILE");
+                std::env::set_var("USERPROFILE", home);
+                prev
+            };
+
+            Self {
+                original_home,
+                #[cfg(target_os = "windows")]
+                original_userprofile,
+            }
+        }
+    }
+
+    impl Drop for HomeEnvGuard {
+        fn drop(&mut self) {
+            match &self.original_home {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+
+            #[cfg(target_os = "windows")]
+            match &self.original_userprofile {
+                Some(profile) => std::env::set_var("USERPROFILE", profile),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
 
     #[test]
     fn builds_default_thread_workspace_path_under_tiy_workspace_directory() {
@@ -314,5 +357,34 @@ mod tests {
             workspace_path,
             PathBuf::from("/tmp/jorben/.tiy/workspace/Default")
         );
+    }
+
+    #[tokio::test]
+    async fn derive_display_path_uses_current_home_after_environment_changes() {
+        let _home_lock = home_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let first_home = tempfile::tempdir().expect("should create first temp home");
+        let second_home = tempfile::tempdir().expect("should create second temp home");
+
+        let first_path = dunce::canonicalize(first_home.path().join("project"));
+        assert!(first_path.is_err(), "fixture should not exist yet");
+
+        tokio::fs::create_dir_all(first_home.path().join("project"))
+            .await
+            .expect("should create first project directory");
+        tokio::fs::create_dir_all(second_home.path().join("project"))
+            .await
+            .expect("should create second project directory");
+
+        let first_canonical = dunce::canonicalize(first_home.path().join("project"))
+            .expect("should canonicalize first project");
+        let second_canonical = dunce::canonicalize(second_home.path().join("project"))
+            .expect("should canonicalize second project");
+
+        let _first_guard = HomeEnvGuard::set(first_home.path());
+        assert_eq!(derive_display_path(&first_canonical).await, "~/project");
+        drop(_first_guard);
+
+        let _second_guard = HomeEnvGuard::set(second_home.path());
+        assert_eq!(derive_display_path(&second_canonical).await, "~/project");
     }
 }
