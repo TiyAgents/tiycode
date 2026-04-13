@@ -333,7 +333,7 @@ pub fn run() {
         ])
         .setup(move |app| {
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
-            let db_path = tiy_home.join("db/tiy-agent.db");
+            let db_path = tiy_home.join("db/tiycode.db");
 
             let pool = tauri::async_runtime::block_on(async {
                 persistence::init_database(&db_path).await
