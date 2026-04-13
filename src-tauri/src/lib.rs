@@ -48,20 +48,20 @@ fn log_dir() -> PathBuf {
     {
         dirs::home_dir()
             .expect("cannot resolve HOME directory")
-            .join("Library/Logs/TiyAgent")
+            .join("Library/Logs/TiyAgents")
     }
     #[cfg(target_os = "windows")]
     {
         dirs::data_local_dir()
             .expect("cannot resolve LOCALAPPDATA")
-            .join("TiyAgent/logs")
+            .join("TiyAgents/logs")
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         dirs::state_dir()
             .or_else(|| dirs::home_dir().map(|h| h.join(".local/state")))
             .expect("cannot resolve state directory")
-            .join("tiy-agent/logs")
+            .join("tiy-agents/logs")
     }
 }
 
@@ -97,7 +97,7 @@ fn init_logging() {
     let file_appender = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
         .max_log_files(5)
-        .filename_prefix("app")
+        .filename_prefix("tiycode")
         .filename_suffix("log")
         .build(&log_path)
         .expect("failed to create log appender");
