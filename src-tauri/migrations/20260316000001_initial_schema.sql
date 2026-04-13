@@ -1,7 +1,7 @@
 -- Tiy Agent Initial Schema
 -- Date: 2026-03-16
 -- Description: Creates all core tables for the Tiy Agent desktop application.
--- Storage location: $HOME/.tiy/db/tiy-agent.db
+-- Storage location: $HOME/.tiy/db/tiycode.db
 
 --------------------------------------------------------------------------------
 -- 0. Pragmas (applied at connection time, not in migration)

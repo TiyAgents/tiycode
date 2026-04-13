@@ -1,8 +1,8 @@
 //! M1.1 — Project infrastructure & database layer tests
 //!
 //! Acceptance criteria:
-//! - `cargo build` passes; app startup creates `$HOME/.tiy/db/tiy-agent.db` with 17 tables
-//! - Logs written to platform-specific log path (macOS ~/Library/Logs/TiyAgent/)
+//! - `cargo build` passes; app startup creates `$HOME/.tiy/db/tiycode.db` with 17 tables
+//! - Logs written to platform-specific log path (macOS ~/Library/Logs/TiyAgents/)
 //! - `cargo test` persistence module passes
 
 mod test_helpers;

@@ -630,7 +630,53 @@ When reviewing code, check for:
 
 ---
 
-## 8. Workspace & Git
+## 8. Logs & Diagnostics
+
+TiyCode's native backend logs are produced by the Rust/Tauri process through `tracing`. These file logs are **platform-native operational logs**, not files inside `~/.tiy/`.
+
+### 8.1 Log Directories
+
+| Platform | Directory | Notes |
+|----------|-----------|-------|
+| macOS | `~/Library/Logs/TiyAgents/` | Created automatically on startup if missing |
+| Windows | `%LOCALAPPDATA%/TiyAgents/logs/` | Uses the current user's Local AppData directory |
+| Linux / other Unix | `$XDG_STATE_HOME/tiy-agents/logs/` | Preferred state directory |
+| Linux fallback | `~/.local/state/tiy-agents/logs/` | Used when `XDG_STATE_HOME` is not set |
+
+### 8.2 File Naming, Format, and Retention
+
+| Rule | Behavior |
+|------|----------|
+| File prefix | `tiycode` |
+| File suffix | `log` |
+| Format | Structured JSON logs |
+| Default level | `info` (`sqlx=warn`) unless overridden by environment |
+| Rotation | Daily |
+| Retention | Keep at most **5** log files |
+| Cleanup | Older rotated files beyond the 5-file limit are removed automatically by the rolling appender |
+
+### 8.3 What Gets Recorded in Logs
+
+The file logs are primarily for operational diagnostics. They commonly include:
+
+- App startup and readiness events such as agent startup, database readiness, and migration completion.
+- Workspace, thread, and run lifecycle events such as workspace added/removed, thread created/deleted, run cancellation, and context compression activity.
+- Tool execution metadata such as `tool_call_id`, tool name, and success/failure status.
+- Desktop/runtime warnings such as tray visibility issues, launch-at-login sync failures, sleep-prevention failures, and terminal session recovery or shutdown failures.
+- Provider/catalog/extension warnings such as catalog refresh/load failures, plugin command parse failures, and skill file read/parse failures.
+- Error objects and diagnostic metadata such as local file paths, workspace/thread/run IDs, provider/model IDs, counts, setting keys, and error messages.
+
+The current Rust tracing is mostly **metadata-oriented**, not intended as a full conversation transcript dump. Even so, users should review logs before sharing them externally because they may contain local paths, IDs, tool names, and operational error details.
+
+### 8.4 How the Agent Should Use This Information
+
+- When a user asks where logs are stored, answer with the platform-specific directory above rather than pointing them to `~/.tiy/`.
+- When troubleshooting startup, provider catalog, terminal, tray, or extension loading issues, ask the user for the newest `tiycode*.log` file from the platform-native log directory.
+- If a user asks whether old logs are cleaned automatically, explain the daily rotation + 5-file retention rule.
+
+---
+
+## 9. Workspace & Git
 
 ### Workspaces
 
@@ -655,7 +701,7 @@ The `/commit` command triggers AI-powered commit message generation.
 
 ---
 
-## 9. Terminal
+## 10. Terminal
 
 TiyCode includes a built-in Terminal panel.
 
@@ -687,7 +733,7 @@ TiyCode includes a built-in Terminal panel.
 
 ---
 
-## 10. Theme & Language
+## 11. Theme & Language
 
 ### Theme
 
@@ -712,7 +758,7 @@ TiyCode includes a built-in Terminal panel.
 
 ---
 
-## 11. Common User Scenarios
+## 12. Common User Scenarios
 
 ### "Command not found" in terminal
 
@@ -830,7 +876,7 @@ Use `shell` to run `git status`, `git diff`, `git log --oneline -10`, etc.
 
 ---
 
-## 12. Capability Summary
+## 13. Capability Summary
 
 ### What the Agent CAN Do Directly
 
