@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-04-13
+### :sparkles: New Features
+- [`928ca77`](https://github.com/TiyAgents/tiycode/commit/928ca77d74a2da9d198164f55bcc804755e6e7f9) - **settings**: ✨ add OpenAI Responses provider type to catalog *(PR [#29](https://github.com/TiyAgents/tiycode/pull/29) by [@HayWolf](https://github.com/HayWolf))*
+- [`d927366`](https://github.com/TiyAgents/tiycode/commit/d927366ee58a2a678c0bacc3697f2deaa18cfcff) - **search**: replace ripgrep with in-process local search engine *(PR [#30](https://github.com/TiyAgents/tiycode/pull/30) by [@HayWolf](https://github.com/HayWolf))*
+- [`ed902e4`](https://github.com/TiyAgents/tiycode/commit/ed902e4c711e905c88e8b04d3129a08d0da5215a) - **review**: add diff-first review contract and Git read-only review tools *(PR [#32](https://github.com/TiyAgents/tiycode/pull/32) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`b176852`](https://github.com/TiyAgents/tiycode/commit/b176852af5d344acbf991a5b0b8db9e372132d65) - **workspace**: normalize workspace paths and helper shell guidance *(PR [#31](https://github.com/TiyAgents/tiycode/pull/31) by [@HayWolf](https://github.com/HayWolf))*
+- [`865ad26`](https://github.com/TiyAgents/tiycode/commit/865ad26101f03dbec757d8fd8875606e9372d2b6) - **llm**: 🐛 disable reasoning and bump token budget for lightweight generation tasks *(PR [#33](https://github.com/TiyAgents/tiycode/pull/33) by [@jorben](https://github.com/jorben))*
+
+### :recycle: Refactors
+- [`7476c7c`](https://github.com/TiyAgents/tiycode/commit/7476c7c9feb7d6258e7e55519ef0d97f5ff502fd) - ⚡️ parallelize overlay fetching and cache canonical paths *(PR [#26](https://github.com/TiyAgents/tiycode/pull/26) by [@jorben](https://github.com/jorben))*
+- [`d618725`](https://github.com/TiyAgents/tiycode/commit/d61872556a00a8573e7a08b453862677f2ae4cf4) - **ripgrep**: improve executable resolution strategy *(PR [#25](https://github.com/TiyAgents/tiycode/pull/25) by [@HayWolf](https://github.com/HayWolf))*
+- [`9f61a19`](https://github.com/TiyAgents/tiycode/commit/9f61a19835c789b9bc6e8626adf29c4fd93f243f) - **shell**: unify shell runtime and improve tool discovery *(PR [#28](https://github.com/TiyAgents/tiycode/pull/28) by [@HayWolf](https://github.com/HayWolf))*
+
+### :white_check_mark: Tests
+- [`371b120`](https://github.com/TiyAgents/tiycode/commit/371b1200a370d96c268a3643b20ed8191ed7393e) - **agent-session**: 🧪 default OpenAI compat and reasoning handling *(PR [#27](https://github.com/TiyAgents/tiycode/pull/27) by [@HayWolf](https://github.com/HayWolf))*
+
+### :wrench: Chores
+- [`3abca43`](https://github.com/TiyAgents/tiycode/commit/3abca43299d00e799de7fe477b83ccd3ac5b077f) - **platform**: standardize log paths and app db filename *(PR [#34](https://github.com/TiyAgents/tiycode/pull/34) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.2.5] - 2026-04-10
 ### :sparkles: New Features
 - [`91979fb`](https://github.com/TiyAgents/tiycode/commit/91979fb531dd57baa3169959353d8e25447e3919) - ✨ add shell setup docs and duplicate approval handling *(commit by [@jorben](https://github.com/jorben))*
@@ -428,3 +450,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.3]: https://github.com/TiyAgents/tiycode/compare/0.2.2...0.2.3
 [0.2.4]: https://github.com/TiyAgents/tiycode/compare/0.2.3...0.2.4
 [0.2.5]: https://github.com/TiyAgents/tiycode/compare/0.2.4...0.2.5
+[0.2.6]: https://github.com/TiyAgents/tiycode/compare/0.2.5...0.2.6
