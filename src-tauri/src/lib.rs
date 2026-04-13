@@ -30,6 +30,8 @@ const MAIN_WINDOW_LABEL: &str = "main";
 const MAIN_TRAY_ID: &str = "main-tray";
 const TRAY_SHOW_ID: &str = "tray-show";
 const TRAY_QUIT_ID: &str = "tray-quit";
+const LOG_FILE_PREFIX: &str = "tiycode";
+const LOG_FILE_SUFFIX: &str = "log";
 
 fn persisted_window_state_flags() -> StateFlags {
     StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
@@ -97,8 +99,8 @@ fn init_logging() {
     let file_appender = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
         .max_log_files(5)
-        .filename_prefix("tiycode")
-        .filename_suffix("log")
+        .filename_prefix(LOG_FILE_PREFIX)
+        .filename_suffix(LOG_FILE_SUFFIX)
         .build(&log_path)
         .expect("failed to create log appender");
 
@@ -512,4 +514,69 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{log_dir, LOG_FILE_PREFIX, LOG_FILE_SUFFIX};
+    use std::io::Write;
+    use tracing_appender::rolling::{RollingFileAppender, Rotation};
+
+    #[test]
+    fn log_dir_uses_platform_native_location() {
+        let path = log_dir();
+
+        #[cfg(target_os = "macos")]
+        assert!(
+            path.ends_with("Library/Logs/TiyAgents"),
+            "expected macOS logs under ~/Library/Logs/TiyAgents, got {}",
+            path.display()
+        );
+
+        #[cfg(target_os = "windows")]
+        assert!(
+            path.ends_with("TiyAgents/logs"),
+            "expected Windows logs under %LOCALAPPDATA%/TiyAgents/logs, got {}",
+            path.display()
+        );
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        assert!(
+            path.ends_with("tiy-agents/logs"),
+            "expected Unix logs under state dir/tiy-agents/logs, got {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn log_file_uses_tiycode_prefix_and_log_suffix() {
+        let temp_dir = tempfile::tempdir().expect("should create tempdir");
+        let mut appender = RollingFileAppender::builder()
+            .rotation(Rotation::DAILY)
+            .filename_prefix(LOG_FILE_PREFIX)
+            .filename_suffix(LOG_FILE_SUFFIX)
+            .build(temp_dir.path())
+            .expect("should create rolling file appender");
+
+        writeln!(appender, "test log line").expect("should write log line");
+        appender.flush().expect("should flush log output");
+
+        let entries = std::fs::read_dir(temp_dir.path())
+            .expect("should read log directory")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("should collect log directory entries");
+
+        assert_eq!(entries.len(), 1, "expected a single log file");
+
+        let file_name = entries[0].file_name();
+        let file_name = file_name.to_string_lossy();
+        assert!(
+            file_name.starts_with(LOG_FILE_PREFIX),
+            "expected log file to start with {LOG_FILE_PREFIX}, got {file_name}"
+        );
+        assert!(
+            file_name.ends_with(&format!(".{LOG_FILE_SUFFIX}")),
+            "expected log file to end with .{LOG_FILE_SUFFIX}, got {file_name}"
+        );
+    }
 }
