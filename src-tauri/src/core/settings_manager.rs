@@ -426,7 +426,9 @@ fn build_provider_model_test_request(
             provider.custom_headers_json.as_deref(),
         ))),
         session_id: None,
-        security: Some(tiycore::types::SecurityConfig::default().with_url(crate::core::tiycode_url_policy())),
+        security: Some(
+            tiycore::types::SecurityConfig::default().with_url(crate::core::tiycode_url_policy()),
+        ),
         on_payload: build_provider_options_payload_hook(model.provider_options_json.as_deref()),
         transport: None,
         max_retry_delay_ms: None,
