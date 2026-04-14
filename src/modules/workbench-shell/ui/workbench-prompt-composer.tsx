@@ -1272,6 +1272,13 @@ export function WorkbenchPromptComposer({
     }
 
     if ((event.key === "Enter" || event.key === "Tab") && selectedCommand) {
+      // When the command is already fully resolved in the input (exact match),
+      // Enter should submit instead of re-inserting the same command.
+      const parsedActive = getParsedActiveCommand(value, commandRegistry);
+      if (event.key === "Enter" && parsedActive?.command) {
+        return;
+      }
+
       event.preventDefault();
       const nextValue = buildCommandInputValue(selectedCommand);
       onValueChange(nextValue);
