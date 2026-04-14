@@ -74,6 +74,37 @@ function resolveProfilePrimaryModel(
   };
 }
 
+export function resolveProfileModelByTier(
+  tier: "primary" | "assistant" | "lite",
+  profile: AgentProfile,
+  providers: ReadonlyArray<ProviderEntry> = [],
+): { displayName: string; modelId: string } | null {
+  let providerId: string | undefined;
+  let modelRecordId: string | undefined;
+
+  if (tier === "primary") {
+    providerId = profile.primaryProviderId;
+    modelRecordId = profile.primaryModelId;
+  } else if (tier === "assistant") {
+    providerId = profile.assistantProviderId;
+    modelRecordId = profile.assistantModelId;
+  } else {
+    providerId = profile.liteProviderId;
+    modelRecordId = profile.liteModelId;
+  }
+
+  if (!providerId || !modelRecordId) {
+    return null;
+  }
+
+  const resolved = resolveProviderModel(providers, providerId, modelRecordId);
+  if (resolved) {
+    return resolved;
+  }
+
+  return { displayName: modelRecordId, modelId: modelRecordId };
+}
+
 export function getProfilePrimaryModelId(
   profile: AgentProfile,
   providers: ReadonlyArray<ProviderEntry> = [],
