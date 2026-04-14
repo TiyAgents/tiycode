@@ -436,6 +436,7 @@ export function BranchSelector({
                 <button
                   type="button"
                   className="flex-1 rounded-lg border border-app-border bg-app-surface-muted px-3 py-1.5 text-xs font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     setCreateMode(false);
                     setNewBranchName("");
@@ -449,6 +450,7 @@ export function BranchSelector({
                   type="button"
                   className="flex-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={!newBranchName.trim() || isCreating}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => void doCreateBranch(newBranchName)}
                 >
                   {isCreating ? (

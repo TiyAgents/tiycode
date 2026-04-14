@@ -25,7 +25,7 @@ use crate::persistence::repo::{audit_repo, workspace_repo};
 
 const COMMIT_MESSAGE_MAX_TOKENS: u32 = 2048;
 const COMMIT_MESSAGE_MAX_TOKENS_REASONING: u32 = 4096;
-const COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);
+const COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(60);
 const COMMIT_MESSAGE_FILE_LIMIT: usize = 24;
 const COMMIT_MESSAGE_DIFF_CHAR_BUDGET: usize = 48_000;
 const COMMIT_MESSAGE_GENERATOR_PROMPT: &str = r#"You are a commit message generator for Git changes.

@@ -38,7 +38,7 @@ use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{MessageAttachmentDto, MessageRecord, ThreadStatus};
 use crate::persistence::repo::{message_repo, profile_repo, run_repo, thread_repo, workspace_repo};
 
-const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(12);
+const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(60);
 const COMPACT_SUMMARY_TIMEOUT: Duration = Duration::from_secs(20);
 const TITLE_GENERATION_MAX_TOKENS: u32 = 512;
 const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 2048;
