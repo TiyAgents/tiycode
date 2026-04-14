@@ -866,6 +866,7 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
             tiycore::agent::AbortSignal::new(),
             ToolExecutionOptions {
                 allow_user_approval: false,
+                execution_timeout: None,
             },
             {
                 let approval_prompted = Arc::clone(&approval_prompted);
@@ -1009,6 +1010,9 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
         ToolGatewayResult::Cancelled { .. } => {
             panic!("search should not be cancelled");
         }
+        ToolGatewayResult::TimedOut { .. } => {
+            panic!("search should not time out");
+        }
     }
 }
 
@@ -1119,6 +1123,9 @@ async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
         ToolGatewayResult::Cancelled { .. } => {
             panic!("wildcard file pattern search should not be cancelled");
         }
+        ToolGatewayResult::TimedOut { .. } => {
+            panic!("wildcard file pattern search should not time out");
+        }
     }
 }
 
@@ -1219,6 +1226,9 @@ async fn test_search_repo_treats_regex_metacharacters_as_literal_text() {
         ToolGatewayResult::Cancelled { .. } => {
             panic!("literal metacharacter search should not be cancelled");
         }
+        ToolGatewayResult::TimedOut { .. } => {
+            panic!("literal metacharacter search should not time out");
+        }
     }
 }
 
@@ -1309,6 +1319,9 @@ async fn test_search_repo_supports_regex_count_mode_and_case_insensitive_matchin
         }
         ToolGatewayResult::Cancelled { .. } => {
             panic!("regex count-mode search should not be cancelled");
+        }
+        ToolGatewayResult::TimedOut { .. } => {
+            panic!("regex count-mode search should not time out");
         }
     }
 }
