@@ -18,7 +18,6 @@ import {
   ModelSelectorContent,
   ModelSelectorEmpty,
   ModelSelectorGroup,
-  ModelSelectorInput,
   ModelSelectorItem,
   ModelSelectorList,
   ModelSelectorTrigger,
@@ -855,14 +854,15 @@ function ProfileSelectorItem({
   profile: AgentProfile;
   providers: ReadonlyArray<ProviderEntry>;
 }) {
+  const t = useT();
   const primaryModel = resolveProfileModelByTier("primary", profile, providers);
   const assistantModel = resolveProfileModelByTier("assistant", profile, providers);
   const liteModel = resolveProfileModelByTier("lite", profile, providers);
 
   const tiers: Array<{ label: string; model: { displayName: string; modelId: string } | null }> = [
-    { label: "Primary", model: primaryModel },
-    { label: "Assistant", model: assistantModel },
-    { label: "Lite", model: liteModel },
+    { label: t("composer.profileTier.primary"), model: primaryModel },
+    { label: t("composer.profileTier.auxiliary"), model: assistantModel },
+    { label: t("composer.profileTier.lightweight"), model: liteModel },
   ];
 
   return (
@@ -885,7 +885,7 @@ function ProfileSelectorItem({
                   <span className="min-w-0 truncate text-[11px] text-app-muted">{model.displayName}</span>
                 </>
               ) : (
-                <span className="text-[11px] italic text-app-subtle/60">Not configured</span>
+                <span className="text-[11px] italic text-app-subtle/60">{t("composer.profileTier.notConfigured")}</span>
               )}
             </div>
           ))}
@@ -1639,7 +1639,6 @@ export function WorkbenchPromptComposer({
                         </PromptInputButton>
                       </ModelSelectorTrigger>
                       <ModelSelectorContent commandProps={{ value: activeAgentProfileId ?? undefined }} title="Profile Selector">
-                        <ModelSelectorInput placeholder="Search profiles..." />
                         <ModelSelectorList>
                           <ModelSelectorEmpty>{t("composer.noProfileAvailable")}</ModelSelectorEmpty>
                           <ModelSelectorGroup heading="Agent Profiles">
