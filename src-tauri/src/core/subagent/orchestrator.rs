@@ -325,6 +325,10 @@ impl HelperAgentOrchestrator {
                             );
                             helper_agent_error_result("Helper tool execution cancelled")
                         }
+                        // NOTE: Currently unreachable because subagent passes
+                        // `execution_timeout: None`. This arm exists for forward-
+                        // compatibility so enabling a timeout later won't cause a
+                        // non-exhaustive match error.
                         ToolGatewayResult::TimedOut { timeout_secs, .. } => {
                             let message =
                                 format!("Helper tool timed out after {timeout_secs}s");
