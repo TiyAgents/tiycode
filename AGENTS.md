@@ -22,6 +22,9 @@ Frontend utility and model regressions can be covered with Vitest tests colocate
 ## Commit & Pull Request Guidelines
 Follow Conventional Commits: `type(scope): short summary`, for example `feat(agent-session): enhance workspace context`. Common types include `feat`, `fix`, `refactor`, and `chore`. Keep scopes tied to the area changed. Pull requests should include a concise summary, linked issue or design doc when relevant, commands run, and screenshots or GIFs for visible UI changes. Call out migrations, capability updates, or setup steps explicitly.
 
+## Settings Schema Version (`SETTINGS_STORAGE_SCHEMA_VERSION`)
+The constant `SETTINGS_STORAGE_SCHEMA_VERSION` in `src/modules/settings-center/model/defaults.ts` controls whether the app discards cached localStorage settings and falls back to code-defined defaults on startup. When the stored schema version is lower than this constant, the app resets all settings to defaults. **You must increment this value** whenever you change any built-in default that needs to reach existing users, including but not limited to: updates to default slash command prompts (`cmd-commit`, `cmd-create-pr`, etc.), additions or removals of built-in commands, and changes to default model, provider, or other setting values in `DEFAULT_COMMAND_SETTINGS` or `DEFAULT_SETTINGS`. Without the increment, existing users will keep stale localStorage data and never see the updated defaults. Note that incrementing this value resets *all* user-customized settings, so only do it when shipping defaults that must override prior values.
+
 ## Post-Implementation Checklist
 After completing a task, always run the relevant formatting and validation commands before committing: `cargo fmt --manifest-path src-tauri/Cargo.toml` for any Rust changes, `npm run typecheck` for any TypeScript/TSX changes, and `npm run test:unit` when frontend utility or model tests were added or affected. Fix all warnings and errors before finalizing the commit.
 

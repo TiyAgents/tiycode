@@ -10,7 +10,7 @@ import type {
 } from "@/modules/settings-center/model/types";
 
 export const SETTINGS_STORAGE_KEY = "tiy-agent-workbench-settings";
-export const SETTINGS_STORAGE_SCHEMA_VERSION = 2;
+export const SETTINGS_STORAGE_SCHEMA_VERSION = 3;
 export const GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY = "general.launch_at_login";
 export const GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY =
   "general.prevent_sleep_while_running";
