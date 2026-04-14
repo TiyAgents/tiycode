@@ -107,7 +107,7 @@ With options:
 
 3. **File staging**:
    - Check staged files with \`git status\`
-   - If no files staged, automatically add all modified/new files with \`git add\`
+   - If no files staged, **do NOT automatically add files**. Instead, remind the user that there are no staged changes and ask them to stage the desired files before committing.
 
 4. **Change analysis**:
    - Run \`git diff\` to understand changes
@@ -293,7 +293,7 @@ Refs: RFC-6749, RFC-7636
 4. Analyze changes to determine commit type and scope
 5. Check if changes should be split into multiple commits
 6. For each commit:
-   - Stage appropriate files
+   - Verify files are staged (do not auto-stage; ask the user if nothing is staged)
    - Generate commit message based on style setting
    - If full style, create detailed body and footer
    - Execute git commit with generated message
@@ -320,10 +320,10 @@ Refs: RFC-6749, RFC-7636
       argumentHint:
         "[--draft] [--base=main|master] [--style=simple|full] [--language=english|chinese]",
       description:
-        "Create pull requests via GitHub MCP tools with well-formatted PR title and description",
-      prompt: `# TiyCode Command: Create PR via MCP
+        "Create pull requests with well-formatted PR title and description",
+      prompt: `# TiyCode Command: Create PR
 
-This command helps you create well-formatted pull requests using GitHub CLI/MCP tools, with automatic fallback to GitHub.
+This command helps you create well-formatted pull requests using GitHub CLI, with automatic fallback to GitHub MCP tools.
 
 ## Usage
 
@@ -535,8 +535,8 @@ Example: \`feat(auth): ✨ Add OAuth2 authentication flow\`
    \`\`\`
 
 7. **Create PR**:
-   - Try MCP tool first: \`mcp__github__create_pull_request\`
-   - If fails or unavailable, fallback to: \`gh pr create\`
+   - Primary: use GitHub CLI \`gh pr create\`
+   - If CLI unavailable, fallback to MCP tool: \`mcp__github__create_pull_request\`
 
 8. **Output result**:
    - Display PR URL to user
@@ -581,9 +581,9 @@ Example: \`feat(auth): ✨ Add OAuth2 authentication flow\`
    - Error: "No commits between base and head"
    - Solution: Make commits before creating PR
 
-5. **MCP tools unavailable**:
-   - Automatically fallback to GitHub CLI
-   - Ensure \`gh\` is installed and authenticated
+5. **GitHub CLI unavailable**:
+   - Automatically fallback to MCP tool \`mcp__github__create_pull_request\`
+   - Ensure MCP GitHub tools are configured
 
 6. **GitHub CLI not authenticated**:
    - Error: "gh: Not logged in"
