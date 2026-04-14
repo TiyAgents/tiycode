@@ -89,13 +89,7 @@ With options:
 
 ## What This Command Does
 
-1. **Merge latest remote main branch**:
-   - Detect the default branch name (master or main) from remote
-   - Fetch latest changes from remote: \`git fetch origin\`
-   - Merge the latest remote main branch: \`git merge origin/<main|master>\`
-   - Resolve any merge conflicts if necessary before proceeding
-
-2. **Pre-commit checks** (when \`--verify=yes\`):
+1. **Pre-commit checks** (when \`--verify=yes\`):
    - **Auto-detect project build tool first**: Check for package.json, pyproject.toml, Makefile, Cargo.toml, go.mod, etc.
    - **Determine the package manager**: For Node.js projects, check lock files (package-lock.json → npm, pnpm-lock.yaml → pnpm, yarn.lock → yarn)
    - **Read available scripts/targets**: Check package.json scripts, Makefile targets, or equivalent before executing
@@ -105,16 +99,16 @@ With options:
      - Build: Run the project's build command if available
    - **IMPORTANT**: Do NOT hardcode or assume commands like \`npm run test\`. Always verify the exact commands from the project configuration first.
 
-3. **File staging**:
+2. **File staging**:
    - Check staged files with \`git status\`
    - If no files staged, **do NOT automatically add files**. Instead, remind the user that there are no staged changes and ask them to stage the desired files before committing.
 
-4. **Change analysis**:
+3. **Change analysis**:
    - Run \`git diff\` to understand changes
    - Detect if multiple logical changes should be split
    - Suggest atomic commits when appropriate
 
-5. **Commit message creation**:
+4. **Commit message creation**:
    - **CRITICAL: Language Detection** - First, check if \`--language=chinese\` is present in the command arguments. If so, generate ALL commit messages in Simplified Chinese. If not specified or \`--language=english\`, generate in English.
    - Generate messages following Conventional Commits specification
    - Apply appropriate emoji prefixes
@@ -288,16 +282,15 @@ Refs: RFC-6749, RFC-7636
 ## Workflow
 
 1. **Check language parameter**: Determine the language for commit messages by checking command arguments. If \`--language=chinese\` is present, use Simplified Chinese. Otherwise, use English.
-2. **Merge latest remote main branch**: Fetch and merge the latest changes from remote main/master branch to ensure the local branch is up-to-date.
-3. **Run pre-commit checks** (if \`--verify=yes\`): Auto-detect project build tools and execute appropriate lint/test/build commands.
-4. Analyze changes to determine commit type and scope
-5. Check if changes should be split into multiple commits
-6. For each commit:
+2. **Run pre-commit checks** (if \`--verify=yes\`): Auto-detect project build tools and execute appropriate lint/test/build commands.
+3. Analyze changes to determine commit type and scope
+4. Check if changes should be split into multiple commits
+5. For each commit:
    - Verify files are staged (do not auto-stage; ask the user if nothing is staged)
    - Generate commit message based on style setting
    - If full style, create detailed body and footer
    - Execute git commit with generated message
-7. Provide summary of committed changes
+6. Provide summary of committed changes
 
 ## Important Notes
 
