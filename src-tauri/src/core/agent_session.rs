@@ -394,13 +394,15 @@ impl AgentSession {
         let event_tx = self.event_tx.clone();
         let run_id = self.spec.run_id.clone();
         let tool_call_id_owned = tool_call_id.to_string();
-        let tool_timeout = standard_tool_timeout();
-        let outcome = tokio::time::timeout(
-            tool_timeout,
-            self.tool_gateway.execute_tool_call(
+        let outcome = self
+            .tool_gateway
+            .execute_tool_call(
                 request,
                 self.abort_signal.clone(),
-                ToolExecutionOptions::default(),
+                ToolExecutionOptions {
+                    allow_user_approval: true,
+                    execution_timeout: Some(standard_tool_timeout()),
+                },
                 move |approval: ApprovalRequest| {
                     let _ = event_tx.send(ThreadStreamEvent::ApprovalRequired {
                         run_id: approval.run_id,
@@ -421,36 +423,8 @@ impl AgentSession {
                         });
                     }
                 },
-            ),
-        )
-        .await;
-
-        let outcome = match outcome {
-            Ok(outcome) => outcome,
-            Err(_) => {
-                let message = format!(
-                    "Tool '{}' timed out after {}s",
-                    tool_name, STANDARD_TOOL_TIMEOUT_SECS
-                );
-                let result = serde_json::json!({ "error": message.clone() });
-                tool_call_repo::update_result(
-                    &self.pool,
-                    tool_call_id,
-                    &result.to_string(),
-                    "failed",
-                )
-                .await
-                .ok();
-
-                let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
-                    run_id: self.spec.run_id.clone(),
-                    tool_call_id: tool_call_id.to_string(),
-                    error: message.clone(),
-                });
-
-                return agent_error_result(message);
-            }
-        };
+            )
+            .await;
 
         match outcome {
             Ok(outcome) => {
@@ -490,6 +464,26 @@ impl AgentSession {
                     }
                     ToolGatewayResult::Cancelled { .. } => {
                         let message = "Tool execution cancelled".to_string();
+                        let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                            run_id: self.spec.run_id.clone(),
+                            tool_call_id: tool_call_id.to_string(),
+                            error: message.clone(),
+                        });
+                        agent_error_result(message)
+                    }
+                    ToolGatewayResult::TimedOut { timeout_secs, .. } => {
+                        let message =
+                            format!("Tool '{}' timed out after {}s", tool_name, timeout_secs);
+                        let result = serde_json::json!({ "error": message.clone() });
+                        tool_call_repo::update_result(
+                            &self.pool,
+                            tool_call_id,
+                            &result.to_string(),
+                            "failed",
+                        )
+                        .await
+                        .ok();
+
                         let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
                             run_id: self.spec.run_id.clone(),
                             tool_call_id: tool_call_id.to_string(),
