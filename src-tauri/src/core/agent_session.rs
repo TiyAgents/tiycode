@@ -959,25 +959,13 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
     agent.set_security_config(runtime_security_config());
 
     // Context compression: automatically trim messages to fit the context window.
-    // Also injects a stable runtime-context reminder (current date) at the end of the
-    // message list so that the system prompt stays unchanged for better prefix caching.
     let compression_settings = crate::core::context_compression::CompressionSettings::new(
         spec.model_plan.primary.model.context_window,
     );
-    let runtime_date = chrono::Local::now().format("%Y-%m-%d").to_string();
     agent.set_transform_context(move |messages| {
         let settings = compression_settings.clone();
-        let date = runtime_date.clone();
         async move {
-            let mut messages =
-                crate::core::context_compression::compress_context(messages, &settings);
-            // Inject the current-date reminder as the last message so that it never
-            // disrupts the stable prefix used by LLM prompt caching.
-            messages.push(tiycore::agent::AgentMessage::User(
-                tiycore::types::UserMessage::text(format!(
-                    "[system-reminder] Current date: {date}"
-                )),
-            ));
+            let messages = crate::core::context_compression::compress_context(messages, &settings);
             messages
         }
     });

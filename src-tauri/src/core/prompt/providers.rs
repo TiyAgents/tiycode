@@ -427,6 +427,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> (String, bool) {
 
 fn build_system_environment_body(tools: &[ToolAvailability]) -> String {
     let shell = current_shell();
+    let current_date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let tool_lines = tools
         .iter()
         .map(|tool| match (&tool.path, &tool.version) {
@@ -440,10 +441,11 @@ fn build_system_environment_body(tools: &[ToolAvailability]) -> String {
         .join("\n");
 
     format!(
-        "- Operating system: {}\n- Architecture: {}\n- Default shell: {}\n- Common CLI tools:\n{}",
+        "- Operating system: {}\n- Architecture: {}\n- Default shell: {}\n- Current date: {}\n- Common CLI tools:\n{}",
         std::env::consts::OS,
         std::env::consts::ARCH,
         shell,
+        current_date,
         tool_lines
     )
 }
