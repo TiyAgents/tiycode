@@ -18,7 +18,6 @@ import {
   ModelSelectorContent,
   ModelSelectorEmpty,
   ModelSelectorGroup,
-  ModelSelectorInput,
   ModelSelectorItem,
   ModelSelectorList,
   ModelSelectorTrigger,
@@ -55,6 +54,7 @@ import {
 import {
   getProfilePrimaryModelId,
   getProfilePrimaryModelLabel,
+  resolveProfileModelByTier,
 } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
 import type { SkillRecord } from "@/shared/types/extensions";
@@ -854,12 +854,44 @@ function ProfileSelectorItem({
   profile: AgentProfile;
   providers: ReadonlyArray<ProviderEntry>;
 }) {
+  const t = useT();
+  const primaryModel = resolveProfileModelByTier("primary", profile, providers);
+  const assistantModel = resolveProfileModelByTier("assistant", profile, providers);
+  const liteModel = resolveProfileModelByTier("lite", profile, providers);
+
+  const tiers: Array<{ label: string; model: { displayName: string; modelId: string } | null }> = [
+    { label: t("composer.profileTier.primary"), model: primaryModel },
+    { label: t("composer.profileTier.auxiliary"), model: assistantModel },
+    { label: t("composer.profileTier.lightweight"), model: liteModel },
+  ];
+
   return (
     <ModelSelectorItem onSelect={onSelect} value={profile.id}>
-      <div className="min-w-0 flex flex-1 items-center">
-        <ProfileInlineIdentity profile={profile} providers={providers} />
+      <div className="min-w-0 flex flex-1 flex-col gap-2">
+        {/* Profile header */}
+        <ProfileInlineIdentity profile={profile} providers={providers} showModel={false} />
+        {/* Three-tier model rows */}
+        <div className="flex flex-col gap-1 pl-8">
+          {tiers.map(({ label, model }) => (
+            <div className="flex items-center gap-1.5" key={label}>
+              <span className="w-[54px] shrink-0 text-[10px] font-medium text-app-subtle">{label}</span>
+              {model ? (
+                <>
+                  <ModelBrandIcon
+                    className="size-3 shrink-0 text-app-muted"
+                    displayName={model.displayName}
+                    modelId={model.modelId}
+                  />
+                  <span className="min-w-0 truncate text-[11px] text-app-muted">{model.displayName}</span>
+                </>
+              ) : (
+                <span className="text-[11px] italic text-app-subtle/60">{t("composer.profileTier.notConfigured")}</span>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
-      {isActive ? <CheckIcon className="ml-auto size-4" /> : <span className="ml-auto size-4" />}
+      {isActive ? <CheckIcon className="ml-auto size-4 shrink-0" /> : <span className="ml-auto size-4 shrink-0" />}
     </ModelSelectorItem>
   );
 }
@@ -986,7 +1018,7 @@ export function WorkbenchPromptComposer({
     () => agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0] ?? null,
     [activeAgentProfileId, agentProfiles],
   );
-  const canSwitchProfiles = agentProfiles.length > 1 && Boolean(activeProfile);
+  const canSwitchProfiles = Boolean(activeProfile);
   const commandRegistry = useMemo(
     () => buildComposerCommandRegistry(commands),
     [commands],
@@ -1607,7 +1639,6 @@ export function WorkbenchPromptComposer({
                         </PromptInputButton>
                       </ModelSelectorTrigger>
                       <ModelSelectorContent commandProps={{ value: activeAgentProfileId ?? undefined }} title="Profile Selector">
-                        <ModelSelectorInput placeholder="Search profiles..." />
                         <ModelSelectorList>
                           <ModelSelectorEmpty>{t("composer.noProfileAvailable")}</ModelSelectorEmpty>
                           <ModelSelectorGroup heading="Agent Profiles">
