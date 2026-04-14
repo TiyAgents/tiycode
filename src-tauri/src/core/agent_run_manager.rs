@@ -38,10 +38,10 @@ use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{MessageAttachmentDto, MessageRecord, ThreadStatus};
 use crate::persistence::repo::{message_repo, profile_repo, run_repo, thread_repo, workspace_repo};
 
-const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(12);
+const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(60);
 const COMPACT_SUMMARY_TIMEOUT: Duration = Duration::from_secs(20);
-const TITLE_GENERATION_MAX_TOKENS: u32 = 32;
-const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 512;
+const TITLE_GENERATION_MAX_TOKENS: u32 = 512;
+const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 2048;
 const COMPACT_SUMMARY_MAX_TOKENS: u32 = 700;
 const COMPACT_SUMMARY_MAX_TOKENS_REASONING: u32 = 2048;
 const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
@@ -1898,7 +1898,7 @@ async fn generate_thread_title(
     // Lightweight title generation does not benefit from reasoning/thinking tokens.
     // When the lightweight model is a reasoning-capable model (e.g. DeepSeek R1, o1),
     // the reasoning tokens count against `max_tokens` and can exhaust the entire
-    // token budget (TITLE_GENERATION_MAX_TOKENS = 32), leaving no room for the
+    // token budget (TITLE_GENERATION_MAX_TOKENS = 512), leaving no room for the
     // actual title output.
     //
     // Strategy: 1) Explicitly disable reasoning so the protocol layer omits
