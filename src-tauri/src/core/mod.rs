@@ -35,3 +35,9 @@ pub fn tiycode_default_headers() -> std::collections::HashMap<String, String> {
     );
     headers
 }
+
+/// Returns the default URL policy for all LLM API requests.
+/// Exempts `.oa.com` domains from the HTTPS requirement.
+pub fn tiycode_url_policy() -> tiycore::types::UrlPolicy {
+    tiycore::types::UrlPolicy::default().with_https_exempt_hosts(vec![".oa.com".into()])
+}
