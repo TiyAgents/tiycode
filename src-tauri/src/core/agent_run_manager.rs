@@ -30,6 +30,7 @@ use crate::core::plan_checkpoint::{
 use crate::core::sleep_manager::SleepManager;
 use crate::core::task_board_manager;
 use crate::core::tiycode_default_headers;
+use crate::core::tiycode_url_policy;
 use crate::ipc::app_events::{
     self, ThreadRunFinishedPayload, ThreadRunStartedPayload, ThreadTitleUpdatedPayload,
 };
@@ -1527,6 +1528,7 @@ async fn generate_compact_summary(
         }),
         headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
+        security: Some(tiycore::types::SecurityConfig::default().with_url(tiycode_url_policy())),
         ..TiyStreamOptions::default()
     };
 
@@ -1945,6 +1947,7 @@ async fn generate_thread_title(
         }),
         headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
+        security: Some(tiycore::types::SecurityConfig::default().with_url(tiycode_url_policy())),
         ..TiyStreamOptions::default()
     };
 

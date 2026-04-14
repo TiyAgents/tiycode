@@ -14,6 +14,7 @@ use crate::core::agent_session::{
 use crate::core::app_state::AppState;
 use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
 use crate::core::tiycode_default_headers;
+use crate::core::tiycode_url_policy;
 use crate::ipc::frontend_channels::GitStreamEvent;
 use crate::model::errors::{AppError, ErrorCategory, ErrorSource};
 use crate::model::git::{
@@ -1115,6 +1116,7 @@ async fn generate_with_lite_model(
         }),
         headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
+        security: Some(tiycore::types::SecurityConfig::default().with_url(tiycode_url_policy())),
         ..TiyStreamOptions::default()
     };
 
