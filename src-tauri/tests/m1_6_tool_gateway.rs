@@ -1325,3 +1325,91 @@ async fn test_search_repo_supports_regex_count_mode_and_case_insensitive_matchin
         }
     }
 }
+
+// =========================================================================
+// T1.6.x — Execution timeout fires for slow tool
+// =========================================================================
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_execution_timeout_fires_for_slow_tool() {
+    use std::time::Duration;
+    use tiycode::core::terminal_manager::TerminalManager;
+    use tiycode::core::tool_gateway::{
+        ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
+    };
+
+    let pool = test_helpers::setup_test_pool().await;
+    let workspace_root = std::env::temp_dir().join(format!("tiy-timeout-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+
+    test_helpers::seed_workspace(&pool, "ws-timeout", workspace_root.to_str().unwrap()).await;
+    test_helpers::seed_thread(&pool, "t-timeout", "ws-timeout").await;
+    test_helpers::seed_run(&pool, "r-timeout", "t-timeout", "running", "default").await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-timeout",
+        "r-timeout",
+        "t-timeout",
+        "shell",
+        "requested",
+    )
+    .await;
+
+    let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+    let gateway = Arc::new(ToolGateway::new(pool, terminal_manager));
+
+    // Use a shell command that sleeps but with a very short execution_timeout.
+    // The shell executor's own internal timeout (60s) is much longer, so our
+    // execution_timeout (1s) fires first via execute_with_timeout.
+    //
+    // We also set the shell's input `timeout` to 3s so the child process is
+    // cleaned up promptly even if our outer future-drop doesn't kill it.
+    eprintln!("[test-timeout] calling execute_tool_call...");
+    let gateway_for_approval = Arc::clone(&gateway);
+    let tool_call_id = "tc-timeout".to_string();
+    // Spawn a task that auto-approves the shell tool after a brief delay,
+    // so execution actually begins and the 1s execution_timeout fires.
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = gateway_for_approval
+            .resolve_approval(&tool_call_id, true)
+            .await;
+    });
+    let outcome = gateway
+        .execute_tool_call(
+            ToolExecutionRequest {
+                run_id: "r-timeout".into(),
+                thread_id: "t-timeout".into(),
+                tool_call_id: "tc-timeout".into(),
+                tool_name: "shell".into(),
+                tool_input: serde_json::json!({
+                    "command": "sleep 30",
+                    "timeout": 3,
+                }),
+                workspace_path: workspace_root.display().to_string(),
+                run_mode: "default".into(),
+            },
+            tiycore::agent::AbortSignal::new(),
+            ToolExecutionOptions {
+                allow_user_approval: true,
+                execution_timeout: Some(Duration::from_secs(1)),
+            },
+            |_| {},
+            || {},
+        )
+        .await
+        .unwrap();
+
+    eprintln!("[test-timeout] execute_tool_call returned, checking result...");
+    match outcome.result {
+        ToolGatewayResult::TimedOut {
+            timeout_secs,
+            tool_call_id,
+        } => {
+            assert_eq!(tool_call_id, "tc-timeout");
+            assert_eq!(timeout_secs, 1);
+        }
+        _ => panic!("expected TimedOut, got a different variant"),
+    }
+}
