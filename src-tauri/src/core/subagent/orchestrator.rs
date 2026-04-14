@@ -239,6 +239,7 @@ impl HelperAgentOrchestrator {
                         tiycore::agent::AbortSignal::new(),
                         ToolExecutionOptions {
                             allow_user_approval: false,
+                            execution_timeout: None,
                         },
                         |_| {},
                         || {},
@@ -323,6 +324,28 @@ impl HelperAgentOrchestrator {
                                 },
                             );
                             helper_agent_error_result("Helper tool execution cancelled")
+                        }
+                        // NOTE: Currently unreachable because subagent passes
+                        // `execution_timeout: None`. This arm exists for forward-
+                        // compatibility so enabling a timeout later won't cause a
+                        // non-exhaustive match error.
+                        ToolGatewayResult::TimedOut { timeout_secs, .. } => {
+                            let message =
+                                format!("Helper tool timed out after {timeout_secs}s");
+                            emit_subagent_progress(
+                                &progress_event_tx,
+                                &helper_run_id,
+                                &helper_id_for_events,
+                                &helper_kind,
+                                &helper_started_at_for_events,
+                                SubagentActivityStatus::Failed,
+                                &progress_state_ref,
+                                message.clone(),
+                                |progress| {
+                                    progress.record_finished(Some(message.clone()))
+                                },
+                            );
+                            helper_agent_error_result(message)
                         }
                     },
                     Err(error) => {

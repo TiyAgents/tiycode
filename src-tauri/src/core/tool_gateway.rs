@@ -54,12 +54,16 @@ pub struct ToolGatewayOutcome {
 #[derive(Debug, Clone)]
 pub struct ToolExecutionOptions {
     pub allow_user_approval: bool,
+    /// Timeout applied only to actual tool execution (after approval).
+    /// `None` means no timeout.
+    pub execution_timeout: Option<std::time::Duration>,
 }
 
 impl Default for ToolExecutionOptions {
     fn default() -> Self {
         Self {
             allow_user_approval: true,
+            execution_timeout: None,
         }
     }
 }
@@ -83,6 +87,11 @@ pub enum ToolGatewayResult {
     },
     /// Tool was cancelled before approval or execution could finish.
     Cancelled { tool_call_id: String },
+    /// Tool execution timed out (timeout applies only to actual execution, not approval wait).
+    TimedOut {
+        tool_call_id: String,
+        timeout_secs: u64,
+    },
 }
 
 pub struct ToolGateway {
@@ -185,17 +194,14 @@ impl ToolGateway {
 
                 on_execution_started();
 
-                let output = self
-                    .execute_and_audit(&request, &policy_json, resolved_tool.as_ref())
-                    .await?;
-
-                Ok(ToolGatewayOutcome {
-                    approval_required: false,
-                    result: ToolGatewayResult::Executed {
-                        tool_call_id: request.tool_call_id,
-                        output,
-                    },
-                })
+                self.execute_with_timeout(
+                    request,
+                    &policy_json,
+                    resolved_tool.as_ref(),
+                    options.execution_timeout,
+                    false,
+                )
+                .await
             }
             PolicyVerdict::RequireApproval { reason } => {
                 if !options.allow_user_approval {
@@ -281,17 +287,14 @@ impl ToolGateway {
                             });
                         }
 
-                        let output = self
-                            .execute_and_audit(&request, &policy_json, resolved_tool.as_ref())
-                            .await?;
-
-                        Ok(ToolGatewayOutcome {
-                            approval_required: true,
-                            result: ToolGatewayResult::Executed {
-                                tool_call_id: request.tool_call_id,
-                                output,
-                            },
-                        })
+                        self.execute_with_timeout(
+                            request,
+                            &policy_json,
+                            resolved_tool.as_ref(),
+                            options.execution_timeout,
+                            true,
+                        )
+                        .await
                     }
                     Some(false) => {
                         tool_call_repo::update_approval(
@@ -352,6 +355,50 @@ impl ToolGateway {
                 }
             }
         }
+    }
+
+    /// Execute a tool with an optional timeout, returning a `ToolGatewayOutcome`.
+    ///
+    /// This helper centralises the timeout-wrapping logic so the `AutoAllow`
+    /// and `RequireApproval(approved)` branches do not duplicate it.
+    async fn execute_with_timeout(
+        &self,
+        request: ToolExecutionRequest,
+        policy_json: &str,
+        resolved_tool: Option<&ResolvedTool>,
+        execution_timeout: Option<std::time::Duration>,
+        approval_required: bool,
+    ) -> Result<ToolGatewayOutcome, crate::model::errors::AppError> {
+        let output = if let Some(timeout) = execution_timeout {
+            match tokio::time::timeout(
+                timeout,
+                self.execute_and_audit(&request, policy_json, resolved_tool),
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    return Ok(ToolGatewayOutcome {
+                        approval_required,
+                        result: ToolGatewayResult::TimedOut {
+                            tool_call_id: request.tool_call_id,
+                            timeout_secs: timeout.as_secs(),
+                        },
+                    });
+                }
+            }
+        } else {
+            self.execute_and_audit(&request, policy_json, resolved_tool)
+                .await?
+        };
+
+        Ok(ToolGatewayOutcome {
+            approval_required,
+            result: ToolGatewayResult::Executed {
+                tool_call_id: request.tool_call_id,
+                output,
+            },
+        })
     }
 
     /// Resolve a pending approval. Returns `true` when a waiter was found.
