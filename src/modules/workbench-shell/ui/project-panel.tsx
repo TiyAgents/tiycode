@@ -1064,8 +1064,7 @@ export function ProjectPanel({
           ) : null}
         </div>
 
-        <div className="relative mt-2.5 pl-5 pr-1 pb-2.5">
-          <div className="absolute bottom-0 left-[6px] top-0 w-px bg-app-border" />
+        <div className="relative mt-2.5 pr-1 pb-2.5">
           <div className="relative">
             <Input
               value={filterValue}
@@ -1120,8 +1119,7 @@ export function ProjectPanel({
         ref={treeScrollRef}
         className="min-h-0 flex-1 overflow-auto overscroll-none pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        <div className="relative pl-5">
-          <div className="absolute bottom-0 left-[6px] top-0 w-px bg-app-border" />
+        <div className="relative">
           <div className={DRAWER_LIST_STACK_CLASS}>
             {isFiltering
               ? filterResults.map((match) => {
