@@ -285,7 +285,6 @@ pub fn run() {
             commands::extensions::skill_rescan,
             commands::extensions::skill_enable,
             commands::extensions::skill_disable,
-            commands::extensions::skill_pin,
             commands::extensions::skill_preview,
             // Threads
             commands::thread::thread_list,

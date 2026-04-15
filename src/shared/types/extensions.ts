@@ -145,7 +145,6 @@ export type SkillRecord = {
   source: string;
   path: string;
   enabled: boolean;
-  pinned: boolean;
   scope: string;
   contentPreview: string;
   promptBudgetChars: number;
