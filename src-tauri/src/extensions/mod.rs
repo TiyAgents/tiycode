@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
@@ -125,8 +126,8 @@ struct SkillStateStore {
     enabled: Vec<String>,
     #[serde(default)]
     disabled: Vec<String>,
-    #[serde(default)]
-    pinned: Vec<String>,
+    #[serde(default, alias = "pinned", skip_serializing)]
+    legacy_pinned: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -327,7 +328,7 @@ impl ExtensionsManager {
         items.extend(plugins);
         items.extend(mcps);
         items.extend(skills);
-        items.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        items.sort_by(compare_extension_summaries);
         Ok(items)
     }
 
@@ -585,7 +586,7 @@ impl ExtensionsManager {
             results.push(state);
         }
 
-        results.sort_by(|left, right| left.label.to_lowercase().cmp(&right.label.to_lowercase()));
+        results.sort_by(compare_mcp_server_states);
         Ok(results)
     }
 
@@ -798,36 +799,6 @@ impl ExtensionsManager {
         .await
     }
 
-    pub async fn pin_skill(
-        &self,
-        id: &str,
-        pinned: bool,
-        workspace_path: Option<&str>,
-        scope: ConfigScope,
-    ) -> Result<(), AppError> {
-        if !self.skill_exists(id, workspace_path, scope).await? {
-            return Err(AppError::not_found(
-                ErrorSource::Settings,
-                format!("skill '{id}'"),
-            ));
-        }
-        let mut store = self.load_skill_state_store(workspace_path, scope).await?;
-        update_named_membership(&mut store.pinned, id, pinned);
-        self.save_skill_state_store(&store, workspace_path, scope)
-            .await?;
-        self.write_extension_audit(
-            if pinned {
-                "skill_pinned"
-            } else {
-                "skill_unpinned"
-            },
-            "skill",
-            id,
-            serde_json::json!({ "pinned": pinned }),
-        )
-        .await
-    }
-
     pub async fn preview_skill(
         &self,
         id: &str,
@@ -1022,7 +993,7 @@ impl ExtensionsManager {
             }
         }
 
-        items.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        items.sort_by(compare_marketplace_items);
         Ok(items)
     }
 
@@ -2073,12 +2044,7 @@ impl ExtensionsManager {
             }
         }
 
-        results.sort_by(|left, right| {
-            left.record
-                .name
-                .to_lowercase()
-                .cmp(&right.record.name.to_lowercase())
-        });
+        results.sort_by(|left, right| compare_skill_records(&left.record, &right.record));
         Ok(results)
     }
 
@@ -3754,7 +3720,6 @@ fn parse_skill_markdown(
             source: source.to_string(),
             path: skill_dir.to_string_lossy().to_string(),
             enabled: true,
-            pinned: false,
             scope: "global".to_string(),
             content_preview: preview.clone(),
             prompt_budget_chars: preview.len(),
@@ -3803,15 +3768,55 @@ fn update_named_membership(values: &mut Vec<String>, id: &str, enabled: bool) {
     }
 }
 
+fn compare_extension_summaries(
+    left: &ExtensionSummaryDto,
+    right: &ExtensionSummaryDto,
+) -> Ordering {
+    let left_enabled = matches!(left.install_state, ExtensionInstallState::Enabled);
+    let right_enabled = matches!(right.install_state, ExtensionInstallState::Enabled);
+    right_enabled
+        .cmp(&left_enabled)
+        .then_with(|| {
+            let left_installed = !matches!(left.install_state, ExtensionInstallState::Discovered);
+            let right_installed = !matches!(right.install_state, ExtensionInstallState::Discovered);
+            right_installed.cmp(&left_installed)
+        })
+        .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn compare_mcp_server_states(left: &McpServerStateDto, right: &McpServerStateDto) -> Ordering {
+    right
+        .config
+        .enabled
+        .cmp(&left.config.enabled)
+        .then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn compare_skill_records(left: &SkillRecordDto, right: &SkillRecordDto) -> Ordering {
+    right
+        .enabled
+        .cmp(&left.enabled)
+        .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn compare_marketplace_items(left: &MarketplaceItemDto, right: &MarketplaceItemDto) -> Ordering {
+    right
+        .enabled
+        .cmp(&left.enabled)
+        .then_with(|| right.installed.cmp(&left.installed))
+        .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
 fn apply_skill_state(record: &mut SkillRecordDto, state: &SkillStateStore) {
     if state.disabled.iter().any(|value| value == &record.id) {
         record.enabled = false;
     }
     if state.enabled.iter().any(|value| value == &record.id) {
         record.enabled = true;
-    }
-    if state.pinned.iter().any(|value| value == &record.id) {
-        record.pinned = true;
     }
 }
 

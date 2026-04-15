@@ -81,6 +81,16 @@ type PluginCollectionItem = {
   hooks: PluginHookGroup[];
 };
 
+function comparePluginCollectionItems(left: PluginCollectionItem, right: PluginCollectionItem) {
+  if (left.enabled !== right.enabled) {
+    return left.enabled ? -1 : 1;
+  }
+  if (left.installed !== right.installed) {
+    return left.installed ? -1 : 1;
+  }
+  return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+}
+
 function PluginIcon() {
   return (
     <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-app-border bg-app-canvas shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]">
@@ -560,12 +570,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
         })),
     );
 
-    return combined.sort((left, right) => {
-      if (left.installed !== right.installed) {
-        return left.installed ? -1 : 1;
-      }
-      return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
-    });
+    return combined.sort(comparePluginCollectionItems);
   }, [
     props.extensions,
     props.marketplaceItems,
