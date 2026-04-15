@@ -2589,7 +2589,7 @@ fn normalize_provider_options(value: Option<serde_json::Value>) -> Option<serde_
     })
 }
 
-fn runtime_security_config() -> tiycore::types::SecurityConfig {
+pub(crate) fn runtime_security_config() -> tiycore::types::SecurityConfig {
     let mut security = tiycore::types::SecurityConfig::default();
     security.agent.tool_execution_timeout_secs = SUBAGENT_TOOL_TIMEOUT_SECS;
     security.url = crate::core::tiycode_url_policy();
