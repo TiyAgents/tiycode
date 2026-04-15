@@ -1656,7 +1656,7 @@ impl ExtensionsManager {
     ) -> Result<Vec<McpServerConfigInput>, AppError> {
         let file = match scope {
             ConfigScope::Global => global_mcp_path(),
-            ConfigScope::Workspace => workspace_mcp_path(workspace_path)?,
+            ConfigScope::Workspace => workspace_mcp_read_path(workspace_path)?,
         };
         Ok(self
             .read_json_file_with_diagnostics::<McpConfigFile>(&file, "mcp", scope)?
@@ -2056,7 +2056,7 @@ impl ExtensionsManager {
     ) -> Result<SkillStateStore, AppError> {
         let file = match scope {
             ConfigScope::Global => global_skills_config_path(),
-            ConfigScope::Workspace => workspace_skills_config_path(workspace_path)?,
+            ConfigScope::Workspace => workspace_skills_read_path(workspace_path)?,
         };
         Ok(self
             .read_json_file_with_diagnostics(&file, "skills", scope)?
@@ -3504,7 +3504,29 @@ fn workspace_mcp_path(workspace_path: Option<&str>) -> Result<PathBuf, AppError>
             "workspace path is required for workspace-scoped MCP config",
         )
     })?;
+    Ok(PathBuf::from(workspace_path).join(".tiy/mcp.local.json"))
+}
+
+fn legacy_workspace_mcp_path(workspace_path: Option<&str>) -> Result<PathBuf, AppError> {
+    let workspace_path = workspace_path.ok_or_else(|| {
+        AppError::validation(
+            ErrorSource::Settings,
+            "workspace path is required for workspace-scoped MCP config",
+        )
+    })?;
     Ok(PathBuf::from(workspace_path).join(".tiy/mcp.json"))
+}
+
+fn workspace_mcp_read_path(workspace_path: Option<&str>) -> Result<PathBuf, AppError> {
+    let path = workspace_mcp_path(workspace_path)?;
+    if path.exists() {
+        return Ok(path);
+    }
+    let legacy_path = legacy_workspace_mcp_path(workspace_path)?;
+    if legacy_path.exists() {
+        return Ok(legacy_path);
+    }
+    Ok(path)
 }
 
 fn global_skills_config_path() -> PathBuf {
@@ -3518,7 +3540,29 @@ fn workspace_skills_config_path(workspace_path: Option<&str>) -> Result<PathBuf,
             "workspace path is required for workspace-scoped skill config",
         )
     })?;
+    Ok(PathBuf::from(workspace_path).join(".tiy/skills.local.json"))
+}
+
+fn legacy_workspace_skills_config_path(workspace_path: Option<&str>) -> Result<PathBuf, AppError> {
+    let workspace_path = workspace_path.ok_or_else(|| {
+        AppError::validation(
+            ErrorSource::Settings,
+            "workspace path is required for workspace-scoped skill config",
+        )
+    })?;
     Ok(PathBuf::from(workspace_path).join(".tiy/skills.json"))
+}
+
+fn workspace_skills_read_path(workspace_path: Option<&str>) -> Result<PathBuf, AppError> {
+    let path = workspace_skills_config_path(workspace_path)?;
+    if path.exists() {
+        return Ok(path);
+    }
+    let legacy_path = legacy_workspace_skills_config_path(workspace_path)?;
+    if legacy_path.exists() {
+        return Ok(legacy_path);
+    }
+    Ok(path)
 }
 
 fn global_marketplace_sources_path() -> PathBuf {
