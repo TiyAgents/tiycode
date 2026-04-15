@@ -1,6 +1,5 @@
-import type { MarketplaceCatalogItem, MarketplaceStoredState } from "@/modules/marketplace-center/model/types";
+import type { MarketplaceCatalogItem } from "@/modules/marketplace-center/model/types";
 
-export const MARKETPLACE_STORAGE_KEY = "tiy-agent-marketplace";
 export const MARKETPLACE_ACTIVE_TAB_STORAGE_KEY = "tiy-agent-marketplace-active-tab";
 
 export const MARKETPLACE_CATALOG: ReadonlyArray<MarketplaceCatalogItem> = [
@@ -342,16 +341,4 @@ export const MARKETPLACE_CATALOG: ReadonlyArray<MarketplaceCatalogItem> = [
   },
 ];
 
-export const DEFAULT_MARKETPLACE_STATE: MarketplaceStoredState = {
-  "skill-docs-sync": { installed: true, enabled: true },
-  "skill-bug-repro": { installed: true, enabled: false },
-  "skill-ui-audit": { installed: true, enabled: false },
-  "mcp-postgres": { installed: true, enabled: false },
-  "mcp-github": { installed: true, enabled: true },
-  "mcp-brave": { installed: true, enabled: false },
-  "plugin-terminal-plus": { installed: true, enabled: true },
-  "plugin-markdown-export": { installed: true, enabled: true },
-  "plugin-release-notes": { installed: true, enabled: false },
-  "automation-ai-news-briefing": { installed: true, enabled: true },
-  "automation-standup-digest": { installed: true, enabled: false },
-};
+export const DEFAULT_MARKETPLACE_STATE: Record<string, never> = {};

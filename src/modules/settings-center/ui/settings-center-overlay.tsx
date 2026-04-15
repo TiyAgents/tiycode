@@ -42,6 +42,7 @@ import type { ThemePreference } from "@/app/providers/theme-provider";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { matchProviderIcon } from "@/shared/lib/llm-brand-matcher";
 import type { ProviderModelConnectionTestResultDto } from "@/shared/types/api";
+import type { ConfigDiagnostic } from "@/shared/types/extensions";
 import type { SystemMetadata } from "@/shared/types/system";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
@@ -73,12 +74,6 @@ import type {
   WorkspaceEntry,
   WritableRootEntry,
 } from "@/modules/settings-center/model/use-settings-controller";
-
-type UserSession = {
-  name: string;
-  avatar: string;
-  email: string;
-};
 
 function validatePolicyPatternInput(
   value: string,
@@ -127,6 +122,7 @@ type SettingsCenterOverlayProps = {
   agentProfiles: Array<AgentProfile>;
   activeAgentProfileId: string;
   contentRef: RefObject<HTMLDivElement | null>;
+  configDiagnostics: ConfigDiagnostic[];
   generalPreferences: GeneralPreferences;
   isCheckingUpdates: boolean;
   language: LanguagePreference;
@@ -139,7 +135,6 @@ type SettingsCenterOverlayProps = {
   systemMetadata: SystemMetadata | null;
   theme: ThemePreference;
   updateStatus: string | null;
-  userSession: UserSession | null;
   workspaces: Array<WorkspaceEntry>;
   onAddAgentProfile: (entry: Omit<AgentProfile, "id">) => void;
   onAddAllowEntry: (entry: Omit<PatternEntry, "id">) => void;
@@ -151,8 +146,6 @@ type SettingsCenterOverlayProps = {
   onCheckUpdates: () => void;
   onClose: () => void;
   onDuplicateAgentProfile: (id: string) => void;
-  onLogin: () => void;
-  onLogout: () => void;
   onRemoveAgentProfile: (id: string) => void;
   onRemoveAllowEntry: (id: string) => void;
   onRemoveCommand: (id: string) => void;
@@ -289,6 +282,7 @@ export function SettingsCenterOverlay({
   agentProfiles,
   activeAgentProfileId,
   contentRef,
+  configDiagnostics,
   generalPreferences,
   isCheckingUpdates,
   language,
@@ -301,7 +295,6 @@ export function SettingsCenterOverlay({
   systemMetadata,
   theme,
   updateStatus,
-  userSession,
   workspaces,
   onAddAgentProfile,
   onAddAllowEntry,
@@ -313,8 +306,6 @@ export function SettingsCenterOverlay({
   onCheckUpdates,
   onClose,
   onDuplicateAgentProfile,
-  onLogin,
-  onLogout,
   onRemoveAgentProfile,
   onRemoveAllowEntry,
   onRemoveCommand,
@@ -441,12 +432,24 @@ export function SettingsCenterOverlay({
                     : "flex max-w-4xl flex-col gap-6 pb-28 pt-6",
                 )}
               >
+                {configDiagnostics.length > 0 ? (
+                  <div className="rounded-2xl border border-app-warning/30 bg-app-warning/8 px-4 py-3 text-sm text-app-warning">
+                    <p className="font-medium text-app-foreground">检测到配置文件异常</p>
+                    <div className="mt-2 space-y-2 text-[12px] leading-5">
+                      {configDiagnostics.map((diagnostic) => (
+                        <div key={diagnostic.id} className="rounded-xl border border-app-warning/20 bg-app-canvas/40 px-3 py-2">
+                          <p className="font-medium text-app-foreground">{diagnostic.summary}</p>
+                          <p className="mt-1 break-all">{diagnostic.filePath}</p>
+                          <p className="mt-1 text-app-subtle">{diagnostic.suggestion}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 {activeCategory === "account" ? (
                   <AccountSettingsPanel
                     description={activeMeta.description}
-                    userSession={userSession}
-                    onLogin={onLogin}
-                    onLogout={onLogout}
                   />
                 ) : null}
 
@@ -559,21 +562,6 @@ type PlanDefinition = {
   summary: string;
 };
 
-type CurrentPlanSnapshot = {
-  creditsTotal: number;
-  creditsUsed: number;
-  name: PlanName;
-  nextResetAt: string;
-};
-
-type BillingHistoryEntry = {
-  amount: string;
-  id: string;
-  invoice: string;
-  paymentMethod: string;
-  time: string;
-};
-
 const PLAN_DEFINITIONS: ReadonlyArray<PlanDefinition> = [
   {
     name: "Free",
@@ -602,37 +590,6 @@ const PLAN_DEFINITIONS: ReadonlyArray<PlanDefinition> = [
     summary: "For intensive usage, long sessions, and high-volume multi-step workflows.",
     description: "Includes 80,000 monthly credits for advanced users who need substantial capacity for sustained, heavy workloads.",
     monthlyCredits: 80_000,
-  },
-] as const;
-
-const CURRENT_PLAN_SNAPSHOT: CurrentPlanSnapshot = {
-  name: "Pro",
-  creditsUsed: 1_840,
-  creditsTotal: 5_000,
-  nextResetAt: "2026-04-01 00:00",
-};
-
-const BILLING_HISTORY_SNAPSHOT: ReadonlyArray<BillingHistoryEntry> = [
-  {
-    id: "billing-2026-03",
-    time: "Mar 01, 2026",
-    amount: "$19.90",
-    paymentMethod: "Visa •••• 2048",
-    invoice: "INV-2026-0301",
-  },
-  {
-    id: "billing-2026-02",
-    time: "Feb 01, 2026",
-    amount: "$19.90",
-    paymentMethod: "Visa •••• 2048",
-    invoice: "INV-2026-0201",
-  },
-  {
-    id: "billing-2026-01",
-    time: "Jan 01, 2026",
-    amount: "$19.90",
-    paymentMethod: "Visa •••• 2048",
-    invoice: "INV-2026-0101",
   },
 ] as const;
 
@@ -691,93 +648,26 @@ function formatCreditCount(count: number): string {
   return count.toString();
 }
 
-function SessionIdentityCard({
-  userSession,
-  onLogin,
-  onLogout,
-}: {
-  userSession: UserSession | null;
-  onLogin: () => void;
-  onLogout: () => void;
-}) {
+function SessionIdentityCard() {
   const t = useT();
   return (
     <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-center gap-3">
         <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-app-border bg-app-surface-muted text-sm font-semibold text-app-foreground">
-          {userSession ? userSession.avatar : <CircleUserRound className="size-5 text-app-subtle" />}
+          <CircleUserRound className="size-5 text-app-subtle" />
         </div>
         <div className="min-w-0">
           <p className="truncate text-[14px] font-semibold text-app-foreground">
-            {userSession?.name ?? t("settings.account.guest")}
+            {t("settings.account.guest")}
           </p>
           <p className="mt-1 truncate text-[12px] text-app-muted">
-            {userSession?.email ?? t("settings.account.signInHint")}
+            {t("settings.account.signInHint")}
           </p>
         </div>
       </div>
 
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        className="border-app-border bg-app-surface-muted text-app-foreground shadow-none hover:bg-app-surface-hover"
-        onClick={userSession ? onLogout : onLogin}
-      >
-        {userSession ? t("settings.account.signOut") : t("settings.account.signIn")}
-      </Button>
-    </div>
-  );
-}
-
-function CurrentPlanCard({ plan }: { plan: CurrentPlanSnapshot }) {
-  const t = useT();
-  const usageRatio = Math.min(plan.creditsUsed / plan.creditsTotal, 1);
-  const remainingCredits = Math.max(plan.creditsTotal - plan.creditsUsed, 0);
-  const planStyle = PLAN_VISUAL_STYLES[plan.name];
-
-  return (
-    <div
-      className={cn(
-        "rounded-2xl border px-4 py-4",
-        planStyle?.cardClass ?? "border-app-border bg-app-surface-muted",
-        planStyle?.activeClass,
-      )}
-    >
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <div
-            className={cn(
-              "inline-flex min-h-8 items-center rounded-full border bg-app-surface px-3 text-[12px] font-medium text-app-foreground",
-              planStyle?.chipClass ?? "border-app-border",
-            )}
-          >
-            {plan.name}
-          </div>
-        </div>
-
-        <div className="sm:text-right">
-          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.nextReset")}</p>
-          <p className="mt-2 text-[13px] font-medium text-app-foreground">{plan.nextResetAt}</p>
-        </div>
-      </div>
-
-      <div className="mt-5">
-        <div className="flex items-center justify-between gap-3 text-[12px]">
-          <span className="font-medium text-app-foreground">Credits</span>
-          <span className="text-app-muted">
-            {formatCreditCount(plan.creditsUsed)} / {formatCreditCount(plan.creditsTotal)}
-          </span>
-        </div>
-        <div className="mt-2 h-2 overflow-hidden rounded-full bg-app-surface">
-          <div
-            className="h-full rounded-full bg-app-foreground/70 transition-[width] duration-300 dark:bg-white/70"
-            style={{ width: `${usageRatio * 100}%` }}
-          />
-        </div>
-        <p className="mt-2 text-[12px] text-app-muted">
-          {formatCreditCount(remainingCredits)} {t("settings.account.creditsRemaining")}
-        </p>
+      <div className="rounded-full border border-dashed border-app-border px-3 py-1 text-[12px] text-app-subtle">
+        {t("settings.account.guestAccess")}
       </div>
     </div>
   );
@@ -846,80 +736,31 @@ function PlanCatalogCard({
   );
 }
 
-function BillingHistoryTable({
-  entries,
-}: {
-  entries: ReadonlyArray<BillingHistoryEntry>;
-}) {
-  const t = useT();
-  return (
-    <div className="overflow-hidden rounded-2xl border border-app-border bg-app-surface">
-      <div className="overflow-x-auto">
-        <table className="min-w-full border-collapse text-left">
-          <thead className="bg-app-surface-muted/80">
-            <tr>
-              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.timeHeader")}</th>
-              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.amountHeader")}</th>
-              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.paymentMethodHeader")}</th>
-              <th className="px-4 py-3 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.invoiceHeader")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map((entry) => (
-              <tr key={entry.id} className="border-t border-app-border">
-                <td className="whitespace-nowrap px-4 py-3 text-[13px] text-app-foreground">{entry.time}</td>
-                <td className="whitespace-nowrap px-4 py-3 text-[13px] font-medium text-app-foreground">{entry.amount}</td>
-                <td className="whitespace-nowrap px-4 py-3 text-[13px] text-app-muted">{entry.paymentMethod}</td>
-                <td className="whitespace-nowrap px-4 py-3">
-                  <span className="inline-flex items-center rounded-md border border-app-border bg-app-surface-muted px-2 py-1 font-mono text-[11px] text-app-foreground">
-                    {entry.invoice}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 function AccountSettingsPanel({
   description,
-  userSession,
-  onLogin,
-  onLogout,
 }: {
   description: string;
-  userSession: UserSession | null;
-  onLogin: () => void;
-  onLogout: () => void;
 }) {
   const t = useT();
-  const currentPlan = userSession ? CURRENT_PLAN_SNAPSHOT : null;
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeading title={t("settings.category.account")} description={description} />
 
       <SettingsSection title="Session">
-        <SessionIdentityCard userSession={userSession} onLogin={onLogin} onLogout={onLogout} />
+        <SessionIdentityCard />
       </SettingsSection>
 
       <section>
         <div className="mb-2 flex items-center justify-between px-1">
           <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.currentPlan")}</h2>
         </div>
-        {currentPlan ? (
-          <CurrentPlanCard plan={currentPlan} />
-        ) : (
-          <div className="rounded-2xl border border-dashed border-app-border bg-app-surface-muted px-4 py-4">
-            <p className="text-[13px] font-medium text-app-foreground">{t("settings.account.guestAccess")}</p>
-            <p className="mt-1 text-[12px] leading-5 text-app-muted">
-              {t("settings.account.signInForPlan")}
-            </p>
-          </div>
-        )}
+        <div className="rounded-2xl border border-dashed border-app-border bg-app-surface-muted px-4 py-4">
+          <p className="text-[13px] font-medium text-app-foreground">{t("settings.account.guestAccess")}</p>
+          <p className="mt-1 text-[12px] leading-5 text-app-muted">
+            {t("settings.account.signInForPlan")}
+          </p>
+        </div>
       </section>
 
       <section>
@@ -931,7 +772,7 @@ function AccountSettingsPanel({
             <PlanCatalogCard
               key={plan.name}
               plan={plan}
-              isActive={currentPlan?.name === plan.name}
+              isActive={false}
             />
           ))}
         </div>
@@ -941,16 +782,12 @@ function AccountSettingsPanel({
         <div className="mb-2 flex items-center justify-between px-1">
           <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{t("settings.account.billingHistory")}</h2>
         </div>
-        {userSession ? (
-          <BillingHistoryTable entries={BILLING_HISTORY_SNAPSHOT} />
-        ) : (
-          <div className="rounded-2xl border border-dashed border-app-border bg-app-surface-muted px-4 py-4">
-            <p className="text-[13px] font-medium text-app-foreground">{t("settings.account.billingAfterSignIn")}</p>
-            <p className="mt-1 text-[12px] leading-5 text-app-muted">
-              {t("settings.account.signInForBilling")}
-            </p>
-          </div>
-        )}
+        <div className="rounded-2xl border border-dashed border-app-border bg-app-surface-muted px-4 py-4">
+          <p className="text-[13px] font-medium text-app-foreground">{t("settings.account.billingAfterSignIn")}</p>
+          <p className="mt-1 text-[12px] leading-5 text-app-muted">
+            {t("settings.account.signInForBilling")}
+          </p>
+        </div>
       </section>
     </div>
   );

@@ -1,5 +1,4 @@
 import {
-  AUTH_STORAGE_KEY,
   DEFAULT_PANEL_VISIBILITY_STATE,
   PANEL_VISIBILITY_STORAGE_KEY,
   WORKSPACE_ITEMS,
@@ -16,7 +15,6 @@ import type {
   GitDiffPreview,
   GitDiffLine,
   GitSplitDiffRow,
-  MockUserSession,
   PanelVisibilityState,
   ProjectOption,
   ThreadStatus as WorkbenchThreadStatus,
@@ -289,34 +287,6 @@ export function buildGitSplitDiffRows(file: GitChangeFile): ReadonlyArray<GitSpl
   }
 
   return rows;
-}
-
-export function readStoredUserSession(): MockUserSession | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const rawValue = window.localStorage.getItem(AUTH_STORAGE_KEY);
-
-  if (!rawValue) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(rawValue) as Partial<MockUserSession>;
-
-    if (typeof parsed.name === "string" && typeof parsed.avatar === "string" && typeof parsed.email === "string") {
-      return {
-        name: parsed.name,
-        avatar: parsed.avatar,
-        email: parsed.email,
-      };
-    }
-  } catch {
-    // ignore malformed cached session
-  }
-
-  return null;
 }
 
 export function readPanelVisibilityState(): PanelVisibilityState {

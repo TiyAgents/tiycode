@@ -2,6 +2,20 @@ export type ExtensionKind = "plugin" | "mcp" | "skill";
 
 export type ExtensionInstallState = "discovered" | "installed" | "enabled" | "disabled" | "error";
 export type ExtensionHealth = "unknown" | "healthy" | "degraded" | "error";
+export type ConfigDiagnosticSeverity = "warning" | "error";
+export type ConfigDiagnosticKind = "invalid_json" | "invalid_structure" | "read_failed";
+
+export type ConfigDiagnostic = {
+  id: string;
+  scope: string;
+  area: string;
+  filePath: string;
+  severity: ConfigDiagnosticSeverity;
+  kind: ConfigDiagnosticKind;
+  summary: string;
+  detail: string;
+  suggestion: string;
+};
 
 export type ExtensionSource =
   | { type: "builtin" }

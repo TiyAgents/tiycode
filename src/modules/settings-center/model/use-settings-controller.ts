@@ -3,26 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import {
   DEFAULT_AGENT_PROFILES,
-  DEFAULT_GENERAL_PREFERENCES,
+  DEFAULT_POLICY_SETTINGS,
+  DEFAULT_SETTINGS,
   GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY,
   GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY,
-  DEFAULT_POLICY_SETTINGS,
   GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
-  TERMINAL_SHELL_PATH_SETTING_KEY,
-  TERMINAL_SHELL_ARGS_SETTING_KEY,
-  TERMINAL_FONT_FAMILY_SETTING_KEY,
-  TERMINAL_FONT_SIZE_SETTING_KEY,
-  TERMINAL_LINE_HEIGHT_SETTING_KEY,
-  TERMINAL_CURSOR_STYLE_SETTING_KEY,
-  TERMINAL_CURSOR_BLINK_SETTING_KEY,
-  TERMINAL_SCROLLBACK_SETTING_KEY,
-  TERMINAL_COPY_ON_SELECT_SETTING_KEY,
-  TERMINAL_TERM_ENV_SETTING_KEY,
 } from "@/modules/settings-center/model/defaults";
 import {
   persistLocalUiSettings,
-  persistSettings,
-  readStoredSettings,
+  readStoredLocalUiSettings,
 } from "@/modules/settings-center/model/settings-storage";
 import type {
   AgentProfile,
@@ -42,6 +31,7 @@ import type {
   WorkspaceDto,
   ProviderModelConnectionTestResultDto,
   ProviderSettingsDto,
+  PromptCommandDto,
 } from "@/shared/types/api";
 import {
   policyGetAll,
@@ -50,6 +40,10 @@ import {
   profileDelete,
   profileList,
   profileUpdate,
+  promptCommandCreate,
+  promptCommandDelete,
+  promptCommandList,
+  promptCommandUpdate,
   providerCatalogList,
   providerModelTestConnection,
   providerSettingsCreateCustom,
@@ -59,7 +53,6 @@ import {
   providerSettingsUpdateCustom,
   providerSettingsUpsertBuiltin,
   settingsGet,
-  settingsGetAll,
   settingsSet,
   workspaceAdd,
   workspaceList,
@@ -70,79 +63,6 @@ import {
 export * from "@/modules/settings-center/model/types";
 
 const ACTIVE_AGENT_PROFILE_SETTING_KEY = "active_profile_id";
-const DB_BACKED_SETTINGS_MIGRATION_KEY = "settings.db_backed_sources_v1";
-
-function mapBooleanSettingValue(value: unknown, fallback: boolean) {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function mapGeneralPreferencesFromSettings(
-  settings: ReadonlyArray<import("@/shared/types/api").SettingDto>,
-  fallback: GeneralPreferences,
-): GeneralPreferences {
-  const values = new Map(settings.map((entry) => [entry.key, entry.value]));
-
-  return {
-    launchAtLogin: mapBooleanSettingValue(
-      values.get(GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY),
-      fallback.launchAtLogin,
-    ),
-    preventSleepWhileRunning: mapBooleanSettingValue(
-      values.get(GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY),
-      fallback.preventSleepWhileRunning,
-    ),
-    minimizeToTray: mapBooleanSettingValue(
-      values.get(GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY),
-      fallback.minimizeToTray,
-    ),
-  };
-}
-
-const TERMINAL_SETTING_KEY_MAP: Record<keyof TerminalSettings, string> = {
-  shellPath: TERMINAL_SHELL_PATH_SETTING_KEY,
-  shellArgs: TERMINAL_SHELL_ARGS_SETTING_KEY,
-  fontFamily: TERMINAL_FONT_FAMILY_SETTING_KEY,
-  fontSize: TERMINAL_FONT_SIZE_SETTING_KEY,
-  lineHeight: TERMINAL_LINE_HEIGHT_SETTING_KEY,
-  cursorStyle: TERMINAL_CURSOR_STYLE_SETTING_KEY,
-  cursorBlink: TERMINAL_CURSOR_BLINK_SETTING_KEY,
-  scrollback: TERMINAL_SCROLLBACK_SETTING_KEY,
-  copyOnSelect: TERMINAL_COPY_ON_SELECT_SETTING_KEY,
-  termEnv: TERMINAL_TERM_ENV_SETTING_KEY,
-};
-
-function mapTerminalSettingsFromDb(
-  settings: ReadonlyArray<import("@/shared/types/api").SettingDto>,
-  fallback: TerminalSettings,
-): TerminalSettings {
-  const values = new Map(settings.map((entry) => [entry.key, entry.value]));
-
-  const str = (key: string, fb: string) => {
-    const v = values.get(key);
-    return typeof v === "string" ? v : fb;
-  };
-  const num = (key: string, fb: number) => {
-    const v = values.get(key);
-    return typeof v === "number" ? v : fb;
-  };
-  const bool = (key: string, fb: boolean) => {
-    const v = values.get(key);
-    return typeof v === "boolean" ? v : fb;
-  };
-
-  return {
-    shellPath: str(TERMINAL_SHELL_PATH_SETTING_KEY, fallback.shellPath),
-    shellArgs: str(TERMINAL_SHELL_ARGS_SETTING_KEY, fallback.shellArgs),
-    fontFamily: str(TERMINAL_FONT_FAMILY_SETTING_KEY, fallback.fontFamily),
-    fontSize: num(TERMINAL_FONT_SIZE_SETTING_KEY, fallback.fontSize),
-    lineHeight: num(TERMINAL_LINE_HEIGHT_SETTING_KEY, fallback.lineHeight),
-    cursorStyle: str(TERMINAL_CURSOR_STYLE_SETTING_KEY, fallback.cursorStyle) as TerminalSettings["cursorStyle"],
-    cursorBlink: bool(TERMINAL_CURSOR_BLINK_SETTING_KEY, fallback.cursorBlink),
-    scrollback: num(TERMINAL_SCROLLBACK_SETTING_KEY, fallback.scrollback),
-    copyOnSelect: bool(TERMINAL_COPY_ON_SELECT_SETTING_KEY, fallback.copyOnSelect),
-    termEnv: str(TERMINAL_TERM_ENV_SETTING_KEY, fallback.termEnv),
-  };
-}
 
 function mapProfileDto(profile: import("@/shared/types/api").AgentProfileDto): AgentProfile {
   const defaultProfile = DEFAULT_AGENT_PROFILES[0];
@@ -346,15 +266,6 @@ async function persistPolicyState(policy: PolicySettings) {
   ]);
 }
 
-function isDefaultPolicyState(policy: PolicySettings) {
-  return (
-    policy.approvalPolicy === DEFAULT_POLICY_SETTINGS.approvalPolicy
-    && policy.allowList.length === 0
-    && policy.denyList.length === 0
-    && policy.writableRoots.length === 0
-  );
-}
-
 function resolveActiveProfileId(
   profiles: ReadonlyArray<AgentProfile>,
   activeProfileId: unknown,
@@ -405,13 +316,31 @@ function mapWorkspaceDto(workspace: WorkspaceDto): WorkspaceEntry {
   };
 }
 
+function mapPromptCommandDto(command: PromptCommandDto): CommandEntry {
+  return {
+    id: command.id,
+    name: command.name,
+    path: command.path,
+    argumentHint: command.argumentHint,
+    description: command.description,
+    prompt: command.prompt,
+    source: command.source,
+    enabled: command.enabled,
+    version: command.version,
+    fileName: command.fileName,
+  };
+}
+
 export function useSettingsController() {
-  const storedSettingsRef = useRef<SettingsState>(readStoredSettings());
-  const [settings, setSettings] = useState<SettingsState>(() => storedSettingsRef.current);
+  const storedLocalUiSettingsRef = useRef(readStoredLocalUiSettings());
+  const [settings, setSettings] = useState<SettingsState>(() => ({
+    ...DEFAULT_SETTINGS,
+    general: storedLocalUiSettingsRef.current.general,
+    terminal: storedLocalUiSettingsRef.current.terminal,
+  }));
   const [providerCatalog, setProviderCatalog] = useState<Array<ProviderCatalogEntry>>([]);
   const [availableShells, setAvailableShells] = useState<Array<{ path: string; name: string }>>([]);
   const [backendHydrated, setBackendHydrated] = useState(!isTauri());
-  const [generalSettingsHydrated, setGeneralSettingsHydrated] = useState(!isTauri());
   const settingsRef = useRef(settings);
 
   settingsRef.current = settings;
@@ -421,13 +350,11 @@ export function useSettingsController() {
       return;
     }
 
-    if (isTauri()) {
-      persistLocalUiSettings(settings);
-      return;
-    }
-
-    persistSettings(settings);
-  }, [backendHydrated, settings]);
+    persistLocalUiSettings({
+      general: settings.general,
+      terminal: settings.terminal,
+    });
+  }, [backendHydrated, settings.general, settings.terminal]);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -438,21 +365,19 @@ export function useSettingsController() {
 
     async function hydrateDbBackedSettings() {
       try {
-        const [providers, catalog, policies, profiles, workspaceEntries, storedSettings, activeProfileSetting, migrationSetting] =
+        const [providers, catalog, policies, profiles, workspaceEntries, promptCommands, activeProfileSetting] =
           await Promise.all([
             providerSettingsGetAll(),
             providerCatalogList(),
             policyGetAll(),
             profileList(),
             workspaceList(),
-            settingsGetAll(),
+            promptCommandList(),
             settingsGet(ACTIVE_AGENT_PROFILE_SETTING_KEY),
-            settingsGet(DB_BACKED_SETTINGS_MIGRATION_KEY),
           ]);
 
         const mappedProviders = providers.map(mapProviderDto);
 
-        // Deduplicate providers by providerKey, keeping first occurrence
         const seenProviderKeys = new Set<string>();
         const dedupedProviders = mappedProviders.filter((provider) => {
           if (seenProviderKeys.has(provider.providerKey)) {
@@ -471,104 +396,10 @@ export function useSettingsController() {
           defaultBaseUrl: entry.defaultBaseUrl,
         }));
 
-        let mappedProfiles = profiles.map(mapProfileDto);
-        const localProfiles = storedSettingsRef.current.agentProfiles.length > 0
-          ? storedSettingsRef.current.agentProfiles
-          : DEFAULT_AGENT_PROFILES;
-        const localGeneral = storedSettingsRef.current.general;
-        const migrated = migrationSetting?.value === true;
-
-        if (!migrated && mappedProfiles.length === 0) {
-          const activeLocalProfileId = storedSettingsRef.current.activeAgentProfileId;
-          const profileIdMap = new Map<string, string>();
-          const createdProfiles = [];
-
-          for (const profile of localProfiles) {
-            const created = await profileCreate(
-              toProfileInput(
-                {
-                  name: profile.name,
-                  customInstructions: profile.customInstructions,
-                  commitMessagePrompt: profile.commitMessagePrompt,
-                  responseStyle: profile.responseStyle,
-                  thinkingLevel: profile.thinkingLevel,
-                  responseLanguage: profile.responseLanguage,
-                  commitMessageLanguage: profile.commitMessageLanguage,
-                  primaryProviderId: profile.primaryProviderId,
-                  primaryModelId: profile.primaryModelId,
-                  assistantProviderId: profile.assistantProviderId,
-                  assistantModelId: profile.assistantModelId,
-                  liteProviderId: profile.liteProviderId,
-                  liteModelId: profile.liteModelId,
-                },
-                profile.id === activeLocalProfileId,
-              ),
-            );
-
-            profileIdMap.set(profile.id, created.id);
-            createdProfiles.push(mapProfileDto(created));
-          }
-
-          mappedProfiles = createdProfiles;
-          const migratedActiveProfileId = resolveActiveProfileId(
-            createdProfiles,
-            profileIdMap.get(activeLocalProfileId),
-          );
-          await settingsSet(
-            ACTIVE_AGENT_PROFILE_SETTING_KEY,
-            JSON.stringify(migratedActiveProfileId),
-          );
-        }
-
+        const mappedProfiles = profiles.map(mapProfileDto);
         const mappedPolicy = mapPoliciesFromDtos(policies);
-        const shouldMigrateLocalPolicy =
-          !migrated
-          && isDefaultPolicyState(mappedPolicy)
-          && !isDefaultPolicyState(storedSettingsRef.current.policy);
+        const resolvedPromptCommands = promptCommands;
 
-        if (shouldMigrateLocalPolicy) {
-          await persistPolicyState(storedSettingsRef.current.policy);
-        }
-
-        const resolvedPolicy = shouldMigrateLocalPolicy
-          ? storedSettingsRef.current.policy
-          : mappedPolicy;
-
-        const generalSettingKeys = new Set(storedSettings.map((entry) => entry.key));
-        const generalMigrationWrites = !migrated
-          ? [
-              !generalSettingKeys.has(GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY)
-              && localGeneral.launchAtLogin !== DEFAULT_GENERAL_PREFERENCES.launchAtLogin
-                ? settingsSet(
-                    GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY,
-                    JSON.stringify(localGeneral.launchAtLogin),
-                  )
-                : null,
-              !generalSettingKeys.has(GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY)
-              && localGeneral.preventSleepWhileRunning !== DEFAULT_GENERAL_PREFERENCES.preventSleepWhileRunning
-                ? settingsSet(
-                    GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
-                    JSON.stringify(localGeneral.preventSleepWhileRunning),
-                  )
-                : null,
-              !generalSettingKeys.has(GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY)
-              && localGeneral.minimizeToTray !== DEFAULT_GENERAL_PREFERENCES.minimizeToTray
-                ? settingsSet(
-                    GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY,
-                    JSON.stringify(localGeneral.minimizeToTray),
-                  )
-                : null,
-            ].filter((operation): operation is Promise<void> => operation !== null)
-          : [];
-
-        if (generalMigrationWrites.length > 0) {
-          await Promise.all(generalMigrationWrites);
-        }
-
-        const resolvedGeneral = mapGeneralPreferencesFromSettings(storedSettings, localGeneral);
-        const resolvedTerminal = mapTerminalSettingsFromDb(storedSettings, storedSettingsRef.current.terminal);
-
-        // Fetch available shells
         let shells: Array<{ path: string; name: string }> = [];
         try {
           shells = await invoke<Array<{ path: string; name: string }>>("terminal_list_available_shells");
@@ -588,42 +419,29 @@ export function useSettingsController() {
           );
         }
 
-        if (!migrated) {
-          await settingsSet(DB_BACKED_SETTINGS_MIGRATION_KEY, "true");
-        }
-
         if (cancelled) {
           return;
         }
-
-        const nextGeneral = resolvedGeneral;
 
         setProviderCatalog(mappedCatalog);
         setAvailableShells(shells);
         setSettings((current) => ({
           ...current,
-          general: nextGeneral,
-          terminal: resolvedTerminal,
           workspaces: workspaceEntries.map(mapWorkspaceDto),
           providers: dedupedProviders,
-          policy: resolvedPolicy,
+          commands: {
+            commands: resolvedPromptCommands.map(mapPromptCommandDto),
+          },
+          policy: mappedPolicy,
           agentProfiles: mappedProfiles.length > 0 ? mappedProfiles : DEFAULT_AGENT_PROFILES,
           activeAgentProfileId: mappedProfiles.length > 0
             ? resolvedActiveProfileId
             : DEFAULT_AGENT_PROFILES[0]?.id ?? "default-profile",
         }));
-        storedSettingsRef.current = {
-          ...storedSettingsRef.current,
-          general: nextGeneral,
-        };
-        setGeneralSettingsHydrated(true);
       } catch (error) {
         console.warn("Failed to hydrate DB-backed settings", error);
       } finally {
         if (!cancelled) {
-          if (!generalSettingsHydrated) {
-            setGeneralSettingsHydrated(true);
-          }
           setBackendHydrated(true);
         }
       }
@@ -637,7 +455,7 @@ export function useSettingsController() {
   }, []);
 
   useEffect(() => {
-    if (!isTauri()) {
+    if (!isTauri() || !backendHydrated) {
       return;
     }
 
@@ -662,7 +480,7 @@ export function useSettingsController() {
       console.warn("Failed to sync general settings", error);
     });
   }, [
-    generalSettingsHydrated,
+    backendHydrated,
     settings.general.launchAtLogin,
     settings.general.preventSleepWhileRunning,
     settings.general.minimizeToTray,
@@ -696,13 +514,6 @@ export function useSettingsController() {
         [key]: value,
       },
     }));
-
-    if (isTauri()) {
-      const dbKey = TERMINAL_SETTING_KEY_MAP[key];
-      void settingsSet(dbKey, JSON.stringify(value)).catch((error) => {
-        console.warn(`Failed to persist terminal setting ${key}`, error);
-      });
-    }
   };
 
   const addAgentProfile = (entry: Omit<AgentProfile, "id">) => {
@@ -779,9 +590,6 @@ export function useSettingsController() {
     setSettings(nextSettings);
 
     if (!isTauri()) {
-      // In non-Tauri environments, persist to localStorage immediately
-      // This ensures changes survive component unmounting and page reloads
-      persistSettings(nextSettings);
       return;
     }
 
@@ -1352,35 +1160,116 @@ export function useSettingsController() {
   };
 
   const addCommand = (entry: Omit<CommandEntry, "id">) => {
-    setSettings((current) => ({
-      ...current,
-      commands: {
-        ...current.commands,
-        commands: [...current.commands.commands, { ...entry, id: crypto.randomUUID() }],
-      },
-    }));
+    if (!isTauri()) {
+      setSettings((current) => ({
+        ...current,
+        commands: {
+          ...current.commands,
+          commands: [...current.commands.commands, { ...entry, id: crypto.randomUUID() }],
+        },
+      }));
+      return;
+    }
+
+    void promptCommandCreate({
+      name: entry.name,
+      path: entry.path,
+      argumentHint: entry.argumentHint,
+      description: entry.description,
+      prompt: entry.prompt,
+      source: entry.source ?? "user",
+      enabled: entry.enabled ?? true,
+      version: entry.version ?? 1,
+    })
+      .then((command) => {
+        const mapped = mapPromptCommandDto(command);
+        setSettings((current) => ({
+          ...current,
+          commands: {
+            ...current.commands,
+            commands: [...current.commands.commands, mapped],
+          },
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to create prompt command", error);
+      });
   };
 
   const removeCommand = (id: string) => {
-    setSettings((current) => ({
-      ...current,
-      commands: {
-        ...current.commands,
-        commands: current.commands.commands.filter((cmd) => cmd.id !== id),
-      },
-    }));
+    if (!isTauri()) {
+      setSettings((current) => ({
+        ...current,
+        commands: {
+          ...current.commands,
+          commands: current.commands.commands.filter((cmd) => cmd.id !== id),
+        },
+      }));
+      return;
+    }
+
+    void promptCommandDelete(id)
+      .then(() => {
+        setSettings((current) => ({
+          ...current,
+          commands: {
+            ...current.commands,
+            commands: current.commands.commands.filter((cmd) => cmd.id !== id),
+          },
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to delete prompt command", error);
+      });
   };
 
   const updateCommand = (id: string, patch: Partial<Omit<CommandEntry, "id">>) => {
+    const currentCommand = settingsRef.current.commands.commands.find((command) => command.id === id);
+    if (!currentCommand) {
+      return;
+    }
+
+    const nextCommand = { ...currentCommand, ...patch };
     setSettings((current) => ({
       ...current,
       commands: {
         ...current.commands,
         commands: current.commands.commands.map((cmd) =>
-          cmd.id === id ? { ...cmd, ...patch } : cmd,
+          cmd.id === id ? nextCommand : cmd,
         ),
       },
     }));
+
+    if (!isTauri()) {
+      return;
+    }
+
+    void promptCommandUpdate(id, {
+      id,
+      name: nextCommand.name,
+      path: nextCommand.path,
+      argumentHint: nextCommand.argumentHint,
+      description: nextCommand.description,
+      prompt: nextCommand.prompt,
+      source: nextCommand.source ?? "user",
+      enabled: nextCommand.enabled ?? true,
+      version: nextCommand.version ?? 1,
+    })
+      .then((command) => {
+        const mapped = mapPromptCommandDto(command);
+        setSettings((current) => ({
+          ...current,
+          commands: {
+            ...current.commands,
+            commands: current.commands.commands.map((entry) =>
+              entry.id === id ? mapped : entry,
+            ),
+          },
+        }));
+      })
+      .catch((error) => {
+        console.warn("Failed to update prompt command", error);
+      });
   };
 
   return {

@@ -251,8 +251,14 @@ pub fn run() {
             commands::settings::profile_create,
             commands::settings::profile_update,
             commands::settings::profile_delete,
+            // Prompt Commands
+            commands::prompts::prompt_command_list,
+            commands::prompts::prompt_command_create,
+            commands::prompts::prompt_command_update,
+            commands::prompts::prompt_command_delete,
             // Extensions
             commands::extensions::extensions_list,
+            commands::extensions::config_list_diagnostics,
             commands::extensions::extension_get_detail,
             commands::extensions::extension_enable,
             commands::extensions::extension_disable,
@@ -345,6 +351,7 @@ pub fn run() {
 
             // 5. Construct and manage AppState
             let state = AppState::new(pool, app.handle().clone());
+            state.prompt_command_manager.ensure_builtin_seeded()?;
             let desktop_runtime = DesktopRuntimeState::default();
 
             let (prevent_sleep_while_running, launch_at_login, minimize_to_tray) =

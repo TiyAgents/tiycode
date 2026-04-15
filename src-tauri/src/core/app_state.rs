@@ -6,6 +6,7 @@ use crate::core::agent_run_manager::AgentRunManager;
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
 use crate::core::git_manager::GitManager;
 use crate::core::index_manager::IndexManager;
+use crate::core::prompt_command_manager::PromptCommandManager;
 use crate::core::settings_manager::SettingsManager;
 use crate::core::sleep_manager::SleepManager;
 use crate::core::terminal_manager::TerminalManager;
@@ -21,6 +22,7 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub workspace_manager: WorkspaceManager,
     pub settings_manager: SettingsManager,
+    pub prompt_command_manager: PromptCommandManager,
     pub thread_manager: ThreadManager,
     pub sleep_manager: Arc<SleepManager>,
     pub built_in_agent_runtime: Arc<BuiltInAgentRuntime>,
@@ -36,6 +38,7 @@ impl AppState {
     pub fn new(pool: SqlitePool, app_handle: AppHandle) -> Self {
         let workspace_manager = WorkspaceManager::new(pool.clone());
         let settings_manager = SettingsManager::new(pool.clone());
+        let prompt_command_manager = PromptCommandManager::new();
         let thread_manager = ThreadManager::new(pool.clone());
         let sleep_manager = Arc::new(SleepManager::new());
         let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
@@ -61,6 +64,7 @@ impl AppState {
             pool,
             workspace_manager,
             settings_manager,
+            prompt_command_manager,
             thread_manager,
             sleep_manager,
             built_in_agent_runtime,

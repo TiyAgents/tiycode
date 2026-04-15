@@ -4,7 +4,6 @@ import {
   Copy,
   Globe,
   LoaderCircle,
-  LogOut,
   Minus,
   MoreHorizontal,
   Settings,
@@ -38,7 +37,6 @@ import {
   MENU_TRIGGER_LABEL_CLASS,
   THEME_OPTIONS,
 } from "@/modules/workbench-shell/model/fixtures";
-import type { MockUserSession } from "@/modules/workbench-shell/model/types";
 
 export function WorkbenchTopBar({
   isMacOS,
@@ -48,8 +46,6 @@ export function WorkbenchTopBar({
   isTerminalCollapsed,
   isUserMenuOpen,
   isOverlayOpen,
-  isLoggedIn,
-  userSession,
   isCheckingUpdates,
   updateStatus,
   openSettingsSection,
@@ -59,7 +55,6 @@ export function WorkbenchTopBar({
   language,
   theme,
   onToggleUserMenu,
-  onLogout,
   onCheckUpdates,
   onOpenSettings,
   onSelectLanguage,
@@ -76,8 +71,6 @@ export function WorkbenchTopBar({
   isTerminalCollapsed: boolean;
   isUserMenuOpen: boolean;
   isOverlayOpen: boolean;
-  isLoggedIn: boolean;
-  userSession: MockUserSession | null;
   isCheckingUpdates: boolean;
   updateStatus: string | null;
   openSettingsSection: "theme" | "language" | null;
@@ -87,7 +80,6 @@ export function WorkbenchTopBar({
   language: LanguagePreference;
   theme: ThemePreference;
   onToggleUserMenu: () => void;
-  onLogout: () => void;
   onCheckUpdates: () => void;
   onOpenSettings: () => void;
   onSelectLanguage: (language: LanguagePreference) => void;
@@ -161,8 +153,8 @@ export function WorkbenchTopBar({
               isOverlayOpen && "pointer-events-none invisible",
               isUserMenuOpen && "bg-app-surface-hover text-app-foreground",
             )}
-            aria-label={isLoggedIn ? t("topBar.openUserMenu") : t("topBar.openMenu")}
-            title={isLoggedIn ? t("topBar.openUserMenu") : t("topBar.openMenu")}
+            aria-label={t("topBar.openMenu")}
+            title={t("topBar.openMenu")}
             aria-expanded={isUserMenuOpen}
             aria-haspopup="menu"
             onClick={onToggleUserMenu}
@@ -172,17 +164,6 @@ export function WorkbenchTopBar({
 
           {isUserMenuOpen ? (
             <div className={cn("absolute left-0 top-full z-30 mt-2 w-[248px] rounded-2xl border border-app-border bg-app-menu p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] dark:shadow-[0_20px_48px_rgba(0,0,0,0.42)]", isMacOS ? MAC_USER_MENU_POPOVER_OFFSET : "left-2")}>
-              {userSession ? (
-                <div className="mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left">
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-app-surface-active text-sm font-semibold text-app-foreground">
-                    {userSession.avatar}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-app-foreground">{userSession.name}</p>
-                    <p className="truncate text-xs text-app-subtle">{userSession.email}</p>
-                  </div>
-                </div>
-              ) : null}
 
               <button
                 type="button"
@@ -285,13 +266,6 @@ export function WorkbenchTopBar({
                 <MoreHorizontal className={MENU_TRIGGER_ICON_CLASS} />
                 <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.moreSettings")}</span>
               </button>
-
-              {userSession ? (
-                <button type="button" className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")} onClick={onLogout}>
-                  <LogOut className={MENU_TRIGGER_ICON_CLASS} />
-                  <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.logout")}</span>
-                </button>
-              ) : null}
 
               {updateStatus ? (
                 <div className="px-3 pb-1 pt-2 text-xs text-app-subtle">{updateStatus}</div>

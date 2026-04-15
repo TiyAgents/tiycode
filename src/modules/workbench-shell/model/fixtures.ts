@@ -463,7 +463,6 @@ export const MENU_SUBMENU_ICON_CLASS = "size-3.5 shrink-0 text-app-subtle/90";
 export const MENU_SUBMENU_LABEL_CLASS = "flex-1 truncate";
 export const MAC_USER_MENU_OFFSET = "ml-[74px]";
 export const MAC_USER_MENU_POPOVER_OFFSET = "left-[74px]";
-export const AUTH_STORAGE_KEY = "tiy-agent-auth-session";
 export const PANEL_VISIBILITY_STORAGE_KEY = "tiy-agent-panel-visibility";
 export const UPDATE_STATUS_DURATION = 2200;
 

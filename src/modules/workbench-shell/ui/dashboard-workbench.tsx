@@ -72,7 +72,6 @@ import {
   LANGUAGE_OPTIONS,
   MIN_TERMINAL_HEIGHT,
   MIN_WORKBENCH_HEIGHT,
-  MOCK_USER_SESSION,
   PANEL_VISIBILITY_STORAGE_KEY,
   RECENT_PROJECTS,
   THEME_OPTIONS,
@@ -93,7 +92,6 @@ import {
   isNodeInsideContainer,
   mergeRecentProjects,
   readPanelVisibilityState,
-  readStoredUserSession,
   selectContainerContents,
 } from "@/modules/workbench-shell/model/helpers";
 import {
@@ -355,6 +353,7 @@ export function DashboardWorkbench() {
     enableSkill,
     error: extensionsError,
     extensions,
+    configDiagnostics,
     getMarketplaceSourceRemovePlan,
     installMarketplaceItem,
     isLoading: areExtensionsLoading,
@@ -461,7 +460,6 @@ export function DashboardWorkbench() {
     "theme" | "language" | null
   >(null);
   const [isUserMenuOpen, setUserMenuOpen] = useState(false);
-  const [userSession, setUserSession] = useState(() => readStoredUserSession());
   const appUpdater = useAppUpdater();
   const isCheckingUpdates = appUpdater.phase === "checking";
   const updateStatus =
@@ -1365,16 +1363,8 @@ export function DashboardWorkbench() {
       return;
     }
 
-    if (userSession) {
-      window.localStorage.setItem(
-        "tiy-agent-auth-session",
-        JSON.stringify(userSession),
-      );
-      return;
-    }
-
     window.localStorage.removeItem("tiy-agent-auth-session");
-  }, [userSession]);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2303,18 +2293,6 @@ export function DashboardWorkbench() {
     });
   };
 
-  const handleLogin = () => {
-    setUserSession(MOCK_USER_SESSION);
-    setOpenSettingsSection(null);
-    setUserMenuOpen(!isOverlayOpen);
-  };
-
-  const handleLogout = () => {
-    setUserSession(null);
-    setOpenSettingsSection(null);
-    setUserMenuOpen(false);
-  };
-
   const handleCheckUpdates = appUpdater.checkForUpdates;
 
   const workspaceOpenLabel = t("sidebar.openInFileManager");
@@ -2369,8 +2347,6 @@ export function DashboardWorkbench() {
         isTerminalCollapsed={isTerminalCollapsed}
         isUserMenuOpen={isUserMenuOpen}
         isOverlayOpen={isOverlayOpen}
-        isLoggedIn={Boolean(userSession)}
-        userSession={userSession}
         isCheckingUpdates={isCheckingUpdates}
         updateStatus={updateStatus}
         openSettingsSection={openSettingsSection}
@@ -2380,7 +2356,6 @@ export function DashboardWorkbench() {
         language={language}
         theme={theme}
         onToggleUserMenu={handleUserMenuToggle}
-        onLogout={handleLogout}
         onCheckUpdates={handleCheckUpdates}
         onOpenSettings={() => handleOpenSettings("general")}
         onSelectLanguage={handleLanguageSelect}
@@ -3011,6 +2986,7 @@ export function DashboardWorkbench() {
           agentProfiles={agentProfiles}
           activeAgentProfileId={activeAgentProfileId}
           contentRef={overlayContentRef}
+          configDiagnostics={configDiagnostics}
           generalPreferences={generalPreferences}
           isCheckingUpdates={isCheckingUpdates}
           language={language}
@@ -3023,7 +2999,6 @@ export function DashboardWorkbench() {
           systemMetadata={data}
           theme={theme}
           updateStatus={updateStatus}
-          userSession={userSession}
           workspaces={settingsWorkspaces}
           onAddAgentProfile={addAgentProfile}
           onAddAllowEntry={addAllowEntry}
@@ -3035,8 +3010,6 @@ export function DashboardWorkbench() {
           onCheckUpdates={handleCheckUpdates}
           onClose={() => setActiveOverlay(null)}
           onDuplicateAgentProfile={duplicateAgentProfile}
-          onLogin={handleLogin}
-          onLogout={handleLogout}
           onRemoveAgentProfile={removeAgentProfile}
           onRemoveAllowEntry={removeAllowEntry}
           onRemoveCommand={removeCommand}
@@ -3069,6 +3042,7 @@ export function DashboardWorkbench() {
           detailById={extensionDetailById}
           error={extensionsError}
           extensions={extensions}
+          configDiagnostics={configDiagnostics}
           isLoading={areExtensionsLoading}
           marketplaceItems={marketplaceItems}
           marketplaceSources={marketplaceSources}

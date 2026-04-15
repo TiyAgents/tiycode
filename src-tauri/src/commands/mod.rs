@@ -3,6 +3,7 @@ pub mod attachment;
 pub mod extensions;
 pub mod git;
 pub mod index;
+pub mod prompts;
 pub mod settings;
 pub mod system;
 pub mod terminal;

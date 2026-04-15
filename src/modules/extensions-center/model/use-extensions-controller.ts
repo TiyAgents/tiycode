@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  configListDiagnostics,
   extensionDisable,
   extensionEnable,
   extensionGetDetail,
@@ -26,6 +27,7 @@ import {
 } from "@/services/bridge";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import type {
+  ConfigDiagnostic,
   ExtensionCommand,
   ExtensionDetail,
   ExtensionSummary,
@@ -53,6 +55,7 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
   const [commands, setCommands] = useState<ExtensionCommand[]>([]);
   const [marketplaceSources, setMarketplaceSources] = useState<MarketplaceSource[]>([]);
   const [marketplaceItems, setMarketplaceItems] = useState<MarketplaceItem[]>([]);
+  const [configDiagnostics, setConfigDiagnostics] = useState<ConfigDiagnostic[]>([]);
   const [detailByKey, setDetailByKey] = useState<Record<string, ExtensionDetail>>({});
   const [skillPreviewByKey, setSkillPreviewByKey] = useState<Record<string, SkillPreview>>({});
   const [isLoading, setLoading] = useState(true);
@@ -84,9 +87,10 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
           extensionsListCommands(),
           marketplaceListSources(),
           marketplaceListItems(),
+          configListDiagnostics(),
         ]);
 
-        const [nextExtensions, nextMcpServers, nextSkills, nextCommands, nextSources, nextMarketplaceItems] =
+        const [nextExtensions, nextMcpServers, nextSkills, nextCommands, nextSources, nextMarketplaceItems, nextDiagnostics] =
           results;
 
         if (nextExtensions.status === "fulfilled") {
@@ -106,6 +110,9 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
         }
         if (nextMarketplaceItems.status === "fulfilled") {
           setMarketplaceItems(nextMarketplaceItems.value);
+        }
+        if (nextDiagnostics.status === "fulfilled") {
+          setConfigDiagnostics(nextDiagnostics.value);
         }
 
         const rejected = results
@@ -212,6 +219,7 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
     commands,
     marketplaceSources,
     marketplaceItems,
+    configDiagnostics,
     pluginCommandEntries,
     detailByKey,
     skillPreviewByKey,

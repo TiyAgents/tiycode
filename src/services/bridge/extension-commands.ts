@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
+  ConfigDiagnostic,
   ExtensionActivityEvent,
   ExtensionCommand,
   ExtensionDetail,
@@ -25,6 +26,11 @@ export async function extensionsList(options?: { scope?: string; workspacePath?:
     scope: options?.scope,
     workspacePath: options?.workspacePath ?? undefined,
   });
+}
+
+export async function configListDiagnostics(): Promise<ConfigDiagnostic[]> {
+  if (!isTauri()) return [];
+  return invoke<ConfigDiagnostic[]>("config_list_diagnostics");
 }
 
 export async function extensionGetDetail(

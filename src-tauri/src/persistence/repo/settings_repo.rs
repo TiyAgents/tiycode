@@ -59,6 +59,15 @@ pub async fn set(pool: &SqlitePool, key: &str, value_json: &str) -> Result<(), A
     Ok(())
 }
 
+pub async fn delete(pool: &SqlitePool, key: &str) -> Result<bool, AppError> {
+    let result = sqlx::query("DELETE FROM settings WHERE key = ?")
+        .bind(key)
+        .execute(pool)
+        .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 // ---------------------------------------------------------------------------
 // Policies table (identical schema, separate table)
 // ---------------------------------------------------------------------------

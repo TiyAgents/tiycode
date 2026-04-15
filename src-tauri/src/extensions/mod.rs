@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -17,17 +18,18 @@ use crate::core::executors::ToolOutput;
 use crate::core::windows_process::configure_background_tokio_command;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::extensions::{
-    ExtensionActivityEventDto, ExtensionCommandDto, ExtensionDetailDto, ExtensionHealth,
-    ExtensionInstallState, ExtensionKind, ExtensionSourceDto, ExtensionSummaryDto,
-    MarketplaceItemDto, MarketplaceRemoveSourcePlanDto, MarketplaceSourceDto,
-    MarketplaceSourceInputDto, MarketplaceSourcePluginRefDto, McpResourceSummaryDto,
-    McpServerConfigDto, McpServerConfigInput, McpServerStateDto, McpToolSummaryDto,
-    PluginCommandDto, PluginDetailDto, PluginHookGroupDto, PluginToolDto, SkillPreviewDto,
-    SkillRecordDto,
+    ConfigDiagnosticDto, ConfigDiagnosticKind, ConfigDiagnosticSeverity, ExtensionActivityEventDto,
+    ExtensionCommandDto, ExtensionDetailDto, ExtensionHealth, ExtensionInstallState, ExtensionKind,
+    ExtensionSourceDto, ExtensionSummaryDto, MarketplaceItemDto, MarketplaceRemoveSourcePlanDto,
+    MarketplaceSourceDto, MarketplaceSourceInputDto, MarketplaceSourcePluginRefDto,
+    McpResourceSummaryDto, McpServerConfigDto, McpServerConfigInput, McpServerStateDto,
+    McpToolSummaryDto, PluginCommandDto, PluginDetailDto, PluginHookGroupDto, PluginToolDto,
+    SkillPreviewDto, SkillRecordDto,
 };
 use crate::persistence::repo::{audit_repo, settings_repo};
 
-const EXTENSIONS_PLUGINS_KEY: &str = "extensions.plugins.installed";
+const EXTENSIONS_PLUGINS_FILE_NAME: &str = "plugins.json";
+const LEGACY_EXTENSIONS_INSTALLED_PLUGINS_KEY: &str = "extensions.plugins.installed";
 const EXTENSIONS_PLUGIN_CONFIG_KEY: &str = "extensions.plugins.config";
 const EXTENSIONS_MCP_RUNTIME_KEY: &str = "extensions.mcp.runtime";
 const EXTENSIONS_SKILLS_MAX_PROMPT_CHARS_KEY: &str = "extensions.skills.max_prompt_chars";
@@ -68,6 +70,12 @@ impl ConfigScope {
 #[derive(Debug, Clone)]
 pub struct ExtensionsManager {
     pool: SqlitePool,
+    diagnostics: Arc<Mutex<Vec<ConfigDiagnosticDto>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ConfigLoadOutcome<T> {
+    value: T,
 }
 
 #[derive(Debug, Clone)]
@@ -293,7 +301,17 @@ struct HookOutput {
 
 impl ExtensionsManager {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            diagnostics: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn list_config_diagnostics(&self) -> Vec<ConfigDiagnosticDto> {
+        self.diagnostics
+            .lock()
+            .map(|items| items.clone())
+            .unwrap_or_default()
     }
 
     pub async fn list_extensions(
@@ -1581,15 +1599,38 @@ impl ExtensionsManager {
     }
 
     async fn load_installed_plugin_records(&self) -> Result<Vec<InstalledPluginRecord>, AppError> {
-        self.read_json_setting(EXTENSIONS_PLUGINS_KEY).await
+        let file = global_plugins_config_path();
+        let records = self
+            .read_json_file_with_diagnostics::<Vec<InstalledPluginRecord>>(
+                &file,
+                "plugins",
+                ConfigScope::Global,
+            )?
+            .value;
+        if !records.is_empty() {
+            return Ok(records);
+        }
+
+        let legacy_records = self
+            .read_json_setting::<Vec<InstalledPluginRecord>>(
+                LEGACY_EXTENSIONS_INSTALLED_PLUGINS_KEY,
+            )
+            .await?;
+        if !legacy_records.is_empty() {
+            self.save_installed_plugin_records(&legacy_records).await?;
+            let _ =
+                settings_repo::delete(&self.pool, LEGACY_EXTENSIONS_INSTALLED_PLUGINS_KEY).await;
+            return Ok(legacy_records);
+        }
+
+        Ok(records)
     }
 
     async fn save_installed_plugin_records(
         &self,
         records: &[InstalledPluginRecord],
     ) -> Result<(), AppError> {
-        self.write_json_setting(EXTENSIONS_PLUGINS_KEY, records)
-            .await
+        self.write_json_file(&global_plugins_config_path(), records)
     }
 
     async fn load_plugin_config_store(&self) -> Result<PluginConfigStore, AppError> {
@@ -1646,7 +1687,8 @@ impl ExtensionsManager {
             ConfigScope::Workspace => workspace_mcp_path(workspace_path)?,
         };
         Ok(self
-            .read_json_file::<McpConfigFile>(&file)?
+            .read_json_file_with_diagnostics::<McpConfigFile>(&file, "mcp", scope)?
+            .value
             .servers
             .into_iter()
             .map(canonicalize_mcp_config)
@@ -2049,7 +2091,9 @@ impl ExtensionsManager {
             ConfigScope::Global => global_skills_config_path(),
             ConfigScope::Workspace => workspace_skills_config_path(workspace_path)?,
         };
-        self.read_json_file(&file)
+        Ok(self
+            .read_json_file_with_diagnostics(&file, "skills", scope)?
+            .value)
     }
 
     async fn save_skill_state_store(
@@ -2145,8 +2189,13 @@ impl ExtensionsManager {
     }
 
     fn load_marketplace_sources(&self) -> Result<MarketplaceSourceStore, AppError> {
-        let mut store =
-            self.read_json_file::<MarketplaceSourceStore>(&global_marketplace_sources_path())?;
+        let mut store = self
+            .read_json_file_with_diagnostics::<MarketplaceSourceStore>(
+                &global_marketplace_sources_path(),
+                "marketplaces",
+                ConfigScope::Global,
+            )?
+            .value;
         let mut by_id = store
             .sources
             .into_iter()
@@ -2708,17 +2757,72 @@ impl ExtensionsManager {
     where
         T: for<'de> Deserialize<'de> + Default,
     {
+        Ok(self
+            .read_json_file_with_diagnostics(path, "config", ConfigScope::Global)?
+            .value)
+    }
+
+    fn read_json_file_with_diagnostics<T>(
+        &self,
+        path: &Path,
+        area: &str,
+        scope: ConfigScope,
+    ) -> Result<ConfigLoadOutcome<T>, AppError>
+    where
+        T: for<'de> Deserialize<'de> + Default,
+    {
         if !path.exists() {
-            return Ok(T::default());
+            self.clear_diagnostic(path, area, scope);
+            return Ok(ConfigLoadOutcome {
+                value: T::default(),
+            });
         }
-        let raw = fs::read_to_string(path)?;
-        serde_json::from_str(&raw).map_err(|error| {
-            AppError::recoverable(
-                ErrorSource::Settings,
-                "extensions.file.invalid_json",
-                format!("Invalid extension config '{}': {error}", path.display()),
-            )
-        })
+        let raw = match fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(error) => {
+                let diagnostic = self.make_config_diagnostic(
+                    path,
+                    area,
+                    scope,
+                    ConfigDiagnosticKind::ReadFailed,
+                    format!("Unable to read {area} config"),
+                    format!("Failed to read '{}': {error}", path.display()),
+                    format!(
+                        "Check that '{}' is readable and not locked by another process.",
+                        path.display()
+                    ),
+                );
+                self.record_diagnostic(diagnostic.clone());
+                return Ok(ConfigLoadOutcome {
+                    value: T::default(),
+                });
+            }
+        };
+
+        match serde_json::from_str(&raw) {
+            Ok(value) => {
+                self.clear_diagnostic(path, area, scope);
+                Ok(ConfigLoadOutcome { value })
+            }
+            Err(error) => {
+                let diagnostic = self.make_config_diagnostic(
+                    path,
+                    area,
+                    scope,
+                    ConfigDiagnosticKind::InvalidJson,
+                    format!("{area} config is not valid JSON"),
+                    format!("Invalid JSON in '{}': {error}", path.display()),
+                    format!(
+                        "Fix the JSON syntax in '{}' or replace it with a valid backup.",
+                        path.display()
+                    ),
+                );
+                self.record_diagnostic(diagnostic.clone());
+                Ok(ConfigLoadOutcome {
+                    value: T::default(),
+                })
+            }
+        }
     }
 
     fn write_json_file<T>(&self, path: &Path, value: &T) -> Result<(), AppError>
@@ -2739,6 +2843,44 @@ impl ExtensionsManager {
         })?;
         fs::write(path, encoded)?;
         Ok(())
+    }
+
+    fn record_diagnostic(&self, diagnostic: ConfigDiagnosticDto) {
+        if let Ok(mut items) = self.diagnostics.lock() {
+            items.retain(|item| item.id != diagnostic.id);
+            items.push(diagnostic);
+            items.sort_by(|left, right| left.file_path.cmp(&right.file_path));
+        }
+    }
+
+    fn clear_diagnostic(&self, path: &Path, area: &str, scope: ConfigScope) {
+        let id = config_diagnostic_id(path, area, scope);
+        if let Ok(mut items) = self.diagnostics.lock() {
+            items.retain(|item| item.id != id);
+        }
+    }
+
+    fn make_config_diagnostic(
+        &self,
+        path: &Path,
+        area: &str,
+        scope: ConfigScope,
+        kind: ConfigDiagnosticKind,
+        summary: String,
+        detail: String,
+        suggestion: String,
+    ) -> ConfigDiagnosticDto {
+        ConfigDiagnosticDto {
+            id: config_diagnostic_id(path, area, scope),
+            scope: scope.as_str().to_string(),
+            area: area.to_string(),
+            file_path: path.display().to_string(),
+            severity: ConfigDiagnosticSeverity::Error,
+            kind,
+            summary,
+            detail,
+            suggestion,
+        }
     }
 
     async fn write_extension_audit(
@@ -3400,8 +3542,16 @@ fn global_marketplace_sources_path() -> PathBuf {
     tiy_home().join("marketplaces.json")
 }
 
+fn global_plugins_config_path() -> PathBuf {
+    tiy_home().join(EXTENSIONS_PLUGINS_FILE_NAME)
+}
+
 fn marketplace_cache_root() -> PathBuf {
     tiy_home().join("catalog/marketplaces")
+}
+
+fn config_diagnostic_id(path: &Path, area: &str, scope: ConfigScope) -> String {
+    format!("{}:{}:{}", scope.as_str(), area, path.display())
 }
 
 fn builtin_marketplace_sources() -> Vec<MarketplaceSourceRecord> {
@@ -5716,6 +5866,34 @@ rl.on("line", (line) => {
             "plugin::context7::context7",
             &current
         ));
+    }
+
+    #[tokio::test]
+    async fn invalid_config_json_returns_default_and_records_diagnostic() {
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("plugins.json");
+        fs::write(&path, "{ invalid json").expect("write invalid json");
+
+        let records = manager
+            .read_json_file_with_diagnostics::<Vec<InstalledPluginRecord>>(
+                &path,
+                "plugins",
+                ConfigScope::Global,
+            )
+            .expect("read config")
+            .value;
+
+        assert!(records.is_empty());
+        let diagnostics = manager.list_config_diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].area, "plugins");
+        assert_eq!(diagnostics[0].kind, ConfigDiagnosticKind::InvalidJson);
+        assert!(diagnostics[0].file_path.contains("plugins.json"));
     }
 }
 

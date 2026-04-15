@@ -3,6 +3,8 @@ import type {
   AgentProfileDto,
   AgentProfileInput,
   CustomProviderCreateInput,
+  PromptCommandDto,
+  PromptCommandInput,
   ProviderCatalogEntryDto,
   ProviderModelConnectionTestResultDto,
   ProviderSettingsDto,
@@ -135,4 +137,28 @@ export async function profileUpdate(
 export async function profileDelete(id: string): Promise<void> {
   requireTauri("profile_delete");
   return invoke("profile_delete", { id });
+}
+
+// ---------------------------------------------------------------------------
+// Prompt Commands
+// ---------------------------------------------------------------------------
+
+export async function promptCommandList(): Promise<PromptCommandDto[]> {
+  if (!isTauri()) return [];
+  return invoke<PromptCommandDto[]>("prompt_command_list");
+}
+
+export async function promptCommandCreate(input: PromptCommandInput): Promise<PromptCommandDto> {
+  requireTauri("prompt_command_create");
+  return invoke<PromptCommandDto>("prompt_command_create", { input });
+}
+
+export async function promptCommandUpdate(id: string, input: PromptCommandInput): Promise<PromptCommandDto> {
+  requireTauri("prompt_command_update");
+  return invoke<PromptCommandDto>("prompt_command_update", { id, input });
+}
+
+export async function promptCommandDelete(id: string): Promise<void> {
+  requireTauri("prompt_command_delete");
+  return invoke("prompt_command_delete", { id });
 }

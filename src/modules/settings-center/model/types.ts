@@ -90,6 +90,10 @@ export type CommandEntry = {
   argumentHint: string;
   description: string;
   prompt: string;
+  source?: string;
+  enabled?: boolean;
+  version?: number;
+  fileName?: string;
 };
 
 export type AgentProfile = {
@@ -139,6 +143,11 @@ export type TerminalSettings = {
   scrollback: number;
   copyOnSelect: boolean;
   termEnv: string;
+};
+
+export type LocalUiSettingsState = {
+  general: GeneralPreferences;
+  terminal: TerminalSettings;
 };
 
 export type SettingsState = {
