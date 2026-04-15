@@ -127,6 +127,7 @@ struct SkillStateStore {
     #[serde(default)]
     disabled: Vec<String>,
     #[serde(default, alias = "pinned", skip_serializing)]
+    #[allow(dead_code)]
     legacy_pinned: Vec<String>,
 }
 
@@ -5248,6 +5249,315 @@ mod tests {
         });
 
         (format!("http://{address}/mcp"), requests, handle)
+    }
+
+    #[test]
+    fn compare_extension_summaries_sorts_enabled_then_installed_then_name() {
+        let mut items = vec![
+            ExtensionSummaryDto {
+                id: "skill-zeta".to_string(),
+                kind: ExtensionKind::Skill,
+                name: "Zeta".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                source: ExtensionSourceDto::Builtin,
+                install_state: ExtensionInstallState::Discovered,
+                health: ExtensionHealth::Unknown,
+                permissions: Vec::new(),
+                tags: Vec::new(),
+            },
+            ExtensionSummaryDto {
+                id: "skill-bravo".to_string(),
+                kind: ExtensionKind::Skill,
+                name: "bravo".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                source: ExtensionSourceDto::Builtin,
+                install_state: ExtensionInstallState::Installed,
+                health: ExtensionHealth::Unknown,
+                permissions: Vec::new(),
+                tags: Vec::new(),
+            },
+            ExtensionSummaryDto {
+                id: "skill-alpha".to_string(),
+                kind: ExtensionKind::Skill,
+                name: "Alpha".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                source: ExtensionSourceDto::Builtin,
+                install_state: ExtensionInstallState::Enabled,
+                health: ExtensionHealth::Unknown,
+                permissions: Vec::new(),
+                tags: Vec::new(),
+            },
+        ];
+
+        items.sort_by(compare_extension_summaries);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["skill-alpha", "skill-bravo", "skill-zeta"]
+        );
+    }
+
+    #[test]
+    fn compare_mcp_server_states_sorts_enabled_then_name() {
+        let mut items = vec![
+            McpServerStateDto {
+                id: "server-zeta".to_string(),
+                label: "Zeta".to_string(),
+                scope: "global".to_string(),
+                status: "ready".to_string(),
+                phase: "idle".to_string(),
+                tools: Vec::new(),
+                resources: Vec::new(),
+                stale_snapshot: false,
+                last_error: None,
+                updated_at: "2026-04-15T00:00:00Z".to_string(),
+                config: McpServerConfigDto {
+                    id: "server-zeta".to_string(),
+                    label: "Zeta".to_string(),
+                    transport: "stdio".to_string(),
+                    enabled: false,
+                    auto_start: false,
+                    command: None,
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                    url: None,
+                    headers: HashMap::new(),
+                    timeout_ms: None,
+                },
+            },
+            McpServerStateDto {
+                id: "server-alpha".to_string(),
+                label: "Alpha".to_string(),
+                scope: "global".to_string(),
+                status: "ready".to_string(),
+                phase: "idle".to_string(),
+                tools: Vec::new(),
+                resources: Vec::new(),
+                stale_snapshot: false,
+                last_error: None,
+                updated_at: "2026-04-15T00:00:00Z".to_string(),
+                config: McpServerConfigDto {
+                    id: "server-alpha".to_string(),
+                    label: "Alpha".to_string(),
+                    transport: "stdio".to_string(),
+                    enabled: true,
+                    auto_start: true,
+                    command: None,
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                    url: None,
+                    headers: HashMap::new(),
+                    timeout_ms: None,
+                },
+            },
+            McpServerStateDto {
+                id: "server-bravo".to_string(),
+                label: "bravo".to_string(),
+                scope: "global".to_string(),
+                status: "ready".to_string(),
+                phase: "idle".to_string(),
+                tools: Vec::new(),
+                resources: Vec::new(),
+                stale_snapshot: false,
+                last_error: None,
+                updated_at: "2026-04-15T00:00:00Z".to_string(),
+                config: McpServerConfigDto {
+                    id: "server-bravo".to_string(),
+                    label: "bravo".to_string(),
+                    transport: "stdio".to_string(),
+                    enabled: true,
+                    auto_start: true,
+                    command: None,
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                    url: None,
+                    headers: HashMap::new(),
+                    timeout_ms: None,
+                },
+            },
+        ];
+
+        items.sort_by(compare_mcp_server_states);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["server-alpha", "server-bravo", "server-zeta"]
+        );
+    }
+
+    #[test]
+    fn compare_skill_records_sorts_enabled_then_name() {
+        let mut items = vec![
+            SkillRecordDto {
+                id: "skill-zeta".to_string(),
+                name: "Zeta".to_string(),
+                description: None,
+                tags: Vec::new(),
+                triggers: Vec::new(),
+                tools: Vec::new(),
+                priority: None,
+                source: "builtin".to_string(),
+                path: "/tmp/zeta".to_string(),
+                enabled: false,
+                scope: "global".to_string(),
+                content_preview: String::new(),
+                prompt_budget_chars: 100,
+            },
+            SkillRecordDto {
+                id: "skill-alpha".to_string(),
+                name: "Alpha".to_string(),
+                description: None,
+                tags: Vec::new(),
+                triggers: Vec::new(),
+                tools: Vec::new(),
+                priority: None,
+                source: "builtin".to_string(),
+                path: "/tmp/alpha".to_string(),
+                enabled: true,
+                scope: "global".to_string(),
+                content_preview: String::new(),
+                prompt_budget_chars: 100,
+            },
+            SkillRecordDto {
+                id: "skill-bravo".to_string(),
+                name: "bravo".to_string(),
+                description: None,
+                tags: Vec::new(),
+                triggers: Vec::new(),
+                tools: Vec::new(),
+                priority: None,
+                source: "builtin".to_string(),
+                path: "/tmp/bravo".to_string(),
+                enabled: true,
+                scope: "global".to_string(),
+                content_preview: String::new(),
+                prompt_budget_chars: 100,
+            },
+        ];
+
+        items.sort_by(compare_skill_records);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["skill-alpha", "skill-bravo", "skill-zeta"]
+        );
+    }
+
+    #[test]
+    fn compare_marketplace_items_sorts_enabled_then_installed_then_name() {
+        let mut items = vec![
+            MarketplaceItemDto {
+                id: "market-zeta".to_string(),
+                source_id: "source".to_string(),
+                source_name: "Source".to_string(),
+                kind: "plugin".to_string(),
+                name: "Zeta".to_string(),
+                version: "1.0.0".to_string(),
+                summary: "summary".to_string(),
+                description: "description".to_string(),
+                publisher: "publisher".to_string(),
+                tags: Vec::new(),
+                hooks: Vec::new(),
+                command_names: Vec::new(),
+                mcp_servers: Vec::new(),
+                skill_names: Vec::new(),
+                path: "/tmp/zeta".to_string(),
+                installable: true,
+                installed: false,
+                enabled: false,
+            },
+            MarketplaceItemDto {
+                id: "market-bravo".to_string(),
+                source_id: "source".to_string(),
+                source_name: "Source".to_string(),
+                kind: "plugin".to_string(),
+                name: "bravo".to_string(),
+                version: "1.0.0".to_string(),
+                summary: "summary".to_string(),
+                description: "description".to_string(),
+                publisher: "publisher".to_string(),
+                tags: Vec::new(),
+                hooks: Vec::new(),
+                command_names: Vec::new(),
+                mcp_servers: Vec::new(),
+                skill_names: Vec::new(),
+                path: "/tmp/bravo".to_string(),
+                installable: true,
+                installed: true,
+                enabled: false,
+            },
+            MarketplaceItemDto {
+                id: "market-alpha".to_string(),
+                source_id: "source".to_string(),
+                source_name: "Source".to_string(),
+                kind: "plugin".to_string(),
+                name: "Alpha".to_string(),
+                version: "1.0.0".to_string(),
+                summary: "summary".to_string(),
+                description: "description".to_string(),
+                publisher: "publisher".to_string(),
+                tags: Vec::new(),
+                hooks: Vec::new(),
+                command_names: Vec::new(),
+                mcp_servers: Vec::new(),
+                skill_names: Vec::new(),
+                path: "/tmp/alpha".to_string(),
+                installable: true,
+                installed: true,
+                enabled: true,
+            },
+        ];
+
+        items.sort_by(compare_marketplace_items);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["market-alpha", "market-bravo", "market-zeta"]
+        );
+    }
+
+    #[test]
+    fn skill_state_store_deserializes_legacy_pinned_alias_without_serializing_it() {
+        let store: SkillStateStore = serde_json::from_value(serde_json::json!({
+            "enabled": ["skill-a"],
+            "disabled": ["skill-b"],
+            "pinned": ["skill-legacy"]
+        }))
+        .expect("deserialize skill state");
+
+        assert_eq!(store.enabled, vec!["skill-a"]);
+        assert_eq!(store.disabled, vec!["skill-b"]);
+        assert_eq!(store.legacy_pinned, vec!["skill-legacy"]);
+
+        let serialized = serde_json::to_value(&store).expect("serialize skill state");
+        assert_eq!(
+            serialized.get("enabled"),
+            Some(&serde_json::json!(["skill-a"]))
+        );
+        assert_eq!(
+            serialized.get("disabled"),
+            Some(&serde_json::json!(["skill-b"]))
+        );
+        assert!(serialized.get("pinned").is_none());
+        assert!(serialized.get("legacyPinned").is_none());
     }
 
     #[test]
