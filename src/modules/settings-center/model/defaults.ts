@@ -34,7 +34,7 @@ export const DEFAULT_AGENT_PROFILES: Array<AgentProfile> = [
     customInstructions: "",
     commitMessagePrompt: "",
     responseStyle: "balanced",
-    thinkingLevel: "off",
+    thinkingLevel: "medium",
     responseLanguage: "English",
     commitMessageLanguage: "English",
     primaryProviderId: "",
