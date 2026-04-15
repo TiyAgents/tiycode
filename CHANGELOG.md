@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-04-15
+### :sparkles: New Features
+- [`cbad2ff`](https://github.com/TiyAgents/tiycode/commit/cbad2ff45d7fb05a8503a5c913fe9eab640c3c27) - **tauri**: ✨ Add URL security policy, configurable tool timeouts, and enhanced defaults *(PR [#39](https://github.com/TiyAgents/tiycode/pull/39) by [@jorben](https://github.com/jorben))*
+- [`0bbdbc9`](https://github.com/TiyAgents/tiycode/commit/0bbdbc97177e71dee73bed11fd8e2e6e17e1d73f) - **workbench**: ✨ add tier-based model resolution and display *(PR [#40](https://github.com/TiyAgents/tiycode/pull/40) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`d075e33`](https://github.com/TiyAgents/tiycode/commit/d075e3382bcec4d9b282fe6c7f81e667a036fa24) - **tool-gateway**: 🐛 Decouple tool execution timeout from approval wait *(PR [#38](https://github.com/TiyAgents/tiycode/pull/38) by [@jorben](https://github.com/jorben))*
+
+### :recycle: Refactors
+- [`410c16e`](https://github.com/TiyAgents/tiycode/commit/410c16ee8a27c165b5215e1030ca994ff7023e86) - **prompt**: ♻️ move current date from message injection to system prompt *(PR [#36](https://github.com/TiyAgents/tiycode/pull/36) by [@jorben](https://github.com/jorben))*
+- [`f3aa30a`](https://github.com/TiyAgents/tiycode/commit/f3aa30a52bcdd42bb0049462e77cee6e3d3ca4b3) - **settings-center**: remove embedded prompt defaults, increase timeouts & fix UX issues *(PR [#37](https://github.com/TiyAgents/tiycode/pull/37) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.2.6] - 2026-04-13
 ### :sparkles: New Features
 - [`928ca77`](https://github.com/TiyAgents/tiycode/commit/928ca77d74a2da9d198164f55bcc804755e6e7f9) - **settings**: ✨ add OpenAI Responses provider type to catalog *(PR [#29](https://github.com/TiyAgents/tiycode/pull/29) by [@HayWolf](https://github.com/HayWolf))*
@@ -451,3 +464,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.4]: https://github.com/TiyAgents/tiycode/compare/0.2.3...0.2.4
 [0.2.5]: https://github.com/TiyAgents/tiycode/compare/0.2.4...0.2.5
 [0.2.6]: https://github.com/TiyAgents/tiycode/compare/0.2.5...0.2.6
+[0.2.7]: https://github.com/TiyAgents/tiycode/compare/0.2.6...0.2.7
