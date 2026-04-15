@@ -36,6 +36,31 @@ export interface SettingDto {
   updatedAt: string;
 }
 
+export interface PromptCommandDto {
+  id: string;
+  name: string;
+  path: string;
+  argumentHint: string;
+  description: string;
+  prompt: string;
+  source: string;
+  enabled: boolean;
+  version: number;
+  fileName: string;
+}
+
+export interface PromptCommandInput {
+  id?: string;
+  name: string;
+  path: string;
+  argumentHint?: string;
+  description?: string;
+  prompt: string;
+  source?: string;
+  enabled?: boolean;
+  version?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------

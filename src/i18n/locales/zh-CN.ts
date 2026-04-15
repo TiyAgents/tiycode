@@ -579,6 +579,7 @@ const zhCN = {
   "extensions.refresh": "刷新",
   "extensions.addSource": "添加源",
   "extensions.addMcp": "添加 MCP",
+  "extensions.configIssuesDetected": "检测到配置文件异常",
   "extensions.rescanSkills": "重新扫描 Skills",
   "extensions.install": "安装",
   "extensions.disable": "禁用",

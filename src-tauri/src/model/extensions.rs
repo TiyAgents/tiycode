@@ -27,6 +27,35 @@ pub enum ExtensionHealth {
     Error,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigDiagnosticSeverity {
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigDiagnosticKind {
+    InvalidJson,
+    InvalidStructure,
+    ReadFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigDiagnosticDto {
+    pub id: String,
+    pub scope: String,
+    pub area: String,
+    pub file_path: String,
+    pub severity: ConfigDiagnosticSeverity,
+    pub kind: ConfigDiagnosticKind,
+    pub summary: String,
+    pub detail: String,
+    pub suggestion: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ExtensionSourceDto {

@@ -4,8 +4,8 @@ use crate::core::app_state::AppState;
 use crate::extensions::ConfigScope;
 use crate::model::errors::AppError;
 use crate::model::extensions::{
-    ExtensionActivityEventDto, ExtensionCommandDto, ExtensionDetailDto, ExtensionSummaryDto,
-    MarketplaceItemDto, MarketplaceRemoveSourcePlanDto, MarketplaceSourceDto,
+    ConfigDiagnosticDto, ExtensionActivityEventDto, ExtensionCommandDto, ExtensionDetailDto,
+    ExtensionSummaryDto, MarketplaceItemDto, MarketplaceRemoveSourcePlanDto, MarketplaceSourceDto,
     MarketplaceSourceInputDto, McpServerConfigInput, McpServerStateDto, PluginDetailDto,
     SkillPreviewDto, SkillRecordDto,
 };
@@ -23,6 +23,13 @@ pub async fn extensions_list(
             ConfigScope::from_option(scope.as_deref()),
         )
         .await
+}
+
+#[tauri::command]
+pub async fn config_list_diagnostics(
+    state: State<'_, AppState>,
+) -> Result<Vec<ConfigDiagnosticDto>, AppError> {
+    Ok(state.extensions_manager.list_config_diagnostics())
 }
 
 #[tauri::command]

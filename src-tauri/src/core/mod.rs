@@ -12,6 +12,7 @@ pub mod local_search;
 pub mod plan_checkpoint;
 pub mod policy_engine;
 pub mod prompt;
+pub mod prompt_command_manager;
 pub mod settings_manager;
 pub mod shell_runtime;
 pub mod sleep_manager;

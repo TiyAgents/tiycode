@@ -39,6 +39,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
 import type {
+  ConfigDiagnostic,
   ExtensionDetail,
   ExtensionSummary,
   MarketplaceItem,
@@ -105,6 +106,7 @@ type ExtensionsCenterOverlayProps = {
   skills: SkillRecord[];
   detailById: Record<string, ExtensionDetail>;
   skillPreviewById: Record<string, SkillPreview>;
+  configDiagnostics: ConfigDiagnostic[];
   marketplaceSources: MarketplaceSource[];
   marketplaceItems: MarketplaceItem[];
   onClose: () => void;
@@ -941,6 +943,21 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
             {props.error ? (
               <div className="mt-3 rounded-xl border border-app-danger/30 bg-app-danger/8 px-3 py-2 text-[12px] text-app-danger">
                 {props.error}
+              </div>
+            ) : null}
+
+            {props.configDiagnostics.length > 0 ? (
+              <div className="mt-3 rounded-xl border border-app-warning/30 bg-app-warning/8 px-3 py-3 text-[12px] text-app-warning">
+                <p className="font-medium text-app-foreground">{t("extensions.configIssuesDetected")}</p>
+                <div className="mt-2 space-y-2 text-app-warning">
+                  {props.configDiagnostics.map((diagnostic) => (
+                    <div key={diagnostic.id} className="rounded-lg border border-app-warning/20 bg-app-canvas/40 px-3 py-2">
+                      <p className="font-medium text-app-foreground">{diagnostic.summary}</p>
+                      <p className="mt-1 break-all">{diagnostic.filePath}</p>
+                      <p className="mt-1 text-app-subtle">{diagnostic.suggestion}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
           </div>
