@@ -434,7 +434,7 @@ export function SettingsCenterOverlay({
               >
                 {configDiagnostics.length > 0 ? (
                   <div className="rounded-2xl border border-app-warning/30 bg-app-warning/8 px-4 py-3 text-sm text-app-warning">
-                    <p className="font-medium text-app-foreground">检测到配置文件异常</p>
+                    <p className="font-medium text-app-foreground">{t("extensions.configIssuesDetected")}</p>
                     <div className="mt-2 space-y-2 text-[12px] leading-5">
                       {configDiagnostics.map((diagnostic) => (
                         <div key={diagnostic.id} className="rounded-xl border border-app-warning/20 bg-app-canvas/40 px-3 py-2">

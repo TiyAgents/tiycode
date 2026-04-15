@@ -550,6 +550,7 @@ const en: Record<TranslationKey, string> = {
   "extensions.refresh": "Refresh",
   "extensions.addSource": "Add source",
   "extensions.addMcp": "Add MCP",
+  "extensions.configIssuesDetected": "Configuration issues detected",
   "extensions.rescanSkills": "Rescan skills",
   "extensions.install": "Install",
   "extensions.disable": "Disable",
