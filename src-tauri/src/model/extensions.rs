@@ -209,7 +209,6 @@ pub struct SkillRecordDto {
     pub source: String,
     pub path: String,
     pub enabled: bool,
-    pub pinned: bool,
     pub scope: String,
     pub content_preview: String,
     pub prompt_budget_chars: usize,

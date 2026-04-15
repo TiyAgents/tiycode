@@ -319,25 +319,6 @@ pub async fn skill_disable(
 }
 
 #[tauri::command]
-pub async fn skill_pin(
-    state: State<'_, AppState>,
-    id: String,
-    pinned: bool,
-    workspace_path: Option<String>,
-    scope: Option<String>,
-) -> Result<(), AppError> {
-    state
-        .extensions_manager
-        .pin_skill(
-            &id,
-            pinned,
-            workspace_path.as_deref(),
-            ConfigScope::from_option(scope.as_deref()),
-        )
-        .await
-}
-
-#[tauri::command]
 pub async fn skill_preview(
     state: State<'_, AppState>,
     id: String,
