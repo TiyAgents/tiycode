@@ -716,6 +716,8 @@ impl PromptCommandManager {
         self.ensure_path_is_unique(&records, &next_record.path, Some(id))?;
         self.ensure_name_is_unique(&records, &next_record.name, Some(id))?;
 
+        self.write_record(&next_record)?;
+
         if existing.file_path != next_record.file_path && existing.file_path.exists() {
             fs::remove_file(&existing.file_path).map_err(|error| {
                 AppError::recoverable(
@@ -729,7 +731,6 @@ impl PromptCommandManager {
             })?;
         }
 
-        self.write_record(&next_record)?;
         Ok(next_record.into_dto())
     }
 
@@ -1101,22 +1102,28 @@ fn parse_frontmatter_map(frontmatter: &str) -> Result<PromptCommandFrontmatter, 
 fn serialize_frontmatter(frontmatter: &PromptCommandFrontmatter) -> String {
     let mut lines = Vec::new();
     if let Some(value) = &frontmatter.id {
-        lines.push(format!("id: {value}"));
+        lines.push(format!("id: {}", sanitize_frontmatter_value(value)));
     }
     if let Some(value) = &frontmatter.name {
-        lines.push(format!("name: {value}"));
+        lines.push(format!("name: {}", sanitize_frontmatter_value(value)));
     }
     if let Some(value) = &frontmatter.path {
-        lines.push(format!("path: {value}"));
+        lines.push(format!("path: {}", sanitize_frontmatter_value(value)));
     }
     if let Some(value) = &frontmatter.argument_hint {
-        lines.push(format!("argumentHint: {value}"));
+        lines.push(format!(
+            "argumentHint: {}",
+            sanitize_frontmatter_value(value)
+        ));
     }
     if let Some(value) = &frontmatter.description {
-        lines.push(format!("description: {value}"));
+        lines.push(format!(
+            "description: {}",
+            sanitize_frontmatter_value(value)
+        ));
     }
     if let Some(value) = &frontmatter.source {
-        lines.push(format!("source: {value}"));
+        lines.push(format!("source: {}", sanitize_frontmatter_value(value)));
     }
     if let Some(value) = frontmatter.enabled {
         lines.push(format!("enabled: {value}"));
@@ -1125,6 +1132,17 @@ fn serialize_frontmatter(frontmatter: &PromptCommandFrontmatter) -> String {
         lines.push(format!("version: {value}"));
     }
     lines.join("\n")
+}
+
+fn sanitize_frontmatter_value(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    sanitized.trim().to_string()
 }
 
 trait IfEmptyThen {

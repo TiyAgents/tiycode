@@ -351,7 +351,9 @@ pub fn run() {
 
             // 5. Construct and manage AppState
             let state = AppState::new(pool, app.handle().clone());
-            state.prompt_command_manager.ensure_builtin_seeded()?;
+            if let Err(error) = state.prompt_command_manager.ensure_builtin_seeded() {
+                tracing::warn!(error = %error, "failed to seed builtin prompts during startup");
+            }
             let desktop_runtime = DesktopRuntimeState::default();
 
             let (prevent_sleep_while_running, launch_at_login, minimize_to_tray) =

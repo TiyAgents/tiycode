@@ -2874,7 +2874,7 @@ impl ExtensionsManager {
             id: config_diagnostic_id(path, area, scope),
             scope: scope.as_str().to_string(),
             area: area.to_string(),
-            file_path: path.display().to_string(),
+            file_path: display_config_path(path),
             severity: ConfigDiagnosticSeverity::Error,
             kind,
             summary,
@@ -3496,6 +3496,22 @@ impl From<bool> for ExtensionInstallState {
             Self::Disabled
         }
     }
+}
+
+fn display_config_path(path: &Path) -> String {
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(relative) = path.strip_prefix(&home) {
+            return format!("~/{}", relative.display());
+        }
+
+        if let Ok(canonical_home) = dunce::canonicalize(&home) {
+            if let Ok(relative) = path.strip_prefix(&canonical_home) {
+                return format!("~/{}", relative.display());
+            }
+        }
+    }
+
+    path.display().to_string()
 }
 
 fn tiy_home() -> PathBuf {
