@@ -141,6 +141,11 @@ impl HelperAgentOrchestrator {
         // Inject default TiyCode identification headers for all LLM API requests.
         agent.set_custom_headers(crate::core::tiycode_default_headers());
 
+        // Apply the same URL policy (including HTTPS exemptions for .oa.com domains)
+        // used by the main agent so that subagent LLM requests are not rejected
+        // when connecting to internal HTTP-only endpoints.
+        agent.set_security_config(crate::core::agent_session::runtime_security_config());
+
         if let Some(provider_options) = request.model_role.provider_options.clone() {
             agent.set_on_payload(move |payload, _model| {
                 let provider_options = provider_options.clone();
