@@ -1125,7 +1125,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         <CardHeader className="gap-3 pb-3">
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex min-w-0 items-start gap-3">
-                              <div className="mt-0.5 flex size-10 items-center justify-center rounded-2xl border border-app-border bg-app-canvas text-app-foreground">
+                              <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-2xl border border-app-border bg-app-canvas text-app-foreground">
                                 <LocalLlmIcon slug="mcp" className="size-4" title="MCP" />
                               </div>
                               <div className="min-w-0">
