@@ -16,6 +16,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 use crate::core::executors::ToolOutput;
+use crate::core::shell_runtime::resolve_command_path;
 use crate::core::windows_process::configure_background_tokio_command;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::extensions::{
@@ -3332,7 +3333,7 @@ impl ExtensionsManager {
             Box<dyn std::future::Future<Output = Result<T, AppError>> + Send + 'a>,
         >,
     {
-        let mut child = spawn_stdio_mcp_process(config, workspace_path)?;
+        let mut child = spawn_stdio_mcp_process(config, workspace_path).await?;
         let mut stdin = child.stdin.take().ok_or_else(|| {
             AppError::internal(
                 ErrorSource::Tool,
@@ -4366,6 +4367,59 @@ fn build_streamable_http_client(
         })
 }
 
+/// Expands `${VAR}` and `$VAR` patterns in a string using the current process
+/// environment. Unresolved variables are left as-is so the user sees what failed.
+fn expand_env_vars(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '$' {
+            let braced = chars.peek() == Some(&'{');
+            if braced {
+                chars.next(); // consume '{'
+            }
+            let mut var_name = String::new();
+            while let Some(&c) = chars.peek() {
+                if braced {
+                    if c == '}' {
+                        chars.next(); // consume '}'
+                        break;
+                    }
+                    var_name.push(c);
+                    chars.next();
+                } else if c.is_ascii_alphanumeric() || c == '_' {
+                    var_name.push(c);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if var_name.is_empty() {
+                result.push('$');
+                if braced {
+                    result.push('{');
+                    result.push('}');
+                }
+            } else if let Ok(val) = std::env::var(&var_name) {
+                result.push_str(&val);
+            } else {
+                // Leave unresolved variable as-is for debuggability
+                if braced {
+                    result.push_str(&format!("${{{}}}", var_name));
+                } else {
+                    result.push('$');
+                    result.push_str(&var_name);
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
 fn build_streamable_http_headers(
     config: &McpServerConfigInput,
     session: Option<&StreamableHttpSession>,
@@ -4410,7 +4464,8 @@ fn build_streamable_http_headers(
                     format!("Invalid MCP header name '{key}': {error}"),
                 )
             })?;
-            let value = HeaderValue::from_str(value).map_err(|error| {
+            let expanded = expand_env_vars(value);
+            let value = HeaderValue::from_str(&expanded).map_err(|error| {
                 AppError::validation(
                     ErrorSource::Settings,
                     format!("Invalid MCP header value for '{key}': {error}"),
@@ -4731,12 +4786,15 @@ fn parse_streamable_http_sse_payload(payload: &str) -> Result<serde_json::Value,
     Ok(serde_json::Value::Array(messages))
 }
 
-fn spawn_stdio_mcp_process(
+async fn spawn_stdio_mcp_process(
     config: &McpServerConfigInput,
     workspace_path: Option<&str>,
 ) -> Result<tokio::process::Child, AppError> {
-    let program = config.command.as_deref().unwrap_or_default();
-    let mut command = Command::new(program);
+    let configured_program = config.command.as_deref().unwrap_or_default().trim();
+    let program = resolve_command_path(configured_program)
+        .await
+        .unwrap_or_else(|| PathBuf::from(configured_program));
+    let mut command = Command::new(&program);
     command.args(config.args.clone().unwrap_or_default());
     if let Some(cwd) = config.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) {
         command.current_dir(cwd);
@@ -4749,7 +4807,7 @@ fn spawn_stdio_mcp_process(
     command.stderr(std::process::Stdio::piped());
     if let Some(env) = &config.env {
         for (key, value) in env {
-            command.env(key, value);
+            command.env(key, expand_env_vars(value));
         }
     }
 
@@ -4757,7 +4815,11 @@ fn spawn_stdio_mcp_process(
         AppError::recoverable(
             ErrorSource::Tool,
             "extensions.mcp.spawn_failed",
-            format!("Failed to start MCP server '{}': {error}", config.label),
+            format!(
+                "Failed to start MCP server '{}' with command '{}': {error}",
+                config.label,
+                program.display()
+            ),
         )
     })
 }
@@ -6269,6 +6331,55 @@ rl.on("line", (line) => {
         assert_eq!(diagnostics[0].area, "plugins");
         assert_eq!(diagnostics[0].kind, ConfigDiagnosticKind::InvalidJson);
         assert!(diagnostics[0].file_path.contains("plugins.json"));
+    }
+
+    #[test]
+    fn expand_env_vars_braced_syntax() {
+        // SAFETY: test-only, unique var names avoid races with other tests
+        unsafe { std::env::set_var("_TEST_EXPAND_TOKEN", "my_secret_123") };
+        let result = expand_env_vars("Bearer ${_TEST_EXPAND_TOKEN}");
+        assert_eq!(result, "Bearer my_secret_123");
+        unsafe { std::env::remove_var("_TEST_EXPAND_TOKEN") };
+    }
+
+    #[test]
+    fn expand_env_vars_unbraced_syntax() {
+        unsafe { std::env::set_var("_TEST_EXPAND_PLAIN", "value_abc") };
+        let result = expand_env_vars("prefix-$_TEST_EXPAND_PLAIN-suffix");
+        assert_eq!(result, "prefix-value_abc-suffix");
+        unsafe { std::env::remove_var("_TEST_EXPAND_PLAIN") };
+    }
+
+    #[test]
+    fn expand_env_vars_missing_variable_preserved() {
+        let result = expand_env_vars("Bearer ${_NONEXISTENT_VAR_12345}");
+        assert_eq!(result, "Bearer ${_NONEXISTENT_VAR_12345}");
+    }
+
+    #[test]
+    fn expand_env_vars_no_variables() {
+        assert_eq!(expand_env_vars("plain text"), "plain text");
+    }
+
+    #[test]
+    fn expand_env_vars_dollar_sign_alone() {
+        assert_eq!(expand_env_vars("price is $"), "price is $");
+    }
+
+    #[test]
+    fn expand_env_vars_multiple_vars() {
+        unsafe { std::env::set_var("_TEST_A", "hello") };
+        unsafe { std::env::set_var("_TEST_B", "world") };
+        let result = expand_env_vars("${_TEST_A} $_TEST_B!");
+        assert_eq!(result, "hello world!");
+        unsafe { std::env::remove_var("_TEST_A") };
+        unsafe { std::env::remove_var("_TEST_B") };
+    }
+
+    #[test]
+    fn expand_env_vars_empty_braced_preserved() {
+        // `${}` should be preserved as-is, not lose the closing `}`
+        assert_eq!(expand_env_vars("before ${}after"), "before ${}after");
     }
 }
 

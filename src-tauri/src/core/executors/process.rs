@@ -47,22 +47,67 @@ pub async fn run_command(
         }
     };
     cmd.current_dir(cwd)
+        .kill_on_drop(true)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let result =
-        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await;
+    let mut child = cmd.spawn().map_err(|e| {
+        AppError::recoverable(
+            crate::model::errors::ErrorSource::Tool,
+            "tool.shell.spawn_failed",
+            format!("Command execution failed: {e}"),
+        )
+    })?;
 
-    match result {
-        Ok(Ok(output)) => {
-            let exit_code = output.status.code().unwrap_or(-1);
+    // Take pipe handles before async operations so we can drain them
+    // concurrently with `child.wait()` and still explicitly kill+reap
+    // the child on timeout (preventing zombie processes).
+    let child_stdout = child.stdout.take();
+    let child_stderr = child.stderr.take();
+
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut out) = child_stdout {
+            use tokio::io::AsyncReadExt;
+            let _ = out.read_to_end(&mut buf).await;
+        }
+        buf
+    });
+
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut err) = child_stderr {
+            use tokio::io::AsyncReadExt;
+            let _ = err.read_to_end(&mut buf).await;
+        }
+        buf
+    });
+
+    let timeout = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs));
+    tokio::pin!(timeout);
+
+    let wait_result = tokio::select! {
+        result = child.wait() => Some(result),
+        _ = &mut timeout => {
+            // Explicitly kill and reap the child to prevent zombie processes.
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            None
+        },
+    };
+
+    match wait_result {
+        Some(Ok(status)) => {
+            let stdout_bytes = stdout_task.await.unwrap_or_default();
+            let stderr_bytes = stderr_task.await.unwrap_or_default();
+            let exit_code = status.code().unwrap_or(-1);
             let (stdout, stdout_truncated) =
-                truncate_tail_bytes(&output.stdout, COMMAND_MAX_BYTES, COMMAND_MAX_LINES);
+                truncate_tail_bytes(&stdout_bytes, COMMAND_MAX_BYTES, COMMAND_MAX_LINES);
             let (stderr, stderr_truncated) =
-                truncate_tail_bytes(&output.stderr, COMMAND_MAX_BYTES, COMMAND_MAX_LINES);
+                truncate_tail_bytes(&stderr_bytes, COMMAND_MAX_BYTES, COMMAND_MAX_LINES);
 
             Ok(ToolOutput {
-                success: output.status.success(),
+                success: status.success(),
                 result: serde_json::json!({
                     "command": command,
                     "exitCode": exit_code,
@@ -73,19 +118,24 @@ pub async fn run_command(
                 }),
             })
         }
-        Ok(Err(e)) => Ok(ToolOutput {
+        Some(Err(e)) => Ok(ToolOutput {
             success: false,
             result: serde_json::json!({
                 "error": format!("Command execution failed: {e}"),
                 "command": command,
             }),
         }),
-        Err(_) => Ok(ToolOutput {
-            success: false,
-            result: serde_json::json!({
-                "error": format!("Command timed out after {timeout_secs}s"),
-                "command": command,
-            }),
-        }),
+        None => {
+            // Abort pipe reader tasks on timeout
+            stdout_task.abort();
+            stderr_task.abort();
+            Ok(ToolOutput {
+                success: false,
+                result: serde_json::json!({
+                    "error": format!("Command timed out after {timeout_secs}s"),
+                    "command": command,
+                }),
+            })
+        }
     }
 }
