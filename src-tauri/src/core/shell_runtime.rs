@@ -125,13 +125,22 @@ pub(crate) fn explicit_command_path(command: &str) -> Option<PathBuf> {
     None
 }
 
-#[cfg(not(target_os = "macos"))]
-async fn discover_command_path_from_platform_defaults(_command: &str) -> Option<PathBuf> {
-    None
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+async fn discover_command_path_from_platform_defaults(command: &str) -> Option<PathBuf> {
+    resolve_command_via_login_shell(command).await
 }
 
 #[cfg(target_os = "macos")]
 async fn discover_command_path_from_platform_defaults(command: &str) -> Option<PathBuf> {
+    if let Some(path) = resolve_command_via_path_helper(command).await {
+        return Some(path);
+    }
+
+    resolve_command_via_login_shell(command).await
+}
+
+#[cfg(target_os = "macos")]
+async fn resolve_command_via_path_helper(command: &str) -> Option<PathBuf> {
     let helper_path = Path::new("/usr/libexec/path_helper");
     if !helper_path.is_file() {
         return None;
@@ -155,6 +164,58 @@ async fn discover_command_path_from_platform_defaults(command: &str) -> Option<P
     let stdout = String::from_utf8_lossy(&output.stdout);
     let path_value = parse_path_helper_path(&stdout)?;
     find_command_on_path_value(command, path_value.as_os_str())
+}
+
+/// Resolve a bare command name by asking the user's login shell.
+///
+/// This covers tools whose PATH entries are injected by shell startup files
+/// (e.g. nvm, fnm, pyenv, rustup) and would not appear in the process PATH
+/// or macOS `path_helper` output.
+#[cfg(not(target_os = "windows"))]
+async fn resolve_command_via_login_shell(command: &str) -> Option<PathBuf> {
+    use std::time::Duration;
+
+    const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_millis(3000);
+
+    // Sanitize: only allow simple command names to avoid shell injection.
+    if command.contains(|ch: char| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                ';' | '&' | '|' | '$' | '`' | '(' | ')' | '{' | '}' | '<' | '>' | '\'' | '"' | '\\'
+            )
+    }) {
+        return None;
+    }
+
+    let shell_command = format!("command -v {}", command);
+    let mut process = build_unix_shell_command(&shell_command, UnixShellMode::Login);
+    process
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null());
+
+    let output = tokio::time::timeout(LOGIN_SHELL_TIMEOUT, process.output())
+        .await
+        .ok()?
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let resolved = stdout.trim();
+    if resolved.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(resolved);
+    if path.is_absolute() && path.is_file() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -334,5 +395,34 @@ mod tests {
                 "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
             ))
         );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn resolve_command_via_login_shell_finds_common_command() {
+        // `sh` should be resolvable via any login shell.
+        let resolved = resolve_command_via_login_shell("sh").await;
+        assert!(
+            resolved.is_some(),
+            "login shell should resolve 'sh' to an absolute path"
+        );
+        let path = resolved.unwrap();
+        assert!(path.is_absolute());
+        assert!(path.is_file());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn resolve_command_via_login_shell_rejects_shell_metacharacters() {
+        let resolved = resolve_command_via_login_shell("echo; rm -rf /").await;
+        assert_eq!(resolved, None);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn resolve_command_via_login_shell_returns_none_for_nonexistent_command() {
+        let resolved =
+            resolve_command_via_login_shell("this-command-definitely-does-not-exist-xyz").await;
+        assert_eq!(resolved, None);
     }
 }
