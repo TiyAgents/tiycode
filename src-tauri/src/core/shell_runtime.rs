@@ -302,10 +302,24 @@ mod tests {
         let _lock = path_env_lock()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let _guard = PathEnvGuard::set(std::path::Path::new("/usr/bin:/bin"));
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let command_path = temp_dir.path().join("test-shell-runtime-command");
+        std::fs::write(&command_path, "#!/bin/sh\nexit 0\n").expect("write command");
 
-        let resolved = resolve_command_path("sh").await;
-        assert_eq!(resolved, Some(PathBuf::from("/bin/sh")));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&command_path)
+                .expect("metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&command_path, permissions).expect("set permissions");
+        }
+
+        let _guard = PathEnvGuard::set(temp_dir.path());
+
+        let resolved = resolve_command_path("test-shell-runtime-command").await;
+        assert_eq!(resolved, Some(command_path));
     }
 
     #[cfg(target_os = "macos")]
