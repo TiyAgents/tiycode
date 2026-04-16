@@ -61,6 +61,13 @@ impl ConfigScope {
         }
     }
 
+    pub fn from_str(scope: &str) -> Self {
+        match scope {
+            "workspace" => Self::Workspace,
+            _ => Self::Global,
+        }
+    }
+
     fn as_str(&self) -> &'static str {
         match self {
             Self::Global => "global",
@@ -386,11 +393,54 @@ impl ExtensionsManager {
         ))
     }
 
+    /// Resolve the effective scope for an MCP server: global-first, then workspace.
+    async fn resolve_mcp_scope(&self, id: &str, workspace_path: Option<&str>) -> ConfigScope {
+        if let Ok(global) = self
+            .load_mcp_configs_for_scope(None, ConfigScope::Global)
+            .await
+        {
+            if global.iter().any(|c| c.id == id) {
+                return ConfigScope::Global;
+            }
+        }
+        if workspace_path.is_some() {
+            if let Ok(ws) = self
+                .load_mcp_configs_for_scope(workspace_path, ConfigScope::Workspace)
+                .await
+            {
+                if ws.iter().any(|c| c.id == id) {
+                    return ConfigScope::Workspace;
+                }
+            }
+        }
+        ConfigScope::Global
+    }
+
+    /// Resolve the effective scope for a skill: global-first, then workspace.
+    async fn resolve_skill_scope(&self, id: &str, workspace_path: Option<&str>) -> ConfigScope {
+        if self
+            .skill_exists(id, None, ConfigScope::Global)
+            .await
+            .unwrap_or(false)
+        {
+            return ConfigScope::Global;
+        }
+        if workspace_path.is_some()
+            && self
+                .skill_exists(id, workspace_path, ConfigScope::Workspace)
+                .await
+                .unwrap_or(false)
+        {
+            return ConfigScope::Workspace;
+        }
+        ConfigScope::Global
+    }
+
     pub async fn enable_extension(
         &self,
         id: &str,
         workspace_path: Option<&str>,
-        scope: ConfigScope,
+        scope: Option<ConfigScope>,
     ) -> Result<(), AppError> {
         if self.update_plugin_enabled(id, true).await? {
             self.write_extension_audit(
@@ -403,8 +453,12 @@ impl ExtensionsManager {
             return Ok(());
         }
 
+        let mcp_scope = match scope {
+            Some(s) => s,
+            None => self.resolve_mcp_scope(id, workspace_path).await,
+        };
         if self
-            .update_mcp_enabled(id, true, workspace_path, scope)
+            .update_mcp_enabled(id, true, workspace_path, mcp_scope)
             .await?
         {
             self.write_extension_audit(
@@ -417,8 +471,12 @@ impl ExtensionsManager {
             return Ok(());
         }
 
+        let skill_scope = match scope {
+            Some(s) => s,
+            None => self.resolve_skill_scope(id, workspace_path).await,
+        };
         if self
-            .update_skill_enabled(id, true, workspace_path, scope)
+            .update_skill_enabled(id, true, workspace_path, skill_scope)
             .await?
         {
             self.write_extension_audit(
@@ -441,7 +499,7 @@ impl ExtensionsManager {
         &self,
         id: &str,
         workspace_path: Option<&str>,
-        scope: ConfigScope,
+        scope: Option<ConfigScope>,
     ) -> Result<(), AppError> {
         if self.update_plugin_enabled(id, false).await? {
             self.write_extension_audit(
@@ -454,8 +512,12 @@ impl ExtensionsManager {
             return Ok(());
         }
 
+        let mcp_scope = match scope {
+            Some(s) => s,
+            None => self.resolve_mcp_scope(id, workspace_path).await,
+        };
         if self
-            .update_mcp_enabled(id, false, workspace_path, scope)
+            .update_mcp_enabled(id, false, workspace_path, mcp_scope)
             .await?
         {
             self.write_extension_audit(
@@ -468,8 +530,12 @@ impl ExtensionsManager {
             return Ok(());
         }
 
+        let skill_scope = match scope {
+            Some(s) => s,
+            None => self.resolve_skill_scope(id, workspace_path).await,
+        };
         if self
-            .update_skill_enabled(id, false, workspace_path, scope)
+            .update_skill_enabled(id, false, workspace_path, skill_scope)
             .await?
         {
             self.write_extension_audit(

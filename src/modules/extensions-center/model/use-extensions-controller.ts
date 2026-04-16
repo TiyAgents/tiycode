@@ -228,10 +228,14 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
     refresh,
     loadDetail,
     loadSkillPreview,
-    enableExtension: (id: string, scope: ExtensionScope) =>
-      mutateAndRefresh(scope, () => extensionEnable(id, buildScopeOptions(scope))),
-    disableExtension: (id: string, scope: ExtensionScope) =>
-      mutateAndRefresh(scope, () => extensionDisable(id, buildScopeOptions(scope))),
+    enableExtension: (id: string) =>
+      mutateAndRefresh(currentWorkspacePath ? "workspace" : "global", () =>
+        extensionEnable(id, { workspacePath: currentWorkspacePath ?? undefined }),
+      ),
+    disableExtension: (id: string) =>
+      mutateAndRefresh(currentWorkspacePath ? "workspace" : "global", () =>
+        extensionDisable(id, { workspacePath: currentWorkspacePath ?? undefined }),
+      ),
     uninstallExtension: (id: string, scope: ExtensionScope) =>
       mutateAndRefresh(scope, () => extensionUninstall(id, buildScopeOptions(scope))),
     installMarketplaceItem: (id: string) => mutateAndRefresh("global", () => marketplaceInstallItem(id)),

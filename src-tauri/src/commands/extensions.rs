@@ -61,7 +61,7 @@ pub async fn extension_enable(
         .enable_extension(
             &id,
             workspace_path.as_deref(),
-            ConfigScope::from_option(scope.as_deref()),
+            scope.as_deref().map(ConfigScope::from_str),
         )
         .await
 }
@@ -78,7 +78,7 @@ pub async fn extension_disable(
         .disable_extension(
             &id,
             workspace_path.as_deref(),
-            ConfigScope::from_option(scope.as_deref()),
+            scope.as_deref().map(ConfigScope::from_str),
         )
         .await
 }

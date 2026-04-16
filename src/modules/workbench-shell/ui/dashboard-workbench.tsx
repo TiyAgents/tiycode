@@ -3051,8 +3051,8 @@ export function DashboardWorkbench() {
           onRefresh={() => void refreshExtensions(currentExtensionScope)}
           onLoadDetail={(id) => loadExtensionDetail(id, currentExtensionScope)}
           onLoadSkillPreview={(id) => loadSkillPreview(id, currentExtensionScope)}
-          onEnableExtension={(id) => enableExtension(id, currentExtensionScope)}
-          onDisableExtension={(id) => disableExtension(id, currentExtensionScope)}
+          onEnableExtension={(id) => enableExtension(id)}
+          onDisableExtension={(id) => disableExtension(id)}
           onUninstallExtension={(id) => uninstallExtension(id, currentExtensionScope)}
           onAddMarketplaceSource={addMarketplaceSource}
           onGetMarketplaceSourceRemovePlan={getMarketplaceSourceRemovePlan}
