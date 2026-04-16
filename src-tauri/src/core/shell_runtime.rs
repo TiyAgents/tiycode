@@ -188,7 +188,16 @@ async fn resolve_command_via_login_shell(command: &str) -> Option<PathBuf> {
         return None;
     }
 
-    let shell_command = format!("builtin command -v {}", command);
+    // Use `builtin command -v` on bash/zsh to bypass user-defined `command`
+    // functions.  Fall back to plain `command -v` for other shells (e.g. dash,
+    // which is /bin/sh on Debian/Ubuntu and does not recognise `builtin`).
+    let shell = current_shell();
+    let shell_basename = shell.rsplit('/').next().unwrap_or("");
+    let shell_command = if matches!(shell_basename, "bash" | "zsh") {
+        format!("builtin command -v {}", command)
+    } else {
+        format!("command -v {}", command)
+    };
     let mut process = build_unix_shell_command(&shell_command, UnixShellMode::Login);
     process
         .stdout(std::process::Stdio::piped())
