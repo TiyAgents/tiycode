@@ -16,6 +16,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 use crate::core::executors::ToolOutput;
+use crate::core::shell_runtime::resolve_command_path;
 use crate::core::windows_process::configure_background_tokio_command;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::extensions::{
@@ -3332,7 +3333,7 @@ impl ExtensionsManager {
             Box<dyn std::future::Future<Output = Result<T, AppError>> + Send + 'a>,
         >,
     {
-        let mut child = spawn_stdio_mcp_process(config, workspace_path)?;
+        let mut child = spawn_stdio_mcp_process(config, workspace_path).await?;
         let mut stdin = child.stdin.take().ok_or_else(|| {
             AppError::internal(
                 ErrorSource::Tool,
@@ -4731,12 +4732,15 @@ fn parse_streamable_http_sse_payload(payload: &str) -> Result<serde_json::Value,
     Ok(serde_json::Value::Array(messages))
 }
 
-fn spawn_stdio_mcp_process(
+async fn spawn_stdio_mcp_process(
     config: &McpServerConfigInput,
     workspace_path: Option<&str>,
 ) -> Result<tokio::process::Child, AppError> {
-    let program = config.command.as_deref().unwrap_or_default();
-    let mut command = Command::new(program);
+    let configured_program = config.command.as_deref().unwrap_or_default().trim();
+    let program = resolve_command_path(configured_program)
+        .await
+        .unwrap_or_else(|| PathBuf::from(configured_program));
+    let mut command = Command::new(&program);
     command.args(config.args.clone().unwrap_or_default());
     if let Some(cwd) = config.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) {
         command.current_dir(cwd);
@@ -4757,7 +4761,11 @@ fn spawn_stdio_mcp_process(
         AppError::recoverable(
             ErrorSource::Tool,
             "extensions.mcp.spawn_failed",
-            format!("Failed to start MCP server '{}': {error}", config.label),
+            format!(
+                "Failed to start MCP server '{}' with command '{}': {error}",
+                config.label,
+                program.display()
+            ),
         )
     })
 }
