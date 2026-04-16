@@ -4466,7 +4466,7 @@ fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
             // Use a blocking spawn + wait with timeout.  This runs once during
             // the first MCP connection attempt, so a short block is acceptable.
             let result: Option<HashMap<String, String>> = (|| {
-                let mut child = cmd.spawn().ok()?;
+                let child = cmd.spawn().ok()?;
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     let result = child.wait_with_output();
