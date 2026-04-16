@@ -4964,6 +4964,14 @@ async fn spawn_stdio_mcp_process(
     command.stdin(std::process::Stdio::piped());
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
+
+    // Inject login shell environment so child processes (and their shebangs
+    // like `#!/usr/bin/env node`) can find tools that live outside the minimal
+    // GUI-app PATH (e.g. nvm-managed node).  User-configured `config.env`
+    // entries are applied afterwards so they can override any login-shell value.
+    for (key, value) in login_shell_env() {
+        command.env(key, value);
+    }
     if let Some(env) = &config.env {
         for (key, value) in env {
             command.env(key, expand_env_vars(value));
