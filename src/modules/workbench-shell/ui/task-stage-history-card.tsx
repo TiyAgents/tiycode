@@ -1,8 +1,13 @@
 "use client";
 
-import { CheckCircle2Icon, ListChecksIcon, XCircleIcon } from "lucide-react";
+import { CheckCircle2Icon, ChevronDownIcon, ListChecksIcon, XCircleIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 import { cn } from "@/shared/lib/utils";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/shared/ui/collapsible";
 import type { TaskBoardDto } from "../model/task-board";
 import { computeProgress, hasFailedTasks, isBoardCompleted } from "../model/task-board";
 
@@ -96,13 +101,23 @@ export const TaskHistoryTimeline = ({
 
   return (
     <div className={cn("space-y-2", className)} {...props}>
-      <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
-        <ListChecksIcon className="size-3" />
-        <span>Task History</span>
-      </div>
-      {historyBoards.map((board) => (
-        <TaskStageHistoryCard key={board.id} board={board} />
-      ))}
+      <Collapsible defaultOpen={false}>
+        <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground">
+          <div className="flex items-center gap-2">
+            <ListChecksIcon className="size-3" />
+            <span>Task History</span>
+            <span className="rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-subtle">
+              {historyBoards.length}
+            </span>
+          </div>
+          <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="space-y-2 pt-2 outline-none data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 data-[state=closed]:animate-out data-[state=open]:animate-in">
+          {historyBoards.map((board) => (
+            <TaskStageHistoryCard key={board.id} board={board} />
+          ))}
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 };
