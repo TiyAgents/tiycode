@@ -6334,18 +6334,19 @@ rl.on("line", (line) => {
 
     #[test]
     fn expand_env_vars_braced_syntax() {
-        std::env::set_var("_TEST_EXPAND_TOKEN", "my_secret_123");
+        // SAFETY: test-only, unique var names avoid races with other tests
+        unsafe { std::env::set_var("_TEST_EXPAND_TOKEN", "my_secret_123") };
         let result = expand_env_vars("Bearer ${_TEST_EXPAND_TOKEN}");
         assert_eq!(result, "Bearer my_secret_123");
-        std::env::remove_var("_TEST_EXPAND_TOKEN");
+        unsafe { std::env::remove_var("_TEST_EXPAND_TOKEN") };
     }
 
     #[test]
     fn expand_env_vars_unbraced_syntax() {
-        std::env::set_var("_TEST_EXPAND_PLAIN", "value_abc");
+        unsafe { std::env::set_var("_TEST_EXPAND_PLAIN", "value_abc") };
         let result = expand_env_vars("prefix-$_TEST_EXPAND_PLAIN-suffix");
         assert_eq!(result, "prefix-value_abc-suffix");
-        std::env::remove_var("_TEST_EXPAND_PLAIN");
+        unsafe { std::env::remove_var("_TEST_EXPAND_PLAIN") };
     }
 
     #[test]
@@ -6366,12 +6367,12 @@ rl.on("line", (line) => {
 
     #[test]
     fn expand_env_vars_multiple_vars() {
-        std::env::set_var("_TEST_A", "hello");
-        std::env::set_var("_TEST_B", "world");
+        unsafe { std::env::set_var("_TEST_A", "hello") };
+        unsafe { std::env::set_var("_TEST_B", "world") };
         let result = expand_env_vars("${_TEST_A} $_TEST_B!");
         assert_eq!(result, "hello world!");
-        std::env::remove_var("_TEST_A");
-        std::env::remove_var("_TEST_B");
+        unsafe { std::env::remove_var("_TEST_A") };
+        unsafe { std::env::remove_var("_TEST_B") };
     }
 }
 
