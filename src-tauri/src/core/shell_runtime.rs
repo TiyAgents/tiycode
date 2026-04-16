@@ -188,7 +188,7 @@ async fn resolve_command_via_login_shell(command: &str) -> Option<PathBuf> {
         return None;
     }
 
-    let shell_command = format!("command -v {}", command);
+    let shell_command = format!("builtin command -v {}", command);
     let mut process = build_unix_shell_command(&shell_command, UnixShellMode::Login);
     process
         .stdout(std::process::Stdio::piped())

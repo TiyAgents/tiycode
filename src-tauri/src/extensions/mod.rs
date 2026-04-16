@@ -4399,6 +4399,7 @@ fn expand_env_vars(input: &str) -> String {
                 result.push('$');
                 if braced {
                     result.push('{');
+                    result.push('}');
                 }
             } else if let Ok(val) = std::env::var(&var_name) {
                 result.push_str(&val);
@@ -6373,6 +6374,12 @@ rl.on("line", (line) => {
         assert_eq!(result, "hello world!");
         unsafe { std::env::remove_var("_TEST_A") };
         unsafe { std::env::remove_var("_TEST_B") };
+    }
+
+    #[test]
+    fn expand_env_vars_empty_braced_preserved() {
+        // `${}` should be preserved as-is, not lose the closing `}`
+        assert_eq!(expand_env_vars("before ${}after"), "before ${}after");
     }
 }
 
