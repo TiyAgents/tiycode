@@ -295,7 +295,7 @@ pub async fn skill_enable(
             &id,
             true,
             workspace_path.as_deref(),
-            ConfigScope::from_option(scope.as_deref()),
+            scope.as_deref().map(ConfigScope::from_str),
         )
         .await
 }
@@ -313,7 +313,7 @@ pub async fn skill_disable(
             &id,
             false,
             workspace_path.as_deref(),
-            ConfigScope::from_option(scope.as_deref()),
+            scope.as_deref().map(ConfigScope::from_str),
         )
         .await
 }

@@ -841,18 +841,27 @@ impl ExtensionsManager {
         id: &str,
         enabled: bool,
         workspace_path: Option<&str>,
-        scope: ConfigScope,
+        scope: Option<ConfigScope>,
     ) -> Result<(), AppError> {
-        if !self.skill_exists(id, workspace_path, scope).await? {
+        let resolved_scope = match scope {
+            Some(s) => s,
+            None => self.resolve_skill_scope(id, workspace_path).await,
+        };
+        if !self
+            .skill_exists(id, workspace_path, resolved_scope)
+            .await?
+        {
             return Err(AppError::not_found(
                 ErrorSource::Settings,
                 format!("skill '{id}'"),
             ));
         }
-        let mut store = self.load_skill_state_store(workspace_path, scope).await?;
+        let mut store = self
+            .load_skill_state_store(workspace_path, resolved_scope)
+            .await?;
         update_named_membership(&mut store.enabled, id, enabled);
         update_named_membership(&mut store.disabled, id, !enabled);
-        self.save_skill_state_store(&store, workspace_path, scope)
+        self.save_skill_state_store(&store, workspace_path, resolved_scope)
             .await?;
         self.write_extension_audit(
             if enabled {
@@ -3516,7 +3525,7 @@ impl ExtensionsManager {
         if !self.skill_exists(id, workspace_path, scope).await? {
             return Ok(false);
         }
-        self.set_skill_enabled(id, enabled, workspace_path, scope)
+        self.set_skill_enabled(id, enabled, workspace_path, Some(scope))
             .await?;
         Ok(true)
     }

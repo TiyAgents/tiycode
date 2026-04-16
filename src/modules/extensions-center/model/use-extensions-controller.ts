@@ -257,9 +257,13 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
       mutateAndRefresh(scope, () => mcpRestartServer(id, buildScopeOptions(scope))),
     rescanSkills: (scope: ExtensionScope) =>
       mutateAndRefresh(scope, () => skillRescan(buildScopeOptions(scope))),
-    enableSkill: (id: string, scope: ExtensionScope) =>
-      mutateAndRefresh(scope, () => skillEnable(id, buildScopeOptions(scope))),
-    disableSkill: (id: string, scope: ExtensionScope) =>
-      mutateAndRefresh(scope, () => skillDisable(id, buildScopeOptions(scope))),
+    enableSkill: (id: string) =>
+      mutateAndRefresh(currentWorkspacePath ? "workspace" : "global", () =>
+        skillEnable(id, { workspacePath: currentWorkspacePath ?? undefined }),
+      ),
+    disableSkill: (id: string) =>
+      mutateAndRefresh(currentWorkspacePath ? "workspace" : "global", () =>
+        skillDisable(id, { workspacePath: currentWorkspacePath ?? undefined }),
+      ),
   };
 }
