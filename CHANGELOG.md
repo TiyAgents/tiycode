@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-04-16
+### :sparkles: New Features
+- [`efd104c`](https://github.com/TiyAgents/tiycode/commit/efd104c8308be5894630809a0a92fce8fb4b6f76) - **settings-center**: ✨ 收紧存储链路并增加配置诊断 *(PR [#44](https://github.com/TiyAgents/tiycode/pull/44) by [@jorben](https://github.com/jorben))*
+- [`1ae5cbe`](https://github.com/TiyAgents/tiycode/commit/1ae5cbec98cab13e73d456bad95509568d87ae49) - **workbench-shell**: ✨ add collapsible task history and tweak profile selector *(PR [#47](https://github.com/TiyAgents/tiycode/pull/47) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`09534d7`](https://github.com/TiyAgents/tiycode/commit/09534d7159999ea9fe16e5f9d1dd1b75bc9ef2a6) - **subagent**: 🐛 apply URL policy to subagent LLM requests *(PR [#43](https://github.com/TiyAgents/tiycode/pull/43) by [@jorben](https://github.com/jorben))*
+- [`a9b7598`](https://github.com/TiyAgents/tiycode/commit/a9b75985efa2be2abce59a14ffdd111c6678764e) - **extensions**: 🐛 support legacy workspace config paths *(PR [#46](https://github.com/TiyAgents/tiycode/pull/46) by [@HayWolf](https://github.com/HayWolf))*
+
+### :recycle: Refactors
+- [`e477f1a`](https://github.com/TiyAgents/tiycode/commit/e477f1a03f3d6fed07b37eff9cd57105d443f852) - **extensions**: 🧹 remove pinning and unify sorting *(PR [#45](https://github.com/TiyAgents/tiycode/pull/45) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.2.7] - 2026-04-15
 ### :sparkles: New Features
 - [`cbad2ff`](https://github.com/TiyAgents/tiycode/commit/cbad2ff45d7fb05a8503a5c913fe9eab640c3c27) - **tauri**: ✨ Add URL security policy, configurable tool timeouts, and enhanced defaults *(PR [#39](https://github.com/TiyAgents/tiycode/pull/39) by [@jorben](https://github.com/jorben))*
@@ -465,3 +478,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.5]: https://github.com/TiyAgents/tiycode/compare/0.2.4...0.2.5
 [0.2.6]: https://github.com/TiyAgents/tiycode/compare/0.2.5...0.2.6
 [0.2.7]: https://github.com/TiyAgents/tiycode/compare/0.2.6...0.2.7
+[0.2.8]: https://github.com/TiyAgents/tiycode/compare/0.2.7...0.2.8
