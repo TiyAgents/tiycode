@@ -1368,22 +1368,15 @@ async fn test_execution_timeout_fires_for_slow_tool() {
     eprintln!("[test-timeout] calling execute_tool_call...");
     let gateway_for_approval = Arc::clone(&gateway);
     let tool_call_id = "tc-timeout".to_string();
-    // Spawn a task that auto-approves the shell tool after a brief delay,
-    // so execution actually begins and the 1s execution_timeout fires.
+    let (approval_requested_tx, approval_requested_rx) = tokio::sync::oneshot::channel::<()>();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        for _ in 0..50 {
-            if matches!(
-                gateway_for_approval
-                    .resolve_approval(&tool_call_id, true)
-                    .await,
-                Ok(true)
-            ) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+        if approval_requested_rx.await.is_ok() {
+            let _ = gateway_for_approval
+                .resolve_approval(&tool_call_id, true)
+                .await;
         }
     });
+    let mut approval_requested_tx = Some(approval_requested_tx);
     let outcome = gateway
         .execute_tool_call(
             ToolExecutionRequest {
@@ -1403,7 +1396,11 @@ async fn test_execution_timeout_fires_for_slow_tool() {
                 allow_user_approval: true,
                 execution_timeout: Some(Duration::from_secs(1)),
             },
-            |_| {},
+            move |_| {
+                if let Some(tx) = approval_requested_tx.take() {
+                    let _ = tx.send(());
+                }
+            },
             || {},
         )
         .await
