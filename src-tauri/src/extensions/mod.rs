@@ -4367,8 +4367,80 @@ fn build_streamable_http_client(
         })
 }
 
+/// Returns the cached environment from the user's login shell.
+///
+/// On macOS (and Linux), GUI apps do not inherit environment variables set in
+/// `.zshrc`, `.bashrc`, or tools like nvm/fnm/pyenv. This function runs the
+/// user's login shell once to capture the full environment and caches the result
+/// for the lifetime of the process.
+fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    static CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        #[cfg(target_os = "windows")]
+        {
+            HashMap::new()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            use crate::core::shell_runtime::current_shell;
+            use std::time::Duration;
+
+            const TIMEOUT: Duration = Duration::from_millis(3000);
+
+            let shell = current_shell();
+            let mut cmd = std::process::Command::new(&shell);
+            cmd.args(["-l", "-c", "env"]);
+            cmd.stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .stdin(std::process::Stdio::null());
+
+            // Use a blocking spawn + wait with timeout.  This runs once during
+            // the first MCP connection attempt, so a short block is acceptable.
+            let result: Option<HashMap<String, String>> = (|| {
+                let mut child = cmd.spawn().ok()?;
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let result = child.wait_with_output();
+                    let _ = tx.send(result);
+                });
+                let output = match rx.recv_timeout(TIMEOUT) {
+                    Ok(Ok(output)) if output.status.success() => output,
+                    _ => return None,
+                };
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let mut map = HashMap::new();
+                for line in stdout.lines() {
+                    if let Some((key, value)) = line.split_once('=') {
+                        if !key.is_empty()
+                            && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        {
+                            map.insert(key.to_string(), value.to_string());
+                        }
+                    }
+                }
+                Some(map)
+            })();
+
+            result.unwrap_or_default()
+        }
+    })
+}
+
+/// Resolves an environment variable by name, first checking the process
+/// environment, then falling back to the cached login shell environment.
+fn resolve_env_var(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .or_else(|| login_shell_env().get(name).cloned())
+}
+
 /// Expands `${VAR}` and `$VAR` patterns in a string using the current process
-/// environment. Unresolved variables are left as-is so the user sees what failed.
+/// environment, falling back to the user's login shell environment for variables
+/// not present in the process env (common on macOS GUI apps).
+/// Unresolved variables are left as-is so the user sees what failed.
 fn expand_env_vars(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -4401,7 +4473,7 @@ fn expand_env_vars(input: &str) -> String {
                     result.push('{');
                     result.push('}');
                 }
-            } else if let Ok(val) = std::env::var(&var_name) {
+            } else if let Some(val) = resolve_env_var(&var_name) {
                 result.push_str(&val);
             } else {
                 // Leave unresolved variable as-is for debuggability
