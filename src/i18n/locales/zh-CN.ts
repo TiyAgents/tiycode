@@ -587,6 +587,7 @@ const zhCN = {
   "extensions.remove": "移除",
   "extensions.edit": "编辑",
   "extensions.restart": "重启",
+"extensions.connecting": "连接中…",
   "extensions.commandsBadge": "命令",
   "extensions.mcpsBadge": "MCP",
   "extensions.skillsBadge": "Skills",
