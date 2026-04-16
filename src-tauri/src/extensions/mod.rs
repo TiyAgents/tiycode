@@ -4466,17 +4466,29 @@ fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
             // Use a blocking spawn + wait with timeout.  This runs once during
             // the first MCP connection attempt, so a short block is acceptable.
             let result: Option<HashMap<String, String>> = (|| {
-                let child = cmd.spawn().ok()?;
+                let mut child = cmd.spawn().ok()?;
+                let mut stdout = child.stdout.take()?;
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = child.wait_with_output();
-                    let _ = tx.send(result);
+                    use std::io::Read;
+                    let mut buf = Vec::new();
+                    let read_result = stdout.read_to_end(&mut buf);
+                    let _ = tx.send(read_result.map(|_| buf));
                 });
-                let output = match rx.recv_timeout(TIMEOUT) {
-                    Ok(Ok(output)) if output.status.success() => output,
-                    _ => return None,
+                let stdout_bytes = match rx.recv_timeout(TIMEOUT) {
+                    Ok(Ok(bytes)) => bytes,
+                    _ => {
+                        // Timeout or read error — kill the child to prevent resource leaks
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
                 };
-                let stdout = String::from_utf8_lossy(&output.stdout);
+                let status = child.wait().ok()?;
+                if !status.success() {
+                    return None;
+                }
+                let stdout = String::from_utf8_lossy(&stdout_bytes);
                 let mut map = HashMap::new();
                 for line in stdout.lines() {
                     if let Some((key, value)) = line.split_once('=') {

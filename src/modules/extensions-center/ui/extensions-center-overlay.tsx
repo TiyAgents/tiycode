@@ -730,7 +730,6 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
   const runMcpAction = useCallback(async (serverId: string, action: () => Promise<void>) => {
     setPendingMcpIds((prev) => new Set(prev).add(serverId));
-    setActionPending(true);
     try {
       await action();
     } catch (error) {
@@ -741,7 +740,6 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
         next.delete(serverId);
         return next;
       });
-      setActionPending(false);
     }
   }, []);
 
@@ -1144,7 +1142,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         <CardHeader className="gap-3 pb-3">
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex min-w-0 items-start gap-3">
-                              <div className="mt-0.5 flex size-10 min-w-10 shrink-0 items-center justify-center rounded-2xl border border-app-border bg-app-canvas text-app-foreground">
+                              <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-2xl border border-app-border bg-app-canvas text-app-foreground">
                                 <LocalLlmIcon slug="mcp" className="size-4" title="MCP" />
                               </div>
                               <div className="min-w-0">
@@ -1205,7 +1203,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                           />
                           <Badge className={cn("shrink-0", pendingMcpIds.has(server.id) ? "bg-app-surface-muted/80 text-app-subtle" : getStatusBadgeClass(server.status))}>
                             {pendingMcpIds.has(server.id) ? (
-                              <span className="flex items-center gap-1.5"><Spinner className="size-3" />{t("extensions.connecting")}</span>
+                              <span className="flex items-center gap-1.5"><Spinner className="size-3" />{t("extensions.processing")}</span>
                             ) : (
                               getStatusBadgeLabel(server.status)
                             )}
@@ -1868,7 +1866,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
             <Button variant="outline" onClick={() => setMcpDialogOpen(false)}>
               {t("extensions.cancelButton")}
             </Button>
-            <Button onClick={() => void handleSubmitMcp()} disabled={isActionPending}>
+            <Button onClick={() => void handleSubmitMcp()} disabled={isActionPending || pendingMcpIds.size > 0}>
               {mcpDialogMode === "create" ? t("extensions.createButton") : t("extensions.saveButton")}
             </Button>
           </DialogFooter>
