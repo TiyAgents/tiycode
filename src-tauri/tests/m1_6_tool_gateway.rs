@@ -1372,9 +1372,17 @@ async fn test_execution_timeout_fires_for_slow_tool() {
     // so execution actually begins and the 1s execution_timeout fires.
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let _ = gateway_for_approval
-            .resolve_approval(&tool_call_id, true)
-            .await;
+        for _ in 0..50 {
+            if matches!(
+                gateway_for_approval
+                    .resolve_approval(&tool_call_id, true)
+                    .await,
+                Ok(true)
+            ) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     });
     let outcome = gateway
         .execute_tool_call(

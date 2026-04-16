@@ -47,14 +47,28 @@ pub async fn run_command(
         }
     };
     cmd.current_dir(cwd)
+        .kill_on_drop(true)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let result =
-        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await;
+    let child = cmd.spawn().map_err(|e| {
+        AppError::recoverable(
+            crate::model::errors::ErrorSource::Tool,
+            "tool.shell.spawn_failed",
+            format!("Command execution failed: {e}"),
+        )
+    })?;
 
-    match result {
-        Ok(Ok(output)) => {
+    let timeout = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs));
+    tokio::pin!(timeout);
+
+    let output = tokio::select! {
+        result = child.wait_with_output() => Some(result),
+        _ = &mut timeout => None,
+    };
+
+    match output {
+        Some(Ok(output)) => {
             let exit_code = output.status.code().unwrap_or(-1);
             let (stdout, stdout_truncated) =
                 truncate_tail_bytes(&output.stdout, COMMAND_MAX_BYTES, COMMAND_MAX_LINES);
@@ -73,14 +87,14 @@ pub async fn run_command(
                 }),
             })
         }
-        Ok(Err(e)) => Ok(ToolOutput {
+        Some(Err(e)) => Ok(ToolOutput {
             success: false,
             result: serde_json::json!({
                 "error": format!("Command execution failed: {e}"),
                 "command": command,
             }),
         }),
-        Err(_) => Ok(ToolOutput {
+        None => Ok(ToolOutput {
             success: false,
             result: serde_json::json!({
                 "error": format!("Command timed out after {timeout_secs}s"),

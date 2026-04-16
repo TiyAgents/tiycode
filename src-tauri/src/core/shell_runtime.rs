@@ -1,14 +1,15 @@
-use std::ffi::OsString;
-#[cfg(target_os = "windows")]
+use std::ffi::{OsStr, OsString};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 #[cfg(not(target_os = "windows"))]
 use tokio::process::Command;
 
-#[cfg(not(target_os = "windows"))]
-pub(crate) const LOGIN_SHELL_COMMAND_RESOLUTION_TIMEOUT: Duration = Duration::from_millis(1500);
+#[cfg(target_os = "macos")]
+pub(crate) const PATH_HELPER_COMMAND_RESOLUTION_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[cfg(not(target_os = "windows"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,9 +58,13 @@ pub(crate) fn build_unix_shell_command(command: &str, mode: UnixShellMode) -> Co
 
 pub(crate) fn find_command_on_path(command: &str) -> Option<PathBuf> {
     let path_value = std::env::var_os("PATH")?;
+    find_command_on_path_value(command, &path_value)
+}
+
+fn find_command_on_path_value(command: &str, path_value: &OsStr) -> Option<PathBuf> {
     let candidates = executable_candidates(command);
 
-    for directory in std::env::split_paths(&path_value) {
+    for directory in std::env::split_paths(path_value) {
         for candidate in &candidates {
             let path = directory.join(candidate);
             if path.is_file() {
@@ -85,7 +90,7 @@ pub(crate) async fn resolve_command_path(command: &str) -> Option<PathBuf> {
         return Some(path);
     }
 
-    discover_command_path_from_login_shell(command).await
+    discover_command_path_from_platform_defaults(command).await
 }
 
 #[cfg(target_os = "windows")]
@@ -120,16 +125,25 @@ pub(crate) fn explicit_command_path(command: &str) -> Option<PathBuf> {
     None
 }
 
-#[cfg(not(target_os = "windows"))]
-async fn discover_command_path_from_login_shell(command: &str) -> Option<PathBuf> {
-    let quoted_command = shell_single_quote(command.trim());
-    let script = format!("command -v -- {quoted_command} 2>/dev/null");
-    let mut process = build_unix_shell_command(&script, UnixShellMode::Login);
+#[cfg(not(target_os = "macos"))]
+async fn discover_command_path_from_platform_defaults(_command: &str) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+async fn discover_command_path_from_platform_defaults(command: &str) -> Option<PathBuf> {
+    let helper_path = Path::new("/usr/libexec/path_helper");
+    if !helper_path.is_file() {
+        return None;
+    }
+
+    let mut process = Command::new(helper_path);
+    process.arg("-s");
     process
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
 
-    let output = tokio::time::timeout(LOGIN_SHELL_COMMAND_RESOLUTION_TIMEOUT, process.output())
+    let output = tokio::time::timeout(PATH_HELPER_COMMAND_RESOLUTION_TIMEOUT, process.output())
         .await
         .ok()?
         .ok()?;
@@ -138,18 +152,34 @@ async fn discover_command_path_from_login_shell(command: &str) -> Option<PathBuf
         return None;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let resolved = stdout
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())?;
-    let path = PathBuf::from(resolved);
-    path.is_file().then_some(path)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let path_value = parse_path_helper_path(&stdout)?;
+    find_command_on_path_value(command, path_value.as_os_str())
 }
 
-#[cfg(not(target_os = "windows"))]
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r#"'\''"#))
+#[cfg(target_os = "macos")]
+fn parse_path_helper_path(output: &str) -> Option<OsString> {
+    for statement in output.split(';') {
+        let trimmed = statement.trim();
+        let Some(value) = trimmed.strip_prefix("PATH=") else {
+            continue;
+        };
+        let unquoted = value
+            .strip_prefix('"')
+            .and_then(|inner| inner.strip_suffix('"'))
+            .or_else(|| {
+                value
+                    .strip_prefix('\'')
+                    .and_then(|inner| inner.strip_suffix('\''))
+            })
+            .unwrap_or(value)
+            .trim();
+        if !unquoted.is_empty() {
+            return Some(OsString::from(unquoted));
+        }
+    }
+
+    None
 }
 
 fn executable_candidates(command: &str) -> Vec<OsString> {
@@ -278,9 +308,17 @@ mod tests {
         assert_eq!(resolved, Some(PathBuf::from("/bin/sh")));
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     #[test]
-    fn shell_single_quote_escapes_single_quotes() {
-        assert_eq!(shell_single_quote("ab'cd"), "'ab'\\''cd'".to_string());
+    fn parse_path_helper_path_reads_exported_path_assignment() {
+        let parsed = parse_path_helper_path(
+            r#"PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export PATH;"#,
+        );
+        assert_eq!(
+            parsed,
+            Some(OsString::from(
+                "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+            ))
+        );
     }
 }
