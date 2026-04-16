@@ -1638,7 +1638,11 @@ export function WorkbenchPromptComposer({
                           <ProfileInlineIdentity badge={false} profile={activeProfile} providers={providers} showModel={false} />
                         </PromptInputButton>
                       </ModelSelectorTrigger>
-                      <ModelSelectorContent commandProps={{ value: activeAgentProfileId ?? undefined }} title="Profile Selector">
+                      <ModelSelectorContent
+                        commandProps={{ value: activeAgentProfileId ?? undefined }}
+                        showCloseButton={false}
+                        title="Profile Selector"
+                      >
                         <ModelSelectorList>
                           <ModelSelectorEmpty>{t("composer.noProfileAvailable")}</ModelSelectorEmpty>
                           <ModelSelectorGroup heading="Agent Profiles">
