@@ -1131,7 +1131,11 @@ impl ExtensionsManager {
         Ok(tools)
     }
 
-    pub async fn resolve_tool(&self, tool_name: &str) -> Result<Option<ResolvedTool>, AppError> {
+    pub async fn resolve_tool(
+        &self,
+        tool_name: &str,
+        workspace_path: Option<&str>,
+    ) -> Result<Option<ResolvedTool>, AppError> {
         for plugin in self.load_enabled_plugin_runtimes().await? {
             if let Some(tool) = plugin
                 .manifest
@@ -1150,7 +1154,15 @@ impl ExtensionsManager {
             }
         }
 
-        for server in self.list_mcp_servers(None, ConfigScope::Global).await? {
+        let scope = if workspace_path
+            .map(|path| !path.trim().is_empty())
+            .unwrap_or(false)
+        {
+            ConfigScope::Workspace
+        } else {
+            ConfigScope::Global
+        };
+        for server in self.list_mcp_servers(workspace_path, scope).await? {
             if server.status == "connected" || server.status == "degraded" {
                 if let Some(tool) = server
                     .tools
@@ -5308,8 +5320,10 @@ fn mcp_runtime_record_needs_refresh(server_id: &str, runtime: &McpRuntimeRecord)
 }
 
 fn mcp_runtime_record_is_disabled(runtime: &McpRuntimeRecord) -> bool {
-    matches!(runtime.status.as_deref(), Some("disconnected"))
-        || matches!(runtime.phase.as_deref(), Some("shutdown"))
+    matches!(
+        runtime.status.as_deref(),
+        Some("disconnected") | Some("error")
+    ) || matches!(runtime.phase.as_deref(), Some("shutdown"))
 }
 
 fn mcp_tool_name_is_provider_safe(name: &str) -> bool {

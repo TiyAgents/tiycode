@@ -137,7 +137,7 @@ impl ToolGateway {
         let writable_roots = self.load_writable_roots().await?;
         let resolved_tool = self
             .extensions_manager
-            .resolve_tool(&request.tool_name)
+            .resolve_tool(&request.tool_name, Some(&request.workspace_path))
             .await?;
         let provider_context = resolved_tool
             .as_ref()
