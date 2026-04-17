@@ -23,6 +23,55 @@ use crate::core::desktop_runtime::{
     DesktopRuntimeState, LAUNCH_AT_LOGIN_SETTING_KEY, MINIMIZE_TO_TRAY_SETTING_KEY,
 };
 use crate::core::sleep_manager::PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY;
+
+/// Re-position the macOS traffic-light buttons (close / miniaturize / zoom)
+/// so that the layout stays consistent regardless of the SDK the binary was
+/// linked against. Older macOS SDKs render the buttons with a different size
+/// and offset, causing visual regressions in CI-built binaries.
+#[cfg(target_os = "macos")]
+fn reposition_traffic_lights(window: &tauri::Window) {
+    use objc2_app_kit::{NSView, NSWindow, NSWindowButton};
+    use objc2_foundation::NSPoint;
+
+    let Ok(ns_window_ptr) = window.ns_window() else {
+        return;
+    };
+    let ns_window: &NSWindow = unsafe { &*(ns_window_ptr as *const NSWindow) };
+
+    let (x, y) = (14.0_f64, 20.0_f64);
+
+    let Some(close) = ns_window.standardWindowButton(NSWindowButton::CloseButton) else {
+        return;
+    };
+    let Some(miniaturize) = ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton)
+    else {
+        return;
+    };
+    let Some(zoom) = ns_window.standardWindowButton(NSWindowButton::ZoomButton) else {
+        return;
+    };
+
+    unsafe {
+        // Resize the title-bar container so the buttons have enough vertical room.
+        let title_bar_container = close.superview().and_then(|v| v.superview());
+        if let Some(container) = title_bar_container {
+            let close_rect = NSView::frame(&close);
+            let title_bar_frame_height = close_rect.size.height + y;
+            let mut title_bar_rect = NSView::frame(&container);
+            title_bar_rect.size.height = title_bar_frame_height;
+            title_bar_rect.origin.y =
+                NSWindow::frame(ns_window).size.height - title_bar_frame_height;
+            container.setFrame(title_bar_rect);
+        }
+
+        let close_rect = NSView::frame(&close);
+        let space_between = NSView::frame(&miniaturize).origin.x - close_rect.origin.x;
+        for (i, button) in [&close, &miniaturize, &zoom].iter().enumerate() {
+            let origin = NSPoint::new(x + (i as f64 * space_between), close_rect.origin.y);
+            button.setFrameOrigin(origin);
+        }
+    }
+}
 #[cfg(target_os = "macos")]
 use crate::core::startup_manager;
 
@@ -463,6 +512,14 @@ pub fn run() {
                 let _ = window.set_decorations(false);
             }
 
+            // Re-apply traffic light position after window-state restoration so the
+            // values stay consistent regardless of the SDK the binary was linked
+            // against (older SDKs render smaller/offset traffic lights by default).
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                reposition_traffic_lights(&window.as_ref().window());
+            }
+
             Ok(())
         })
         .on_page_load(|webview, payload| {
@@ -479,12 +536,21 @@ pub fn run() {
                 return;
             }
 
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                let runtime = window.state::<DesktopRuntimeState>();
-                if runtime.minimize_to_tray_enabled() && !runtime.is_quitting() {
-                    api.prevent_close();
-                    let _ = window.hide();
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    let runtime = window.state::<DesktopRuntimeState>();
+                    if runtime.minimize_to_tray_enabled() && !runtime.is_quitting() {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
+                // Re-apply traffic light position on resize/theme change since
+                // macOS may reset it when linked against an older SDK.
+                #[cfg(target_os = "macos")]
+                WindowEvent::Resized { .. } | WindowEvent::ThemeChanged { .. } => {
+                    reposition_traffic_lights(window);
+                }
+                _ => {}
             }
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
