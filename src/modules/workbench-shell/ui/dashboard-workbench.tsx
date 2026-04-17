@@ -561,6 +561,8 @@ export function DashboardWorkbench() {
     isTauri() ? {} : buildInitialWorkspaceThreadDisplayCounts(),
   );
   const newThreadCreationRef = useRef<Record<string, Promise<string>>>({});
+  const terminalThreadBindingsRef = useRef(terminalThreadBindings);
+  terminalThreadBindingsRef.current = terminalThreadBindings;
   const removedWorkspacePathsRef = useRef<Set<string>>(new Set());
 
   const activeThread = getActiveThread(workspaces);
@@ -758,6 +760,9 @@ export function DashboardWorkbench() {
       visibleLimit: number,
     ): Promise<{ hasMore: boolean; threads: Array<ThreadSummaryDto> }> => {
       const desiredVisibleCount = visibleLimit + 1;
+      const pendingTerminalThreadIds = new Set(
+        Object.values(terminalThreadBindingsRef.current),
+      );
       const visibleThreads: Array<ThreadSummaryDto> = [];
       let offset = 0;
       let hasMoreRawThreads = true;
@@ -773,6 +778,9 @@ export function DashboardWorkbench() {
         hasMoreRawThreads = batch.length === rawLimit;
 
         for (const thread of batch) {
+          if (pendingTerminalThreadIds.has(thread.id)) {
+            continue;
+          }
           visibleThreads.push(thread);
 
           if (visibleThreads.length >= desiredVisibleCount) {
@@ -795,6 +803,7 @@ export function DashboardWorkbench() {
 
   const clearNewThreadBindingForWorkspace = useCallback((workspaceId: string) => {
     const bindingKey = getNewThreadTerminalBindingKey(workspaceId);
+    const pendingThreadId = terminalThreadBindingsRef.current[bindingKey] ?? null;
     newThreadCreationRef.current = Object.fromEntries(
       Object.entries(newThreadCreationRef.current).filter(
         ([candidateWorkspaceId]) => candidateWorkspaceId !== workspaceId,
@@ -809,6 +818,12 @@ export function DashboardWorkbench() {
       delete next[bindingKey];
       return next;
     });
+    if (pendingThreadId && isTauri()) {
+      terminalStore.removeSession(pendingThreadId);
+      void threadDelete(pendingThreadId).catch((error) => {
+        console.warn("[terminal] failed to delete pending thread:", pendingThreadId, error);
+      });
+    }
   }, []);
 
   const getOrCreateNewThreadId = useCallback(
@@ -856,6 +871,29 @@ export function DashboardWorkbench() {
     },
     [terminalThreadBindings],
   );
+
+  useEffect(() => {
+    if (
+      !isNewThreadMode ||
+      isTerminalCollapsed ||
+      !selectedProjectWorkspaceId ||
+      resolvedTerminalThreadId
+    ) {
+      return;
+    }
+
+    getOrCreateNewThreadId(selectedProjectWorkspaceId).catch((error) => {
+      setTerminalBootstrapError(
+        getInvokeErrorMessage(error, "Failed to prepare terminal"),
+      );
+    });
+  }, [
+    isNewThreadMode,
+    isTerminalCollapsed,
+    selectedProjectWorkspaceId,
+    resolvedTerminalThreadId,
+    getOrCreateNewThreadId,
+  ]);
 
   const syncWorkspaceSidebar = useCallback(
     async ({
@@ -1629,6 +1667,9 @@ export function DashboardWorkbench() {
   };
 
   const handleThreadSelect = (threadId: string) => {
+    if (isNewThreadMode && selectedProjectWorkspaceId) {
+      clearNewThreadBindingForWorkspace(selectedProjectWorkspaceId);
+    }
     setNewThreadMode(false);
     setActiveWorkspaceMenuId(null);
     setPendingDeleteThreadId(null);
@@ -2049,6 +2090,18 @@ export function DashboardWorkbench() {
         setNewThreadRunMode("default");
         setComposerValue("");
         setComposerError(null);
+        if (nextWorkspaceId) {
+          const bindingKey = getNewThreadTerminalBindingKey(nextWorkspaceId);
+          setTerminalThreadBindings((current) => {
+            if (!(bindingKey in current)) {
+              return current;
+            }
+
+            const next = { ...current };
+            delete next[bindingKey];
+            return next;
+          });
+        }
       })();
       return;
     }
@@ -2333,8 +2386,8 @@ export function DashboardWorkbench() {
     LANGUAGE_OPTIONS[1];
   const newThreadTerminalIdleMessage = !selectedProject
     ? t("dashboard.terminalDisabledHint")
-    : !resolvedWorkspaceId && !terminalBootstrapError
-      ? "Preparing workspace…"
+    : !resolvedTerminalThreadId && !terminalBootstrapError
+      ? "Preparing terminal…"
       : undefined;
 
   useEffect(() => {
