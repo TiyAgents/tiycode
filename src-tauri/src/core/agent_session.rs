@@ -1489,11 +1489,11 @@ Phase 4 — Call update_plan:\n\
 - Only after phases 1-3 are complete, call this tool with a plan that satisfies the quality contract below.\n\n\
 ## Quality contract — every plan must satisfy\n\n\
 - summary: what is being changed, why, and expected outcome (2-3 sentences).\n\
-- context: only confirmed facts from inspected code, docs, or user input. Never speculate about uninspected files or architecture.\n\
-- design: the recommended approach and key tradeoffs that make it the right choice.\n\
-- keyImplementation: the specific files, modules, interfaces, or data flows involved. Vague references are not acceptable.\n\
+- context: write a thorough narrative of confirmed facts from inspected code, docs, or user input. Connect the facts into coherent paragraphs that explain the current state, how the relevant pieces fit together, and what constraints exist. Include file paths, type signatures, data flow direction, and version or compatibility details. The goal is a self-contained briefing a developer unfamiliar with the area can read and fully understand. Never speculate about uninspected files or architecture.\n\
+- design: write a detailed prose description of the recommended approach. Explain the architecture or structural changes, walk through the data flow step by step, and articulate why this approach is chosen over alternatives by comparing tradeoffs explicitly. Cover edge cases the design handles and those it defers. The reader should finish this section understanding both the what and the why at a level sufficient to implement without further design questions.\n\
+- keyImplementation: write a connected prose description of the specific files, modules, interfaces, data flows, or state transitions that carry the change. For each major component, explain what it does today, what changes, and how the changed pieces interact. Include type names, function signatures, and module boundaries. Vague references like 'update the relevant files' are not acceptable.\n\
 - steps: concrete, ordered, actionable steps with affected files and intended outcomes.\n\
-- verification: how to confirm the change succeeded (type-checks, tests, manual checks).\n\
+- verification: write a thorough description of how to validate the change succeeded. Cover type-checks, unit tests, integration tests, manual smoke tests, and behavioral verification. Mention specific commands, expected outputs, and edge cases worth verifying. Explain what each check proves and why it matters.\n\
 - risks: main risks, edge cases, compatibility concerns, regression areas.\n\
 - assumptions (optional): only non-blocking assumptions, not open questions.\n\n\
 Prohibited: unresolved core ambiguities (use clarify first), TODO placeholders, vague steps, architecture guesses not backed by exploration, lengthy background essays without actionable information.\n\n\
@@ -1503,33 +1503,9 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                 "properties": {
                     "title": { "type": "string" },
                     "summary": { "type": "string" },
-                    "context": {
-                        "oneOf": [
-                            { "type": "string" },
-                            {
-                                "type": "array",
-                                "items": { "type": "string" }
-                            }
-                        ]
-                    },
-                    "design": {
-                        "oneOf": [
-                            { "type": "string" },
-                            {
-                                "type": "array",
-                                "items": { "type": "string" }
-                            }
-                        ]
-                    },
-                    "keyImplementation": {
-                        "oneOf": [
-                            { "type": "string" },
-                            {
-                                "type": "array",
-                                "items": { "type": "string" }
-                            }
-                        ]
-                    },
+                    "context": { "type": "string" },
+                    "design": { "type": "string" },
+                    "keyImplementation": { "type": "string" },
                     "steps": {
                         "type": "array",
                         "items": {
@@ -1551,27 +1527,14 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                             ]
                         }
                     },
-                    "verification": {
-                        "oneOf": [
-                            { "type": "string" },
-                            {
-                                "type": "array",
-                                "items": { "type": "string" }
-                            }
-                        ]
-                    },
+                    "verification": { "type": "string" },
                     "risks": {
                         "type": "array",
                         "items": { "type": "string" }
                     },
                     "assumptions": {
-                        "oneOf": [
-                            { "type": "string" },
-                            {
-                                "type": "array",
-                                "items": { "type": "string" }
-                            }
-                        ]
+                        "type": "array",
+                        "items": { "type": "string" }
                     },
                     "needsContextResetOption": { "type": "boolean" },
                     "plan": {
@@ -1580,33 +1543,9 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                         "properties": {
                             "title": { "type": "string" },
                             "summary": { "type": "string" },
-                            "context": {
-                                "oneOf": [
-                                    { "type": "string" },
-                                    {
-                                        "type": "array",
-                                        "items": { "type": "string" }
-                                    }
-                                ]
-                            },
-                            "design": {
-                                "oneOf": [
-                                    { "type": "string" },
-                                    {
-                                        "type": "array",
-                                        "items": { "type": "string" }
-                                    }
-                                ]
-                            },
-                            "keyImplementation": {
-                                "oneOf": [
-                                    { "type": "string" },
-                                    {
-                                        "type": "array",
-                                        "items": { "type": "string" }
-                                    }
-                                ]
-                            },
+                            "context": { "type": "string" },
+                            "design": { "type": "string" },
+                            "keyImplementation": { "type": "string" },
                             "steps": {
                                 "type": "array",
                                 "items": {
@@ -1628,27 +1567,14 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                                     ]
                                 }
                             },
-                            "verification": {
-                                "oneOf": [
-                                    { "type": "string" },
-                                    {
-                                        "type": "array",
-                                        "items": { "type": "string" }
-                                    }
-                                ]
-                            },
+                            "verification": { "type": "string" },
                             "risks": {
                                 "type": "array",
                                 "items": { "type": "string" }
                             },
                             "assumptions": {
-                                "oneOf": [
-                                    { "type": "string" },
-                                    {
-                                        "type": "array",
-                                        "items": { "type": "string" }
-                                    }
-                                ]
+                                "type": "array",
+                                "items": { "type": "string" }
                             },
                             "needsContextResetOption": { "type": "boolean" }
                         }
@@ -3810,8 +3736,8 @@ Used for prompt assembly coverage.
         assert!(prompt.contains("must call update_plan"));
         assert!(prompt.contains("Unresolved core ambiguities pushed to the approval step"));
         assert!(prompt.contains("Once published, the run pauses for user approval"));
-        assert!(prompt.contains("`design`: Describe the recommended approach"));
-        assert!(prompt.contains("`verification`: Describe how to validate"));
+        assert!(prompt.contains("`design`: Write a detailed prose description"));
+        assert!(prompt.contains("`verification`: Write a thorough description"));
         assert!(prompt.contains("pause"));
         // Verify phased workflow is present
         assert!(prompt.contains("Phase 1: Explore and understand"));

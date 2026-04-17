@@ -218,11 +218,11 @@ type PlanStepMetadata = {
 type PlanMessageMetadata = {
   approvalState?: string;
   assumptions?: string[];
-  context?: string[];
-  design?: string[];
+  context?: string;
+  design?: string;
   generatedFromRunId?: string;
   kind?: string;
-  keyImplementation?: string[];
+  keyImplementation?: string;
   needsContextResetOption?: boolean;
   planRevision?: number;
   risks?: string[];
@@ -230,21 +230,21 @@ type PlanMessageMetadata = {
   steps?: PlanStepMetadata[];
   summary?: string;
   title?: string;
-  verification?: string[];
+  verification?: string;
 };
 
 type FormattedPlan = {
   approvalState: string | null;
   assumptions: string[];
-  context: string[];
-  design: string[];
-  keyImplementation: string[];
+  context: string;
+  design: string;
+  keyImplementation: string;
   planRevision: number | null;
   risks: string[];
   steps: string[];
   summary: string;
   title: string;
-  verification: string[];
+  verification: string;
 };
 
 type FormattedApprovalPrompt = {
@@ -346,11 +346,11 @@ function parsePlanMessageMetadata(value: unknown): PlanMessageMetadata | null {
   return {
     approvalState: readStringField(record, "approvalState") ?? undefined,
     assumptions: readStringArrayField(record, "assumptions"),
-    context: readStringArrayField(record, "context"),
-    design: readStringArrayField(record, "design"),
+    context: readStringField(record, "context") ?? undefined,
+    design: readStringField(record, "design") ?? undefined,
     generatedFromRunId: readStringField(record, "generatedFromRunId") ?? undefined,
     kind: readStringField(record, "kind") ?? undefined,
-    keyImplementation: readStringArrayField(record, "keyImplementation"),
+    keyImplementation: readStringField(record, "keyImplementation") ?? undefined,
     needsContextResetOption:
       typeof record.needsContextResetOption === "boolean" ? record.needsContextResetOption : undefined,
     planRevision: readNumberField(record, "planRevision") ?? undefined,
@@ -359,7 +359,7 @@ function parsePlanMessageMetadata(value: unknown): PlanMessageMetadata | null {
     steps: stepEntries,
     summary: readStringField(record, "summary") ?? undefined,
     title: readStringField(record, "title") ?? undefined,
-    verification: readStringArrayField(record, "verification"),
+    verification: readStringField(record, "verification") ?? undefined,
   };
 }
 
@@ -519,15 +519,15 @@ function formatPlanMetadata(
   return {
     approvalState: parsed?.approvalState ?? null,
     assumptions: parsed?.assumptions ?? [],
-    context: parsed?.context ?? [],
-    design: parsed?.design ?? [],
-    keyImplementation: parsed?.keyImplementation ?? [],
+    context: parsed?.context?.trim() ?? "",
+    design: parsed?.design?.trim() ?? "",
+    keyImplementation: parsed?.keyImplementation?.trim() ?? "",
     planRevision: parsed?.planRevision ?? null,
     risks: parsed?.risks ?? [],
     steps,
     summary,
     title,
-    verification: parsed?.verification ?? [],
+    verification: parsed?.verification?.trim() ?? "",
   };
 }
 
@@ -565,6 +565,23 @@ function renderPlanListSection(
           </li>
         ))}
       </ListTag>
+    </div>
+  );
+}
+
+function renderPlanProseSection(title: string, content: string) {
+  if (!content.trim()) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-semibold uppercase tracking-[0.08em] text-app-subtle">
+        {title}
+      </div>
+      <div className="text-sm leading-6 text-app-muted">
+        <MessageResponse>{content}</MessageResponse>
+      </div>
     </div>
   );
 }
@@ -3912,17 +3929,16 @@ export function RuntimeThreadSurface({
                               <PlanTrigger />
                             </PlanHeader>
                             <PlanContent className="space-y-4">
-                              {formattedPlan.context.length > 0
-                                ? renderPlanListSection(message.id, "Context", formattedPlan.context)
+                              {formattedPlan.context
+                                ? renderPlanProseSection("Context", formattedPlan.context)
                                 : null}
 
-                              {formattedPlan.design.length > 0
-                                ? renderPlanListSection(message.id, "Design", formattedPlan.design)
+                              {formattedPlan.design
+                                ? renderPlanProseSection("Design", formattedPlan.design)
                                 : null}
 
-                              {formattedPlan.keyImplementation.length > 0
-                                ? renderPlanListSection(
-                                  message.id,
+                              {formattedPlan.keyImplementation
+                                ? renderPlanProseSection(
                                   "Key Implementation",
                                   formattedPlan.keyImplementation,
                                 )
@@ -3934,9 +3950,8 @@ export function RuntimeThreadSurface({
                                 <MessageResponse>{message.content}</MessageResponse>
                               )}
 
-                              {formattedPlan.verification.length > 0
-                                ? renderPlanListSection(
-                                  message.id,
+                              {formattedPlan.verification
+                                ? renderPlanProseSection(
                                   "Verification",
                                   formattedPlan.verification,
                                 )

@@ -578,9 +578,9 @@ async fn test_build_session_spec_adds_plan_mode_guardrails() {
         .contains("`summary`: State what is being changed"));
     assert!(spec
         .system_prompt
-        .contains("Include ONLY confirmed facts from inspected code"));
+        .contains("Write a thorough narrative of confirmed facts"));
     assert!(spec.system_prompt.contains(
-        "Name the specific files, modules, interfaces, data flows, or state transitions"
+        "Write a connected prose description of the specific files, modules, interfaces, data flows, or state transitions"
     ));
     assert!(spec.system_prompt.contains("pauses for user approval"));
 }

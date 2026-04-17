@@ -39,14 +39,14 @@ pub struct PlanArtifact {
     pub title: String,
     pub summary: String,
     #[serde(default)]
-    pub context: Vec<String>,
+    pub context: String,
     #[serde(default)]
-    pub design: Vec<String>,
+    pub design: String,
     #[serde(default)]
-    pub key_implementation: Vec<String>,
+    pub key_implementation: String,
     pub steps: Vec<PlanStep>,
     #[serde(default)]
-    pub verification: Vec<String>,
+    pub verification: String,
     pub risks: Vec<String>,
     #[serde(default)]
     pub assumptions: Vec<String>,
@@ -139,9 +139,9 @@ pub fn plan_markdown(metadata: &PlanMessageMetadata) -> String {
         lines.push(artifact.summary.trim().to_string());
     }
 
-    append_string_section(&mut lines, "Context", &artifact.context);
-    append_string_section(&mut lines, "Design", &artifact.design);
-    append_string_section(
+    append_prose_section(&mut lines, "Context", &artifact.context);
+    append_prose_section(&mut lines, "Design", &artifact.design);
+    append_prose_section(
         &mut lines,
         "Key Implementation",
         &artifact.key_implementation,
@@ -162,7 +162,7 @@ pub fn plan_markdown(metadata: &PlanMessageMetadata) -> String {
         }
     }
 
-    append_string_section(&mut lines, "Verification", &artifact.verification);
+    append_prose_section(&mut lines, "Verification", &artifact.verification);
     append_string_section(&mut lines, "Risks", &artifact.risks);
     append_string_section(&mut lines, "Assumptions", &artifact.assumptions);
 
@@ -227,11 +227,11 @@ pub fn build_plan_artifact_from_tool_input(
             }]
         });
 
-    let context = read_string_list(root.and_then(|value| value.get("context")));
-    let design = read_string_list(root.and_then(|value| value.get("design")));
+    let context = read_prose_field(root.and_then(|value| value.get("context")));
+    let design = read_prose_field(root.and_then(|value| value.get("design")));
     let key_implementation =
-        read_string_list(root.and_then(|value| value.get("keyImplementation")));
-    let verification = read_string_list(root.and_then(|value| value.get("verification")));
+        read_prose_field(root.and_then(|value| value.get("keyImplementation")));
+    let verification = read_prose_field(root.and_then(|value| value.get("verification")));
     let risks = read_string_list(root.and_then(|value| value.get("risks")));
     let assumptions = read_string_list(root.and_then(|value| value.get("assumptions")));
     let needs_context_reset_option = root
@@ -253,6 +253,17 @@ pub fn build_plan_artifact_from_tool_input(
         plan_revision,
         needs_context_reset_option,
     }
+}
+
+fn append_prose_section(lines: &mut Vec<String>, title: &str, content: &str) {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    lines.push(String::new());
+    lines.push(format!("## {}", title));
+    lines.push(trimmed.to_string());
 }
 
 fn append_string_section(lines: &mut Vec<String>, title: &str, items: &[String]) {
@@ -346,6 +357,20 @@ fn read_string_list(value: Option<&serde_json::Value>) -> Vec<String> {
     }
 }
 
+fn read_prose_field(value: Option<&serde_json::Value>) -> String {
+    match value {
+        Some(serde_json::Value::String(text)) => text.trim().to_string(),
+        Some(serde_json::Value::Array(entries)) => entries
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        _ => String::new(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Plan file persistence — write plan markdown to ~/.tiy/plans/{thread_id}.md
 // ---------------------------------------------------------------------------
@@ -389,9 +414,9 @@ mod tests {
             &serde_json::json!({
                 "title": "Runtime refactor",
                 "summary": "Refactor plan mode behavior.",
-                "context": ["Plan artifact only stores a subset of planning data today."],
-                "design": ["Expand the artifact and keep older plans compatible."],
-                "keyImplementation": ["Update plan checkpoint parsing and rendering."],
+                "context": "Plan artifact only stores a subset of planning data today.",
+                "design": "Expand the artifact and keep older plans compatible.",
+                "keyImplementation": "Update plan checkpoint parsing and rendering.",
                 "steps": [
                     "Remove helper plan tool",
                     {
@@ -400,7 +425,7 @@ mod tests {
                         "files": ["src-tauri/src/core/agent_run_manager.rs"]
                     }
                 ],
-                "verification": ["Run Rust tests covering plan artifact parsing."],
+                "verification": "Run Rust tests covering plan artifact parsing.",
                 "risks": ["State drift"],
                 "assumptions": ["Plan mode continues to pause before implementation."]
             }),
@@ -410,11 +435,11 @@ mod tests {
         assert_eq!(artifact.plan_revision, 3);
         assert_eq!(
             artifact.context,
-            vec!["Plan artifact only stores a subset of planning data today."]
+            "Plan artifact only stores a subset of planning data today."
         );
         assert_eq!(
             artifact.key_implementation,
-            vec!["Update plan checkpoint parsing and rendering."]
+            "Update plan checkpoint parsing and rendering."
         );
         assert_eq!(artifact.steps.len(), 2);
         assert_eq!(artifact.steps[0].title, "Remove helper plan tool");
@@ -424,7 +449,7 @@ mod tests {
         );
         assert_eq!(
             artifact.verification,
-            vec!["Run Rust tests covering plan artifact parsing."]
+            "Run Rust tests covering plan artifact parsing."
         );
     }
 
@@ -460,11 +485,11 @@ mod tests {
             &serde_json::json!({
                 "title": "Structured plan",
                 "summary": "Publish a richer planning artifact.",
-                "context": ["The current artifact only stores summary, steps, and risks."],
-                "design": ["Add new sections as structured arrays."],
-                "keyImplementation": ["Extend Rust schema and frontend parsing."],
+                "context": "The current artifact only stores summary, steps, and risks.",
+                "design": "Add new sections as structured prose fields.",
+                "keyImplementation": "Extend Rust schema and frontend parsing.",
                 "steps": ["Update the plan artifact builder."],
-                "verification": ["Run plan-related Rust and TypeScript verification."],
+                "verification": "Run plan-related Rust and TypeScript verification.",
                 "risks": ["Older plans must remain readable."],
                 "assumptions": ["Historical messages may omit new fields."]
             }),
