@@ -713,17 +713,10 @@ impl ExtensionsManager {
                 break;
             }
         }
-        if !found && scope == ConfigScope::Workspace && workspace_path.is_some() {
-            let exists_globally = self
-                .load_mcp_configs_for_scope(None, ConfigScope::Global)
-                .await?
-                .into_iter()
-                .any(|server| server.id == id);
-            if exists_globally {
-                configs.push(input.clone());
-                found = true;
-            }
-        }
+        // Intentionally no workspace→global fallback: if the MCP does not exist
+        // at the requested scope, editing it should not silently materialize a
+        // copy in a different config file. Callers that actually intend to add
+        // a workspace-level override should go through `add_mcp_server`.
         if !found {
             return Err(AppError::not_found(
                 ErrorSource::Settings,
@@ -843,25 +836,39 @@ impl ExtensionsManager {
         workspace_path: Option<&str>,
         scope: Option<ConfigScope>,
     ) -> Result<(), AppError> {
-        let resolved_scope = match scope {
-            Some(s) => s,
-            None => self.resolve_skill_scope(id, workspace_path).await,
-        };
-        if !self
-            .skill_exists(id, workspace_path, resolved_scope)
+        // Determine the skill's true installation scope from its on-disk location
+        // (built-in / plugin → global, workspace `.tiy/skills` → workspace). The
+        // caller-supplied scope is treated as a hint only; if it conflicts with
+        // where the skill actually lives we still write to the correct config
+        // file so user-level installs never get shadowed into a workspace file.
+        let actual_scope = self
+            .lookup_skill_actual_scope(id, workspace_path)
             .await?
-        {
-            return Err(AppError::not_found(
-                ErrorSource::Settings,
-                format!("skill '{id}'"),
-            ));
+            .ok_or_else(|| AppError::not_found(ErrorSource::Settings, format!("skill '{id}'")))?;
+
+        if let Some(requested) = scope {
+            if requested != actual_scope {
+                tracing::debug!(
+                    skill_id = %id,
+                    requested = %requested.as_str(),
+                    actual = %actual_scope.as_str(),
+                    "skill enable/disable scope hint differs from installation scope; using installation scope",
+                );
+            }
         }
+
+        let effective_workspace_path = if actual_scope == ConfigScope::Workspace {
+            workspace_path
+        } else {
+            None
+        };
+
         let mut store = self
-            .load_skill_state_store(workspace_path, resolved_scope)
+            .load_skill_state_store(effective_workspace_path, actual_scope)
             .await?;
         update_named_membership(&mut store.enabled, id, enabled);
         update_named_membership(&mut store.disabled, id, !enabled);
-        self.save_skill_state_store(&store, workspace_path, resolved_scope)
+        self.save_skill_state_store(&store, effective_workspace_path, actual_scope)
             .await?;
         self.write_extension_audit(
             if enabled {
@@ -2124,11 +2131,24 @@ impl ExtensionsManager {
                 }
                 visited.insert(record.id.clone());
 
+                // Determine the true installation scope based on where the skill
+                // was discovered. Built-in and plugin-provided skills live under
+                // the user's home and are always global; only skills discovered
+                // under the workspace's `.tiy/skills` directory are workspace
+                // scoped. Applying state must follow the same rule so that
+                // enable/disable decisions persist in the matching config file.
+                let effective_scope = match source_label.as_str() {
+                    "workspace" => ConfigScope::Workspace,
+                    _ => ConfigScope::Global,
+                };
+
                 apply_skill_state(&mut record, &global_state);
-                if let Some(workspace_state) = workspace_state.as_ref() {
-                    apply_skill_state(&mut record, workspace_state);
+                if effective_scope == ConfigScope::Workspace {
+                    if let Some(workspace_state) = workspace_state.as_ref() {
+                        apply_skill_state(&mut record, workspace_state);
+                    }
                 }
-                record.scope = scope.as_str().to_string();
+                record.scope = effective_scope.as_str().to_string();
 
                 record.prompt_budget_chars = max_prompt_chars.min(record.content_preview.len());
                 results.push(SkillRuntime { record, content });
@@ -3503,6 +3523,13 @@ impl ExtensionsManager {
         workspace_path: Option<&str>,
         scope: ConfigScope,
     ) -> Result<bool, AppError> {
+        // Only update the config at the caller-supplied scope. We intentionally
+        // do not fall back to cloning a globally-defined MCP entry into the
+        // workspace config file: the install-location rule says toggling a
+        // user-level MCP must stay at the user level. If the id isn't found in
+        // the requested scope, return `Ok(false)` so `enable_extension` /
+        // `disable_extension` can continue trying other scopes or extension
+        // kinds without silently shadowing the entry.
         let mut configs = self
             .load_mcp_configs_for_scope(workspace_path, scope)
             .await?;
@@ -3517,24 +3544,6 @@ impl ExtensionsManager {
             return Ok(true);
         }
 
-        if scope == ConfigScope::Workspace && workspace_path.is_some() {
-            if let Some(mut config) = self
-                .load_mcp_configs_for_scope(None, ConfigScope::Global)
-                .await?
-                .into_iter()
-                .find(|config| config.id == id)
-            {
-                config.enabled = enabled;
-                configs.push(config.clone());
-                self.save_mcp_configs_for_scope(&configs, workspace_path, scope)
-                    .await?;
-                let _ = self
-                    .refresh_mcp_runtime(&config, None, scope.as_str())
-                    .await?;
-                return Ok(true);
-            }
-        }
-
         Ok(false)
     }
 
@@ -3543,14 +3552,57 @@ impl ExtensionsManager {
         id: &str,
         enabled: bool,
         workspace_path: Option<&str>,
-        scope: ConfigScope,
+        _scope: ConfigScope,
     ) -> Result<bool, AppError> {
-        if !self.skill_exists(id, workspace_path, scope).await? {
+        // The caller-supplied `scope` is intentionally ignored here: the scope
+        // that matters is the skill's on-disk installation location, and
+        // `set_skill_enabled` resolves that itself. We still return `Ok(false)`
+        // when the id doesn't match any installed skill so `enable_extension` /
+        // `disable_extension` can continue trying other extension kinds.
+        if self
+            .lookup_skill_actual_scope(id, workspace_path)
+            .await?
+            .is_none()
+        {
             return Ok(false);
         }
-        self.set_skill_enabled(id, enabled, workspace_path, Some(scope))
+        self.set_skill_enabled(id, enabled, workspace_path, None)
             .await?;
         Ok(true)
+    }
+
+    /// Find the actual installation scope of a skill by scanning both the
+    /// global skill roots and (when available) the workspace skill root. The
+    /// scope is read from the `SkillRecordDto.scope` field, which `load_skills`
+    /// now derives from the discovered source label rather than the query
+    /// parameter.
+    async fn lookup_skill_actual_scope(
+        &self,
+        id: &str,
+        workspace_path: Option<&str>,
+    ) -> Result<Option<ConfigScope>, AppError> {
+        if workspace_path.is_some() {
+            for skill in self
+                .load_skills(workspace_path, ConfigScope::Workspace)
+                .await?
+            {
+                if skill.record.id == id {
+                    let resolved = match skill.record.scope.as_str() {
+                        "workspace" => ConfigScope::Workspace,
+                        _ => ConfigScope::Global,
+                    };
+                    return Ok(Some(resolved));
+                }
+            }
+        }
+
+        for skill in self.load_skills(None, ConfigScope::Global).await? {
+            if skill.record.id == id {
+                return Ok(Some(ConfigScope::Global));
+            }
+        }
+
+        Ok(None)
     }
 }
 

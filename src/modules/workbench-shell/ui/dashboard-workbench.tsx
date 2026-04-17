@@ -376,20 +376,48 @@ export function DashboardWorkbench() {
     updateMcpServer,
   } = useExtensionsController(selectedProject?.path ?? null);
   const currentExtensionScope: ExtensionScope = selectedProject ? "workspace" : "global";
+  /**
+   * Resolve the scope that an enable/disable/update mutation should target for
+   * a specific extension id. The scope of an item is determined by where it is
+   * installed (plugins are always user-level; MCP/Skill scope is surfaced by
+   * the backend on each record), _not_ by whatever scope the UI happens to be
+   * showing. Using the UI's scope blindly would cause user-level MCP/Skill
+   * toggles to land in the workspace config file, which violates the
+   * install-location rule.
+   */
+  const resolveItemScope = useCallback(
+    (id: string): ExtensionScope => {
+      const mcpScope = mcpServers.find((server) => server.id === id)?.scope;
+      if (mcpScope === "workspace" || mcpScope === "global") {
+        return mcpScope;
+      }
+      const skillScope = extensionSkills.find((skill) => skill.id === id)?.scope;
+      if (skillScope === "workspace" || skillScope === "global") {
+        return skillScope;
+      }
+      // Plugins (and anything we can't classify from loaded state) live at the
+      // user level today, so default to "global". This also matches the
+      // behavior of marketplace-installed extensions.
+      return "global";
+    },
+    [mcpServers, extensionSkills],
+  );
   const extensionDetailById = useMemo<Record<string, ExtensionDetail>>(() => {
+    // Entries are keyed by `${scope}:${workspacePath ?? "global"}:${id}` in the
+    // controller cache. When the extensions list shows items from multiple
+    // scopes at once (e.g. in a workspace view that includes user-level MCP
+    // entries) we must not filter by the outer UI scope, otherwise details
+    // loaded under an item's real scope would be invisible. Indexing by id is
+    // sufficient because the controller keeps one entry per (scope, id) pair.
     return Object.fromEntries(
-      Object.entries(extensionDetailByKey)
-        .filter(([key]) => key.startsWith(`${currentExtensionScope}:`))
-        .map(([, value]) => [value.summary.id, value]),
+      Object.entries(extensionDetailByKey).map(([, value]) => [value.summary.id, value]),
     );
-  }, [currentExtensionScope, extensionDetailByKey]);
+  }, [extensionDetailByKey]);
   const skillPreviewById = useMemo<Record<string, SkillPreview>>(() => {
     return Object.fromEntries(
-      Object.entries(skillPreviewByKey)
-        .filter(([key]) => key.startsWith(`${currentExtensionScope}:`))
-        .map(([, value]) => [value.record.id, value]),
+      Object.entries(skillPreviewByKey).map(([, value]) => [value.record.id, value]),
     );
-  }, [currentExtensionScope, skillPreviewByKey]);
+  }, [skillPreviewByKey]);
   const {
     general: generalPreferences,
     workspaces: settingsWorkspaces,
@@ -3049,23 +3077,23 @@ export function DashboardWorkbench() {
           mcpServers={mcpServers}
           onClose={() => setActiveOverlay(null)}
           onRefresh={() => void refreshExtensions(currentExtensionScope)}
-          onLoadDetail={(id) => loadExtensionDetail(id, currentExtensionScope)}
-          onLoadSkillPreview={(id) => loadSkillPreview(id, currentExtensionScope)}
-          onEnableExtension={(id) => enableExtension(id, currentExtensionScope)}
-          onDisableExtension={(id) => disableExtension(id, currentExtensionScope)}
-          onUninstallExtension={(id) => uninstallExtension(id, currentExtensionScope)}
+          onLoadDetail={(id) => loadExtensionDetail(id, resolveItemScope(id))}
+          onLoadSkillPreview={(id) => loadSkillPreview(id, resolveItemScope(id))}
+          onEnableExtension={(id) => enableExtension(id, resolveItemScope(id))}
+          onDisableExtension={(id) => disableExtension(id, resolveItemScope(id))}
+          onUninstallExtension={(id) => uninstallExtension(id, resolveItemScope(id))}
           onAddMarketplaceSource={addMarketplaceSource}
           onGetMarketplaceSourceRemovePlan={getMarketplaceSourceRemovePlan}
           onRemoveMarketplaceSource={removeMarketplaceSource}
           onRefreshMarketplaceSource={refreshMarketplaceSource}
           onInstallMarketplaceItem={installMarketplaceItem}
           onAddMcpServer={(input) => addMcpServer(input, currentExtensionScope)}
-          onUpdateMcpServer={(id, input) => updateMcpServer(id, input, currentExtensionScope)}
-          onRemoveMcpServer={(id) => removeMcpServer(id, currentExtensionScope)}
-          onRestartMcpServer={(id) => restartMcpServer(id, currentExtensionScope)}
+          onUpdateMcpServer={(id, input) => updateMcpServer(id, input, resolveItemScope(id))}
+          onRemoveMcpServer={(id) => removeMcpServer(id, resolveItemScope(id))}
+          onRestartMcpServer={(id) => restartMcpServer(id, resolveItemScope(id))}
           onRescanSkills={() => rescanSkills(currentExtensionScope)}
-          onEnableSkill={(id) => enableSkill(id, currentExtensionScope)}
-          onDisableSkill={(id) => disableSkill(id, currentExtensionScope)}
+          onEnableSkill={(id) => enableSkill(id, resolveItemScope(id))}
+          onDisableSkill={(id) => disableSkill(id, resolveItemScope(id))}
           skillPreviewById={skillPreviewById}
           skills={extensionSkills}
         />
