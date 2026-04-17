@@ -820,7 +820,9 @@ export function DashboardWorkbench() {
     });
     if (pendingThreadId && isTauri()) {
       terminalStore.removeSession(pendingThreadId);
-      void threadDelete(pendingThreadId).catch(() => {});
+      void threadDelete(pendingThreadId).catch((error) => {
+        console.warn("[terminal] failed to delete pending thread:", pendingThreadId, error);
+      });
     }
   }, []);
 
@@ -2442,23 +2444,7 @@ export function DashboardWorkbench() {
         onToggleSettingsSection={setOpenSettingsSection}
         onToggleSidebar={() => setSidebarOpen((current) => !current)}
         onToggleDrawer={() => setDrawerOpen((current) => !current)}
-        onToggleTerminal={() => {
-          if (
-            isNewThreadMode &&
-            isTerminalCollapsed &&
-            selectedProjectWorkspaceId &&
-            !resolvedTerminalThreadId
-          ) {
-            getOrCreateNewThreadId(selectedProjectWorkspaceId).catch(
-              (error) => {
-                setTerminalBootstrapError(
-                  getInvokeErrorMessage(error, "Failed to prepare terminal"),
-                );
-              },
-            );
-          }
-          setTerminalCollapsed((current) => !current);
-        }}
+        onToggleTerminal={() => setTerminalCollapsed((current) => !current)}
       />
 
       <div className="flex h-full min-h-0 pt-9">
