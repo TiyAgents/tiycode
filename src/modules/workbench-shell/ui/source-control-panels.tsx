@@ -826,7 +826,7 @@ export function GitPanel({
           return;
         }
 
-        const nextHistory = await gitGetHistory(workspaceId, 24);
+        const nextHistory = await gitGetHistory(workspaceId, 32);
         if (!cancelled) {
           setHistory(nextHistory);
         }
@@ -1615,7 +1615,7 @@ export function GitPanel({
           <div className="flex items-center gap-2">
             <p className="text-sm font-semibold text-app-foreground">History</p>
             <span className="rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-subtle">
-              {history.length}
+              {history.length >= 32 ? "32+" : history.length}
             </span>
           </div>
           <div className="flex items-center gap-1">
@@ -1634,7 +1634,7 @@ export function GitPanel({
                 DRAWER_ICON_ACTION_CLASS,
                 (!gitCliAvailable || pendingAction !== null) && "opacity-60",
               )}
-              onClick={() => handleRemoteAction("fetch")}
+              onClick={() => executeConfirmedAction("fetch")}
             >
               {pendingAction === "fetch" ? (
                 <LoaderCircle className="size-4 animate-spin" />
