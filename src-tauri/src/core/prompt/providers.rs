@@ -1,16 +1,9 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-#[cfg(not(target_os = "windows"))]
-use tokio::task::JoinSet;
+use std::path::Path;
 
 use crate::core::agent_session::{
     normalize_profile_response_language, response_style_system_instruction, ProfileResponseStyle,
 };
-#[cfg(not(target_os = "windows"))]
-use crate::core::shell_runtime::{build_unix_shell_command, UnixShellMode};
-use crate::core::shell_runtime::{current_shell, find_command_on_path};
+use crate::core::shell_runtime::current_shell;
 use crate::core::subagent::TERM_PANEL_USAGE_NOTE;
 use crate::extensions::{ConfigScope, ExtensionsManager};
 use crate::model::errors::AppError;
@@ -21,31 +14,12 @@ use super::section::{PromptPhase, PromptSection, PromptSectionProvider};
 
 const WORKSPACE_INSTRUCTION_FILE_NAMES: &[&str] = &["AGENTS.md", "CLAUDE.md", "AGENT.MD"];
 const WORKSPACE_INSTRUCTION_MAX_CHARS: usize = 12_800;
-#[cfg(not(target_os = "windows"))]
-const LOGIN_SHELL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
-#[cfg(not(target_os = "windows"))]
-const TOOL_VERSION_TIMEOUT: Duration = Duration::from_secs(2);
-#[cfg(not(target_os = "windows"))]
-const LOGIN_SHELL_MARKER_START: &str = "__TIYCODE_TOOL_START__";
-#[cfg(not(target_os = "windows"))]
-const LOGIN_SHELL_MARKER_END: &str = "__TIYCODE_TOOL_END__";
-const SHELL_GUIDE_TOOL_NAMES: &[&str] = &[
-    "node", "bun", "npx", "npm", "pnpm", "yarn", "python", "uv", "uvx", "pip", "python3", "pip3",
-    "git", "rg",
-];
 
 #[derive(Debug, Clone)]
 struct WorkspaceInstructionSnippet {
     file_name: &'static str,
     content: String,
     truncated: bool,
-}
-
-#[derive(Debug, Clone)]
-struct ToolAvailability {
-    name: &'static str,
-    path: Option<PathBuf>,
-    version: Option<String>,
 }
 
 pub struct BaseProvider;
@@ -102,13 +76,11 @@ impl PromptSectionProvider for WorkspaceProvider {
 
 impl PromptSectionProvider for EnvironmentProvider {
     async fn collect(&self, ctx: &PromptBuildContext<'_>) -> Result<Vec<PromptSection>, AppError> {
-        let tools = detect_shell_tools_via_login_shell().await;
-
         Ok(vec![
             PromptSection {
                 key: "system_environment",
                 title: "System Environment",
-                body: build_system_environment_body(&tools),
+                body: build_system_environment_body(),
                 phase: PromptPhase::RuntimeContext,
                 order_in_phase: 10,
             },
@@ -123,7 +95,7 @@ impl PromptSectionProvider for EnvironmentProvider {
             PromptSection {
                 key: "shell_tooling_guide",
                 title: "Shell Tooling Guide",
-                body: build_shell_tooling_guide_body(&tools),
+                body: build_shell_tooling_guide_body(),
                 phase: PromptPhase::Capability,
                 order_in_phase: 10,
             },
@@ -425,306 +397,24 @@ fn truncate_chars(value: &str, max_chars: usize) -> (String, bool) {
     (truncated.trim_end().to_string(), true)
 }
 
-fn build_system_environment_body(tools: &[ToolAvailability]) -> String {
+fn build_system_environment_body() -> String {
     let shell = current_shell();
     let current_date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let tool_lines = tools
-        .iter()
-        .map(|tool| match (&tool.path, &tool.version) {
-            (Some(path), Some(version)) => {
-                format!("- {}: {} (at {})", tool.name, version, path.display())
-            }
-            (Some(path), None) => format!("- {}: available at {}", tool.name, path.display()),
-            (None, _) => format!("- {}: not found on PATH", tool.name),
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
 
     format!(
-        "- Operating system: {}\n- Architecture: {}\n- Default shell: {}\n- Current date: {}\n- Common CLI tools:\n{}",
+        "- Operating system: {}\n- Architecture: {}\n- Default shell: {}\n- Current date: {}",
         std::env::consts::OS,
         std::env::consts::ARCH,
         shell,
         current_date,
-        tool_lines
     )
 }
 
-fn build_shell_tooling_guide_body(tools: &[ToolAvailability]) -> String {
-    let tool_available: HashMap<&str, bool> = tools
-        .iter()
-        .map(|tool| (tool.name, tool.path.is_some()))
-        .collect();
-
-    let is_avail = |name: &str| tool_available.get(name).copied().unwrap_or(false);
-
-    let python_hint = if is_avail("python3") {
-        "Prefer `python3` for Python commands in shell examples."
-    } else if is_avail("python") {
-        "Use `python` for Python commands in shell examples."
-    } else {
-        "Do not assume Python is available; verify before proposing Python shell commands."
-    };
-
-    let pip_hint = if is_avail("pip3") || is_avail("pip") {
-        let cmd = if is_avail("pip3") { "pip3" } else { "pip" };
-        format!("Use `{cmd}` for Python package installation when needed.")
-    } else {
-        "Do not assume `pip` is available.".to_string()
-    };
-
-    let node_hint = if is_avail("node") || is_avail("npm") {
-        let mut parts = vec!["Node tooling is available."];
-        if is_avail("npm") {
-            parts.push("Prefer `npm` scripts when the workspace defines them.");
-        }
-        if is_avail("bun") {
-            parts.push("`bun` is available as an alternative runtime.");
-        }
-        if is_avail("pnpm") {
-            parts.push("`pnpm` is available.");
-        }
-        if is_avail("yarn") {
-            parts.push("`yarn` is available.");
-        }
-        if is_avail("npx") {
-            parts.push("Use `npx` for one-off package execution.");
-        }
-        parts.join(" ")
-    } else {
-        "Do not assume Node tooling is available; verify before proposing Node shell commands."
-            .to_string()
-    };
-
-    let uv_hint = if is_avail("uv") {
-        let mut parts = vec![
-            "Use `uv` for lightweight Python environment and script execution when that fits the task.",
-        ];
-        if is_avail("uvx") {
-            parts.push("`uvx` is available for running Python CLI tools without installing them.");
-        }
-        parts.join(" ")
-    } else {
-        "Do not assume `uv` is available.".to_string()
-    };
-
-    let rg_hint = if is_avail("rg") {
-        "Prefer `rg` for text search and file discovery before broader shell commands."
-    } else {
-        "If `rg` is unavailable, fall back to the built-in search and find tools before broad shell scans."
-    };
-
-    let git_hint = if is_avail("git") {
-        "Use `git` for repo status, diff, and history checks when repository context matters."
-    } else {
-        "Do not assume `git` is available in shell commands."
-    };
-
-    let hints = [
-        rg_hint.to_string(),
-        python_hint.to_string(),
-        pip_hint,
-        node_hint,
-        uv_hint,
-        git_hint.to_string(),
-    ];
-
+fn build_shell_tooling_guide_body() -> String {
     format!(
-        "- Shell commands run through the user's default shell (`{}`).\n- This section is a shell command selection and boundary guide. Prefer workspace-aware tools (`read`, `list`, `search`, `find`, `edit`) before shell when they fit.\n- Use `shell` for one-shot non-interactive commands in the workspace.\n- Use `term_status`, `term_output`, `term_write`, `term_restart`, and `term_close` only for the desktop app's embedded Terminal panel session for the current thread. They inspect or control that persistent panel session and do not replace one-shot `shell` execution.\n- {}",
-        current_shell(),
-        hints.join("\n- ")
+        "- Shell commands run through the user's default shell (`{shell}`).\n- This section is a shell command selection and boundary guide. Prefer workspace-aware tools (`read`, `list`, `search`, `find`, `edit`) before shell when they fit.\n- Use `shell` for one-shot non-interactive commands in the workspace.\n- Use `term_status`, `term_output`, `term_write`, `term_restart`, and `term_close` only for the desktop app's embedded Terminal panel session for the current thread. They inspect or control that persistent panel session and do not replace one-shot `shell` execution.\n- Do not assume any particular CLI tool (for example `node`, `python`, `pip`, `git`, or `rg`) is available on the user's machine. Verify availability with a quick probe (such as `command -v <tool>`) before proposing a shell command that depends on it, or prefer the workspace-aware tools when they can accomplish the task.\n- When `rg` is unavailable, fall back to the built-in `search` and `find` tools before broad shell scans.",
+        shell = current_shell()
     )
-}
-
-async fn detect_shell_tools_via_login_shell() -> Vec<ToolAvailability> {
-    #[cfg(not(target_os = "windows"))]
-    {
-        detect_shell_tools_unix().await
-    }
-    #[cfg(target_os = "windows")]
-    {
-        detect_shell_tools_windows()
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-async fn detect_shell_tools_unix() -> Vec<ToolAvailability> {
-    let discovered_paths = discover_tool_paths_from_login_shell().await;
-    let mut tools_by_index = vec![None; SHELL_GUIDE_TOOL_NAMES.len()];
-    let mut version_tasks = JoinSet::new();
-
-    for (index, &name) in SHELL_GUIDE_TOOL_NAMES.iter().enumerate() {
-        let login_shell_path = discovered_paths.get(name).cloned();
-        let path = login_shell_path.or_else(|| find_command_on_path(name));
-
-        if let Some(path_for_version) = path.clone() {
-            version_tasks.spawn(async move {
-                let version = detect_tool_version_from_path(&path_for_version).await;
-                (index, version)
-            });
-        }
-
-        tools_by_index[index] = Some(ToolAvailability {
-            name,
-            path,
-            version: None,
-        });
-    }
-
-    while let Some(result) = version_tasks.join_next().await {
-        let Ok((index, version)) = result else {
-            continue;
-        };
-
-        if let Some(tool) = tools_by_index.get_mut(index).and_then(Option::as_mut) {
-            tool.version = version;
-        }
-    }
-
-    tools_by_index.into_iter().flatten().collect()
-}
-
-#[cfg(not(target_os = "windows"))]
-async fn discover_tool_paths_from_login_shell() -> HashMap<&'static str, PathBuf> {
-    let tool_names = SHELL_GUIDE_TOOL_NAMES.join(" ");
-    // Why this script shape:
-    //   * Some zsh configurations (observed with nvm + heavy completion
-    //     plugins) make `command -v` inside `$(...)` silently return empty
-    //     for most executables — only commands already referenced during
-    //     shell startup (typically `node` from nvm init) resolve. The exact
-    //     plugin/hash interaction is environment-specific, so rather than
-    //     chase each trigger we avoid `command -v` on zsh entirely.
-    //   * `whence -p` is the zsh builtin that always walks PATH for the
-    //     external command and works reliably inside command substitution.
-    //   * On bash / sh we keep `command -v` for portability.
-    //   * We branch at the top with $ZSH_VERSION instead of wrapping the
-    //     lookup in a shell function, because wrapping it has been seen to
-    //     re-trigger the same silent-empty failure in long loops.
-    let script = format!(
-        r#"printf '%s\n' '{LOGIN_SHELL_MARKER_START}'
-if [ -n "${{ZSH_VERSION:-}}" ]; then
-  for cmd in {tool_names}; do
-    path=$(whence -p -- "$cmd" 2>/dev/null) || true
-    printf '%s|%s\n' "$cmd" "$path"
-  done
-else
-  for cmd in {tool_names}; do
-    path=$(command -v -- "$cmd" 2>/dev/null) || true
-    printf '%s|%s\n' "$cmd" "$path"
-  done
-fi
-printf '%s\n' '{LOGIN_SHELL_MARKER_END}'"#
-    );
-    let mut command = build_unix_shell_command(&script, UnixShellMode::Login);
-    command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-
-    let output = match tokio::time::timeout(LOGIN_SHELL_DISCOVERY_TIMEOUT, command.output()).await {
-        Ok(Ok(output)) => output,
-        _ => return HashMap::new(),
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-
-    parse_login_shell_tool_paths(&stdout)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn parse_login_shell_tool_paths(output: &str) -> HashMap<&'static str, PathBuf> {
-    let Some(section) =
-        lines_between_markers(output, LOGIN_SHELL_MARKER_START, LOGIN_SHELL_MARKER_END)
-    else {
-        return HashMap::new();
-    };
-
-    let mut paths = HashMap::new();
-
-    for line in section
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let mut parts = line.splitn(2, '|');
-        let Some(name) = parts.next().map(str::trim) else {
-            continue;
-        };
-        let Some(path_str) = parts.next().map(str::trim) else {
-            continue;
-        };
-        if path_str.is_empty() {
-            continue;
-        }
-        let Some(name) = SHELL_GUIDE_TOOL_NAMES
-            .iter()
-            .find(|&&candidate| candidate == name)
-            .copied()
-        else {
-            continue;
-        };
-
-        let path = PathBuf::from(path_str);
-        if path.is_file() {
-            paths.insert(name, path);
-        }
-    }
-
-    paths
-}
-
-#[cfg(not(target_os = "windows"))]
-async fn detect_tool_version_from_path(path: &Path) -> Option<String> {
-    let mut command = tokio::process::Command::new(path);
-    command
-        .arg("--version")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let output = tokio::time::timeout(TOOL_VERSION_TIMEOUT, command.output())
-        .await
-        .ok()?
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    first_non_empty_output_line(&output.stdout, &output.stderr)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn lines_between_markers<'a>(
-    output: &'a str,
-    start_marker: &str,
-    end_marker: &str,
-) -> Option<&'a str> {
-    let (_, after_start) = output.split_once(start_marker)?;
-    let (between, _) = after_start.split_once(end_marker)?;
-    Some(between)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn first_non_empty_output_line(stdout: &[u8], stderr: &[u8]) -> Option<String> {
-    let stdout = String::from_utf8_lossy(stdout);
-    let stderr = String::from_utf8_lossy(stderr);
-
-    stdout
-        .lines()
-        .chain(stderr.lines())
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(str::to_string)
-}
-
-#[cfg(target_os = "windows")]
-fn detect_shell_tools_windows() -> Vec<ToolAvailability> {
-    SHELL_GUIDE_TOOL_NAMES
-        .iter()
-        .map(|name| ToolAvailability {
-            name,
-            path: find_command_on_path(name),
-            version: None,
-        })
-        .collect()
 }
 
 fn build_profile_response_prompt_parts_from_runtime(
@@ -759,55 +449,25 @@ fn normalize_profile_response_style(value: Option<&str>) -> ProfileResponseStyle
 mod tests {
     use super::*;
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn parse_login_shell_tool_paths_ignores_noise_and_keeps_known_tools() {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let node_path = temp_dir.path().join("node");
-        std::fs::write(&node_path, "#!/bin/sh\nexit 0\n").expect("write fake node");
+    fn build_system_environment_body_omits_cli_tool_section() {
+        let body = build_system_environment_body();
 
-        let output = format!(
-            "noise before\n{start}\nnode|{node}\nunknown|/tmp/unknown\nnpm|\n{end}\nnoise after",
-            start = LOGIN_SHELL_MARKER_START,
-            node = node_path.display(),
-            end = LOGIN_SHELL_MARKER_END,
-        );
-
-        let parsed = parse_login_shell_tool_paths(&output);
-
-        assert_eq!(parsed.get("node"), Some(&node_path));
-        assert!(!parsed.contains_key("unknown"));
-        assert!(!parsed.contains_key("npm"));
+        assert!(body.contains("- Operating system:"));
+        assert!(body.contains("- Architecture:"));
+        assert!(body.contains("- Default shell:"));
+        assert!(body.contains("- Current date:"));
+        assert!(!body.contains("Common CLI tools"));
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn first_non_empty_output_line_prefers_stdout_then_stderr() {
-        let value = first_non_empty_output_line(b"\nnode v1.2.3\n", b"stderr line\n")
-            .expect("should find version line");
+    fn build_shell_tooling_guide_body_is_static_and_tool_agnostic() {
+        let body = build_shell_tooling_guide_body();
 
-        assert_eq!(value, "node v1.2.3");
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn lines_between_markers_returns_section_body() {
-        let output = format!(
-            "before\n{start}\n\n/path/to/node\n{end}\nafter",
-            start = LOGIN_SHELL_MARKER_START,
-            end = LOGIN_SHELL_MARKER_END,
-        );
-
-        let section =
-            lines_between_markers(&output, LOGIN_SHELL_MARKER_START, LOGIN_SHELL_MARKER_END)
-                .expect("should find marker section");
-        let value = section
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .expect("should find line");
-
-        assert_eq!(value, "/path/to/node");
+        assert!(body.contains("Shell commands run through the user's default shell"));
+        assert!(body.contains("Prefer workspace-aware tools"));
+        assert!(body.contains("Do not assume any particular CLI tool"));
+        assert!(body.contains("When `rg` is unavailable"));
     }
 }
 
