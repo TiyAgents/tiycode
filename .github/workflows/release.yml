@@ -99,15 +99,15 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "BUNDLE_VERSION=$BUNDLE_VERSION" >> "$GITHUB_ENV"
 
-          # Use BUNDLE_VERSION for tauri.conf.json (bundler compatibility)
-          # Use VERSION for display/tag reference
+          # Use BUNDLE_VERSION for tauri.conf.json (bundler compatibility, e.g. MSI requires pure numeric version)
+          # Use full VERSION (including any -rc.x suffix) for Cargo.toml so it stays aligned with the git tag
           node -e "
             const fs = require('fs');
             const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
             conf.version = '$BUNDLE_VERSION';
             fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
           "
-          sed -i.bak "s/^version = \".*\"/version = \"$BUNDLE_VERSION\"/" src-tauri/Cargo.toml
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
           rm -f src-tauri/Cargo.toml.bak
           echo "Tag version: $VERSION, Bundle version: $BUNDLE_VERSION"
 
