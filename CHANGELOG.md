@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-17
+### :sparkles: New Features
+- [`b5e58d9`](https://github.com/TiyAgents/tiycode/commit/b5e58d9cddcf8a1520a2e6d0d7cd15bcd8338059) - **workbench**: ✨ render branch selector on new thread empty state *(PR [#58](https://github.com/TiyAgents/tiycode/pull/58) by [@jorben](https://github.com/jorben))*
+- [`8f1864e`](https://github.com/TiyAgents/tiycode/commit/8f1864e4069d0ba16ab0f172c1d28cd83020fdf0) - **plans**: ✨ Persist plans by thread and verify compliance *(PR [#61](https://github.com/TiyAgents/tiycode/pull/61) by [@jorben](https://github.com/jorben))*
+- [`9b53a38`](https://github.com/TiyAgents/tiycode/commit/9b53a383fd0c8019683dda076cb0e25c7d265daa) - **context**: ✨ Load history since last context reset with tool calls *(PR [#62](https://github.com/TiyAgents/tiycode/pull/62) by [@jorben](https://github.com/jorben))*
+- [`718194d`](https://github.com/TiyAgents/tiycode/commit/718194d6409e8f9a1b3d218144195f68c93620bf) - **workbench**: ✨ Enable terminal on New Thread page with workspace selected *(PR [#63](https://github.com/TiyAgents/tiycode/pull/63) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`53f6c43`](https://github.com/TiyAgents/tiycode/commit/53f6c431c20c9f0506104336e666e26c58bd8b6f) - **source-control**: 🐛 expand fetch history and confirmation handling *(PR [#65](https://github.com/TiyAgents/tiycode/pull/65) by [@HayWolf](https://github.com/HayWolf))*
+
+### :recycle: Refactors
+- [`678f24c`](https://github.com/TiyAgents/tiycode/commit/678f24ce23d404033855578efd370838fce35f82) - **macOS**: ♻️ stabilize title bar button layout *(PR [#59](https://github.com/TiyAgents/tiycode/pull/59) by [@jorben](https://github.com/jorben))*
+- [`452fa4c`](https://github.com/TiyAgents/tiycode/commit/452fa4c587de0a1060daaa250f678ecb9837596f) - **plan**: ♻️ Plan 叙事字段从数组升级为 Markdown 段落 *(PR [#64](https://github.com/TiyAgents/tiycode/pull/64) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.2.9] - 2026-04-17
 ### :bug: Bug Fixes
 - [`cc615c3`](https://github.com/TiyAgents/tiycode/commit/cc615c3fa1811ef11b522927fafa0d2ca3b9073a) - **mcp**: 🐛 Resolve login-shell command lookup *(PR [#48](https://github.com/TiyAgents/tiycode/pull/48) by [@HayWolf](https://github.com/HayWolf))*
@@ -494,3 +509,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.7]: https://github.com/TiyAgents/tiycode/compare/0.2.6...0.2.7
 [0.2.8]: https://github.com/TiyAgents/tiycode/compare/0.2.7...0.2.8
 [0.2.9]: https://github.com/TiyAgents/tiycode/compare/0.2.8...0.2.9
+[0.3.0]: https://github.com/TiyAgents/tiycode/compare/0.2.9...0.3.0
