@@ -587,12 +587,32 @@ async fn detect_shell_tools_unix() -> Vec<ToolAvailability> {
 #[cfg(not(target_os = "windows"))]
 async fn discover_tool_paths_from_login_shell() -> HashMap<&'static str, PathBuf> {
     let tool_names = SHELL_GUIDE_TOOL_NAMES.join(" ");
+    // Why this script shape:
+    //   * Some zsh configurations (observed with nvm + heavy completion
+    //     plugins) make `command -v` inside `$(...)` silently return empty
+    //     for most executables — only commands already referenced during
+    //     shell startup (typically `node` from nvm init) resolve. The exact
+    //     plugin/hash interaction is environment-specific, so rather than
+    //     chase each trigger we avoid `command -v` on zsh entirely.
+    //   * `whence -p` is the zsh builtin that always walks PATH for the
+    //     external command and works reliably inside command substitution.
+    //   * On bash / sh we keep `command -v` for portability.
+    //   * We branch at the top with $ZSH_VERSION instead of wrapping the
+    //     lookup in a shell function, because wrapping it has been seen to
+    //     re-trigger the same silent-empty failure in long loops.
     let script = format!(
         r#"printf '%s\n' '{LOGIN_SHELL_MARKER_START}'
-for cmd in {tool_names}; do
-  path=$(command -v -- "$cmd" 2>/dev/null) || true
-  printf '%s|%s\n' "$cmd" "$path"
-done
+if [ -n "${{ZSH_VERSION:-}}" ]; then
+  for cmd in {tool_names}; do
+    path=$(whence -p -- "$cmd" 2>/dev/null) || true
+    printf '%s|%s\n' "$cmd" "$path"
+  done
+else
+  for cmd in {tool_names}; do
+    path=$(command -v -- "$cmd" 2>/dev/null) || true
+    printf '%s|%s\n' "$cmd" "$path"
+  done
+fi
 printf '%s\n' '{LOGIN_SHELL_MARKER_END}'"#
     );
     let mut command = build_unix_shell_command(&script, UnixShellMode::Login);
