@@ -40,9 +40,10 @@ pub(crate) fn current_shell() -> String {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn unix_shell_command_args(mode: UnixShellMode, command: &str) -> Vec<String> {
-    let mut args = Vec::with_capacity(3);
+    let mut args = Vec::with_capacity(4);
     if mode == UnixShellMode::Login {
         args.push("-l".to_string());
+        args.push("-i".to_string());
     }
     args.push("-c".to_string());
     args.push(command.to_string());

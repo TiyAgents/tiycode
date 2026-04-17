@@ -4478,7 +4478,7 @@ fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
 
             let shell = current_shell();
             let mut cmd = std::process::Command::new(&shell);
-            cmd.args(["-l", "-c", "env"]);
+            cmd.args(["-l", "-i", "-c", "env"]);
             cmd.stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
                 .stdin(std::process::Stdio::null());
@@ -4537,7 +4537,7 @@ fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
                 );
                 // Log PATH separately since it is the most important for tool resolution
                 if let Some(path) = env.get("PATH") {
-                    tracing::debug!(PATH = %path, "login_shell_env: captured PATH");
+                    tracing::info!(PATH = %path, "login_shell_env: captured PATH");
                 }
             }
             env
@@ -5019,6 +5019,12 @@ async fn spawn_stdio_mcp_process(
     let program = resolve_command_path(configured_program)
         .await
         .unwrap_or_else(|| PathBuf::from(configured_program));
+    tracing::info!(
+        server = %config.label,
+        configured = %configured_program,
+        resolved = %program.display(),
+        "spawn_stdio_mcp_process: resolved command path"
+    );
     let mut command = Command::new(&program);
     command.args(config.args.clone().unwrap_or_default());
     if let Some(cwd) = config.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) {
