@@ -330,7 +330,7 @@ mod tests {
     fn unix_shell_command_args_include_login_flag_when_requested() {
         assert_eq!(
             unix_shell_command_args(UnixShellMode::Login, "echo hi"),
-            vec!["-l", "-c", "echo hi"]
+            vec!["-l", "-i", "-c", "echo hi"]
         );
     }
 
