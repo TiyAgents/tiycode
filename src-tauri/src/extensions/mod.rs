@@ -1856,6 +1856,7 @@ impl ExtensionsManager {
         phase_override: Option<&str>,
         scope: &str,
     ) -> Result<McpServerStateDto, AppError> {
+        tracing::info!(server = %config.label, id = %config.id, scope, transport = ?config.transport, "MCP runtime refresh starting");
         let mut store = self.load_mcp_runtime_store().await?;
         let previous_runtime = store.items.remove(&config.id).unwrap_or_default();
         let mut runtime: McpRuntimeRecord;
@@ -1926,6 +1927,7 @@ impl ExtensionsManager {
         store.items.insert(config.id.clone(), runtime.clone());
         self.save_mcp_runtime_store(&store).await?;
 
+        tracing::info!(server = %config.label, %status, %phase, last_error = ?last_error, "MCP runtime refresh completed");
         Ok(McpServerStateDto {
             id: config.id.clone(),
             label: config.label.clone(),
@@ -3170,6 +3172,8 @@ impl ExtensionsManager {
         tool_input: &serde_json::Value,
         workspace_path: &str,
     ) -> Result<ToolOutput, AppError> {
+        tracing::info!(server_id, tool = %tool.name, "MCP tool execution starting");
+        tracing::debug!(server_id, tool = %tool.name, %tool_input, "MCP tool execution input");
         let config = self
             .load_mcp_configs_with_scope(Some(workspace_path), ConfigScope::Global)
             .await?
@@ -3192,13 +3196,14 @@ impl ExtensionsManager {
             .call_mcp_tool_once(&config, &tool.name, tool_input, Some(workspace_path))
             .await?;
 
-        Ok(ToolOutput {
-            success: !result
-                .get("isError")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
-            result,
-        })
+        let success = !result
+            .get("isError")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        tracing::info!(server_id, tool = %tool.name, success, "MCP tool execution completed");
+        tracing::debug!(server_id, tool = %tool.name, %result, "MCP tool execution result");
+
+        Ok(ToolOutput { success, result })
     }
 
     async fn probe_mcp_runtime(
@@ -3408,7 +3413,9 @@ impl ExtensionsManager {
             Box<dyn std::future::Future<Output = Result<T, AppError>> + Send + 'a>,
         >,
     {
+        tracing::info!(server = %config.label, command = ?config.command, "MCP stdio process spawning");
         let mut child = spawn_stdio_mcp_process(config, workspace_path).await?;
+        tracing::info!(server = %config.label, pid = ?child.id(), "MCP stdio process spawned");
         let mut stdin = child.stdin.take().ok_or_else(|| {
             AppError::internal(
                 ErrorSource::Tool,
@@ -3445,6 +3452,7 @@ impl ExtensionsManager {
         )
         .await
         .map_err(|_| {
+            tracing::warn!(server = %config.label, timeout_ms, "MCP stdio session timed out");
             AppError::recoverable(
                 ErrorSource::Tool,
                 "extensions.mcp.timeout",
@@ -3459,6 +3467,9 @@ impl ExtensionsManager {
         let _ = child.kill().await;
         let _ = child.wait().await;
         let stderr_output = stderr_task.await.unwrap_or_default();
+        if !stderr_output.is_empty() {
+            tracing::debug!(server = %config.label, stderr = %stderr_output, "MCP stdio process stderr");
+        }
 
         result.map_err(|error| append_mcp_stderr(error, &stderr_output))
     }
@@ -4513,7 +4524,23 @@ fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
                 Some(map)
             })();
 
-            result.unwrap_or_default()
+            let env = result.unwrap_or_default();
+            if env.is_empty() {
+                tracing::warn!("login_shell_env: captured 0 env vars from login shell");
+            } else {
+                let mut keys: Vec<&str> = env.keys().map(|k| k.as_str()).collect();
+                keys.sort_unstable();
+                tracing::info!(
+                    count = env.len(),
+                    keys = %keys.join(", "),
+                    "login_shell_env: captured env vars from login shell"
+                );
+                // Log PATH separately since it is the most important for tool resolution
+                if let Some(path) = env.get("PATH") {
+                    tracing::debug!(PATH = %path, "login_shell_env: captured PATH");
+                }
+            }
+            env
         }
     })
 }
@@ -4521,9 +4548,18 @@ fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
 /// Resolves an environment variable by name, first checking the process
 /// environment, then falling back to the cached login shell environment.
 fn resolve_env_var(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .or_else(|| login_shell_env().get(name).cloned())
+    let from_process = std::env::var(name).ok();
+    if let Some(ref val) = from_process {
+        tracing::debug!(var = %name, source = "process", "resolve_env_var: resolved");
+        return Some(val.clone());
+    }
+    let from_login = login_shell_env().get(name).cloned();
+    if from_login.is_some() {
+        tracing::debug!(var = %name, source = "login_shell", "resolve_env_var: resolved");
+    } else {
+        tracing::debug!(var = %name, "resolve_env_var: not found in process or login shell");
+    }
+    from_login
 }
 
 /// Expands `${VAR}` and `$VAR` patterns in a string using the current process
@@ -4618,6 +4654,13 @@ fn build_streamable_http_headers(
     }
 
     if let Some(custom_headers) = &config.headers {
+        let header_keys: Vec<&str> = custom_headers.keys().map(|k| k.as_str()).collect();
+        tracing::info!(
+            server = %config.label,
+            count = custom_headers.len(),
+            keys = %header_keys.join(", "),
+            "build_streamable_http_headers: injecting custom headers"
+        );
         for (key, value) in custom_headers {
             let name = HeaderName::from_bytes(key.trim().as_bytes()).map_err(|error| {
                 AppError::validation(
@@ -4642,6 +4685,7 @@ fn build_streamable_http_headers(
 async fn initialize_streamable_http_session(
     config: &McpServerConfigInput,
 ) -> Result<(StreamableHttpSession, serde_json::Value), AppError> {
+    tracing::info!(server = %config.label, url = ?config.url, "MCP HTTP session initializing");
     let response = send_streamable_http_jsonrpc_request(
         config,
         None,
@@ -4679,6 +4723,7 @@ async fn initialize_streamable_http_session(
     )
     .await?;
 
+    tracing::info!(server = %config.label, session_id = ?session.session_id, "MCP HTTP session initialized successfully");
     Ok((session, init_result))
 }
 
@@ -4689,6 +4734,8 @@ async fn call_streamable_http_mcp_method(
     method: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, AppError> {
+    tracing::info!(id, method, server = %config.label, "MCP HTTP request sending");
+    tracing::debug!(id, method, %params, "MCP HTTP request params");
     let response = send_streamable_http_jsonrpc_request(
         config,
         Some(session),
@@ -4700,7 +4747,17 @@ async fn call_streamable_http_mcp_method(
         }),
     )
     .await?;
-    extract_streamable_http_jsonrpc_result(&response.body, id, method)
+    let result = extract_streamable_http_jsonrpc_result(&response.body, id, method);
+    match &result {
+        Ok(value) => {
+            tracing::info!(id, method, server = %config.label, "MCP HTTP response received");
+            tracing::debug!(id, method, %value, "MCP HTTP response body");
+        }
+        Err(error) => {
+            tracing::warn!(id, method, server = %config.label, error = %error.user_message, "MCP HTTP response error");
+        }
+    }
+    result
 }
 
 async fn send_streamable_http_notification(
@@ -4759,6 +4816,11 @@ async fn send_streamable_http_jsonrpc_request(
     session: Option<&StreamableHttpSession>,
     message: &serde_json::Value,
 ) -> Result<StreamableHttpJsonRpcResponse, AppError> {
+    let method = message
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    tracing::info!(server = %config.label, url = ?config.url, method, "MCP HTTP sending request");
     let client = build_streamable_http_client(config)?;
     let url = config.url.as_deref().ok_or_else(|| {
         AppError::validation(
@@ -4788,6 +4850,7 @@ async fn send_streamable_http_jsonrpc_request(
         })?;
 
     let status = response.status();
+    tracing::info!(server = %config.label, %status, "MCP HTTP response status");
     let session_id = response
         .headers()
         .get(MCP_HEADER_SESSION_ID)
@@ -4814,6 +4877,7 @@ async fn send_streamable_http_jsonrpc_request(
         } else {
             format!("{status}: {}", body.trim())
         };
+        tracing::warn!(server = %config.label, %status, %detail, "MCP HTTP request failed");
         return Err(AppError::recoverable(
             ErrorSource::Tool,
             "extensions.mcp.http_request_failed",
@@ -4971,12 +5035,36 @@ async fn spawn_stdio_mcp_process(
     // like `#!/usr/bin/env node`) can find tools that live outside the minimal
     // GUI-app PATH (e.g. nvm-managed node).  User-configured `config.env`
     // entries are applied afterwards so they can override any login-shell value.
-    for (key, value) in login_shell_env() {
+    let login_env = login_shell_env();
+    {
+        let mut login_keys: Vec<&str> = login_env.keys().map(|k| k.as_str()).collect();
+        login_keys.sort_unstable();
+        tracing::info!(
+            server = %config.label,
+            count = login_env.len(),
+            keys = %login_keys.join(", "),
+            "spawn_stdio_mcp_process: injecting login shell env"
+        );
+    }
+    for (key, value) in login_env {
         command.env(key, value);
     }
     if let Some(env) = &config.env {
+        let config_keys: Vec<&str> = env.keys().map(|k| k.as_str()).collect();
+        tracing::info!(
+            server = %config.label,
+            count = env.len(),
+            keys = %config_keys.join(", "),
+            "spawn_stdio_mcp_process: injecting user-configured env (overrides login shell)"
+        );
         for (key, value) in env {
-            command.env(key, expand_env_vars(value));
+            let expanded = expand_env_vars(value);
+            tracing::debug!(
+                server = %config.label,
+                key = %key,
+                "spawn_stdio_mcp_process: config env key applied"
+            );
+            command.env(key, expanded);
         }
     }
 
@@ -4997,6 +5085,7 @@ async fn initialize_mcp_session(
     stdin: &mut tokio::process::ChildStdin,
     stdout: &mut BufReader<tokio::process::ChildStdout>,
 ) -> Result<serde_json::Value, AppError> {
+    tracing::info!("MCP stdio session initializing");
     let init_result = call_stdio_mcp_method(
         stdin,
         stdout,
@@ -5021,6 +5110,7 @@ async fn initialize_mcp_session(
         }),
     )
     .await?;
+    tracing::info!("MCP stdio session initialized successfully");
     Ok(init_result)
 }
 
@@ -5031,6 +5121,8 @@ async fn call_stdio_mcp_method(
     method: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, AppError> {
+    tracing::info!(id, method, "MCP stdio request sending");
+    tracing::debug!(id, method, %params, "MCP stdio request params");
     write_stdio_mcp_message(
         stdin,
         &serde_json::json!({
@@ -5057,16 +5149,20 @@ async fn call_stdio_mcp_method(
                 .get("message")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("unknown error");
+            tracing::warn!(id, method, %code, detail, "MCP stdio response error");
             return Err(AppError::recoverable(
                 ErrorSource::Tool,
                 "extensions.mcp.rpc_error",
                 format!("MCP method '{method}' failed ({code}): {detail}"),
             ));
         }
-        return Ok(message
+        let result = message
             .get("result")
             .cloned()
-            .unwrap_or(serde_json::Value::Null));
+            .unwrap_or(serde_json::Value::Null);
+        tracing::info!(id, method, "MCP stdio response received");
+        tracing::debug!(id, method, %result, "MCP stdio response body");
+        return Ok(result);
     }
 }
 
