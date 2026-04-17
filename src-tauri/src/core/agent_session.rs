@@ -1922,7 +1922,7 @@ pub(crate) fn convert_history_messages(
             .map(|(i, m)| (m.run_id.as_deref(), m.created_at.as_str(), i))
             .collect();
 
-        for tc in tool_calls {
+        for (tc_idx, tc) in tool_calls.iter().enumerate() {
             if tc.status != "completed" {
                 continue;
             }
@@ -1953,7 +1953,7 @@ pub(crate) fn convert_history_messages(
                 .build()
                 .expect("history tool-call assistant message should always build");
             timeline.push((
-                SortKey::before_position(insert_pos, 0),
+                SortKey::before_position(insert_pos, tc_idx * 2),
                 AgentMessage::Assistant(assistant),
             ));
 
@@ -1966,7 +1966,7 @@ pub(crate) fn convert_history_messages(
 
             let tool_result = ToolResultMessage::text(&tc.id, &tc.tool_name, result_text, false);
             timeline.push((
-                SortKey::before_position(insert_pos, 1),
+                SortKey::before_position(insert_pos, tc_idx * 2 + 1),
                 AgentMessage::ToolResult(tool_result),
             ));
         }
@@ -2012,21 +2012,23 @@ impl SortKey {
     }
 }
 
-/// Truncate a tool result string to at most `max_chars`, appending a marker.
+/// Truncate a tool result string to at most `max_chars` **characters**, appending a marker.
 fn truncate_tool_result_text(text: &str, max_chars: usize) -> String {
-    if text.len() <= max_chars {
+    let total_chars = text.chars().count();
+    if total_chars <= max_chars {
         return text.to_string();
     }
-    let mut truncated = text[..max_chars].to_string();
-    // Ensure valid UTF-8 boundary.
-    while !truncated.is_char_boundary(truncated.len()) {
-        truncated.pop();
-    }
+    // Collect the byte offset after the first `max_chars` characters so we
+    // slice on a valid UTF-8 boundary (no panic on multi-byte chars).
+    let byte_end = text
+        .char_indices()
+        .nth(max_chars)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len());
+    let truncated = &text[..byte_end];
     format!(
         "{}\n\n[Tool output truncated: {} chars → {} chars]",
-        truncated,
-        text.len(),
-        max_chars
+        truncated, total_chars, max_chars
     )
 }
 

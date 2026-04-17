@@ -100,8 +100,8 @@ pub async fn list_recent(
 /// Strategy:
 /// 1. Query the DB for the most recent context_reset marker (uses the partial index
 ///    `idx_messages_type` on `(thread_id, message_type)` for summary_marker rows).
-/// 2. If found, load all messages whose id > that marker (UUID v7 ordering).
-/// 3. If no reset marker exists, load all messages (up to `SAFETY_LIMIT`).
+/// 2. If found, load all messages whose id >= that marker (UUID v7 ordering).
+/// 3. If no reset marker exists, load the most recent messages (up to `SAFETY_LIMIT`).
 /// 4. Discarded messages (`status = "discarded"`) are filtered out.
 pub async fn list_since_last_reset(
     pool: &SqlitePool,
@@ -111,14 +111,14 @@ pub async fn list_since_last_reset(
 
     let reset_id = find_last_context_reset_id(pool, thread_id).await?;
 
-    let rows = match reset_id.as_deref() {
+    let mut rows = match reset_id.as_deref() {
         Some(cursor) => {
             sqlx::query_as::<_, MessageRow>(
                 "SELECT id, thread_id, run_id, role, content_markdown, message_type,
                         status, metadata_json, attachments_json, created_at
                  FROM messages
                  WHERE thread_id = ? AND id >= ? AND status != 'discarded'
-                 ORDER BY id ASC
+                 ORDER BY id DESC
                  LIMIT ?",
             )
             .bind(thread_id)
@@ -133,7 +133,7 @@ pub async fn list_since_last_reset(
                         status, metadata_json, attachments_json, created_at
                  FROM messages
                  WHERE thread_id = ? AND status != 'discarded'
-                 ORDER BY id ASC
+                 ORDER BY id DESC
                  LIMIT ?",
             )
             .bind(thread_id)
@@ -143,7 +143,17 @@ pub async fn list_since_last_reset(
         }
     };
 
+    // Reverse to restore chronological (ASC) order after the DESC fetch.
+    rows.reverse();
+
     Ok(rows.into_iter().map(|r| r.into_record()).collect())
+}
+
+/// Lightweight row for the context-reset-marker lookup (only the columns we need).
+#[derive(sqlx::FromRow)]
+struct MarkerRow {
+    id: String,
+    metadata_json: Option<String>,
 }
 
 /// Find the ID of the last context_reset summary_marker in a thread.
@@ -151,16 +161,16 @@ pub async fn list_since_last_reset(
 /// Uses the partial index on `(thread_id, message_type)` to efficiently scan
 /// only `summary_marker` rows, then checks metadata in Rust for the `context_reset`
 /// kind (consistent with the existing application-layer check pattern).
+/// Discarded markers are skipped.
 async fn find_last_context_reset_id(
     pool: &SqlitePool,
     thread_id: &str,
 ) -> Result<Option<String>, AppError> {
     // Load the most recent summary_marker messages; typically very few exist.
-    let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, thread_id, run_id, role, content_markdown, message_type,
-                status, metadata_json, attachments_json, created_at
+    let rows = sqlx::query_as::<_, MarkerRow>(
+        "SELECT id, metadata_json
          FROM messages
-         WHERE thread_id = ? AND message_type = 'summary_marker'
+         WHERE thread_id = ? AND message_type = 'summary_marker' AND status != 'discarded'
          ORDER BY id DESC
          LIMIT 50",
     )
@@ -169,9 +179,8 @@ async fn find_last_context_reset_id(
     .await?;
 
     for row in rows {
-        let record = row.into_record();
-        if is_context_reset_marker(&record) {
-            return Ok(Some(record.id));
+        if metadata_kind_matches(row.metadata_json.as_deref(), "context_reset") {
+            return Ok(Some(row.id));
         }
     }
     Ok(None)
@@ -240,12 +249,6 @@ pub async fn update_metadata(
         .execute(pool)
         .await?;
     Ok(())
-}
-
-/// Helper: Check if a message is a context reset marker.
-fn is_context_reset_marker(message: &MessageRecord) -> bool {
-    message.message_type == "summary_marker"
-        && metadata_kind_matches(message.metadata_json.as_deref(), "context_reset")
 }
 
 /// Helper: Check if metadata contains the expected kind value.
