@@ -141,7 +141,7 @@ export function WorkbenchTopBar({
   return (
     <header className="fixed inset-x-0 top-0 z-30 h-9 border-b border-app-border bg-app-chrome backdrop-blur-xl">
       <div className={cn("grid h-full grid-cols-[auto_1fr_auto] items-center gap-2 px-2.5", isWindows && "pr-0")}>
-        <div className={cn("relative z-10 flex h-full shrink-0 items-center", isMacOS ? "w-[150px]" : "w-[132px]")}>
+        <div className={cn("relative z-10 flex h-full shrink-0 items-center", isMacOS && "w-[150px]")}>
         </div>
 
         <div
