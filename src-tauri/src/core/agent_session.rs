@@ -42,6 +42,12 @@ const DEFAULT_FULL_TOOL_PROFILE: &str = "default_full";
 const PLAN_READ_ONLY_TOOL_PROFILE: &str = "plan_read_only";
 const STANDARD_TOOL_TIMEOUT_SECS: u64 = 120;
 const SUBAGENT_TOOL_TIMEOUT_SECS: u64 = 600;
+/// Main agent timeout is effectively unlimited (24 h) because user-interactive
+/// tools like `clarify` and approval prompts must wait for human input without
+/// being killed by the outer tiycore timeout.  The per-tool execution timeout
+/// inside `tool_gateway` (120 s) still guards against runaway non-interactive
+/// tool calls.
+const MAIN_AGENT_TOOL_TIMEOUT_SECS: u64 = 86_400;
 const CLARIFY_TOOL_NAME: &str = "clarify";
 const PLAN_MODE_MISSING_CHECKPOINT_ERROR: &str =
     "Plan mode requires publishing a plan with update_plan before the run can finish.";
@@ -950,7 +956,7 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
     agent.set_tool_execution(ToolExecutionMode::Sequential);
     agent.set_thinking_level(spec.model_plan.thinking_level);
     agent.set_transport(spec.model_plan.transport);
-    agent.set_security_config(runtime_security_config());
+    agent.set_security_config(main_agent_security_config());
 
     // Context compression: automatically trim messages to fit the context window.
     let compression_settings = crate::core::context_compression::CompressionSettings::new(
@@ -2589,6 +2595,18 @@ fn normalize_provider_options(value: Option<serde_json::Value>) -> Option<serde_
     })
 }
 
+/// Security config for the **main** agent.  Uses a very large tool timeout so
+/// that user-interactive tools (clarify, approval) are never killed by the
+/// outer tiycore `tokio::select!` timeout.
+fn main_agent_security_config() -> tiycore::types::SecurityConfig {
+    let mut security = tiycore::types::SecurityConfig::default();
+    security.agent.tool_execution_timeout_secs = MAIN_AGENT_TOOL_TIMEOUT_SECS;
+    security.url = crate::core::tiycode_url_policy();
+    security
+}
+
+/// Security config for **sub-agents** (helpers).  Keeps the tighter 600 s
+/// timeout because sub-agents never surface user-interactive tools.
 pub(crate) fn runtime_security_config() -> tiycore::types::SecurityConfig {
     let mut security = tiycore::types::SecurityConfig::default();
     security.agent.tool_execution_timeout_secs = SUBAGENT_TOOL_TIMEOUT_SECS;
@@ -2626,14 +2644,15 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 mod tests {
     use super::{
         build_profile_response_prompt_parts, build_system_prompt, convert_history_messages,
-        handle_agent_event, normalize_profile_response_language, normalize_profile_response_style,
-        plan_mode_missing_checkpoint_error, resolve_helper_model_role, resolve_helper_profile,
-        response_style_system_instruction, runtime_security_config, runtime_tools_for_profile,
+        handle_agent_event, main_agent_security_config, normalize_profile_response_language,
+        normalize_profile_response_style, plan_mode_missing_checkpoint_error,
+        resolve_helper_model_role, resolve_helper_profile, response_style_system_instruction,
+        runtime_security_config, runtime_tools_for_profile,
         runtime_tools_for_profile_with_extensions, standard_tool_timeout,
         trim_history_to_current_context, ProfileResponseStyle, ResolvedModelRole,
         ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
-        PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
-        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
+        MAIN_AGENT_TOOL_TIMEOUT_SECS, PLAN_MODE_MISSING_CHECKPOINT_ERROR,
+        PLAN_READ_ONLY_TOOL_PROFILE, STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
     use std::sync::Mutex as StdMutex;
@@ -2796,6 +2815,19 @@ mod tests {
             security.agent.tool_execution_timeout_secs,
             SUBAGENT_TOOL_TIMEOUT_SECS
         );
+    }
+
+    #[test]
+    fn test_main_agent_security_config_uses_large_timeout() {
+        let security = main_agent_security_config();
+
+        assert_eq!(
+            security.agent.tool_execution_timeout_secs,
+            MAIN_AGENT_TOOL_TIMEOUT_SECS
+        );
+        // Main agent timeout must be much larger than subagent timeout
+        // to avoid killing user-interactive tools like clarify/approval.
+        assert!(MAIN_AGENT_TOOL_TIMEOUT_SECS > SUBAGENT_TOOL_TIMEOUT_SECS);
     }
 
     #[test]
