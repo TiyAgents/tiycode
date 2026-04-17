@@ -1397,6 +1397,7 @@ fn build_implementation_handoff_prompt(
         }
     };
     let plan_file_note = crate::core::plan_checkpoint::plan_file_path(thread_id)
+        .filter(|path| path.exists())
         .map(|path| format!("\n- Plan file on disk: {}", path.display()))
         .unwrap_or_default();
     match action {
