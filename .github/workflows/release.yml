@@ -59,6 +59,13 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      - name: Select latest Xcode
+        if: matrix.platform == 'macos'
+        run: |
+          LATEST_XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$LATEST_XCODE"
+          echo "Using $(xcodebuild -version | head -1)"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
