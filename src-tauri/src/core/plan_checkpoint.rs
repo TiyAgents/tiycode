@@ -360,6 +360,13 @@ fn read_string_list(value: Option<&serde_json::Value>) -> Vec<String> {
 fn read_prose_field(value: Option<&serde_json::Value>) -> String {
     match value {
         Some(serde_json::Value::String(text)) => text.trim().to_string(),
+        Some(serde_json::Value::Array(entries)) => entries
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
         _ => String::new(),
     }
 }
