@@ -26,8 +26,6 @@ import { Button } from "@/shared/ui/button";
 import { cn } from "@/shared/lib/utils";
 import {
   LANGUAGE_OPTIONS,
-  MAC_USER_MENU_OFFSET,
-  MAC_USER_MENU_POPOVER_OFFSET,
   MENU_SUBMENU_GROUP_CLASS,
   MENU_SUBMENU_ICON_CLASS,
   MENU_SUBMENU_LABEL_CLASS,
@@ -143,146 +141,149 @@ export function WorkbenchTopBar({
   return (
     <header className="fixed inset-x-0 top-0 z-30 h-9 border-b border-app-border bg-app-chrome backdrop-blur-xl">
       <div className={cn("grid h-full grid-cols-[auto_1fr_auto] items-center gap-2 px-2.5", isWindows && "pr-0")}>
-        <div className={cn("relative z-10 flex h-full shrink-0 items-center", isMacOS ? "w-[150px]" : "w-[132px]")} ref={userMenuRef}>
-          <Button
-            size="icon"
-            variant="ghost"
-            className={cn(
-              "size-7 rounded-full text-app-subtle transition-[color,background-color,border-color] duration-200 hover:bg-app-surface-hover hover:text-app-foreground",
-              isMacOS ? MAC_USER_MENU_OFFSET : "ml-2",
-              isOverlayOpen && "pointer-events-none invisible",
-              isUserMenuOpen && "bg-app-surface-hover text-app-foreground",
-            )}
-            aria-label={t("topBar.openMenu")}
-            title={t("topBar.openMenu")}
-            aria-expanded={isUserMenuOpen}
-            aria-haspopup="menu"
-            onClick={onToggleUserMenu}
-          >
-            <Settings className="size-4" />
-          </Button>
-
-          {isUserMenuOpen ? (
-            <div className={cn("absolute left-0 top-full z-30 mt-2 w-[248px] rounded-2xl border border-app-border bg-app-menu p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] dark:shadow-[0_20px_48px_rgba(0,0,0,0.42)]", isMacOS ? MAC_USER_MENU_POPOVER_OFFSET : "left-2")}>
-
-              <button
-                type="button"
-                className={cn(MENU_TRIGGER_CLASS, "text-app-foreground")}
-                aria-expanded={openSettingsSection === "theme"}
-                onClick={() => onToggleSettingsSection((current) => (current === "theme" ? null : "theme"))}
-              >
-                <Palette className={MENU_TRIGGER_ICON_CLASS} />
-                <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.theme")}</span>
-                <span className="shrink-0 text-xs text-app-subtle">{selectedThemeSummary}</span>
-              </button>
-
-              {openSettingsSection === "theme" ? (
-                <div className={MENU_SUBMENU_GROUP_CLASS}>
-                  <div className="space-y-0.5">
-                    {THEME_OPTIONS.map((option) => {
-                      const OptionIcon = option.icon === Moon ? Moon : option.icon === Sun ? Sun : option.icon;
-                      const isSelected = theme === option.value;
-
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={cn(
-                            MENU_SUBMENU_OPTION_CLASS,
-                            isSelected
-                              ? "bg-app-surface-hover/80 text-app-foreground"
-                              : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                          )}
-                          onClick={() => onSelectTheme(option.value)}
-                        >
-                          <OptionIcon className={MENU_SUBMENU_ICON_CLASS} />
-                          <span className={MENU_SUBMENU_LABEL_CLASS}>{t(option.labelKey)}</span>
-                          {isSelected ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-
-              <button
-                type="button"
-                className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")}
-                aria-expanded={openSettingsSection === "language"}
-                onClick={() => onToggleSettingsSection((current) => (current === "language" ? null : "language"))}
-              >
-                <Globe className={MENU_TRIGGER_ICON_CLASS} />
-                <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.language")}</span>
-                <span className="shrink-0 text-xs text-app-subtle">{selectedLanguageLabel}</span>
-              </button>
-
-              {openSettingsSection === "language" ? (
-                <div className={MENU_SUBMENU_GROUP_CLASS}>
-                  <div className="space-y-0.5">
-                    {LANGUAGE_OPTIONS.map((option) => {
-                      const OptionIcon = option.icon;
-                      const isSelected = language === option.value;
-
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={cn(
-                            MENU_SUBMENU_OPTION_CLASS,
-                            isSelected
-                              ? "bg-app-surface-hover/80 text-app-foreground"
-                              : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                          )}
-                          onClick={() => onSelectLanguage(option.value)}
-                        >
-                          <OptionIcon className={MENU_SUBMENU_ICON_CLASS} />
-                          <span className={MENU_SUBMENU_LABEL_CLASS}>{option.label}</span>
-                          {isSelected ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-
-              <button
-                type="button"
-                className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground", isCheckingUpdates && "cursor-wait")}
-                onClick={onCheckUpdates}
-              >
-                {isCheckingUpdates ? (
-                  <LoaderCircle className={cn(MENU_TRIGGER_ICON_CLASS, "animate-spin")} />
-                ) : (
-                  <RefreshCw className={MENU_TRIGGER_ICON_CLASS} />
-                )}
-                <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.checkUpdates")}</span>
-              </button>
-
-              <button
-                type="button"
-                className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground", isOverlayOpen && "bg-app-surface-hover")}
-                onClick={onOpenSettings}
-              >
-                <MoreHorizontal className={MENU_TRIGGER_ICON_CLASS} />
-                <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.moreSettings")}</span>
-              </button>
-
-              {updateStatus ? (
-                <div className="px-3 pb-1 pt-2 text-xs text-app-subtle">{updateStatus}</div>
-              ) : null}
-            </div>
-          ) : null}
+        <div className={cn("relative z-10 flex h-full shrink-0 items-center", isMacOS ? "w-[150px]" : "w-[132px]")}>
         </div>
 
         <div
-          className="relative z-10 flex h-full items-center justify-center"
+          className={cn("relative z-10 flex h-full items-center", isWindows ? "justify-start" : "justify-center")}
           data-tauri-drag-region=""
         >
           <img src="/app-icon.png" alt="" className="mr-1.5 size-4 shrink-0 select-none" draggable={false} data-tauri-drag-region="" />
           <span className="select-none text-[13px] font-semibold tracking-[0.02em] text-app-foreground" data-tauri-drag-region="">TiyCode</span>
         </div>
 
-        <div className="relative z-10 flex items-center justify-end gap-0.5">
+        <div className="relative z-10 flex items-center justify-end gap-0.5" ref={userMenuRef}>
+          <div className="relative">
+            <Button
+              size="icon"
+              variant="ghost"
+              className={cn(
+                panelToggleButtonClass,
+                "rounded-full",
+                isOverlayOpen && "pointer-events-none invisible",
+                isUserMenuOpen && "bg-app-surface-hover text-app-foreground",
+              )}
+              aria-label={t("topBar.openMenu")}
+              title={t("topBar.openMenu")}
+              aria-expanded={isUserMenuOpen}
+              aria-haspopup="menu"
+              onClick={onToggleUserMenu}
+            >
+              <Settings className="size-4" />
+            </Button>
+
+            {isUserMenuOpen ? (
+              <div className="absolute right-0 top-full z-30 mt-2 w-[248px] rounded-2xl border border-app-border bg-app-menu p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] dark:shadow-[0_20px_48px_rgba(0,0,0,0.42)]">
+
+                <button
+                  type="button"
+                  className={cn(MENU_TRIGGER_CLASS, "text-app-foreground")}
+                  aria-expanded={openSettingsSection === "theme"}
+                  onClick={() => onToggleSettingsSection((current) => (current === "theme" ? null : "theme"))}
+                >
+                  <Palette className={MENU_TRIGGER_ICON_CLASS} />
+                  <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.theme")}</span>
+                  <span className="shrink-0 text-xs text-app-subtle">{selectedThemeSummary}</span>
+                </button>
+
+                {openSettingsSection === "theme" ? (
+                  <div className={MENU_SUBMENU_GROUP_CLASS}>
+                    <div className="space-y-0.5">
+                      {THEME_OPTIONS.map((option) => {
+                        const OptionIcon = option.icon === Moon ? Moon : option.icon === Sun ? Sun : option.icon;
+                        const isSelected = theme === option.value;
+
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={cn(
+                              MENU_SUBMENU_OPTION_CLASS,
+                              isSelected
+                                ? "bg-app-surface-hover/80 text-app-foreground"
+                                : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                            )}
+                            onClick={() => onSelectTheme(option.value)}
+                          >
+                            <OptionIcon className={MENU_SUBMENU_ICON_CLASS} />
+                            <span className={MENU_SUBMENU_LABEL_CLASS}>{t(option.labelKey)}</span>
+                            {isSelected ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                <button
+                  type="button"
+                  className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")}
+                  aria-expanded={openSettingsSection === "language"}
+                  onClick={() => onToggleSettingsSection((current) => (current === "language" ? null : "language"))}
+                >
+                  <Globe className={MENU_TRIGGER_ICON_CLASS} />
+                  <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.language")}</span>
+                  <span className="shrink-0 text-xs text-app-subtle">{selectedLanguageLabel}</span>
+                </button>
+
+                {openSettingsSection === "language" ? (
+                  <div className={MENU_SUBMENU_GROUP_CLASS}>
+                    <div className="space-y-0.5">
+                      {LANGUAGE_OPTIONS.map((option) => {
+                        const OptionIcon = option.icon;
+                        const isSelected = language === option.value;
+
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={cn(
+                              MENU_SUBMENU_OPTION_CLASS,
+                              isSelected
+                                ? "bg-app-surface-hover/80 text-app-foreground"
+                                : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                            )}
+                            onClick={() => onSelectLanguage(option.value)}
+                          >
+                            <OptionIcon className={MENU_SUBMENU_ICON_CLASS} />
+                            <span className={MENU_SUBMENU_LABEL_CLASS}>{option.label}</span>
+                            {isSelected ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                <button
+                  type="button"
+                  className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground", isCheckingUpdates && "cursor-wait")}
+                  onClick={onCheckUpdates}
+                >
+                  {isCheckingUpdates ? (
+                    <LoaderCircle className={cn(MENU_TRIGGER_ICON_CLASS, "animate-spin")} />
+                  ) : (
+                    <RefreshCw className={MENU_TRIGGER_ICON_CLASS} />
+                  )}
+                  <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.checkUpdates")}</span>
+                </button>
+
+                <button
+                  type="button"
+                  className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground", isOverlayOpen && "bg-app-surface-hover")}
+                  onClick={onOpenSettings}
+                >
+                  <MoreHorizontal className={MENU_TRIGGER_ICON_CLASS} />
+                  <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.moreSettings")}</span>
+                </button>
+
+                {updateStatus ? (
+                  <div className="px-3 pb-1 pt-2 text-xs text-app-subtle">{updateStatus}</div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
           <Button
             size="icon"
             variant="ghost"
