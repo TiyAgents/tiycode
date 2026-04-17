@@ -10,7 +10,8 @@ use tiycore::agent::{
 use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{
     AssistantMessage, AssistantMessageEvent, ContentBlock, Cost, ImageContent, InputType, Model,
-    OpenAICompletionsCompat, Provider, StopReason, TextContent, Transport, Usage, UserMessage,
+    OpenAICompletionsCompat, Provider, StopReason, TextContent, ToolCall, ToolResultMessage,
+    Transport, Usage, UserMessage,
 };
 use tokio::sync::mpsc;
 
@@ -32,9 +33,13 @@ use crate::extensions::ExtensionsManager;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::AgentProfileRecord;
-use crate::model::thread::{MessageAttachmentDto, MessageRecord, RunUsageDto};
+use crate::model::thread::{MessageAttachmentDto, MessageRecord, RunUsageDto, ToolCallDto};
 use crate::persistence::repo::{message_repo, provider_repo, tool_call_repo};
 
+/// Deprecated: previously used as the hard limit for `message_repo::list_recent` in
+/// `build_session_spec`.  Replaced by `message_repo::list_since_last_reset()` which
+/// queries the DB for the reset boundary directly.  Retained for reference only.
+#[allow(dead_code)]
 const MESSAGE_HISTORY_LIMIT: i64 = 200;
 const DEFAULT_CONTEXT_WINDOW: u32 = 128_000;
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32_000;
@@ -129,6 +134,7 @@ pub struct AgentSessionSpec {
     pub runtime_tools: Vec<AgentTool>,
     pub system_prompt: String,
     pub history_messages: Vec<MessageRecord>,
+    pub history_tool_calls: Vec<ToolCallDto>,
     pub model_plan: ResolvedRuntimeModelPlan,
     pub initial_prompt: Option<String>,
 }
@@ -145,9 +151,24 @@ pub async fn build_session_spec(
         serde_json::from_value(model_plan_value.clone()).unwrap_or_default();
     let resolved_plan = resolve_model_plan(pool, raw_plan.clone()).await?;
     let tool_profile_name = resolve_tool_profile_name(&raw_plan, run_mode);
-    let recent_messages =
-        message_repo::list_recent(pool, thread_id, None, MESSAGE_HISTORY_LIMIT).await?;
-    let history_messages = trim_history_to_current_context(&recent_messages);
+    // Load all messages since the last context reset marker (or all messages
+    // if no reset exists).  The new `list_since_last_reset` queries the DB
+    // directly for the reset boundary, removing the former hard-coded 200-row
+    // limit (`MESSAGE_HISTORY_LIMIT`) that could silently discard older
+    // context_reset markers.
+    let history_messages = message_repo::list_since_last_reset(pool, thread_id).await?;
+
+    // Load tool calls from all runs referenced by the history messages so that
+    // convert_history_messages can reconstruct assistant-tool-call / tool-result
+    // pairs that are not stored in the messages table.
+    let history_run_ids: Vec<String> = history_messages
+        .iter()
+        .filter_map(|m| m.run_id.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let history_tool_calls = tool_call_repo::list_by_run_ids(pool, &history_run_ids).await?;
+
     let system_prompt = build_system_prompt(pool, &raw_plan, workspace_path, run_mode).await?;
     let extension_tools = ExtensionsManager::new(pool.clone())
         .list_runtime_agent_tools(Some(workspace_path))
@@ -165,6 +186,7 @@ pub async fn build_session_spec(
         ),
         system_prompt,
         history_messages,
+        history_tool_calls,
         model_plan: resolved_plan,
         initial_prompt: None,
     })
@@ -971,6 +993,7 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
     agent.set_system_prompt(spec.system_prompt.clone());
     agent.replace_messages(convert_history_messages(
         &spec.history_messages,
+        &spec.history_tool_calls,
         &spec.model_plan.primary.model,
     ));
     agent.set_tools(spec.runtime_tools.clone());
@@ -1868,35 +1891,192 @@ fn resolve_helper_model_role(
     }
 }
 
+/// Maximum characters for a tool result output when replayed from history.
+/// Sits between the aggressive (800) and recent (3200) thresholds used by
+/// `context_compression`, providing a reasonable starting budget that the
+/// real-time compressor can further trim if needed.
+const HISTORY_TOOL_RESULT_MAX_CHARS: usize = 1600;
+
 pub(crate) fn convert_history_messages(
     messages: &[MessageRecord],
+    tool_calls: &[ToolCallDto],
     model: &Model,
 ) -> Vec<AgentMessage> {
-    messages
-        .iter()
-        .filter_map(|message| match message.message_type.as_str() {
+    // Phase 1: Convert message records into (sort_key, AgentMessage) pairs.
+    // Messages arrive from the DB in chronological order (sorted by UUID v7 id).
+    // We use a zero-padded positional index as the primary sort key to preserve
+    // this order exactly, then interleave tool calls using their `started_at`
+    // timestamp mapped into the same key space.
+    let mut timeline: Vec<(SortKey, AgentMessage)> = Vec::new();
+
+    for (pos, message) in messages.iter().enumerate() {
+        let key = SortKey::positional(pos);
+        match message.message_type.as_str() {
             "plain_message" => match message.role.as_str() {
-                "user" => Some(AgentMessage::User(history_user_message(message, model))),
-                "assistant" => Some(AgentMessage::Assistant(assistant_message_from_text(
-                    &message.content_markdown,
-                    model,
-                ))),
-                _ => None,
+                "user" => {
+                    timeline.push((
+                        key,
+                        AgentMessage::User(history_user_message(message, model)),
+                    ));
+                }
+                "assistant" => {
+                    timeline.push((
+                        key,
+                        AgentMessage::Assistant(assistant_message_from_text(
+                            &message.content_markdown,
+                            model,
+                        )),
+                    ));
+                }
+                _ => {}
             },
-            "plan" if message.role == "assistant" => Some(AgentMessage::Assistant(
-                assistant_message_from_text(&format_plan_history_message(message), model),
-            )),
+            "plan" if message.role == "assistant" => {
+                timeline.push((
+                    key,
+                    AgentMessage::Assistant(assistant_message_from_text(
+                        &format_plan_history_message(message),
+                        model,
+                    )),
+                ));
+            }
             "summary_marker" if is_context_summary_marker(message) => {
                 let summary = message.content_markdown.trim();
-                if summary.is_empty() {
-                    None
-                } else {
-                    Some(AgentMessage::User(UserMessage::text(summary.to_string())))
+                if !summary.is_empty() {
+                    timeline.push((
+                        key,
+                        AgentMessage::User(UserMessage::text(summary.to_string())),
+                    ));
                 }
             }
-            _ => None,
-        })
-        .collect()
+            _ => {}
+        }
+    }
+
+    // Phase 2: Interleave completed tool calls from the tool_calls table.
+    //
+    // Each completed tool call becomes an assistant message (with a ToolCall
+    // content block) followed by a ToolResult message.  Tool calls are placed
+    // right before the assistant text message that follows them in the same
+    // run.  We find the correct position by looking up which message position
+    // each run_id corresponds to and placing tool calls just before the next
+    // message after `started_at`.
+    if !tool_calls.is_empty() {
+        // Build a lookup: for each message, record (run_id, created_at, position)
+        // so we can find where tool calls slot in.
+        let msg_positions: Vec<(Option<&str>, &str, usize)> = messages
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.run_id.as_deref(), m.created_at.as_str(), i))
+            .collect();
+
+        for (tc_idx, tc) in tool_calls.iter().enumerate() {
+            if tc.status != "completed" {
+                continue;
+            }
+
+            // Find the position for this tool call: the position of the first
+            // message in the same run whose created_at >= started_at, minus a
+            // small delta so the tool call lands just before it.  If no match
+            // is found, place it at the end.
+            let insert_pos = msg_positions
+                .iter()
+                .find(|(run_id, created_at, _)| {
+                    run_id.map_or(false, |r| r == tc.run_id)
+                        && *created_at >= tc.started_at.as_str()
+                })
+                .map(|(_, _, pos)| *pos)
+                .unwrap_or(messages.len());
+
+            // Build the assistant message containing the tool call.
+            let tool_call_block =
+                ContentBlock::ToolCall(ToolCall::new(&tc.id, &tc.tool_name, tc.tool_input.clone()));
+            let assistant = AssistantMessage::builder()
+                .content(vec![tool_call_block])
+                .api(effective_api_for_model(model))
+                .provider(model.provider.clone())
+                .model(model.id.clone())
+                .usage(Usage::default())
+                .stop_reason(StopReason::ToolUse)
+                .build()
+                .expect("history tool-call assistant message should always build");
+            timeline.push((
+                SortKey::before_position(insert_pos, tc_idx * 2),
+                AgentMessage::Assistant(assistant),
+            ));
+
+            // Build the tool result message (truncated to avoid blowing up context).
+            let result_text = tc
+                .tool_output
+                .as_ref()
+                .map(|v| truncate_tool_result_text(&v.to_string(), HISTORY_TOOL_RESULT_MAX_CHARS))
+                .unwrap_or_else(|| "[no output]".to_string());
+
+            let tool_result = ToolResultMessage::text(&tc.id, &tc.tool_name, result_text, false);
+            timeline.push((
+                SortKey::before_position(insert_pos, tc_idx * 2 + 1),
+                AgentMessage::ToolResult(tool_result),
+            ));
+        }
+    }
+
+    // Phase 3: Sort by the sort key to produce a chronological sequence.
+    timeline.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Return only the messages.
+    timeline.into_iter().map(|(_, msg)| msg).collect()
+}
+
+/// Sort key for interleaving messages and tool calls chronologically.
+///
+/// Messages get a whole-number position (their index in the original list).
+/// Tool calls are placed just before a specific position using fractional keys.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SortKey {
+    /// Main position (message index).
+    position: usize,
+    /// 0 = a tool call slot before this position, 1 = the actual message at this position.
+    /// For tool call pairs: sub 0 = assistant+tool_call, sub 1 = tool_result.
+    sub: u8,
+    /// Tiebreaker for multiple tool calls before the same position.
+    seq: usize,
+}
+
+impl SortKey {
+    fn positional(pos: usize) -> Self {
+        Self {
+            position: pos,
+            sub: 2, // after any tool calls inserted before this position
+            seq: 0,
+        }
+    }
+
+    fn before_position(pos: usize, seq: usize) -> Self {
+        Self {
+            position: pos,
+            sub: 0,
+            seq,
+        }
+    }
+}
+
+/// Truncate a tool result string to at most `max_chars` **characters**, appending a marker.
+fn truncate_tool_result_text(text: &str, max_chars: usize) -> String {
+    let total_chars = text.chars().count();
+    if total_chars <= max_chars {
+        return text.to_string();
+    }
+    // Collect the byte offset after the first `max_chars` characters so we
+    // slice on a valid UTF-8 boundary (no panic on multi-byte chars).
+    let byte_end = text
+        .char_indices()
+        .nth(max_chars)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len());
+    let truncated = &text[..byte_end];
+    format!(
+        "{}\n\n[Tool output truncated: {} chars → {} chars]",
+        truncated, total_chars, max_chars
+    )
 }
 
 fn history_user_message(message: &MessageRecord, model: &Model) -> UserMessage {
@@ -3743,7 +3923,7 @@ Used for prompt assembly coverage.
         ];
 
         let history =
-            convert_history_messages(&messages, &sample_resolved_model_role("primary").model);
+            convert_history_messages(&messages, &[], &sample_resolved_model_role("primary").model);
 
         assert_eq!(history.len(), 2);
         assert_eq!(message_text(&history[0]), "Please refine the plan.");
@@ -3778,7 +3958,7 @@ Used for prompt assembly coverage.
         }];
 
         let history =
-            convert_history_messages(&messages, &sample_resolved_model_role("primary").model);
+            convert_history_messages(&messages, &[], &sample_resolved_model_role("primary").model);
 
         assert_eq!(history.len(), 1);
         assert_eq!(
@@ -3820,6 +4000,7 @@ Used for prompt assembly coverage.
 
         let history = convert_history_messages(
             &messages,
+            &[],
             &sample_resolved_model_role_with_inputs(
                 "vision-model",
                 vec![
@@ -3884,7 +4065,7 @@ Used for prompt assembly coverage.
         }];
 
         let history =
-            convert_history_messages(&messages, &sample_resolved_model_role("primary").model);
+            convert_history_messages(&messages, &[], &sample_resolved_model_role("primary").model);
 
         assert_eq!(history.len(), 1);
         let blocks = user_blocks(&history[0]);
@@ -4010,7 +4191,7 @@ Used for prompt assembly coverage.
         ];
 
         let history =
-            convert_history_messages(&messages, &sample_resolved_model_role("primary").model);
+            convert_history_messages(&messages, &[], &sample_resolved_model_role("primary").model);
 
         assert_eq!(history.len(), 1);
         assert_eq!(
