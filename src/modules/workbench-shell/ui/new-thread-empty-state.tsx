@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, Folder, FolderPlus } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useT } from "@/i18n";
@@ -11,11 +11,13 @@ export function NewThreadEmptyState({
   selectedProject,
   isOverlayOpen,
   onSelectProject,
+  branchSlot,
 }: {
   recentProjects: ReadonlyArray<ProjectOption>;
   selectedProject: ProjectOption | null;
   isOverlayOpen: boolean;
   onSelectProject: (project: ProjectOption) => void;
+  branchSlot?: ReactNode;
 }) {
   const t = useT();
   const [isMenuOpen, setMenuOpen] = useState(false);
@@ -195,6 +197,12 @@ export function NewThreadEmptyState({
             </div>
           ) : null}
         </div>
+
+        {branchSlot ? (
+          <div className="flex w-full max-w-[24rem] justify-end">
+            {branchSlot}
+          </div>
+        ) : null}
       </div>
     </div>
   );

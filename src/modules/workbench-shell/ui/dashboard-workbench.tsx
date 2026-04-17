@@ -2725,12 +2725,23 @@ export function DashboardWorkbench() {
                     <div className="relative min-h-0 flex-1 overflow-hidden bg-app-canvas">
                       <div className="pointer-events-none absolute left-1/2 top-0 h-56 w-[72rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(120,180,255,0.11),transparent_68%)] blur-3xl" />
                       <div className="relative flex h-full min-h-0 flex-col">
-                        <div className="flex min-h-0 flex-1 items-center justify-center px-6 pb-8 pt-6">
+                        <div className="relative z-10 flex min-h-0 flex-1 items-center justify-center px-6 pb-8 pt-6">
                           <NewThreadEmptyState
                             recentProjects={recentProjects}
                             selectedProject={selectedProject}
                             isOverlayOpen={isOverlayOpen}
                             onSelectProject={handleProjectSelect}
+                            branchSlot={
+                              resolvedWorkspaceId &&
+                              topBarGitSnapshot?.capabilities.repoAvailable &&
+                              topBarGitSnapshot?.capabilities.gitCliAvailable ? (
+                                <BranchSelector
+                                  workspaceId={resolvedWorkspaceId}
+                                  snapshot={branchSnapshot}
+                                  modelPlan={commitMessageModelPlan}
+                                />
+                              ) : null
+                            }
                           />
                         </div>
 
