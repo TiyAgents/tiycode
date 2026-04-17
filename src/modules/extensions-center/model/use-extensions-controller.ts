@@ -229,9 +229,13 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
     loadDetail,
     loadSkillPreview,
     enableExtension: (id: string, scope: ExtensionScope) =>
-      mutateAndRefresh(scope, () => extensionEnable(id, buildScopeOptions(scope))),
+      mutateAndRefresh(scope, () =>
+        extensionEnable(id, buildScopeOptions(scope)),
+      ),
     disableExtension: (id: string, scope: ExtensionScope) =>
-      mutateAndRefresh(scope, () => extensionDisable(id, buildScopeOptions(scope))),
+      mutateAndRefresh(scope, () =>
+        extensionDisable(id, buildScopeOptions(scope)),
+      ),
     uninstallExtension: (id: string, scope: ExtensionScope) =>
       mutateAndRefresh(scope, () => extensionUninstall(id, buildScopeOptions(scope))),
     installMarketplaceItem: (id: string) => mutateAndRefresh("global", () => marketplaceInstallItem(id)),
@@ -254,8 +258,12 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
     rescanSkills: (scope: ExtensionScope) =>
       mutateAndRefresh(scope, () => skillRescan(buildScopeOptions(scope))),
     enableSkill: (id: string, scope: ExtensionScope) =>
-      mutateAndRefresh(scope, () => skillEnable(id, buildScopeOptions(scope))),
+      mutateAndRefresh(scope, () =>
+        skillEnable(id, buildScopeOptions(scope)),
+      ),
     disableSkill: (id: string, scope: ExtensionScope) =>
-      mutateAndRefresh(scope, () => skillDisable(id, buildScopeOptions(scope))),
+      mutateAndRefresh(scope, () =>
+        skillDisable(id, buildScopeOptions(scope)),
+      ),
   };
 }

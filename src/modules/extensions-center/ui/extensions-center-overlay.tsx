@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useEffect, useMemo, useState } from "react";
+import { type ReactNode, type RefObject, useCallback, useEffect, useMemo, useState } from "react";
 import { Streamdown } from "streamdown";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
@@ -37,6 +37,7 @@ import { LocalLlmIcon } from "@/shared/ui/local-llm-icon";
 import { ScrollArea } from "@/shared/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
 import { Switch } from "@/shared/ui/switch";
+import { Spinner } from "@/shared/ui/spinner";
 import { Textarea } from "@/shared/ui/textarea";
 import type {
   ConfigDiagnostic,
@@ -500,6 +501,8 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
   const [isRemoveSourceSubmitting, setRemoveSourceSubmitting] = useState(false);
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [isActionPending, setActionPending] = useState(false);
+  const [pendingMcpIds, setPendingMcpIds] = useState<Set<string>>(new Set());
+  const [actionError, setActionError] = useState<string | null>(null);
   const [skillPreviewDialogOpen, setSkillPreviewDialogOpen] = useState(false);
   const activeQuery = queryByTab[activeTab];
 
@@ -717,14 +720,33 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
   const runAction = async (action: () => Promise<void>) => {
     setActionPending(true);
+    setActionError(null);
     try {
       await action();
     } catch (error) {
       console.error("extensions-center action failed", error);
+      setActionError(getInvokeErrorMessage(error, t("extensions.actionFailed")));
     } finally {
       setActionPending(false);
     }
   };
+
+  const runMcpAction = useCallback(async (serverId: string, action: () => Promise<void>) => {
+    setPendingMcpIds((prev) => new Set(prev).add(serverId));
+    setActionError(null);
+    try {
+      await action();
+    } catch (error) {
+      console.error("extensions-center mcp action failed", error);
+      setActionError(getInvokeErrorMessage(error, t("extensions.actionFailed")));
+    } finally {
+      setPendingMcpIds((prev) => {
+        const next = new Set(prev);
+        next.delete(serverId);
+        return next;
+      });
+    }
+  }, [t]);
 
   const handleOpenCreateMcpDialog = () => {
     setMcpDialogMode("create");
@@ -951,6 +973,15 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
               </div>
             ) : null}
 
+            {actionError ? (
+              <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-app-danger/30 bg-app-danger/8 px-3 py-2 text-[12px] text-app-danger">
+                <span>{actionError}</span>
+                <button type="button" className="shrink-0 text-app-danger/60 hover:text-app-danger" onClick={() => setActionError(null)}>
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ) : null}
+
             {props.configDiagnostics.length > 0 ? (
               <div className="mt-3 rounded-xl border border-app-warning/30 bg-app-warning/8 px-3 py-3 text-[12px] text-app-warning">
                 <p className="font-medium text-app-foreground">{t("extensions.configIssuesDetected")}</p>
@@ -1141,6 +1172,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                   size="sm"
                                   variant="ghost"
                                   className="h-8 rounded-lg px-3 text-[12px]"
+                                  disabled={pendingMcpIds.has(server.id)}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     handleOpenEditMcpDialog(server);
@@ -1152,11 +1184,13 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                                   size="sm"
                                   variant="secondary"
                                   className="h-8 rounded-lg px-3 text-[12px]"
+                                  disabled={pendingMcpIds.has(server.id)}
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    void runAction(() => props.onRestartMcpServer(server.id));
+                                    void runMcpAction(server.id, () => props.onRestartMcpServer(server.id));
                                   }}
                                 >
+                                  {pendingMcpIds.has(server.id) ? <Spinner className="size-3.5" /> : null}
                                   {t("extensions.restart")}
                                 </Button>
                               </div>
@@ -1173,15 +1207,20 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                         <CardFooter className="justify-between gap-2">
                           <Switch
                             checked={server.config.enabled}
+                            disabled={pendingMcpIds.has(server.id)}
                             onCheckedChange={(checked) =>
-                              void runAction(() =>
+                              void runMcpAction(server.id, () =>
                                 checked ? props.onEnableExtension(server.id) : props.onDisableExtension(server.id),
                               )
                             }
                             aria-label={`${server.label} enabled`}
                           />
-                          <Badge className={cn("shrink-0", getStatusBadgeClass(server.status))}>
-                            {getStatusBadgeLabel(server.status)}
+                          <Badge className={cn("shrink-0", pendingMcpIds.has(server.id) ? "bg-app-surface-muted/80 text-app-subtle" : getStatusBadgeClass(server.status))}>
+                            {pendingMcpIds.has(server.id) ? (
+                              <span className="flex items-center gap-1.5"><Spinner className="size-3" />{t("extensions.processing")}</span>
+                            ) : (
+                              getStatusBadgeLabel(server.status)
+                            )}
                           </Badge>
                         </CardFooter>
                       </Card>
@@ -1513,13 +1552,14 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                           <div className="space-y-4">
                             <DetailSection title={t("extensions.actions")}>
                               <div className="flex flex-wrap gap-2">
-                                <Button size="sm" variant="secondary" onClick={() => handleOpenEditMcpDialog(selectedDetail.mcp!)}>
+                                <Button size="sm" variant="secondary" disabled={pendingMcpIds.has(selectedDetail.mcp!.id)} onClick={() => handleOpenEditMcpDialog(selectedDetail.mcp!)}>
                                   {t("extensions.edit")}
                                 </Button>
-                                <Button size="sm" variant="outline" onClick={() => void runAction(() => props.onRestartMcpServer(selectedDetail.mcp!.id))}>
+                                <Button size="sm" variant="outline" disabled={pendingMcpIds.has(selectedDetail.mcp!.id)} onClick={() => void runMcpAction(selectedDetail.mcp!.id, () => props.onRestartMcpServer(selectedDetail.mcp!.id))}>
+                                  {pendingMcpIds.has(selectedDetail.mcp!.id) ? <Spinner className="size-3.5" /> : null}
                                   {t("extensions.restart")}
                                 </Button>
-                                <Button size="sm" variant="ghost" onClick={() => void runAction(() => props.onRemoveMcpServer(selectedDetail.mcp!.id))}>
+                                <Button size="sm" variant="ghost" disabled={pendingMcpIds.has(selectedDetail.mcp!.id)} onClick={() => void runMcpAction(selectedDetail.mcp!.id, () => props.onRemoveMcpServer(selectedDetail.mcp!.id))}>
                                   {t("extensions.remove")}
                                 </Button>
                               </div>
@@ -1840,7 +1880,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
             <Button variant="outline" onClick={() => setMcpDialogOpen(false)}>
               {t("extensions.cancelButton")}
             </Button>
-            <Button onClick={() => void handleSubmitMcp()} disabled={isActionPending}>
+            <Button onClick={() => void handleSubmitMcp()} disabled={isActionPending || pendingMcpIds.size > 0}>
               {mcpDialogMode === "create" ? t("extensions.createButton") : t("extensions.saveButton")}
             </Button>
           </DialogFooter>

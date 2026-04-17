@@ -61,6 +61,13 @@ impl ConfigScope {
         }
     }
 
+    pub fn from_str(scope: &str) -> Self {
+        match scope {
+            "workspace" => Self::Workspace,
+            _ => Self::Global,
+        }
+    }
+
     fn as_str(&self) -> &'static str {
         match self {
             Self::Global => "global",
@@ -386,11 +393,54 @@ impl ExtensionsManager {
         ))
     }
 
+    /// Resolve the effective scope for an MCP server: global-first, then workspace.
+    async fn resolve_mcp_scope(&self, id: &str, workspace_path: Option<&str>) -> ConfigScope {
+        if let Ok(global) = self
+            .load_mcp_configs_for_scope(None, ConfigScope::Global)
+            .await
+        {
+            if global.iter().any(|c| c.id == id) {
+                return ConfigScope::Global;
+            }
+        }
+        if workspace_path.is_some() {
+            if let Ok(ws) = self
+                .load_mcp_configs_for_scope(workspace_path, ConfigScope::Workspace)
+                .await
+            {
+                if ws.iter().any(|c| c.id == id) {
+                    return ConfigScope::Workspace;
+                }
+            }
+        }
+        ConfigScope::Global
+    }
+
+    /// Resolve the effective scope for a skill: global-first, then workspace.
+    async fn resolve_skill_scope(&self, id: &str, workspace_path: Option<&str>) -> ConfigScope {
+        if self
+            .skill_exists(id, None, ConfigScope::Global)
+            .await
+            .unwrap_or(false)
+        {
+            return ConfigScope::Global;
+        }
+        if workspace_path.is_some()
+            && self
+                .skill_exists(id, workspace_path, ConfigScope::Workspace)
+                .await
+                .unwrap_or(false)
+        {
+            return ConfigScope::Workspace;
+        }
+        ConfigScope::Global
+    }
+
     pub async fn enable_extension(
         &self,
         id: &str,
         workspace_path: Option<&str>,
-        scope: ConfigScope,
+        scope: Option<ConfigScope>,
     ) -> Result<(), AppError> {
         if self.update_plugin_enabled(id, true).await? {
             self.write_extension_audit(
@@ -403,8 +453,12 @@ impl ExtensionsManager {
             return Ok(());
         }
 
+        let mcp_scope = match scope {
+            Some(s) => s,
+            None => self.resolve_mcp_scope(id, workspace_path).await,
+        };
         if self
-            .update_mcp_enabled(id, true, workspace_path, scope)
+            .update_mcp_enabled(id, true, workspace_path, mcp_scope)
             .await?
         {
             self.write_extension_audit(
@@ -417,8 +471,12 @@ impl ExtensionsManager {
             return Ok(());
         }
 
+        let skill_scope = match scope {
+            Some(s) => s,
+            None => self.resolve_skill_scope(id, workspace_path).await,
+        };
         if self
-            .update_skill_enabled(id, true, workspace_path, scope)
+            .update_skill_enabled(id, true, workspace_path, skill_scope)
             .await?
         {
             self.write_extension_audit(
@@ -441,7 +499,7 @@ impl ExtensionsManager {
         &self,
         id: &str,
         workspace_path: Option<&str>,
-        scope: ConfigScope,
+        scope: Option<ConfigScope>,
     ) -> Result<(), AppError> {
         if self.update_plugin_enabled(id, false).await? {
             self.write_extension_audit(
@@ -454,8 +512,12 @@ impl ExtensionsManager {
             return Ok(());
         }
 
+        let mcp_scope = match scope {
+            Some(s) => s,
+            None => self.resolve_mcp_scope(id, workspace_path).await,
+        };
         if self
-            .update_mcp_enabled(id, false, workspace_path, scope)
+            .update_mcp_enabled(id, false, workspace_path, mcp_scope)
             .await?
         {
             self.write_extension_audit(
@@ -468,8 +530,12 @@ impl ExtensionsManager {
             return Ok(());
         }
 
+        let skill_scope = match scope {
+            Some(s) => s,
+            None => self.resolve_skill_scope(id, workspace_path).await,
+        };
         if self
-            .update_skill_enabled(id, false, workspace_path, scope)
+            .update_skill_enabled(id, false, workspace_path, skill_scope)
             .await?
         {
             self.write_extension_audit(
@@ -775,18 +841,27 @@ impl ExtensionsManager {
         id: &str,
         enabled: bool,
         workspace_path: Option<&str>,
-        scope: ConfigScope,
+        scope: Option<ConfigScope>,
     ) -> Result<(), AppError> {
-        if !self.skill_exists(id, workspace_path, scope).await? {
+        let resolved_scope = match scope {
+            Some(s) => s,
+            None => self.resolve_skill_scope(id, workspace_path).await,
+        };
+        if !self
+            .skill_exists(id, workspace_path, resolved_scope)
+            .await?
+        {
             return Err(AppError::not_found(
                 ErrorSource::Settings,
                 format!("skill '{id}'"),
             ));
         }
-        let mut store = self.load_skill_state_store(workspace_path, scope).await?;
+        let mut store = self
+            .load_skill_state_store(workspace_path, resolved_scope)
+            .await?;
         update_named_membership(&mut store.enabled, id, enabled);
         update_named_membership(&mut store.disabled, id, !enabled);
-        self.save_skill_state_store(&store, workspace_path, scope)
+        self.save_skill_state_store(&store, workspace_path, resolved_scope)
             .await?;
         self.write_extension_audit(
             if enabled {
@@ -3450,7 +3525,7 @@ impl ExtensionsManager {
         if !self.skill_exists(id, workspace_path, scope).await? {
             return Ok(false);
         }
-        self.set_skill_enabled(id, enabled, workspace_path, scope)
+        self.set_skill_enabled(id, enabled, workspace_path, Some(scope))
             .await?;
         Ok(true)
     }
@@ -4367,8 +4442,94 @@ fn build_streamable_http_client(
         })
 }
 
+/// Returns the cached environment from the user's login shell.
+///
+/// On macOS (and Linux), GUI apps do not inherit environment variables set in
+/// `.zshrc`, `.bashrc`, or tools like nvm/fnm/pyenv. This function runs the
+/// user's login shell once to capture the full environment and caches the result
+/// for the lifetime of the process.
+fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    static CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        #[cfg(target_os = "windows")]
+        {
+            HashMap::new()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            use crate::core::shell_runtime::current_shell;
+            use std::time::Duration;
+
+            const TIMEOUT: Duration = Duration::from_millis(3000);
+
+            let shell = current_shell();
+            let mut cmd = std::process::Command::new(&shell);
+            cmd.args(["-l", "-c", "env"]);
+            cmd.stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .stdin(std::process::Stdio::null());
+
+            // Use a blocking spawn + wait with timeout.  This runs once during
+            // the first MCP connection attempt, so a short block is acceptable.
+            let result: Option<HashMap<String, String>> = (|| {
+                let mut child = cmd.spawn().ok()?;
+                let mut stdout = child.stdout.take()?;
+                let (tx, rx) = std::sync::mpsc::channel();
+                let reader_handle = std::thread::spawn(move || {
+                    use std::io::Read;
+                    let mut buf = Vec::new();
+                    let read_result = stdout.read_to_end(&mut buf);
+                    let _ = tx.send(read_result.map(|_| buf));
+                });
+                let stdout_bytes = match rx.recv_timeout(TIMEOUT) {
+                    Ok(Ok(bytes)) => bytes,
+                    _ => {
+                        // Timeout or read error — kill the child to prevent resource leaks
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        // Join the reader thread so it doesn't outlive the child process
+                        let _ = reader_handle.join();
+                        return None;
+                    }
+                };
+                let status = child.wait().ok()?;
+                if !status.success() {
+                    return None;
+                }
+                let stdout = String::from_utf8_lossy(&stdout_bytes);
+                let mut map = HashMap::new();
+                for line in stdout.lines() {
+                    if let Some((key, value)) = line.split_once('=') {
+                        if !key.is_empty()
+                            && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        {
+                            map.insert(key.to_string(), value.to_string());
+                        }
+                    }
+                }
+                Some(map)
+            })();
+
+            result.unwrap_or_default()
+        }
+    })
+}
+
+/// Resolves an environment variable by name, first checking the process
+/// environment, then falling back to the cached login shell environment.
+fn resolve_env_var(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .or_else(|| login_shell_env().get(name).cloned())
+}
+
 /// Expands `${VAR}` and `$VAR` patterns in a string using the current process
-/// environment. Unresolved variables are left as-is so the user sees what failed.
+/// environment, falling back to the user's login shell environment for variables
+/// not present in the process env (common on macOS GUI apps).
+/// Unresolved variables are left as-is so the user sees what failed.
 fn expand_env_vars(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -4401,7 +4562,7 @@ fn expand_env_vars(input: &str) -> String {
                     result.push('{');
                     result.push('}');
                 }
-            } else if let Ok(val) = std::env::var(&var_name) {
+            } else if let Some(val) = resolve_env_var(&var_name) {
                 result.push_str(&val);
             } else {
                 // Leave unresolved variable as-is for debuggability
@@ -4805,6 +4966,14 @@ async fn spawn_stdio_mcp_process(
     command.stdin(std::process::Stdio::piped());
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
+
+    // Inject login shell environment so child processes (and their shebangs
+    // like `#!/usr/bin/env node`) can find tools that live outside the minimal
+    // GUI-app PATH (e.g. nvm-managed node).  User-configured `config.env`
+    // entries are applied afterwards so they can override any login-shell value.
+    for (key, value) in login_shell_env() {
+        command.env(key, value);
+    }
     if let Some(env) = &config.env {
         for (key, value) in env {
             command.env(key, expand_env_vars(value));
