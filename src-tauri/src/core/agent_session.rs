@@ -1941,11 +1941,8 @@ pub(crate) fn convert_history_messages(
                 .unwrap_or(messages.len());
 
             // Build the assistant message containing the tool call.
-            let tool_call_block = ContentBlock::ToolCall(ToolCall::new(
-                &tc.id,
-                &tc.tool_name,
-                tc.tool_input.clone(),
-            ));
+            let tool_call_block =
+                ContentBlock::ToolCall(ToolCall::new(&tc.id, &tc.tool_name, tc.tool_input.clone()));
             let assistant = AssistantMessage::builder()
                 .content(vec![tool_call_block])
                 .api(effective_api_for_model(model))
