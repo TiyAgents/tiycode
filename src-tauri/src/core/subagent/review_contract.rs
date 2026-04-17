@@ -61,6 +61,8 @@ pub struct ReviewRequest {
     pub preferred_checks: Vec<String>,
     #[serde(default)]
     pub risk_hints: Vec<String>,
+    #[serde(default)]
+    pub plan_file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +96,8 @@ pub struct VerificationResult {
 pub struct CoverageNote {
     pub diff_reviewed: bool,
     pub global_scan_performed: bool,
+    #[serde(default)]
+    pub plan_compliance_checked: bool,
     #[serde(default)]
     pub changed_files_reviewed: Vec<String>,
     #[serde(default)]
@@ -144,6 +148,12 @@ impl ReviewRequest {
             changed_files: read_string_array(tool_input.get("changedFiles")),
             preferred_checks: read_string_array(tool_input.get("preferredChecks")),
             risk_hints: read_string_array(tool_input.get("riskHints")),
+            plan_file_path: tool_input
+                .get("planFilePath")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string),
         })
     }
 
@@ -154,6 +164,17 @@ impl ReviewRequest {
             "infer from the repository instructions, scripts, and build files",
         );
         let risk_hints = format_list(&self.risk_hints, "none provided");
+        let plan_file_section = match &self.plan_file_path {
+            Some(path) => format!(
+                "- plan_file_path: {path}\n\n\
+Plan compliance verification:\n\
+- Read the plan file at the path above using the `read` tool before starting the code review.\n\
+- After reviewing code and diffs, verify each plan step against the implementation: was it completed, partially done, skipped, or deviated from?\n\
+- Report plan compliance in the coverage section by setting `planComplianceChecked` to true.\n\
+- If any plan steps were skipped or deviated from, include them in `followUp` with a clear description of the gap."
+            ),
+            None => "- plan_file_path: none provided".to_string(),
+        };
 
         format!(
             "Review request:
@@ -164,6 +185,7 @@ impl ReviewRequest {
 - changed_files: {changed_files}
 - preferred_checks: {preferred_checks}
 - risk_hints: {risk_hints}
+{plan_file_section}
 
 Execution rules:
 - Adapt your review to the active repository instead of assuming a specific framework, language, or test runner.
@@ -211,6 +233,7 @@ Return exactly one JSON object with this contract:
   \"coverage\": {{
     \"diffReviewed\": true,
     \"globalScanPerformed\": true,
+    \"planComplianceChecked\": true,
     \"changedFilesReviewed\": [\"path\"],
     \"scannedPaths\": [\"path\"],
     \"unscannedPaths\": [\"path\"],
@@ -227,6 +250,7 @@ Do not wrap the JSON in markdown fences and do not add prose before or after it.
             changed_files = changed_files,
             preferred_checks = preferred_checks,
             risk_hints = risk_hints,
+            plan_file_section = plan_file_section,
         )
     }
 }
@@ -389,6 +413,10 @@ fn render_coverage_section(coverage: &CoverageNote) -> String {
         format!(
             "- global_scan_performed: {}",
             yes_no(coverage.global_scan_performed)
+        ),
+        format!(
+            "- plan_compliance_checked: {}",
+            yes_no(coverage.plan_compliance_checked)
         ),
         format!(
             "- changed_files_reviewed: {}",
@@ -601,5 +629,70 @@ mod tests {
         assert!(summary.contains("Direct Diff Findings"));
         assert!(summary.contains("Global Impact Findings"));
         assert!(summary.contains("npm run typecheck"));
+    }
+
+    #[test]
+    fn review_request_parses_plan_file_path() {
+        let request = ReviewRequest::from_tool_input(&serde_json::json!({
+            "task": "review against plan",
+            "target": "diff",
+            "planFilePath": "/home/user/.tiy/plans/thread-123.md"
+        }))
+        .expect("request should parse");
+
+        assert_eq!(
+            request.plan_file_path.as_deref(),
+            Some("/home/user/.tiy/plans/thread-123.md")
+        );
+    }
+
+    #[test]
+    fn review_request_omits_plan_file_path_when_absent() {
+        let request = ReviewRequest::from_tool_input(&serde_json::json!({
+            "task": "review without plan",
+            "target": "code"
+        }))
+        .expect("request should parse");
+
+        assert!(request.plan_file_path.is_none());
+    }
+
+    #[test]
+    fn review_helper_prompt_includes_plan_compliance_instructions_when_plan_provided() {
+        let request = ReviewRequest::from_tool_input(&serde_json::json!({
+            "task": "review changes against the approved plan",
+            "target": "diff",
+            "planFilePath": "/home/user/.tiy/plans/thread-abc.md"
+        }))
+        .expect("request should parse");
+
+        let prompt = request.to_helper_prompt();
+        assert!(prompt.contains("plan_file_path: /home/user/.tiy/plans/thread-abc.md"));
+        assert!(prompt.contains("Read the plan file"));
+        assert!(prompt.contains("verify each plan step"));
+        assert!(prompt.contains("planComplianceChecked"));
+    }
+
+    #[test]
+    fn review_helper_prompt_skips_plan_compliance_when_no_plan() {
+        let request = ReviewRequest::from_tool_input(&serde_json::json!({
+            "task": "review without plan",
+            "target": "diff"
+        }))
+        .expect("request should parse");
+
+        let prompt = request.to_helper_prompt();
+        assert!(prompt.contains("plan_file_path: none provided"));
+        assert!(!prompt.contains("Read the plan file"));
+    }
+
+    #[test]
+    fn coverage_note_plan_compliance_defaults_to_false() {
+        let report = extract_review_report(
+            r#"{"verdict":"pass","directFindings":[],"globalFindings":[],"verification":[],"coverage":{"diffReviewed":true,"globalScanPerformed":false,"changedFilesReviewed":[],"scannedPaths":[],"unscannedPaths":[],"limitations":[]},"followUp":[]}"#,
+        )
+        .expect("report should parse");
+
+        assert!(!report.coverage.plan_compliance_checked);
     }
 }

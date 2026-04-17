@@ -346,13 +346,41 @@ fn read_string_list(value: Option<&serde_json::Value>) -> Vec<String> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Plan file persistence — write plan markdown to ~/.tiy/plans/{thread_id}.md
+// ---------------------------------------------------------------------------
+
+use std::path::PathBuf;
+
+/// Return the directory used for plan file persistence.
+pub fn plan_file_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".tiy").join("plans"))
+}
+
+/// Return the plan file path for a given thread.
+pub fn plan_file_path(thread_id: &str) -> Option<PathBuf> {
+    plan_file_dir().map(|dir| dir.join(format!("{thread_id}.md")))
+}
+
+/// Write plan markdown to disk. Creates the directory if needed.
+/// Returns the written path on success.
+pub fn write_plan_file(thread_id: &str, markdown: &str) -> Result<PathBuf, std::io::Error> {
+    let dir = plan_file_dir().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "home directory not available")
+    })?;
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{thread_id}.md"));
+    std::fs::write(&path, markdown)?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         approval_prompt_markdown, build_approval_prompt_metadata,
         build_plan_artifact_from_tool_input, build_plan_message_metadata,
         parse_approval_prompt_metadata, parse_plan_message_metadata, plan_markdown,
-        PlanApprovalAction,
+        write_plan_file, PlanApprovalAction,
     };
 
     #[test]
@@ -450,5 +478,29 @@ mod tests {
         assert!(markdown.contains("## Key Implementation"));
         assert!(markdown.contains("## Verification"));
         assert!(markdown.contains("## Assumptions"));
+    }
+
+    #[test]
+    fn write_plan_file_creates_and_overwrites() {
+        // Use a unique thread ID to avoid collisions with parallel test runs.
+        let thread_id = format!("test-plan-file-{}", std::process::id());
+
+        // First write creates the file.
+        let path = write_plan_file(&thread_id, "# Revision 1\n\nFirst draft.")
+            .expect("first write should succeed");
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).expect("read first revision");
+        assert!(content.contains("# Revision 1"));
+
+        // Second write overwrites.
+        let path2 = write_plan_file(&thread_id, "# Revision 2\n\nRefined plan.")
+            .expect("second write should succeed");
+        assert_eq!(path, path2);
+        let content = std::fs::read_to_string(&path).expect("read second revision");
+        assert!(content.contains("# Revision 2"));
+        assert!(!content.contains("# Revision 1"));
+
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
     }
 }

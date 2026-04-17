@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 
 use crate::core::plan_checkpoint::{
     approval_prompt_markdown, build_approval_prompt_metadata, build_plan_artifact_from_tool_input,
-    build_plan_message_metadata, parse_plan_message_metadata, plan_markdown,
+    build_plan_message_metadata, parse_plan_message_metadata, plan_markdown, write_plan_file,
 };
 use crate::core::prompt;
 use crate::core::subagent::{
@@ -761,17 +761,38 @@ impl AgentSession {
             plan: serde_json::to_value(&artifact).unwrap_or_else(|_| serde_json::json!({})),
         });
 
+        // Persist plan markdown to ~/.tiy/plans/{thread_id}.md for incremental
+        // plan refinement and downstream review verification.
+        let plan_file_path = write_plan_file(&self.spec.thread_id, &plan_message.content_markdown)
+            .ok()
+            .map(|path| path.to_string_lossy().to_string());
+
+        if let Some(ref path) = plan_file_path {
+            tracing::info!(
+                thread_id = %self.spec.thread_id,
+                plan_revision = plan_revision,
+                path = %path,
+                "plan file written to disk"
+            );
+        }
+
         self.checkpoint_requested.store(true, Ordering::SeqCst);
         self.abort_signal.cancel();
         self.agent.abort();
 
+        let result_message = match &plan_file_path {
+            Some(path) => format!(
+                "Implementation plan published and saved to {path}. Waiting for approval before execution."
+            ),
+            None => "Implementation plan published. Waiting for approval before execution.".to_string(),
+        };
+
         AgentToolResult {
-            content: vec![ContentBlock::Text(TextContent::new(
-                "Implementation plan published. Waiting for approval before execution.",
-            ))],
+            content: vec![ContentBlock::Text(TextContent::new(result_message))],
             details: Some(serde_json::json!({
                 "planMessageId": plan_message_id,
                 "approvalMessageId": approval_message_id,
+                "planFilePath": plan_file_path,
                 "plan": artifact,
             })),
         }
@@ -1427,7 +1448,33 @@ fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
         AgentTool::new(
             "update_plan",
             "Update Plan",
-            "Publish the current implementation plan and pause before execution. Use this when the main agent has enough context to present a concrete pre-implementation plan for user approval.",
+            "Publish the current implementation plan and pause for user approval before execution. The plan is saved to disk and persists across runs.\n\n\
+## Workflow — complete these phases before calling this tool\n\n\
+Phase 1 — Explore and understand:\n\
+- Use read, search, find, list, and agent_explore to inspect relevant files, modules, and patterns.\n\
+- Identify existing conventions, reusable modules, constraints, and dependencies.\n\
+- Do NOT call update_plan until you have grounded your understanding in actual code evidence.\n\n\
+Phase 2 — Clarify ambiguities:\n\
+- If implementation-blocking uncertainty remains that code exploration cannot resolve, use clarify to ask the user.\n\
+- Only ask questions the user must decide: scope, preference between valid approaches, priority tradeoffs.\n\
+- Do NOT ask questions that code exploration can answer. Batch related questions. Wait for the answer before continuing.\n\
+- Skip this phase if exploration resolved all uncertainties.\n\n\
+Phase 3 — Converge on a recommendation:\n\
+- Synthesize exploration evidence and clarification answers into ONE recommended approach.\n\
+- Do not present multiple unranked alternatives. Every design decision must be grounded in inspected code or user input.\n\n\
+Phase 4 — Call update_plan:\n\
+- Only after phases 1-3 are complete, call this tool with a plan that satisfies the quality contract below.\n\n\
+## Quality contract — every plan must satisfy\n\n\
+- summary: what is being changed, why, and expected outcome (2-3 sentences).\n\
+- context: only confirmed facts from inspected code, docs, or user input. Never speculate about uninspected files or architecture.\n\
+- design: the recommended approach and key tradeoffs that make it the right choice.\n\
+- keyImplementation: the specific files, modules, interfaces, or data flows involved. Vague references are not acceptable.\n\
+- steps: concrete, ordered, actionable steps with affected files and intended outcomes.\n\
+- verification: how to confirm the change succeeded (type-checks, tests, manual checks).\n\
+- risks: main risks, edge cases, compatibility concerns, regression areas.\n\
+- assumptions (optional): only non-blocking assumptions, not open questions.\n\n\
+Prohibited: unresolved core ambiguities (use clarify first), TODO placeholders, vague steps, architecture guesses not backed by exploration, lengthy background essays without actionable information.\n\n\
+You may call this tool multiple times in a run to incrementally refine the plan. Each call overwrites the previous version.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -2927,7 +2974,7 @@ mod tests {
 
         assert!(plan_prompt.contains("embedded Terminal panel"));
         assert!(plan_prompt.contains("update_plan"));
-        assert!(plan_prompt.contains("pause for user approval"));
+        assert!(plan_prompt.contains("pauses for user approval"));
         assert!(plan_prompt.contains("do not inspect your own runtime"));
         assert!(default_prompt.contains("embedded Terminal panel"));
         assert!(default_prompt.contains("do not inspect your own runtime"));
@@ -3522,6 +3569,34 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn update_plan_tool_description_contains_workflow_and_quality_contract() {
+        let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
+        let update_plan = tools
+            .iter()
+            .find(|tool| tool.name == "update_plan")
+            .expect("update_plan tool should exist");
+
+        // Workflow phases
+        assert!(update_plan.description.contains("Phase 1"));
+        assert!(update_plan.description.contains("Explore and understand"));
+        assert!(update_plan.description.contains("Phase 2"));
+        assert!(update_plan.description.contains("Clarify ambiguities"));
+        assert!(update_plan.description.contains("Phase 3"));
+        assert!(update_plan
+            .description
+            .contains("Converge on a recommendation"));
+        assert!(update_plan.description.contains("Phase 4"));
+        // Quality contract
+        assert!(update_plan.description.contains("Quality contract"));
+        assert!(update_plan.description.contains("keyImplementation"));
+        assert!(update_plan.description.contains("verification"));
+        assert!(update_plan.description.contains("Prohibited"));
+        assert!(update_plan
+            .description
+            .contains("incrementally refine the plan"));
+    }
+
+    #[test]
     fn explore_and_review_use_auxiliary_model_when_available() {
         let model_plan =
             sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
@@ -3551,16 +3626,20 @@ Used for prompt assembly coverage.
         let prompt = run_mode_prompt_body("plan");
 
         assert!(prompt.contains("clarify"));
-        assert!(prompt.contains("a prose answer alone does not complete the run"));
+        assert!(prompt.contains("does NOT complete the run"));
         assert!(prompt.contains("must call update_plan"));
-        assert!(prompt.contains("Do not include unresolved questions"));
-        assert!(prompt.contains("Once you publish a plan with update_plan"));
-        assert!(prompt.contains(
-            "Structure the plan as: summary, context, design, keyImplementation, ordered steps, verification, and risks."
-        ));
-        assert!(prompt.contains("In `design`, describe the recommended approach"));
-        assert!(prompt.contains("In `verification`, include how the change will be validated"));
-        assert!(prompt.contains("pause for user approval"));
+        assert!(prompt.contains("Unresolved core ambiguities pushed to the approval step"));
+        assert!(prompt.contains("Once published, the run pauses for user approval"));
+        assert!(prompt.contains("`design`: Describe the recommended approach"));
+        assert!(prompt.contains("`verification`: Describe how to validate"));
+        assert!(prompt.contains("pause"));
+        // Verify phased workflow is present
+        assert!(prompt.contains("Phase 1: Explore and understand"));
+        assert!(prompt.contains("Phase 2: Clarify ambiguities"));
+        assert!(prompt.contains("Phase 3: Converge on a recommendation"));
+        assert!(prompt.contains("Phase 4: Publish the plan"));
+        // Verify quality contract is present
+        assert!(prompt.contains("Plan quality contract"));
     }
 
     #[test]
@@ -3570,6 +3649,15 @@ Used for prompt assembly coverage.
         assert!(prompt.contains("Use clarify instead of guessing"));
         assert!(prompt.contains("multiple reasonable approaches"));
         assert!(prompt.contains("approve a risky action"));
+    }
+
+    #[test]
+    fn default_mode_prompt_references_update_plan_quality_contract() {
+        let prompt = run_mode_prompt_body("default");
+
+        assert!(prompt.contains("follow the quality contract"));
+        assert!(prompt.contains("update_plan tool description"));
+        assert!(prompt.contains("Explore the codebase first"));
     }
 
     #[test]
