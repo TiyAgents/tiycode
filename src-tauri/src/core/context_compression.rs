@@ -22,8 +22,10 @@ use tiycore::types::{ContentBlock, TextContent, UserMessage};
 const RESERVE_TOKENS: u32 = 16_384;
 
 /// Keep at least this many tokens of recent conversation untouched.
-/// Matches pi-mono `DEFAULT_COMPACTION_SETTINGS.keepRecentTokens`.
-const KEEP_RECENT_TOKENS: u32 = 20_000;
+/// Raised from pi-mono's default (20 000) to preserve more multi-turn
+/// context — especially tool-call / tool-result pairs that are now
+/// included in the history.
+const KEEP_RECENT_TOKENS: u32 = 32_000;
 
 /// Maximum characters for a tool result in the "old" region.
 /// Longer results are truncated with a summary marker.

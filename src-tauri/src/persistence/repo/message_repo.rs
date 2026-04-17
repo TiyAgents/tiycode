@@ -92,6 +92,91 @@ pub async fn list_recent(
     Ok(records)
 }
 
+/// Load all messages since the last context reset marker for a thread.
+///
+/// A context reset marker is a `summary_marker` message with `kind = "context_reset"`
+/// in its metadata JSON.
+///
+/// Strategy:
+/// 1. Query the DB for the most recent context_reset marker (uses the partial index
+///    `idx_messages_type` on `(thread_id, message_type)` for summary_marker rows).
+/// 2. If found, load all messages whose id > that marker (UUID v7 ordering).
+/// 3. If no reset marker exists, load all messages (up to `SAFETY_LIMIT`).
+/// 4. Discarded messages (`status = "discarded"`) are filtered out.
+pub async fn list_since_last_reset(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Vec<MessageRecord>, AppError> {
+    const SAFETY_LIMIT: i64 = 2000;
+
+    let reset_id = find_last_context_reset_id(pool, thread_id).await?;
+
+    let rows = match reset_id.as_deref() {
+        Some(cursor) => {
+            sqlx::query_as::<_, MessageRow>(
+                "SELECT id, thread_id, run_id, role, content_markdown, message_type,
+                        status, metadata_json, attachments_json, created_at
+                 FROM messages
+                 WHERE thread_id = ? AND id >= ? AND status != 'discarded'
+                 ORDER BY id ASC
+                 LIMIT ?",
+            )
+            .bind(thread_id)
+            .bind(cursor)
+            .bind(SAFETY_LIMIT)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, MessageRow>(
+                "SELECT id, thread_id, run_id, role, content_markdown, message_type,
+                        status, metadata_json, attachments_json, created_at
+                 FROM messages
+                 WHERE thread_id = ? AND status != 'discarded'
+                 ORDER BY id ASC
+                 LIMIT ?",
+            )
+            .bind(thread_id)
+            .bind(SAFETY_LIMIT)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    Ok(rows.into_iter().map(|r| r.into_record()).collect())
+}
+
+/// Find the ID of the last context_reset summary_marker in a thread.
+///
+/// Uses the partial index on `(thread_id, message_type)` to efficiently scan
+/// only `summary_marker` rows, then checks metadata in Rust for the `context_reset`
+/// kind (consistent with the existing application-layer check pattern).
+async fn find_last_context_reset_id(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<String>, AppError> {
+    // Load the most recent summary_marker messages; typically very few exist.
+    let rows = sqlx::query_as::<_, MessageRow>(
+        "SELECT id, thread_id, run_id, role, content_markdown, message_type,
+                status, metadata_json, attachments_json, created_at
+         FROM messages
+         WHERE thread_id = ? AND message_type = 'summary_marker'
+         ORDER BY id DESC
+         LIMIT 50",
+    )
+    .bind(thread_id)
+    .fetch_all(pool)
+    .await?;
+
+    for row in rows {
+        let record = row.into_record();
+        if is_context_reset_marker(&record) {
+            return Ok(Some(record.id));
+        }
+    }
+    Ok(None)
+}
+
 /// Insert a new message (append-only).
 pub async fn insert(pool: &SqlitePool, record: &MessageRecord) -> Result<(), AppError> {
     sqlx::query(
@@ -155,4 +240,22 @@ pub async fn update_metadata(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Helper: Check if a message is a context reset marker.
+fn is_context_reset_marker(message: &MessageRecord) -> bool {
+    message.message_type == "summary_marker"
+        && metadata_kind_matches(message.metadata_json.as_deref(), "context_reset")
+}
+
+/// Helper: Check if metadata contains the expected kind value.
+fn metadata_kind_matches(raw: Option<&str>, expected: &str) -> bool {
+    if let Some(json_str) = raw {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
+            if let Some(kind_str) = value.get("kind").and_then(serde_json::Value::as_str) {
+                return kind_str == expected;
+            }
+        }
+    }
+    false
 }

@@ -37,14 +37,16 @@ use crate::ipc::app_events::{
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{MessageAttachmentDto, MessageRecord, ThreadStatus};
-use crate::persistence::repo::{message_repo, profile_repo, run_repo, thread_repo, workspace_repo};
+use crate::persistence::repo::{
+    message_repo, profile_repo, run_repo, thread_repo, tool_call_repo, workspace_repo,
+};
 
 const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(60);
-const COMPACT_SUMMARY_TIMEOUT: Duration = Duration::from_secs(20);
+const COMPACT_SUMMARY_TIMEOUT: Duration = Duration::from_secs(60);
 const TITLE_GENERATION_MAX_TOKENS: u32 = 512;
 const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 2048;
-const COMPACT_SUMMARY_MAX_TOKENS: u32 = 700;
-const COMPACT_SUMMARY_MAX_TOKENS_REASONING: u32 = 2048;
+const COMPACT_SUMMARY_MAX_TOKENS: u32 = 4096;
+const COMPACT_SUMMARY_MAX_TOKENS_REASONING: u32 = 8192;
 const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
 const COMPACT_SUMMARY_CONTEXT_MAX_CHARS: usize = 18_000;
 const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
@@ -447,6 +449,14 @@ impl AgentRunManager {
             .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
         let messages = message_repo::list_recent(&self.pool, thread_id, None, 1024).await?;
         let current_context_messages = trim_history_to_current_context(&messages);
+        let compact_run_ids: Vec<String> = current_context_messages
+            .iter()
+            .filter_map(|m| m.run_id.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let compact_tool_calls =
+            tool_call_repo::list_by_run_ids(&self.pool, &compact_run_ids).await?;
         let workspace_path = workspace_repo::find_by_id(&self.pool, &thread.workspace_id)
             .await?
             .map(|workspace| workspace.canonical_path)
@@ -461,7 +471,8 @@ impl AgentRunManager {
         )
         .await?;
         let model = compact_summary_model(&preview_spec.model_plan);
-        let history = convert_history_messages(&current_context_messages, &model);
+        let history =
+            convert_history_messages(&current_context_messages, &compact_tool_calls, &model);
         let compact_instructions = instructions
             .as_ref()
             .map(|value| value.trim().to_string())
@@ -725,7 +736,16 @@ impl AgentRunManager {
             "<context_summary>\nNo earlier plain-message context was available before this plan.\n</context_summary>"
                 .to_string()
         } else {
-            let history = convert_history_messages(&current_context_messages, &model);
+            let reset_run_ids: Vec<String> = current_context_messages
+                .iter()
+                .filter_map(|m| m.run_id.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            let reset_tool_calls =
+                tool_call_repo::list_by_run_ids(&self.pool, &reset_run_ids).await?;
+            let history =
+                convert_history_messages(&current_context_messages, &reset_tool_calls, &model);
             summarize_messages(&history)
         };
 
