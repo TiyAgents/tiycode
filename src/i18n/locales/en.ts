@@ -558,7 +558,7 @@ const en: Record<TranslationKey, string> = {
   "extensions.remove": "Remove",
   "extensions.edit": "Edit",
   "extensions.restart": "Restart",
-"extensions.connecting": "Connecting…",
+"extensions.actionFailed": "Action failed",
 "extensions.processing": "Processing…",
   "extensions.commandsBadge": "commands",
   "extensions.mcpsBadge": "mcps",

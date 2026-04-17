@@ -228,13 +228,13 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
     refresh,
     loadDetail,
     loadSkillPreview,
-    enableExtension: (id: string) =>
-      mutateAndRefresh(currentWorkspacePath ? "workspace" : "global", () =>
-        extensionEnable(id, { workspacePath: currentWorkspacePath ?? undefined }),
+    enableExtension: (id: string, scope: ExtensionScope) =>
+      mutateAndRefresh(scope, () =>
+        extensionEnable(id, buildScopeOptions(scope)),
       ),
-    disableExtension: (id: string) =>
-      mutateAndRefresh(currentWorkspacePath ? "workspace" : "global", () =>
-        extensionDisable(id, { workspacePath: currentWorkspacePath ?? undefined }),
+    disableExtension: (id: string, scope: ExtensionScope) =>
+      mutateAndRefresh(scope, () =>
+        extensionDisable(id, buildScopeOptions(scope)),
       ),
     uninstallExtension: (id: string, scope: ExtensionScope) =>
       mutateAndRefresh(scope, () => extensionUninstall(id, buildScopeOptions(scope))),
@@ -257,13 +257,13 @@ export function useExtensionsController(currentWorkspacePath?: string | null) {
       mutateAndRefresh(scope, () => mcpRestartServer(id, buildScopeOptions(scope))),
     rescanSkills: (scope: ExtensionScope) =>
       mutateAndRefresh(scope, () => skillRescan(buildScopeOptions(scope))),
-    enableSkill: (id: string) =>
-      mutateAndRefresh(currentWorkspacePath ? "workspace" : "global", () =>
-        skillEnable(id, { workspacePath: currentWorkspacePath ?? undefined }),
+    enableSkill: (id: string, scope: ExtensionScope) =>
+      mutateAndRefresh(scope, () =>
+        skillEnable(id, buildScopeOptions(scope)),
       ),
-    disableSkill: (id: string) =>
-      mutateAndRefresh(currentWorkspacePath ? "workspace" : "global", () =>
-        skillDisable(id, { workspacePath: currentWorkspacePath ?? undefined }),
+    disableSkill: (id: string, scope: ExtensionScope) =>
+      mutateAndRefresh(scope, () =>
+        skillDisable(id, buildScopeOptions(scope)),
       ),
   };
 }

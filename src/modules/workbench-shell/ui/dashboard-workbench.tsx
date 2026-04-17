@@ -3051,8 +3051,8 @@ export function DashboardWorkbench() {
           onRefresh={() => void refreshExtensions(currentExtensionScope)}
           onLoadDetail={(id) => loadExtensionDetail(id, currentExtensionScope)}
           onLoadSkillPreview={(id) => loadSkillPreview(id, currentExtensionScope)}
-          onEnableExtension={(id) => enableExtension(id)}
-          onDisableExtension={(id) => disableExtension(id)}
+          onEnableExtension={(id) => enableExtension(id, currentExtensionScope)}
+          onDisableExtension={(id) => disableExtension(id, currentExtensionScope)}
           onUninstallExtension={(id) => uninstallExtension(id, currentExtensionScope)}
           onAddMarketplaceSource={addMarketplaceSource}
           onGetMarketplaceSourceRemovePlan={getMarketplaceSourceRemovePlan}
@@ -3064,8 +3064,8 @@ export function DashboardWorkbench() {
           onRemoveMcpServer={(id) => removeMcpServer(id, currentExtensionScope)}
           onRestartMcpServer={(id) => restartMcpServer(id, currentExtensionScope)}
           onRescanSkills={() => rescanSkills(currentExtensionScope)}
-          onEnableSkill={(id) => enableSkill(id)}
-          onDisableSkill={(id) => disableSkill(id)}
+          onEnableSkill={(id) => enableSkill(id, currentExtensionScope)}
+          onDisableSkill={(id) => disableSkill(id, currentExtensionScope)}
           skillPreviewById={skillPreviewById}
           skills={extensionSkills}
         />

@@ -502,6 +502,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [isActionPending, setActionPending] = useState(false);
   const [pendingMcpIds, setPendingMcpIds] = useState<Set<string>>(new Set());
+  const [actionError, setActionError] = useState<string | null>(null);
   const [skillPreviewDialogOpen, setSkillPreviewDialogOpen] = useState(false);
   const activeQuery = queryByTab[activeTab];
 
@@ -719,10 +720,12 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
   const runAction = async (action: () => Promise<void>) => {
     setActionPending(true);
+    setActionError(null);
     try {
       await action();
     } catch (error) {
       console.error("extensions-center action failed", error);
+      setActionError(getInvokeErrorMessage(error, t("extensions.actionFailed")));
     } finally {
       setActionPending(false);
     }
@@ -730,10 +733,12 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
 
   const runMcpAction = useCallback(async (serverId: string, action: () => Promise<void>) => {
     setPendingMcpIds((prev) => new Set(prev).add(serverId));
+    setActionError(null);
     try {
       await action();
     } catch (error) {
       console.error("extensions-center mcp action failed", error);
+      setActionError(getInvokeErrorMessage(error, t("extensions.actionFailed")));
     } finally {
       setPendingMcpIds((prev) => {
         const next = new Set(prev);
@@ -741,7 +746,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
         return next;
       });
     }
-  }, []);
+  }, [t]);
 
   const handleOpenCreateMcpDialog = () => {
     setMcpDialogMode("create");
@@ -965,6 +970,15 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
             {props.error ? (
               <div className="mt-3 rounded-xl border border-app-danger/30 bg-app-danger/8 px-3 py-2 text-[12px] text-app-danger">
                 {props.error}
+              </div>
+            ) : null}
+
+            {actionError ? (
+              <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-app-danger/30 bg-app-danger/8 px-3 py-2 text-[12px] text-app-danger">
+                <span>{actionError}</span>
+                <button type="button" className="shrink-0 text-app-danger/60 hover:text-app-danger" onClick={() => setActionError(null)}>
+                  <X className="size-3.5" />
+                </button>
               </div>
             ) : null}
 

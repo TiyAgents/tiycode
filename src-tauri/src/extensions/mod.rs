@@ -4478,7 +4478,7 @@ fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
                 let mut child = cmd.spawn().ok()?;
                 let mut stdout = child.stdout.take()?;
                 let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
+                let reader_handle = std::thread::spawn(move || {
                     use std::io::Read;
                     let mut buf = Vec::new();
                     let read_result = stdout.read_to_end(&mut buf);
@@ -4490,6 +4490,8 @@ fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
                         // Timeout or read error — kill the child to prevent resource leaks
                         let _ = child.kill();
                         let _ = child.wait();
+                        // Join the reader thread so it doesn't outlive the child process
+                        let _ = reader_handle.join();
                         return None;
                     }
                 };
