@@ -1131,7 +1131,11 @@ impl ExtensionsManager {
         Ok(tools)
     }
 
-    pub async fn resolve_tool(&self, tool_name: &str) -> Result<Option<ResolvedTool>, AppError> {
+    pub async fn resolve_tool(
+        &self,
+        tool_name: &str,
+        workspace_path: Option<&str>,
+    ) -> Result<Option<ResolvedTool>, AppError> {
         for plugin in self.load_enabled_plugin_runtimes().await? {
             if let Some(tool) = plugin
                 .manifest
@@ -1150,7 +1154,15 @@ impl ExtensionsManager {
             }
         }
 
-        for server in self.list_mcp_servers(None, ConfigScope::Global).await? {
+        let scope = if workspace_path
+            .map(|path| !path.trim().is_empty())
+            .unwrap_or(false)
+        {
+            ConfigScope::Workspace
+        } else {
+            ConfigScope::Global
+        };
+        for server in self.list_mcp_servers(workspace_path, scope).await? {
             if server.status == "connected" || server.status == "degraded" {
                 if let Some(tool) = server
                     .tools
@@ -4478,7 +4490,7 @@ fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
 
             let shell = current_shell();
             let mut cmd = std::process::Command::new(&shell);
-            cmd.args(["-l", "-c", "env"]);
+            cmd.args(["-l", "-i", "-c", "env"]);
             cmd.stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
                 .stdin(std::process::Stdio::null());
@@ -4537,7 +4549,7 @@ fn login_shell_env() -> &'static std::collections::HashMap<String, String> {
                 );
                 // Log PATH separately since it is the most important for tool resolution
                 if let Some(path) = env.get("PATH") {
-                    tracing::debug!(PATH = %path, "login_shell_env: captured PATH");
+                    tracing::info!(PATH = %path, "login_shell_env: captured PATH");
                 }
             }
             env
@@ -5019,6 +5031,12 @@ async fn spawn_stdio_mcp_process(
     let program = resolve_command_path(configured_program)
         .await
         .unwrap_or_else(|| PathBuf::from(configured_program));
+    tracing::info!(
+        server = %config.label,
+        configured = %configured_program,
+        resolved = %program.display(),
+        "spawn_stdio_mcp_process: resolved command path"
+    );
     let mut command = Command::new(&program);
     command.args(config.args.clone().unwrap_or_default());
     if let Some(cwd) = config.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) {
@@ -5302,8 +5320,10 @@ fn mcp_runtime_record_needs_refresh(server_id: &str, runtime: &McpRuntimeRecord)
 }
 
 fn mcp_runtime_record_is_disabled(runtime: &McpRuntimeRecord) -> bool {
-    matches!(runtime.status.as_deref(), Some("disconnected"))
-        || matches!(runtime.phase.as_deref(), Some("shutdown"))
+    matches!(
+        runtime.status.as_deref(),
+        Some("disconnected") | Some("error")
+    ) || matches!(runtime.phase.as_deref(), Some("shutdown"))
 }
 
 fn mcp_tool_name_is_provider_safe(name: &str) -> bool {
