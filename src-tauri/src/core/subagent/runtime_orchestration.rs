@@ -125,6 +125,10 @@ impl RuntimeOrchestrationTool {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "Optional risk cues such as cross_platform, persistence, schema, runtime, config, or tests."
+                    },
+                    "planFilePath": {
+                        "type": "string",
+                        "description": "Optional absolute path to a plan file (e.g. ~/.tiy/plans/{threadId}.md). When provided, the review helper reads the plan and verifies each step was implemented."
                     }
                 },
                 "required": ["task"]
