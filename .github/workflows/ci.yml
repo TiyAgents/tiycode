@@ -32,7 +32,7 @@ jobs:
             COMMITS=$(git log -1 --format=%s)
           fi
 
-          PATTERN='^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\([a-zA-Z0-9_-]+\))?: .+'
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\([a-zA-Z0-9_/.-]+\))?: .+'
 
           echo "Validating commit messages..."
           FAILED=0
