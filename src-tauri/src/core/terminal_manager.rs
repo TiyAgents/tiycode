@@ -250,6 +250,15 @@ impl TerminalManager {
             .unwrap_or("xterm-256color");
         command.env("TERM", term_value);
         command.env("COLORTERM", "truecolor");
+        tracing::info!(
+            session_id = %session_id,
+            thread_id = %thread_id,
+            shell = %shell,
+            cwd = %cwd.display(),
+            TERM = %term_value,
+            COLORTERM = "truecolor",
+            "terminal session: env vars injected"
+        );
 
         let child = pair.slave.spawn_command(command).map_err(|error| {
             AppError::recoverable(
