@@ -308,7 +308,7 @@ impl AgentRunManager {
         plan_metadata.approval_state = IMPLEMENTATION_PLAN_APPROVED_STATE.to_string();
 
         let implementation_prompt =
-            build_implementation_handoff_prompt(&plan_metadata, action.clone());
+            build_implementation_handoff_prompt(thread_id, &plan_metadata, action.clone());
         let (history_override, context_seed_messages) = match action {
             PlanApprovalAction::ApplyPlan => (None, None),
             PlanApprovalAction::ApplyPlanWithContextReset => {
@@ -1384,6 +1384,7 @@ fn extract_run_model_refs(
 }
 
 fn build_implementation_handoff_prompt(
+    thread_id: &str,
     metadata: &PlanMessageMetadata,
     action: PlanApprovalAction,
 ) -> String {
@@ -1395,18 +1396,22 @@ fn build_implementation_handoff_prompt(
             "The user approved this plan after clearing the planning conversation from the implementation context."
         }
     };
+    let plan_file_note = crate::core::plan_checkpoint::plan_file_path(thread_id)
+        .filter(|path| path.exists())
+        .map(|path| format!("\n- Plan file on disk: {}", path.display()))
+        .unwrap_or_default();
     match action {
         PlanApprovalAction::ApplyPlan => {
             let plan_markdown = crate::core::plan_checkpoint::plan_markdown(metadata);
 
             format!(
-                "Implementation handoff:\n- {action_note}\n- Plan revision: {}\n- Treat the approved plan below as the implementation baseline.\n- If the plan turns out to be invalid or incomplete, pause and return to planning before making a different change.\n\nApproved plan:\n{}",
+                "Implementation handoff:\n- {action_note}\n- Plan revision: {}{plan_file_note}\n- Treat the approved plan below as the implementation baseline.\n- If the plan turns out to be invalid or incomplete, pause and return to planning before making a different change.\n- After implementation, use agent_review with planFilePath to verify each plan step was completed.\n\nApproved plan:\n{}",
                 metadata.artifact.plan_revision,
                 plan_markdown
             )
         }
         PlanApprovalAction::ApplyPlanWithContextReset => format!(
-            "Implementation handoff:\n- {action_note}\n- Plan revision: {}\n- The reset context already includes a historical summary and the approved plan.\n- Treat the approved plan in context as the implementation baseline.\n- If the plan turns out to be invalid or incomplete, pause and return to planning before making a different change.",
+            "Implementation handoff:\n- {action_note}\n- Plan revision: {}{plan_file_note}\n- The reset context already includes a historical summary and the approved plan.\n- Treat the approved plan in context as the implementation baseline.\n- If the plan turns out to be invalid or incomplete, pause and return to planning before making a different change.\n- After implementation, use agent_review with planFilePath to verify each plan step was completed.",
             metadata.artifact.plan_revision,
         ),
     }
@@ -2312,6 +2317,7 @@ mod tests {
         let metadata = build_plan_message_metadata(artifact, "run-plan", "plan");
 
         let prompt = build_implementation_handoff_prompt(
+            "thread-handoff-test",
             &metadata,
             PlanApprovalAction::ApplyPlanWithContextReset,
         );
@@ -2324,5 +2330,6 @@ mod tests {
             prompt.contains("Treat the approved plan in context as the implementation baseline.")
         );
         assert!(prompt.contains("after clearing the planning conversation"));
+        assert!(prompt.contains("agent_review with planFilePath"));
     }
 }

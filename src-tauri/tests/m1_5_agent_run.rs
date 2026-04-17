@@ -568,19 +568,21 @@ async fn test_build_session_spec_adds_plan_mode_guardrails() {
 
     assert_eq!(spec.tool_profile_name, "plan_read_only");
     assert!(spec.system_prompt.contains("Plan mode is active."));
+    // Phase 4 instructs the model to call update_plan to publish the plan
     assert!(spec
         .system_prompt
-        .contains("Once you publish a plan with update_plan"));
+        .contains("Call update_plan to publish the formal implementation plan"));
+    // Quality contract covers key sections
+    assert!(spec
+        .system_prompt
+        .contains("`summary`: State what is being changed"));
+    assert!(spec
+        .system_prompt
+        .contains("Include ONLY confirmed facts from inspected code"));
     assert!(spec.system_prompt.contains(
-        "Structure the plan as: summary, context, design, keyImplementation, ordered steps, verification, and risks."
+        "Name the specific files, modules, interfaces, data flows, or state transitions"
     ));
-    assert!(spec
-        .system_prompt
-        .contains("In `context`, include only confirmed facts"));
-    assert!(spec
-        .system_prompt
-        .contains("In `keyImplementation`, name the important files, modules, interfaces, data flow, or state transitions"));
-    assert!(spec.system_prompt.contains("pause for user approval"));
+    assert!(spec.system_prompt.contains("pauses for user approval"));
 }
 
 #[tokio::test]
