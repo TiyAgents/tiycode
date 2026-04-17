@@ -52,11 +52,12 @@ fn reposition_traffic_lights(window: &tauri::Window) {
     };
 
     unsafe {
-        // Resize the title-bar container so the buttons have enough vertical room.
+        // Use a fixed title-bar container height so the result is stable
+        // across dev / release builds regardless of the initial button size.
+        let title_bar_frame_height = y + 20.0; // 40 pt total
+
         let title_bar_container = close.superview().and_then(|v| v.superview());
         if let Some(container) = title_bar_container {
-            let close_rect = NSView::frame(&close);
-            let title_bar_frame_height = close_rect.size.height + y;
             let mut title_bar_rect = NSView::frame(&container);
             title_bar_rect.size.height = title_bar_frame_height;
             title_bar_rect.origin.y =
@@ -65,9 +66,11 @@ fn reposition_traffic_lights(window: &tauri::Window) {
         }
 
         let close_rect = NSView::frame(&close);
+        let button_height = close_rect.size.height;
+        let button_y = ((title_bar_frame_height - button_height) / 2.0).max(0.0);
         let space_between = NSView::frame(&miniaturize).origin.x - close_rect.origin.x;
         for (i, button) in [&close, &miniaturize, &zoom].iter().enumerate() {
-            let origin = NSPoint::new(x + (i as f64 * space_between), close_rect.origin.y);
+            let origin = NSPoint::new(x + (i as f64 * space_between), button_y);
             button.setFrameOrigin(origin);
         }
     }
