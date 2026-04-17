@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-04-17
+### :bug: Bug Fixes
+- [`cc615c3`](https://github.com/TiyAgents/tiycode/commit/cc615c3fa1811ef11b522927fafa0d2ca3b9073a) - **mcp**: 🐛 Resolve login-shell command lookup *(PR [#48](https://github.com/TiyAgents/tiycode/pull/48) by [@HayWolf](https://github.com/HayWolf))*
+- [`285318d`](https://github.com/TiyAgents/tiycode/commit/285318d716a77809834fc0182e766b3181b843e8) - **extensions**: 🐛 Fix MCP server env var resolution and UI feedback *(PR [#50](https://github.com/TiyAgents/tiycode/pull/50) by [@jorben](https://github.com/jorben))*
+- [`febdf3c`](https://github.com/TiyAgents/tiycode/commit/febdf3ce68f980947f08174245a892845ba6109a) - **tauri-macos**: 🐛 keep traffic-light buttons aligned across macOS SDKs *(PR [#51](https://github.com/TiyAgents/tiycode/pull/51) by [@HayWolf](https://github.com/HayWolf))*
+- [`0eed109`](https://github.com/TiyAgents/tiycode/commit/0eed109d0f3517fa316904d034ee3da128749cd8) - **agent-session**: 🐛 prevent main agent tool timeouts *(PR [#54](https://github.com/TiyAgents/tiycode/pull/54) by [@jorben](https://github.com/jorben))*
+- [`1c087eb`](https://github.com/TiyAgents/tiycode/commit/1c087ebb5e29b0a1f2a77741f3ec226f3fb32da6) - **shell**: 🐛 Use interactive login shell for env capture and MCP process spawn *(PR [#53](https://github.com/TiyAgents/tiycode/pull/53) by [@jorben](https://github.com/jorben))*
+- [`ec9c975`](https://github.com/TiyAgents/tiycode/commit/ec9c9755176bbc955368b835d82bd291eaa5efde) - 🐛 Respect installation scope for MCP/skills toggles *(PR [#56](https://github.com/TiyAgents/tiycode/pull/56) by [@jorben](https://github.com/jorben))*
+
+### :wrench: Chores
+- [`c8f16cc`](https://github.com/TiyAgents/tiycode/commit/c8f16cc04c86ca1c9413e62f004be83db205388e) - **mcp**: 🧾 add detailed MCP runtime and tool tracing *(PR [#52](https://github.com/TiyAgents/tiycode/pull/52) by [@jorben](https://github.com/jorben))*
+- [`274a1f1`](https://github.com/TiyAgents/tiycode/commit/274a1f1b4c27cd48b542117badc69a9b2483e630) - **deps**: 🔧 bump tiycore to v0.1.7 *(PR [#55](https://github.com/TiyAgents/tiycode/pull/55) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.2.8] - 2026-04-16
 ### :sparkles: New Features
 - [`efd104c`](https://github.com/TiyAgents/tiycode/commit/efd104c8308be5894630809a0a92fce8fb4b6f76) - **settings-center**: ✨ 收紧存储链路并增加配置诊断 *(PR [#44](https://github.com/TiyAgents/tiycode/pull/44) by [@jorben](https://github.com/jorben))*
@@ -479,3 +493,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.6]: https://github.com/TiyAgents/tiycode/compare/0.2.5...0.2.6
 [0.2.7]: https://github.com/TiyAgents/tiycode/compare/0.2.6...0.2.7
 [0.2.8]: https://github.com/TiyAgents/tiycode/compare/0.2.7...0.2.8
+[0.2.9]: https://github.com/TiyAgents/tiycode/compare/0.2.8...0.2.9
