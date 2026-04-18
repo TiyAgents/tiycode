@@ -1345,11 +1345,12 @@ impl SettingsManager {
             updated_at: String::new(),
         };
 
+        // Insert the row first so that set_default can find it.
+        profile_repo::insert(&self.pool, &record).await?;
+
         if record.is_default {
             profile_repo::set_default(&self.pool, &record.id).await.ok();
         }
-
-        profile_repo::insert(&self.pool, &record).await?;
 
         profile_repo::find_by_id(&self.pool, &record.id)
             .await?
