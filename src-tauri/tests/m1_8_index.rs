@@ -833,17 +833,14 @@ async fn test_tree_cache_expires_after_ttl() {
 
     // Third call — TTL expired, should rescan and pick up the new file.
     let refreshed = manager.get_tree(&base.to_string_lossy()).await.unwrap();
-    let refreshed_count = refreshed
-        .children
-        .as_ref()
-        .map(|c| c.len())
-        .unwrap_or(0);
+    let refreshed_count = refreshed.children.as_ref().map(|c| c.len()).unwrap_or(0);
 
     assert!(
         refreshed_count > first_count
-            || refreshed.children.as_ref().is_some_and(|children| children
-                .iter()
-                .any(|child| child.path == "src")),
+            || refreshed
+                .children
+                .as_ref()
+                .is_some_and(|children| children.iter().any(|child| child.path == "src")),
         "after TTL expiry the tree should reflect filesystem changes"
     );
 }
