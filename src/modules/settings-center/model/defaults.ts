@@ -657,7 +657,24 @@ Refs #198
   - Changes affecting multiple systems
 - Always review the generated PR content before confirming
 - The tool will intelligently suggest \`full\` style when appropriate
-- PR URL will be displayed upon successful creation`,
+- PR URL will be displayed upon successful creation
+
+## Windows and Cross-Platform Notes
+
+When running on Windows (cmd.exe), the default shell has limited support for multi-line strings, heredocs, and special character escaping. Follow these guidelines to avoid common pitfalls:
+
+1. **Never pass multi-line PR body directly via --body**. Windows cmd does not support heredoc or \`$'...'\` syntax, and embedded newlines and quotes are easily mangled. Instead:
+   - Create the PR with \`gh pr create --fill\` (which auto-generates a title from commits), or use \`--title\` with a single-line title only.
+   - Then update the body from a file: \`gh pr edit <PR-NUMBER> --body-file pr-description.md\`
+   - Write the PR description to a temporary markdown file first, then pass that file to \`--body-file\`.
+
+2. **Two-step approach is the safest workflow on all platforms**:
+   - Step 1: \`gh pr create --fill\` or \`gh pr create --title "<title>" --body ""\`
+   - Step 2: \`gh pr edit <PR-NUMBER> --body-file <path-to-description-file>\`
+
+3. **Avoid shell-special characters in inline strings**. Characters like \`!\`, \`%\`, \`"\`, \`\`\`, and \`\\n\` are interpreted differently across cmd, PowerShell, and Unix shells. Writing content to a file and referencing it with \`--body-file\` bypasses all shell escaping issues.
+
+4. **CRLF line endings**: If \`git diff\` output shows \`^M\` artifacts, ensure \`git config core.autocrlf\` is set appropriately for the project.`,
     },
   ],
 };
