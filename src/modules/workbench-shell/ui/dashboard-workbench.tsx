@@ -18,6 +18,7 @@ import {
   LoaderCircle,
   MessageSquarePlus,
   MoreHorizontal,
+  Shuffle,
   Trash2,
 } from "lucide-react";
 import {
@@ -1498,6 +1499,13 @@ export function DashboardWorkbench() {
       return;
     }
 
+    // Worktree rows cannot be the default workspace — only the owning repo
+    // can. Skip the auto-promotion in that case to avoid a recoverable
+    // backend error and a stale bootstrap banner.
+    if (selectedProject.kind === "worktree") {
+      return;
+    }
+
     let cancelled = false;
 
     void workspaceSetDefault(selectedProjectWorkspaceId)
@@ -1821,7 +1829,28 @@ export function DashboardWorkbench() {
     setNewThreadMode(false);
     setActiveWorkspaceMenuId(null);
     setPendingDeleteThreadId(null);
+    setTerminalBootstrapError(null);
     setWorkspaces((current) => activateThread(current, threadId));
+
+    // Align the selected project with the workspace that owns this thread so
+    // the new-thread empty state and path bindings stay consistent when the
+    // user toggles back to New Thread mode. Without this, selectedProject can
+    // drift (e.g. it stays on a worktree after the user jumped back to a
+    // thread belonging to the parent repo).
+    const nextWorkspace = workspaces.find((workspace) =>
+      workspace.threads.some((thread) => thread.id === threadId),
+    );
+    if (nextWorkspace && nextWorkspace.id !== selectedProject?.id) {
+      const projectForWorkspace = recentProjects.find(
+        (project) => project.id === nextWorkspace.id,
+      );
+      if (projectForWorkspace) {
+        setSelectedProject({
+          ...projectForWorkspace,
+          lastOpenedLabel: t("time.justNow"),
+        });
+      }
+    }
 
     // Restore the profile that was last used on this thread.
     const resolved = resolveThreadProfileId(
@@ -1855,7 +1884,7 @@ export function DashboardWorkbench() {
     clearNewThreadBindingForWorkspace(workspace.id);
 
     const projectFromPath = buildProjectOptionFromPath(workspace.path);
-    const nextProject = {
+    const nextProject: ProjectOption = {
       ...(projectFromPath ?? {
         id: workspace.id,
         name: workspace.name,
@@ -1866,6 +1895,16 @@ export function DashboardWorkbench() {
       name: workspace.name,
       path: workspace.path,
       lastOpenedLabel: t("time.justNow"),
+      // Preserve worktree-aware metadata so downstream effects (e.g. the
+      // "set this workspace as default" auto-promotion) can correctly skip
+      // worktree rows. Without this, selecting a worktree to start a new
+      // thread would surface the backend error
+      // "A worktree cannot be set as the default workspace" in the project
+      // and git panels.
+      kind: workspace.kind,
+      parentWorkspaceId: workspace.parentWorkspaceId,
+      worktreeHash: workspace.worktreeHash,
+      branch: workspace.branch,
     };
 
     deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
@@ -2755,7 +2794,7 @@ export function DashboardWorkbench() {
                   const isOpen =
                     openWorkspaces[workspace.id] ?? workspace.defaultOpen;
                   const FolderIcon = isWorktreeRow
-                    ? GitBranch
+                    ? Shuffle
                     : isOpen
                       ? FolderOpen
                       : Folder;
@@ -2798,17 +2837,19 @@ export function DashboardWorkbench() {
                             onClick={() => handleWorkspaceToggle(workspace.id)}
                           >
                             <FolderIcon className="size-4 shrink-0 text-app-muted" />
-                            <span className={cn(DRAWER_LIST_LABEL_CLASS, "flex-1")}>
-                              {workspace.name}
-                            </span>
-                            {worktreeTag ? (
-                              <span
-                                title={t("worktree.tag.label")}
-                                className="rounded bg-app-surface-hover px-1.5 py-0.5 font-mono text-[10px] text-app-subtle"
-                              >
-                                {worktreeTag}
+                            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                              <span className="truncate text-[13px] leading-5">
+                                {workspace.name}
                               </span>
-                            ) : null}
+                              {worktreeTag ? (
+                                <span
+                                  title={t("worktree.tag.label")}
+                                  className="shrink-0 rounded bg-app-surface-hover px-1.5 py-0.5 font-mono text-[10px] text-app-subtle"
+                                >
+                                  {worktreeTag}
+                                </span>
+                              ) : null}
+                            </div>
                           </button>
                           <button
                             type="button"
@@ -2868,7 +2909,7 @@ export function DashboardWorkbench() {
                                   }}
                                   disabled={!workspace.path}
                                 >
-                                  <GitBranch className="size-4 shrink-0" />
+                                  <Shuffle className="size-4 shrink-0" />
                                   <span>{t("worktree.menu.newWorktree")}</span>
                                 </button>
                               ) : null}
@@ -3063,6 +3104,7 @@ export function DashboardWorkbench() {
                                   workspaceId={resolvedWorkspaceId}
                                   snapshot={branchSnapshot}
                                   modelPlan={commitMessageModelPlan}
+                                  readOnly={currentProject?.kind === "worktree"}
                                 />
                               ) : null
                             }
@@ -3175,6 +3217,7 @@ export function DashboardWorkbench() {
                             workspaceId={resolvedWorkspaceId}
                             snapshot={branchSnapshot}
                             modelPlan={commitMessageModelPlan}
+                            readOnly={currentProject?.kind === "worktree"}
                           />
                         </div>
                       </div>

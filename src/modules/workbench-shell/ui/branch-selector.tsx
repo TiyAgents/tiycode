@@ -45,10 +45,12 @@ export function BranchSelector({
   workspaceId,
   snapshot,
   modelPlan,
+  readOnly,
 }: {
   workspaceId: string | null;
   snapshot: Pick<GitSnapshotDto, "headRef" | "isDetached" | "stagedFiles" | "unstagedFiles" | "untrackedFiles"> | null;
   modelPlan: RunModelPlanDto | null;
+  readOnly?: boolean;
 }) {
   const t = useT();
   const [isOpen, setOpen] = useState(false);
@@ -340,6 +342,15 @@ export function BranchSelector({
       <span className="inline-flex items-center gap-1.5 text-xs text-app-subtle">
         <GitBranch className="size-3.5" />
         <span>{t("sourceControl.noBranch")}</span>
+      </span>
+    );
+  }
+
+  if (readOnly) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-app-subtle">
+        <GitBranch className="size-3.5 shrink-0" />
+        <span className="max-w-[120px] truncate">{branchLabel}</span>
       </span>
     );
   }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown, Folder, FolderPlus, GitBranch } from "lucide-react";
+import { Check, ChevronDown, Folder, FolderPlus, Shuffle } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useT } from "@/i18n";
 import { cn } from "@/shared/lib/utils";
@@ -128,7 +128,7 @@ export function NewThreadEmptyState({
           >
             <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border bg-app-surface-muted text-app-subtle">
               {activeProject?.kind === "worktree" ? (
-                <GitBranch className="size-4 shrink-0" />
+                <Shuffle className="size-4 shrink-0" />
               ) : (
                 <Folder className="size-4 shrink-0" />
               )}
@@ -199,7 +199,7 @@ export function NewThreadEmptyState({
                         >
                           <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-subtle">
                             {isWorktree ? (
-                              <GitBranch className="size-4 shrink-0" />
+                              <Shuffle className="size-4 shrink-0" />
                             ) : (
                               <Folder className="size-4 shrink-0" />
                             )}
@@ -254,7 +254,7 @@ export function NewThreadEmptyState({
                     }}
                   >
                     <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-subtle">
-                      <GitBranch className="size-4 shrink-0" />
+                      <Shuffle className="size-4 shrink-0" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium">{t("worktree.menu.newWorktree")}</div>
