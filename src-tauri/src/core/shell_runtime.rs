@@ -262,7 +262,12 @@ fn executable_candidates(command: &str) -> Vec<OsString> {
 
         let pathext =
             std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
-        let mut candidates = vec![OsString::from(command)];
+        // On Windows, prioritise extension-bearing candidates (.exe, .cmd, …)
+        // over the bare name.  Tools like nvm-for-windows place a Unix shell
+        // script shim (`npx`) alongside the real `npx.cmd` in the same
+        // directory; matching the bare name first would resolve to the shell
+        // script, which is not a valid Win32 executable (OS error 193).
+        let mut candidates = Vec::new();
 
         for ext in pathext.to_string_lossy().split(';') {
             let trimmed = ext.trim();
@@ -271,6 +276,9 @@ fn executable_candidates(command: &str) -> Vec<OsString> {
             }
             candidates.push(OsString::from(format!("{command}{trimmed}")));
         }
+
+        // Bare name as last-resort fallback.
+        candidates.push(OsString::from(command));
 
         candidates
     }

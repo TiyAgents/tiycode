@@ -5090,6 +5090,7 @@ async fn spawn_stdio_mcp_process(
         "spawn_stdio_mcp_process: resolved command path"
     );
     let mut command = Command::new(&program);
+    configure_background_tokio_command(&mut command);
     command.args(config.args.clone().unwrap_or_default());
     if let Some(cwd) = config.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) {
         command.current_dir(cwd);
