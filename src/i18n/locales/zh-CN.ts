@@ -797,7 +797,7 @@ const zhCN = {
   "worktree.field.path": "worktree 目录",
   "worktree.field.pathPlaceholder": "自动生成路径",
   "worktree.field.pathBrowse": "选择...",
-  "worktree.field.pathHint": "默认创建在主仓库同级目录，可修改",
+  "worktree.field.pathHint": "留空将自动生成在 ~/.tiy/workspace/<hash>/<repo>",
   "worktree.submit": "创建 Worktree",
   "worktree.submitting": "创建中...",
   "worktree.cancel": "取消",

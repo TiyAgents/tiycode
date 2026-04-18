@@ -32,38 +32,6 @@ export type NewWorktreeDialogContext = {
 
 type Tab = "existing" | "new";
 
-function slugifyBranch(branch: string): string {
-  const lower = branch.toLowerCase();
-  let out = "";
-  let lastDash = false;
-  for (const ch of lower) {
-    if (/[a-z0-9]/.test(ch)) {
-      out += ch;
-      lastDash = false;
-    } else {
-      if (!lastDash) {
-        out += "-";
-        lastDash = true;
-      }
-    }
-  }
-  out = out.replace(/^-+|-+$/g, "");
-  return out || "worktree";
-}
-
-function repoParentPath(canonicalPath: string): string {
-  const normalized = canonicalPath.replace(/\\/g, "/").replace(/\/+$/g, "");
-  const slash = normalized.lastIndexOf("/");
-  if (slash <= 0) return normalized;
-  return normalized.slice(0, slash);
-}
-
-function repoBaseName(canonicalPath: string): string {
-  const normalized = canonicalPath.replace(/\\/g, "/").replace(/\/+$/g, "");
-  const slash = normalized.lastIndexOf("/");
-  return slash >= 0 ? normalized.slice(slash + 1) : normalized;
-}
-
 export function NewWorktreeDialog({
   context,
   onClose,
@@ -117,20 +85,22 @@ export function NewWorktreeDialog({
     };
   }, [isOpen, context]);
 
-  // Auto-fill the default path based on the current branch input.
-  const defaultPath = useMemo(() => {
+  // When left empty, the backend auto-generates the path under
+  // `~/.tiy/workspace/<hash>/<repo-name>`. We intentionally do NOT auto-fill
+  // the input so users see the placeholder and trust the default.
+  const defaultPathHint = useMemo(() => {
     if (!context) return "";
-    const parent = repoParentPath(context.repo.canonicalPath);
-    const repoName = repoBaseName(context.repo.canonicalPath);
-    const slug = slugifyBranch(branch || "worktree");
-    return `${parent}/${repoName}-${slug}`;
-  }, [context, branch]);
+    return `~/.tiy/workspace/<hash>/${context.repo.name}`;
+  }, [context]);
 
   useEffect(() => {
+    if (!isOpen) return;
+    // Reset path back to empty whenever the dialog opens for a new repo;
+    // backend will auto-generate on submit.
     if (!pathTouched) {
-      setPath(defaultPath);
+      setPath("");
     }
-  }, [defaultPath, pathTouched]);
+  }, [isOpen, pathTouched]);
 
   const canSubmit = Boolean(context && branch.trim() && !submitting);
 
@@ -287,7 +257,7 @@ export function NewWorktreeDialog({
                   setPath(e.target.value);
                   setPathTouched(true);
                 }}
-                placeholder={t("worktree.field.pathPlaceholder")}
+                placeholder={defaultPathHint}
                 className="flex-1 font-mono text-xs"
               />
               <Button type="button" variant="outline" onClick={handleBrowsePath}>

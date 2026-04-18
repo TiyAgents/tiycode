@@ -759,7 +759,7 @@ const en: Record<TranslationKey, string> = {
   "worktree.field.path": "Worktree directory",
   "worktree.field.pathPlaceholder": "Auto-generated path",
   "worktree.field.pathBrowse": "Browse…",
-  "worktree.field.pathHint": "Defaults to a sibling directory next to the main repo. You can override it.",
+  "worktree.field.pathHint": "Leave empty to auto-generate under ~/.tiy/workspace/<hash>/<repo>.",
   "worktree.submit": "Create worktree",
   "worktree.submitting": "Creating…",
   "worktree.cancel": "Cancel",

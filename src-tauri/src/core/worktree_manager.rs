@@ -104,7 +104,6 @@ impl WorktreeManager {
         // displays as a hash tag, so uniqueness across siblings is guaranteed.
         let hex6 = random_hex6();
         let worktree_name = format!("{hex6}-{slug}");
-        let repo_root = PathBuf::from(&parent.canonical_path);
         let target_path = match input
             .path
             .as_deref()
@@ -112,7 +111,7 @@ impl WorktreeManager {
             .filter(|s| !s.is_empty())
         {
             Some(custom) => PathBuf::from(custom),
-            None => default_worktree_path(&repo_root, &worktree_name),
+            None => default_worktree_path(&parent.name, &hex6)?,
         };
 
         if target_path.exists() {
@@ -373,13 +372,47 @@ fn random_hex6() -> String {
     raw[..6].to_string()
 }
 
-fn default_worktree_path(repo_root: &Path, worktree_name: &str) -> PathBuf {
-    let repo_name = repo_root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("repo");
-    let parent = repo_root.parent().unwrap_or_else(|| Path::new("."));
-    parent.join(format!("{repo_name}-{worktree_name}"))
+/// Compute the default worktree directory under the TiyCode data root:
+/// `~/.tiy/workspace/<hex6>/<safe-repo-name>`. Ensures the parent directory
+/// exists so `git worktree add` will succeed even on a fresh install where
+/// `~/.tiy/workspace/` has never been created.
+fn default_worktree_path(repo_name: &str, hex6: &str) -> Result<PathBuf, AppError> {
+    let home = dirs::home_dir().ok_or_else(|| {
+        AppError::internal(ErrorSource::Workspace, "cannot resolve HOME directory")
+    })?;
+    let safe_name = sanitize_repo_name_for_path(repo_name);
+    let parent_dir = home.join(".tiy").join("workspace").join(hex6);
+
+    if let Err(error) = std::fs::create_dir_all(&parent_dir) {
+        return Err(worktree_error(
+            "workspace.worktree.prepare_default_path_failed",
+            format!(
+                "Failed to create default worktree parent directory '{}': {error}",
+                parent_dir.display()
+            ),
+            false,
+        ));
+    }
+
+    Ok(parent_dir.join(safe_name))
+}
+
+fn sanitize_repo_name_for_path(name: &str) -> String {
+    let trimmed = name.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        if ch.is_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            out.push(ch);
+        } else if ch.is_whitespace() || ch == '/' || ch == '\\' {
+            out.push('-');
+        }
+    }
+    let cleaned = out.trim_matches(|c: char| c == '-' || c == '.').to_string();
+    if cleaned.is_empty() {
+        "workspace".to_string()
+    } else {
+        cleaned
+    }
 }
 
 fn derive_name_from_path(path: &Path) -> String {
@@ -649,8 +682,24 @@ mod tests {
     }
 
     #[test]
-    fn default_worktree_path_uses_sibling_directory() {
-        let path = default_worktree_path(Path::new("/tmp/my-repo"), "feature-foo");
-        assert_eq!(path, PathBuf::from("/tmp/my-repo-feature-foo"));
+    fn default_worktree_path_uses_tiy_workspace_root() {
+        let path = default_worktree_path("my-repo", "abcdef").expect("should compute path");
+        let home = dirs::home_dir().expect("home available");
+        let expected = home
+            .join(".tiy")
+            .join("workspace")
+            .join("abcdef")
+            .join("my-repo");
+        assert_eq!(path, expected);
+        // The parent directory should exist on disk after the call.
+        assert!(expected.parent().unwrap().is_dir());
+    }
+
+    #[test]
+    fn sanitize_repo_name_replaces_path_and_whitespace_characters() {
+        assert_eq!(sanitize_repo_name_for_path("my repo"), "my-repo");
+        assert_eq!(sanitize_repo_name_for_path("a/b\\c"), "a-b-c");
+        assert_eq!(sanitize_repo_name_for_path("  -repo.-"), "repo");
+        assert_eq!(sanitize_repo_name_for_path("***"), "workspace");
     }
 }
