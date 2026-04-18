@@ -9,6 +9,7 @@ use serde::Serialize;
 pub const THREAD_RUN_STARTED: &str = "thread-run-started";
 pub const THREAD_RUN_FINISHED: &str = "thread-run-finished";
 pub const THREAD_TITLE_UPDATED: &str = "thread-title-updated";
+pub const INDEX_GIT_OVERLAY_READY: &str = "index-git-overlay-ready";
 
 /// Payload emitted when a thread run transitions to the `running` state.
 #[derive(Debug, Clone, Serialize)]
@@ -33,4 +34,14 @@ pub struct ThreadRunFinishedPayload {
 pub struct ThreadTitleUpdatedPayload {
     pub thread_id: String,
     pub title: String,
+}
+
+/// Payload emitted when a workspace git overlay has been computed asynchronously
+/// after the initial tree response was returned to the frontend.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexGitOverlayReadyPayload {
+    pub workspace_id: String,
+    pub repo_available: bool,
+    pub states: std::collections::HashMap<String, crate::model::git::GitFileState>,
 }

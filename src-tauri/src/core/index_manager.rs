@@ -55,6 +55,9 @@ const INITIAL_LOADED_DEPTH: usize = 0;
 /// Cache workspace file manifests briefly so repeated filter input stays fast.
 const MANIFEST_TTL: Duration = Duration::from_secs(2);
 
+/// Cache the initial tree briefly so rapid panel refreshes skip the FS scan.
+const TREE_CACHE_TTL: Duration = Duration::from_secs(2);
+
 /// Max children loaded for a directory page in TreeView.
 const DIRECTORY_PAGE_SIZE: usize = 200;
 
@@ -230,6 +233,12 @@ struct ManifestCacheEntry {
 }
 
 #[derive(Debug, Clone)]
+struct TreeCacheEntry {
+    built_at: Instant,
+    tree: FileTreeNode,
+}
+
+#[derive(Debug, Clone)]
 struct DirectoryPage {
     children: Vec<FileTreeNode>,
     has_more: bool,
@@ -246,6 +255,7 @@ struct DirectoryEntry {
 #[derive(Clone)]
 pub struct IndexManager {
     manifest_cache: Arc<RwLock<HashMap<String, ManifestCacheEntry>>>,
+    tree_cache: Arc<RwLock<HashMap<String, TreeCacheEntry>>>,
     canonical_cache: Arc<RwLock<HashMap<String, PathBuf>>>,
     stream_cancellations: Arc<Mutex<HashMap<u32, LocalSearchCancellation>>>,
 }
@@ -260,6 +270,7 @@ impl IndexManager {
     pub fn new() -> Self {
         Self {
             manifest_cache: Arc::new(RwLock::new(HashMap::new())),
+            tree_cache: Arc::new(RwLock::new(HashMap::new())),
             canonical_cache: Arc::new(RwLock::new(HashMap::new())),
             stream_cancellations: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -309,17 +320,38 @@ impl IndexManager {
     }
 
     /// Scan workspace directory and return a shallow, expandable file tree.
+    ///
+    /// Results are cached for a short TTL so rapid panel refreshes or workspace
+    /// switches do not trigger redundant filesystem scans.
     pub async fn get_tree(&self, workspace_path: &str) -> Result<FileTreeNode, AppError> {
         let root = self.cached_canonicalize(workspace_path).await?;
+        let cache_key = root.to_string_lossy().to_string();
 
-        tokio::task::spawn_blocking(move || build_initial_tree(&root))
+        if let Some(cached) = self.tree_cache.read().await.get(&cache_key) {
+            if cached.built_at.elapsed() < TREE_CACHE_TTL {
+                return Ok(cached.tree.clone());
+            }
+        }
+
+        let root_for_scan = root.clone();
+        let tree = tokio::task::spawn_blocking(move || build_initial_tree(&root_for_scan))
             .await
             .map_err(|error| {
                 AppError::internal(
                     ErrorSource::Index,
                     format!("Initial tree task failed: {error}"),
                 )
-            })?
+            })??;
+
+        self.tree_cache.write().await.insert(
+            cache_key,
+            TreeCacheEntry {
+                built_at: Instant::now(),
+                tree: tree.clone(),
+            },
+        );
+
+        Ok(tree)
     }
 
     /// Load a directory's direct children on demand.
@@ -868,27 +900,15 @@ fn scan_tree_node(
         return Ok(make_file_node(path, root));
     }
 
-    let page = if depth == 0 {
-        read_directory_entries_page(
-            root,
-            path,
-            skipped,
-            tree_lazy_only,
-            depth < preload_depth,
-            0,
-            usize::MAX,
-        )?
-    } else {
-        read_directory_entries_page(
-            root,
-            path,
-            skipped,
-            tree_lazy_only,
-            depth < preload_depth,
-            0,
-            DIRECTORY_PAGE_SIZE,
-        )?
-    };
+    let page = read_directory_entries_page(
+        root,
+        path,
+        skipped,
+        tree_lazy_only,
+        depth < preload_depth,
+        0,
+        DIRECTORY_PAGE_SIZE,
+    )?;
 
     Ok(FileTreeNode {
         name: node_name(path, root),

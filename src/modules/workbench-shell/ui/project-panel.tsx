@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { useT } from "@/i18n";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Check, ChevronDown, ChevronRight, Copy, FolderOpen, LoaderCircle, RefreshCw } from "lucide-react";
 import {
   type DirectoryChildrenResponse,
@@ -12,6 +13,7 @@ import {
   type FileFilterResponse,
   type FileTreeNode,
   type FileTreeResponse,
+  type IndexGitOverlayReadyPayload,
 } from "@/services/bridge";
 import { Input } from "@/shared/ui/input";
 import { cn } from "@/shared/lib/utils";
@@ -374,6 +376,48 @@ function applyRevealSegment(
   };
 }
 
+const GIT_STATE_PRIORITY: Record<string, number> = {
+  ignored: 1,
+  tracked: 2,
+  modified: 3,
+  untracked: 4,
+};
+
+function strongestGitState(
+  a: FileTreeNode["gitState"],
+  b: FileTreeNode["gitState"],
+): FileTreeNode["gitState"] {
+  if (!a) return b;
+  if (!b) return a;
+  return (GIT_STATE_PRIORITY[a] ?? 0) >= (GIT_STATE_PRIORITY[b] ?? 0) ? a : b;
+}
+
+/**
+ * Apply a git overlay (path → state map) to a tree, mirroring the backend
+ * `annotate_git_state` logic: directories inherit the "strongest" state of
+ * their children, and direct matches take precedence.
+ */
+function applyGitOverlayToNode(
+  node: FileTreeNode,
+  states: Record<string, FileTreeNode["gitState"]>,
+): FileTreeNode["gitState"] {
+  let childAggregate: FileTreeNode["gitState"] = undefined;
+
+  const nextChildren = node.children?.map((child) => {
+    const childState = applyGitOverlayToNode(child, states);
+    childAggregate = strongestGitState(childAggregate, childState);
+    return child;
+  });
+
+  const directState = node.path ? states[node.path] : undefined;
+  const resolved = strongestGitState(directState, childAggregate) ?? undefined;
+  node.gitState = resolved;
+  if (nextChildren) {
+    node.children = nextChildren;
+  }
+  return resolved;
+}
+
 export function ProjectPanel({
   currentProject,
   workspaceId,
@@ -584,6 +628,54 @@ export function ProjectPanel({
       cancelled = true;
     };
   }, [projectPath, workspaceId, treeReloadVersion]);
+
+  // Listen for async git overlay events pushed from the backend after the
+  // initial tree response. This allows the tree to render immediately and
+  // receive git status annotations once they are ready.
+  useEffect(() => {
+    if (!isTauri() || !workspaceId) {
+      return;
+    }
+
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+
+    void listen<IndexGitOverlayReadyPayload>("index-git-overlay-ready", (event) => {
+      if (cancelled || event.payload.workspaceId !== workspaceId) {
+        return;
+      }
+
+      setTreeState((current) => {
+        if (!current.data) {
+          return current;
+        }
+
+        // Deep-clone the tree so React detects the state change.
+        const nextTree: FileTreeNode = JSON.parse(JSON.stringify(current.data.tree));
+        applyGitOverlayToNode(nextTree, event.payload.states);
+
+        return {
+          ...current,
+          data: {
+            ...current.data,
+            repoAvailable: event.payload.repoAvailable,
+            tree: nextTree,
+          },
+        };
+      });
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
