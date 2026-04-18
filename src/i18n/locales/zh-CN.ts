@@ -648,6 +648,8 @@ const zhCN = {
   "extensions.argsPlaceholder": "以空格分隔的参数",
   "extensions.headersHelper":
     "每行一个 `Header: value`。掩码值会保留，除非你替换或删除它们。",
+  "extensions.envLabel": "环境变量",
+  "extensions.envHelper": "每行一个 `KEY: value`。变量会传递给服务器进程。",
   "extensions.enableOnSave": "保存时启用",
   "extensions.disabledEntryHint": "禁用的条目保持注册但不会启动。",
   "extensions.cancelButton": "取消",

@@ -3191,11 +3191,11 @@ export function DashboardWorkbench() {
           onRemoveMarketplaceSource={removeMarketplaceSource}
           onRefreshMarketplaceSource={refreshMarketplaceSource}
           onInstallMarketplaceItem={installMarketplaceItem}
-          onAddMcpServer={(input) => addMcpServer(input, currentExtensionScope)}
+          onAddMcpServer={(input) => addMcpServer(input, "global")}
           onUpdateMcpServer={(id, input) => updateMcpServer(id, input, resolveItemScope(id))}
           onRemoveMcpServer={(id) => removeMcpServer(id, resolveItemScope(id))}
           onRestartMcpServer={(id) => restartMcpServer(id, resolveItemScope(id))}
-          onRescanSkills={() => rescanSkills(currentExtensionScope)}
+          onRescanSkills={() => rescanSkills("global")}
           onEnableSkill={(id) => enableSkill(id, resolveItemScope(id))}
           onDisableSkill={(id) => disableSkill(id, resolveItemScope(id))}
           skillPreviewById={skillPreviewById}
