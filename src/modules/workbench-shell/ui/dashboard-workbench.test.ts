@@ -1,0 +1,57 @@
+import { describe, expect, it } from "vitest";
+import { resolveThreadProfileId } from "./dashboard-workbench";
+
+describe("resolveThreadProfileId", () => {
+  const profileIds = new Set(["p-1", "p-2", "p-3"]);
+  const globalActive = "p-1";
+  const firstProfile = "p-1";
+
+  it("returns global active when threadId is null", () => {
+    expect(
+      resolveThreadProfileId(null, { "t-1": "p-2" }, profileIds, globalActive, firstProfile),
+    ).toBe(globalActive);
+  });
+
+  it("returns global active when thread has no binding", () => {
+    expect(
+      resolveThreadProfileId("t-99", {}, profileIds, globalActive, firstProfile),
+    ).toBe(globalActive);
+  });
+
+  it("returns the bound profile when it exists in profileIds", () => {
+    const bindings = { "t-1": "p-2", "t-2": "p-3" };
+    expect(
+      resolveThreadProfileId("t-1", bindings, profileIds, globalActive, firstProfile),
+    ).toBe("p-2");
+    expect(
+      resolveThreadProfileId("t-2", bindings, profileIds, globalActive, firstProfile),
+    ).toBe("p-3");
+  });
+
+  it("falls back to firstProfileId when bound profile was deleted", () => {
+    const bindings = { "t-1": "p-deleted" };
+    expect(
+      resolveThreadProfileId("t-1", bindings, profileIds, globalActive, firstProfile),
+    ).toBe(firstProfile);
+  });
+
+  it("falls back to globalActive when bound profile was deleted and firstProfileId is null", () => {
+    const bindings = { "t-1": "p-deleted" };
+    expect(
+      resolveThreadProfileId("t-1", bindings, profileIds, globalActive, null),
+    ).toBe(globalActive);
+  });
+
+  it("returns global active when profileIds is empty and no binding", () => {
+    expect(
+      resolveThreadProfileId("t-1", {}, new Set(), globalActive, null),
+    ).toBe(globalActive);
+  });
+
+  it("falls back correctly when profileIds is empty but binding exists", () => {
+    const bindings = { "t-1": "p-1" };
+    expect(
+      resolveThreadProfileId("t-1", bindings, new Set(), globalActive, null),
+    ).toBe(globalActive);
+  });
+});

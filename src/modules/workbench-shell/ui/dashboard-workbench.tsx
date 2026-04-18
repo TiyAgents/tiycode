@@ -153,7 +153,7 @@ const SIDEBAR_AUTO_REFRESH_GRACE_MS = 20_000;
  *  2. Global active profile (= last actively-switched profile).
  *  3. First profile in the list (fallback when the bound profile was deleted).
  */
-function resolveThreadProfileId(
+export function resolveThreadProfileId(
   threadId: string | null,
   bindings: Record<string, string>,
   profileIds: ReadonlySet<string>,
@@ -1270,6 +1270,8 @@ export function DashboardWorkbench() {
         if (!cancelled && stored?.value) {
           const parsed = JSON.parse(String(stored.value));
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            // Mark to skip the persistence effect that will fire from this setState.
+            threadProfileBindingsSkipNextPersistRef.current = true;
             setThreadProfileBindings(parsed as Record<string, string>);
           }
         }
@@ -1303,9 +1305,16 @@ export function DashboardWorkbench() {
   }, [syncWorkspaceSidebar]);
 
   // Persist thread-profile bindings to backend KV whenever they change.
+  const threadProfileBindingsSkipNextPersistRef = useRef(false);
   useEffect(() => {
     if (!threadProfileBindingsLoadedRef.current) return;
     if (!isTauri()) return;
+
+    // Skip the write triggered immediately after hydration (same data).
+    if (threadProfileBindingsSkipNextPersistRef.current) {
+      threadProfileBindingsSkipNextPersistRef.current = false;
+      return;
+    }
 
     // Cap to most recent 200 entries (by insertion order, which is recent-enough for UUIDv7 keys).
     const MAX_THREAD_PROFILE_BINDINGS = 200;
@@ -1338,6 +1347,27 @@ export function DashboardWorkbench() {
       return changed ? next : current;
     });
   }, [agentProfiles, profileIdSet]);
+
+  // After hydration (or any external update) of thread-profile bindings,
+  // re-evaluate the active thread's profile so that a thread selected before
+  // hydration completed gets its correct profile restored.
+  useEffect(() => {
+    if (!threadProfileBindingsLoadedRef.current) return;
+    if (isNewThreadMode || !activeThread?.id) return;
+
+    const resolved = resolveThreadProfileId(
+      activeThread.id,
+      threadProfileBindings,
+      profileIdSet,
+      activeAgentProfileId,
+      firstProfileId,
+    );
+    if (resolved !== activeAgentProfileId) {
+      setActiveAgentProfile(resolved);
+    }
+    // Only re-run when the bindings map itself changes — not on every profile switch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadProfileBindings]);
 
   useEffect(() => {
     if (!terminalResize || typeof window === "undefined") {
