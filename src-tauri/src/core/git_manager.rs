@@ -21,7 +21,7 @@ use crate::model::git::{
     GitFileStatusDto, GitRepoCapabilitiesDto, GitSnapshotDto,
 };
 
-const DEFAULT_HISTORY_LIMIT: usize = 24;
+const DEFAULT_HISTORY_LIMIT: usize = 32;
 const MAX_DIFF_LINES: usize = 1200;
 const GIT_STREAM_BUFFER: usize = 32;
 const OVERLAY_CACHE_TTL: Duration = Duration::from_secs(10);
