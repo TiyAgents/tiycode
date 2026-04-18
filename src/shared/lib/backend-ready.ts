@@ -1,34 +1,41 @@
+import { invoke } from "@tauri-apps/api/core";
 import { once } from "@tauri-apps/api/event";
 
 /**
- * Returns a promise that resolves once the Rust backend has signalled
- * readiness via the `backend-ready` event.
+ * Returns a promise that resolves once the Rust backend is ready to
+ * handle IPC calls.
  *
- * On Windows the WebView2 IPC bridge may need a few seconds after
- * `on_page_load(Finished)` before it can reliably deliver `invoke`
- * responses.  By waiting for this event (which the Rust side pushes
- * via `webview.emit`), the frontend avoids queuing heavy IPC batches
- * into a channel that isn't fully warmed up yet.
+ * Uses a race between three signals:
+ * 1. The `backend-ready` event emitted by the Rust `on_page_load` handler.
+ * 2. A lightweight invoke probe — if IPC is already working this
+ *    resolves immediately (typical on macOS where WebKit is fast).
+ * 3. A timeout safety net (default 3 s) for the rare case where the
+ *    event was emitted before the listener registered and the probe
+ *    also stalls.
  *
- * A 3-second timeout acts as a safety net in case the event was
- * already emitted before the listener was registered (race with
- * `on_page_load`).
+ * On macOS the probe wins almost instantly; on Windows the event or
+ * probe will resolve once WebView2's IPC bridge is warmed up.
  */
 export function waitForBackendReady(timeoutMs = 3000): Promise<void> {
-  return new Promise<void>((resolve) => {
-    let resolved = false;
-    const done = () => {
-      if (!resolved) {
-        resolved = true;
-        resolve();
-      }
-    };
-    once("backend-ready", () => done()).then((unlisten) => {
-      // If already resolved via timeout, clean up the listener
-      if (resolved) unlisten();
+  // 1. Listen for the explicit backend-ready event
+  const fromEvent = new Promise<void>((resolve) => {
+    once("backend-ready", () => resolve()).then((unlisten) => {
+      // Event may have already fired; schedule cleanup on next tick
+      queueMicrotask(() => unlisten());
     });
-    // Safety fallback: don't block forever if the event was already
-    // emitted before the listener was registered.
-    setTimeout(done, timeoutMs);
   });
+
+  // 2. Probe IPC with a no-side-effect invoke.  Any response (success
+  //    or error) proves the bridge is up.  We use workspace_list which
+  //    is always registered and fast (~0 ms on macOS).
+  const fromProbe = invoke("workspace_list")
+    .then(() => {})
+    .catch(() => {});
+
+  // 3. Timeout fallback
+  const fromTimeout = new Promise<void>((resolve) => {
+    setTimeout(resolve, timeoutMs);
+  });
+
+  return Promise.race([fromEvent, fromProbe, fromTimeout]);
 }
