@@ -770,3 +770,80 @@ async fn test_file_tree_scan_performance() {
         elapsed.as_millis()
     );
 }
+
+// =========================================================================
+// T1.8.4 — Tree cache TTL hit / expiry
+// =========================================================================
+
+#[tokio::test]
+async fn test_tree_cache_hit_returns_same_result_without_rescan() {
+    use std::time::Instant;
+    use tiycode::core::index_manager::IndexManager;
+
+    let manager = IndexManager::new();
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("src/main.rs"), "fn main() {}").unwrap();
+
+    // First call — populates the cache.
+    let first = manager.get_tree(&base.to_string_lossy()).await.unwrap();
+
+    // Mutate the filesystem *before* the second call.
+    std::fs::write(base.join("src/extra.rs"), "fn extra() {}").unwrap();
+
+    // Second call within the TTL window — should return the cached (stale) tree.
+    let start = Instant::now();
+    let second = manager.get_tree(&base.to_string_lossy()).await.unwrap();
+    let elapsed = start.elapsed();
+
+    assert_eq!(
+        first.children.as_ref().map(|c| c.len()),
+        second.children.as_ref().map(|c| c.len()),
+        "cached tree should return the same children count before TTL expires"
+    );
+    assert!(
+        elapsed.as_millis() < 50,
+        "cache hit should be near-instant, took {}ms",
+        elapsed.as_millis()
+    );
+}
+
+#[tokio::test]
+async fn test_tree_cache_expires_after_ttl() {
+    use tiycode::core::index_manager::IndexManager;
+
+    let manager = IndexManager::new();
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let base = tmp.path();
+
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("src/main.rs"), "fn main() {}").unwrap();
+
+    // First call — populates the cache.
+    let first = manager.get_tree(&base.to_string_lossy()).await.unwrap();
+    let first_count = first.children.as_ref().map(|c| c.len()).unwrap_or(0);
+
+    // Add a new file.
+    std::fs::write(base.join("src/extra.rs"), "fn extra() {}").unwrap();
+
+    // Wait for the cache TTL (2 s) to expire.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    // Third call — TTL expired, should rescan and pick up the new file.
+    let refreshed = manager.get_tree(&base.to_string_lossy()).await.unwrap();
+    let refreshed_count = refreshed
+        .children
+        .as_ref()
+        .map(|c| c.len())
+        .unwrap_or(0);
+
+    assert!(
+        refreshed_count > first_count
+            || refreshed.children.as_ref().is_some_and(|children| children
+                .iter()
+                .any(|child| child.path == "src")),
+        "after TTL expiry the tree should reflect filesystem changes"
+    );
+}

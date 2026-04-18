@@ -651,7 +651,7 @@ export function ProjectPanel({
         }
 
         // Deep-clone the tree so React detects the state change.
-        const nextTree: FileTreeNode = JSON.parse(JSON.stringify(current.data.tree));
+        const nextTree: FileTreeNode = structuredClone(current.data.tree);
         applyGitOverlayToNode(nextTree, event.payload.states);
 
         return {
