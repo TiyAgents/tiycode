@@ -52,6 +52,8 @@ import type {
   WorkspaceDto,
 } from "@/shared/types/api";
 import {
+  settingsGet,
+  settingsSet,
   threadCreate,
   threadDelete,
   threadList,
@@ -142,6 +144,29 @@ const DEFAULT_TERMINAL_COLLAPSED = true;
 const WORKSPACE_THREAD_PAGE_SIZE = 10;
 const SIDEBAR_AUTO_REFRESH_INTERVAL_MS = 2_000;
 const SIDEBAR_AUTO_REFRESH_GRACE_MS = 20_000;
+
+/**
+ * Resolve which profile a thread should use.
+ *
+ * Priority:
+ *  1. Persisted binding for this thread, if the profile still exists.
+ *  2. Global active profile (= last actively-switched profile).
+ *  3. First profile in the list (fallback when the bound profile was deleted).
+ */
+export function resolveThreadProfileId(
+  threadId: string | null,
+  bindings: Record<string, string>,
+  profileIds: ReadonlySet<string>,
+  globalActiveProfileId: string,
+  firstProfileId: string | null,
+): string {
+  if (!threadId) return globalActiveProfileId;
+  const boundId = bindings[threadId];
+  if (!boundId) return globalActiveProfileId;
+  if (profileIds.has(boundId)) return boundId;
+  // Bound profile was deleted → fall back to first available profile.
+  return firstProfileId ?? globalActiveProfileId;
+}
 
 function buildInitialWorkspaceThreadDisplayCounts() {
   return Object.fromEntries(
@@ -484,6 +509,10 @@ export function DashboardWorkbench() {
   const [terminalThreadBindings, setTerminalThreadBindings] = useState<
     Record<string, string>
   >({});
+  const [threadProfileBindings, setThreadProfileBindings] = useState<
+    Record<string, string>
+  >({});
+  const threadProfileBindingsLoadedRef = useRef(false);
   const [composerValue, setComposerValue] = useState("");
   const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
   const [composerError, setComposerError] = useState<string | null>(null);
@@ -569,6 +598,11 @@ export function DashboardWorkbench() {
   const removedWorkspacePathsRef = useRef<Set<string>>(new Set());
 
   const activeThread = getActiveThread(workspaces);
+  const profileIdSet = useMemo(
+    () => new Set(agentProfiles.map((p) => p.id)),
+    [agentProfiles],
+  );
+  const firstProfileId = agentProfiles[0]?.id ?? null;
   const selectedProjectWorkspaceId = getWorkspaceBindingId(
     terminalWorkspaceBindings,
     selectedProject?.path ?? null,
@@ -1229,6 +1263,25 @@ export function DashboardWorkbench() {
     void (async () => {
       await waitForBackendReady();
       if (cancelled) return;
+
+      // Hydrate thread-profile bindings from backend KV
+      try {
+        const stored = await settingsGet("thread_profile_bindings");
+        if (!cancelled && stored?.value) {
+          const parsed = JSON.parse(String(stored.value));
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            // Mark to skip the persistence effect that will fire from this setState.
+            threadProfileBindingsSkipNextPersistRef.current = true;
+            setThreadProfileBindings(parsed as Record<string, string>);
+          }
+        }
+      } catch {
+        // Ignore corrupted JSON – fall back to empty bindings
+      }
+      if (!cancelled) {
+        threadProfileBindingsLoadedRef.current = true;
+      }
+
       await syncWorkspaceSidebar();
     })()
       .then(() => {
@@ -1250,6 +1303,71 @@ export function DashboardWorkbench() {
       cancelled = true;
     };
   }, [syncWorkspaceSidebar]);
+
+  // Persist thread-profile bindings to backend KV whenever they change.
+  const threadProfileBindingsSkipNextPersistRef = useRef(false);
+  useEffect(() => {
+    if (!threadProfileBindingsLoadedRef.current) return;
+    if (!isTauri()) return;
+
+    // Skip the write triggered immediately after hydration (same data).
+    if (threadProfileBindingsSkipNextPersistRef.current) {
+      threadProfileBindingsSkipNextPersistRef.current = false;
+      return;
+    }
+
+    // Cap to most recent 200 entries (by insertion order, which is recent-enough for UUIDv7 keys).
+    const MAX_THREAD_PROFILE_BINDINGS = 200;
+    const entries = Object.entries(threadProfileBindings);
+    const trimmed =
+      entries.length > MAX_THREAD_PROFILE_BINDINGS
+        ? Object.fromEntries(entries.slice(-MAX_THREAD_PROFILE_BINDINGS))
+        : threadProfileBindings;
+
+    void settingsSet("thread_profile_bindings", JSON.stringify(trimmed)).catch(
+      () => {
+        // Best-effort persistence — silently ignore write failures.
+      },
+    );
+  }, [threadProfileBindings]);
+
+  // Remove thread-profile bindings that reference a deleted profile.
+  useEffect(() => {
+    if (!agentProfiles.length) return;
+    setThreadProfileBindings((current) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [tid, pid] of Object.entries(current)) {
+        if (profileIdSet.has(pid)) {
+          next[tid] = pid;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [agentProfiles, profileIdSet]);
+
+  // After hydration (or any external update) of thread-profile bindings,
+  // re-evaluate the active thread's profile so that a thread selected before
+  // hydration completed gets its correct profile restored.
+  useEffect(() => {
+    if (!threadProfileBindingsLoadedRef.current) return;
+    if (isNewThreadMode || !activeThread?.id) return;
+
+    const resolved = resolveThreadProfileId(
+      activeThread.id,
+      threadProfileBindings,
+      profileIdSet,
+      activeAgentProfileId,
+      firstProfileId,
+    );
+    if (resolved !== activeAgentProfileId) {
+      setActiveAgentProfile(resolved);
+    }
+    // Only re-run when the bindings map itself changes — not on every profile switch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadProfileBindings]);
 
   useEffect(() => {
     if (!terminalResize || typeof window === "undefined") {
@@ -1691,6 +1809,18 @@ export function DashboardWorkbench() {
     setActiveWorkspaceMenuId(null);
     setPendingDeleteThreadId(null);
     setWorkspaces((current) => activateThread(current, threadId));
+
+    // Restore the profile that was last used on this thread.
+    const resolved = resolveThreadProfileId(
+      threadId,
+      threadProfileBindings,
+      profileIdSet,
+      activeAgentProfileId,
+      firstProfileId,
+    );
+    if (resolved !== activeAgentProfileId) {
+      setActiveAgentProfile(resolved);
+    }
   };
 
   const handleProjectSelect = (project: ProjectOption) => {
@@ -1866,6 +1996,12 @@ export function DashboardWorkbench() {
                 ([, boundThreadId]) => boundThreadId !== threadId,
               ),
             );
+            return next;
+          });
+          setThreadProfileBindings((current) => {
+            if (!(threadId in current)) return current;
+            const next = { ...current };
+            delete next[threadId];
             return next;
           });
 
@@ -2103,6 +2239,14 @@ export function DashboardWorkbench() {
           }));
         }
 
+        // Bind the current profile to the newly created thread.
+        if (persistedThreadId) {
+          setThreadProfileBindings((current) => ({
+            ...current,
+            [persistedThreadId]: activeAgentProfileId,
+          }));
+        }
+
         setNewThreadMode(false);
         setNewThreadRunMode("default");
         setComposerValue("");
@@ -2136,6 +2280,21 @@ export function DashboardWorkbench() {
     setLanguage(nextLanguage);
     setOpenSettingsSection("language");
   };
+
+  // Wrapper: when user switches profile inside an active thread, also record
+  // the binding so it's restored when the user switches back to this thread.
+  const handleSelectAgentProfileForThread = useCallback(
+    (profileId: string) => {
+      setActiveAgentProfile(profileId);
+      if (!isNewThreadMode && activeThread?.id) {
+        setThreadProfileBindings((current) => ({
+          ...current,
+          [activeThread.id]: profileId,
+        }));
+      }
+    },
+    [activeThread?.id, isNewThreadMode, setActiveAgentProfile],
+  );
 
   const handleOpenSettings = (category: SettingsCategory = "general") => {
     setActiveSettingsCategory(category);
@@ -2983,7 +3142,7 @@ export function DashboardWorkbench() {
                         }}
                         onContextUsageChange={setRuntimeContextUsage}
                         onRunStateChange={handleRuntimeThreadRunStateChange}
-                        onSelectAgentProfile={setActiveAgentProfile}
+                        onSelectAgentProfile={handleSelectAgentProfileForThread}
                         onThreadTitleChange={handleRuntimeThreadTitleChange}
                         providers={providers}
                         threadId={resolvedTerminalThreadId}

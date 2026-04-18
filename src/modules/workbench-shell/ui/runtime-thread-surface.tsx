@@ -2082,6 +2082,16 @@ export function RuntimeThreadSurface({
   const [selectedRunMode, setSelectedRunMode] = useState<RunMode>("default");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [snapshotThreadId, setSnapshotThreadId] = useState<string | null>(null);
+
+  // Reset run mode (plan toggle) when switching to a different thread so it
+  // doesn't leak from one thread to another.
+  const prevThreadIdRef = useRef(threadId);
+  useEffect(() => {
+    if (prevThreadIdRef.current !== threadId) {
+      prevThreadIdRef.current = threadId;
+      setSelectedRunMode("default");
+    }
+  }, [threadId]);
   const [thinkingPlaceholder, setThinkingPlaceholder] = useState<ThinkingPlaceholder | null>(null);
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
   const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});
