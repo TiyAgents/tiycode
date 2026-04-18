@@ -277,6 +277,17 @@ function resolveActiveProfileId(
   return profiles[0]?.id ?? DEFAULT_AGENT_PROFILES[0]?.id ?? "default-profile";
 }
 
+/** Check whether a Tauri invoke error carries a `.not_found` error code. */
+function isTauriNotFoundError(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "errorCode" in error &&
+    typeof (error as Record<string, unknown>).errorCode === "string" &&
+    ((error as Record<string, unknown>).errorCode as string).includes(".not_found")
+  );
+}
+
 function mapProviderDto(provider: ProviderSettingsDto): ProviderEntry {
   return {
     id: provider.id,
@@ -419,6 +430,32 @@ export function useSettingsController() {
           );
         }
 
+        // When the database has no profiles yet (fresh install), seed the default profile
+        // into the database so the frontend always works with a real persisted record
+        // instead of the hardcoded DEFAULT_AGENT_PROFILES ghost ID.
+        let persistedProfiles = mappedProfiles;
+        let persistedActiveId = resolvedActiveProfileId;
+
+        if (mappedProfiles.length === 0) {
+          try {
+            const defaultInput = DEFAULT_AGENT_PROFILES[0];
+            if (defaultInput) {
+              const created = await profileCreate(
+                toProfileInput(defaultInput, true),
+              );
+              const mapped = mapProfileDto(created);
+              persistedProfiles = [mapped];
+              persistedActiveId = mapped.id;
+              await settingsSet(
+                ACTIVE_AGENT_PROFILE_SETTING_KEY,
+                JSON.stringify(mapped.id),
+              );
+            }
+          } catch (seedError) {
+            console.warn("Failed to seed default profile during hydration", seedError);
+          }
+        }
+
         if (cancelled) {
           return;
         }
@@ -433,9 +470,9 @@ export function useSettingsController() {
             commands: resolvedPromptCommands.map(mapPromptCommandDto),
           },
           policy: mappedPolicy,
-          agentProfiles: mappedProfiles.length > 0 ? mappedProfiles : DEFAULT_AGENT_PROFILES,
-          activeAgentProfileId: mappedProfiles.length > 0
-            ? resolvedActiveProfileId
+          agentProfiles: persistedProfiles.length > 0 ? persistedProfiles : DEFAULT_AGENT_PROFILES,
+          activeAgentProfileId: persistedProfiles.length > 0
+            ? persistedActiveId
             : DEFAULT_AGENT_PROFILES[0]?.id ?? "default-profile",
         }));
       } catch (error) {
@@ -625,8 +662,38 @@ export function useSettingsController() {
           ),
         }));
       })
-      .catch((error) => {
-        console.warn("Failed to update profile", error);
+      .catch(async (error) => {
+        // If the profile does not exist in the database (e.g., using a hardcoded default-profile ID),
+        // create it first and then update the frontend state with the new persistent profile.
+        if (!isTauriNotFoundError(error)) {
+          console.warn("Failed to update profile", error);
+          return;
+        }
+
+        try {
+          const createdProfile = await profileCreate(toProfileInput(nextProfile, false));
+          const mapped = mapProfileDto(createdProfile);
+
+          // Persist the new profile ID as the active profile.
+          await settingsSet(ACTIVE_AGENT_PROFILE_SETTING_KEY, JSON.stringify(mapped.id));
+
+          setSettings((current) => {
+            // Replace the ghost profile if it exists, otherwise append the new one.
+            const found = current.agentProfiles.some((entry) => entry.id === id);
+            const nextProfiles = found
+              ? current.agentProfiles.map((entry) => (entry.id === id ? mapped : entry))
+              : [...current.agentProfiles, mapped];
+
+            return {
+              ...current,
+              agentProfiles: nextProfiles,
+              activeAgentProfileId:
+                current.activeAgentProfileId === id ? mapped.id : current.activeAgentProfileId,
+            };
+          });
+        } catch (createError) {
+          console.warn("Failed to create missing profile during update", createError);
+        }
       });
   };
 
