@@ -363,6 +363,57 @@ mod tests {
         assert_eq!(bare, None);
     }
 
+    #[test]
+    fn executable_candidates_returns_bare_name_only_on_unix() {
+        // On non-Windows the function always returns only the bare command name.
+        #[cfg(not(target_os = "windows"))]
+        {
+            let candidates = executable_candidates("npx");
+            assert_eq!(candidates, vec![OsString::from("npx")]);
+        }
+    }
+
+    #[test]
+    fn executable_candidates_prioritises_extensions_over_bare_name() {
+        // Regardless of platform, verify the ordering contract: when a bare
+        // command name is provided, PATHEXT-derived candidates must appear
+        // before the bare name so that `.cmd`/`.exe` variants win over Unix
+        // shell shims (the root cause of OS error 193 on Windows).
+        #[cfg(target_os = "windows")]
+        {
+            let candidates = executable_candidates("npx");
+            // Last element must be the bare name.
+            assert_eq!(candidates.last(), Some(&OsString::from("npx")));
+            // First element must be an extension-bearing candidate (e.g. npx.COM).
+            let first = candidates[0].to_string_lossy().to_string();
+            assert!(
+                first.contains('.'),
+                "first candidate should have an extension, got: {first}"
+            );
+            // Bare name must not appear before any extension-bearing candidate.
+            let bare_pos = candidates
+                .iter()
+                .position(|c| c == &OsString::from("npx"))
+                .expect("bare name must be present");
+            assert_eq!(
+                bare_pos,
+                candidates.len() - 1,
+                "bare name should be the last candidate"
+            );
+        }
+    }
+
+    #[test]
+    fn executable_candidates_returns_as_is_when_extension_present() {
+        // When the command already contains an extension, return it as-is
+        // without appending PATHEXT variants.
+        #[cfg(target_os = "windows")]
+        {
+            let candidates = executable_candidates("npx.cmd");
+            assert_eq!(candidates, vec![OsString::from("npx.cmd")]);
+        }
+    }
+
     #[cfg(not(target_os = "windows"))]
     #[tokio::test]
     async fn resolve_command_path_returns_explicit_existing_path_without_path_lookup() {
