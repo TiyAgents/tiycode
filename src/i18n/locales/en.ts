@@ -749,13 +749,11 @@ const en: Record<TranslationKey, string> = {
 
   // ── Worktree ───────────────────────────────────────────
   "worktree.createTitle": "New worktree",
-  "worktree.createDescription": "Create a new worktree for this Git repository. Choose an existing branch or create a new one.",
-  "worktree.field.branch": "Branch",
-  "worktree.field.branchPlaceholder": "Pick or type a branch name",
-  "worktree.tab.existingBranch": "Existing branch",
-  "worktree.tab.newBranch": "New branch",
-  "worktree.field.baseRef": "Base ref",
-  "worktree.field.baseRefPlaceholder": "Default: current HEAD",
+  "worktree.createDescription": "Create a new worktree with a new branch for this Git repository.",
+  "worktree.field.branch": "New branch name",
+  "worktree.field.branchPlaceholder": "Type a new branch name",
+  "worktree.field.baseBranch": "Base branch",
+  "worktree.field.baseBranchHint": "New branch will be created from {{branch}}",
   "worktree.field.path": "Worktree directory",
   "worktree.field.pathPlaceholder": "Auto-generated path",
   "worktree.field.pathBrowse": "Browse…",

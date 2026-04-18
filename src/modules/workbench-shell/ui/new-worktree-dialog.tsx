@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { GitBranch, LoaderCircle, Plus } from "lucide-react";
+import { GitBranch, LoaderCircle } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { useT } from "@/i18n";
@@ -30,8 +30,6 @@ export type NewWorktreeDialogContext = {
   repo: Pick<WorkspaceDto, "id" | "name" | "canonicalPath">;
 };
 
-type Tab = "existing" | "new";
-
 export function NewWorktreeDialog({
   context,
   onClose,
@@ -44,9 +42,8 @@ export function NewWorktreeDialog({
   const t = useT();
   const isOpen = context !== null;
 
-  const [tab, setTab] = useState<Tab>("new");
   const [branch, setBranch] = useState("");
-  const [baseRef, setBaseRef] = useState("");
+  const [baseBranch, setBaseBranch] = useState("");
   const [path, setPath] = useState("");
   const [pathTouched, setPathTouched] = useState(false);
   const [branches, setBranches] = useState<GitBranchDto[]>([]);
@@ -57,9 +54,8 @@ export function NewWorktreeDialog({
   // Reset state whenever the dialog opens for a new repo.
   useEffect(() => {
     if (!isOpen) return;
-    setTab("new");
     setBranch("");
-    setBaseRef("");
+    setBaseBranch("");
     setPath("");
     setPathTouched(false);
     setError(null);
@@ -116,8 +112,8 @@ export function NewWorktreeDialog({
     try {
       const input: WorktreeCreateInput = {
         branch: trimmed,
-        createBranch: tab === "new",
-        baseRef: tab === "new" && baseRef.trim() ? baseRef.trim() : undefined,
+        createBranch: true,
+        baseRef: baseBranch || undefined,
         path: path.trim() || undefined,
       };
       const created = await workspaceCreateWorktree(context.repo.id, input);
@@ -128,7 +124,7 @@ export function NewWorktreeDialog({
     } finally {
       setSubmitting(false);
     }
-  }, [context, branch, baseRef, path, tab, t, onCreated, onClose]);
+  }, [context, branch, baseBranch, path, t, onCreated, onClose]);
 
   const handleBrowsePath = useCallback(async () => {
     const selected = await openDialog({
@@ -159,95 +155,61 @@ export function NewWorktreeDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
-          <div className="flex gap-1 rounded-md bg-muted p-1 text-sm">
-            <button
-              type="button"
-              onClick={() => setTab("new")}
-              className={cn(
-                "flex-1 rounded px-3 py-1.5 transition-colors",
-                tab === "new"
-                  ? "bg-background shadow-sm font-medium"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Plus className="mr-1 inline h-3.5 w-3.5" />
-              {t("worktree.tab.newBranch")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setTab("existing")}
-              className={cn(
-                "flex-1 rounded px-3 py-1.5 transition-colors",
-                tab === "existing"
-                  ? "bg-background shadow-sm font-medium"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <GitBranch className="mr-1 inline h-3.5 w-3.5" />
-              {t("worktree.tab.existingBranch")}
-            </button>
-          </div>
-
+          {/* New branch name */}
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-medium">{t("worktree.field.branch")}</label>
-            {tab === "existing" ? (
-              <div className="flex max-h-48 flex-col gap-1 overflow-y-auto rounded border bg-muted/20 p-1">
-                {branchesLoading ? (
-                  <div className="flex items-center gap-2 px-2 py-4 text-sm text-muted-foreground">
-                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                    Loading…
-                  </div>
-                ) : branches.length === 0 ? (
-                  <div className="px-2 py-4 text-sm text-muted-foreground">
-                    {t("worktree.empty.branches")}
-                  </div>
-                ) : (
-                  branches.map((b) => {
-                    const isActive = branch === b.name;
-                    const label = b.isRemote ? "remote" : "local";
-                    return (
-                      <button
-                        key={`${label}:${b.name}`}
-                        type="button"
-                        onClick={() => setBranch(b.name)}
-                        className={cn(
-                          "flex items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-background",
-                          isActive && "bg-background font-medium",
-                        )}
-                      >
-                        <span className="truncate">{b.name}</span>
-                        <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                          {label}
-                        </span>
-                      </button>
-                    );
-                  })
-                )}
+            <Input
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              placeholder={t("worktree.field.branchPlaceholder")}
+              autoFocus
+            />
+          </div>
+
+          {/* Base branch selector */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">{t("worktree.field.baseBranch")}</label>
+            <div className="flex max-h-48 flex-col gap-1 overflow-y-auto rounded border bg-muted/20 p-1">
+              {branchesLoading ? (
+                <div className="flex items-center gap-2 px-2 py-4 text-sm text-muted-foreground">
+                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                  Loading…
+                </div>
+              ) : branches.length === 0 ? (
+                <div className="px-2 py-4 text-sm text-muted-foreground">
+                  {t("worktree.empty.branches")}
+                </div>
+              ) : (
+                branches.map((b) => {
+                  const isActive = baseBranch === b.name;
+                  const label = b.isRemote ? "remote" : "local";
+                  return (
+                    <button
+                      key={`${label}:${b.name}`}
+                      type="button"
+                      onClick={() => setBaseBranch(b.name)}
+                      className={cn(
+                        "flex items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-background",
+                        isActive && "bg-background font-medium",
+                      )}
+                    >
+                      <span className="truncate">{b.name}</span>
+                      <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {label}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+            {baseBranch && (
+              <div className="text-xs text-muted-foreground">
+                {t("worktree.field.baseBranchHint", { branch: baseBranch })}
               </div>
-            ) : (
-              <Input
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-                placeholder={t("worktree.field.branchPlaceholder")}
-                autoFocus
-              />
-            )}
-            {tab === "existing" && branch && (
-              <div className="text-xs text-muted-foreground">{branch}</div>
             )}
           </div>
 
-          {tab === "new" ? (
-            <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium">{t("worktree.field.baseRef")}</label>
-              <Input
-                value={baseRef}
-                onChange={(e) => setBaseRef(e.target.value)}
-                placeholder={t("worktree.field.baseRefPlaceholder")}
-              />
-            </div>
-          ) : null}
-
+          {/* Path */}
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-medium">{t("worktree.field.path")}</label>
             <div className="flex gap-2">

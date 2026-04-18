@@ -1633,6 +1633,10 @@ export function DashboardWorkbench() {
       return;
     }
 
+    // Clear stale snapshot immediately so the UI doesn't flash the previous
+    // workspace's branch while the new subscription/fetch is in flight.
+    setTopBarGitSnapshot(null);
+
     let cancelled = false;
     let unsubscribe: (() => Promise<void>) | null = null;
 
@@ -1656,7 +1660,7 @@ export function DashboardWorkbench() {
     void gitGetSnapshot(resolvedWorkspaceId)
       .then((snapshot) => {
         if (!cancelled && snapshot) {
-          setTopBarGitSnapshot((current) => current ?? snapshot);
+          setTopBarGitSnapshot(snapshot);
         }
       })
       .catch(() => {});

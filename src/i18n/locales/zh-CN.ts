@@ -787,13 +787,11 @@ const zhCN = {
 
   // ── Worktree ───────────────────────────────────────────
   "worktree.createTitle": "新建 Worktree",
-  "worktree.createDescription": "为当前 Git 仓库创建一个新的 worktree，可基于现有分支或新建分支。",
-  "worktree.field.branch": "分支",
-  "worktree.field.branchPlaceholder": "选择或输入分支名",
-  "worktree.tab.existingBranch": "已有分支",
-  "worktree.tab.newBranch": "新建分支",
-  "worktree.field.baseRef": "起点（Base）",
-  "worktree.field.baseRefPlaceholder": "默认：当前 HEAD",
+  "worktree.createDescription": "为当前 Git 仓库创建一个新的 worktree，基于现有分支新建分支。",
+  "worktree.field.branch": "新分支名",
+  "worktree.field.branchPlaceholder": "输入新分支名称",
+  "worktree.field.baseBranch": "基于分支",
+  "worktree.field.baseBranchHint": "新分支将基于 {{branch}} 创建",
   "worktree.field.path": "worktree 目录",
   "worktree.field.pathPlaceholder": "自动生成路径",
   "worktree.field.pathBrowse": "选择...",
