@@ -1505,7 +1505,7 @@ impl ExtensionsManager {
         dir: &Path,
         discovered: bool,
     ) -> Result<InstalledPluginRuntime, AppError> {
-        let plugin_dir = fs::canonicalize(dir).map_err(|error| {
+        let plugin_dir = dunce::canonicalize(dir).map_err(|error| {
             AppError::recoverable(
                 ErrorSource::Settings,
                 "extensions.plugin.invalid_path",
@@ -6399,7 +6399,7 @@ Provide a code review for the given pull request."#,
         assert_eq!(runtime.manifest.name, "Marketplace Plugin");
         assert_eq!(
             runtime.path,
-            fs::canonicalize(plugin_dir.path()).expect("canonical plugin path")
+            dunce::canonicalize(plugin_dir.path()).expect("canonical plugin path")
         );
     }
 
