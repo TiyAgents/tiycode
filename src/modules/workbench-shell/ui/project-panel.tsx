@@ -517,6 +517,9 @@ export function ProjectPanel({
   }, [isOpenMenuOpen]);
 
   useEffect(() => {
+    if (openApps.length === 0) {
+      return;
+    }
     if (!preferredOpenAppId || !openApps.some((app) => app.id === preferredOpenAppId)) {
       const fileManagerApp = openApps.find((app) => FILE_MANAGER_APP_IDS.includes(app.id));
       setPreferredOpenAppId(fileManagerApp?.id ?? openApps[0]?.id ?? null);
