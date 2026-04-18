@@ -375,7 +375,9 @@ export function useSettingsController() {
     let cancelled = false;
 
     async function hydrateDbBackedSettings() {
+      const hydrateStart = performance.now();
       try {
+        const t0 = performance.now();
         const [providers, catalog, policies, profiles, workspaceEntries, promptCommands, activeProfileSetting] =
           await Promise.all([
             providerSettingsGetAll(),
@@ -386,6 +388,7 @@ export function useSettingsController() {
             promptCommandList(),
             settingsGet(ACTIVE_AGENT_PROFILE_SETTING_KEY),
           ]);
+        console.log(`⏱ [settings-hydration] Promise.all (7 invokes): ${(performance.now() - t0).toFixed(1)}ms`);
 
         const mappedProviders = providers.map(mapProviderDto);
 
@@ -413,7 +416,9 @@ export function useSettingsController() {
 
         let shells: Array<{ path: string; name: string }> = [];
         try {
+          const t1 = performance.now();
           shells = await invoke<Array<{ path: string; name: string }>>("terminal_list_available_shells");
+          console.log(`⏱ [settings-hydration] terminal_list_available_shells: ${(performance.now() - t1).toFixed(1)}ms`);
         } catch (shellError) {
           console.warn("Failed to list available shells", shellError);
         }
@@ -478,6 +483,7 @@ export function useSettingsController() {
       } catch (error) {
         console.warn("Failed to hydrate DB-backed settings", error);
       } finally {
+        console.log(`⏱ [settings-hydration] total: ${(performance.now() - hydrateStart).toFixed(1)}ms`);
         if (!cancelled) {
           setBackendHydrated(true);
         }

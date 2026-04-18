@@ -904,9 +904,13 @@ export function DashboardWorkbench() {
       preserveSelectedProjectIfMissing?: boolean;
       threadDisplayCountOverrides?: Record<string, number>;
     } = {}) => {
+      const syncStart = performance.now();
       const version = ++syncVersionRef.current;
 
+      const t0 = performance.now();
       const workspaceEntries = await workspaceList();
+      console.log(`⏱ [sidebar-sync] workspaceList: ${(performance.now() - t0).toFixed(1)}ms (${workspaceEntries.length} workspaces)`);
+
       const nextDisplayCounts = Object.fromEntries(
         workspaceEntries.map((workspace) => [
           workspace.id,
@@ -915,6 +919,7 @@ export function DashboardWorkbench() {
             WORKSPACE_THREAD_PAGE_SIZE,
         ]),
       );
+      const t1 = performance.now();
       const threadEntries = await Promise.all(
         workspaceEntries.map(
           async (workspace) =>
@@ -927,6 +932,7 @@ export function DashboardWorkbench() {
             ] as const,
         ),
       );
+      console.log(`⏱ [sidebar-sync] threadList for ${workspaceEntries.length} workspace(s): ${(performance.now() - t1).toFixed(1)}ms`);
 
       // Discard stale sync results — a newer sync has been initiated while we were fetching.
       if (syncVersionRef.current !== version) {
@@ -1055,6 +1061,7 @@ export function DashboardWorkbench() {
           ]),
         ),
       );
+      console.log(`⏱ [sidebar-sync] total: ${(performance.now() - syncStart).toFixed(1)}ms`);
     },
     [listVisibleWorkspaceThreads],
   );
@@ -1213,6 +1220,7 @@ export function DashboardWorkbench() {
       return;
     }
 
+    console.log("⏱ [startup] syncWorkspaceSidebar initial useEffect fired");
     let cancelled = false;
 
     void syncWorkspaceSidebar()
