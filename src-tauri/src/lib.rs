@@ -436,26 +436,37 @@ pub fn run() {
                 }
             }
 
-            // 6. Startup recovery: validate workspaces + interrupt dangling runs
-            tauri::async_runtime::block_on(async {
-                state.workspace_manager.validate_all().await?;
-                state.thread_manager.recover_interrupted_runs().await?;
-                state.terminal_manager.recover_orphaned_sessions().await?;
-                Ok::<(), crate::model::errors::AppError>(())
-            })?;
-
             // Apply bundled catalog snapshot if it is newer than the local cache.
             // This ensures a usable catalog is available even without network access
             // (e.g. fresh install or app update in an offline environment).
             crate::core::settings_manager::apply_bundled_catalog_if_newer(app.handle());
 
+            app.manage(state);
+            app.manage(desktop_runtime);
+
+            // 6. Startup recovery: validate workspaces + interrupt dangling runs.
+            // Spawned asynchronously so the window can render without waiting for
+            // potentially slow filesystem checks (especially on Windows where NTFS
+            // metadata + antivirus hooks add significant latency per workspace).
+            let recovery_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = recovery_handle.state::<AppState>();
+                if let Err(e) = state.workspace_manager.validate_all().await {
+                    tracing::warn!(error = %e, "startup workspace validation failed");
+                }
+                if let Err(e) = state.thread_manager.recover_interrupted_runs().await {
+                    tracing::warn!(error = %e, "startup run recovery failed");
+                }
+                if let Err(e) = state.terminal_manager.recover_orphaned_sessions().await {
+                    tracing::warn!(error = %e, "startup terminal session recovery failed");
+                }
+                tracing::info!("startup recovery complete");
+            });
+
             tauri::async_runtime::spawn(async {
                 crate::core::settings_manager::SettingsManager::refresh_catalog_snapshot_silently()
                     .await;
             });
-
-            app.manage(state);
-            app.manage(desktop_runtime);
             build_tray(app, minimize_to_tray)?;
 
             // 7. Platform-specific window setup

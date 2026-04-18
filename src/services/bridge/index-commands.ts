@@ -47,6 +47,12 @@ export interface RevealPathResponse {
   segments: RevealPathSegment[];
 }
 
+export interface IndexGitOverlayReadyPayload {
+  workspaceId: string;
+  repoAvailable: boolean;
+  states: Record<string, GitFileState>;
+}
+
 export interface SearchResult {
   path: string;
   absolutePath: string;
