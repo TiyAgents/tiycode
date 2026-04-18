@@ -6087,6 +6087,7 @@ dependencies = [
  "chrono",
  "dirs 6.0.0",
  "dunce",
+ "futures",
  "git2",
  "globset",
  "ignore",

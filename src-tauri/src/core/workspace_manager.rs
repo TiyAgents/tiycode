@@ -144,6 +144,18 @@ impl WorkspaceManager {
             .await?
             .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
+        self.validate_record(&record).await?;
+
+        // Re-fetch the updated record
+        workspace_repo::find_by_id(&self.pool, id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))
+    }
+
+    /// Validate a workspace from an already-loaded record, skipping the
+    /// initial `find_by_id` lookup and the trailing re-fetch.  This is the
+    /// shared validation core used by both `validate` and `validate_all`.
+    async fn validate_record(&self, record: &WorkspaceRecord) -> Result<(), AppError> {
         let canonical = Path::new(&record.canonical_path);
         let now = Utc::now();
 
@@ -163,22 +175,24 @@ impl WorkspaceManager {
         // Update git detection as well
         let is_git = fs::metadata(canonical.join(".git")).await.is_ok();
         if is_git != record.is_git {
-            workspace_repo::update_is_git(&self.pool, id, is_git).await?;
+            workspace_repo::update_is_git(&self.pool, &record.id, is_git).await?;
         }
 
-        workspace_repo::update_status(&self.pool, id, &new_status, now).await?;
-
-        // Re-fetch the updated record
-        workspace_repo::find_by_id(&self.pool, id)
-            .await?
-            .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))
+        workspace_repo::update_status(&self.pool, &record.id, &new_status, now).await?;
+        Ok(())
     }
 
     /// Validate all workspaces — called on app startup.
+    ///
+    /// Validations run concurrently so that slow filesystem checks (e.g. on
+    /// Windows with antivirus hooks) do not accumulate sequentially.
     pub async fn validate_all(&self) -> Result<(), AppError> {
         let workspaces = self.list().await?;
-        for ws in &workspaces {
-            if let Err(e) = self.validate(&ws.id).await {
+        let results =
+            futures::future::join_all(workspaces.iter().map(|ws| self.validate_record(ws))).await;
+
+        for (ws, result) in workspaces.iter().zip(results) {
+            if let Err(e) = result {
                 tracing::warn!(
                     workspace_id = %ws.id,
                     error = %e,

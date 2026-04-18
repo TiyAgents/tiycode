@@ -1,11 +1,12 @@
-use tauri::{ipc::Channel, State};
+use tauri::{ipc::Channel, AppHandle, Emitter, State};
 
 use crate::core::app_state::AppState;
 use crate::core::index_manager::{
-    DirectoryChildrenResponse, FileFilterResponse, FileTreeNode, FileTreeResponse,
-    RevealPathResponse, SearchBatchResponse, SearchOptions, SearchResponse,
+    DirectoryChildrenResponse, FileFilterResponse, FileTreeResponse, RevealPathResponse,
+    SearchBatchResponse, SearchOptions, SearchResponse,
 };
 use crate::core::local_search::{SearchOutputMode, SearchQueryMode};
+use crate::ipc::app_events;
 use crate::ipc::frontend_channels::SearchStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::persistence::repo::workspace_repo;
@@ -13,6 +14,7 @@ use std::time::Duration;
 
 #[tauri::command]
 pub async fn index_get_tree(
+    app: AppHandle,
     state: State<'_, AppState>,
     workspace_id: String,
 ) -> Result<FileTreeResponse, AppError> {
@@ -20,20 +22,34 @@ pub async fn index_get_tree(
         .await?
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
-    let (tree_result, overlay_result) = tokio::join!(
-        state.index_manager.get_tree(&workspace.canonical_path),
-        state
-            .git_manager
-            .get_workspace_overlay(&workspace.canonical_path)
-    );
+    let tree = state
+        .index_manager
+        .get_tree(&workspace.canonical_path)
+        .await?;
 
-    let mut tree = tree_result?;
-    let overlay = overlay_result?;
-
-    tree.apply_git_overlay(&overlay.states);
+    // Spawn async overlay fetch — pushes the result to the frontend via event
+    // so the tree can render immediately without waiting for `git status`.
+    let canonical_path = workspace.canonical_path.clone();
+    let ws_id = workspace_id.clone();
+    let git_manager = state.git_manager.clone();
+    tauri::async_runtime::spawn(async move {
+        match git_manager.get_workspace_overlay(&canonical_path).await {
+            Ok(overlay) => {
+                let payload = app_events::IndexGitOverlayReadyPayload {
+                    workspace_id: ws_id,
+                    repo_available: overlay.repo_available,
+                    states: overlay.states.clone(),
+                };
+                let _ = app.emit(app_events::INDEX_GIT_OVERLAY_READY, payload);
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "git overlay fetch failed for tree");
+            }
+        }
+    });
 
     Ok(FileTreeResponse {
-        repo_available: overlay.repo_available,
+        repo_available: false,
         tree,
     })
 }
@@ -50,39 +66,15 @@ pub async fn index_get_children(
         .await?
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
-    let (children_result, overlay_result) = tokio::join!(
-        state.index_manager.get_children(
+    state
+        .index_manager
+        .get_children(
             &workspace.canonical_path,
             &directory_path,
             offset,
             max_results,
-        ),
-        state
-            .git_manager
-            .get_workspace_overlay(&workspace.canonical_path)
-    );
-
-    let response = children_result?;
-    let overlay = overlay_result?;
-
-    let mut overlay_root = FileTreeNode {
-        name: workspace.name.clone(),
-        path: String::new(),
-        is_dir: true,
-        is_expandable: true,
-        children_has_more: false,
-        children_next_offset: None,
-        git_state: None,
-        children: Some(response.children),
-    };
-
-    overlay_root.apply_git_overlay(&overlay.states);
-
-    Ok(DirectoryChildrenResponse {
-        children: overlay_root.children.unwrap_or_default(),
-        has_more: response.has_more,
-        next_offset: response.next_offset,
-    })
+        )
+        .await
 }
 
 #[tauri::command]
@@ -112,44 +104,10 @@ pub async fn index_reveal_path(
         .await?
         .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
 
-    let (response_result, overlay_result) = tokio::join!(
-        state
-            .index_manager
-            .reveal_path(&workspace.canonical_path, &target_path),
-        state
-            .git_manager
-            .get_workspace_overlay(&workspace.canonical_path)
-    );
-
-    let mut response = response_result?;
-    let overlay = overlay_result?;
-
-    for segment in &mut response.segments {
-        let mut overlay_root = FileTreeNode {
-            name: if segment.directory_path.is_empty() {
-                workspace.name.clone()
-            } else {
-                segment
-                    .directory_path
-                    .split('/')
-                    .next_back()
-                    .unwrap_or(&workspace.name)
-                    .to_string()
-            },
-            path: segment.directory_path.clone(),
-            is_dir: true,
-            is_expandable: true,
-            children_has_more: segment.has_more,
-            children_next_offset: segment.next_offset,
-            git_state: None,
-            children: Some(segment.children.clone()),
-        };
-
-        overlay_root.apply_git_overlay(&overlay.states);
-        segment.children = overlay_root.children.unwrap_or_default();
-    }
-
-    Ok(response)
+    state
+        .index_manager
+        .reveal_path(&workspace.canonical_path, &target_path)
+        .await
 }
 
 #[tauri::command]
