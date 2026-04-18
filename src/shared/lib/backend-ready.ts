@@ -15,27 +15,57 @@ import { once } from "@tauri-apps/api/event";
  *
  * On macOS the probe wins almost instantly; on Windows the event or
  * probe will resolve once WebView2's IPC bridge is warmed up.
+ *
+ * All three paths share a `settled` flag so that whichever wins first
+ * cleans up the other two (event listener + timer), preventing leaks.
  */
 export function waitForBackendReady(timeoutMs = 3000): Promise<void> {
-  // 1. Listen for the explicit backend-ready event
-  const fromEvent = new Promise<void>((resolve) => {
-    once("backend-ready", () => resolve()).then((unlisten) => {
-      // Event may have already fired; schedule cleanup on next tick
-      queueMicrotask(() => unlisten());
+  let settled = false;
+  let eventUnlisten: (() => void) | null = null;
+  let timerId: ReturnType<typeof setTimeout> | null = null;
+
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    if (eventUnlisten) {
+      eventUnlisten();
+      eventUnlisten = null;
+    }
+    if (timerId !== null) {
+      clearTimeout(timerId);
+      timerId = null;
+    }
+  };
+
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      settle();
+      resolve();
+    };
+
+    // 1. Listen for the explicit backend-ready event
+    once("backend-ready", () => {
+      if (!settled) done();
+    }).then((unlisten) => {
+      // If another signal already won the race, clean up immediately
+      if (settled) unlisten();
+      else eventUnlisten = unlisten;
     });
+
+    // 2. Probe IPC with a no-side-effect invoke.  Any response (success
+    //    or error) proves the bridge is up.  We use workspace_list which
+    //    is always registered and fast (~0 ms on macOS).
+    invoke("workspace_list")
+      .then(() => {
+        if (!settled) done();
+      })
+      .catch(() => {
+        if (!settled) done();
+      });
+
+    // 3. Timeout fallback
+    timerId = setTimeout(() => {
+      if (!settled) done();
+    }, timeoutMs);
   });
-
-  // 2. Probe IPC with a no-side-effect invoke.  Any response (success
-  //    or error) proves the bridge is up.  We use workspace_list which
-  //    is always registered and fast (~0 ms on macOS).
-  const fromProbe = invoke("workspace_list")
-    .then(() => {})
-    .catch(() => {});
-
-  // 3. Timeout fallback
-  const fromTimeout = new Promise<void>((resolve) => {
-    setTimeout(resolve, timeoutMs);
-  });
-
-  return Promise.race([fromEvent, fromProbe, fromTimeout]);
 }
