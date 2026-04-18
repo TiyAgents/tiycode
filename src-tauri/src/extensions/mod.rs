@@ -1505,7 +1505,7 @@ impl ExtensionsManager {
         dir: &Path,
         discovered: bool,
     ) -> Result<InstalledPluginRuntime, AppError> {
-        let plugin_dir = fs::canonicalize(dir).map_err(|error| {
+        let plugin_dir = dunce::canonicalize(dir).map_err(|error| {
             AppError::recoverable(
                 ErrorSource::Settings,
                 "extensions.plugin.invalid_path",
@@ -5090,6 +5090,7 @@ async fn spawn_stdio_mcp_process(
         "spawn_stdio_mcp_process: resolved command path"
     );
     let mut command = Command::new(&program);
+    configure_background_tokio_command(&mut command);
     command.args(config.args.clone().unwrap_or_default());
     if let Some(cwd) = config.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) {
         command.current_dir(cwd);
@@ -6398,7 +6399,7 @@ Provide a code review for the given pull request."#,
         assert_eq!(runtime.manifest.name, "Marketplace Plugin");
         assert_eq!(
             runtime.path,
-            fs::canonicalize(plugin_dir.path()).expect("canonical plugin path")
+            dunce::canonicalize(plugin_dir.path()).expect("canonical plugin path")
         );
     }
 
