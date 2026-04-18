@@ -45,6 +45,7 @@ fn refresh_wake_lock(state: &mut SleepManagerState) {
         let mut builder = Builder::default();
         builder
             .idle(true)
+            .display(true)
             .reason("Active TiyCode run")
             .app_name("TiyCode")
             .app_reverse_domain("ai.tiy.tiycode");
