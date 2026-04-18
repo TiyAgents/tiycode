@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { resolveThreadProfileId } from "./dashboard-workbench";
 
 describe("resolveThreadProfileId", () => {
-  const profileIds = new Set(["p-1", "p-2", "p-3"]);
-  const globalActive = "p-1";
+  const profileIds = new Set(["p-1", "p-2", "p-3", "p-global"]);
+  const globalActive = "p-global";
   const firstProfile = "p-1";
 
   it("returns global active when threadId is null", () => {
