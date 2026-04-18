@@ -427,6 +427,7 @@ export function DashboardWorkbench() {
     terminal,
     availableShells,
     policy,
+    backendHydrated: settingsHydrated,
     updateGeneralPreference,
     addWorkspace,
     removeWorkspace,
@@ -3174,7 +3175,7 @@ export function DashboardWorkbench() {
         onDismiss={appUpdater.dismiss}
       />
 
-      {showOnboarding ? (
+      {showOnboarding && settingsHydrated ? (
         <OnboardingWizard
           language={language}
           theme={theme}

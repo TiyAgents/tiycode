@@ -1352,6 +1352,7 @@ export function useSettingsController() {
     addWorkspace,
     removeWorkspace,
     setDefaultWorkspace,
+    backendHydrated,
     addProvider,
     removeProvider,
     updateProvider,
