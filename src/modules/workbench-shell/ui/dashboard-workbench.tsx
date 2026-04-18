@@ -3195,7 +3195,7 @@ export function DashboardWorkbench() {
           onUpdateMcpServer={(id, input) => updateMcpServer(id, input, resolveItemScope(id))}
           onRemoveMcpServer={(id) => removeMcpServer(id, resolveItemScope(id))}
           onRestartMcpServer={(id) => restartMcpServer(id, resolveItemScope(id))}
-          onRescanSkills={() => rescanSkills("global")}
+          onRescanSkills={() => rescanSkills(currentExtensionScope)}
           onEnableSkill={(id) => enableSkill(id, resolveItemScope(id))}
           onDisableSkill={(id) => disableSkill(id, resolveItemScope(id))}
           skillPreviewById={skillPreviewById}
