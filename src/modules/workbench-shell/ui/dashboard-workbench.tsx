@@ -467,6 +467,7 @@ export function DashboardWorkbench() {
     () => (isTauri() ? [] : [...RECENT_PROJECTS]),
   );
   const [isNewThreadMode, setNewThreadMode] = useState(true);
+  const [isSidebarReady, setSidebarReady] = useState(() => !isTauri());
   const [activeOverlay, setActiveOverlay] = useState<WorkbenchOverlay>(null);
   const [showOnboarding, setShowOnboarding] = useState(() => !isOnboardingCompleted());
   const [activeSettingsCategory, setActiveSettingsCategory] =
@@ -1234,6 +1235,7 @@ export function DashboardWorkbench() {
         if (cancelled) {
           return;
         }
+        setSidebarReady(true);
       })
       .catch((error) => {
         if (cancelled) {
@@ -2542,7 +2544,28 @@ export function DashboardWorkbench() {
 
             <div className="mt-3 min-h-0 flex-1 overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <div className="space-y-1.5">
-                {workspaces.map((workspace) => {
+                {!isSidebarReady ? (
+                  <div className="space-y-3 px-1">
+                    {/* Workspace skeleton */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 rounded-lg px-2 py-1.5">
+                        <div className="size-4 animate-pulse rounded bg-app-surface-hover" />
+                        <div className="h-3.5 w-28 animate-pulse rounded bg-app-surface-hover" />
+                      </div>
+                      {/* Thread skeletons */}
+                      {[1, 2, 3].map((i) => (
+                        <div key={i} className="flex items-center gap-2 rounded-lg px-2 py-1.5 pl-7">
+                          <div className="size-3.5 animate-pulse rounded bg-app-surface-hover" />
+                          <div
+                            className="h-3 animate-pulse rounded bg-app-surface-hover"
+                            style={{ width: `${60 + i * 12}%` }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                workspaces.map((workspace) => {
                   const isOpen =
                     openWorkspaces[workspace.id] ?? workspace.defaultOpen;
                   const FolderIcon = isOpen ? FolderOpen : Folder;
@@ -2775,7 +2798,8 @@ export function DashboardWorkbench() {
                       ) : null}
                     </div>
                   );
-                })}
+                })
+                )}
               </div>
             </div>
           </div>
@@ -2798,6 +2822,7 @@ export function DashboardWorkbench() {
                             recentProjects={recentProjects}
                             selectedProject={selectedProject}
                             isOverlayOpen={isOverlayOpen}
+                            isLoading={!isSidebarReady}
                             onSelectProject={handleProjectSelect}
                             branchSlot={
                               resolvedWorkspaceId &&

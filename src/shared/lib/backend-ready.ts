@@ -14,7 +14,7 @@ import { once } from "@tauri-apps/api/event";
  * already emitted before the listener was registered (race with
  * `on_page_load`).
  */
-export function waitForBackendReady(): Promise<void> {
+export function waitForBackendReady(timeoutMs = 3000): Promise<void> {
   return new Promise<void>((resolve) => {
     let resolved = false;
     const done = () => {
@@ -29,6 +29,6 @@ export function waitForBackendReady(): Promise<void> {
     });
     // Safety fallback: don't block forever if the event was already
     // emitted before the listener was registered.
-    setTimeout(done, 3000);
+    setTimeout(done, timeoutMs);
   });
 }
