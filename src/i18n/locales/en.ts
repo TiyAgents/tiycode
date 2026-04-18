@@ -617,6 +617,8 @@ const en: Record<TranslationKey, string> = {
   "extensions.commandPlaceholder": "command",
   "extensions.argsPlaceholder": "args separated by spaces",
   "extensions.headersHelper": "Use one `Header: value` per line. Masked values are kept unless you replace or remove them.",
+"extensions.envLabel": "Environment Variables",
+"extensions.envHelper": "One `KEY: value` per line. Variables are passed to the server process.",
   "extensions.enableOnSave": "Enable on save",
   "extensions.disabledEntryHint": "Disabled entries stay registered but won't start.",
   "extensions.cancelButton": "Cancel",

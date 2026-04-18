@@ -489,6 +489,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
   const [mcpDialogMode, setMcpDialogMode] = useState<"create" | "edit">("create");
   const [mcpForm, setMcpForm] = useState<McpFormState>(createDefaultMcpFormState);
   const [mcpHeadersText, setMcpHeadersText] = useState("");
+  const [mcpEnvText, setMcpEnvText] = useState("");
   const [marketSourceDialogOpen, setMarketSourceDialogOpen] = useState(false);
   const [marketSourceForm, setMarketSourceForm] = useState<MarketplaceSourceInput>({ name: "", url: "" });
   const [marketSourceError, setMarketSourceError] = useState<string | null>(null);
@@ -752,6 +753,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
     setMcpDialogMode("create");
     setMcpForm(createDefaultMcpFormState());
     setMcpHeadersText("");
+    setMcpEnvText("");
     setMcpDialogOpen(true);
   };
 
@@ -772,11 +774,13 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
       timeoutMs: server.config.timeoutMs ?? 30_000,
     });
     setMcpHeadersText(formatHeaderMap(server.config.headers));
+    setMcpEnvText(formatHeaderMap(server.config.env));
     setMcpDialogOpen(true);
   };
 
   const handleSubmitMcp = async () => {
     const headers = parseHeaderMapInput(mcpHeadersText);
+    const envMap = parseHeaderMapInput(mcpEnvText);
     const payload: McpServerConfigInput = {
       ...mcpForm,
       command: mcpForm.command?.trim() || undefined,
@@ -784,6 +788,7 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
       url: mcpForm.url?.trim() || undefined,
       args: (mcpForm.args ?? []).filter(Boolean),
       headers: Object.keys(headers).length > 0 ? headers : undefined,
+      env: Object.keys(envMap).length > 0 ? envMap : undefined,
     };
     await runAction(() =>
       mcpDialogMode === "create"
@@ -1844,6 +1849,18 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                   }
                   placeholder={t("extensions.argsPlaceholder")}
                 />
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-app-foreground">{t("extensions.envLabel")}</div>
+                  <Textarea
+                    value={mcpEnvText}
+                    onChange={(event) => setMcpEnvText(event.target.value)}
+                    placeholder={"PATH: /usr/local/bin\nNODE_ENV: production"}
+                    className="min-h-28"
+                  />
+                  <div className="text-xs text-app-muted">
+                    {t("extensions.envHelper")}
+                  </div>
+                </div>
               </>
             ) : (
               <>
