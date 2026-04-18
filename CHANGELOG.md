@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-04-18
+### :sparkles: New Features
+- [`0737873`](https://github.com/TiyAgents/tiycode/commit/0737873fe1f1c4f663d1d219db6aabfe2ff17450) - **workbench**: ✨ remember preferred open app in localStorage *(PR [#79](https://github.com/TiyAgents/tiycode/pull/79) by [@HayWolf](https://github.com/HayWolf))*
+- [`44e76f4`](https://github.com/TiyAgents/tiycode/commit/44e76f4cbdd9add830b6d9241051cac6da2e2a94) - **extensions-center**: ✨ Force user-level storage for extensions & add MCP env editing *(PR [#78](https://github.com/TiyAgents/tiycode/pull/78) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`14e31bb`](https://github.com/TiyAgents/tiycode/commit/14e31bb6582b7bdd399b6081e3e813d2fe7c5540) - **titlebar**: 🐛 Remove macOS traffic light repositioning and refine top bar layout *(PR [#67](https://github.com/TiyAgents/tiycode/pull/67) by [@HayWolf](https://github.com/HayWolf))*
+- [`9d6de21`](https://github.com/TiyAgents/tiycode/commit/9d6de210c6612d99f45845ef91752eb361100cd6) - **sleep-manager**: 🐛 show wake lock display activity *(PR [#70](https://github.com/TiyAgents/tiycode/pull/70) by [@HayWolf](https://github.com/HayWolf))*
+- [`33674a1`](https://github.com/TiyAgents/tiycode/commit/33674a131a42350e0fc7d08badab38f94711be23) - **settings**: 🐛 Seed default profile when database has no records *(PR [#71](https://github.com/TiyAgents/tiycode/pull/71) by [@jorben](https://github.com/jorben))*
+- [`d332c8f`](https://github.com/TiyAgents/tiycode/commit/d332c8f4ea88344887a7688be1982e1bf4a64a54) - **settings**: 🐛 hydrate settings before onboarding render *(PR [#74](https://github.com/TiyAgents/tiycode/pull/74) by [@HayWolf](https://github.com/HayWolf))*
+- [`6f25181`](https://github.com/TiyAgents/tiycode/commit/6f251813a82b6961859cf364d5a71b20eaed15bb) - **windows**: 🐛 Fix MCP server launch and plugin source display on Windows *(PR [#75](https://github.com/TiyAgents/tiycode/pull/75) by [@HayWolf](https://github.com/HayWolf))*
+- [`e722c5c`](https://github.com/TiyAgents/tiycode/commit/e722c5cab262ba53a9ad8432658778994a5a69ff) - **extensions**: 🐛 load MCP configs with workspace scope *(PR [#76](https://github.com/TiyAgents/tiycode/pull/76) by [@HayWolf](https://github.com/HayWolf))*
+
+### :zap: Performance Improvements
+- [`eff9eec`](https://github.com/TiyAgents/tiycode/commit/eff9eec40138f799649653772847f5480bac1da4) - **startup**: ⚡️ Optimize Windows startup and TreeView loading latency *(PR [#73](https://github.com/TiyAgents/tiycode/pull/73) by [@HayWolf](https://github.com/HayWolf))*
+- [`06544cf`](https://github.com/TiyAgents/tiycode/commit/06544cf434c8be811d7356a1cf56687f3133f39a) - **startup**: ⚡️ Optimize Windows startup performance and reduce IPC latency *(PR [#77](https://github.com/TiyAgents/tiycode/pull/77) by [@HayWolf](https://github.com/HayWolf))*
+
+### :wrench: Chores
+- [`a72dead`](https://github.com/TiyAgents/tiycode/commit/a72deade6dac1cd5a6f1d9bda18c8d5931df9120) - **git**: 🔧 increase default history limit from 24 to 32 *(PR [#68](https://github.com/TiyAgents/tiycode/pull/68) by [@HayWolf](https://github.com/HayWolf))*
+- [`5d497db`](https://github.com/TiyAgents/tiycode/commit/5d497db14dac5bfb5e2f4d0b35896033e043c8c5) - **config**: 🔧 enforce LF line endings *(PR [#69](https://github.com/TiyAgents/tiycode/pull/69) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.3.0] - 2026-04-17
 ### :sparkles: New Features
 - [`b5e58d9`](https://github.com/TiyAgents/tiycode/commit/b5e58d9cddcf8a1520a2e6d0d7cd15bcd8338059) - **workbench**: ✨ render branch selector on new thread empty state *(PR [#58](https://github.com/TiyAgents/tiycode/pull/58) by [@jorben](https://github.com/jorben))*
@@ -510,3 +532,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.8]: https://github.com/TiyAgents/tiycode/compare/0.2.7...0.2.8
 [0.2.9]: https://github.com/TiyAgents/tiycode/compare/0.2.8...0.2.9
 [0.3.0]: https://github.com/TiyAgents/tiycode/compare/0.2.9...0.3.0
+[0.3.1]: https://github.com/TiyAgents/tiycode/compare/0.3.0...0.3.1
