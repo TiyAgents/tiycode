@@ -29,6 +29,25 @@ import { useWorkspaceOpenApps } from "@/modules/workbench-shell/model/use-worksp
 import type { ProjectOption, ProjectTreeItem, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
 
+const PREFERRED_OPEN_APP_STORAGE_KEY = "tiy-preferred-open-app-id";
+const FILE_MANAGER_APP_IDS = ["finder", "explorer"];
+
+function readCachedPreferredOpenAppId(): string | null {
+  try {
+    return localStorage.getItem(PREFERRED_OPEN_APP_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedPreferredOpenAppId(id: string): void {
+  try {
+    localStorage.setItem(PREFERRED_OPEN_APP_STORAGE_KEY, id);
+  } catch {
+    // ignore
+  }
+}
+
 const APP_ICON_FALLBACKS: Record<
   string,
   { src?: string; label: string; className: string }
@@ -439,7 +458,7 @@ export function ProjectPanel({
   const [isRefreshingTree, setRefreshingTree] = useState(false);
   const [treeReloadVersion, setTreeReloadVersion] = useState(0);
   const [isOpenMenuOpen, setOpenMenuOpen] = useState(false);
-  const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(null);
+  const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(() => readCachedPreferredOpenAppId());
   const [activeOpenTargetId, setActiveOpenTargetId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
@@ -499,7 +518,8 @@ export function ProjectPanel({
 
   useEffect(() => {
     if (!preferredOpenAppId || !openApps.some((app) => app.id === preferredOpenAppId)) {
-      setPreferredOpenAppId(openApps[0]?.id ?? null);
+      const fileManagerApp = openApps.find((app) => FILE_MANAGER_APP_IDS.includes(app.id));
+      setPreferredOpenAppId(fileManagerApp?.id ?? openApps[0]?.id ?? null);
     }
   }, [openApps, preferredOpenAppId]);
 
@@ -785,6 +805,7 @@ export function ProjectPanel({
         appPath: app.openWith,
       });
       setPreferredOpenAppId(app.id);
+      writeCachedPreferredOpenAppId(app.id);
       setOpenMenuOpen(false);
       setOpenError(null);
     } catch (error) {
