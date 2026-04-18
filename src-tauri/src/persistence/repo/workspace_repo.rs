@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 
 use crate::model::errors::{AppError, ErrorSource};
-use crate::model::workspace::{WorkspaceRecord, WorkspaceStatus};
+use crate::model::workspace::{WorkspaceKind, WorkspaceRecord, WorkspaceStatus};
 
 /// Row returned by sqlx queries (intermediate mapping).
 #[derive(sqlx::FromRow)]
@@ -19,6 +19,11 @@ struct WorkspaceRow {
     last_validated_at: Option<String>,
     created_at: String,
     updated_at: String,
+    kind: String,
+    parent_workspace_id: Option<String>,
+    git_common_dir: Option<String>,
+    branch: Option<String>,
+    worktree_name: Option<String>,
 }
 
 impl WorkspaceRow {
@@ -43,17 +48,23 @@ impl WorkspaceRow {
             updated_at: DateTime::parse_from_rfc3339(&self.updated_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
+            kind: WorkspaceKind::from_str(&self.kind),
+            parent_workspace_id: self.parent_workspace_id,
+            git_common_dir: self.git_common_dir,
+            branch: self.branch,
+            worktree_name: self.worktree_name,
         }
     }
 }
 
+const SELECT_COLUMNS: &str = "id, name, path, canonical_path, display_path, is_default, is_git,\n                auto_work_tree, status, last_validated_at, created_at, updated_at,\n                kind, parent_workspace_id, git_common_dir, branch, worktree_name";
+
 pub async fn list_all(pool: &SqlitePool) -> Result<Vec<WorkspaceRecord>, AppError> {
-    let rows = sqlx::query_as::<_, WorkspaceRow>(
-        "SELECT id, name, path, canonical_path, display_path, is_default, is_git,
-                auto_work_tree, status, last_validated_at, created_at, updated_at
+    let rows = sqlx::query_as::<_, WorkspaceRow>(&format!(
+        "SELECT {SELECT_COLUMNS}
          FROM workspaces
-         ORDER BY is_default DESC, updated_at DESC",
-    )
+         ORDER BY is_default DESC, updated_at DESC"
+    ))
     .fetch_all(pool)
     .await?;
 
@@ -61,11 +72,9 @@ pub async fn list_all(pool: &SqlitePool) -> Result<Vec<WorkspaceRecord>, AppErro
 }
 
 pub async fn find_by_id(pool: &SqlitePool, id: &str) -> Result<Option<WorkspaceRecord>, AppError> {
-    let row = sqlx::query_as::<_, WorkspaceRow>(
-        "SELECT id, name, path, canonical_path, display_path, is_default, is_git,
-                auto_work_tree, status, last_validated_at, created_at, updated_at
-         FROM workspaces WHERE id = ?",
-    )
+    let row = sqlx::query_as::<_, WorkspaceRow>(&format!(
+        "SELECT {SELECT_COLUMNS} FROM workspaces WHERE id = ?"
+    ))
     .bind(id)
     .fetch_optional(pool)
     .await?;
@@ -77,11 +86,9 @@ pub async fn find_by_canonical_path(
     pool: &SqlitePool,
     canonical_path: &str,
 ) -> Result<Option<WorkspaceRecord>, AppError> {
-    let row = sqlx::query_as::<_, WorkspaceRow>(
-        "SELECT id, name, path, canonical_path, display_path, is_default, is_git,
-                auto_work_tree, status, last_validated_at, created_at, updated_at
-         FROM workspaces WHERE canonical_path = ?",
-    )
+    let row = sqlx::query_as::<_, WorkspaceRow>(&format!(
+        "SELECT {SELECT_COLUMNS} FROM workspaces WHERE canonical_path = ?"
+    ))
     .bind(canonical_path)
     .fetch_optional(pool)
     .await?;
@@ -89,13 +96,32 @@ pub async fn find_by_canonical_path(
     Ok(row.map(|r| r.into_record()))
 }
 
+/// List worktree workspaces attached to the given parent repo workspace.
+pub async fn list_worktrees_of(
+    pool: &SqlitePool,
+    parent_id: &str,
+) -> Result<Vec<WorkspaceRecord>, AppError> {
+    let rows = sqlx::query_as::<_, WorkspaceRow>(&format!(
+        "SELECT {SELECT_COLUMNS}
+         FROM workspaces
+         WHERE parent_workspace_id = ? AND kind = 'worktree'
+         ORDER BY created_at ASC"
+    ))
+    .bind(parent_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|r| r.into_record()).collect())
+}
+
 pub async fn insert(pool: &SqlitePool, record: &WorkspaceRecord) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
                 is_default, is_git, auto_work_tree, status, last_validated_at,
-                created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                created_at, updated_at,
+                kind, parent_workspace_id, git_common_dir, branch, worktree_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.name)
@@ -109,6 +135,11 @@ pub async fn insert(pool: &SqlitePool, record: &WorkspaceRecord) -> Result<(), A
     .bind(record.last_validated_at.map(|t| t.to_rfc3339()))
     .bind(&now)
     .bind(&now)
+    .bind(record.kind.as_str())
+    .bind(record.parent_workspace_id.as_deref())
+    .bind(record.git_common_dir.as_deref())
+    .bind(record.branch.as_deref())
+    .bind(record.worktree_name.as_deref())
     .execute(pool)
     .await?;
 
@@ -248,6 +279,38 @@ pub async fn update_is_git(pool: &SqlitePool, id: &str, is_git: bool) -> Result<
         .bind(id)
         .execute(pool)
         .await?;
+
+    Ok(())
+}
+
+/// Update the workspace `kind` (and optional related fields). Used when
+/// upgrading an existing `standalone` workspace to `repo` after Git detection,
+/// or when re-synchronizing worktree metadata after a git operation.
+pub async fn update_kind_metadata(
+    pool: &SqlitePool,
+    id: &str,
+    kind: WorkspaceKind,
+    parent_workspace_id: Option<&str>,
+    worktree_name: Option<&str>,
+    branch: Option<&str>,
+    git_common_dir: Option<&str>,
+) -> Result<(), AppError> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE workspaces
+         SET kind = ?, parent_workspace_id = ?, worktree_name = ?,
+             branch = ?, git_common_dir = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(kind.as_str())
+    .bind(parent_workspace_id)
+    .bind(worktree_name)
+    .bind(branch)
+    .bind(git_common_dir)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }

@@ -25,6 +25,7 @@ pub mod tool_gateway;
 pub mod windows_process;
 pub mod workspace_manager;
 pub mod workspace_paths;
+pub mod worktree_manager;
 
 /// Returns the default HTTP headers that identify TiyCode in every LLM API request.
 pub fn tiycode_default_headers() -> std::collections::HashMap<String, String> {

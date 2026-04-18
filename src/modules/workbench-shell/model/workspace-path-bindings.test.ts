@@ -25,6 +25,11 @@ function createWorkspace(overrides: Partial<WorkspaceDto> = {}): WorkspaceDto {
     lastValidatedAt: null,
     createdAt: "2026-04-12T00:00:00Z",
     updatedAt: "2026-04-12T00:00:00Z",
+    kind: "repo",
+    parentWorkspaceId: null,
+    gitCommonDir: null,
+    branch: null,
+    worktreeName: null,
     ...overrides,
   };
 }

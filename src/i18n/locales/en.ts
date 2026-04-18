@@ -746,6 +746,29 @@ const en: Record<TranslationKey, string> = {
   "onboarding.complete.title": "All set!",
   "onboarding.complete.desc": "Configuration complete. You can adjust these settings anytime.",
   "onboarding.complete.tip": "Tip: Use the top menu bar to quickly switch theme and language.",
+
+  // ── Worktree ───────────────────────────────────────────
+  "worktree.createTitle": "New worktree",
+  "worktree.createDescription": "Create a new worktree for this Git repository. Choose an existing branch or create a new one.",
+  "worktree.field.branch": "Branch",
+  "worktree.field.branchPlaceholder": "Pick or type a branch name",
+  "worktree.tab.existingBranch": "Existing branch",
+  "worktree.tab.newBranch": "New branch",
+  "worktree.field.baseRef": "Base ref",
+  "worktree.field.baseRefPlaceholder": "Default: current HEAD",
+  "worktree.field.path": "Worktree directory",
+  "worktree.field.pathPlaceholder": "Auto-generated path",
+  "worktree.field.pathBrowse": "Browse…",
+  "worktree.field.pathHint": "Defaults to a sibling directory next to the main repo. You can override it.",
+  "worktree.submit": "Create worktree",
+  "worktree.submitting": "Creating…",
+  "worktree.cancel": "Cancel",
+  "worktree.menu.newWorktree": "New worktree…",
+  "worktree.removeConfirm": "Removing this worktree will delete the directory on disk and all related threads. Continue?",
+  "worktree.error.branchRequired": "Branch name is required",
+  "worktree.error.selectRepo": "Worktrees can only be created on a Git repository workspace",
+  "worktree.empty.branches": "No branches yet",
+  "worktree.tag.label": "Worktree",
 };
 
 export default en;

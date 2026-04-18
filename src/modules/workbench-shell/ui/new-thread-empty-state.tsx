@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown, Folder, FolderPlus } from "lucide-react";
+import { Check, ChevronDown, Folder, FolderPlus, GitBranch } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useT } from "@/i18n";
 import { cn } from "@/shared/lib/utils";
@@ -13,6 +13,7 @@ export function NewThreadEmptyState({
   isLoading,
   onSelectProject,
   branchSlot,
+  onRequestNewWorktree,
 }: {
   recentProjects: ReadonlyArray<ProjectOption>;
   selectedProject: ProjectOption | null;
@@ -20,6 +21,7 @@ export function NewThreadEmptyState({
   isLoading?: boolean;
   onSelectProject: (project: ProjectOption) => void;
   branchSlot?: ReactNode;
+  onRequestNewWorktree?: (project: ProjectOption) => void;
 }) {
   const t = useT();
   const [isMenuOpen, setMenuOpen] = useState(false);
@@ -74,6 +76,15 @@ export function NewThreadEmptyState({
     setMenuOpen(false);
   };
 
+  const newWorktreeRepo =
+    onRequestNewWorktree && activeProject?.kind === "repo"
+      ? activeProject
+      : onRequestNewWorktree && activeProject?.kind === "worktree" && activeProject.parentWorkspaceId
+        ? (recentProjects.find(
+            (project) => project.id === activeProject.parentWorkspaceId,
+          ) ?? null)
+        : null;
+
   return (
     <div
       className={cn(
@@ -116,13 +127,25 @@ export function NewThreadEmptyState({
             onClick={() => setMenuOpen((current) => !current)}
           >
             <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border bg-app-surface-muted text-app-subtle">
-              <Folder className="size-4 shrink-0" />
+              {activeProject?.kind === "worktree" ? (
+                <GitBranch className="size-4 shrink-0" />
+              ) : (
+                <Folder className="size-4 shrink-0" />
+              )}
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-[1rem] font-medium tracking-[-0.02em] text-app-foreground">
                   {activeProject?.name ?? t("newThread.chooseProject")}
                 </span>
+                {activeProject?.worktreeHash ? (
+                  <span
+                    title={t("worktree.tag.label")}
+                    className="shrink-0 rounded bg-app-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-app-subtle"
+                  >
+                    {activeProject.worktreeHash}
+                  </span>
+                ) : null}
                 {activeProject ? (
                   <span className="shrink-0 rounded-full bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium text-app-subtle">
                     {activeProject.lastOpenedLabel}
@@ -157,6 +180,7 @@ export function NewThreadEmptyState({
                   <div className="space-y-0.5">
                     {recentProjects.map((project) => {
                       const isSelected = activeProject?.id === project.id;
+                      const isWorktree = project.kind === "worktree";
 
                       return (
                         <button
@@ -174,11 +198,23 @@ export function NewThreadEmptyState({
                           }}
                         >
                           <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-subtle">
-                            <Folder className="size-4 shrink-0" />
+                            {isWorktree ? (
+                              <GitBranch className="size-4 shrink-0" />
+                            ) : (
+                              <Folder className="size-4 shrink-0" />
+                            )}
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
                               <span className="min-w-0 flex-1 truncate text-sm font-medium">{project.name}</span>
+                              {project.worktreeHash ? (
+                                <span
+                                  title={t("worktree.tag.label")}
+                                  className="shrink-0 rounded bg-app-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-app-subtle"
+                                >
+                                  {project.worktreeHash}
+                                </span>
+                              ) : null}
                               <span className="shrink-0 text-[10px] font-medium text-app-subtle">{project.lastOpenedLabel}</span>
                             </div>
                             <p className="mt-0.5 truncate text-[11px] leading-5 text-app-subtle" title={project.path}>
@@ -207,6 +243,27 @@ export function NewThreadEmptyState({
                     <p className="mt-0.5 text-[11px] leading-5 text-app-subtle">{t("newThread.browseHint")}</p>
                   </div>
                 </button>
+
+                {newWorktreeRepo && onRequestNewWorktree ? (
+                  <button
+                    type="button"
+                    className="flex w-full shrink-0 items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-app-foreground transition-colors hover:bg-app-surface-hover/70"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onRequestNewWorktree(newWorktreeRepo);
+                    }}
+                  >
+                    <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-subtle">
+                      <GitBranch className="size-4 shrink-0" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium">{t("worktree.menu.newWorktree")}</div>
+                      <p className="mt-0.5 truncate text-[11px] leading-5 text-app-subtle">
+                        {newWorktreeRepo.name}
+                      </p>
+                    </div>
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : null}

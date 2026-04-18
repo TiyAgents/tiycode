@@ -17,6 +17,10 @@ export type WorkspaceItem = {
   defaultOpen: boolean;
   threads: Array<WorkspaceThreadItem>;
   path?: string;
+  kind?: "standalone" | "repo" | "worktree";
+  parentWorkspaceId?: string | null;
+  worktreeHash?: string | null;
+  branch?: string | null;
 };
 
 export type ProjectOption = {
@@ -24,6 +28,10 @@ export type ProjectOption = {
   name: string;
   path: string;
   lastOpenedLabel: string;
+  kind?: "standalone" | "repo" | "worktree";
+  parentWorkspaceId?: string | null;
+  worktreeHash?: string | null;
+  branch?: string | null;
 };
 
 export type WorkspaceOpenApp = {

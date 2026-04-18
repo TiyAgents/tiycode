@@ -88,6 +88,7 @@ import {
   buildInitialWorkspaces,
   buildWorkspaceItemsFromDtos,
   buildThreadTitle,
+  sortWorkspacesWithWorktrees,
   clearActiveThreads,
   getActiveThread,
   isEditableSelectionTarget,
@@ -116,6 +117,10 @@ import type {
 } from "@/modules/workbench-shell/model/types";
 import type { ExtensionDetail, SkillPreview } from "@/shared/types/extensions";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
+import {
+  NewWorktreeDialog,
+  type NewWorktreeDialogContext,
+} from "@/modules/workbench-shell/ui/new-worktree-dialog";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
 import { BranchSelector } from "@/modules/workbench-shell/ui/branch-selector";
 import {
@@ -190,7 +195,7 @@ function getNewThreadTerminalBindingKey(workspaceId: string) {
   return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
 }
 
-function buildProjectOptionFromWorkspace(workspace: WorkspaceDto) {
+function buildProjectOptionFromWorkspace(workspace: WorkspaceDto): ProjectOption | null {
   const project = buildProjectOptionFromPath(
     workspace.canonicalPath || workspace.path,
   );
@@ -202,6 +207,12 @@ function buildProjectOptionFromWorkspace(workspace: WorkspaceDto) {
     ...project,
     id: workspace.id,
     name: workspace.name,
+    kind: workspace.kind,
+    parentWorkspaceId: workspace.parentWorkspaceId ?? null,
+    worktreeHash: workspace.worktreeName
+      ? workspace.worktreeName.slice(0, 6)
+      : null,
+    branch: workspace.branch ?? null,
   };
 }
 
@@ -541,6 +552,8 @@ export function DashboardWorkbench() {
     workspaceId: string;
     kind: "open" | "remove";
   } | null>(null);
+  const [worktreeDialogContext, setWorktreeDialogContext] =
+    useState<NewWorktreeDialogContext | null>(null);
   const [pendingThreadRuns, setPendingThreadRuns] = useState<
     Record<string, PendingThreadRun>
   >({});
@@ -2407,6 +2420,13 @@ export function DashboardWorkbench() {
         return;
       }
 
+      if (workspace.kind === "worktree") {
+        const confirmed =
+          typeof window === "undefined" ||
+          window.confirm(t("worktree.removeConfirm"));
+        if (!confirmed) return;
+      }
+
       void (async () => {
         const workspaceThreadIds = new Set(
           workspace.threads.map((thread) => thread.id),
@@ -2538,6 +2558,7 @@ export function DashboardWorkbench() {
       selectedProject?.id,
       selectedProject?.path,
       syncWorkspaceSidebar,
+      t,
       workspaceAction,
     ],
   );
@@ -2724,10 +2745,20 @@ export function DashboardWorkbench() {
                     </div>
                   </div>
                 ) : (
-                workspaces.map((workspace) => {
+                sortWorkspacesWithWorktrees(workspaces).map((workspace) => {
+                  const isWorktreeRow = workspace.kind === "worktree";
+                  const isRepoRow = workspace.kind === "repo";
+                  const worktreeTag =
+                    workspace.worktreeHash && workspace.worktreeHash.length > 0
+                      ? workspace.worktreeHash
+                      : null;
                   const isOpen =
                     openWorkspaces[workspace.id] ?? workspace.defaultOpen;
-                  const FolderIcon = isOpen ? FolderOpen : Folder;
+                  const FolderIcon = isWorktreeRow
+                    ? GitBranch
+                    : isOpen
+                      ? FolderOpen
+                      : Folder;
                   const isWorkspaceMenuOpen =
                     activeWorkspaceMenuId === workspace.id;
                   const isOpeningWorkspace =
@@ -2767,9 +2798,17 @@ export function DashboardWorkbench() {
                             onClick={() => handleWorkspaceToggle(workspace.id)}
                           >
                             <FolderIcon className="size-4 shrink-0 text-app-muted" />
-                            <span className={DRAWER_LIST_LABEL_CLASS}>
+                            <span className={cn(DRAWER_LIST_LABEL_CLASS, "flex-1")}>
                               {workspace.name}
                             </span>
+                            {worktreeTag ? (
+                              <span
+                                title={t("worktree.tag.label")}
+                                className="rounded bg-app-surface-hover px-1.5 py-0.5 font-mono text-[10px] text-app-subtle"
+                              >
+                                {worktreeTag}
+                              </span>
+                            ) : null}
                           </button>
                           <button
                             type="button"
@@ -2809,6 +2848,30 @@ export function DashboardWorkbench() {
                                 <MessageSquarePlus className="size-4 shrink-0" />
                                 <span>{t("sidebar.newThreadForWorkspace")}</span>
                               </button>
+                              {isRepoRow ? (
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-app-foreground transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:text-app-subtle"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setActiveWorkspaceMenuId(null);
+                                    if (workspace.path) {
+                                      setWorktreeDialogContext({
+                                        repo: {
+                                          id: workspace.id,
+                                          name: workspace.name,
+                                          canonicalPath: workspace.path,
+                                        },
+                                      });
+                                    }
+                                  }}
+                                  disabled={!workspace.path}
+                                >
+                                  <GitBranch className="size-4 shrink-0" />
+                                  <span>{t("worktree.menu.newWorktree")}</span>
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 role="menuitem"
@@ -2983,6 +3046,15 @@ export function DashboardWorkbench() {
                             isOverlayOpen={isOverlayOpen}
                             isLoading={!isSidebarReady}
                             onSelectProject={handleProjectSelect}
+                            onRequestNewWorktree={(project) => {
+                              setWorktreeDialogContext({
+                                repo: {
+                                  id: project.id,
+                                  name: project.name,
+                                  canonicalPath: project.path,
+                                },
+                              });
+                            }}
                             branchSlot={
                               resolvedWorkspaceId &&
                               topBarGitSnapshot?.capabilities.repoAvailable &&
@@ -3390,6 +3462,14 @@ export function DashboardWorkbench() {
           onDismiss={() => setShowOnboarding(false)}
         />
       ) : null}
+
+      <NewWorktreeDialog
+        context={worktreeDialogContext}
+        onClose={() => setWorktreeDialogContext(null)}
+        onCreated={() => {
+          void syncWorkspaceSidebar().catch(() => {});
+        }}
+      />
     </main>
   );
 }

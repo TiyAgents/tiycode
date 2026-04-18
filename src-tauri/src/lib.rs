@@ -233,6 +233,10 @@ pub fn run() {
             commands::workspace::workspace_remove,
             commands::workspace::workspace_set_default,
             commands::workspace::workspace_validate,
+            commands::workspace::workspace_list_worktrees,
+            commands::workspace::workspace_create_worktree,
+            commands::workspace::workspace_remove_worktree,
+            commands::workspace::workspace_prune_worktrees,
             // Settings & Policies
             commands::settings::settings_get,
             commands::settings::settings_get_all,

@@ -13,6 +13,7 @@ use crate::core::terminal_manager::TerminalManager;
 use crate::core::thread_manager::ThreadManager;
 use crate::core::tool_gateway::ToolGateway;
 use crate::core::workspace_manager::WorkspaceManager;
+use crate::core::worktree_manager::WorktreeManager;
 use crate::extensions::ExtensionsManager;
 
 /// Global application state shared across all Tauri commands.
@@ -21,6 +22,7 @@ use crate::extensions::ExtensionsManager;
 pub struct AppState {
     pub pool: SqlitePool,
     pub workspace_manager: WorkspaceManager,
+    pub worktree_manager: Arc<WorktreeManager>,
     pub settings_manager: SettingsManager,
     pub prompt_command_manager: PromptCommandManager,
     pub thread_manager: ThreadManager,
@@ -37,6 +39,8 @@ pub struct AppState {
 impl AppState {
     pub fn new(pool: SqlitePool, app_handle: AppHandle) -> Self {
         let workspace_manager = WorkspaceManager::new(pool.clone());
+        let worktree_manager = Arc::new(WorktreeManager::new(pool.clone()));
+        workspace_manager.set_worktree_manager(Arc::clone(&worktree_manager));
         let settings_manager = SettingsManager::new(pool.clone());
         let prompt_command_manager = PromptCommandManager::new();
         let thread_manager = ThreadManager::new(pool.clone());
@@ -63,6 +67,7 @@ impl AppState {
         Self {
             pool,
             workspace_manager,
+            worktree_manager,
             settings_manager,
             prompt_command_manager,
             thread_manager,

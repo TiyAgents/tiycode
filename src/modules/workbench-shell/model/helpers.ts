@@ -407,6 +407,10 @@ export function buildWorkspaceItemsFromDtos(
     name: workspace.name,
     defaultOpen: workspace.isDefault,
     path: workspace.canonicalPath || workspace.path,
+    kind: workspace.kind,
+    parentWorkspaceId: workspace.parentWorkspaceId,
+    worktreeHash: workspace.worktreeName ? workspace.worktreeName.slice(0, 6) : null,
+    branch: workspace.branch,
     threads: (threadsByWorkspaceId[workspace.id] ?? []).map((thread) =>
       buildWorkspaceThreadItem(thread, activeThreadId, language),
     ),
@@ -512,6 +516,76 @@ export function buildProjectOptionFromPath(path: string | null): ProjectOption |
     path: normalizedPath,
     lastOpenedLabel: translate("zh-CN", "time.justNow"),
   };
+}
+
+export function buildProjectOptionFromWorkspace(
+  workspace: WorkspaceDto,
+  lastOpenedLabel?: string,
+): ProjectOption {
+  return {
+    id: workspace.id,
+    name: workspace.name,
+    path: workspace.canonicalPath || workspace.path,
+    lastOpenedLabel: lastOpenedLabel ?? translate("zh-CN", "time.justNow"),
+    kind: workspace.kind,
+    parentWorkspaceId: workspace.parentWorkspaceId,
+    worktreeHash: workspace.worktreeName
+      ? workspace.worktreeName.slice(0, 6)
+      : null,
+    branch: workspace.branch,
+  };
+}
+
+/**
+ * Order workspaces so each worktree row immediately follows its parent repo.
+ * Non-worktree rows keep their incoming ordering. Orphan worktrees (missing
+ * parent) fall back to their own ordering position.
+ */
+export function sortWorkspacesWithWorktrees<
+  T extends {
+    id: string;
+    kind?: "standalone" | "repo" | "worktree";
+    parentWorkspaceId?: string | null;
+  },
+>(items: ReadonlyArray<T>): Array<T> {
+  const byId = new Map(items.map((item) => [item.id, item] as const));
+  const placed = new Set<string>();
+  const result: Array<T> = [];
+
+  for (const item of items) {
+    if (placed.has(item.id)) continue;
+    if (item.kind === "worktree") {
+      const parentId = item.parentWorkspaceId ?? "";
+      if (parentId && byId.has(parentId) && !placed.has(parentId)) {
+        // Defer until parent is emitted first; skip now and pick up later.
+        continue;
+      }
+    }
+    result.push(item);
+    placed.add(item.id);
+
+    // Emit this item's worktrees right after it, preserving order.
+    for (const child of items) {
+      if (placed.has(child.id)) continue;
+      if (
+        child.kind === "worktree"
+        && (child.parentWorkspaceId ?? "") === item.id
+      ) {
+        result.push(child);
+        placed.add(child.id);
+      }
+    }
+  }
+
+  // Orphan worktrees whose parent never appeared.
+  for (const item of items) {
+    if (!placed.has(item.id)) {
+      result.push(item);
+      placed.add(item.id);
+    }
+  }
+
+  return result;
 }
 
 export function formatProjectPathLabel(path: string) {
