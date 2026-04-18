@@ -3207,7 +3207,7 @@ impl ExtensionsManager {
         tracing::info!(server_id, tool = %tool.name, "MCP tool execution starting");
         tracing::debug!(server_id, tool = %tool.name, %tool_input, "MCP tool execution input");
         let config = self
-            .load_mcp_configs_with_scope(Some(workspace_path), ConfigScope::Global)
+            .load_mcp_configs_with_scope(Some(workspace_path), ConfigScope::Workspace)
             .await?
             .into_iter()
             .find(|(config, _)| config.id == server_id)
