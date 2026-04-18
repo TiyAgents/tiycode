@@ -1,0 +1,12 @@
+# Auto detect text files and normalize to LF
+* text=auto eol=lf
+
+# Force LF for SQL migrations (critical for sqlx checksum verification)
+*.sql text eol=lf
+
+# Also enforce LF for Rust and config files
+*.rs text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
