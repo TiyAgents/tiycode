@@ -189,6 +189,7 @@ pub fn run() {
     tracing::info!(path = %tiy_home.display(), "tiy agent starting");
 
     // 3. Build Tauri app
+    let build_start = std::time::Instant::now();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -215,7 +216,12 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder;
 
-    builder
+    tracing::info!(
+        elapsed_ms = build_start.elapsed().as_millis(),
+        "⏱ [startup] plugins registered"
+    );
+
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             commands::attachment::attachment_read_files,
             // System
@@ -340,6 +346,7 @@ pub fn run() {
             commands::terminal::terminal_list_available_shells,
         ])
         .setup(move |app| {
+            tracing::info!(elapsed_ms = build_start.elapsed().as_millis(), "⏱ [startup] builder configured (plugins + invoke_handler), entering setup()");
             let setup_start = std::time::Instant::now();
 
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
@@ -553,18 +560,24 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| match event {
-            RunEvent::ExitRequested { .. } => {
-                app.state::<DesktopRuntimeState>().mark_quitting();
-                sync_tray_visibility(app, false);
-            }
-            #[cfg(target_os = "macos")]
-            RunEvent::Reopen { .. } => {
-                show_main_window(app);
-            }
-            _ => {}
-        });
+        .expect("error while building tauri application");
+
+    tracing::info!(
+        elapsed_ms = build_start.elapsed().as_millis(),
+        "⏱ [startup] app.build() complete (window created), entering run loop"
+    );
+
+    app.run(|app, event| match event {
+        RunEvent::ExitRequested { .. } => {
+            app.state::<DesktopRuntimeState>().mark_quitting();
+            sync_tray_visibility(app, false);
+        }
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            show_main_window(app);
+        }
+        _ => {}
+    });
 }
 
 #[cfg(test)]

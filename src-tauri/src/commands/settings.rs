@@ -26,11 +26,15 @@ pub async fn settings_get(
     state: State<'_, AppState>,
     key: String,
 ) -> Result<Option<SettingDto>, AppError> {
-    Ok(state
+    tracing::info!(key = %key, "⏱ [ipc] settings_get command entered");
+    let t0 = std::time::Instant::now();
+    let result = state
         .settings_manager
         .get_setting(&key)
         .await?
-        .map(|r| r.into_dto()))
+        .map(|r| r.into_dto());
+    tracing::info!(elapsed_ms = t0.elapsed().as_millis(), key = %key, "⏱ [ipc] settings_get command done");
+    Ok(result)
 }
 
 #[tauri::command]
@@ -154,7 +158,14 @@ pub async fn provider_catalog_list(
 pub async fn provider_settings_get_all(
     state: State<'_, AppState>,
 ) -> Result<Vec<ProviderSettingsDto>, AppError> {
-    state.settings_manager.get_all_provider_settings().await
+    tracing::info!("⏱ [ipc] provider_settings_get_all command entered");
+    let t0 = std::time::Instant::now();
+    let result = state.settings_manager.get_all_provider_settings().await;
+    tracing::info!(
+        elapsed_ms = t0.elapsed().as_millis(),
+        "⏱ [ipc] provider_settings_get_all command done"
+    );
+    result
 }
 
 #[tauri::command]

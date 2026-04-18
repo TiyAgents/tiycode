@@ -13,10 +13,18 @@ pub async fn thread_list(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<ThreadSummaryDto>, AppError> {
-    state
+    tracing::info!(workspace_id = %workspace_id, "⏱ [ipc] thread_list command entered");
+    let t0 = std::time::Instant::now();
+    let result = state
         .thread_manager
         .list(&workspace_id, limit, offset)
-        .await
+        .await?;
+    tracing::info!(
+        elapsed_ms = t0.elapsed().as_millis(),
+        count = result.len(),
+        "⏱ [ipc] thread_list command done"
+    );
+    Ok(result)
 }
 
 #[tauri::command]

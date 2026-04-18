@@ -908,6 +908,7 @@ export function DashboardWorkbench() {
       const version = ++syncVersionRef.current;
 
       const t0 = performance.now();
+      console.log(`⏱ [sidebar-sync] firing workspaceList() at ${t0.toFixed(1)}ms since page load`);
       const workspaceEntries = await workspaceList();
       console.log(`⏱ [sidebar-sync] workspaceList: ${(performance.now() - t0).toFixed(1)}ms (${workspaceEntries.length} workspaces)`);
 

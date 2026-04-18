@@ -378,6 +378,7 @@ export function useSettingsController() {
       const hydrateStart = performance.now();
       try {
         const t0 = performance.now();
+        console.log(`⏱ [settings-hydration] firing Promise.all (7 invokes) at ${t0.toFixed(1)}ms since page load`);
         const [providers, catalog, policies, profiles, workspaceEntries, promptCommands, activeProfileSetting] =
           await Promise.all([
             providerSettingsGetAll(),
