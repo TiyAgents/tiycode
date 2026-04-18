@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 #[cfg(not(target_os = "macos"))]
 use tauri_plugin_autostart::ManagerExt as AutoStartManagerExt;
 use tauri_plugin_window_state::StateFlags;
@@ -198,10 +198,6 @@ pub fn run() {
                 .with_state_flags(persisted_window_state_flags())
                 .build(),
         );
-
-    let builder = builder
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
 
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -520,6 +516,8 @@ pub fn run() {
             let window = webview.window();
             let _ = window.show();
             let _ = window.set_focus();
+            let _ = webview.emit("backend-ready", ());
+            tracing::info!("⏱ [startup] backend-ready event emitted");
         })
         .on_window_event(|window, event| {
             if window.label() != MAIN_WINDOW_LABEL {

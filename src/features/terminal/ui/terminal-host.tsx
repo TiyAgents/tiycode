@@ -6,8 +6,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { Terminal } from "xterm";
 import "xterm/css/xterm.css";
 import { useT } from "@/i18n";
 import { useThreadTerminal } from "@/features/terminal/model/use-thread-terminal";
@@ -47,49 +47,76 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
       return;
     }
 
-    const fitAddon = new FitAddon();
-    const terminal = new Terminal({
-      cursorBlink: terminalSettings.cursorBlink,
-      cursorStyle: terminalSettings.cursorStyle,
-      convertEol: false,
-      allowTransparency: true,
-      fontFamily: terminalSettings.fontFamily,
-      fontSize: terminalSettings.fontSize,
-      lineHeight: terminalSettings.lineHeight,
-      scrollback: terminalSettings.scrollback,
-      theme: {
-        background: "#0b1220",
-        foreground: "#d8e1f3",
-        cursor: "#7dd3fc",
-        selectionBackground: "rgba(125, 211, 252, 0.24)",
-      },
-    });
+    let cancelled = false;
+    const container = containerRef.current;
 
-    terminal.loadAddon(fitAddon);
-    terminal.open(containerRef.current);
+    void (async () => {
+      try {
+        const [{ Terminal: XTerminal }, { FitAddon: XFitAddon }] = await Promise.all([
+          import("xterm"),
+          import("@xterm/addon-fit"),
+        ]);
 
-    terminalRef.current = terminal;
-    fitAddonRef.current = fitAddon;
-    syncGeometryRef.current = () => {
-      fitAddon.fit();
-      const next = { cols: terminal.cols, rows: terminal.rows };
-      geometryRef.current = next;
-      setGeometry((current) =>
-        current.cols === next.cols && current.rows === next.rows ? current : next,
-      );
-    };
+        if (cancelled || !container.isConnected) {
+          return;
+        }
 
-    const frameId = window.requestAnimationFrame(() => {
-      syncGeometryRef.current?.();
-      setTerminalReady(true);
-    });
+        const fitAddon = new XFitAddon();
+        const terminal = new XTerminal({
+          cursorBlink: terminalSettings.cursorBlink,
+          cursorStyle: terminalSettings.cursorStyle,
+          convertEol: false,
+          allowTransparency: true,
+          fontFamily: terminalSettings.fontFamily,
+          fontSize: terminalSettings.fontSize,
+          lineHeight: terminalSettings.lineHeight,
+          scrollback: terminalSettings.scrollback,
+          theme: {
+            background: "#0b1220",
+            foreground: "#d8e1f3",
+            cursor: "#7dd3fc",
+            selectionBackground: "rgba(125, 211, 252, 0.24)",
+          },
+        });
+
+        terminal.loadAddon(fitAddon);
+        terminal.open(container);
+
+        terminalRef.current = terminal;
+        fitAddonRef.current = fitAddon;
+        syncGeometryRef.current = () => {
+          fitAddon.fit();
+          const next = { cols: terminal.cols, rows: terminal.rows };
+          geometryRef.current = next;
+          setGeometry((current) =>
+            current.cols === next.cols && current.rows === next.rows ? current : next,
+          );
+        };
+
+        const frameId = window.requestAnimationFrame(() => {
+          syncGeometryRef.current?.();
+          setTerminalReady(true);
+        });
+
+        if (cancelled) {
+          window.cancelAnimationFrame(frameId);
+          terminal.dispose();
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn("Failed to load xterm", err);
+        }
+      }
+    })();
 
     return () => {
-      window.cancelAnimationFrame(frameId);
+      cancelled = true;
       syncGeometryRef.current = null;
-      terminalRef.current = null;
+      if (terminalRef.current) {
+        terminalRef.current.dispose();
+        terminalRef.current = null;
+      }
       fitAddonRef.current = null;
-      terminal.dispose();
     };
   }, []);
 
@@ -112,7 +139,7 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
     return () => {
       disposable.dispose();
     };
-  }, [terminalSettings.copyOnSelect]);
+  }, [isTerminalReady, terminalSettings.copyOnSelect]);
 
   useEffect(() => {
     if (!active || !isTerminalReady) {
@@ -183,7 +210,7 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
     return () => {
       disposable.dispose();
     };
-  }, []);
+  }, [isTerminalReady]);
 
   useEffect(() => {
     if (threadId) {

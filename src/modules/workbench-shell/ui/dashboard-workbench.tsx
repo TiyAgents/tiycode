@@ -132,6 +132,7 @@ import { useSystemMetadata } from "@/features/system-info/model/use-system-metad
 import { cn } from "@/shared/lib/utils";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { isSameWorkspacePath } from "@/shared/lib/workspace-path";
+import { waitForBackendReady } from "@/shared/lib/backend-ready";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import { terminalStore } from "@/features/terminal/model/terminal-store";
 
@@ -1224,7 +1225,11 @@ export function DashboardWorkbench() {
     console.log("⏱ [startup] syncWorkspaceSidebar initial useEffect fired");
     let cancelled = false;
 
-    void syncWorkspaceSidebar()
+    void (async () => {
+      await waitForBackendReady();
+      if (cancelled) return;
+      await syncWorkspaceSidebar();
+    })()
       .then(() => {
         if (cancelled) {
           return;

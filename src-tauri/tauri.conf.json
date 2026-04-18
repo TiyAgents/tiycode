@@ -24,6 +24,7 @@
         "hiddenTitle": true,
         "decorations": true,
         "transparent": false,
+        "additionalBrowserArgs": "--disable-background-timer-throttling --disable-backgrounding-occluded-windows",
         "windowEffects": {
           "effects": ["titlebar"],
           "state": "followsWindowActiveState"
