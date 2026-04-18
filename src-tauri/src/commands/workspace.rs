@@ -6,8 +6,16 @@ use crate::model::workspace::{WorkspaceAddInput, WorkspaceDto};
 
 #[tauri::command]
 pub async fn workspace_list(state: State<'_, AppState>) -> Result<Vec<WorkspaceDto>, AppError> {
+    tracing::debug!("⏱ [ipc] workspace_list command entered");
+    let t0 = std::time::Instant::now();
     let records = state.workspace_manager.list().await?;
-    Ok(records.into_iter().map(WorkspaceDto::from).collect())
+    let result: Vec<WorkspaceDto> = records.into_iter().map(WorkspaceDto::from).collect();
+    tracing::debug!(
+        elapsed_ms = t0.elapsed().as_millis(),
+        count = result.len(),
+        "⏱ [ipc] workspace_list command done"
+    );
+    Ok(result)
 }
 
 #[tauri::command]

@@ -132,6 +132,7 @@ import { useSystemMetadata } from "@/features/system-info/model/use-system-metad
 import { cn } from "@/shared/lib/utils";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { isSameWorkspacePath } from "@/shared/lib/workspace-path";
+import { waitForBackendReady } from "@/shared/lib/backend-ready";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import { terminalStore } from "@/features/terminal/model/terminal-store";
 
@@ -466,6 +467,7 @@ export function DashboardWorkbench() {
     () => (isTauri() ? [] : [...RECENT_PROJECTS]),
   );
   const [isNewThreadMode, setNewThreadMode] = useState(true);
+  const [isSidebarReady, setSidebarReady] = useState(() => !isTauri());
   const [activeOverlay, setActiveOverlay] = useState<WorkbenchOverlay>(null);
   const [showOnboarding, setShowOnboarding] = useState(() => !isOnboardingCompleted());
   const [activeSettingsCategory, setActiveSettingsCategory] =
@@ -904,9 +906,14 @@ export function DashboardWorkbench() {
       preserveSelectedProjectIfMissing?: boolean;
       threadDisplayCountOverrides?: Record<string, number>;
     } = {}) => {
+      const syncStart = performance.now();
       const version = ++syncVersionRef.current;
 
+      const t0 = performance.now();
+      console.log(`⏱ [sidebar-sync] firing workspaceList() at ${t0.toFixed(1)}ms since page load`);
       const workspaceEntries = await workspaceList();
+      console.log(`⏱ [sidebar-sync] workspaceList: ${(performance.now() - t0).toFixed(1)}ms (${workspaceEntries.length} workspaces)`);
+
       const nextDisplayCounts = Object.fromEntries(
         workspaceEntries.map((workspace) => [
           workspace.id,
@@ -915,6 +922,7 @@ export function DashboardWorkbench() {
             WORKSPACE_THREAD_PAGE_SIZE,
         ]),
       );
+      const t1 = performance.now();
       const threadEntries = await Promise.all(
         workspaceEntries.map(
           async (workspace) =>
@@ -927,6 +935,7 @@ export function DashboardWorkbench() {
             ] as const,
         ),
       );
+      console.log(`⏱ [sidebar-sync] threadList for ${workspaceEntries.length} workspace(s): ${(performance.now() - t1).toFixed(1)}ms`);
 
       // Discard stale sync results — a newer sync has been initiated while we were fetching.
       if (syncVersionRef.current !== version) {
@@ -1055,6 +1064,7 @@ export function DashboardWorkbench() {
           ]),
         ),
       );
+      console.log(`⏱ [sidebar-sync] total: ${(performance.now() - syncStart).toFixed(1)}ms`);
     },
     [listVisibleWorkspaceThreads],
   );
@@ -1213,13 +1223,19 @@ export function DashboardWorkbench() {
       return;
     }
 
+    console.log("⏱ [startup] syncWorkspaceSidebar initial useEffect fired");
     let cancelled = false;
 
-    void syncWorkspaceSidebar()
+    void (async () => {
+      await waitForBackendReady();
+      if (cancelled) return;
+      await syncWorkspaceSidebar();
+    })()
       .then(() => {
         if (cancelled) {
           return;
         }
+        setSidebarReady(true);
       })
       .catch((error) => {
         if (cancelled) {
@@ -2528,7 +2544,28 @@ export function DashboardWorkbench() {
 
             <div className="mt-3 min-h-0 flex-1 overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <div className="space-y-1.5">
-                {workspaces.map((workspace) => {
+                {!isSidebarReady ? (
+                  <div className="space-y-3 px-1">
+                    {/* Workspace skeleton */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 rounded-lg px-2 py-1.5">
+                        <div className="size-4 animate-pulse rounded bg-app-surface-hover" />
+                        <div className="h-3.5 w-28 animate-pulse rounded bg-app-surface-hover" />
+                      </div>
+                      {/* Thread skeletons */}
+                      {[1, 2, 3].map((i) => (
+                        <div key={i} className="flex items-center gap-2 rounded-lg px-2 py-1.5 pl-7">
+                          <div className="size-3.5 animate-pulse rounded bg-app-surface-hover" />
+                          <div
+                            className="h-3 animate-pulse rounded bg-app-surface-hover"
+                            style={{ width: `${60 + i * 12}%` }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                workspaces.map((workspace) => {
                   const isOpen =
                     openWorkspaces[workspace.id] ?? workspace.defaultOpen;
                   const FolderIcon = isOpen ? FolderOpen : Folder;
@@ -2761,7 +2798,8 @@ export function DashboardWorkbench() {
                       ) : null}
                     </div>
                   );
-                })}
+                })
+                )}
               </div>
             </div>
           </div>
@@ -2784,6 +2822,7 @@ export function DashboardWorkbench() {
                             recentProjects={recentProjects}
                             selectedProject={selectedProject}
                             isOverlayOpen={isOverlayOpen}
+                            isLoading={!isSidebarReady}
                             onSelectProject={handleProjectSelect}
                             branchSlot={
                               resolvedWorkspaceId &&

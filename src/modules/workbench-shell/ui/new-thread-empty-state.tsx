@@ -10,12 +10,14 @@ export function NewThreadEmptyState({
   recentProjects,
   selectedProject,
   isOverlayOpen,
+  isLoading,
   onSelectProject,
   branchSlot,
 }: {
   recentProjects: ReadonlyArray<ProjectOption>;
   selectedProject: ProjectOption | null;
   isOverlayOpen: boolean;
+  isLoading?: boolean;
   onSelectProject: (project: ProjectOption) => void;
   branchSlot?: ReactNode;
 }) {
@@ -94,6 +96,18 @@ export function NewThreadEmptyState({
         </div>
 
         <div ref={projectMenuRef} className="relative w-full max-w-[24rem]">
+          {isLoading ? (
+            <div className="inline-flex w-full items-center gap-3 rounded-2xl border border-app-border bg-app-surface/85 px-3.5 py-3 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-border bg-app-surface-muted">
+                <div className="size-4 animate-pulse rounded bg-app-surface-hover" />
+              </div>
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="h-4 w-32 animate-pulse rounded bg-app-surface-hover" />
+                <div className="h-3 w-48 animate-pulse rounded bg-app-surface-hover" />
+              </div>
+            </div>
+          ) : (
+          <>
           <button
             type="button"
             aria-haspopup="menu"
@@ -196,6 +210,8 @@ export function NewThreadEmptyState({
               </div>
             </div>
           ) : null}
+          </>
+          )}
         </div>
 
         {branchSlot ? (

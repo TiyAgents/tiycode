@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 #[cfg(not(target_os = "macos"))]
 use tauri_plugin_autostart::ManagerExt as AutoStartManagerExt;
 use tauri_plugin_window_state::StateFlags;
@@ -189,6 +189,7 @@ pub fn run() {
     tracing::info!(path = %tiy_home.display(), "tiy agent starting");
 
     // 3. Build Tauri app
+    let build_start = std::time::Instant::now();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -197,10 +198,6 @@ pub fn run() {
                 .with_state_flags(persisted_window_state_flags())
                 .build(),
         );
-
-    let builder = builder
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
 
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -215,7 +212,12 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder;
 
-    builder
+    tracing::info!(
+        elapsed_ms = build_start.elapsed().as_millis(),
+        "⏱ [startup] plugins registered"
+    );
+
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             commands::attachment::attachment_read_files,
             // System
@@ -340,22 +342,32 @@ pub fn run() {
             commands::terminal::terminal_list_available_shells,
         ])
         .setup(move |app| {
+            tracing::info!(elapsed_ms = build_start.elapsed().as_millis(), "⏱ [startup] builder configured (plugins + invoke_handler), entering setup()");
+            let setup_start = std::time::Instant::now();
+
             // 4. Initialize database (async, on the tokio runtime that Tauri provides)
             let db_path = tiy_home.join("db/tiycode.db");
 
+            let t0 = std::time::Instant::now();
             let pool = tauri::async_runtime::block_on(async {
                 persistence::init_database(&db_path).await
             })?;
-
-            tracing::info!(db = %db_path.display(), "database ready");
+            tracing::info!(elapsed_ms = t0.elapsed().as_millis(), db = %db_path.display(), "⏱ [startup] database ready");
 
             // 5. Construct and manage AppState
+            let t0 = std::time::Instant::now();
             let state = AppState::new(pool, app.handle().clone());
+            tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "⏱ [startup] AppState constructed");
+
+            let t0 = std::time::Instant::now();
             if let Err(error) = state.prompt_command_manager.ensure_builtin_seeded() {
                 tracing::warn!(error = %error, "failed to seed builtin prompts during startup");
             }
+            tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "⏱ [startup] ensure_builtin_seeded");
+
             let desktop_runtime = DesktopRuntimeState::default();
 
+            let t0 = std::time::Instant::now();
             let (prevent_sleep_while_running, launch_at_login, minimize_to_tray) =
                 tauri::async_runtime::block_on(async {
                     let prevent_sleep = state
@@ -377,13 +389,16 @@ pub fn run() {
                         parse_bool_setting(minimize_to_tray, MINIMIZE_TO_TRAY_SETTING_KEY),
                     ))
                 })?;
+            tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "⏱ [startup] read 3 settings (prevent_sleep, launch_at_login, minimize_to_tray)");
 
+            let t0 = std::time::Instant::now();
             tauri::async_runtime::block_on(async {
                 state
                     .sleep_manager
                     .set_user_preference(prevent_sleep_while_running)
                     .await;
             });
+            tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "⏱ [startup] sleep_manager.set_user_preference");
 
             desktop_runtime.set_minimize_to_tray(minimize_to_tray);
 
@@ -439,7 +454,9 @@ pub fn run() {
             // Apply bundled catalog snapshot if it is newer than the local cache.
             // This ensures a usable catalog is available even without network access
             // (e.g. fresh install or app update in an offline environment).
+            let t0 = std::time::Instant::now();
             crate::core::settings_manager::apply_bundled_catalog_if_newer(app.handle());
+            tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "⏱ [startup] apply_bundled_catalog_if_newer");
 
             app.manage(state);
             app.manage(desktop_runtime);
@@ -450,17 +467,28 @@ pub fn run() {
             // metadata + antivirus hooks add significant latency per workspace).
             let recovery_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                let recovery_start = std::time::Instant::now();
                 let state = recovery_handle.state::<AppState>();
+
+                let t0 = std::time::Instant::now();
                 if let Err(e) = state.workspace_manager.validate_all().await {
                     tracing::warn!(error = %e, "startup workspace validation failed");
                 }
+                tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "⏱ [startup-recovery] validate_all workspaces");
+
+                let t0 = std::time::Instant::now();
                 if let Err(e) = state.thread_manager.recover_interrupted_runs().await {
                     tracing::warn!(error = %e, "startup run recovery failed");
                 }
+                tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "⏱ [startup-recovery] recover_interrupted_runs");
+
+                let t0 = std::time::Instant::now();
                 if let Err(e) = state.terminal_manager.recover_orphaned_sessions().await {
                     tracing::warn!(error = %e, "startup terminal session recovery failed");
                 }
-                tracing::info!("startup recovery complete");
+                tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "⏱ [startup-recovery] recover_orphaned_sessions");
+
+                tracing::info!(elapsed_ms = recovery_start.elapsed().as_millis(), "⏱ [startup-recovery] total");
             });
 
             tauri::async_runtime::spawn(async {
@@ -475,6 +503,8 @@ pub fn run() {
                 let _ = window.set_decorations(false);
             }
 
+            tracing::info!(elapsed_ms = setup_start.elapsed().as_millis(), "⏱ [startup] setup() total");
+
             Ok(())
         })
         .on_page_load(|webview, payload| {
@@ -482,9 +512,12 @@ pub fn run() {
                 return;
             }
 
+            tracing::info!("⏱ [startup] on_page_load Finished — showing main window");
             let window = webview.window();
             let _ = window.show();
             let _ = window.set_focus();
+            let _ = webview.emit("backend-ready", ());
+            tracing::info!("⏱ [startup] backend-ready event emitted");
         })
         .on_window_event(|window, event| {
             if window.label() != MAIN_WINDOW_LABEL {
@@ -525,18 +558,24 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| match event {
-            RunEvent::ExitRequested { .. } => {
-                app.state::<DesktopRuntimeState>().mark_quitting();
-                sync_tray_visibility(app, false);
-            }
-            #[cfg(target_os = "macos")]
-            RunEvent::Reopen { .. } => {
-                show_main_window(app);
-            }
-            _ => {}
-        });
+        .expect("error while building tauri application");
+
+    tracing::info!(
+        elapsed_ms = build_start.elapsed().as_millis(),
+        "⏱ [startup] app.build() complete (window created), entering run loop"
+    );
+
+    app.run(|app, event| match event {
+        RunEvent::ExitRequested { .. } => {
+            app.state::<DesktopRuntimeState>().mark_quitting();
+            sync_tray_visibility(app, false);
+        }
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            show_main_window(app);
+        }
+        _ => {}
+    });
 }
 
 #[cfg(test)]

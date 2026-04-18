@@ -59,6 +59,7 @@ import {
   workspaceRemove,
   workspaceSetDefault,
 } from "@/services/bridge";
+import { waitForBackendReady } from "@/shared/lib/backend-ready";
 
 export * from "@/modules/settings-center/model/types";
 
@@ -373,19 +374,21 @@ export function useSettingsController() {
     }
 
     let cancelled = false;
+    let deferredHandle = -1;
 
     async function hydrateDbBackedSettings() {
+      const hydrateStart = performance.now();
       try {
-        const [providers, catalog, policies, profiles, workspaceEntries, promptCommands, activeProfileSetting] =
+        // ── Phase 1: critical-path data needed for first render ──
+        const t0 = performance.now();
+        console.log(`⏱ [settings-hydration] phase-1 (3 invokes) at ${t0.toFixed(1)}ms since page load`);
+        const [providers, workspaceEntries, activeProfileSetting] =
           await Promise.all([
             providerSettingsGetAll(),
-            providerCatalogList(),
-            policyGetAll(),
-            profileList(),
             workspaceList(),
-            promptCommandList(),
             settingsGet(ACTIVE_AGENT_PROFILE_SETTING_KEY),
           ]);
+        console.log(`⏱ [settings-hydration] phase-1 done: ${(performance.now() - t0).toFixed(1)}ms`);
 
         const mappedProviders = providers.map(mapProviderDto);
 
@@ -398,96 +401,170 @@ export function useSettingsController() {
           return true;
         });
 
-        const mappedCatalog = catalog.map((entry) => ({
-          providerKey: entry.providerKey as ProviderCatalogEntry["providerKey"],
-          providerType: entry.providerType as ProviderCatalogEntry["providerType"],
-          displayName: entry.displayName,
-          builtin: entry.builtin,
-          supportsCustom: entry.supportsCustom,
-          defaultBaseUrl: entry.defaultBaseUrl,
-        }));
-
-        const mappedProfiles = profiles.map(mapProfileDto);
-        const mappedPolicy = mapPoliciesFromDtos(policies);
-        const resolvedPromptCommands = promptCommands;
-
-        let shells: Array<{ path: string; name: string }> = [];
-        try {
-          shells = await invoke<Array<{ path: string; name: string }>>("terminal_list_available_shells");
-        } catch (shellError) {
-          console.warn("Failed to list available shells", shellError);
-        }
-
-        const resolvedActiveProfileId = resolveActiveProfileId(
-          mappedProfiles,
-          activeProfileSetting?.value,
-        );
-
-        if (mappedProfiles.length > 0 && activeProfileSetting?.value !== resolvedActiveProfileId) {
-          await settingsSet(
-            ACTIVE_AGENT_PROFILE_SETTING_KEY,
-            JSON.stringify(resolvedActiveProfileId),
-          );
-        }
-
-        // When the database has no profiles yet (fresh install), seed the default profile
-        // into the database so the frontend always works with a real persisted record
-        // instead of the hardcoded DEFAULT_AGENT_PROFILES ghost ID.
-        let persistedProfiles = mappedProfiles;
-        let persistedActiveId = resolvedActiveProfileId;
-
-        if (mappedProfiles.length === 0) {
-          try {
-            const defaultInput = DEFAULT_AGENT_PROFILES[0];
-            if (defaultInput) {
-              const created = await profileCreate(
-                toProfileInput(defaultInput, true),
-              );
-              const mapped = mapProfileDto(created);
-              persistedProfiles = [mapped];
-              persistedActiveId = mapped.id;
-              await settingsSet(
-                ACTIVE_AGENT_PROFILE_SETTING_KEY,
-                JSON.stringify(mapped.id),
-              );
-            }
-          } catch (seedError) {
-            console.warn("Failed to seed default profile during hydration", seedError);
-          }
-        }
-
         if (cancelled) {
           return;
         }
 
-        setProviderCatalog(mappedCatalog);
-        setAvailableShells(shells);
+        // Apply phase-1 state immediately so the UI can render
+        // Use DEFAULT_AGENT_PROFILES as placeholder until phase-2 loads real profiles
+        const phase1ActiveId = (() => {
+          try {
+            const raw = activeProfileSetting?.value;
+            if (raw && typeof raw === "string") {
+              const parsed: unknown = JSON.parse(raw);
+              if (typeof parsed === "string" && parsed.length > 0) {
+                return parsed;
+              }
+            }
+          } catch { /* ignore parse errors */ }
+          return DEFAULT_AGENT_PROFILES[0]?.id ?? "default-profile";
+        })();
+
         setSettings((current) => ({
           ...current,
           workspaces: workspaceEntries.map(mapWorkspaceDto),
           providers: dedupedProviders,
-          commands: {
-            commands: resolvedPromptCommands.map(mapPromptCommandDto),
-          },
-          policy: mappedPolicy,
-          agentProfiles: persistedProfiles.length > 0 ? persistedProfiles : DEFAULT_AGENT_PROFILES,
-          activeAgentProfileId: persistedProfiles.length > 0
-            ? persistedActiveId
-            : DEFAULT_AGENT_PROFILES[0]?.id ?? "default-profile",
+          activeAgentProfileId: phase1ActiveId,
         }));
+        setBackendHydrated(true);
+        console.log(`⏱ [settings-hydration] phase-1 total: ${(performance.now() - hydrateStart).toFixed(1)}ms`);
+
+        // ── Phase 2: deferred data (settings overlay, catalog, shells) ──
+        const scheduleDeferred: (cb: () => void) => number =
+          (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
+            ?? ((cb: () => void) => window.setTimeout(cb, 50));
+
+        deferredHandle = scheduleDeferred(() => {
+          if (cancelled) {
+            return;
+          }
+          void (async () => {
+            try {
+              const t2 = performance.now();
+              console.log(`⏱ [settings-hydration] phase-2 (4 invokes) at ${t2.toFixed(1)}ms since page load`);
+              const [catalog, policies, profiles, promptCommands] =
+                await Promise.all([
+                  providerCatalogList(),
+                  policyGetAll(),
+                  profileList(),
+                  promptCommandList(),
+                ]);
+              console.log(`⏱ [settings-hydration] phase-2 invokes done: ${(performance.now() - t2).toFixed(1)}ms`);
+
+              const mappedCatalog = catalog.map((entry) => ({
+                providerKey: entry.providerKey as ProviderCatalogEntry["providerKey"],
+                providerType: entry.providerType as ProviderCatalogEntry["providerType"],
+                displayName: entry.displayName,
+                builtin: entry.builtin,
+                supportsCustom: entry.supportsCustom,
+                defaultBaseUrl: entry.defaultBaseUrl,
+              }));
+
+              const mappedProfiles = profiles.map(mapProfileDto);
+              const mappedPolicy = mapPoliciesFromDtos(policies);
+              const resolvedPromptCommands = promptCommands;
+
+              let shells: Array<{ path: string; name: string }> = [];
+              try {
+                const t3 = performance.now();
+                shells = await invoke<Array<{ path: string; name: string }>>("terminal_list_available_shells");
+                console.log(`⏱ [settings-hydration] terminal_list_available_shells: ${(performance.now() - t3).toFixed(1)}ms`);
+              } catch (shellError) {
+                console.warn("Failed to list available shells", shellError);
+              }
+
+              const resolvedActiveProfileId = resolveActiveProfileId(
+                mappedProfiles,
+                activeProfileSetting?.value,
+              );
+
+              if (mappedProfiles.length > 0 && activeProfileSetting?.value !== resolvedActiveProfileId) {
+                await settingsSet(
+                  ACTIVE_AGENT_PROFILE_SETTING_KEY,
+                  JSON.stringify(resolvedActiveProfileId),
+                );
+              }
+
+              // When the database has no profiles yet (fresh install), seed the default profile
+              // into the database so the frontend always works with a real persisted record
+              // instead of the hardcoded DEFAULT_AGENT_PROFILES ghost ID.
+              let persistedProfiles = mappedProfiles;
+              let persistedActiveId = resolvedActiveProfileId;
+
+              if (mappedProfiles.length === 0) {
+                try {
+                  const defaultInput = DEFAULT_AGENT_PROFILES[0];
+                  if (defaultInput) {
+                    const created = await profileCreate(
+                      toProfileInput(defaultInput, true),
+                    );
+                    const mapped = mapProfileDto(created);
+                    persistedProfiles = [mapped];
+                    persistedActiveId = mapped.id;
+                    await settingsSet(
+                      ACTIVE_AGENT_PROFILE_SETTING_KEY,
+                      JSON.stringify(mapped.id),
+                    );
+                  }
+                } catch (seedError) {
+                  console.warn("Failed to seed default profile during hydration", seedError);
+                }
+              }
+
+              if (cancelled) {
+                return;
+              }
+
+              setProviderCatalog(mappedCatalog);
+              setAvailableShells(shells);
+              setSettings((current) => ({
+                ...current,
+                commands: {
+                  commands: resolvedPromptCommands.map(mapPromptCommandDto),
+                },
+                policy: mappedPolicy,
+                agentProfiles: persistedProfiles.length > 0 ? persistedProfiles : DEFAULT_AGENT_PROFILES,
+                activeAgentProfileId: persistedProfiles.length > 0
+                  ? persistedActiveId
+                  : DEFAULT_AGENT_PROFILES[0]?.id ?? "default-profile",
+              }));
+              console.log(`⏱ [settings-hydration] phase-2 total: ${(performance.now() - t2).toFixed(1)}ms`);
+            } catch (error) {
+              console.warn("Failed to hydrate phase-2 settings", error);
+            }
+          })();
+        });
       } catch (error) {
         console.warn("Failed to hydrate DB-backed settings", error);
-      } finally {
         if (!cancelled) {
           setBackendHydrated(true);
         }
+      } finally {
+        console.log(`⏱ [settings-hydration] total: ${(performance.now() - hydrateStart).toFixed(1)}ms`);
       }
     }
 
-    void hydrateDbBackedSettings();
+    void (async () => {
+      // Wait for backend to signal readiness before firing IPC calls,
+      // avoids queuing invokes while the WebView2 IPC bridge is still initialising.
+      const t0 = performance.now();
+      console.log(`⏱ [settings-hydration] waiting for backend-ready at ${t0.toFixed(1)}ms since page load`);
+      await waitForBackendReady();
+      console.log(`⏱ [settings-hydration] backend-ready received after ${(performance.now() - t0).toFixed(1)}ms`);
+
+      if (!cancelled) {
+        void hydrateDbBackedSettings();
+      }
+    })();
 
     return () => {
       cancelled = true;
+      if (deferredHandle !== -1) {
+        const cancelDeferred: (h: number) => void =
+          (window as unknown as { cancelIdleCallback?: (h: number) => void }).cancelIdleCallback
+            ?? ((h: number) => window.clearTimeout(h));
+        cancelDeferred(deferredHandle);
+      }
     };
   }, []);
 
