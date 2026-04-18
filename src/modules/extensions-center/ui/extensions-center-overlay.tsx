@@ -1849,6 +1849,18 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                   }
                   placeholder={t("extensions.argsPlaceholder")}
                 />
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-app-foreground">{t("extensions.envLabel")}</div>
+                  <Textarea
+                    value={mcpEnvText}
+                    onChange={(event) => setMcpEnvText(event.target.value)}
+                    placeholder={"PATH: /usr/local/bin\nNODE_ENV: production"}
+                    className="min-h-28"
+                  />
+                  <div className="text-xs text-app-muted">
+                    {t("extensions.envHelper")}
+                  </div>
+                </div>
               </>
             ) : (
               <>
@@ -1868,19 +1880,6 @@ export function ExtensionsCenterOverlay(props: ExtensionsCenterOverlayProps) {
                 </div>
               </>
             )}
-
-            <div className="space-y-2">
-              <div className="text-sm font-medium text-app-foreground">{t("extensions.envLabel")}</div>
-              <Textarea
-                value={mcpEnvText}
-                onChange={(event) => setMcpEnvText(event.target.value)}
-                placeholder={"PATH: /usr/local/bin\nNODE_ENV: production"}
-                className="min-h-28"
-              />
-              <div className="text-xs text-app-muted">
-                {t("extensions.envHelper")}
-              </div>
-            </div>
 
             <div className="flex items-center justify-between rounded-xl border border-app-border bg-app-surface p-3">
               <div>
