@@ -52,15 +52,17 @@ export function waitForBackendReady(timeoutMs = 3000): Promise<void> {
       else eventUnlisten = unlisten;
     });
 
-    // 2. Probe IPC with a no-side-effect invoke.  Any response (success
-    //    or error) proves the bridge is up.  We use workspace_list which
-    //    is always registered and fast (~0 ms on macOS).
+    // 2. Probe IPC with a no-side-effect invoke.  A successful response
+    //    proves the bridge is up.  Rejections are ignored — if the bridge
+    //    is not ready the invoke will hang rather than reject, and a real
+    //    rejection (e.g. command error) still means the bridge is up, but
+    //    we let the event or timeout handle that path to stay safe.
     invoke("workspace_list")
       .then(() => {
         if (!settled) done();
       })
       .catch(() => {
-        if (!settled) done();
+        // Intentionally ignored — rely on event or timeout.
       });
 
     // 3. Timeout fallback
