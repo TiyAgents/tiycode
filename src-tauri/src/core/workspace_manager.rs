@@ -178,7 +178,7 @@ impl WorkspaceManager {
                 let children = workspace_repo::list_worktrees_of(&self.pool, &record.id).await?;
                 for child in children {
                     if let Some(manager) = self.worktree_manager() {
-                        manager.remove_physical(&child, true).await?;
+                        manager.remove_physical(&child, force).await?;
                     }
                     workspace_repo::delete(&self.pool, &child.id).await?;
                 }

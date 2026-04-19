@@ -614,6 +614,7 @@ fn run_git_cli(repo_root: &str, args: &[String]) -> Result<String, AppError> {
         .current_dir(repo_root)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_PAGER", "cat")
+        .env("LC_ALL", "C")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

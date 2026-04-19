@@ -2519,7 +2519,7 @@ export function DashboardWorkbench() {
           if (workspace.path) {
             addRemovedWorkspacePath(removedWorkspacePathsRef.current, workspace.path);
           }
-          await workspaceRemove(workspace.id);
+          await workspaceRemove(workspace.id, true);
 
           if (isRemovingActiveWorkspace) {
             setNewThreadMode(true);
