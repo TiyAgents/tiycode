@@ -463,7 +463,10 @@ fn test_plan_mode_allows_read_tools() {
 
     // Shell is not in the hard-deny list; it follows the normal approval policy.
     let blocked = mutating_tools.contains(&"shell");
-    assert!(!blocked, "Shell should follow normal approval policy in plan mode, not be hard-denied");
+    assert!(
+        !blocked,
+        "Shell should follow normal approval policy in plan mode, not be hard-denied"
+    );
 }
 
 // =========================================================================
@@ -496,7 +499,10 @@ async fn test_plan_mode_shell_follows_approval_policy() {
         result.verdict
     );
     assert!(
-        result.checked_rules.contains(&"plan_mode_restriction".to_string()) == false,
+        result
+            .checked_rules
+            .contains(&"plan_mode_restriction".to_string())
+            == false,
         "shell should not trigger plan_mode_restriction rule"
     );
 }
