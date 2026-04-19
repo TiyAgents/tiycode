@@ -449,6 +449,7 @@ export function ProjectPanel({
   const t = useT();
   const [filterValue, setFilterValue] = useState("");
   const [treeState, setTreeState] = useState<TreeState>(initialTreeState);
+const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const [filterState, setFilterState] = useState<FilterState>(initialFilterState);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(() => new Set());
@@ -623,6 +624,7 @@ export function ProjectPanel({
           return;
         }
 
+        setGitOverlayResolved(false);
         setTreeState({
           data: response ?? buildMockTreeResponse(),
           error: null,
@@ -668,6 +670,7 @@ export function ProjectPanel({
         return;
       }
 
+      setGitOverlayResolved(true);
       setTreeState((current) => {
         if (!current.data) {
           return current;
@@ -1205,7 +1208,7 @@ export function ProjectPanel({
           {workspaceBootstrapError ? (
             <p className="mt-2 text-[11px] text-app-danger">{workspaceBootstrapError}</p>
           ) : null}
-          {!openAppsError && !openError && treeState.data && !treeState.data.repoAvailable ? (
+          {!openAppsError && !openError && gitOverlayResolved && treeState.data && !treeState.data.repoAvailable ? (
             <p className="mt-2 text-[11px] text-app-subtle">Git overlay unavailable for this workspace</p>
           ) : null}
           {!openAppsError && !openError && !isFiltering && treeState.isLoading && workspaceId ? (
