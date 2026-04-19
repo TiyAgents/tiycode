@@ -29,6 +29,7 @@ import {
   Server,
   Settings2,
   ShieldCheck,
+  Shuffle,
   Star,
   TerminalSquare,
   Trash2,
@@ -3367,7 +3368,7 @@ function WorkspaceSettingsPanel({
                 className="group flex items-center gap-3 px-4 py-3 transition-colors"
               >
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-app-surface-muted text-app-subtle">
-                  <FolderOpen className="size-4" />
+                  {workspace.autoWorkTree ? <Shuffle className="size-4" /> : <FolderOpen className="size-4" />}
                 </div>
 
                 <div className="min-w-0 flex-1">
@@ -3383,6 +3384,12 @@ function WorkspaceSettingsPanel({
                       <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
                         <GitBranch className="size-2.5" />
                         Git
+                      </span>
+                    ) : null}
+                    {workspace.autoWorkTree ? (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
+                        <Shuffle className="size-2.5" />
+                        Worktree
                       </span>
                     ) : null}
                   </div>
