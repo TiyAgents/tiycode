@@ -28,7 +28,7 @@ use crate::model::settings::SettingRecord;
 use crate::persistence::repo::{profile_repo, provider_repo, settings_repo};
 
 const PROVIDER_SCHEMA_VERSION_KEY: &str = "providers.schema_version";
-const PROVIDER_SCHEMA_VERSION: u32 = 4;
+const PROVIDER_SCHEMA_VERSION: u32 = 5;
 const TIY_CATALOG_SNAPSHOT_FILE: &str = "catalog.json";
 const PROVIDER_MODEL_TEST_PROMPT: &str = "Ping from TiyCode.";
 const PROVIDER_MODEL_TEST_MIN_MAX_TOKENS: u32 = 16;
@@ -115,6 +115,12 @@ const BUILTIN_PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         provider_type: "zenmux",
         display_name: "ZenMux",
         default_base_url: "https://zenmux.ai/api/v1",
+    },
+    ProviderCatalogEntry {
+        provider_key: "opencode-go",
+        provider_type: "opencode-go",
+        display_name: "OpenCode Go",
+        default_base_url: "https://opencode.ai/zen/go/v1",
     },
 ];
 
