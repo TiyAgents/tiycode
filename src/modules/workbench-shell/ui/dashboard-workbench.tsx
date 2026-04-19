@@ -442,13 +442,14 @@ function ThreadRenameInput({
         <input
           ref={inputRef}
           autoFocus
+          aria-label={t("sidebar.renameThread")}
           className="min-w-0 flex-1 truncate border-none bg-transparent text-[13px] leading-tight text-app-foreground outline-none placeholder:text-app-muted"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              save();
+              if (!isRegenerating) save();
             } else if (e.key === "Escape") {
               e.preventDefault();
               cancel();
