@@ -1989,6 +1989,17 @@ export function DashboardWorkbench() {
       if (isTauri()) {
         void threadUpdateTitle(threadId, trimmed).catch((error) => {
           console.warn("[thread] failed to update title:", error);
+          // Rollback: restore the original name on failure.
+          setWorkspaces((current) =>
+            current.map((workspace) => ({
+              ...workspace,
+              threads: workspace.threads.map((thread) =>
+                thread.id === threadId
+                  ? { ...thread, name: originalName }
+                  : thread,
+              ),
+            })),
+          );
         });
       }
 

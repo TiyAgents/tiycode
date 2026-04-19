@@ -100,7 +100,13 @@ pub async fn thread_regenerate_title(
     thread_id: String,
     model_plan: serde_json::Value,
 ) -> Result<String, AppError> {
-    let raw_plan: RuntimeModelPlan = serde_json::from_value(model_plan).unwrap_or_default();
+    let raw_plan: RuntimeModelPlan = serde_json::from_value(model_plan).map_err(|e| {
+        AppError::recoverable(
+            ErrorSource::Settings,
+            "settings.title.invalid_model_plan",
+            format!("Invalid model plan for title generation: {e}"),
+        )
+    })?;
     let selected_model = select_title_model_role(&raw_plan)?;
     let mut model_role = resolve_runtime_model_role(&state.pool, selected_model).await?;
 
