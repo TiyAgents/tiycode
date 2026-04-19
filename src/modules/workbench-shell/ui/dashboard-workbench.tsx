@@ -19,6 +19,7 @@ import {
   MessageSquarePlus,
   MoreHorizontal,
   Shuffle,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import {
@@ -49,6 +50,7 @@ import type {
   GitSnapshotDto,
   MessageAttachmentDto,
   RunMode,
+  RunModelPlanDto,
   ThreadSummaryDto,
   WorkspaceDto,
 } from "@/shared/types/api";
@@ -58,6 +60,8 @@ import {
   threadCreate,
   threadDelete,
   threadList,
+  threadUpdateTitle,
+  threadRegenerateTitle,
   workspaceAdd,
   workspaceEnsureDefault,
   workspaceList,
@@ -374,6 +378,137 @@ type PendingThreadRun = {
   threadId: string;
 };
 
+// ---------------------------------------------------------------------------
+// ThreadRenameInput — isolated component for inline thread title editing.
+// Keeps per-keystroke state local to avoid re-rendering the entire dashboard.
+// ---------------------------------------------------------------------------
+
+function ThreadRenameInput({
+  threadId,
+  initialName,
+  isActive,
+  status,
+  modelPlan,
+  onDone,
+}: {
+  threadId: string;
+  initialName: string;
+  isActive: boolean;
+  status: import("@/modules/workbench-shell/model/types").ThreadStatus;
+  modelPlan: RunModelPlanDto | null;
+  onDone: (newTitle: string | null) => void;
+}) {
+  const t = useT();
+  const [value, setValue] = useState(initialName);
+  const [isRegenerating, setRegenerating] = useState(false);
+  const [regenError, setRegenError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // After regeneration completes, re-focus the input so the user
+  // is not left in a stuck editing state without a focused input.
+  const refocusAfterRegenerate = useCallback(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const save = useCallback(() => {
+    const trimmed = value.trim();
+    onDone(trimmed || null);
+  }, [value, onDone]);
+
+  const cancel = useCallback(() => {
+    onDone(null);
+  }, [onDone]);
+
+  const handleRegenerate = useCallback(() => {
+    if (!modelPlan || isRegenerating) return;
+    setRegenerating(true);
+    setRegenError(null);
+    void threadRegenerateTitle(threadId, modelPlan)
+      .then((title) => {
+        setValue(title);
+      })
+      .catch((error) => {
+        const message = getInvokeErrorMessage(error, "Failed to regenerate title");
+        console.warn("[thread] failed to regenerate title:", message);
+        setRegenError(t("sidebar.regenerateTitleFailed"));
+      })
+      .finally(() => {
+        setRegenerating(false);
+        refocusAfterRegenerate();
+      });
+  }, [threadId, modelPlan, isRegenerating, refocusAfterRegenerate]);
+
+  return (
+    <div
+      className={cn(
+        `${DRAWER_LIST_ROW_CLASS} border pr-1.5`,
+        isActive
+          ? "border-app-border-strong bg-app-surface-active text-app-foreground"
+          : "border-transparent bg-transparent text-app-muted",
+      )}
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-1">
+        <ThreadStatusIndicator
+          status={status}
+          emphasis={isActive ? "default" : "subtle"}
+        />
+        <input
+          ref={inputRef}
+          autoFocus
+          aria-label={t("sidebar.renameThread")}
+          className="min-w-0 flex-1 truncate border-none bg-transparent text-[13px] leading-tight text-app-foreground outline-none placeholder:text-app-muted"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (!isRegenerating) save();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancel();
+            }
+          }}
+          onBlur={(e) => {
+            // Ignore blur when clicking the regenerate button
+            // or while regeneration is in progress.
+            if (isRegenerating) return;
+            const related = e.relatedTarget as HTMLElement | null;
+            if (related?.dataset.threadRegenerateBtn === "true") return;
+            save();
+          }}
+          onFocus={(e) => e.target.select()}
+        />
+        <button
+          type="button"
+          data-thread-regenerate-btn="true"
+          title={
+            regenError
+              ? regenError
+              : modelPlan
+                ? t("sidebar.regenerateTitle")
+                : t("sidebar.noLiteModel")
+          }
+          disabled={!modelPlan || isRegenerating}
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleRegenerate();
+          }}
+        >
+          <Sparkles
+            className={cn(
+              "size-3.5",
+              regenError && "text-red-500",
+              isRegenerating && "animate-spin",
+            )}
+          />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function DashboardWorkbench() {
   const { data } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
@@ -546,6 +681,7 @@ export function DashboardWorkbench() {
     string | null
   >(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
+  const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [isAddingWorkspace, setAddingWorkspace] = useState(false);
   const [activeWorkspaceMenuId, setActiveWorkspaceMenuId] = useState<
     string | null
@@ -602,6 +738,7 @@ export function DashboardWorkbench() {
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
   const syncVersionRef = useRef(0);
+  const editingThreadIdRef = useRef<string | null>(null);
   const sidebarAutoRefreshUntilRef = useRef(0);
   const sidebarSyncInFlightRef = useRef(false);
   const workspaceThreadDisplayCountsRef = useRef<Record<string, number>>(
@@ -1187,6 +1324,11 @@ export function DashboardWorkbench() {
           const trimmedTitle = title.trim();
 
           if (!trimmedTitle) {
+            return;
+          }
+
+          // Skip update for the thread currently being edited inline.
+          if (editingThreadIdRef.current === threadId) {
             return;
           }
 
@@ -1992,6 +2134,60 @@ export function DashboardWorkbench() {
         ...current,
         [threadId]: value,
       }));
+    },
+    [],
+  );
+
+  const handleThreadEditStart = useCallback(
+    (threadId: string) => {
+      setEditingThreadId(threadId);
+      editingThreadIdRef.current = threadId;
+    },
+    [],
+  );
+
+  const handleThreadEditDone = useCallback(
+    (threadId: string, newTitle: string | null, originalName: string) => {
+      setEditingThreadId(null);
+
+      if (!newTitle || newTitle === originalName) {
+        editingThreadIdRef.current = null;
+        return;
+      }
+
+      setWorkspaces((current) =>
+        current.map((workspace) => ({
+          ...workspace,
+          threads: workspace.threads.map((thread) =>
+            thread.id === threadId
+              ? { ...thread, name: newTitle }
+              : thread,
+          ),
+        })),
+      );
+
+      if (isTauri()) {
+        void threadUpdateTitle(threadId, newTitle)
+          .catch((error) => {
+            console.warn("[thread] failed to update title:", error);
+            // Rollback: restore the original name on failure.
+            setWorkspaces((current) =>
+              current.map((workspace) => ({
+                ...workspace,
+                threads: workspace.threads.map((thread) =>
+                  thread.id === threadId
+                    ? { ...thread, name: originalName }
+                    : thread,
+                ),
+              })),
+            );
+          })
+          .finally(() => {
+            editingThreadIdRef.current = null;
+          });
+      } else {
+        editingThreadIdRef.current = null;
+      }
     },
     [],
   );
@@ -2982,9 +3178,26 @@ export function DashboardWorkbench() {
                             const isDeletePending =
                               pendingDeleteThreadId === thread.id;
                             const isDeleting = deletingThreadId === thread.id;
+                            const isEditing = editingThreadId === thread.id;
 
                             return (
                               <div key={thread.id} className="group relative">
+                                {isEditing ? (
+                                  <ThreadRenameInput
+                                    threadId={thread.id}
+                                    initialName={thread.name}
+                                    isActive={thread.active}
+                                    status={thread.status}
+                                    modelPlan={commitMessageModelPlan}
+                                    onDone={(newTitle) =>
+                                      handleThreadEditDone(
+                                        thread.id,
+                                        newTitle,
+                                        thread.name,
+                                      )
+                                    }
+                                  />
+                                ) : (
                                 <button
                                   type="button"
                                   className={cn(
@@ -2994,6 +3207,10 @@ export function DashboardWorkbench() {
                                       : "border-transparent bg-transparent text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                                   )}
                                   onClick={() => handleThreadSelect(thread.id)}
+                                  onDoubleClick={(e) => {
+                                    e.stopPropagation();
+                                    handleThreadEditStart(thread.id);
+                                  }}
                                 >
                                   <div className="flex items-center gap-2">
                                     <ThreadStatusIndicator
@@ -3007,6 +3224,9 @@ export function DashboardWorkbench() {
                                     </p>
                                   </div>
                                 </button>
+                                )}
+                                {isEditing ? null : (
+                                <>
                                 <span
                                   className={cn(
                                     "pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-app-subtle transition-opacity duration-200",
@@ -3052,6 +3272,8 @@ export function DashboardWorkbench() {
                                   >
                                     <Trash2 className="size-4" />
                                   </button>
+                                )}
+                                </>
                                 )}
                               </div>
                             );

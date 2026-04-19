@@ -298,6 +298,7 @@ pub fn run() {
             commands::thread::thread_create,
             commands::thread::thread_load,
             commands::thread::thread_update_title,
+            commands::thread::thread_regenerate_title,
             commands::thread::thread_delete,
             commands::thread::thread_add_message,
             // Agent Run
