@@ -2172,14 +2172,20 @@ export function DashboardWorkbench() {
           ...nextProject,
           lastOpenedLabel: t("time.justNow"),
         };
+        // Two-pass lookup: prefer an exact ID match so a worktree is never
+        // shadowed by its parent repo when they share the same name.
         const existingWorkspace =
           workspaces.find(
             (workspace) =>
               workspace.id === nextWorkspaceId
-              || workspace.id === project.id
-              || workspace.name === project.name
+              || workspace.id === project.id,
+          )
+          ?? workspaces.find(
+            (workspace) =>
+              workspace.name === project.name
               || isSameWorkspacePath(workspace.path, project.path),
-          ) ?? null;
+          )
+          ?? null;
         const nextPendingRunId =
           typeof crypto !== "undefined" && "randomUUID" in crypto
             ? crypto.randomUUID()
@@ -2238,6 +2244,10 @@ export function DashboardWorkbench() {
               name: project.name,
               defaultOpen: true,
               path: project.path,
+              kind: project.kind,
+              parentWorkspaceId: project.parentWorkspaceId,
+              worktreeHash: project.worktreeHash ?? null,
+              branch: project.branch ?? null,
               threads: [nextThread],
             },
             ...cleared,

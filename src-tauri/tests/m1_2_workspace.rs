@@ -300,7 +300,7 @@ async fn test_workspace_repo_delete_removes_messages_before_runs() {
     .await
     .unwrap();
 
-    manager.remove("ws-del-repo").await.unwrap();
+    manager.remove("ws-del-repo", false).await.unwrap();
 
     let workspace = sqlx::query("SELECT id FROM workspaces WHERE id = ?")
         .bind("ws-del-repo")

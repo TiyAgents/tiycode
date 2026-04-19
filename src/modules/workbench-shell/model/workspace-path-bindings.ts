@@ -103,15 +103,28 @@ export function resolveProjectForWorkspace(
     return null;
   }
 
-  const matchedProject = recentProjects.find(
+  // Two-pass matching: prefer id/path exact matches first, then fall back to
+  // a weaker name-only match.  Without this separation, a worktree whose
+  // default directory basename equals the parent repo name (e.g.
+  // `~/.tiy/workspace/<hex>/<repo-name>`) would match the parent project by
+  // name before the worktree project is found, causing the right-side panels
+  // (tree view, git panel) to stay on the parent workspace.
+  const exactMatch = recentProjects.find(
     (project) =>
-      isSameWorkspacePath(project.path, workspace.path)
-      || project.id === workspace.id
-      || project.name === workspace.name,
+      project.id === workspace.id
+      || isSameWorkspacePath(project.path, workspace.path),
   );
 
-  if (matchedProject) {
-    return matchedProject;
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const nameMatch = recentProjects.find(
+    (project) => project.name === workspace.name,
+  );
+
+  if (nameMatch) {
+    return nameMatch;
   }
 
   if (!workspace.path) {

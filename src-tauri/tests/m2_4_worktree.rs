@@ -219,7 +219,7 @@ async fn worktree_remove_cleans_up_admin_dir_and_db_row() {
     assert!(admin.is_dir(), "admin dir should exist pre-remove");
 
     ws_manager
-        .remove(&created.id)
+        .remove(&created.id, false)
         .await
         .expect("remove should succeed");
 
@@ -278,7 +278,7 @@ async fn worktree_parent_remove_cascades_children() {
     test_helpers::seed_thread(&pool, "t-child", &child.id).await;
 
     ws_manager
-        .remove(&parent.id)
+        .remove(&parent.id, false)
         .await
         .expect("remove parent should succeed");
 
