@@ -750,6 +750,28 @@ const en: Record<TranslationKey, string> = {
   "onboarding.complete.title": "All set!",
   "onboarding.complete.desc": "Configuration complete. You can adjust these settings anytime.",
   "onboarding.complete.tip": "Tip: Use the top menu bar to quickly switch theme and language.",
+
+  // ── Worktree ───────────────────────────────────────────
+  "worktree.createTitle": "New worktree",
+  "worktree.createDescription": "Create a new worktree with a new branch for this Git repository.",
+  "worktree.field.branch": "New branch name",
+  "worktree.field.branchPlaceholder": "Type a new branch name",
+  "worktree.field.baseBranch": "Base branch",
+  "worktree.field.baseBranchHint": "New branch will be created from {{branch}}",
+  "worktree.field.path": "Worktree directory",
+  "worktree.field.pathPlaceholder": "Auto-generated path",
+  "worktree.field.pathBrowse": "Browse…",
+  "worktree.field.pathHint": "Leave empty to auto-generate under ~/.tiy/workspace/<hash>/<repo>.",
+  "worktree.submit": "Create worktree",
+  "worktree.submitting": "Creating…",
+  "worktree.cancel": "Cancel",
+  "worktree.menu.newWorktree": "New worktree…",
+  "worktree.removeConfirm": "Removing this worktree will delete the directory on disk and all related threads. Continue?",
+  "worktree.error.branchRequired": "Branch name is required",
+  "worktree.error.selectRepo": "Worktrees can only be created on a Git repository workspace",
+  "worktree.empty.branches": "No branches yet",
+  "worktree.loading.branches": "Loading…",
+  "worktree.tag.label": "Worktree",
 };
 
 export default en;

@@ -25,6 +25,11 @@ function createWorkspace(overrides: Partial<WorkspaceDto> = {}): WorkspaceDto {
     lastValidatedAt: null,
     createdAt: "2026-04-12T00:00:00Z",
     updatedAt: "2026-04-12T00:00:00Z",
+    kind: "repo",
+    parentWorkspaceId: null,
+    gitCommonDir: null,
+    branch: null,
+    worktreeName: null,
     ...overrides,
   };
 }
@@ -116,5 +121,40 @@ describe("workspace path bindings", () => {
     expect(project?.path).toBe("/Users/buddy/docs");
     expect(project?.name).toBe("docs");
     expect(project?.id).toContain("docs");
+  });
+
+  it("prefers id/path match over name match for worktree workspaces", () => {
+    // The parent repo and worktree can share the same name (the default
+    // worktree path is `~/.tiy/workspace/<hex>/<repo-name>`).  The resolver
+    // must not short-circuit on the parent's name match when the worktree
+    // project exists with a matching id.
+    const project = resolveProjectForWorkspace(
+      createWorkspaceItem({
+        id: "worktree-1",
+        name: "my-repo",
+        path: "/Users/buddy/.tiy/workspace/abc123/my-repo",
+        kind: "worktree",
+        parentWorkspaceId: "parent-1",
+      }),
+      [
+        {
+          id: "parent-1",
+          name: "my-repo",
+          path: "/Users/buddy/projects/my-repo",
+          lastOpenedLabel: "Today",
+        },
+        {
+          id: "worktree-1",
+          name: "my-repo",
+          path: "/Users/buddy/.tiy/workspace/abc123/my-repo",
+          lastOpenedLabel: "Today",
+          kind: "worktree",
+          parentWorkspaceId: "parent-1",
+        },
+      ],
+    );
+
+    expect(project?.id).toBe("worktree-1");
+    expect(project?.path).toBe("/Users/buddy/.tiy/workspace/abc123/my-repo");
   });
 });

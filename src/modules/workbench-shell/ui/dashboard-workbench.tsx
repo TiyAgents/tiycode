@@ -18,6 +18,7 @@ import {
   LoaderCircle,
   MessageSquarePlus,
   MoreHorizontal,
+  Shuffle,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -92,6 +93,7 @@ import {
   buildInitialWorkspaces,
   buildWorkspaceItemsFromDtos,
   buildThreadTitle,
+  sortWorkspacesWithWorktrees,
   clearActiveThreads,
   getActiveThread,
   isEditableSelectionTarget,
@@ -120,6 +122,10 @@ import type {
 } from "@/modules/workbench-shell/model/types";
 import type { ExtensionDetail, SkillPreview } from "@/shared/types/extensions";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
+import {
+  NewWorktreeDialog,
+  type NewWorktreeDialogContext,
+} from "@/modules/workbench-shell/ui/new-worktree-dialog";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
 import { BranchSelector } from "@/modules/workbench-shell/ui/branch-selector";
 import {
@@ -194,9 +200,10 @@ function getNewThreadTerminalBindingKey(workspaceId: string) {
   return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
 }
 
-function buildProjectOptionFromWorkspace(workspace: WorkspaceDto) {
+function buildProjectOptionFromWorkspace(workspace: WorkspaceDto, language: LanguagePreference = "en"): ProjectOption | null {
   const project = buildProjectOptionFromPath(
     workspace.canonicalPath || workspace.path,
+    language,
   );
   if (!project) {
     return null;
@@ -206,6 +213,12 @@ function buildProjectOptionFromWorkspace(workspace: WorkspaceDto) {
     ...project,
     id: workspace.id,
     name: workspace.name,
+    kind: workspace.kind,
+    parentWorkspaceId: workspace.parentWorkspaceId ?? null,
+    worktreeHash: workspace.worktreeName
+      ? workspace.worktreeName.slice(0, 6)
+      : null,
+    branch: workspace.branch ?? null,
   };
 }
 
@@ -677,6 +690,8 @@ export function DashboardWorkbench() {
     workspaceId: string;
     kind: "open" | "remove";
   } | null>(null);
+  const [worktreeDialogContext, setWorktreeDialogContext] =
+    useState<NewWorktreeDialogContext | null>(null);
   const [pendingThreadRuns, setPendingThreadRuns] = useState<
     Record<string, PendingThreadRun>
   >({});
@@ -1126,7 +1141,7 @@ export function DashboardWorkbench() {
         ]),
       );
       const nextProjects = workspaceEntries
-        .map((workspace) => buildProjectOptionFromWorkspace(workspace))
+        .map((workspace) => buildProjectOptionFromWorkspace(workspace, language))
         .filter((project): project is ProjectOption => project !== null);
       const nextBindings = buildWorkspaceBindings(workspaceEntries);
       const defaultWorkspace =
@@ -1627,6 +1642,13 @@ export function DashboardWorkbench() {
       return;
     }
 
+    // Worktree rows cannot be the default workspace — only the owning repo
+    // can. Skip the auto-promotion in that case to avoid a recoverable
+    // backend error and a stale bootstrap banner.
+    if (selectedProject.kind === "worktree") {
+      return;
+    }
+
     let cancelled = false;
 
     void workspaceSetDefault(selectedProjectWorkspaceId)
@@ -1754,6 +1776,10 @@ export function DashboardWorkbench() {
       return;
     }
 
+    // Clear stale snapshot immediately so the UI doesn't flash the previous
+    // workspace's branch while the new subscription/fetch is in flight.
+    setTopBarGitSnapshot(null);
+
     let cancelled = false;
     let unsubscribe: (() => Promise<void>) | null = null;
 
@@ -1777,7 +1803,7 @@ export function DashboardWorkbench() {
     void gitGetSnapshot(resolvedWorkspaceId)
       .then((snapshot) => {
         if (!cancelled && snapshot) {
-          setTopBarGitSnapshot((current) => current ?? snapshot);
+          setTopBarGitSnapshot(snapshot);
         }
       })
       .catch(() => {});
@@ -1950,7 +1976,28 @@ export function DashboardWorkbench() {
     setNewThreadMode(false);
     setActiveWorkspaceMenuId(null);
     setPendingDeleteThreadId(null);
+    setTerminalBootstrapError(null);
     setWorkspaces((current) => activateThread(current, threadId));
+
+    // Align the selected project with the workspace that owns this thread so
+    // the new-thread empty state and path bindings stay consistent when the
+    // user toggles back to New Thread mode. Without this, selectedProject can
+    // drift (e.g. it stays on a worktree after the user jumped back to a
+    // thread belonging to the parent repo).
+    const nextWorkspace = workspaces.find((workspace) =>
+      workspace.threads.some((thread) => thread.id === threadId),
+    );
+    if (nextWorkspace && nextWorkspace.id !== selectedProject?.id) {
+      const projectForWorkspace = recentProjects.find(
+        (project) => project.id === nextWorkspace.id,
+      );
+      if (projectForWorkspace) {
+        setSelectedProject({
+          ...projectForWorkspace,
+          lastOpenedLabel: t("time.justNow"),
+        });
+      }
+    }
 
     // Restore the profile that was last used on this thread.
     const resolved = resolveThreadProfileId(
@@ -1983,8 +2030,8 @@ export function DashboardWorkbench() {
 
     clearNewThreadBindingForWorkspace(workspace.id);
 
-    const projectFromPath = buildProjectOptionFromPath(workspace.path);
-    const nextProject = {
+    const projectFromPath = buildProjectOptionFromPath(workspace.path, language);
+    const nextProject: ProjectOption = {
       ...(projectFromPath ?? {
         id: workspace.id,
         name: workspace.name,
@@ -1995,6 +2042,16 @@ export function DashboardWorkbench() {
       name: workspace.name,
       path: workspace.path,
       lastOpenedLabel: t("time.justNow"),
+      // Preserve worktree-aware metadata so downstream effects (e.g. the
+      // "set this workspace as default" auto-promotion) can correctly skip
+      // worktree rows. Without this, selecting a worktree to start a new
+      // thread would surface the backend error
+      // "A worktree cannot be set as the default workspace" in the project
+      // and git panels.
+      kind: workspace.kind,
+      parentWorkspaceId: workspace.parentWorkspaceId,
+      worktreeHash: workspace.worktreeHash,
+      branch: workspace.branch,
     };
 
     deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
@@ -2269,7 +2326,7 @@ export function DashboardWorkbench() {
                 })
               : await workspaceEnsureDefault();
             const ensuredProject =
-              buildProjectOptionFromWorkspace(ensuredWorkspace) ?? {
+              buildProjectOptionFromWorkspace(ensuredWorkspace, language) ?? {
                 id: ensuredWorkspace.id,
                 name: ensuredWorkspace.name,
                 path: ensuredWorkspace.canonicalPath || ensuredWorkspace.path,
@@ -2312,14 +2369,20 @@ export function DashboardWorkbench() {
           ...nextProject,
           lastOpenedLabel: t("time.justNow"),
         };
+        // Two-pass lookup: prefer an exact ID match so a worktree is never
+        // shadowed by its parent repo when they share the same name.
         const existingWorkspace =
           workspaces.find(
             (workspace) =>
               workspace.id === nextWorkspaceId
-              || workspace.id === project.id
-              || workspace.name === project.name
+              || workspace.id === project.id,
+          )
+          ?? workspaces.find(
+            (workspace) =>
+              workspace.name === project.name
               || isSameWorkspacePath(workspace.path, project.path),
-          ) ?? null;
+          )
+          ?? null;
         const nextPendingRunId =
           typeof crypto !== "undefined" && "randomUUID" in crypto
             ? crypto.randomUUID()
@@ -2378,6 +2441,10 @@ export function DashboardWorkbench() {
               name: project.name,
               defaultOpen: true,
               path: project.path,
+              kind: project.kind,
+              parentWorkspaceId: project.parentWorkspaceId,
+              worktreeHash: project.worktreeHash ?? null,
+              branch: project.branch ?? null,
               threads: [nextThread],
             },
             ...cleared,
@@ -2525,7 +2592,7 @@ export function DashboardWorkbench() {
           return;
         }
 
-        const nextProject = buildProjectOptionFromPath(selectedPath);
+        const nextProject = buildProjectOptionFromPath(selectedPath, language);
 
         if (!nextProject) {
           return;
@@ -2603,6 +2670,15 @@ export function DashboardWorkbench() {
         return;
       }
 
+      if (workspace.kind === "worktree") {
+        if (
+          typeof window !== "undefined" &&
+          !window.confirm(t("worktree.removeConfirm"))
+        ) {
+          return;
+        }
+      }
+
       void (async () => {
         const workspaceThreadIds = new Set(
           workspace.threads.map((thread) => thread.id),
@@ -2641,7 +2717,7 @@ export function DashboardWorkbench() {
           if (workspace.path) {
             addRemovedWorkspacePath(removedWorkspacePathsRef.current, workspace.path);
           }
-          await workspaceRemove(workspace.id);
+          await workspaceRemove(workspace.id, true);
 
           if (isRemovingActiveWorkspace) {
             setNewThreadMode(true);
@@ -2734,6 +2810,7 @@ export function DashboardWorkbench() {
       selectedProject?.id,
       selectedProject?.path,
       syncWorkspaceSidebar,
+      t,
       workspaceAction,
     ],
   );
@@ -2920,10 +2997,20 @@ export function DashboardWorkbench() {
                     </div>
                   </div>
                 ) : (
-                workspaces.map((workspace) => {
+                sortWorkspacesWithWorktrees(workspaces).map((workspace) => {
+                  const isWorktreeRow = workspace.kind === "worktree";
+                  const isRepoRow = workspace.kind === "repo";
+                  const worktreeTag =
+                    workspace.worktreeHash && workspace.worktreeHash.length > 0
+                      ? workspace.worktreeHash
+                      : null;
                   const isOpen =
                     openWorkspaces[workspace.id] ?? workspace.defaultOpen;
-                  const FolderIcon = isOpen ? FolderOpen : Folder;
+                  const FolderIcon = isWorktreeRow
+                    ? Shuffle
+                    : isOpen
+                      ? FolderOpen
+                      : Folder;
                   const isWorkspaceMenuOpen =
                     activeWorkspaceMenuId === workspace.id;
                   const isOpeningWorkspace =
@@ -2963,9 +3050,19 @@ export function DashboardWorkbench() {
                             onClick={() => handleWorkspaceToggle(workspace.id)}
                           >
                             <FolderIcon className="size-4 shrink-0 text-app-muted" />
-                            <span className={DRAWER_LIST_LABEL_CLASS}>
-                              {workspace.name}
-                            </span>
+                            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                              <span className="truncate text-[13px] leading-5">
+                                {workspace.name}
+                              </span>
+                              {worktreeTag ? (
+                                <span
+                                  title={t("worktree.tag.label")}
+                                  className="shrink-0 rounded bg-app-surface-hover px-1.5 py-0.5 font-mono text-[10px] text-app-subtle"
+                                >
+                                  {worktreeTag}
+                                </span>
+                              ) : null}
+                            </div>
                           </button>
                           <button
                             type="button"
@@ -3005,6 +3102,30 @@ export function DashboardWorkbench() {
                                 <MessageSquarePlus className="size-4 shrink-0" />
                                 <span>{t("sidebar.newThreadForWorkspace")}</span>
                               </button>
+                              {isRepoRow ? (
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-app-foreground transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:text-app-subtle"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setActiveWorkspaceMenuId(null);
+                                    if (workspace.path) {
+                                      setWorktreeDialogContext({
+                                        repo: {
+                                          id: workspace.id,
+                                          name: workspace.name,
+                                          canonicalPath: workspace.path,
+                                        },
+                                      });
+                                    }
+                                  }}
+                                  disabled={!workspace.path}
+                                >
+                                  <Shuffle className="size-4 shrink-0" />
+                                  <span>{t("worktree.menu.newWorktree")}</span>
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 role="menuitem"
@@ -3205,6 +3326,15 @@ export function DashboardWorkbench() {
                             isOverlayOpen={isOverlayOpen}
                             isLoading={!isSidebarReady}
                             onSelectProject={handleProjectSelect}
+                            onRequestNewWorktree={(project) => {
+                              setWorktreeDialogContext({
+                                repo: {
+                                  id: project.id,
+                                  name: project.name,
+                                  canonicalPath: project.path,
+                                },
+                              });
+                            }}
                             branchSlot={
                               resolvedWorkspaceId &&
                               topBarGitSnapshot?.capabilities.repoAvailable &&
@@ -3213,6 +3343,7 @@ export function DashboardWorkbench() {
                                   workspaceId={resolvedWorkspaceId}
                                   snapshot={branchSnapshot}
                                   modelPlan={commitMessageModelPlan}
+                                  readOnly={currentProject?.kind === "worktree"}
                                 />
                               ) : null
                             }
@@ -3325,6 +3456,7 @@ export function DashboardWorkbench() {
                             workspaceId={resolvedWorkspaceId}
                             snapshot={branchSnapshot}
                             modelPlan={commitMessageModelPlan}
+                            readOnly={currentProject?.kind === "worktree"}
                           />
                         </div>
                       </div>
@@ -3612,6 +3744,14 @@ export function DashboardWorkbench() {
           onDismiss={() => setShowOnboarding(false)}
         />
       ) : null}
+
+      <NewWorktreeDialog
+        context={worktreeDialogContext}
+        onClose={() => setWorktreeDialogContext(null)}
+        onCreated={() => {
+          void syncWorkspaceSidebar().catch(() => {});
+        }}
+      />
     </main>
   );
 }

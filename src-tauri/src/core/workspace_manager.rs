@@ -2,19 +2,38 @@ use chrono::Utc;
 use sqlx::SqlitePool;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::{fs, task};
 
+use crate::core::worktree_manager::WorktreeManager;
 use crate::model::errors::{AppError, ErrorSource};
-use crate::model::workspace::{WorkspaceAddInput, WorkspaceRecord, WorkspaceStatus};
+use crate::model::workspace::{WorkspaceAddInput, WorkspaceKind, WorkspaceRecord, WorkspaceStatus};
 use crate::persistence::repo::workspace_repo;
 
 pub struct WorkspaceManager {
     pool: SqlitePool,
+    worktree_manager: std::sync::OnceLock<Arc<WorktreeManager>>,
 }
 
 impl WorkspaceManager {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            worktree_manager: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Inject the worktree manager so that `remove` can physically clean up
+    /// `.git/worktrees/<name>` entries when deleting a worktree row or a repo
+    /// row with child worktrees. Without this injection, `remove` falls back
+    /// to DB-only cleanup (worktree directories must then be removed with
+    /// `git worktree prune` manually).
+    pub fn set_worktree_manager(&self, manager: Arc<WorktreeManager>) {
+        let _ = self.worktree_manager.set(manager);
+    }
+
+    fn worktree_manager(&self) -> Option<&Arc<WorktreeManager>> {
+        self.worktree_manager.get()
     }
 
     /// List all workspaces, ordered by default first, then by updated_at.
@@ -80,8 +99,14 @@ impl WorkspaceManager {
             .unwrap_or_else(|| derive_name_from_path(&canonical));
         let display_path = derive_display_path(&canonical).await;
 
-        // Detect git repository
+        // Detect git repository. A worktree child's `.git` is a file, while a
+        // regular repo's is a directory; either means Git is in play.
         let is_git = fs::metadata(canonical.join(".git")).await.is_ok();
+        let kind = if is_git {
+            WorkspaceKind::Repo
+        } else {
+            WorkspaceKind::Standalone
+        };
 
         let record = WorkspaceRecord {
             id: uuid::Uuid::now_v7().to_string(),
@@ -96,6 +121,11 @@ impl WorkspaceManager {
             last_validated_at: Some(Utc::now()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            kind,
+            parent_workspace_id: None,
+            git_common_dir: None,
+            branch: None,
+            worktree_name: None,
         };
 
         workspace_repo::insert(&self.pool, &record).await?;
@@ -122,17 +152,64 @@ impl WorkspaceManager {
     }
 
     /// Remove a workspace by ID.
-    pub async fn remove(&self, id: &str) -> Result<(), AppError> {
+    ///
+    /// Worktree-aware semantics:
+    /// - If the row is `kind=worktree`, the underlying `git worktree remove`
+    ///   is executed first (when a worktree manager is injected); DB rows are
+    ///   then cleaned via the repo-level cascade.
+    /// - If the row is `kind=repo`, its child worktree rows are cleaned up the
+    ///   same way before the repo row itself is deleted.
+    pub async fn remove(&self, id: &str, force: bool) -> Result<(), AppError> {
+        let record = workspace_repo::find_by_id(&self.pool, id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
+
+        match record.kind {
+            WorkspaceKind::Worktree => {
+                if let Some(manager) = self.worktree_manager() {
+                    // Physically remove the worktree directory and the
+                    // `.git/worktrees/<name>` registration. `remove_physical`
+                    // is tolerant of an already-missing directory, so any
+                    // error here is worth surfacing to the caller.
+                    manager.remove_physical(&record, force).await?;
+                }
+            }
+            WorkspaceKind::Repo => {
+                let children = workspace_repo::list_worktrees_of(&self.pool, &record.id).await?;
+                for child in children {
+                    if let Some(manager) = self.worktree_manager() {
+                        manager.remove_physical(&child, force).await?;
+                    }
+                    workspace_repo::delete(&self.pool, &child.id).await?;
+                }
+            }
+            WorkspaceKind::Standalone => {}
+        }
+
         let deleted = workspace_repo::delete(&self.pool, id).await?;
         if !deleted {
             return Err(AppError::not_found(ErrorSource::Workspace, "workspace"));
         }
-        tracing::info!(workspace_id = %id, "workspace removed");
+        tracing::info!(
+            workspace_id = %id,
+            kind = %record.kind.as_str(),
+            "workspace removed"
+        );
         Ok(())
     }
 
-    /// Set a workspace as the default.
+    /// Set a workspace as the default. Worktree rows cannot be the default.
     pub async fn set_default(&self, id: &str) -> Result<(), AppError> {
+        let record = workspace_repo::find_by_id(&self.pool, id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
+        if record.kind == WorkspaceKind::Worktree {
+            return Err(AppError::recoverable(
+                ErrorSource::Workspace,
+                "workspace.default.worktree_not_allowed",
+                "A worktree cannot be set as the default workspace",
+            ));
+        }
         workspace_repo::set_default(&self.pool, id).await?;
         tracing::info!(workspace_id = %id, "workspace set as default");
         Ok(())
@@ -176,6 +253,24 @@ impl WorkspaceManager {
         let is_git = fs::metadata(canonical.join(".git")).await.is_ok();
         if is_git != record.is_git {
             workspace_repo::update_is_git(&self.pool, &record.id, is_git).await?;
+        }
+
+        // Auto-upgrade standalone Git workspaces to `kind=repo` so the sidebar
+        // can offer worktree actions. Never downgrade repo or worktree rows.
+        if is_git
+            && record.kind == WorkspaceKind::Standalone
+            && record.parent_workspace_id.is_none()
+        {
+            workspace_repo::update_kind_metadata(
+                &self.pool,
+                &record.id,
+                WorkspaceKind::Repo,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await?;
         }
 
         workspace_repo::update_status(&self.pool, &record.id, &new_status, now).await?;

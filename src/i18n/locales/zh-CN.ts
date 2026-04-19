@@ -788,6 +788,28 @@ const zhCN = {
   "onboarding.complete.title": "一切就绪！",
   "onboarding.complete.desc": "配置已完成。你可以随时在设置中调整这些选项。",
   "onboarding.complete.tip": "提示：使用顶部菜单栏快速切换主题和语言。",
+
+  // ── Worktree ───────────────────────────────────────────
+  "worktree.createTitle": "新建 Worktree",
+  "worktree.createDescription": "为当前 Git 仓库创建一个新的 worktree，基于现有分支新建分支。",
+  "worktree.field.branch": "新分支名",
+  "worktree.field.branchPlaceholder": "输入新分支名称",
+  "worktree.field.baseBranch": "基于分支",
+  "worktree.field.baseBranchHint": "新分支将基于 {{branch}} 创建",
+  "worktree.field.path": "worktree 目录",
+  "worktree.field.pathPlaceholder": "自动生成路径",
+  "worktree.field.pathBrowse": "选择...",
+  "worktree.field.pathHint": "留空将自动生成在 ~/.tiy/workspace/<hash>/<repo>",
+  "worktree.submit": "创建 Worktree",
+  "worktree.submitting": "创建中...",
+  "worktree.cancel": "取消",
+  "worktree.menu.newWorktree": "新建 Worktree…",
+  "worktree.removeConfirm": "删除此 worktree 将同时删除磁盘目录与相关对话记录，确定继续？",
+  "worktree.error.branchRequired": "请填写分支名",
+  "worktree.error.selectRepo": "仅 Git 仓库 workspace 支持创建 worktree",
+  "worktree.empty.branches": "暂无分支",
+  "worktree.loading.branches": "加载中…",
+  "worktree.tag.label": "Worktree",
 } as const;
 
 export type TranslationKey = keyof typeof zhCN;

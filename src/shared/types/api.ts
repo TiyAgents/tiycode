@@ -11,6 +11,8 @@
 
 export type WorkspaceStatus = "ready" | "missing" | "inaccessible" | "invalid";
 
+export type WorkspaceKind = "standalone" | "repo" | "worktree";
+
 export interface WorkspaceDto {
   id: string;
   name: string;
@@ -24,6 +26,28 @@ export interface WorkspaceDto {
   lastValidatedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  kind: WorkspaceKind;
+  parentWorkspaceId: string | null;
+  gitCommonDir: string | null;
+  branch: string | null;
+  worktreeName: string | null;
+}
+
+export interface WorktreeInfoDto {
+  name: string;
+  path: string;
+  branch: string | null;
+  head: string | null;
+  isValid: boolean;
+  isLocked: boolean;
+  workspaceId: string | null;
+}
+
+export interface WorktreeCreateInput {
+  branch: string;
+  baseRef?: string | null;
+  createBranch?: boolean;
+  path?: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -31,6 +31,37 @@ impl WorkspaceStatus {
     }
 }
 
+/// Classification of a workspace row, enabling worktree semantics alongside
+/// standalone folders and Git repositories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceKind {
+    /// A regular folder workspace with no Git worktree relationship.
+    Standalone,
+    /// A Git repository root that may have child worktrees.
+    Repo,
+    /// A Git worktree pointing to a parent repo workspace.
+    Worktree,
+}
+
+impl WorkspaceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Standalone => "standalone",
+            Self::Repo => "repo",
+            Self::Worktree => "worktree",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "repo" => Self::Repo,
+            "worktree" => Self::Worktree,
+            _ => Self::Standalone,
+        }
+    }
+}
+
 /// Database row representation for the `workspaces` table.
 #[derive(Debug, Clone)]
 pub struct WorkspaceRecord {
@@ -46,6 +77,18 @@ pub struct WorkspaceRecord {
     pub last_validated_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub kind: WorkspaceKind,
+    pub parent_workspace_id: Option<String>,
+    pub git_common_dir: Option<String>,
+    pub branch: Option<String>,
+    /// Short logical worktree identifier for this TiyCode workspace.
+    /// Format: `<6-hex>-<branch-slug>`. The leading 6 hex characters are a
+    /// random uniqueness prefix and are what the sidebar renders as the hash
+    /// tag (`worktree_name[..6]`). Note: this is NOT the `git worktree`
+    /// registration name (git derives that from the worktree directory
+    /// basename); we store this label separately so the UI tag stays stable
+    /// even when the user picks a custom path.
+    pub worktree_name: Option<String>,
 }
 
 /// DTO sent to the frontend via Tauri invoke.
@@ -64,6 +107,11 @@ pub struct WorkspaceDto {
     pub last_validated_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub kind: WorkspaceKind,
+    pub parent_workspace_id: Option<String>,
+    pub git_common_dir: Option<String>,
+    pub branch: Option<String>,
+    pub worktree_name: Option<String>,
 }
 
 impl From<WorkspaceRecord> for WorkspaceDto {
@@ -81,6 +129,11 @@ impl From<WorkspaceRecord> for WorkspaceDto {
             last_validated_at: r.last_validated_at.map(|t| t.to_rfc3339()),
             created_at: r.created_at.to_rfc3339(),
             updated_at: r.updated_at.to_rfc3339(),
+            kind: r.kind,
+            parent_workspace_id: r.parent_workspace_id,
+            git_common_dir: r.git_common_dir,
+            branch: r.branch,
+            worktree_name: r.worktree_name,
         }
     }
 }
@@ -91,4 +144,24 @@ impl From<WorkspaceRecord> for WorkspaceDto {
 pub struct WorkspaceAddInput {
     pub path: String,
     pub name: Option<String>,
+}
+
+/// Input from the frontend when creating a worktree for a repo workspace.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeCreateInput {
+    /// The branch name to check out inside the new worktree.
+    /// When `create_branch` is true this is the name of a new branch.
+    pub branch: String,
+    /// Optional starting point (commit / branch / remote ref) used when creating
+    /// a brand-new branch. Ignored when `create_branch` is false.
+    #[serde(default)]
+    pub base_ref: Option<String>,
+    /// When true, a new local branch is created and checked out in the worktree.
+    #[serde(default)]
+    pub create_branch: bool,
+    /// Optional custom path for the new worktree directory. When None the
+    /// manager derives `<repo parent>/<repo name>-<branch-slug>`.
+    #[serde(default)]
+    pub path: Option<String>,
 }

@@ -533,6 +533,11 @@ fn test_workspace_dto_camel_case() {
         last_validated_at: Some("2026-03-16T00:00:00Z".into()),
         created_at: "2026-03-16T00:00:00Z".into(),
         updated_at: "2026-03-16T00:00:00Z".into(),
+        kind: tiycode::model::workspace::WorkspaceKind::Repo,
+        parent_workspace_id: None,
+        git_common_dir: None,
+        branch: None,
+        worktree_name: None,
     };
 
     let json = serde_json::to_value(&dto).unwrap();

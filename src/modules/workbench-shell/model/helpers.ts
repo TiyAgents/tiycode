@@ -345,7 +345,7 @@ function mapThreadStatus(status: ApiThreadStatus): WorkbenchThreadStatus {
   }
 }
 
-export function formatThreadTimeLabel(value: string | null | undefined, language: LanguagePreference = "zh-CN", now = Date.now()) {
+export function formatThreadTimeLabel(value: string | null | undefined, language: LanguagePreference = "en", now = Date.now()) {
   if (!value) {
     return "";
   }
@@ -382,7 +382,7 @@ export function formatThreadTimeLabel(value: string | null | undefined, language
 export function buildWorkspaceThreadItem(
   thread: ThreadSummaryDto,
   activeThreadId: string | null,
-  language: LanguagePreference = "zh-CN",
+  language: LanguagePreference = "en",
 ): WorkspaceThreadItem {
   const trimmedTitle = thread.title.trim();
   const displayTitle = trimmedTitle || translate(language, "dashboard.newThread");
@@ -400,13 +400,17 @@ export function buildWorkspaceItemsFromDtos(
   workspaces: ReadonlyArray<WorkspaceDto>,
   threadsByWorkspaceId: Record<string, ReadonlyArray<ThreadSummaryDto>>,
   activeThreadId: string | null,
-  language: LanguagePreference = "zh-CN",
+  language: LanguagePreference = "en",
 ): Array<WorkspaceItem> {
   return workspaces.map((workspace) => ({
     id: workspace.id,
     name: workspace.name,
     defaultOpen: workspace.isDefault,
     path: workspace.canonicalPath || workspace.path,
+    kind: workspace.kind,
+    parentWorkspaceId: workspace.parentWorkspaceId,
+    worktreeHash: workspace.worktreeName ? workspace.worktreeName.slice(0, 6) : null,
+    branch: workspace.branch,
     threads: (threadsByWorkspaceId[workspace.id] ?? []).map((thread) =>
       buildWorkspaceThreadItem(thread, activeThreadId, language),
     ),
@@ -493,7 +497,7 @@ export function mergeRecentProjects(
   ].slice(0, 6);
 }
 
-export function buildProjectOptionFromPath(path: string | null): ProjectOption | null {
+export function buildProjectOptionFromPath(path: string | null, language: LanguagePreference = "en"): ProjectOption | null {
   if (!path) {
     return null;
   }
@@ -510,8 +514,79 @@ export function buildProjectOptionFromPath(path: string | null): ProjectOption |
     id: normalizedId || `project-${Date.now()}`,
     name: folderName,
     path: normalizedPath,
-    lastOpenedLabel: translate("zh-CN", "time.justNow"),
+    lastOpenedLabel: translate(language, "time.justNow"),
   };
+}
+
+export function buildProjectOptionFromWorkspace(
+  workspace: WorkspaceDto,
+  lastOpenedLabel?: string,
+  language: LanguagePreference = "en",
+): ProjectOption {
+  return {
+    id: workspace.id,
+    name: workspace.name,
+    path: workspace.canonicalPath || workspace.path,
+    lastOpenedLabel: lastOpenedLabel ?? translate(language, "time.justNow"),
+    kind: workspace.kind,
+    parentWorkspaceId: workspace.parentWorkspaceId,
+    worktreeHash: workspace.worktreeName
+      ? workspace.worktreeName.slice(0, 6)
+      : null,
+    branch: workspace.branch,
+  };
+}
+
+/**
+ * Order workspaces so each worktree row immediately follows its parent repo.
+ * Non-worktree rows keep their incoming ordering. Orphan worktrees (missing
+ * parent) fall back to their own ordering position.
+ */
+export function sortWorkspacesWithWorktrees<
+  T extends {
+    id: string;
+    kind?: "standalone" | "repo" | "worktree";
+    parentWorkspaceId?: string | null;
+  },
+>(items: ReadonlyArray<T>): Array<T> {
+  const byId = new Map(items.map((item) => [item.id, item] as const));
+  const placed = new Set<string>();
+  const result: Array<T> = [];
+
+  for (const item of items) {
+    if (placed.has(item.id)) continue;
+    if (item.kind === "worktree") {
+      const parentId = item.parentWorkspaceId ?? "";
+      if (parentId && byId.has(parentId) && !placed.has(parentId)) {
+        // Defer until parent is emitted first; skip now and pick up later.
+        continue;
+      }
+    }
+    result.push(item);
+    placed.add(item.id);
+
+    // Emit this item's worktrees right after it, preserving order.
+    for (const child of items) {
+      if (placed.has(child.id)) continue;
+      if (
+        child.kind === "worktree"
+        && (child.parentWorkspaceId ?? "") === item.id
+      ) {
+        result.push(child);
+        placed.add(child.id);
+      }
+    }
+  }
+
+  // Orphan worktrees whose parent never appeared.
+  for (const item of items) {
+    if (!placed.has(item.id)) {
+      result.push(item);
+      placed.add(item.id);
+    }
+  }
+
+  return result;
 }
 
 export function formatProjectPathLabel(path: string) {
