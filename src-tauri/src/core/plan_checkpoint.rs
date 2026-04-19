@@ -415,7 +415,7 @@ mod tests {
         approval_prompt_markdown, build_approval_prompt_metadata,
         build_plan_artifact_from_tool_input, build_plan_message_metadata,
         parse_approval_prompt_metadata, parse_plan_message_metadata, plan_markdown,
-        write_plan_file, write_plan_file_to, PlanApprovalAction,
+        write_plan_file_to, PlanApprovalAction,
     };
 
     #[test]
