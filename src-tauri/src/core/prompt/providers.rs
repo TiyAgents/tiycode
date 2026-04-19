@@ -304,7 +304,7 @@ async fn build_sandbox_permissions_body(
         .unwrap_or_else(|| merge_writable_roots(&[]));
 
     let run_mode_line = if run_mode == "plan" {
-        "Plan mode is active, so mutating tools are blocked."
+        "Plan mode is active, so mutating tools are blocked; shell follows the configured approval policy and must be used only for read-only commands."
     } else {
         "Default mode is active, so tool use follows the configured approval policy."
     };
@@ -485,9 +485,10 @@ Your sole objective is to produce a concrete, evidence-based implementation plan
 \n\
 ## Available tools\n\
 Read-only tools: read, list, search, find, term_status, term_output, agent_explore.\n\
+Shell tool: shell — use ONLY for read-only commands (e.g. git log, npm ls, command -v, skill CLIs for information gathering). Never use shell to create, modify, or delete files or to run system-changing commands.\n\
 Planning tools: clarify, update_plan.\n\
 {TERM_PANEL_USAGE_NOTE}\n\
-Do NOT use edit, write, shell, or any mutating tool unless the user explicitly requests execution.\n\
+Do NOT use edit, write, or any mutating tool unless the user explicitly requests execution.\n\
 \n\
 ## Workflow — follow these phases in order\n\
 \n\
