@@ -277,6 +277,51 @@ TiyCode 将可扩展性作为桌面工作台的一等能力来设计。
 
 这些能力会统一呈现在 `Extensions Center` 中，但运行时访问仍然会经过宿主侧的 tool gateway、policy check、approval 和 audit 边界治理。
 
+## 问题定位与调试
+
+当遇到模型请求未发出、响应未到达或行为与预期不符等问题时，可以通过 `RUST_LOG` 环境变量控制 Rust / tiycore 侧的日志详细程度。
+
+| `RUST_LOG` 取值 | 日志内容 |
+|---|---|
+| `RUST_LOG=tiycore=debug` | 模型请求元数据与响应内容摘要 —— 适合确认调用了哪个模型、发送了什么 prompt、是否收到了响应。 |
+| `RUST_LOG=tiycore=trace` | 完整 SSE 流数据（含每个 chunk） —— 适合检查原始流式负载或定位流级别的问题。 |
+| `RUST_LOG=debug` | **所有** crate 的 debug 级别日志（信息量较大，但覆盖全栈）。 |
+| `RUST_LOG=info` | 默认级别 —— 仅输出 informational 级别消息。 |
+
+### 设置方式
+
+**从源码运行（开发模式）：**
+
+```bash
+# macOS / Linux
+RUST_LOG=tiycore=debug npm run dev
+
+# 或先 export 再启动
+export RUST_LOG=tiycore=debug
+npm run dev
+```
+
+**已安装应用（macOS）：**
+
+```bash
+RUST_LOG=tiycore=debug /Applications/TiyCode.app/Contents/MacOS/TiyCode
+```
+
+**Windows（PowerShell）：**
+
+```powershell
+$env:RUST_LOG="tiycore=debug"
+npm run dev
+```
+
+日志输出到 stderr / 启动应用时的终端。对于已安装版本，也可以查看 TiyCode 数据目录中的日志文件。
+
+### 常见场景
+
+- **模型无响应：** 先用 `RUST_LOG=tiycore=debug` 确认请求是否发出，并在摘要中查看状态码和错误信息。
+- **流式输出异常或截断：** 用 `RUST_LOG=tiycore=trace` 检查原始 SSE 事件，定位流在何处中断或偏离预期。
+- **Rust Core 更深层问题：** 尝试 `RUST_LOG=debug` 捕获所有 crate 的日志，再逐步缩小关注范围。
+
 ## 当前项目状态
 
 这个仓库已经具备较完整的桌面壳层、工作台 UI、设置中心、内置运行时主链路、Git Drawer 和扩展体系设计。但与此同时，它更适合被理解为一个持续演进中的开源项目，而不是一个已经完成终端用户打包分发说明的成熟发布版产品。

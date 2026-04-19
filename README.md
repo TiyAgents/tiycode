@@ -277,6 +277,51 @@ TiyCode treats extensibility as a first-class part of the desktop workbench.
 
 These capabilities are surfaced through the `Extensions Center`, while runtime access is still governed by the host through tool gateways, policy checks, approvals, and audit boundaries.
 
+## Troubleshooting & Debugging
+
+When something goes wrong — model requests not being sent, responses not arriving, or behavior not matching expectations — you can use the `RUST_LOG` environment variable to control log verbosity on the Rust / tiycore side.
+
+| `RUST_LOG` value | What you get |
+|---|---|
+| `RUST_LOG=tiycore=debug` | Model request metadata and response content summaries — good for verifying which model is called, what prompt is sent, and whether a response is received. |
+| `RUST_LOG=tiycore=trace` | Full SSE stream data including every chunk — useful when you need to inspect raw streaming payloads or diagnose streaming-level issues. |
+| `RUST_LOG=debug` | Debug-level logs for **all** crates (noisy, but covers the entire stack). |
+| `RUST_LOG=info` | Default level — informational messages only. |
+
+### How to set it
+
+**From source (development):**
+
+```bash
+# macOS / Linux
+RUST_LOG=tiycore=debug npm run dev
+
+# Or export before running
+export RUST_LOG=tiycore=debug
+npm run dev
+```
+
+**Installed app (macOS):**
+
+```bash
+RUST_LOG=tiycore=debug /Applications/TiyCode.app/Contents/MacOS/TiyCode
+```
+
+**Windows (PowerShell):**
+
+```powershell
+$env:RUST_LOG="tiycore=debug"
+npm run dev
+```
+
+Logs are written to stderr / the terminal where the app was launched. For installed builds, you can also check the log file in the TiyCode data directory.
+
+### Common scenarios
+
+- **Model not responding:** Start with `RUST_LOG=tiycore=debug` to confirm the request is being sent and check the status code / error message in the summary.
+- **Streaming looks broken or partial:** Use `RUST_LOG=tiycore=trace` to inspect the raw SSE events and see exactly where the stream stops or diverges.
+- **Something deeper in the Rust core:** Try `RUST_LOG=debug` to capture logs from all crates, then narrow down the relevant module.
+
 ## Current Project Status
 
 The repository already contains a substantial desktop shell, workbench UI, settings center, built-in runtime path, Git drawer, and extension architecture. At the same time, it should still be read as an actively evolving project rather than a polished end-user release with a fully documented packaged distribution flow.
