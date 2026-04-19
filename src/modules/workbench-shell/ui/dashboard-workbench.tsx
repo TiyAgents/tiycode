@@ -388,6 +388,7 @@ function ThreadRenameInput({
   const t = useT();
   const [value, setValue] = useState(initialName);
   const [isRegenerating, setRegenerating] = useState(false);
+  const [regenError, setRegenError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // After regeneration completes, re-focus the input so the user
@@ -408,6 +409,7 @@ function ThreadRenameInput({
   const handleRegenerate = useCallback(() => {
     if (!modelPlan || isRegenerating) return;
     setRegenerating(true);
+    setRegenError(null);
     void threadRegenerateTitle(threadId, modelPlan)
       .then((title) => {
         setValue(title);
@@ -415,6 +417,7 @@ function ThreadRenameInput({
       .catch((error) => {
         const message = getInvokeErrorMessage(error, "Failed to regenerate title");
         console.warn("[thread] failed to regenerate title:", message);
+        setRegenError(t("sidebar.regenerateTitleFailed"));
       })
       .finally(() => {
         setRegenerating(false);
@@ -465,9 +468,11 @@ function ThreadRenameInput({
           type="button"
           data-thread-regenerate-btn="true"
           title={
-            modelPlan
-              ? t("sidebar.regenerateTitle")
-              : t("sidebar.noLiteModel")
+            regenError
+              ? regenError
+              : modelPlan
+                ? t("sidebar.regenerateTitle")
+                : t("sidebar.noLiteModel")
           }
           disabled={!modelPlan || isRegenerating}
           className="flex size-6 shrink-0 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-40"
@@ -480,6 +485,7 @@ function ThreadRenameInput({
           <Sparkles
             className={cn(
               "size-3.5",
+              regenError && "text-red-500",
               isRegenerating && "animate-spin",
             )}
           />
@@ -2085,9 +2091,9 @@ export function DashboardWorkbench() {
   const handleThreadEditDone = useCallback(
     (threadId: string, newTitle: string | null, originalName: string) => {
       setEditingThreadId(null);
-      editingThreadIdRef.current = null;
 
       if (!newTitle || newTitle === originalName) {
+        editingThreadIdRef.current = null;
         return;
       }
 
@@ -2103,20 +2109,26 @@ export function DashboardWorkbench() {
       );
 
       if (isTauri()) {
-        void threadUpdateTitle(threadId, newTitle).catch((error) => {
-          console.warn("[thread] failed to update title:", error);
-          // Rollback: restore the original name on failure.
-          setWorkspaces((current) =>
-            current.map((workspace) => ({
-              ...workspace,
-              threads: workspace.threads.map((thread) =>
-                thread.id === threadId
-                  ? { ...thread, name: originalName }
-                  : thread,
-              ),
-            })),
-          );
-        });
+        void threadUpdateTitle(threadId, newTitle)
+          .catch((error) => {
+            console.warn("[thread] failed to update title:", error);
+            // Rollback: restore the original name on failure.
+            setWorkspaces((current) =>
+              current.map((workspace) => ({
+                ...workspace,
+                threads: workspace.threads.map((thread) =>
+                  thread.id === threadId
+                    ? { ...thread, name: originalName }
+                    : thread,
+                ),
+              })),
+            );
+          })
+          .finally(() => {
+            editingThreadIdRef.current = null;
+          });
+      } else {
+        editingThreadIdRef.current = null;
       }
     },
     [],

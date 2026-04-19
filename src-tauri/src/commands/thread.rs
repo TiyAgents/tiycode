@@ -275,3 +275,131 @@ Rules:\n\
 Conversation:\n{conversation}"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::agent_session::{RuntimeModelPlan, RuntimeModelRole};
+    use crate::model::thread::MessageRecord;
+
+    fn dummy_model_role(model: &str) -> RuntimeModelRole {
+        RuntimeModelRole {
+            provider_id: "p1".into(),
+            model_record_id: "mr1".into(),
+            provider: None,
+            provider_key: None,
+            provider_type: "openai".into(),
+            provider_name: None,
+            model: model.into(),
+            model_id: model.into(),
+            model_display_name: None,
+            base_url: "https://api.example.com".into(),
+            context_window: None,
+            max_output_tokens: None,
+            supports_image_input: None,
+            custom_headers: None,
+            provider_options: None,
+        }
+    }
+
+    fn dummy_message(role: &str, content: &str) -> MessageRecord {
+        MessageRecord {
+            id: "msg1".into(),
+            thread_id: "t1".into(),
+            run_id: None,
+            role: role.into(),
+            content_markdown: content.into(),
+            message_type: "message".into(),
+            status: "completed".into(),
+            metadata_json: None,
+            attachments_json: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn select_title_model_role_prefers_lightweight() {
+        let plan = RuntimeModelPlan {
+            lightweight: Some(dummy_model_role("lite")),
+            auxiliary: Some(dummy_model_role("aux")),
+            primary: Some(dummy_model_role("primary")),
+            ..Default::default()
+        };
+        let role = select_title_model_role(&plan).unwrap();
+        assert_eq!(role.model, "lite");
+    }
+
+    #[test]
+    fn select_title_model_role_falls_back_to_auxiliary() {
+        let plan = RuntimeModelPlan {
+            lightweight: None,
+            auxiliary: Some(dummy_model_role("aux")),
+            primary: Some(dummy_model_role("primary")),
+            ..Default::default()
+        };
+        let role = select_title_model_role(&plan).unwrap();
+        assert_eq!(role.model, "aux");
+    }
+
+    #[test]
+    fn select_title_model_role_falls_back_to_primary() {
+        let plan = RuntimeModelPlan {
+            lightweight: None,
+            auxiliary: None,
+            primary: Some(dummy_model_role("primary")),
+            ..Default::default()
+        };
+        let role = select_title_model_role(&plan).unwrap();
+        assert_eq!(role.model, "primary");
+    }
+
+    #[test]
+    fn select_title_model_role_errors_when_all_missing() {
+        let plan = RuntimeModelPlan::default();
+        let result = select_title_model_role(&plan);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn prompt_contains_language_rule_when_specified() {
+        let msg = dummy_message("user", "Hello world");
+        let refs: Vec<&MessageRecord> = vec![&msg];
+        let prompt =
+            build_regenerate_title_prompt(&refs, Some("Chinese"), ProfileResponseStyle::Balanced);
+        assert!(prompt.contains("Write the title in Chinese"));
+    }
+
+    #[test]
+    fn prompt_matches_conversation_language_when_none() {
+        let msg = dummy_message("user", "Hello world");
+        let refs: Vec<&MessageRecord> = vec![&msg];
+        let prompt = build_regenerate_title_prompt(&refs, None, ProfileResponseStyle::Balanced);
+        assert!(prompt.contains("Match the conversation language"));
+    }
+
+    #[test]
+    fn prompt_includes_concise_style_rule() {
+        let msg = dummy_message("user", "Hello");
+        let refs: Vec<&MessageRecord> = vec![&msg];
+        let prompt = build_regenerate_title_prompt(&refs, None, ProfileResponseStyle::Concise);
+        assert!(prompt.contains("terse"));
+    }
+
+    #[test]
+    fn prompt_includes_guide_style_rule() {
+        let msg = dummy_message("user", "Hello");
+        let refs: Vec<&MessageRecord> = vec![&msg];
+        let prompt = build_regenerate_title_prompt(&refs, None, ProfileResponseStyle::Guide);
+        assert!(prompt.contains("decision focus"));
+    }
+
+    #[test]
+    fn prompt_includes_conversation_content() {
+        let m1 = dummy_message("user", "How do I parse JSON?");
+        let m2 = dummy_message("assistant", "Use serde_json.");
+        let refs: Vec<&MessageRecord> = vec![&m1, &m2];
+        let prompt = build_regenerate_title_prompt(&refs, None, ProfileResponseStyle::Balanced);
+        assert!(prompt.contains("User:\nHow do I parse JSON?"));
+        assert!(prompt.contains("Assistant:\nUse serde_json."));
+    }
+}
