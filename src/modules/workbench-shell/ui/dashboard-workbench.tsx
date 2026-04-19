@@ -2475,10 +2475,12 @@ export function DashboardWorkbench() {
       }
 
       if (workspace.kind === "worktree") {
-        const confirmed =
-          typeof window === "undefined" ||
-          window.confirm(t("worktree.removeConfirm"));
-        if (!confirmed) return;
+        if (
+          typeof window !== "undefined" &&
+          !window.confirm(t("worktree.removeConfirm"))
+        ) {
+          return;
+        }
       }
 
       void (async () => {
