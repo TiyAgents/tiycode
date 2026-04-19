@@ -409,8 +409,8 @@ async fn test_policy_allow_list_pattern_must_match() {
 // =========================================================================
 
 #[test]
-fn test_plan_mode_blocks_mutating_tools() {
-    let mutating_tools = vec![
+fn test_plan_mode_blocks_hard_deny_tools() {
+    let hard_deny_tools = vec![
         "write",
         "patch",
         "git_add",
@@ -425,9 +425,9 @@ fn test_plan_mode_blocks_mutating_tools() {
     ];
 
     let run_mode = "plan";
-    for tool in &mutating_tools {
-        let should_block = run_mode == "plan" && mutating_tools.contains(tool);
-        assert!(should_block, "Plan mode should block mutating tool: {tool}");
+    for tool in &hard_deny_tools {
+        let should_block = run_mode == "plan" && hard_deny_tools.contains(tool);
+        assert!(should_block, "Plan mode should hard-deny tool: {tool}");
     }
 }
 
@@ -442,7 +442,7 @@ fn test_plan_mode_allows_read_tools() {
         "git_log",
     ];
 
-    let mutating_tools = vec![
+    let hard_deny_tools = vec![
         "write",
         "patch",
         "git_add",
@@ -457,12 +457,12 @@ fn test_plan_mode_allows_read_tools() {
     ];
 
     for tool in &read_only_tools {
-        let blocked = mutating_tools.contains(tool);
+        let blocked = hard_deny_tools.contains(tool);
         assert!(!blocked, "Plan mode should allow read-only tool: {tool}");
     }
 
     // Shell is not in the hard-deny list; it follows the normal approval policy.
-    let blocked = mutating_tools.contains(&"shell");
+    let blocked = hard_deny_tools.contains(&"shell");
     assert!(
         !blocked,
         "Shell should follow normal approval policy in plan mode, not be hard-denied"
