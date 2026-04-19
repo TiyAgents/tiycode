@@ -1171,14 +1171,16 @@ type DiffPreviewRow = {
 };
 
 type ReadToolPresentation = {
+  error: string | null;
   fileName: string;
   path: string;
-  rangeLabel: string;
+  rangeLabel: string | null;
 };
 
 type QueryToolPresentation = {
   actionLabel: "Find" | "Search";
   countLabel: string | null;
+  error: string | null;
   primaryLabel: string;
   scopeLabel: string | null;
 };
@@ -1186,6 +1188,7 @@ type QueryToolPresentation = {
 type ListToolPresentation = {
   countLabel: string | null;
   directoryLabel: string;
+  error: string | null;
   path: string;
 };
 
@@ -1218,16 +1221,21 @@ function getReadToolPresentation(tool: SurfaceToolEntry): ReadToolPresentation |
   const lineCount = getToolDataNumber(result, "lineCount");
   const startLine = getToolDataNumber(result, "offset") ?? 1;
 
-  let rangeLabel: string;
+  let rangeLabel: string | null;
   if (shownLines && shownLines > 0) {
     rangeLabel = `[${startLine}-${startLine + shownLines - 1}]`;
   } else if (lineCount && lineCount > 0) {
     rangeLabel = `[${startLine}-${lineCount}]`;
   } else {
-    rangeLabel = `[${startLine}-…]`;
+    rangeLabel = null;
   }
 
+  const error = tool.state === "output-error" || tool.state === "output-denied"
+    ? (tool.error ?? getToolDataString(result, "error") ?? null)
+    : null;
+
   return {
+    error,
     fileName: path.split(/[\\/]/).filter(Boolean).pop() ?? path,
     path,
     rangeLabel,
@@ -1285,6 +1293,9 @@ function getQueryToolPresentation(tool: SurfaceToolEntry): QueryToolPresentation
     return {
       actionLabel: "Find",
       countLabel: typeof count === "number" ? `${count} result${count === 1 ? "" : "s"}` : null,
+      error: tool.state === "output-error" || tool.state === "output-denied"
+        ? (tool.error ?? getToolDataString(result, "error") ?? null)
+        : null,
       primaryLabel: pattern,
       scopeLabel: scope,
     };
@@ -1305,6 +1316,9 @@ function getQueryToolPresentation(tool: SurfaceToolEntry): QueryToolPresentation
     return {
       actionLabel: "Search",
       countLabel: typeof count === "number" ? `${count} match${count === 1 ? "" : "es"}` : null,
+      error: tool.state === "output-error" || tool.state === "output-denied"
+        ? (tool.error ?? getToolDataString(result, "error") ?? null)
+        : null,
       primaryLabel: filePattern ? `${query} · ${filePattern}` : query,
       scopeLabel: scope,
     };
@@ -1331,6 +1345,9 @@ function getListToolPresentation(tool: SurfaceToolEntry): ListToolPresentation |
   return {
     countLabel: typeof count === "number" ? `${count} item${count === 1 ? "" : "s"}` : null,
     directoryLabel: formatToolScopeLabel(path) ?? path,
+    error: tool.state === "output-error" || tool.state === "output-denied"
+      ? (tool.error ?? getToolDataString(result, "error") ?? null)
+      : null,
     path,
   };
 }
@@ -3466,13 +3483,21 @@ export function RuntimeThreadSurface({
                 <span className="truncate font-medium text-app-info" title={readTool.path}>
                   {readTool.fileName}
                 </span>
-                <span className="shrink-0 font-mono text-[12px] text-app-subtle">
-                  {readTool.rangeLabel}
-                </span>
+                {readTool.rangeLabel && (
+                  <span className="shrink-0 font-mono text-[12px] text-app-subtle">
+                    {readTool.rangeLabel}
+                  </span>
+                )}
               </div>
-              <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
-                {formatToolStatusLabel(tool.state, t)}
-              </span>
+              {readTool.error ? (
+                <span className="shrink-0 truncate text-xs text-app-danger" title={readTool.error}>
+                  {readTool.error}
+                </span>
+              ) : (
+                <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
+                  {formatToolStatusLabel(tool.state, t)}
+                </span>
+              )}
             </div>
           </MessageContent>
         </Message>
@@ -3503,9 +3528,15 @@ export function RuntimeThreadSurface({
                   </span>
                 ) : null}
               </div>
-              <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
-                {formatToolStatusLabel(tool.state, t)}
-              </span>
+              {queryTool.error ? (
+                <span className="shrink-0 truncate text-xs text-app-danger" title={queryTool.error}>
+                  {queryTool.error}
+                </span>
+              ) : (
+                <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
+                  {formatToolStatusLabel(tool.state, t)}
+                </span>
+              )}
             </div>
           </MessageContent>
         </Message>
@@ -3533,9 +3564,15 @@ export function RuntimeThreadSurface({
                   </span>
                 ) : null}
               </div>
-              <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
-                {formatToolStatusLabel(tool.state, t)}
-              </span>
+              {listTool.error ? (
+                <span className="shrink-0 truncate text-xs text-app-danger" title={listTool.error}>
+                  {listTool.error}
+                </span>
+              ) : (
+                <span className={cn("shrink-0 pt-0.5 text-xs", getToolStatusClass(tool.state))}>
+                  {formatToolStatusLabel(tool.state, t)}
+                </span>
+              )}
             </div>
           </MessageContent>
         </Message>

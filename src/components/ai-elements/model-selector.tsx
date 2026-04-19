@@ -141,6 +141,7 @@ export type ModelSelectorLogoProps = Omit<
     | "baseten"
     | "huggingface"
     | "opencode"
+    | "opencode-go"
     | "fastrouter"
     | "google"
     | "google-vertex"

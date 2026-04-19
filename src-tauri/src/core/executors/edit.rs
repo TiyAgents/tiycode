@@ -170,8 +170,12 @@ fn find_all_occurrences(haystack: &str, needle: &str) -> Vec<usize> {
     let mut start = 0;
     while let Some(pos) = haystack[start..].find(needle) {
         results.push(start + pos);
+        // Advance past the current match start by at least one character,
+        // ensuring we land on a valid UTF-8 char boundary.
         start += pos + 1;
-        // Safety: don't go past the end
+        while start < haystack.len() && !haystack.is_char_boundary(start) {
+            start += 1;
+        }
         if start >= haystack.len() {
             break;
         }
