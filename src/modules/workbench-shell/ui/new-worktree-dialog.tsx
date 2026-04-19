@@ -1,3 +1,5 @@
+// TODO: Add component-level tests once a React testing infrastructure
+// (e.g. @testing-library/react) is set up in this project.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { GitBranch, LoaderCircle } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -173,7 +175,7 @@ export function NewWorktreeDialog({
               {branchesLoading ? (
                 <div className="flex items-center gap-2 px-2 py-4 text-sm text-muted-foreground">
                   <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                  Loading…
+                  {t("worktree.loading.branches")}
                 </div>
               ) : branches.length === 0 ? (
                 <div className="px-2 py-4 text-sm text-muted-foreground">

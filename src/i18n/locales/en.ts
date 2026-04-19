@@ -766,6 +766,7 @@ const en: Record<TranslationKey, string> = {
   "worktree.error.branchRequired": "Branch name is required",
   "worktree.error.selectRepo": "Worktrees can only be created on a Git repository workspace",
   "worktree.empty.branches": "No branches yet",
+"worktree.loading.branches": "Loading…",
   "worktree.tag.label": "Worktree",
 };
 

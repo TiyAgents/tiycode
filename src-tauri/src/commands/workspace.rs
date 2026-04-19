@@ -44,7 +44,7 @@ pub async fn workspace_ensure_default(
 
 #[tauri::command]
 pub async fn workspace_remove(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
-    state.workspace_manager.remove(&id).await
+    state.workspace_manager.remove(&id, true).await
 }
 
 #[tauri::command]
@@ -102,12 +102,12 @@ pub async fn workspace_remove_worktree(
 ) -> Result<(), AppError> {
     // Physical removal + DB cascade are both handled inside
     // `workspace_manager.remove`: it detects the `kind=worktree` row, calls
-    // the injected `WorktreeManager::remove_physical` with force=true, and
-    // then deletes the DB rows (threads / terminals / runs cascade included).
-    // Keeping `force` in the signature for API stability even though the
-    // current implementation always forces.
-    let _ = force;
-    state.workspace_manager.remove(&id).await
+    // the injected `WorktreeManager::remove_physical`, and then deletes the
+    // DB rows (threads / terminals / runs cascade included).
+    state
+        .workspace_manager
+        .remove(&id, force.unwrap_or(true))
+        .await
 }
 
 #[tauri::command]

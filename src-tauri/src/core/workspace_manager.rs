@@ -159,7 +159,7 @@ impl WorkspaceManager {
     ///   then cleaned via the repo-level cascade.
     /// - If the row is `kind=repo`, its child worktree rows are cleaned up the
     ///   same way before the repo row itself is deleted.
-    pub async fn remove(&self, id: &str) -> Result<(), AppError> {
+    pub async fn remove(&self, id: &str, force: bool) -> Result<(), AppError> {
         let record = workspace_repo::find_by_id(&self.pool, id)
             .await?
             .ok_or_else(|| AppError::not_found(ErrorSource::Workspace, "workspace"))?;
@@ -171,7 +171,7 @@ impl WorkspaceManager {
                     // `.git/worktrees/<name>` registration. `remove_physical`
                     // is tolerant of an already-missing directory, so any
                     // error here is worth surfacing to the caller.
-                    manager.remove_physical(&record, true).await?;
+                    manager.remove_physical(&record, force).await?;
                 }
             }
             WorkspaceKind::Repo => {

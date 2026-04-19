@@ -64,6 +64,11 @@ export async function workspaceCreateWorktree(
   });
 }
 
+/**
+ * @internal Reserved for future direct worktree removal UI.
+ * Currently unused — workspace deletion goes through `workspaceRemove` which
+ * handles worktree cleanup internally on the Rust side.
+ */
 export async function workspaceRemoveWorktree(
   id: string,
   force?: boolean,
@@ -77,6 +82,10 @@ export async function workspaceRemoveWorktree(
   });
 }
 
+/**
+ * @internal Reserved for future worktree maintenance UI.
+ * Currently unused — may be exposed as a manual cleanup action later.
+ */
 export async function workspacePruneWorktrees(
   workspaceId: string,
 ): Promise<void> {

@@ -110,7 +110,34 @@ impl WorktreeManager {
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            Some(custom) => PathBuf::from(custom),
+            Some(custom) => {
+                let p = PathBuf::from(custom);
+                // Resolve relative paths against the parent repo directory so
+                // the user can pass e.g. `../my-worktree` in the dialog.
+                let resolved = if p.is_relative() {
+                    PathBuf::from(&parent.canonical_path).join(&p)
+                } else {
+                    p
+                };
+
+                // Reject target paths that fall inside the parent repo working
+                // tree. Creating a worktree inside its own repo causes Git
+                // conflicts and confusing file-system state.
+                let parent_dir = PathBuf::from(&parent.canonical_path);
+                if resolved.starts_with(&parent_dir) {
+                    return Err(worktree_error(
+                        "workspace.worktree.path_inside_repo",
+                        format!(
+                            "Worktree path '{}' must not be inside the parent repository '{}'",
+                            resolved.display(),
+                            parent_dir.display(),
+                        ),
+                        false,
+                    ));
+                }
+
+                resolved
+            }
             None => default_worktree_path(&parent.name, &hex6)?,
         };
 
