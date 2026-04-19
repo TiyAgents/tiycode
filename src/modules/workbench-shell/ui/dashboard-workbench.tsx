@@ -49,6 +49,7 @@ import type {
   GitSnapshotDto,
   MessageAttachmentDto,
   RunMode,
+  RunModelPlanDto,
   ThreadSummaryDto,
   WorkspaceDto,
 } from "@/shared/types/api";
@@ -364,6 +365,130 @@ type PendingThreadRun = {
   threadId: string;
 };
 
+// ---------------------------------------------------------------------------
+// ThreadRenameInput — isolated component for inline thread title editing.
+// Keeps per-keystroke state local to avoid re-rendering the entire dashboard.
+// ---------------------------------------------------------------------------
+
+function ThreadRenameInput({
+  threadId,
+  initialName,
+  isActive,
+  status,
+  modelPlan,
+  onDone,
+}: {
+  threadId: string;
+  initialName: string;
+  isActive: boolean;
+  status: import("@/modules/workbench-shell/model/types").ThreadStatus;
+  modelPlan: RunModelPlanDto | null;
+  onDone: (newTitle: string | null) => void;
+}) {
+  const t = useT();
+  const [value, setValue] = useState(initialName);
+  const [isRegenerating, setRegenerating] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // After regeneration completes, re-focus the input so the user
+  // is not left in a stuck editing state without a focused input.
+  const refocusAfterRegenerate = useCallback(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const save = useCallback(() => {
+    const trimmed = value.trim();
+    onDone(trimmed || null);
+  }, [value, onDone]);
+
+  const cancel = useCallback(() => {
+    onDone(null);
+  }, [onDone]);
+
+  const handleRegenerate = useCallback(() => {
+    if (!modelPlan || isRegenerating) return;
+    setRegenerating(true);
+    void threadRegenerateTitle(threadId, modelPlan)
+      .then((title) => {
+        setValue(title);
+      })
+      .catch((error) => {
+        const message = getInvokeErrorMessage(error, "Failed to regenerate title");
+        console.warn("[thread] failed to regenerate title:", message);
+      })
+      .finally(() => {
+        setRegenerating(false);
+        refocusAfterRegenerate();
+      });
+  }, [threadId, modelPlan, isRegenerating, refocusAfterRegenerate]);
+
+  return (
+    <div
+      className={cn(
+        `${DRAWER_LIST_ROW_CLASS} border pr-1.5`,
+        isActive
+          ? "border-app-border-strong bg-app-surface-active text-app-foreground"
+          : "border-transparent bg-transparent text-app-muted",
+      )}
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-1">
+        <ThreadStatusIndicator
+          status={status}
+          emphasis={isActive ? "default" : "subtle"}
+        />
+        <input
+          ref={inputRef}
+          autoFocus
+          className="min-w-0 flex-1 truncate border-none bg-transparent text-[13px] leading-tight text-app-foreground outline-none placeholder:text-app-muted"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              save();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancel();
+            }
+          }}
+          onBlur={(e) => {
+            // Ignore blur when clicking the regenerate button
+            // or while regeneration is in progress.
+            if (isRegenerating) return;
+            const related = e.relatedTarget as HTMLElement | null;
+            if (related?.dataset.threadRegenerateBtn === "true") return;
+            save();
+          }}
+          onFocus={(e) => e.target.select()}
+        />
+        <button
+          type="button"
+          data-thread-regenerate-btn="true"
+          title={
+            modelPlan
+              ? t("sidebar.regenerateTitle")
+              : t("sidebar.noLiteModel")
+          }
+          disabled={!modelPlan || isRegenerating}
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleRegenerate();
+          }}
+        >
+          <Sparkles
+            className={cn(
+              "size-3.5",
+              isRegenerating && "animate-spin",
+            )}
+          />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function DashboardWorkbench() {
   const { data } = useSystemMetadata();
   const { theme, setTheme } = useTheme();
@@ -537,8 +662,6 @@ export function DashboardWorkbench() {
   >(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
-  const [editingThreadValue, setEditingThreadValue] = useState("");
-  const [isRegeneratingTitle, setRegeneratingTitle] = useState(false);
   const [isAddingWorkspace, setAddingWorkspace] = useState(false);
   const [activeWorkspaceMenuId, setActiveWorkspaceMenuId] = useState<
     string | null
@@ -1952,26 +2075,19 @@ export function DashboardWorkbench() {
   );
 
   const handleThreadEditStart = useCallback(
-    (threadId: string, currentName: string) => {
+    (threadId: string) => {
       setEditingThreadId(threadId);
       editingThreadIdRef.current = threadId;
-      setEditingThreadValue(currentName);
     },
     [],
   );
 
-  const handleThreadEditCancel = useCallback(() => {
-    setEditingThreadId(null);
-    editingThreadIdRef.current = null;
-    setEditingThreadValue("");
-  }, []);
+  const handleThreadEditDone = useCallback(
+    (threadId: string, newTitle: string | null, originalName: string) => {
+      setEditingThreadId(null);
+      editingThreadIdRef.current = null;
 
-  const handleThreadEditSave = useCallback(
-    (threadId: string, originalName: string) => {
-      const trimmed = editingThreadValue.trim();
-
-      if (!trimmed || trimmed === originalName) {
-        handleThreadEditCancel();
+      if (!newTitle || newTitle === originalName) {
         return;
       }
 
@@ -1980,14 +2096,14 @@ export function DashboardWorkbench() {
           ...workspace,
           threads: workspace.threads.map((thread) =>
             thread.id === threadId
-              ? { ...thread, name: trimmed }
+              ? { ...thread, name: newTitle }
               : thread,
           ),
         })),
       );
 
       if (isTauri()) {
-        void threadUpdateTitle(threadId, trimmed).catch((error) => {
+        void threadUpdateTitle(threadId, newTitle).catch((error) => {
           console.warn("[thread] failed to update title:", error);
           // Rollback: restore the original name on failure.
           setWorkspaces((current) =>
@@ -2002,33 +2118,8 @@ export function DashboardWorkbench() {
           );
         });
       }
-
-      handleThreadEditCancel();
     },
-    [editingThreadValue, handleThreadEditCancel],
-  );
-
-  const handleThreadRegenerateTitle = useCallback(
-    (threadId: string) => {
-      if (!commitMessageModelPlan || isRegeneratingTitle) {
-        return;
-      }
-
-      setRegeneratingTitle(true);
-
-      void threadRegenerateTitle(threadId, commitMessageModelPlan)
-        .then((title) => {
-          setEditingThreadValue(title);
-        })
-        .catch((error) => {
-          const message = getInvokeErrorMessage(error, "Failed to regenerate title");
-          console.warn("[thread] failed to regenerate title:", message);
-        })
-        .finally(() => {
-          setRegeneratingTitle(false);
-        });
-    },
-    [commitMessageModelPlan, isRegeneratingTitle],
+    [],
   );
 
   const handleThreadDeleteRequest = useCallback((threadId: string) => {
@@ -2958,92 +3049,20 @@ export function DashboardWorkbench() {
                             return (
                               <div key={thread.id} className="group relative">
                                 {isEditing ? (
-                                  <div
-                                    className={cn(
-                                      `${DRAWER_LIST_ROW_CLASS} border pr-1.5`,
-                                      thread.active
-                                        ? "border-app-border-strong bg-app-surface-active text-app-foreground"
-                                        : "border-transparent bg-transparent text-app-muted",
-                                    )}
-                                  >
-                                    <div className="flex min-w-0 flex-1 items-center gap-1">
-                                      <ThreadStatusIndicator
-                                        status={thread.status}
-                                        emphasis={
-                                          thread.active ? "default" : "subtle"
-                                        }
-                                      />
-                                      <input
-                                        autoFocus
-                                        className="min-w-0 flex-1 truncate border-none bg-transparent text-[13px] leading-tight text-app-foreground outline-none placeholder:text-app-muted"
-                                        value={editingThreadValue}
-                                        onChange={(e) =>
-                                          setEditingThreadValue(e.target.value)
-                                        }
-                                        onKeyDown={(e) => {
-                                          if (e.key === "Enter") {
-                                            e.preventDefault();
-                                            handleThreadEditSave(
-                                              thread.id,
-                                              thread.name,
-                                            );
-                                          } else if (e.key === "Escape") {
-                                            e.preventDefault();
-                                            handleThreadEditCancel();
-                                          }
-                                        }}
-                                        onBlur={(e) => {
-                                          // Ignore blur when clicking the regenerate button
-                                          // or while regeneration is in progress.
-                                          if (isRegeneratingTitle) {
-                                            return;
-                                          }
-                                          const related =
-                                            e.relatedTarget as HTMLElement | null;
-                                          if (
-                                            related?.dataset
-                                              .threadRegenerateBtn === "true"
-                                          ) {
-                                            return;
-                                          }
-                                          handleThreadEditSave(
-                                            thread.id,
-                                            thread.name,
-                                          );
-                                        }}
-                                        onFocus={(e) => e.target.select()}
-                                      />
-                                      <button
-                                        type="button"
-                                        data-thread-regenerate-btn="true"
-                                        title={
-                                          commitMessageModelPlan
-                                            ? t("sidebar.regenerateTitle")
-                                            : t("sidebar.noLiteModel")
-                                        }
-                                        disabled={
-                                          !commitMessageModelPlan ||
-                                          isRegeneratingTitle
-                                        }
-                                        className="flex size-6 shrink-0 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                                        onMouseDown={(e) => e.preventDefault()}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleThreadRegenerateTitle(
-                                            thread.id,
-                                          );
-                                        }}
-                                      >
-                                        <Sparkles
-                                          className={cn(
-                                            "size-3.5",
-                                            isRegeneratingTitle &&
-                                              "animate-spin",
-                                          )}
-                                        />
-                                      </button>
-                                    </div>
-                                  </div>
+                                  <ThreadRenameInput
+                                    threadId={thread.id}
+                                    initialName={thread.name}
+                                    isActive={thread.active}
+                                    status={thread.status}
+                                    modelPlan={commitMessageModelPlan}
+                                    onDone={(newTitle) =>
+                                      handleThreadEditDone(
+                                        thread.id,
+                                        newTitle,
+                                        thread.name,
+                                      )
+                                    }
+                                  />
                                 ) : (
                                 <button
                                   type="button"
@@ -3056,10 +3075,7 @@ export function DashboardWorkbench() {
                                   onClick={() => handleThreadSelect(thread.id)}
                                   onDoubleClick={(e) => {
                                     e.stopPropagation();
-                                    handleThreadEditStart(
-                                      thread.id,
-                                      thread.name,
-                                    );
+                                    handleThreadEditStart(thread.id);
                                   }}
                                 >
                                   <div className="flex items-center gap-2">
