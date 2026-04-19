@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-04-19
+### :sparkles: New Features
+- [`c002ada`](https://github.com/TiyAgents/tiycode/commit/c002adab18fb1a3265bc1fb0256ec2df142933e2) - **workbench**: ✨ Per-thread agent profile bindings *(PR [#83](https://github.com/TiyAgents/tiycode/pull/83) by [@HayWolf](https://github.com/HayWolf))*
+- [`ca7281f`](https://github.com/TiyAgents/tiycode/commit/ca7281f0a7b6b9e46c9647d12f31307c9e0f3e2e) - **workbench-shell**: ✨ Add inline thread title editing with AI regeneration *(PR [#85](https://github.com/TiyAgents/tiycode/pull/85) by [@HayWolf](https://github.com/HayWolf))*
+- [`f75e417`](https://github.com/TiyAgents/tiycode/commit/f75e4172a6b1efd56c0393379e8c9da3f207f49a) - **worktree**: ✨ Add Git worktree support to workspaces *(PR [#84](https://github.com/TiyAgents/tiycode/pull/84) by [@HayWolf](https://github.com/HayWolf))*
+- [`9663d87`](https://github.com/TiyAgents/tiycode/commit/9663d87a689cbacb2ba7f55938da17c062636a1f) - **provider**: ✨ add OpenCode Go provider support *(PR [#87](https://github.com/TiyAgents/tiycode/pull/87) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`1bd5754`](https://github.com/TiyAgents/tiycode/commit/1bd5754d3a8d747fc7a424630425f1b944645403) - **workbench-shell**: 🐛 prevent preferred app selection when no apps are open *(PR [#81](https://github.com/TiyAgents/tiycode/pull/81) by [@HayWolf](https://github.com/HayWolf))*
+- [`656a753`](https://github.com/TiyAgents/tiycode/commit/656a753ec02d9f28f5f9d912e3ae7920eb66b9c1) - **startup**: 🐛 Fix macOS startup delay caused by backend-ready race condition *(PR [#82](https://github.com/TiyAgents/tiycode/pull/82) by [@HayWolf](https://github.com/HayWolf))*
+- [`624ec31`](https://github.com/TiyAgents/tiycode/commit/624ec3190824a8f0ecfcb8dc7b8152d746d0f83e) - **ui**: 🐛 Prevent premature git overlay unavailable flash in project panel *(PR [#86](https://github.com/TiyAgents/tiycode/pull/86) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.3.1] - 2026-04-18
 ### :sparkles: New Features
 - [`0737873`](https://github.com/TiyAgents/tiycode/commit/0737873fe1f1c4f663d1d219db6aabfe2ff17450) - **workbench**: ✨ remember preferred open app in localStorage *(PR [#79](https://github.com/TiyAgents/tiycode/pull/79) by [@HayWolf](https://github.com/HayWolf))*
@@ -533,3 +546,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.9]: https://github.com/TiyAgents/tiycode/compare/0.2.8...0.2.9
 [0.3.0]: https://github.com/TiyAgents/tiycode/compare/0.2.9...0.3.0
 [0.3.1]: https://github.com/TiyAgents/tiycode/compare/0.3.0...0.3.1
+[0.3.2]: https://github.com/TiyAgents/tiycode/compare/0.3.1...0.3.2
