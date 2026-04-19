@@ -804,7 +804,7 @@ const zhCN = {
   "worktree.error.branchRequired": "请填写分支名",
   "worktree.error.selectRepo": "仅 Git 仓库 workspace 支持创建 worktree",
   "worktree.empty.branches": "暂无分支",
-"worktree.loading.branches": "加载中…",
+  "worktree.loading.branches": "加载中…",
   "worktree.tag.label": "Worktree",
 } as const;
 

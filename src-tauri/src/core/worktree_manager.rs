@@ -388,12 +388,17 @@ fn slugify_branch(branch: &str) -> String {
     if trimmed.is_empty() {
         "worktree".to_string()
     } else if trimmed.len() > 40 {
-        trimmed
+        let truncated = trimmed
             .chars()
             .take(40)
             .collect::<String>()
             .trim_matches('-')
-            .to_string()
+            .to_string();
+        if truncated.is_empty() {
+            "worktree".to_string()
+        } else {
+            truncated
+        }
     } else {
         trimmed
     }
