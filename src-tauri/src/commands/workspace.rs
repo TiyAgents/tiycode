@@ -43,8 +43,15 @@ pub async fn workspace_ensure_default(
 }
 
 #[tauri::command]
-pub async fn workspace_remove(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
-    state.workspace_manager.remove(&id, true).await
+pub async fn workspace_remove(
+    state: State<'_, AppState>,
+    id: String,
+    force: Option<bool>,
+) -> Result<(), AppError> {
+    state
+        .workspace_manager
+        .remove(&id, force.unwrap_or(false))
+        .await
 }
 
 #[tauri::command]
@@ -106,7 +113,7 @@ pub async fn workspace_remove_worktree(
     // DB rows (threads / terminals / runs cascade included).
     state
         .workspace_manager
-        .remove(&id, force.unwrap_or(true))
+        .remove(&id, force.unwrap_or(false))
         .await
 }
 

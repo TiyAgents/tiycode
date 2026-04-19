@@ -196,9 +196,10 @@ function getNewThreadTerminalBindingKey(workspaceId: string) {
   return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
 }
 
-function buildProjectOptionFromWorkspace(workspace: WorkspaceDto): ProjectOption | null {
+function buildProjectOptionFromWorkspace(workspace: WorkspaceDto, language: LanguagePreference = "en"): ProjectOption | null {
   const project = buildProjectOptionFromPath(
     workspace.canonicalPath || workspace.path,
+    language,
   );
   if (!project) {
     return null;
@@ -1003,7 +1004,7 @@ export function DashboardWorkbench() {
         ]),
       );
       const nextProjects = workspaceEntries
-        .map((workspace) => buildProjectOptionFromWorkspace(workspace))
+        .map((workspace) => buildProjectOptionFromWorkspace(workspace, language))
         .filter((project): project is ProjectOption => project !== null);
       const nextBindings = buildWorkspaceBindings(workspaceEntries);
       const defaultWorkspace =
@@ -1887,7 +1888,7 @@ export function DashboardWorkbench() {
 
     clearNewThreadBindingForWorkspace(workspace.id);
 
-    const projectFromPath = buildProjectOptionFromPath(workspace.path);
+    const projectFromPath = buildProjectOptionFromPath(workspace.path, language);
     const nextProject: ProjectOption = {
       ...(projectFromPath ?? {
         id: workspace.id,
@@ -2129,7 +2130,7 @@ export function DashboardWorkbench() {
                 })
               : await workspaceEnsureDefault();
             const ensuredProject =
-              buildProjectOptionFromWorkspace(ensuredWorkspace) ?? {
+              buildProjectOptionFromWorkspace(ensuredWorkspace, language) ?? {
                 id: ensuredWorkspace.id,
                 name: ensuredWorkspace.name,
                 path: ensuredWorkspace.canonicalPath || ensuredWorkspace.path,
@@ -2395,7 +2396,7 @@ export function DashboardWorkbench() {
           return;
         }
 
-        const nextProject = buildProjectOptionFromPath(selectedPath);
+        const nextProject = buildProjectOptionFromPath(selectedPath, language);
 
         if (!nextProject) {
           return;

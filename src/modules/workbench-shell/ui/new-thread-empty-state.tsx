@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, Folder, FolderPlus, Shuffle } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useT } from "@/i18n";
+import { useLanguage } from "@/app/providers/language-provider";
 import { cn } from "@/shared/lib/utils";
 import { buildProjectOptionFromPath, formatProjectPathLabel } from "@/modules/workbench-shell/model/helpers";
 import type { ProjectOption } from "@/modules/workbench-shell/model/types";
@@ -24,6 +25,7 @@ export function NewThreadEmptyState({
   onRequestNewWorktree?: (project: ProjectOption) => void;
 }) {
   const t = useT();
+  const { language } = useLanguage();
   const [isMenuOpen, setMenuOpen] = useState(false);
   const projectMenuRef = useRef<HTMLDivElement | null>(null);
   const activeProject = selectedProject ?? recentProjects[0] ?? null;
@@ -66,7 +68,7 @@ export function NewThreadEmptyState({
       return;
     }
 
-    const nextProject = buildProjectOptionFromPath(selectedPath);
+    const nextProject = buildProjectOptionFromPath(selectedPath, language);
 
     if (!nextProject) {
       return;

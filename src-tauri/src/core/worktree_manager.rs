@@ -388,7 +388,12 @@ fn slugify_branch(branch: &str) -> String {
     if trimmed.is_empty() {
         "worktree".to_string()
     } else if trimmed.len() > 40 {
-        trimmed[..40].trim_matches('-').to_string()
+        trimmed
+            .chars()
+            .take(40)
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string()
     } else {
         trimmed
     }
@@ -668,7 +673,13 @@ fn ensure_git_cli_available() -> Result<(), AppError> {
 fn trim_output(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.len() > WORKTREE_OUTPUT_LIMIT {
-        trimmed[..WORKTREE_OUTPUT_LIMIT].to_string()
+        // Find a valid UTF-8 char boundary at or before the limit to avoid
+        // panicking on multi-byte characters.
+        let mut end = WORKTREE_OUTPUT_LIMIT;
+        while !trimmed.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        trimmed[..end].to_string()
     } else {
         trimmed.to_string()
     }

@@ -345,7 +345,7 @@ function mapThreadStatus(status: ApiThreadStatus): WorkbenchThreadStatus {
   }
 }
 
-export function formatThreadTimeLabel(value: string | null | undefined, language: LanguagePreference = "zh-CN", now = Date.now()) {
+export function formatThreadTimeLabel(value: string | null | undefined, language: LanguagePreference = "en", now = Date.now()) {
   if (!value) {
     return "";
   }
@@ -382,7 +382,7 @@ export function formatThreadTimeLabel(value: string | null | undefined, language
 export function buildWorkspaceThreadItem(
   thread: ThreadSummaryDto,
   activeThreadId: string | null,
-  language: LanguagePreference = "zh-CN",
+  language: LanguagePreference = "en",
 ): WorkspaceThreadItem {
   const trimmedTitle = thread.title.trim();
   const displayTitle = trimmedTitle || translate(language, "dashboard.newThread");
@@ -400,7 +400,7 @@ export function buildWorkspaceItemsFromDtos(
   workspaces: ReadonlyArray<WorkspaceDto>,
   threadsByWorkspaceId: Record<string, ReadonlyArray<ThreadSummaryDto>>,
   activeThreadId: string | null,
-  language: LanguagePreference = "zh-CN",
+  language: LanguagePreference = "en",
 ): Array<WorkspaceItem> {
   return workspaces.map((workspace) => ({
     id: workspace.id,
@@ -497,7 +497,7 @@ export function mergeRecentProjects(
   ].slice(0, 6);
 }
 
-export function buildProjectOptionFromPath(path: string | null): ProjectOption | null {
+export function buildProjectOptionFromPath(path: string | null, language: LanguagePreference = "en"): ProjectOption | null {
   if (!path) {
     return null;
   }
@@ -514,19 +514,20 @@ export function buildProjectOptionFromPath(path: string | null): ProjectOption |
     id: normalizedId || `project-${Date.now()}`,
     name: folderName,
     path: normalizedPath,
-    lastOpenedLabel: translate("zh-CN", "time.justNow"),
+    lastOpenedLabel: translate(language, "time.justNow"),
   };
 }
 
 export function buildProjectOptionFromWorkspace(
   workspace: WorkspaceDto,
   lastOpenedLabel?: string,
+  language: LanguagePreference = "en",
 ): ProjectOption {
   return {
     id: workspace.id,
     name: workspace.name,
     path: workspace.canonicalPath || workspace.path,
-    lastOpenedLabel: lastOpenedLabel ?? translate("zh-CN", "time.justNow"),
+    lastOpenedLabel: lastOpenedLabel ?? translate(language, "time.justNow"),
     kind: workspace.kind,
     parentWorkspaceId: workspace.parentWorkspaceId,
     worktreeHash: workspace.worktreeName
