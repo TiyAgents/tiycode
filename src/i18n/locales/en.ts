@@ -231,6 +231,9 @@ const en: Record<TranslationKey, string> = {
   "sidebar.showMore": "Show more",
   "sidebar.delete": "Delete",
   "sidebar.deleting": "Deleting",
+  "sidebar.regenerateTitle": "AI Generate",
+  "sidebar.regenerateTitleFailed": "Failed to generate title",
+  "sidebar.noLiteModel": "Configure a lightweight model first",
 
   // ── New Thread Empty State ─────────────────────────────────
   "newThread.headline": "Whenever you need, Tiy is here.",

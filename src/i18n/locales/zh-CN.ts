@@ -231,6 +231,9 @@ const zhCN = {
   "sidebar.showMore": "显示更多",
   "sidebar.delete": "删除",
   "sidebar.deleting": "正在删除",
+  "sidebar.regenerateTitle": "智能生成",
+  "sidebar.regenerateTitleFailed": "标题生成失败",
+  "sidebar.noLiteModel": "请先配置轻量模型",
 
   // ── New Thread Empty State ─────────────────────────────────
   "newThread.headline": "一切所需，聊聊即达。",

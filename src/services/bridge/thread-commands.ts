@@ -4,6 +4,7 @@ import type {
   ThreadSnapshotDto,
   MessageDto,
   AddMessageInput,
+  RunModelPlanDto,
 } from "@/shared/types/api";
 
 const requireTauri = (cmd: string) => {
@@ -66,4 +67,12 @@ export async function threadAddMessage(
 ): Promise<MessageDto> {
   requireTauri("thread_add_message");
   return invoke<MessageDto>("thread_add_message", { threadId, input });
+}
+
+export async function threadRegenerateTitle(
+  threadId: string,
+  modelPlan: RunModelPlanDto,
+): Promise<string> {
+  requireTauri("thread_regenerate_title");
+  return invoke<string>("thread_regenerate_title", { threadId, modelPlan });
 }

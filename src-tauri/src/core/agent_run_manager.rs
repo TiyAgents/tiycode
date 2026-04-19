@@ -41,13 +41,13 @@ use crate::persistence::repo::{
     message_repo, profile_repo, run_repo, thread_repo, tool_call_repo, workspace_repo,
 };
 
-const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(60);
 const COMPACT_SUMMARY_TIMEOUT: Duration = Duration::from_secs(60);
-const TITLE_GENERATION_MAX_TOKENS: u32 = 512;
-const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 2048;
+pub(crate) const TITLE_GENERATION_MAX_TOKENS: u32 = 512;
+pub(crate) const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 2048;
 const COMPACT_SUMMARY_MAX_TOKENS: u32 = 4096;
 const COMPACT_SUMMARY_MAX_TOKENS_REASONING: u32 = 8192;
-const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
+pub(crate) const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
 const COMPACT_SUMMARY_CONTEXT_MAX_CHARS: usize = 18_000;
 const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
 
@@ -2001,7 +2001,7 @@ async fn generate_thread_title(
     Ok(normalize_generated_title(&message.text_content()))
 }
 
-fn build_title_prompt(
+pub(crate) fn build_title_prompt(
     user_message: &str,
     assistant_message: &str,
     response_language: Option<&str>,
@@ -2038,7 +2038,7 @@ Assistant reply:\n{assistant_message}"
     )
 }
 
-fn normalize_generated_title(raw: &str) -> Option<String> {
+pub(crate) fn normalize_generated_title(raw: &str) -> Option<String> {
     let mut title = raw
         .lines()
         .map(str::trim)
@@ -2074,7 +2074,7 @@ fn normalize_generated_title(raw: &str) -> Option<String> {
     Some(truncate_chars(&title, 40))
 }
 
-fn collapse_whitespace(value: &str) -> String {
+pub(crate) fn collapse_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -2093,7 +2093,7 @@ fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> bool {
     )
 }
 
-fn truncate_chars(value: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_chars(value: &str, max_chars: usize) -> String {
     let truncated: String = value.chars().take(max_chars).collect();
     if value.chars().count() > max_chars {
         truncated.trim_end().to_string()
@@ -2102,7 +2102,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     }
 }
 
-fn build_provider_options_payload_hook(
+pub(crate) fn build_provider_options_payload_hook(
     provider_options: Option<serde_json::Value>,
 ) -> Option<OnPayloadFn> {
     let provider_options = provider_options?;
