@@ -141,11 +141,6 @@ type TimelineEntry =
       message: SurfaceMessage;
     }
   | {
-      kind: "thinking-placeholder";
-      key: string;
-      occurredAt: string;
-    }
-  | {
       kind: "tool";
       key: string;
       occurredAt: string;
@@ -1975,8 +1970,6 @@ function getTimelineEntryKindOrder(entry: TimelineEntry) {
       }
 
       return 5;
-    case "thinking-placeholder":
-      return 1;
     case "helper":
       return 3;
     case "tool":
@@ -1986,21 +1979,12 @@ function getTimelineEntryKindOrder(entry: TimelineEntry) {
 
 function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
   switch (event.type) {
-    // Content arriving — replaces the thinking placeholder
+    // Visible content arriving — replaces the thinking placeholder
     case "message_delta":
     case "message_discarded":
-    // Tool lifecycle — tool UI replaces the placeholder
-    case "tool_requested":
-    case "tool_running":
-    case "tool_completed":
-    case "tool_failed":
+    // Approval / clarify change run state — placeholder not needed
     case "approval_required":
     case "clarify_required":
-    // Helper lifecycle — helper UI replaces the placeholder
-    case "subagent_started":
-    case "subagent_progress":
-    case "subagent_completed":
-    case "subagent_failed":
     // Terminal run states
     case "run_completed":
     case "run_failed":
@@ -2008,6 +1992,29 @@ function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
     case "run_interrupted":
     case "run_limit_reached":
     case "run_checkpointed":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Events that should finalize in-progress reasoning messages and cancel any
+ * scheduled thinking timer, but should NOT clear the thinking placeholder.
+ * This prevents the placeholder from vanishing before the replacement UI
+ * (tool card / helper card / plan) actually renders — especially when React 18
+ * batches the placeholder-clear and replacement into a single frame.
+ */
+function shouldFinalizeReasoningOnly(event: ThreadStreamEvent) {
+  switch (event.type) {
+    case "tool_requested":
+    case "tool_running":
+    case "tool_completed":
+    case "tool_failed":
+    case "subagent_started":
+    case "subagent_progress":
+    case "subagent_completed":
+    case "subagent_failed":
     case "plan_updated":
       return true;
     default:
@@ -2477,6 +2484,9 @@ export function RuntimeThreadSurface({
     stream.onRawEvent = withActiveStream((event) => {
       if (shouldCompleteThinkingPhase(event)) {
         completeThinkingPhase(event.runId);
+      } else if (shouldFinalizeReasoningOnly(event)) {
+        clearScheduledThinkingPhase();
+        finalizeReasoningForRun(event.runId);
       }
 
       if (event.type === "run_started") {
@@ -3150,13 +3160,6 @@ export function RuntimeThreadSurface({
           occurredAt: message.createdAt,
           message,
         })),
-        ...(thinkingPlaceholder
-          ? [{
-              kind: "thinking-placeholder" as const,
-              key: `thinking-placeholder:${thinkingPlaceholder.id}`,
-              occurredAt: thinkingPlaceholder.createdAt,
-            }]
-          : []),
         ...helpers.map((helper) => ({
           kind: "helper" as const,
           key: `helper:${helper.id}`,
@@ -3170,13 +3173,30 @@ export function RuntimeThreadSurface({
           tool,
         })),
       ].sort(compareTimelineEntries),
-    [helpers, messages, thinkingPlaceholder, visibleTools],
+    [helpers, messages, visibleTools],
   );
   const presentationEntries = timelineEntries;
   const lastPresentationRole = presentationEntries.length > 0
     ? getPresentationEntryRole(presentationEntries[presentationEntries.length - 1])
     : null;
-  const queuePreviousRole: TimelineRole | null = lastPresentationRole;
+
+  // Show the thinking indicator at the bottom when the run is active and no
+  // tool / helper / streaming-message is already occupying the "latest action"
+  // slot.  Because this is derived from render-time state rather than toggled
+  // by individual stream events, it survives React 18 batching that would
+  // otherwise swallow a create+clear in the same frame.
+  const hasActiveToolOrHelper =
+    visibleTools.some((tool) => !isCompletedToolState(tool.state))
+    || helpers.some((helper) => helper.status === "running");
+  const showThinkingIndicator =
+    Boolean(thinkingPlaceholder)
+    && runState === "running"
+    && !hasActiveToolOrHelper;
+
+  const thinkingIndicatorPreviousRole: TimelineRole | null =
+    showThinkingIndicator ? lastPresentationRole : null;
+  const queuePreviousRole: TimelineRole | null =
+    showThinkingIndicator ? "assistant" : lastPresentationRole;
   const runtimeErrorPreviousRole: TimelineRole | null = queueArtifact ? "assistant" : lastPresentationRole;
 
   useEffect(() => {
@@ -3861,24 +3881,6 @@ export function RuntimeThreadSurface({
                 : null;
               const spacingClass = getRoleSpacingClass(previousRole, currentRole);
 
-              if (entry.kind === "thinking-placeholder") {
-                return (
-                  <div className={spacingClass} key={entry.key}>
-                    <Message className="max-w-full" from="assistant">
-                      <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                        <Reasoning
-                          className="mb-0 w-full bg-transparent px-0 py-0"
-                          defaultOpen={false}
-                          isStreaming
-                        >
-                          <ReasoningTrigger />
-                        </Reasoning>
-                      </MessageContent>
-                    </Message>
-                  </div>
-                );
-              }
-
               if (entry.kind === "message") {
                 const { message } = entry;
                 const summaryMarker = message.messageType === "summary_marker"
@@ -4265,6 +4267,35 @@ export function RuntimeThreadSurface({
                 </div>
               );
             })}
+
+            {/* Thinking indicator — rendered outside the timeline so it is
+                immune to React 18 batched-state flicker.  The outer wrapper
+                always stays in the DOM; visibility is driven by grid-rows and
+                opacity so the element can transition smoothly in/out without
+                causing a layout jump. */}
+            <div
+              className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
+                showThinkingIndicator
+                  ? "grid-rows-[1fr] opacity-100"
+                  : "grid-rows-[0fr] opacity-0"
+              }`}
+            >
+              <div className="overflow-hidden">
+                <div className={getRoleSpacingClass(thinkingIndicatorPreviousRole, "assistant")}>
+                  <Message className="max-w-full" from="assistant">
+                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                      <Reasoning
+                        className="mb-0 w-full bg-transparent px-0 py-0"
+                        defaultOpen={false}
+                        isStreaming
+                      >
+                        <ReasoningTrigger />
+                      </Reasoning>
+                    </MessageContent>
+                  </Message>
+                </div>
+              </div>
+            </div>
 
             {queueArtifact ? (
               <div className={getRoleSpacingClass(queuePreviousRole, "assistant")}>
