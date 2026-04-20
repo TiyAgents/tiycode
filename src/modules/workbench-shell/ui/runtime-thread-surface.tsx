@@ -4422,12 +4422,9 @@ export function RuntimeThreadSurface({
             canSubmitWhenAttachmentsOnly={false}
             className="w-full max-w-none gap-0"
             commands={commands}
-            composerShellClassName={cn(
-              "shadow-[0_22px_50px_-42px_rgba(15,23,42,0.38)]",
-              taskBoards.activeBoard
-                ? "rounded-t-none border-t-0"
-                : undefined,
-            )}
+            composerShellClassName={taskBoards.activeBoard
+              ? "rounded-t-none border-t-0"
+              : undefined}
             enabledSkills={enabledSkills}
             error={composerError}
             onErrorMessageChange={setComposerError}

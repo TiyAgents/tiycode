@@ -1700,9 +1700,9 @@ export function WorkbenchPromptComposer({
         </PromptInput>
       </div>
 
-      {error ? <p className="text-xs text-app-danger">{error}</p> : null}
+      {error ? <p className="mt-2 text-xs text-app-danger">{error}</p> : null}
       {!activeProfile ? (
-        <p className="text-xs text-app-danger">No active profile is available for the composer right now.</p>
+        <p className="mt-2 text-xs text-app-danger">No active profile is available for the composer right now.</p>
       ) : null}
     </div>
   );
