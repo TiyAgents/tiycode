@@ -321,10 +321,13 @@ function mapWorkspaceDto(workspace: WorkspaceDto): WorkspaceEntry {
   return {
     id: workspace.id,
     name: workspace.name,
-    path: workspace.path,
+    path: workspace.canonicalPath || workspace.path,
     isDefault: workspace.isDefault,
     isGit: workspace.isGit,
     autoWorkTree: workspace.autoWorkTree,
+    kind: workspace.kind,
+    parentWorkspaceId: workspace.parentWorkspaceId,
+    worktreeHash: workspace.worktreeName ? workspace.worktreeName.slice(0, 6) : null,
   };
 }
 
