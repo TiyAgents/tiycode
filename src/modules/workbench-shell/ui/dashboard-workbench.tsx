@@ -66,7 +66,6 @@ import {
   workspaceEnsureDefault,
   workspaceList,
   workspaceRemove,
-  workspaceSetDefault,
   gitGetSnapshot,
   gitSubscribe,
 } from "@/services/bridge";
@@ -705,7 +704,7 @@ export function DashboardWorkbench() {
   const [terminalWorkspaceBindings, setTerminalWorkspaceBindings] = useState<
     Record<string, string>
   >({});
-  const [defaultWorkspaceId, setDefaultWorkspaceId] = useState<string | null>(
+  const [_defaultWorkspaceId, setDefaultWorkspaceId] = useState<string | null>(
     null,
   );
   const [workspaceThreadDisplayCounts, setWorkspaceThreadDisplayCounts] =
@@ -1631,47 +1630,6 @@ export function DashboardWorkbench() {
       cancelled = true;
     };
   }, [currentProject, syncWorkspaceSidebar, terminalWorkspaceBindings]);
-
-  useEffect(() => {
-    if (
-      !isTauri() ||
-      !selectedProject ||
-      !selectedProjectWorkspaceId ||
-      selectedProjectWorkspaceId === defaultWorkspaceId
-    ) {
-      return;
-    }
-
-    // Worktree rows cannot be the default workspace — only the owning repo
-    // can. Skip the auto-promotion in that case to avoid a recoverable
-    // backend error and a stale bootstrap banner.
-    if (selectedProject.kind === "worktree") {
-      return;
-    }
-
-    let cancelled = false;
-
-    void workspaceSetDefault(selectedProjectWorkspaceId)
-      .then(() => {
-        if (cancelled) {
-          return;
-        }
-
-        setDefaultWorkspaceId(selectedProjectWorkspaceId);
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-
-        const message = getInvokeErrorMessage(error, t("dashboard.error.updateDefaultWorkspace"));
-        setTerminalBootstrapError(message);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [defaultWorkspaceId, selectedProject, selectedProjectWorkspaceId]);
 
   const handleTerminalResizeStart = (
     event: ReactMouseEvent<HTMLDivElement>,
