@@ -62,6 +62,7 @@ const en: Record<TranslationKey, string> = {
   "dashboard.error.loadMoreThreads": "Failed to load more threads",
   "dashboard.error.deleteThread": "Failed to delete thread",
   "dashboard.error.createThread": "Failed to create thread",
+"dashboard.error.switchProfile": "Failed to switch agent profile",
 
   // ── Composer ─────────────────────────────────────────────
   "composer.removeAttachment": "Remove attachment {{name}}",

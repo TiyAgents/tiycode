@@ -60,6 +60,7 @@ const zhCN = {
   "dashboard.error.loadMoreThreads": "加载更多会话失败",
   "dashboard.error.deleteThread": "删除会话失败",
   "dashboard.error.createThread": "创建会话失败",
+"dashboard.error.switchProfile": "切换 Agent 配置文件失败",
 
   // ── Composer ─────────────────────────────────────────────
   "composer.removeAttachment": "移除附件 {{name}}",

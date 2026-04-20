@@ -164,14 +164,14 @@ export function resolveThreadProfileId(
   threadProfileId: string | null,
   globalActiveProfileId: string,
 ): string {
-  return threadProfileId ?? globalActiveProfileId;
+  return threadProfileId || globalActiveProfileId;
 }
 
 export function resolveActiveThreadWorkbenchProfileId(
   threadProfileId: string | null,
   globalActiveProfileId: string,
 ): string {
-  return threadProfileId ?? globalActiveProfileId;
+  return threadProfileId || globalActiveProfileId;
 }
 
 function buildInitialWorkspaceThreadDisplayCounts() {
@@ -2284,6 +2284,9 @@ export function DashboardWorkbench() {
             : (terminalThreadBindings[
                 getNewThreadTerminalBindingKey(nextWorkspaceId)
               ] ?? null);
+        // Intentional: new-thread mode always uses the global active profile as the
+        // default for the new conversation; switching to an existing thread reads
+        // its own persisted profile_id via resolveThreadProfileId instead.
         let persistedThreadProfileId = activeAgentProfileId;
         const nextThreadName = buildThreadTitle(trimmedValue || effectivePrompt);
 
@@ -2455,7 +2458,14 @@ export function DashboardWorkbench() {
         return;
       }
 
-      await threadUpdateProfile(activeThread.id, profileId);
+      try {
+        await threadUpdateProfile(activeThread.id, profileId);
+      } catch (error) {
+        const message = getInvokeErrorMessage(error, t("dashboard.error.switchProfile"));
+        setComposerError(message);
+        return;
+      }
+
       setWorkspaces((current) =>
         current.map((workspace) => ({
           ...workspace,

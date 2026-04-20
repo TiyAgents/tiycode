@@ -82,6 +82,34 @@ async fn test_thread_manager_update_profile_persists_new_value() {
 }
 
 #[tokio::test]
+async fn test_thread_manager_update_profile_can_clear_to_none() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-clear-profile", "/tmp/clear-profile").await;
+    test_helpers::seed_thread(
+        &pool,
+        "t-clear-profile",
+        "ws-clear-profile",
+        Some("profile-to-clear"),
+    )
+    .await;
+    let manager = ThreadManager::new(pool.clone());
+
+    manager
+        .update_profile("t-clear-profile", None)
+        .await
+        .expect("thread profile clear should succeed");
+
+    let row = sqlx::query("SELECT profile_id FROM threads WHERE id = 't-clear-profile'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        row.get::<Option<String>, _>("profile_id").is_none(),
+        "profile_id should be NULL after clearing"
+    );
+}
+
+#[tokio::test]
 async fn test_thread_list_returns_profile_id() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-list-profile", "/tmp/list-profile").await;

@@ -15,6 +15,10 @@ describe("resolveThreadProfileId", () => {
   it("preserves deleted profile ids instead of silently falling back", () => {
     expect(resolveThreadProfileId("p-deleted", globalActive)).toBe("p-deleted");
   });
+
+  it("falls back to global active profile when thread profile is an empty string", () => {
+    expect(resolveThreadProfileId("", globalActive)).toBe(globalActive);
+  });
 });
 
 describe("resolveActiveThreadWorkbenchProfileId", () => {
@@ -30,5 +34,9 @@ describe("resolveActiveThreadWorkbenchProfileId", () => {
 
   it("keeps deleted profile ids for existing threads so the UI can show missing state", () => {
     expect(resolveActiveThreadWorkbenchProfileId("p-deleted", globalActive)).toBe("p-deleted");
+  });
+
+  it("falls back to global active profile when thread profile is an empty string", () => {
+    expect(resolveActiveThreadWorkbenchProfileId("", globalActive)).toBe(globalActive);
   });
 });
