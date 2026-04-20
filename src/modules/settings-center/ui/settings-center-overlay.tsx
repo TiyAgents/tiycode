@@ -3279,6 +3279,9 @@ function WorkspaceSettingsPanel({
         isDefault: false,
         isGit: false,
         autoWorkTree: false,
+        kind: "standalone",
+        parentWorkspaceId: null,
+        worktreeHash: null,
       });
       return;
     }
@@ -3298,6 +3301,9 @@ function WorkspaceSettingsPanel({
         isDefault: false,
         isGit: false,
         autoWorkTree: false,
+        kind: "standalone",
+        parentWorkspaceId: null,
+        worktreeHash: null,
       });
     });
   };
@@ -3362,64 +3368,74 @@ function WorkspaceSettingsPanel({
           </div>
         ) : (
           <div className="divide-y divide-app-border">
-            {workspaces.map((workspace) => (
-              <div
-                key={workspace.id}
-                className="group flex items-center gap-3 px-4 py-3 transition-colors"
-              >
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-app-surface-muted text-app-subtle">
-                  {workspace.autoWorkTree ? <Shuffle className="size-4" /> : <FolderOpen className="size-4" />}
-                </div>
+            {workspaces.map((workspace) => {
+              const isWorktreeRow = workspace.kind === "worktree";
+              const worktreeTag = workspace.worktreeHash && workspace.worktreeHash.length > 0
+                ? workspace.worktreeHash
+                : null;
 
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] font-medium text-app-foreground">{workspace.name}</span>
-                    {workspace.isDefault ? (
-                      <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
-                        <Star className="size-2.5 fill-current" />
-                        Default
-                      </span>
-                    ) : null}
-                    {workspace.isGit ? (
-                      <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
-                        <GitBranch className="size-2.5" />
-                        Git
-                      </span>
-                    ) : null}
-                    {workspace.autoWorkTree ? (
-                      <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
-                        <Shuffle className="size-2.5" />
-                        Worktree
-                      </span>
-                    ) : null}
+              return (
+                <div
+                  key={workspace.id}
+                  className="group flex items-center gap-3 px-4 py-3 transition-colors"
+                >
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-app-surface-muted text-app-subtle">
+                    {isWorktreeRow ? <Shuffle className="size-4" /> : <FolderOpen className="size-4" />}
                   </div>
-                  <p className="mt-0.5 truncate text-[12px] text-app-subtle" title={workspace.path}>
-                    {workspace.path}
-                  </p>
-                </div>
 
-                <div className="flex shrink-0 items-center gap-1">
-                  <WorkspaceActionButton
-                    icon={Star}
-                    label="Set as default"
-                    active={workspace.isDefault}
-                    className="invisible group-hover:visible"
-                    onClick={() => onSetDefaultWorkspace(workspace.id)}
-                  />
-                  <WorkspaceActionButton
-                    icon={FolderOpen}
-                    label={activeOpenWorkspaceId === workspace.id ? "Opening folder" : openWorkspaceLabel}
-                    disabled={activeOpenWorkspaceId === workspace.id}
-                    onClick={() => handleOpenWorkspace(workspace)}
-                  />
-                  <WorkspaceActionButton
-                    icon={Trash2}
-                    label="Remove workspace"
-                    onClick={() => onRemoveWorkspace(workspace.id)}
-                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-medium text-app-foreground">{workspace.name}</span>
+                      {workspace.isDefault ? (
+                        <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
+                          <Star className="size-2.5 fill-current" />
+                          Default
+                        </span>
+                      ) : null}
+                      {workspace.isGit ? (
+                        <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-muted">
+                          <GitBranch className="size-2.5" />
+                          Git
+                        </span>
+                      ) : null}
+                      {worktreeTag ? (
+                        <span
+                          title={t("worktree.tag.label")}
+                          className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface-muted px-1.5 py-0.5 font-mono text-[11px] text-app-muted"
+                        >
+                          <Shuffle className="size-2.5" />
+                          {worktreeTag}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 truncate text-[12px] text-app-subtle" title={workspace.path}>
+                      {workspace.path}
+                    </p>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-1">
+                    <WorkspaceActionButton
+                      icon={Star}
+                      label="Set as default"
+                      active={workspace.isDefault}
+                      className="invisible group-hover:visible"
+                      onClick={() => onSetDefaultWorkspace(workspace.id)}
+                    />
+                    <WorkspaceActionButton
+                      icon={FolderOpen}
+                      label={activeOpenWorkspaceId === workspace.id ? "Opening folder" : openWorkspaceLabel}
+                      disabled={activeOpenWorkspaceId === workspace.id}
+                      onClick={() => handleOpenWorkspace(workspace)}
+                    />
+                    <WorkspaceActionButton
+                      icon={Trash2}
+                      label="Remove workspace"
+                      onClick={() => onRemoveWorkspace(workspace.id)}
+                    />
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </SettingsSection>
