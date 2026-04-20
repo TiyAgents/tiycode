@@ -428,6 +428,55 @@ export function clearActiveThreads(workspaces: ReadonlyArray<WorkspaceItem>): Ar
   }));
 }
 
+/**
+ * Check whether a tool call ID belongs to one of the given helper agents.
+ *
+ * Helper-owned tool call IDs follow the pattern `{shortPrefix}:{providerCallId}`
+ * where `shortPrefix` is the first 8 characters of the helper's UUID v4/v7 ID.
+ * For backward compatibility, this also matches the legacy format `{fullUuid}:{providerCallId}`.
+ */
+export function isHelperOwnedTool(
+  toolId: string,
+  helperIds: ReadonlySet<string>,
+): boolean {
+  for (const helperId of helperIds) {
+    if (toolId.startsWith(`${helperId.slice(0, 8)}:`) || toolId.startsWith(`${helperId}:`)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Build a summary of tool calls owned by a specific helper agent.
+ *
+ * Matches tool calls whose IDs start with either the 8-char short prefix
+ * or the full helper ID (for backward compatibility with legacy data).
+ */
+export function buildSnapshotHelperToolSummary(
+  helperId: string,
+  toolCalls: ReadonlyArray<{ id: string; toolName: string; status: string }>,
+) {
+  const helperToolCalls = toolCalls.filter((tool) => tool.id.startsWith(`${helperId.slice(0, 8)}:`) || tool.id.startsWith(`${helperId}:`));
+  const toolCounts = helperToolCalls.reduce<Record<string, number>>((counts, tool) => {
+    counts[tool.toolName] = (counts[tool.toolName] ?? 0) + 1;
+    return counts;
+  }, {});
+  const completedSteps = helperToolCalls.filter((tool) =>
+    tool.status === "completed"
+    || tool.status === "failed"
+    || tool.status === "denied"
+    || tool.status === "cancelled",
+  ).length;
+
+  return {
+    completedSteps,
+    toolCounts,
+    totalToolCalls: helperToolCalls.length,
+  };
+}
+
 export function isEditableSelectionTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
     return false;
