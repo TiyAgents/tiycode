@@ -698,7 +698,7 @@ function buildSnapshotHelperToolSummary(
   helperId: string,
   toolCalls: ReadonlyArray<ToolCallDto>,
 ) {
-  const helperToolCalls = toolCalls.filter((tool) => tool.id.startsWith(`${helperId}:`));
+  const helperToolCalls = toolCalls.filter((tool) => tool.id.startsWith(`${helperId.slice(0, 8)}:`) || tool.id.startsWith(`${helperId}:`));
   const toolCounts = helperToolCalls.reduce<Record<string, number>>((counts, tool) => {
     counts[tool.toolName] = (counts[tool.toolName] ?? 0) + 1;
     return counts;
@@ -1946,7 +1946,7 @@ function isHelperOwnedTool(
   helperIds: ReadonlySet<string>,
 ) {
   for (const helperId of helperIds) {
-    if (toolId.startsWith(`${helperId}:`)) {
+    if (toolId.startsWith(`${helperId.slice(0, 8)}:`) || toolId.startsWith(`${helperId}:`)) {
       return true;
     }
   }
