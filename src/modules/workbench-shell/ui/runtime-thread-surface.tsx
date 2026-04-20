@@ -2041,6 +2041,9 @@ function getRoleSpacingClass(
   return previousRole === currentRole ? "pt-3" : "pt-6";
 }
 
+const BASE_CONVERSATION_BOTTOM_PADDING = 40;
+const ACTIVE_TASK_BOARD_SPACING = 16;
+
 export function RuntimeThreadSurface({
   activeAgentProfileId,
   agentProfiles,
@@ -2097,6 +2100,7 @@ export function RuntimeThreadSurface({
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
   const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});
   const [taskBoards, setTaskBoards] = useState<TaskBoardState>(initialTaskBoardState);
+  const [activeTaskBoardHeight, setActiveTaskBoardHeight] = useState(0);
   const previousHelperStatusesRef = useRef<Record<string, SurfaceHelperEntry["status"]>>({});
   const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
   const snapshotLoadRequestRef = useRef(0);
@@ -2108,6 +2112,7 @@ export function RuntimeThreadSurface({
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
+  const activeTaskBoardRef = useRef<HTMLDivElement | null>(null);
 
   const clearScheduledThinkingPhase = useCallback(() => {
     if (thinkingTimerRef.current !== null) {
@@ -3182,7 +3187,7 @@ export function RuntimeThreadSurface({
 
   // Show the thinking indicator at the bottom when the run is active and no
   // tool / helper / streaming-message is already occupying the "latest action"
-  // slot.  Because this is derived from render-time state rather than toggled
+  // slot. Because this is derived from render-time state rather than toggled
   // by individual stream events, it survives React 18 batching that would
   // otherwise swallow a create+clear in the same frame.
   const hasActiveToolOrHelper =
@@ -3197,7 +3202,47 @@ export function RuntimeThreadSurface({
     showThinkingIndicator ? lastPresentationRole : null;
   const queuePreviousRole: TimelineRole | null =
     showThinkingIndicator ? "assistant" : lastPresentationRole;
-  const runtimeErrorPreviousRole: TimelineRole | null = queueArtifact ? "assistant" : lastPresentationRole;
+  const hasTaskHistoryTimeline = taskBoards.boards.some((board) => board.status !== "active");
+  const historyPreviousRole: TimelineRole | null = queueArtifact ? "assistant" : lastPresentationRole;
+  const runtimeErrorPreviousRole: TimelineRole | null = hasTaskHistoryTimeline
+    ? "assistant"
+    : queueArtifact || showThinkingIndicator
+      ? "assistant"
+      : lastPresentationRole;
+  const activeTaskBoardBottomPadding = taskBoards.activeBoard
+    ? activeTaskBoardHeight + ACTIVE_TASK_BOARD_SPACING
+    : 0;
+  const conversationBottomPadding = BASE_CONVERSATION_BOTTOM_PADDING + activeTaskBoardBottomPadding;
+
+  useEffect(() => {
+    const element = activeTaskBoardRef.current;
+
+    if (!taskBoards.activeBoard || !element) {
+      setActiveTaskBoardHeight(0);
+      return;
+    }
+
+    const syncHeight = () => {
+      const nextHeight = Math.ceil(element.getBoundingClientRect().height);
+      setActiveTaskBoardHeight((current) => (current === nextHeight ? current : nextHeight));
+    };
+
+    syncHeight();
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      syncHeight();
+    });
+
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [taskBoards.activeBoard?.id]);
 
   useEffect(() => {
     const previousToolStates = previousToolStatesRef.current;
@@ -3825,7 +3870,10 @@ export function RuntimeThreadSurface({
       <div className="pointer-events-none absolute left-1/2 top-0 h-56 w-[72rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(120,180,255,0.11),transparent_68%)] blur-3xl" />
       <div className="relative min-h-0 flex-1">
         <Conversation className="size-full" contextRef={conversationContextRef}>
-          <ConversationContent className="mx-auto w-full max-w-4xl gap-0 px-6 pb-10 pt-8">
+          <ConversationContent
+            className="mx-auto w-full max-w-4xl gap-0 px-6 pt-8"
+            style={{ paddingBottom: `${conversationBottomPadding}px` }}
+          >
             {hasMoreMessages ? (
               <div className="pb-4">
                 <div className="flex flex-col items-center gap-2">
@@ -4314,18 +4362,8 @@ export function RuntimeThreadSurface({
               </div>
             ) : null}
 
-            {taskBoards.activeBoard ? (
-              <div className={getRoleSpacingClass(queueArtifact ? "assistant" : lastPresentationRole, "assistant")}>
-                <Message className="max-w-full" from="assistant">
-                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                    <TaskBoardCard board={taskBoards.activeBoard} />
-                  </MessageContent>
-                </Message>
-              </div>
-            ) : null}
-
-            {taskBoards.boards.length > 1 ? (
-              <div className={getRoleSpacingClass(taskBoards.activeBoard ? "assistant" : lastPresentationRole, "assistant")}>
+            {hasTaskHistoryTimeline ? (
+              <div className={getRoleSpacingClass(historyPreviousRole, "assistant")}>
                 <Message className="max-w-full" from="assistant">
                   <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
                     <TaskHistoryTimeline boards={taskBoards.boards} />
@@ -4363,6 +4401,16 @@ export function RuntimeThreadSurface({
           <ConversationScrollButton className="bottom-4" />
         </Conversation>
       </div>
+
+      {taskBoards.activeBoard ? (
+        <div className="shrink-0 px-6 pt-4">
+          <div className="mx-auto w-full max-w-4xl">
+            <div ref={activeTaskBoardRef}>
+              <TaskBoardCard board={taskBoards.activeBoard} />
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="shrink-0 px-6 pb-6 pt-4">
         <WorkbenchPromptComposer
