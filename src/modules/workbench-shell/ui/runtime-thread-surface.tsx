@@ -2042,7 +2042,6 @@ function getRoleSpacingClass(
 }
 
 const BASE_CONVERSATION_BOTTOM_PADDING = 40;
-const ACTIVE_TASK_BOARD_SPACING = 16;
 
 export function RuntimeThreadSurface({
   activeAgentProfileId,
@@ -2101,7 +2100,6 @@ export function RuntimeThreadSurface({
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
   const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});
   const [taskBoards, setTaskBoards] = useState<TaskBoardState>(initialTaskBoardState);
-  const [activeTaskBoardHeight, setActiveTaskBoardHeight] = useState(0);
   const previousHelperStatusesRef = useRef<Record<string, SurfaceHelperEntry["status"]>>({});
   const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
   const snapshotLoadRequestRef = useRef(0);
@@ -2113,7 +2111,6 @@ export function RuntimeThreadSurface({
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
-  const activeTaskBoardRef = useRef<HTMLDivElement | null>(null);
 
   const clearScheduledThinkingPhase = useCallback(() => {
     if (thinkingTimerRef.current !== null) {
@@ -3214,40 +3211,8 @@ export function RuntimeThreadSurface({
     : queueArtifact || showThinkingIndicator
       ? "assistant"
       : lastPresentationRole;
-  const activeTaskBoardBottomPadding = taskBoards.activeBoard
-    ? activeTaskBoardHeight + ACTIVE_TASK_BOARD_SPACING
-    : 0;
-  const conversationBottomPadding = BASE_CONVERSATION_BOTTOM_PADDING + activeTaskBoardBottomPadding;
 
-  useEffect(() => {
-    const element = activeTaskBoardRef.current;
-
-    if (!taskBoards.activeBoard || !element) {
-      setActiveTaskBoardHeight(0);
-      return;
-    }
-
-    const syncHeight = () => {
-      const nextHeight = Math.ceil(element.getBoundingClientRect().height);
-      setActiveTaskBoardHeight((current) => (current === nextHeight ? current : nextHeight));
-    };
-
-    syncHeight();
-
-    if (typeof ResizeObserver === "undefined") {
-      return;
-    }
-
-    const observer = new ResizeObserver(() => {
-      syncHeight();
-    });
-
-    observer.observe(element);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [taskBoards.activeBoard?.id]);
+  const conversationBottomPadding = BASE_CONVERSATION_BOTTOM_PADDING;
 
   useEffect(() => {
     const previousToolStates = previousToolStatesRef.current;
@@ -4412,7 +4377,6 @@ export function RuntimeThreadSurface({
           {taskBoards.activeBoard ? (
             <div
               className="overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu/96 px-2 pb-0 pt-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl"
-              ref={activeTaskBoardRef}
             >
               <TaskBoardCard
                 board={taskBoards.activeBoard}
