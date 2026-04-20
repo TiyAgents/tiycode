@@ -2012,12 +2012,31 @@ export function DashboardWorkbench() {
     setRecentProjects((current) => mergeRecentProjects(current, nextProject));
   };
 
-  const handleNewThreadForWorkspace = (workspace: WorkspaceItem) => {
+  const activateWorkspaceAsNewThreadTarget = useCallback(
+    (workspaceId: string, nextProject: ProjectOption) => {
+      clearNewThreadBindingForWorkspace(workspaceId);
+      deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
+      setSelectedProject(nextProject);
+      setRecentProjects((current) => mergeRecentProjects(current, nextProject));
+      setOpenWorkspaces((current) => ({
+        ...current,
+        [workspaceId]: true,
+      }));
+      setActiveThreadProfileIdOverride(null);
+      setNewThreadMode(true);
+      setWorkspaces((current) => clearActiveThreads(current));
+      setComposerError(null);
+      setPendingDeleteThreadId(null);
+      setTerminalBootstrapError(null);
+      setActiveWorkspaceMenuId(null);
+    },
+    [clearNewThreadBindingForWorkspace],
+  );
+
+  const handleNewThreadForWorkspace = useCallback((workspace: WorkspaceItem) => {
     if (!workspace.path) {
       return;
     }
-
-    clearNewThreadBindingForWorkspace(workspace.id);
 
     const projectFromPath = buildProjectOptionFromPath(workspace.path, language);
     const nextProject: ProjectOption = {
@@ -2043,21 +2062,8 @@ export function DashboardWorkbench() {
       branch: workspace.branch,
     };
 
-    deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
-    setSelectedProject(nextProject);
-    setRecentProjects((current) => mergeRecentProjects(current, nextProject));
-    setOpenWorkspaces((current) => ({
-      ...current,
-      [workspace.id]: true,
-    }));
-    setActiveThreadProfileIdOverride(null);
-    setNewThreadMode(true);
-    setWorkspaces((current) => clearActiveThreads(current));
-    setComposerError(null);
-    setPendingDeleteThreadId(null);
-    setTerminalBootstrapError(null);
-    setActiveWorkspaceMenuId(null);
-  };
+    activateWorkspaceAsNewThreadTarget(workspace.id, nextProject);
+  }, [activateWorkspaceAsNewThreadTarget, language, t]);
 
   const updateActiveThreadStatus = useCallback(
     (status: WorkbenchThreadStatus) => {
@@ -2603,12 +2609,16 @@ export function DashboardWorkbench() {
         const workspace =
           existingWorkspace ??
           (await workspaceAdd(selectedPath, nextProject.name));
+        const workspaceProject =
+          buildProjectOptionFromWorkspace(workspace, language) ?? {
+            ...nextProject,
+            id: workspace.id,
+            name: workspace.name,
+            path: workspace.canonicalPath || workspace.path,
+          };
 
+        activateWorkspaceAsNewThreadTarget(workspace.id, workspaceProject);
         await syncWorkspaceSidebar();
-        setOpenWorkspaces((current) => ({
-          ...current,
-          [workspace.id]: true,
-        }));
       } catch (error) {
         const message = getInvokeErrorMessage(error, "Failed to add workspace");
         setTerminalBootstrapError(message);
@@ -2616,7 +2626,12 @@ export function DashboardWorkbench() {
         setAddingWorkspace(false);
       }
     })();
-  }, [isAddingWorkspace, syncWorkspaceSidebar]);
+  }, [
+    activateWorkspaceAsNewThreadTarget,
+    isAddingWorkspace,
+    language,
+    syncWorkspaceSidebar,
+  ]);
 
   const handleWorkspaceMenuToggle = (workspaceId: string) => {
     setActiveWorkspaceMenuId((current) =>
@@ -3744,7 +3759,21 @@ export function DashboardWorkbench() {
       <NewWorktreeDialog
         context={worktreeDialogContext}
         onClose={() => setWorktreeDialogContext(null)}
-        onCreated={() => {
+        onCreated={(workspace) => {
+          const nextProject =
+            buildProjectOptionFromWorkspace(workspace, language) ?? {
+              id: workspace.id,
+              name: workspace.name,
+              path: workspace.canonicalPath || workspace.path,
+              lastOpenedLabel: t("time.justNow"),
+              kind: workspace.kind,
+              parentWorkspaceId: workspace.parentWorkspaceId,
+              worktreeHash: workspace.worktreeName
+                ? workspace.worktreeName.slice(0, 6)
+                : null,
+              branch: workspace.branch,
+            };
+          activateWorkspaceAsNewThreadTarget(workspace.id, nextProject);
           void syncWorkspaceSidebar().catch(() => {});
         }}
       />
