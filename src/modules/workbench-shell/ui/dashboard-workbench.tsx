@@ -155,12 +155,13 @@ const SIDEBAR_AUTO_REFRESH_INTERVAL_MS = 2_000;
 const SIDEBAR_AUTO_REFRESH_GRACE_MS = 20_000;
 
 /**
- * Resolve which profile a thread should use.
+ * Resolve which profile the workbench should use for a given thread context.
  *
  * Priority:
- *  1. Persisted binding for this thread, if the profile still exists.
- *  2. Global active profile (= last actively-switched profile).
- *  3. First profile in the list (fallback when the bound profile was deleted).
+ *  1. Global active profile when no thread is selected yet (new thread mode).
+ *  2. Persisted binding for this thread, if the profile still exists.
+ *  3. Global active profile when this thread has no binding yet.
+ *  4. First profile in the list when the bound profile was deleted.
  */
 export function resolveThreadProfileId(
   threadId: string | null,
@@ -175,6 +176,34 @@ export function resolveThreadProfileId(
   if (profileIds.has(boundId)) return boundId;
   // Bound profile was deleted → fall back to first available profile.
   return firstProfileId ?? globalActiveProfileId;
+}
+
+export function resolveActiveThreadWorkbenchProfileId(
+  threadId: string | null,
+  persistedBindings: Record<string, string>,
+  activeThreadProfileOverride: string | null,
+  profileIds: ReadonlySet<string>,
+  globalActiveProfileId: string,
+  firstProfileId: string | null,
+): string {
+  if (!threadId) {
+    return globalActiveProfileId;
+  }
+
+  const persistedBoundId = persistedBindings[threadId];
+  if (persistedBoundId) {
+    return profileIds.has(persistedBoundId)
+      ? persistedBoundId
+      : (firstProfileId ?? globalActiveProfileId);
+  }
+
+  if (activeThreadProfileOverride) {
+    return profileIds.has(activeThreadProfileOverride)
+      ? activeThreadProfileOverride
+      : (firstProfileId ?? globalActiveProfileId);
+  }
+
+  return globalActiveProfileId;
 }
 
 function buildInitialWorkspaceThreadDisplayCounts() {
@@ -659,6 +688,7 @@ export function DashboardWorkbench() {
   const [threadProfileBindings, setThreadProfileBindings] = useState<
     Record<string, string>
   >({});
+  const [activeThreadProfileIdOverride, setActiveThreadProfileIdOverride] = useState<string | null>(null);
   const threadProfileBindingsLoadedRef = useRef(false);
   const [composerValue, setComposerValue] = useState("");
   const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
@@ -801,28 +831,48 @@ export function DashboardWorkbench() {
     data?.platform === "windows" ||
     (typeof navigator !== "undefined" &&
       navigator.userAgent.includes("Windows"));
+  const workbenchActiveProfileId = useMemo(
+    () =>
+      resolveActiveThreadWorkbenchProfileId(
+        isNewThreadMode ? null : (activeThread?.id ?? null),
+        threadProfileBindings,
+        activeThreadProfileIdOverride,
+        profileIdSet,
+        activeAgentProfileId,
+        firstProfileId,
+      ),
+    [
+      activeAgentProfileId,
+      activeThread?.id,
+      activeThreadProfileIdOverride,
+      firstProfileId,
+      isNewThreadMode,
+      profileIdSet,
+      threadProfileBindings,
+    ],
+  );
   const selectedRunModelPlan = useMemo(
     () =>
       buildRunModelPlanFromSelection(
-        activeAgentProfileId,
+        workbenchActiveProfileId,
         agentProfiles,
         providers,
       ),
-    [activeAgentProfileId, agentProfiles, providers],
+    [workbenchActiveProfileId, agentProfiles, providers],
   );
-  const activeAgentProfile = useMemo(
+  const workbenchActiveAgentProfile = useMemo(
     () =>
-      agentProfiles.find((profile) => profile.id === activeAgentProfileId) ??
+      agentProfiles.find((profile) => profile.id === workbenchActiveProfileId) ??
       agentProfiles[0] ??
       null,
-    [activeAgentProfileId, agentProfiles],
+    [workbenchActiveProfileId, agentProfiles],
   );
   const commitMessageModelPlan = useMemo(
     () =>
-      activeAgentProfile
-        ? buildProfileModelPlan(activeAgentProfile, providers)
+      workbenchActiveAgentProfile
+        ? buildProfileModelPlan(workbenchActiveAgentProfile, providers)
         : null,
-    [activeAgentProfile, providers],
+    [workbenchActiveAgentProfile, providers],
   );
   const contextBadge = useMemo(
     () =>
@@ -1502,28 +1552,10 @@ export function DashboardWorkbench() {
       }
       return changed ? next : current;
     });
-  }, [agentProfiles, profileIdSet]);
-
-  // After hydration (or any external update) of thread-profile bindings,
-  // re-evaluate the active thread's profile so that a thread selected before
-  // hydration completed gets its correct profile restored.
-  useEffect(() => {
-    if (!threadProfileBindingsLoadedRef.current) return;
-    if (isNewThreadMode || !activeThread?.id) return;
-
-    const resolved = resolveThreadProfileId(
-      activeThread.id,
-      threadProfileBindings,
-      profileIdSet,
-      activeAgentProfileId,
-      firstProfileId,
+    setActiveThreadProfileIdOverride((current) =>
+      current && !profileIdSet.has(current) ? null : current,
     );
-    if (resolved !== activeAgentProfileId) {
-      setActiveAgentProfile(resolved);
-    }
-    // Only re-run when the bindings map itself changes — not on every profile switch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadProfileBindings]);
+  }, [agentProfiles, profileIdSet]);
 
   useEffect(() => {
     if (!terminalResize || typeof window === "undefined") {
@@ -1920,6 +1952,7 @@ export function DashboardWorkbench() {
       clearNewThreadBindingForWorkspace(selectedProjectWorkspaceId);
     }
 
+    setActiveThreadProfileIdOverride(null);
     setNewThreadMode(true);
     setWorkspaces((current) => clearActiveThreads(current));
     setComposerError(null);
@@ -1931,6 +1964,14 @@ export function DashboardWorkbench() {
     if (isNewThreadMode && selectedProjectWorkspaceId) {
       clearNewThreadBindingForWorkspace(selectedProjectWorkspaceId);
     }
+    const resolvedProfileId = resolveThreadProfileId(
+      threadId,
+      threadProfileBindings,
+      profileIdSet,
+      activeAgentProfileId,
+      firstProfileId,
+    );
+    setActiveThreadProfileIdOverride(resolvedProfileId);
     setNewThreadMode(false);
     setActiveWorkspaceMenuId(null);
     setPendingDeleteThreadId(null);
@@ -1957,17 +1998,7 @@ export function DashboardWorkbench() {
       }
     }
 
-    // Restore the profile that was last used on this thread.
-    const resolved = resolveThreadProfileId(
-      threadId,
-      threadProfileBindings,
-      profileIdSet,
-      activeAgentProfileId,
-      firstProfileId,
-    );
-    if (resolved !== activeAgentProfileId) {
-      setActiveAgentProfile(resolved);
-    }
+    // Thread selection should not overwrite the global default profile.
   };
 
   const handleProjectSelect = (project: ProjectOption) => {
@@ -2019,6 +2050,7 @@ export function DashboardWorkbench() {
       ...current,
       [workspace.id]: true,
     }));
+    setActiveThreadProfileIdOverride(null);
     setNewThreadMode(true);
     setWorkspaces((current) => clearActiveThreads(current));
     setComposerError(null);
@@ -2218,6 +2250,7 @@ export function DashboardWorkbench() {
 
           if (isDeletingActiveThread) {
             setSelectedProject((current) => activeThreadProject ?? current);
+            setActiveThreadProfileIdOverride(null);
             setNewThreadMode(true);
             setComposerError(null);
           }
@@ -2466,6 +2499,7 @@ export function DashboardWorkbench() {
             ...current,
             [persistedThreadId]: activeAgentProfileId,
           }));
+          setActiveThreadProfileIdOverride(activeAgentProfileId);
         }
 
         setNewThreadMode(false);
@@ -2502,17 +2536,21 @@ export function DashboardWorkbench() {
     setOpenSettingsSection("language");
   };
 
-  // Wrapper: when user switches profile inside an active thread, also record
-  // the binding so it's restored when the user switches back to this thread.
+  // Wrapper: when user switches profile inside an active thread, keep the
+  // change scoped to that thread. New-thread mode still updates the global
+  // default profile because it defines the profile new conversations inherit.
   const handleSelectAgentProfileForThread = useCallback(
     (profileId: string) => {
-      setActiveAgentProfile(profileId);
-      if (!isNewThreadMode && activeThread?.id) {
-        setThreadProfileBindings((current) => ({
-          ...current,
-          [activeThread.id]: profileId,
-        }));
+      if (isNewThreadMode || !activeThread?.id) {
+        setActiveAgentProfile(profileId);
+        return;
       }
+
+      setThreadProfileBindings((current) => ({
+        ...current,
+        [activeThread.id]: profileId,
+      }));
+      setActiveThreadProfileIdOverride(profileId);
     },
     [activeThread?.id, isNewThreadMode, setActiveAgentProfile],
   );
@@ -3310,7 +3348,7 @@ export function DashboardWorkbench() {
 
                         <div className="shrink-0 px-6 pb-6 pt-4">
                           <WorkbenchPromptComposer
-                            activeAgentProfileId={activeAgentProfileId}
+                            activeAgentProfileId={workbenchActiveProfileId}
                             agentProfiles={agentProfiles}
                             canSubmitWhenAttachmentsOnly={false}
                             commands={composerCommands}
@@ -3318,7 +3356,7 @@ export function DashboardWorkbench() {
                             error={composerError}
                             onErrorMessageChange={setComposerError}
                             onRunModeChange={setNewThreadRunMode}
-                            onSelectAgentProfile={setActiveAgentProfile}
+                            onSelectAgentProfile={handleSelectAgentProfileForThread}
                             onStop={() => undefined}
                             onSubmit={handleComposerSubmit}
                             placeholder={t("composer.placeholder")}
@@ -3420,7 +3458,7 @@ export function DashboardWorkbench() {
                       </div>
 
                       <RuntimeThreadSurface
-                        activeAgentProfileId={activeAgentProfileId}
+                        activeAgentProfileId={workbenchActiveProfileId}
                         agentProfiles={agentProfiles}
                         commands={composerCommands}
                         composerDraft={
@@ -3517,10 +3555,10 @@ export function DashboardWorkbench() {
                           isTerminalCollapsed ? 0 : terminalHeight
                         }
                         commitMessageLanguage={
-                          activeAgentProfile?.commitMessageLanguage ?? "English"
+                          workbenchActiveAgentProfile?.commitMessageLanguage ?? "English"
                         }
                         commitMessagePrompt={
-                          activeAgentProfile?.commitMessagePrompt ?? ""
+                          workbenchActiveAgentProfile?.commitMessagePrompt ?? ""
                         }
                         commitMessageModelPlan={commitMessageModelPlan}
                         onOpenDiffPreview={setSelectedDiffSelection}
