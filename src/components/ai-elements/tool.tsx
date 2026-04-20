@@ -183,51 +183,68 @@ export const ToolOutput = ({
     return null;
   }
 
+  // Avoid rendering the same error text twice as both error block and output.
+  const effectiveOutput =
+    errorText && output && String(output) === String(errorText)
+      ? undefined
+      : output;
+
   const hasCodeBlockOutput =
-    (typeof output === "object" && !isValidElement(output)) ||
-    typeof output === "string";
+    effectiveOutput != null &&
+    ((typeof effectiveOutput === "object" && !isValidElement(effectiveOutput)) ||
+      typeof effectiveOutput === "string");
 
-  let Output = <div>{output as ReactNode}</div>;
+  let Output: ReactNode = null;
 
-  if (typeof output === "object" && !isValidElement(output)) {
-    Output = (
-      <CodeBlock
-        className={errorText ? "border-app-danger/20 bg-app-danger/6" : undefined}
-        code={JSON.stringify(output, null, 2)}
-        contentClassName={codeBlockContentClassName}
-        language="json"
-      />
-    );
-  } else if (typeof output === "string") {
-    Output = (
-      <CodeBlock
-        className={errorText ? "border-app-danger/20 bg-app-danger/6" : undefined}
-        code={output}
-        contentClassName={codeBlockContentClassName}
-        language="json"
-      />
-    );
+  if (effectiveOutput != null) {
+    if (typeof effectiveOutput === "object" && !isValidElement(effectiveOutput)) {
+      Output = (
+        <CodeBlock
+          code={JSON.stringify(effectiveOutput, null, 2)}
+          contentClassName={codeBlockContentClassName}
+          language="json"
+        />
+      );
+    } else if (typeof effectiveOutput === "string") {
+      Output = (
+        <CodeBlock
+          code={effectiveOutput}
+          contentClassName={codeBlockContentClassName}
+          language="json"
+        />
+      );
+    } else {
+      Output = <div>{effectiveOutput as ReactNode}</div>;
+    }
   }
 
   return (
     <div className={cn("space-y-2", className)} {...props}>
-      <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-        {errorText ? resolvedErrorLabel : resolvedLabel}
-      </h4>
-      <div
-        className={cn(
-          "overflow-x-auto text-xs [&_table]:w-full",
-          !hasCodeBlockOutput &&
-            errorText
-            ? "bg-destructive/10 text-destructive"
-            : !hasCodeBlockOutput
-              ? "rounded-md bg-muted/50 text-foreground"
-              : undefined
-        )}
-      >
-        {errorText && <div>{errorText}</div>}
-        {Output}
-      </div>
+      {errorText ? (
+        <>
+          <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+            {resolvedErrorLabel}
+          </h4>
+          <div className="overflow-hidden rounded-md border border-app-danger/20 bg-app-danger/6 px-3 py-2 text-xs text-app-danger">
+            <span className="break-words [overflow-wrap:anywhere]">{errorText}</span>
+          </div>
+        </>
+      ) : null}
+      {Output ? (
+        <>
+          <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+            {resolvedLabel}
+          </h4>
+          <div
+            className={cn(
+              "overflow-x-auto text-xs [&_table]:w-full",
+              !hasCodeBlockOutput ? "rounded-md bg-muted/50 text-foreground" : undefined,
+            )}
+          >
+            {Output}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 };
