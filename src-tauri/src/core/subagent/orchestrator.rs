@@ -160,7 +160,7 @@ impl HelperAgentOrchestrator {
         let helper_workspace_path = request.workspace_path.clone();
         let helper_run_mode = request.run_mode.clone();
         let helper_kind = resolved_helper_kind.clone();
-        let helper_id_for_tools = helper_id.clone();
+        let helper_id_for_tools = helper_id.chars().take(8).collect::<String>();
         let helper_id_for_events = helper_id.clone();
         let helper_started_at_for_events = helper_started_at.clone();
         let helper_agent = Arc::clone(&agent);
