@@ -2011,7 +2011,6 @@ function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
   switch (event.type) {
     // Content arriving — replaces the thinking placeholder
     case "message_delta":
-    case "message_completed":
     case "message_discarded":
     // Tool lifecycle — tool UI replaces the placeholder
     case "tool_requested":
