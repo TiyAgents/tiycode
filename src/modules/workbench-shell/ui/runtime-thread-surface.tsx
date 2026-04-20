@@ -2063,10 +2063,11 @@ export function RuntimeThreadSurface({
   workspaceId,
 }: RuntimeThreadSurfaceProps) {
   const t = useT();
-  const activeProfile = useMemo(
-    () => agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0] ?? null,
-    [activeAgentProfileId, agentProfiles],
-  );
+  const activeProfile = useMemo(() => {
+    const matchedProfile = agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? null;
+    return matchedProfile;
+  }, [activeAgentProfileId, agentProfiles]);
+  const hasMissingActiveProfile = Boolean(activeAgentProfileId) && activeProfile === null;
   const [composerError, setComposerError] = useState<string | null>(null);
   const [localComposerValue, setLocalComposerValue] = useState("");
   const composerValue = onComposerDraftChange ? composerDraft : localComposerValue;
@@ -2967,7 +2968,11 @@ export function RuntimeThreadSurface({
     }
 
     if (!activeProfile) {
-      setComposerError("Select an agent profile with an enabled model before starting a run.");
+      setComposerError(
+        hasMissingActiveProfile
+          ? t("composer.profileDeletedHint")
+          : "Select an agent profile with an enabled model before starting a run.",
+      );
       return;
     }
 
@@ -4419,6 +4424,7 @@ export function RuntimeThreadSurface({
           <WorkbenchPromptComposer
             activeAgentProfileId={activeAgentProfileId}
             agentProfiles={agentProfiles}
+            allowMissingActiveProfile
             canSubmitWhenAttachmentsOnly={false}
             className="w-full max-w-none gap-0"
             commands={commands}

@@ -70,6 +70,8 @@ const zhCN = {
   "composer.removeFileReference": "移除文件引用 {{path}}",
   "composer.uploadFileOrImage": "上传文件或图片",
   "composer.noProfileAvailable": "未找到可用的 profile。",
+  "composer.profileDeleted": "Profile 已删除",
+  "composer.profileDeletedHint": "当前 thread 绑定的 profile 已被删除，请手动切换到其他 profile 后继续。",
   "composer.profileTier.primary": "主力",
   "composer.profileTier.auxiliary": "辅助",
   "composer.profileTier.lightweight": "轻量",

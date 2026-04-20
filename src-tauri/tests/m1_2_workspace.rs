@@ -283,7 +283,7 @@ async fn test_workspace_repo_delete_removes_messages_before_runs() {
     let manager = WorkspaceManager::new(pool.clone());
 
     test_helpers::seed_workspace(&pool, "ws-del-repo", "/tmp/delete-repo").await;
-    test_helpers::seed_thread(&pool, "t-del-repo", "ws-del-repo").await;
+    test_helpers::seed_thread(&pool, "t-del-repo", "ws-del-repo", None).await;
     test_helpers::seed_run(&pool, "r-del-repo", "t-del-repo", "completed", "default").await;
 
     sqlx::query(

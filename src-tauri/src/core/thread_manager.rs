@@ -49,10 +49,12 @@ impl ThreadManager {
         &self,
         workspace_id: &str,
         title: Option<String>,
+        profile_id: Option<String>,
     ) -> Result<ThreadSummaryDto, AppError> {
         let record = ThreadRecord {
             id: uuid::Uuid::now_v7().to_string(),
             workspace_id: workspace_id.to_string(),
+            profile_id,
             title: title.unwrap_or_default(),
             status: ThreadStatus::Idle,
             summary: None,
@@ -144,6 +146,15 @@ impl ThreadManager {
     /// Update thread title.
     pub async fn update_title(&self, id: &str, title: &str) -> Result<(), AppError> {
         thread_repo::update_title(&self.pool, id, title).await
+    }
+
+    /// Update the profile bound to a thread.
+    pub async fn update_profile(&self, id: &str, profile_id: Option<&str>) -> Result<(), AppError> {
+        let updated = thread_repo::update_profile(&self.pool, id, profile_id).await?;
+        if !updated {
+            return Err(AppError::not_found(ErrorSource::Thread, "thread"));
+        }
+        Ok(())
     }
 
     /// Delete a thread and all its messages.

@@ -275,7 +275,7 @@ async fn worktree_parent_remove_cascades_children() {
         .expect("create child should succeed");
 
     // Seed a thread for the child worktree to prove cascade cleanup.
-    test_helpers::seed_thread(&pool, "t-child", &child.id).await;
+    test_helpers::seed_thread(&pool, "t-child", &child.id, None).await;
 
     ws_manager
         .remove(&parent.id, false)

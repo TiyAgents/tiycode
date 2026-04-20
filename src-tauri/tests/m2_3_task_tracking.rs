@@ -26,7 +26,7 @@ use tiycode::model::task_item::TaskStage;
 async fn test_create_task_board() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-task", "/tmp/task").await;
-    test_helpers::seed_thread(&pool, "t-task-1", "ws-task").await;
+    test_helpers::seed_thread(&pool, "t-task-1", "ws-task", None).await;
 
     let input = CreateTaskInput {
         title: "Implement Feature X".to_string(),
@@ -69,7 +69,7 @@ async fn test_create_task_board() {
 async fn test_auto_complete_previous_board() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-auto", "/tmp/auto").await;
-    test_helpers::seed_thread(&pool, "t-auto", "ws-auto").await;
+    test_helpers::seed_thread(&pool, "t-auto", "ws-auto", None).await;
 
     // Create first board
     let input1 = CreateTaskInput {
@@ -112,7 +112,7 @@ async fn test_auto_complete_previous_board() {
 async fn test_update_task_start_step() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-start", "/tmp/start").await;
-    test_helpers::seed_thread(&pool, "t-start", "ws-start").await;
+    test_helpers::seed_thread(&pool, "t-start", "ws-start", None).await;
 
     let input = CreateTaskInput {
         title: "Test Task".to_string(),
@@ -149,7 +149,7 @@ async fn test_update_task_start_step() {
 async fn test_update_task_complete_step() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-complete", "/tmp/complete").await;
-    test_helpers::seed_thread(&pool, "t-complete", "ws-complete").await;
+    test_helpers::seed_thread(&pool, "t-complete", "ws-complete", None).await;
 
     let input = CreateTaskInput {
         title: "Test Task".to_string(),
@@ -188,7 +188,7 @@ async fn test_update_task_complete_step() {
 async fn test_update_task_complete_last_step_auto_completes_board() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-last", "/tmp/last").await;
-    test_helpers::seed_thread(&pool, "t-last", "ws-last").await;
+    test_helpers::seed_thread(&pool, "t-last", "ws-last", None).await;
 
     let input = CreateTaskInput {
         title: "Single Step Task".to_string(),
@@ -222,7 +222,7 @@ async fn test_update_task_complete_last_step_auto_completes_board() {
 async fn test_update_task_advance_step_uses_active_step() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-advance", "/tmp/advance").await;
-    test_helpers::seed_thread(&pool, "t-advance", "ws-advance").await;
+    test_helpers::seed_thread(&pool, "t-advance", "ws-advance", None).await;
 
     let input = CreateTaskInput {
         title: "Advance Task".to_string(),
@@ -259,7 +259,7 @@ async fn test_update_task_advance_step_uses_active_step() {
 async fn test_update_task_advance_step_treats_empty_step_id_as_missing() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-advance-empty", "/tmp/advance-empty").await;
-    test_helpers::seed_thread(&pool, "t-advance-empty", "ws-advance-empty").await;
+    test_helpers::seed_thread(&pool, "t-advance-empty", "ws-advance-empty", None).await;
 
     let input = CreateTaskInput {
         title: "Advance Task Empty Step Id".to_string(),
@@ -298,7 +298,7 @@ async fn test_update_task_advance_step_treats_empty_step_id_as_missing() {
 async fn test_update_task_fail_step() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-fail", "/tmp/fail").await;
-    test_helpers::seed_thread(&pool, "t-fail", "ws-fail").await;
+    test_helpers::seed_thread(&pool, "t-fail", "ws-fail", None).await;
 
     let input = CreateTaskInput {
         title: "Test Task".to_string(),
@@ -342,7 +342,7 @@ async fn test_update_task_fail_step() {
 async fn test_update_task_complete_board() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-board", "/tmp/board").await;
-    test_helpers::seed_thread(&pool, "t-board", "ws-board").await;
+    test_helpers::seed_thread(&pool, "t-board", "ws-board", None).await;
 
     let input = CreateTaskInput {
         title: "Test Task".to_string(),
@@ -369,7 +369,7 @@ async fn test_update_task_complete_board() {
 async fn test_query_task_active_returns_only_active_board() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-query-active", "/tmp/query-active").await;
-    test_helpers::seed_thread(&pool, "t-query-active", "ws-query-active").await;
+    test_helpers::seed_thread(&pool, "t-query-active", "ws-query-active", None).await;
 
     let first_board = task_board_manager::create_task_board(
         &pool,
@@ -419,7 +419,7 @@ async fn test_query_task_active_returns_only_active_board() {
 async fn test_query_task_active_returns_empty_when_no_active_board_exists() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-query-none", "/tmp/query-none").await;
-    test_helpers::seed_thread(&pool, "t-query-none", "ws-query-none").await;
+    test_helpers::seed_thread(&pool, "t-query-none", "ws-query-none", None).await;
 
     let board = task_board_manager::create_task_board(
         &pool,
@@ -459,7 +459,7 @@ async fn test_query_task_active_returns_empty_when_no_active_board_exists() {
 async fn test_query_task_all_returns_all_boards_and_active_id() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-query-all", "/tmp/query-all").await;
-    test_helpers::seed_thread(&pool, "t-query-all", "ws-query-all").await;
+    test_helpers::seed_thread(&pool, "t-query-all", "ws-query-all", None).await;
 
     let first_board = task_board_manager::create_task_board(
         &pool,
@@ -511,7 +511,7 @@ async fn test_query_task_all_returns_all_boards_and_active_id() {
 async fn test_cannot_start_already_started_step() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-sm1", "/tmp/sm1").await;
-    test_helpers::seed_thread(&pool, "t-sm1", "ws-sm1").await;
+    test_helpers::seed_thread(&pool, "t-sm1", "ws-sm1", None).await;
 
     let input = CreateTaskInput {
         title: "SM Test".to_string(),
@@ -542,7 +542,7 @@ async fn test_cannot_start_already_started_step() {
 async fn test_cannot_complete_pending_step() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-sm2", "/tmp/sm2").await;
-    test_helpers::seed_thread(&pool, "t-sm2", "ws-sm2").await;
+    test_helpers::seed_thread(&pool, "t-sm2", "ws-sm2", None).await;
 
     let input = CreateTaskInput {
         title: "SM Test".to_string(),
@@ -575,7 +575,7 @@ async fn test_cannot_complete_pending_step() {
 async fn test_reconcile_active_board_starts_next_pending_step() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-reconcile", "/tmp/reconcile").await;
-    test_helpers::seed_thread(&pool, "t-reconcile", "ws-reconcile").await;
+    test_helpers::seed_thread(&pool, "t-reconcile", "ws-reconcile", None).await;
 
     let board = task_board_manager::create_task_board(
         &pool,
@@ -623,7 +623,7 @@ async fn test_reconcile_active_board_starts_next_pending_step() {
 async fn test_cannot_update_completed_board() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-sm3", "/tmp/sm3").await;
-    test_helpers::seed_thread(&pool, "t-sm3", "ws-sm3").await;
+    test_helpers::seed_thread(&pool, "t-sm3", "ws-sm3", None).await;
 
     let input = CreateTaskInput {
         title: "SM Test".to_string(),
@@ -677,7 +677,7 @@ async fn test_cannot_update_completed_board() {
 async fn test_task_boards_deleted_with_thread() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-delete", "/tmp/delete").await;
-    test_helpers::seed_thread(&pool, "t-delete", "ws-delete").await;
+    test_helpers::seed_thread(&pool, "t-delete", "ws-delete", None).await;
 
     let input = CreateTaskInput {
         title: "To Delete".to_string(),

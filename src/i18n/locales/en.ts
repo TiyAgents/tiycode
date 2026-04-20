@@ -72,6 +72,8 @@ const en: Record<TranslationKey, string> = {
   "composer.removeFileReference": "Remove file reference {{path}}",
   "composer.uploadFileOrImage": "Upload file or image",
   "composer.noProfileAvailable": "No available profile found.",
+  "composer.profileDeleted": "Profile deleted",
+  "composer.profileDeletedHint": "This thread references a deleted profile. Choose another profile to continue.",
   "composer.profileTier.primary": "Primary",
   "composer.profileTier.auxiliary": "Auxiliary",
   "composer.profileTier.lightweight": "Lightweight",

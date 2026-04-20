@@ -389,6 +389,7 @@ export function buildWorkspaceThreadItem(
 
   return {
     id: thread.id,
+    profileId: thread.profileId,
     name: displayTitle,
     time: formatThreadTimeLabel(thread.lastActiveAt || thread.createdAt, language),
     active: thread.id === activeThreadId,

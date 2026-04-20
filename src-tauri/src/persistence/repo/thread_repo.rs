@@ -8,6 +8,7 @@ use crate::model::thread::{ThreadRecord, ThreadStatus};
 struct ThreadRow {
     id: String,
     workspace_id: String,
+    profile_id: Option<String>,
     title: String,
     status: String,
     summary: Option<String>,
@@ -21,6 +22,7 @@ impl ThreadRow {
         ThreadRecord {
             id: self.id,
             workspace_id: self.workspace_id,
+            profile_id: self.profile_id,
             title: self.title,
             status: ThreadStatus::from_str(&self.status),
             summary: self.summary,
@@ -38,7 +40,7 @@ pub async fn list_by_workspace(
     offset: i64,
 ) -> Result<Vec<ThreadRecord>, AppError> {
     let rows = sqlx::query_as::<_, ThreadRow>(
-        "SELECT id, workspace_id, title, status, summary, last_active_at, created_at, updated_at
+        "SELECT id, workspace_id, profile_id, title, status, summary, last_active_at, created_at, updated_at
          FROM threads
          WHERE workspace_id = ?
          ORDER BY last_active_at DESC
@@ -55,7 +57,7 @@ pub async fn list_by_workspace(
 
 pub async fn find_by_id(pool: &SqlitePool, id: &str) -> Result<Option<ThreadRecord>, AppError> {
     let row = sqlx::query_as::<_, ThreadRow>(
-        "SELECT id, workspace_id, title, status, summary, last_active_at, created_at, updated_at
+        "SELECT id, workspace_id, profile_id, title, status, summary, last_active_at, created_at, updated_at
          FROM threads WHERE id = ?",
     )
     .bind(id)
@@ -80,11 +82,12 @@ pub async fn list_ids_with_active_status(pool: &SqlitePool) -> Result<Vec<String
 pub async fn insert(pool: &SqlitePool, record: &ThreadRecord) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO threads (id, workspace_id, title, status, summary, last_active_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO threads (id, workspace_id, profile_id, title, status, summary, last_active_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.workspace_id)
+    .bind(&record.profile_id)
     .bind(&record.title)
     .bind(record.status.as_str())
     .bind(&record.summary)
@@ -114,6 +117,21 @@ pub async fn update_title(pool: &SqlitePool, id: &str, title: &str) -> Result<()
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn update_profile(
+    pool: &SqlitePool,
+    id: &str,
+    profile_id: Option<&str>,
+) -> Result<bool, AppError> {
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query("UPDATE threads SET profile_id = ?, updated_at = ? WHERE id = ?")
+        .bind(profile_id)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn update_status(

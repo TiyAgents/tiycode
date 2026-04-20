@@ -587,6 +587,7 @@ fn test_thread_summary_dto_camel_case() {
     let dto = ThreadSummaryDto {
         id: "t-1".into(),
         workspace_id: "ws-1".into(),
+        profile_id: Some("profile-1".into()),
         title: "Test".into(),
         status: ThreadStatus::Idle,
         last_active_at: "2026-03-16T00:00:00Z".into(),

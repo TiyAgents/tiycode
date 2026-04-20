@@ -96,6 +96,7 @@ const FILE_SEARCH_DEBOUNCE_MS = 120;
 type WorkbenchPromptComposerProps = {
   activeAgentProfileId: string;
   agentProfiles: ReadonlyArray<AgentProfile>;
+  allowMissingActiveProfile?: boolean;
   canSubmitWhenAttachmentsOnly?: boolean;
   className?: string;
   commands?: ReadonlyArray<CommandEntry>;
@@ -778,12 +779,14 @@ function PromptInputSubmitButton({
   activeProfile,
   allowAttachmentsOnly,
   composerValue,
+  hasMissingActiveProfile = false,
   onStop,
   status,
 }: {
   activeProfile: AgentProfile | null;
   allowAttachmentsOnly: boolean;
   composerValue: string;
+  hasMissingActiveProfile?: boolean;
   onStop: () => void;
   status: ChatStatus;
 }) {
@@ -791,7 +794,7 @@ function PromptInputSubmitButton({
   const hasText = Boolean(composerValue.trim());
   const hasAttachments = attachments.files.length > 0;
   const isStopping = status === "submitted" || status === "streaming";
-  const canSubmit = Boolean(activeProfile) && (hasText || (allowAttachmentsOnly && hasAttachments));
+  const canSubmit = Boolean(activeProfile) && !hasMissingActiveProfile && (hasText || (allowAttachmentsOnly && hasAttachments));
 
   return <PromptInputSubmit disabled={isStopping ? false : !canSubmit} onStop={onStop} status={status} />;
 }
@@ -976,6 +979,7 @@ export function ComposerMessageAttachments({
 export function WorkbenchPromptComposer({
   activeAgentProfileId,
   agentProfiles,
+  allowMissingActiveProfile = false,
   canSubmitWhenAttachmentsOnly = true,
   className,
   commands = [],
@@ -1018,11 +1022,19 @@ export function WorkbenchPromptComposer({
   const registerReferencedSourceBridge = useCallback((bridge: ReferencedSourceBridgeHandle) => {
     referencedSourceBridgeRef.current = bridge;
   }, []);
-  const activeProfile = useMemo(
-    () => agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? agentProfiles[0] ?? null,
-    [activeAgentProfileId, agentProfiles],
-  );
-  const canSwitchProfiles = Boolean(activeProfile);
+  const activeProfile = useMemo(() => {
+    const matchedProfile = agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? null;
+    if (matchedProfile) {
+      return matchedProfile;
+    }
+    if (allowMissingActiveProfile) {
+      return null;
+    }
+    return agentProfiles[0] ?? null;
+  }, [activeAgentProfileId, agentProfiles, allowMissingActiveProfile]);
+  const hasMissingActiveProfile =
+    allowMissingActiveProfile && Boolean(activeAgentProfileId) && activeProfile === null;
+  const canSwitchProfiles = agentProfiles.length > 0;
   const commandRegistry = useMemo(
     () => buildComposerCommandRegistry(commands),
     [commands],
@@ -1636,63 +1648,76 @@ export function WorkbenchPromptComposer({
             <PromptInputTools>
               <ComposerAttachmentTrigger />
 
-              {activeProfile ? (
-                <div className="flex items-center gap-2">
-                  {canSwitchProfiles ? (
-                    <ModelSelector onOpenChange={setProfileSelectorOpen} open={isProfileSelectorOpen}>
-                      <ModelSelectorTrigger asChild>
-                        <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" size="sm">
+              <div className="flex items-center gap-2">
+                {canSwitchProfiles ? (
+                  <ModelSelector onOpenChange={setProfileSelectorOpen} open={isProfileSelectorOpen}>
+                    <ModelSelectorTrigger asChild>
+                      <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" size="sm">
+                        {activeProfile ? (
                           <ProfileInlineIdentity badge={false} profile={activeProfile} providers={providers} showModel={false} />
-                        </PromptInputButton>
-                      </ModelSelectorTrigger>
-                      <ModelSelectorContent
-                        commandProps={{ value: activeAgentProfileId ?? undefined }}
-                        showCloseButton={false}
-                        title="Profile Selector"
-                      >
-                        <ModelSelectorList>
-                          <ModelSelectorEmpty>{t("composer.noProfileAvailable")}</ModelSelectorEmpty>
-                          <ModelSelectorGroup heading="Agent Profiles">
-                            {agentProfiles.map((profile) => (
-                              <ProfileSelectorItem
-                                isActive={profile.id === activeAgentProfileId}
-                                key={profile.id}
-                                onSelect={() => {
-                                  onSelectAgentProfile(profile.id);
-                                  setProfileSelectorOpen(false);
-                                }}
-                                profile={profile}
-                                providers={providers}
-                              />
-                            ))}
-                          </ModelSelectorGroup>
-                        </ModelSelectorList>
-                      </ModelSelectorContent>
-                    </ModelSelector>
-                  ) : (
-                    <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" disabled size="sm">
+                        ) : (
+                          <div className="flex min-w-0 items-center gap-2 text-app-danger">
+                            <UserStar className="size-4 shrink-0" />
+                            <span className="truncate text-sm font-medium">{t("composer.profileDeleted")}</span>
+                          </div>
+                        )}
+                      </PromptInputButton>
+                    </ModelSelectorTrigger>
+                    <ModelSelectorContent
+                      commandProps={{ value: activeAgentProfileId ?? undefined }}
+                      showCloseButton={false}
+                      title="Profile Selector"
+                    >
+                      <ModelSelectorList>
+                        <ModelSelectorEmpty>{t("composer.noProfileAvailable")}</ModelSelectorEmpty>
+                        <ModelSelectorGroup heading="Agent Profiles">
+                          {agentProfiles.map((profile) => (
+                            <ProfileSelectorItem
+                              isActive={profile.id === activeAgentProfileId}
+                              key={profile.id}
+                              onSelect={() => {
+                                onSelectAgentProfile(profile.id);
+                                setProfileSelectorOpen(false);
+                              }}
+                              profile={profile}
+                              providers={providers}
+                            />
+                          ))}
+                        </ModelSelectorGroup>
+                      </ModelSelectorList>
+                    </ModelSelectorContent>
+                  </ModelSelector>
+                ) : (
+                  <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" disabled size="sm">
+                    {activeProfile ? (
                       <ProfileInlineIdentity badge={false} muted profile={activeProfile} providers={providers} showModel={false} />
-                    </PromptInputButton>
-                  )}
+                    ) : (
+                      <div className="flex min-w-0 items-center gap-2 text-app-danger/80">
+                        <UserStar className="size-4 shrink-0" />
+                        <span className="truncate text-sm font-medium">{t("composer.profileDeleted")}</span>
+                      </div>
+                    )}
+                  </PromptInputButton>
+                )}
 
-                  {showRunModeToggle ? (
-                    <>
-                      <span aria-hidden="true" className="h-4 w-px bg-app-border/55" />
-                      <RunModeToggle
-                        disabled={runModeDisabled}
-                        onChange={onRunModeChange}
-                        runMode={runMode}
-                      />
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
+                {showRunModeToggle ? (
+                  <>
+                    <span aria-hidden="true" className="h-4 w-px bg-app-border/55" />
+                    <RunModeToggle
+                      disabled={runModeDisabled || hasMissingActiveProfile}
+                      onChange={onRunModeChange}
+                      runMode={runMode}
+                    />
+                  </>
+                ) : null}
+              </div>
             </PromptInputTools>
 
             <PromptInputSubmitButton
               activeProfile={activeProfile}
               allowAttachmentsOnly={canSubmitWhenAttachmentsOnly}
               composerValue={value}
+              hasMissingActiveProfile={hasMissingActiveProfile}
               onStop={onStop}
               status={status}
             />
@@ -1701,7 +1726,9 @@ export function WorkbenchPromptComposer({
       </div>
 
       {error ? <p className="mt-2 text-xs text-app-danger">{error}</p> : null}
-      {!activeProfile ? (
+      {hasMissingActiveProfile ? (
+        <p className="mt-2 text-xs text-app-danger">{t("composer.profileDeletedHint")}</p>
+      ) : !activeProfile ? (
         <p className="mt-2 text-xs text-app-danger">No active profile is available for the composer right now.</p>
       ) : null}
     </div>
