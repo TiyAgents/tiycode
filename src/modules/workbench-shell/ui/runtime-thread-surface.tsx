@@ -58,6 +58,10 @@ import {
   applyTaskBoardUpdate,
   type TaskBoardState,
 } from "@/modules/workbench-shell/model/task-board";
+import {
+  buildSnapshotHelperToolSummary as buildSnapshotHelperToolSummaryFromHelpers,
+  isHelperOwnedTool,
+} from "@/modules/workbench-shell/model/helpers";
 import { TaskBoardCard } from "@/modules/workbench-shell/ui/task-board-card";
 import { TaskHistoryTimeline } from "@/modules/workbench-shell/ui/task-stage-history-card";
 
@@ -698,23 +702,7 @@ function buildSnapshotHelperToolSummary(
   helperId: string,
   toolCalls: ReadonlyArray<ToolCallDto>,
 ) {
-  const helperToolCalls = toolCalls.filter((tool) => tool.id.startsWith(`${helperId.slice(0, 8)}:`) || tool.id.startsWith(`${helperId}:`));
-  const toolCounts = helperToolCalls.reduce<Record<string, number>>((counts, tool) => {
-    counts[tool.toolName] = (counts[tool.toolName] ?? 0) + 1;
-    return counts;
-  }, {});
-  const completedSteps = helperToolCalls.filter((tool) =>
-    tool.status === "completed"
-    || tool.status === "failed"
-    || tool.status === "denied"
-    || tool.status === "cancelled",
-  ).length;
-
-  return {
-    completedSteps,
-    toolCounts,
-    totalToolCalls: helperToolCalls.length,
-  };
+  return buildSnapshotHelperToolSummaryFromHelpers(helperId, toolCalls);
 }
 
 function mapSnapshotHelper(
@@ -1941,18 +1929,7 @@ function formatExecutionSummary({
     : null;
 }
 
-function isHelperOwnedTool(
-  toolId: string,
-  helperIds: ReadonlySet<string>,
-) {
-  for (const helperId of helperIds) {
-    if (toolId.startsWith(`${helperId.slice(0, 8)}:`) || toolId.startsWith(`${helperId}:`)) {
-      return true;
-    }
-  }
 
-  return false;
-}
 
 function isRuntimeOrchestrationTool(toolName: string) {
   return (
