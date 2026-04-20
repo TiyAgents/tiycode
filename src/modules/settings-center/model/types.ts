@@ -12,6 +12,9 @@ export type WorkspaceEntry = {
   isDefault: boolean;
   isGit: boolean;
   autoWorkTree: boolean;
+  kind?: "standalone" | "repo" | "worktree";
+  parentWorkspaceId?: string | null;
+  worktreeHash?: string | null;
 };
 
 export type ProviderKind = "builtin" | "custom";
