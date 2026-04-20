@@ -4402,71 +4402,82 @@ export function RuntimeThreadSurface({
         </Conversation>
       </div>
 
-      {taskBoards.activeBoard ? (
-        <div className="shrink-0 px-6 pt-4">
-          <div className="mx-auto w-full max-w-4xl">
-            <div ref={activeTaskBoardRef}>
-              <TaskBoardCard board={taskBoards.activeBoard} />
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       <div className="shrink-0 px-6 pb-6 pt-4">
-        <WorkbenchPromptComposer
-          activeAgentProfileId={activeAgentProfileId}
-          agentProfiles={agentProfiles}
-          canSubmitWhenAttachmentsOnly={false}
-          commands={commands}
-          enabledSkills={enabledSkills}
-          error={composerError}
-          onErrorMessageChange={setComposerError}
-          onRunModeChange={setSelectedRunMode}
-          onSelectAgentProfile={onSelectAgentProfile}
-          onStop={() => {
-            if (!threadId) {
-              return;
-            }
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-0">
+          {taskBoards.activeBoard ? (
+            <div
+              className="overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu/96 px-2 pb-0 pt-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl"
+              ref={activeTaskBoardRef}
+            >
+              <TaskBoardCard
+                board={taskBoards.activeBoard}
+                className="rounded-[18px] rounded-b-none border-x-0 border-t-0 border-b border-app-border/55 bg-app-surface/52 px-4 pb-3 pt-3 shadow-none"
+              />
+            </div>
+          ) : null}
 
-            void streamRef.current?.cancelRun(threadId).then(() => {
-              // Optimistic UI update: immediately reflect the cancellation in
-              // the UI so the user sees instant feedback. The backend has
-              // accepted the cancel request but `RunCancelled` may arrive late
-              // if the agent loop is blocked on a long-running HTTP call.
-              completeThinkingPhase();
-              setRunState("cancelled");
-              onRunStateChange?.("cancelled");
+          <WorkbenchPromptComposer
+            activeAgentProfileId={activeAgentProfileId}
+            agentProfiles={agentProfiles}
+            canSubmitWhenAttachmentsOnly={false}
+            className="w-full max-w-none gap-0"
+            commands={commands}
+            composerShellClassName={cn(
+              "shadow-[0_22px_50px_-42px_rgba(15,23,42,0.38)]",
+              taskBoards.activeBoard
+                ? "rounded-t-none border-t-0"
+                : undefined,
+            )}
+            enabledSkills={enabledSkills}
+            error={composerError}
+            onErrorMessageChange={setComposerError}
+            onRunModeChange={setSelectedRunMode}
+            onSelectAgentProfile={onSelectAgentProfile}
+            onStop={() => {
+              if (!threadId) {
+                return;
+              }
 
-              // Safety net: if the backend event (`run_cancelled`) hasn't
-              // arrived within 5 seconds, force a snapshot reload to reconcile
-              // the UI with the actual backend state.
-              const timer = setTimeout(() => {
+              void streamRef.current?.cancelRun(threadId).then(() => {
+                // Optimistic UI update: immediately reflect the cancellation in
+                // the UI so the user sees instant feedback. The backend has
+                // accepted the cancel request but `RunCancelled` may arrive late
+                // if the agent loop is blocked on a long-running HTTP call.
+                completeThinkingPhase();
+                setRunState("cancelled");
+                onRunStateChange?.("cancelled");
+
+                // Safety net: if the backend event (`run_cancelled`) hasn't
+                // arrived within 5 seconds, force a snapshot reload to reconcile
+                // the UI with the actual backend state.
+                const timer = setTimeout(() => {
+                  void loadSnapshot();
+                }, 5_000);
+
+                // If the stream delivers a terminal event before the timeout,
+                // the next `onRunStateChange` + `loadSnapshot` will render the
+                // correct state and this timer becomes a harmless no-op.
+                return () => clearTimeout(timer);
+              }).catch(() => {
+                // The cancel request failed — most likely the run already
+                // finished on the backend but the terminal event was lost or
+                // hasn't arrived yet.  Reload the snapshot to reconcile the
+                // UI with the actual backend state.
                 void loadSnapshot();
-              }, 5_000);
-
-              // If the stream delivers a terminal event before the timeout,
-              // the next `onRunStateChange` + `loadSnapshot` will render the
-              // correct state and this timer becomes a harmless no-op.
-              return () => clearTimeout(timer);
-            }).catch(() => {
-              // The cancel request failed — most likely the run already
-              // finished on the backend but the terminal event was lost or
-              // hasn't arrived yet.  Reload the snapshot to reconcile the
-              // UI with the actual backend state.
-              void loadSnapshot();
-            });
-          }}
-          onSubmit={handleSubmit}
-          placeholder="Ask Tiy anything, @ to add files, / for commands, $ for skills"
-          providers={providers}
-          runMode={selectedRunMode}
-          runModeDisabled={runState === "running" || runState === "waiting_approval"}
-          showRunModeToggle
-          status={composerStatus}
-          value={composerValue}
-          workspaceId={workspaceId}
-          onValueChange={setComposerValue}
-        />
+              });
+            }}
+            onSubmit={handleSubmit}
+            placeholder="Ask Tiy anything, @ to add files, / for commands, $ for skills"
+            providers={providers}
+            runMode={selectedRunMode}
+            runModeDisabled={runState === "running" || runState === "waiting_approval"}
+            showRunModeToggle
+            status={composerStatus}
+            value={composerValue}
+            workspaceId={workspaceId}
+            onValueChange={setComposerValue}
+          />
+        </div>
       </div>
     </div>
   );
