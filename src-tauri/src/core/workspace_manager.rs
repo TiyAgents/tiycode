@@ -36,7 +36,8 @@ impl WorkspaceManager {
         self.worktree_manager.get()
     }
 
-    /// List all workspaces, ordered by default first, then by updated_at.
+    /// List all workspaces, ordered by: default first, then name ascending,
+    /// kind ascending (repo/standalone before worktree), created_at descending.
     pub async fn list(&self) -> Result<Vec<WorkspaceRecord>, AppError> {
         workspace_repo::list_all(&self.pool).await
     }

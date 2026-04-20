@@ -63,7 +63,7 @@ pub async fn list_all(pool: &SqlitePool) -> Result<Vec<WorkspaceRecord>, AppErro
     let rows = sqlx::query_as::<_, WorkspaceRow>(&format!(
         "SELECT {SELECT_COLUMNS}
          FROM workspaces
-         ORDER BY is_default DESC, updated_at DESC"
+         ORDER BY is_default DESC, name ASC, kind ASC, created_at DESC"
     ))
     .fetch_all(pool)
     .await?;

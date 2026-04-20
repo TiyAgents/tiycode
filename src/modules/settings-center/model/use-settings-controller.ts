@@ -1067,22 +1067,10 @@ export function useSettingsController() {
     }
 
     void workspaceAdd(entry.path, entry.name)
-      .then(async (workspace) => {
-        if (entry.isDefault) {
-          await workspaceSetDefault(workspace.id);
-        }
-
+      .then((workspace) => {
         setSettings((current) => ({
           ...current,
-          workspaces: current.workspaces
-            .map((currentWorkspace) => ({
-              ...currentWorkspace,
-              isDefault: entry.isDefault ? false : currentWorkspace.isDefault,
-            }))
-            .concat({
-              ...mapWorkspaceDto(workspace),
-              isDefault: entry.isDefault,
-            }),
+          workspaces: current.workspaces.concat(mapWorkspaceDto(workspace)),
         }));
       })
       .catch((error) => {
