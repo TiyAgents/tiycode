@@ -409,11 +409,10 @@ async fn test_policy_allow_list_pattern_must_match() {
 // =========================================================================
 
 #[test]
-fn test_plan_mode_blocks_mutating_tools() {
-    let mutating_tools = vec![
+fn test_plan_mode_blocks_hard_deny_tools() {
+    let hard_deny_tools = vec![
         "write",
         "patch",
-        "shell",
         "git_add",
         "git_stage",
         "git_unstage",
@@ -426,9 +425,9 @@ fn test_plan_mode_blocks_mutating_tools() {
     ];
 
     let run_mode = "plan";
-    for tool in &mutating_tools {
-        let should_block = run_mode == "plan" && mutating_tools.contains(tool);
-        assert!(should_block, "Plan mode should block mutating tool: {tool}");
+    for tool in &hard_deny_tools {
+        let should_block = run_mode == "plan" && hard_deny_tools.contains(tool);
+        assert!(should_block, "Plan mode should hard-deny tool: {tool}");
     }
 }
 
@@ -443,10 +442,9 @@ fn test_plan_mode_allows_read_tools() {
         "git_log",
     ];
 
-    let mutating_tools = vec![
+    let hard_deny_tools = vec![
         "write",
         "patch",
-        "shell",
         "git_add",
         "git_stage",
         "git_unstage",
@@ -459,9 +457,54 @@ fn test_plan_mode_allows_read_tools() {
     ];
 
     for tool in &read_only_tools {
-        let blocked = mutating_tools.contains(tool);
+        let blocked = hard_deny_tools.contains(tool);
         assert!(!blocked, "Plan mode should allow read-only tool: {tool}");
     }
+
+    // Shell is not in the hard-deny list; it follows the normal approval policy.
+    let blocked = hard_deny_tools.contains(&"shell");
+    assert!(
+        !blocked,
+        "Shell should follow normal approval policy in plan mode, not be hard-denied"
+    );
+}
+
+// =========================================================================
+// T1.6.2b — Shell in plan mode follows normal approval policy (not hard-denied)
+// =========================================================================
+
+#[tokio::test]
+async fn test_plan_mode_shell_follows_approval_policy() {
+    let pool = test_helpers::setup_test_pool().await;
+    let engine = PolicyEngine::new(pool);
+
+    // shell in plan mode should NOT be hard-denied; it falls through to the
+    // normal approval policy.  With default settings (no allow/deny rules),
+    // a non-dangerous command should require approval.
+    let result = engine
+        .evaluate(
+            "shell",
+            &json!({ "command": "git log --oneline -5" }),
+            None,
+            &[],
+            "plan",
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !matches!(result.verdict, PolicyVerdict::Deny { .. }),
+        "shell in plan mode should not be hard-denied, got: {:?}",
+        result.verdict
+    );
+    assert!(
+        result
+            .checked_rules
+            .contains(&"plan_mode_restriction".to_string())
+            == false,
+        "shell should not trigger plan_mode_restriction rule"
+    );
 }
 
 // =========================================================================

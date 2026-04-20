@@ -1585,6 +1585,22 @@ You may call this tool multiple times in a run to incrementally refine the plan.
     ];
     tools.extend(runtime_orchestration_tools());
 
+    // Shell is available in both profiles (plan mode applies read-only constraints via prompt).
+    tools.push(AgentTool::new(
+        "shell",
+        "Run Command",
+        "Run a non-interactive shell command inside the current workspace.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string" },
+                "cwd": { "type": "string" },
+                "timeout": { "type": "number" }
+            },
+            "required": ["command"]
+        }),
+    ));
+
     if profile_name == DEFAULT_FULL_TOOL_PROFILE {
         tools.push(AgentTool::new(
             "edit",
@@ -1624,20 +1640,6 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                     "content": { "type": "string" }
                 },
                 "required": ["path", "content"]
-            }),
-        ));
-        tools.push(AgentTool::new(
-            "shell",
-            "Run Command",
-            "Run a non-interactive shell command inside the current workspace.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string" },
-                    "cwd": { "type": "string" },
-                    "timeout": { "type": "number" }
-                },
-                "required": ["command"]
             }),
         ));
         tools.push(AgentTool::new(
@@ -3097,10 +3099,13 @@ mod tests {
     }
 
     #[test]
-    fn plan_read_only_profile_does_not_expose_mutating_terminal_tools() {
+    fn plan_read_only_profile_includes_shell_excludes_mutating_terminal_tools() {
         let tools = runtime_tools_for_profile(PLAN_READ_ONLY_TOOL_PROFILE);
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
+        // Shell is available in plan mode (follows normal approval policy).
+        assert!(tool_names.contains(&"shell"));
+        // Write-oriented terminal tools are excluded.
         assert!(!tool_names.contains(&"term_write"));
         assert!(!tool_names.contains(&"term_restart"));
         assert!(!tool_names.contains(&"term_close"));
