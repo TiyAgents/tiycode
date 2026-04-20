@@ -393,7 +393,7 @@ async fn test_workspace_status_update() {
 }
 
 // =========================================================================
-// T1.2.4 — Workspace ordering (default first, then by updated_at)
+// T1.2.4 — Workspace ordering (default first, then name, kind, created_at)
 // =========================================================================
 
 #[tokio::test]
@@ -409,10 +409,12 @@ async fn test_workspace_list_ordering() {
         .await
         .unwrap();
 
-    let rows = sqlx::query("SELECT id FROM workspaces ORDER BY is_default DESC, updated_at DESC")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+    let rows = sqlx::query(
+        "SELECT id FROM workspaces ORDER BY is_default DESC, name ASC, kind ASC, created_at DESC",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
 
     // Default workspace should come first
     assert_eq!(rows[0].get::<String, _>("id"), "ws-2");

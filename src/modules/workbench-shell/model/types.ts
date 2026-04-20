@@ -21,6 +21,7 @@ export type WorkspaceItem = {
   parentWorkspaceId?: string | null;
   worktreeHash?: string | null;
   branch?: string | null;
+  createdAt?: string;
 };
 
 export type ProjectOption = {
