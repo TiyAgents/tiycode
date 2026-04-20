@@ -827,32 +827,36 @@ fn supported_file_type(
 )> {
     let value = match normalized {
         "rust" | "rs" => ("rust", &["rs"][..], &[][..]),
-        "typescript" | "ts" => ("typescript", &["ts", "tsx", "mts", "cts"][..], &[][..]),
-        "javascript" | "js" => ("javascript", &["js", "jsx", "mjs", "cjs"][..], &[][..]),
+        "typescript" | "ts" | "tsx" | "mts" | "cts" => {
+            ("typescript", &["ts", "tsx", "mts", "cts"][..], &[][..])
+        }
+        "javascript" | "js" | "jsx" | "mjs" | "cjs" => {
+            ("javascript", &["js", "jsx", "mjs", "cjs"][..], &[][..])
+        }
         "python" | "py" => ("python", &["py"][..], &[][..]),
         "go" => ("go", &["go"][..], &[][..]),
         "java" => ("java", &["java"][..], &[][..]),
         "json" => ("json", &["json"][..], &[][..]),
         "yaml" | "yml" => ("yaml", &["yaml", "yml"][..], &[][..]),
         "toml" => ("toml", &["toml"][..], &[][..]),
-        "markdown" | "md" => ("markdown", &["md", "mdx"][..], &[][..]),
-        "css" => ("css", &["css", "scss", "sass", "less"][..], &[][..]),
-        "html" => ("html", &["html", "htm"][..], &[][..]),
+        "markdown" | "md" | "mdx" => ("markdown", &["md", "mdx"][..], &[][..]),
+        "css" | "scss" | "sass" | "less" => ("css", &["css", "scss", "sass", "less"][..], &[][..]),
+        "html" | "htm" => ("html", &["html", "htm"][..], &[][..]),
         "sql" => ("sql", &["sql"][..], &[][..]),
-        "shell" | "sh" | "bash" => (
+        "shell" | "sh" | "bash" | "zsh" | "fish" => (
             "shell",
             &["sh", "bash", "zsh", "fish", "ksh"][..],
             &[".bashrc", ".zshrc"][..],
         ),
         "powershell" | "ps" | "ps1" => ("powershell", &["ps1", "psm1", "psd1"][..], &[][..]),
-        "c" => ("c", &["c", "h"][..], &[][..]),
-        "cpp" | "c++" | "cc" => (
+        "c" | "h" => ("c", &["c", "h"][..], &[][..]),
+        "cpp" | "c++" | "cc" | "cxx" | "hpp" => (
             "cpp",
             &["cc", "cpp", "cxx", "hpp", "hh", "hxx"][..],
             &[][..],
         ),
         "swift" => ("swift", &["swift"][..], &[][..]),
-        "kotlin" | "kt" => ("kotlin", &["kt", "kts"][..], &[][..]),
+        "kotlin" | "kt" | "kts" => ("kotlin", &["kt", "kts"][..], &[][..]),
         "ruby" | "rb" => ("ruby", &["rb"][..], &["Gemfile", "Rakefile"][..]),
         "php" => ("php", &["php"][..], &[][..]),
         "docker" => ("docker", &[][..], &["Dockerfile", "Containerfile"][..]),
@@ -1332,6 +1336,47 @@ mod tests {
             Some(&matcher),
             Path::new("/workspace/src/component.rs"),
         ));
+    }
+
+    #[test]
+    fn file_type_extension_aliases_resolve_to_parent_type() {
+        // tsx/jsx/mdx/scss etc. should be accepted as type filters
+        // and match the same set of extensions as their parent type.
+        for alias in &["tsx", "mts", "cts"] {
+            let matcher = compile_file_type(Some(alias)).unwrap().unwrap();
+            assert!(
+                matches_file_type(Some(&matcher), Path::new("/w/app.ts")),
+                "{alias} should match .ts"
+            );
+            assert!(
+                matches_file_type(Some(&matcher), Path::new("/w/app.tsx")),
+                "{alias} should match .tsx"
+            );
+            assert!(
+                !matches_file_type(Some(&matcher), Path::new("/w/app.js")),
+                "{alias} should not match .js"
+            );
+        }
+
+        for alias in &["jsx", "mjs", "cjs"] {
+            let matcher = compile_file_type(Some(alias)).unwrap().unwrap();
+            assert!(
+                matches_file_type(Some(&matcher), Path::new("/w/app.js")),
+                "{alias} should match .js"
+            );
+            assert!(
+                matches_file_type(Some(&matcher), Path::new("/w/app.jsx")),
+                "{alias} should match .jsx"
+            );
+        }
+
+        let mdx = compile_file_type(Some("mdx")).unwrap().unwrap();
+        assert!(matches_file_type(Some(&mdx), Path::new("/w/readme.md")));
+        assert!(matches_file_type(Some(&mdx), Path::new("/w/doc.mdx")));
+
+        let scss = compile_file_type(Some("scss")).unwrap().unwrap();
+        assert!(matches_file_type(Some(&scss), Path::new("/w/style.css")));
+        assert!(matches_file_type(Some(&scss), Path::new("/w/style.scss")));
     }
 
     #[test]

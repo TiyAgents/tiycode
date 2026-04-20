@@ -3477,7 +3477,10 @@ export function RuntimeThreadSurface({
           <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
             <div
               className={cn(
-                "flex w-full items-start justify-between gap-3 text-left",
+                "flex w-full text-left",
+                readTool.error
+                  ? "flex-col gap-1"
+                  : "items-start justify-between gap-3",
                 inset ? "pl-0" : undefined,
               )}
             >
@@ -3493,7 +3496,7 @@ export function RuntimeThreadSurface({
                 )}
               </div>
               {readTool.error ? (
-                <span className="shrink-0 truncate text-xs text-app-danger" title={readTool.error}>
+                <span className="line-clamp-1 break-words text-xs text-app-danger" title={readTool.error}>
                   {readTool.error}
                 </span>
               ) : (
@@ -3513,7 +3516,10 @@ export function RuntimeThreadSurface({
           <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
             <div
               className={cn(
-                "flex w-full items-start justify-between gap-3 text-left",
+                "flex w-full text-left",
+                queryTool.error
+                  ? "flex-col gap-1"
+                  : "items-start justify-between gap-3",
                 inset ? "pl-0" : undefined,
               )}
             >
@@ -3532,7 +3538,7 @@ export function RuntimeThreadSurface({
                 ) : null}
               </div>
               {queryTool.error ? (
-                <span className="shrink-0 truncate text-xs text-app-danger" title={queryTool.error}>
+                <span className="line-clamp-1 break-words text-xs text-app-danger" title={queryTool.error}>
                   {queryTool.error}
                 </span>
               ) : (
@@ -3552,7 +3558,10 @@ export function RuntimeThreadSurface({
           <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
             <div
               className={cn(
-                "flex w-full items-start justify-between gap-3 text-left",
+                "flex w-full text-left",
+                listTool.error
+                  ? "flex-col gap-1"
+                  : "items-start justify-between gap-3",
                 inset ? "pl-0" : undefined,
               )}
             >
@@ -3568,7 +3577,7 @@ export function RuntimeThreadSurface({
                 ) : null}
               </div>
               {listTool.error ? (
-                <span className="shrink-0 truncate text-xs text-app-danger" title={listTool.error}>
+                <span className="line-clamp-1 break-words text-xs text-app-danger" title={listTool.error}>
                   {listTool.error}
                 </span>
               ) : (
@@ -3771,7 +3780,7 @@ export function RuntimeThreadSurface({
                     errorLabel={t("tool.label.error")}
                     errorText={tool.state === "output-available" ? undefined : tool.error}
                     label={t("tool.label.output")}
-                    output={stringifyToolValue(tool.state === "output-available" ? tool.result : tool.error ?? tool.result)}
+                    output={stringifyToolValue(tool.result)}
                   />
                 ) : null}
 
