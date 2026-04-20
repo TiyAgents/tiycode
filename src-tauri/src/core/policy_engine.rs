@@ -4,7 +4,7 @@
 //! 1. Built-in dangerous pattern hard deny
 //! 2. User deny list
 //! 3. Workspace boundary check
-//! 4. Run mode restrictions (plan mode blocks mutations)
+//! 4. Run mode restrictions (plan mode blocks hard-deny mutations; shell follows normal approval)
 //! 5. User allow list
 //! 6. Approval policy fallback
 
@@ -48,6 +48,27 @@ const MUTATING_TOOLS: &[&str] = &[
     "edit",
     "patch",
     "shell",
+    "git_add",
+    "git_stage",
+    "git_unstage",
+    "git_commit",
+    "git_push",
+    "git_pull",
+    "git_fetch",
+    "term_write",
+    "term_restart",
+    "term_close",
+    "market_install",
+];
+
+/// Tools that are hard-denied in plan mode.
+/// Shell is intentionally excluded — it follows the normal approval policy so that
+/// read-only commands (git log, npm ls, command -v, skill CLIs, etc.) remain
+/// available for information gathering in plan mode.
+const PLAN_HARD_DENY_TOOLS: &[&str] = &[
+    "write",
+    "edit",
+    "patch",
     "git_add",
     "git_stage",
     "git_unstage",
@@ -207,8 +228,9 @@ impl PolicyEngine {
             }
         }
 
-        // 4. Run mode restriction (plan mode blocks mutations)
-        if run_mode == "plan" && MUTATING_TOOLS.contains(&tool_name) {
+        // 4. Run mode restriction (plan mode blocks hard-deny mutations;
+        //    shell is excluded so it falls through to the normal approval policy)
+        if run_mode == "plan" && PLAN_HARD_DENY_TOOLS.contains(&tool_name) {
             checked.push("plan_mode_restriction".to_string());
             return Ok(PolicyCheck {
                 tool_name: tool_name.to_string(),
