@@ -81,22 +81,43 @@ describe("buildProjectOptionFromWorkspace", () => {
 // ---------------------------------------------------------------------------
 
 describe("sortWorkspacesWithWorktrees", () => {
-  it("keeps standalone items in original order", () => {
+  it("sorts standalone items by name then id deterministically", () => {
     const items = [
-      { id: "a", kind: "standalone" as const, parentWorkspaceId: null },
-      { id: "b", kind: "standalone" as const, parentWorkspaceId: null },
-      { id: "c", kind: "standalone" as const, parentWorkspaceId: null },
+      { id: "c", kind: "standalone" as const, parentWorkspaceId: null, name: "Zeta" },
+      { id: "a", kind: "standalone" as const, parentWorkspaceId: null, name: "Alpha" },
+      { id: "b", kind: "standalone" as const, parentWorkspaceId: null, name: "Alpha" },
     ];
     const sorted = sortWorkspacesWithWorktrees(items);
+    // name "Alpha" first (id a < b), then "Zeta"
     expect(sorted.map((i) => i.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("sorts by default workspace first, then name", () => {
+    const items = [
+      { id: "a", kind: "standalone" as const, parentWorkspaceId: null, name: "Beta", defaultOpen: false },
+      { id: "b", kind: "standalone" as const, parentWorkspaceId: null, name: "Alpha", defaultOpen: true },
+    ];
+    const sorted = sortWorkspacesWithWorktrees(items);
+    // default first, then name
+    expect(sorted.map((i) => i.id)).toEqual(["b", "a"]);
+  });
+
+  it("sorts repo/standalone before worktree by kind priority", () => {
+    const items = [
+      { id: "2", kind: "worktree" as const, parentWorkspaceId: "1", name: "feature" },
+      { id: "1", kind: "repo" as const, parentWorkspaceId: null, name: "Repo" },
+    ];
+    const sorted = sortWorkspacesWithWorktrees(items);
+    // repo first, then its worktree
+    expect(sorted.map((i) => i.id)).toEqual(["1", "2"]);
   });
 
   it("places worktree children immediately after their parent repo", () => {
     const items = [
-      { id: "repo-1", kind: "repo" as const, parentWorkspaceId: null },
-      { id: "standalone-1", kind: "standalone" as const, parentWorkspaceId: null },
-      { id: "wt-1", kind: "worktree" as const, parentWorkspaceId: "repo-1" },
-      { id: "wt-2", kind: "worktree" as const, parentWorkspaceId: "repo-1" },
+      { id: "repo-1", kind: "repo" as const, parentWorkspaceId: null, name: "repo-1" },
+      { id: "standalone-1", kind: "standalone" as const, parentWorkspaceId: null, name: "standalone-1" },
+      { id: "wt-1", kind: "worktree" as const, parentWorkspaceId: "repo-1", name: "wt-1" },
+      { id: "wt-2", kind: "worktree" as const, parentWorkspaceId: "repo-1", name: "wt-2" },
     ];
     const sorted = sortWorkspacesWithWorktrees(items);
     expect(sorted.map((i) => i.id)).toEqual([
@@ -105,6 +126,16 @@ describe("sortWorkspacesWithWorktrees", () => {
       "wt-2",
       "standalone-1",
     ]);
+  });
+
+  it("sorts by createdAt descending when names and kinds tie", () => {
+    const items = [
+      { id: "older", kind: "standalone" as const, parentWorkspaceId: null, name: "Project", createdAt: "2025-01-01T00:00:00Z" },
+      { id: "newer", kind: "standalone" as const, parentWorkspaceId: null, name: "Project", createdAt: "2026-01-01T00:00:00Z" },
+    ];
+    const sorted = sortWorkspacesWithWorktrees(items);
+    // Newer (higher createdAt) comes first
+    expect(sorted.map((i) => i.id)).toEqual(["newer", "older"]);
   });
 
   it("handles orphan worktrees (parent missing) gracefully", () => {
@@ -120,10 +151,10 @@ describe("sortWorkspacesWithWorktrees", () => {
 
   it("handles multiple repos each with worktrees", () => {
     const items = [
-      { id: "repo-a", kind: "repo" as const, parentWorkspaceId: null },
-      { id: "repo-b", kind: "repo" as const, parentWorkspaceId: null },
-      { id: "wt-b1", kind: "worktree" as const, parentWorkspaceId: "repo-b" },
-      { id: "wt-a1", kind: "worktree" as const, parentWorkspaceId: "repo-a" },
+      { id: "repo-a", kind: "repo" as const, parentWorkspaceId: null, name: "A" },
+      { id: "repo-b", kind: "repo" as const, parentWorkspaceId: null, name: "B" },
+      { id: "wt-b1", kind: "worktree" as const, parentWorkspaceId: "repo-b", name: "b1" },
+      { id: "wt-a1", kind: "worktree" as const, parentWorkspaceId: "repo-a", name: "a1" },
     ];
     const sorted = sortWorkspacesWithWorktrees(items);
     const ids = sorted.map((i) => i.id);
@@ -136,10 +167,10 @@ describe("sortWorkspacesWithWorktrees", () => {
     expect(sortWorkspacesWithWorktrees([])).toEqual([]);
   });
 
-  it("preserves items without kind field", () => {
+  it("sorts items without name/kind/defaultOpen/createdAt by id as fallback", () => {
     const items = [
-      { id: "x", parentWorkspaceId: null },
       { id: "y", parentWorkspaceId: null },
+      { id: "x", parentWorkspaceId: null },
     ];
     const sorted = sortWorkspacesWithWorktrees(items);
     expect(sorted.map((i) => i.id)).toEqual(["x", "y"]);

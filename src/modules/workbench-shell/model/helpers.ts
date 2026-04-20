@@ -414,6 +414,7 @@ export function buildWorkspaceItemsFromDtos(
     threads: (threadsByWorkspaceId[workspace.id] ?? []).map((thread) =>
       buildWorkspaceThreadItem(thread, activeThreadId, language),
     ),
+    createdAt: workspace.createdAt,
   }));
 }
 
@@ -538,22 +539,77 @@ export function buildProjectOptionFromWorkspace(
 }
 
 /**
- * Order workspaces so each worktree row immediately follows its parent repo.
- * Non-worktree rows keep their incoming ordering. Orphan worktrees (missing
- * parent) fall back to their own ordering position.
+ * Deterministic sort comparator for workspaces.
+ *
+ * Priority:
+ *  1. Default workspace first
+ *  2. Name ascending (locale-aware)
+ *  3. Kind: repo / standalone before worktree
+ *  4. Created-at descending (newest first)
+ *  5. ID as final tiebreaker for total stability
+ */
+function compareWorkspaceItems<
+  T extends {
+    id: string;
+    kind?: "standalone" | "repo" | "worktree";
+    parentWorkspaceId?: string | null;
+    name?: string;
+    defaultOpen?: boolean;
+    createdAt?: string;
+  },
+>(a: T, b: T): number {
+  // 1. Default workspace first
+  const aDefault = a.defaultOpen ? 0 : 1;
+  const bDefault = b.defaultOpen ? 0 : 1;
+  if (aDefault !== bDefault) return aDefault - bDefault;
+
+  // 2. Name ascending (locale-aware)
+  const nameCmp = (a.name ?? "").localeCompare(b.name ?? "");
+  if (nameCmp !== 0) return nameCmp;
+
+  // 3. Kind: repo / standalone before worktree
+  const kindPriority = (kind?: string): number =>
+    kind === "worktree" ? 1 : 0;
+  const aKindPri = kindPriority(a.kind);
+  const bKindPri = kindPriority(b.kind);
+  if (aKindPri !== bKindPri) return aKindPri - bKindPri;
+
+  // 4. Created-at descending (newest first)
+  const aTime = a.createdAt ?? "";
+  const bTime = b.createdAt ?? "";
+  if (aTime !== bTime) return bTime.localeCompare(aTime);
+
+  // 5. ID tiebreaker
+  return a.id.localeCompare(b.id);
+}
+
+/**
+ * Sort workspaces deterministically and group each worktree immediately
+ * after its parent repo.
+ *
+ * Primary order: isDefault → name → kind (repo/standalone before worktree)
+ * → createdAt DESC.  Worktree rows are then pulled forward to sit right
+ * below their owning repo row.
  */
 export function sortWorkspacesWithWorktrees<
   T extends {
     id: string;
     kind?: "standalone" | "repo" | "worktree";
     parentWorkspaceId?: string | null;
+    name?: string;
+    defaultOpen?: boolean;
+    createdAt?: string;
   },
 >(items: ReadonlyArray<T>): Array<T> {
-  const byId = new Map(items.map((item) => [item.id, item] as const));
+  // Step 1: deterministic primary sort
+  const sorted = [...items].sort(compareWorkspaceItems);
+
+  // Step 2: group worktrees under their parent repo
+  const byId = new Map(sorted.map((item) => [item.id, item] as const));
   const placed = new Set<string>();
   const result: Array<T> = [];
 
-  for (const item of items) {
+  for (const item of sorted) {
     if (placed.has(item.id)) continue;
     if (item.kind === "worktree") {
       const parentId = item.parentWorkspaceId ?? "";
@@ -565,8 +621,8 @@ export function sortWorkspacesWithWorktrees<
     result.push(item);
     placed.add(item.id);
 
-    // Emit this item's worktrees right after it, preserving order.
-    for (const child of items) {
+    // Emit this item's worktrees right after it, preserving sort order.
+    for (const child of sorted) {
       if (placed.has(child.id)) continue;
       if (
         child.kind === "worktree"
@@ -579,7 +635,7 @@ export function sortWorkspacesWithWorktrees<
   }
 
   // Orphan worktrees whose parent never appeared.
-  for (const item of items) {
+  for (const item of sorted) {
     if (!placed.has(item.id)) {
       result.push(item);
       placed.add(item.id);
