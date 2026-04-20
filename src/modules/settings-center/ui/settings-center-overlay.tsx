@@ -1560,8 +1560,17 @@ function CommandsSection({
 }) {
   const t = useT();
   const [editingId, setEditingId] = useState<string | null>(null);
+  const pendingAddRef = useRef(false);
+
+  useEffect(() => {
+    if (pendingAddRef.current && commands.length > 0) {
+      pendingAddRef.current = false;
+      setEditingId(commands[commands.length - 1].id);
+    }
+  }, [commands]);
 
   const handleAddCommand = () => {
+    pendingAddRef.current = true;
     onAddCommand({
       name: "",
       path: "",
