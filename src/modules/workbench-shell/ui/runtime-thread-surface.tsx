@@ -2032,6 +2032,7 @@ function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
     case "run_interrupted":
     case "run_limit_reached":
     case "run_checkpointed":
+    case "plan_updated":
       return true;
     default:
       return false;
@@ -2564,7 +2565,9 @@ export function RuntimeThreadSurface({
       showThinkingPlaceholder(event.runId);
     });
 
-    stream.onPlan = withActiveStream((_event) => {});
+    stream.onPlan = withActiveStream((event) => {
+      scheduleThinkingPhase(event.runId);
+    });
 
     stream.onReasoning = withActiveStream((event) => {
       clearScheduledThinkingPhase();
