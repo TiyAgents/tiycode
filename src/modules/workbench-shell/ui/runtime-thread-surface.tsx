@@ -21,7 +21,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "@/components/ai-elements/confirmation";
-import { useViewportAutoCollapse, findScrollParent, type ViewportAutoCollapseEntry } from "@/shared/hooks/use-viewport-auto-collapse";
+import { useViewportAutoCollapse, type ViewportAutoCollapseEntry } from "@/shared/hooks/use-viewport-auto-collapse";
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
 import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
 import { threadClearContext, threadCompactContext, threadLoad } from "@/services/bridge";
@@ -3195,14 +3195,18 @@ export function RuntimeThreadSurface({
   const presentationEntries = timelineEntries;
 
   // --- Viewport auto-collapse: detect scroll container once content mounts ---
+  // We derive the scroll container from StickToBottom's scrollRef rather than
+  // walking the DOM with findScrollParent.  A ref callback runs *before*
+  // layout effects, so StickToBottom hasn't set `overflow: auto` on the scroll
+  // div yet, causing findScrollParent to miss it and return null.
+  // A passive effect fires *after* layout effects, guaranteeing the ref is ready.
   const contentSentinelCallback = useCallback((node: HTMLDivElement | null) => {
     contentSentinelRef.current = node;
-    if (node) {
-      const scrollParent = findScrollParent(node);
-      setScrollContainerEl(scrollParent);
-    } else {
-      setScrollContainerEl(null);
-    }
+  }, []);
+
+  useEffect(() => {
+    const scrollEl = conversationContextRef.current?.scrollRef?.current ?? null;
+    setScrollContainerEl(scrollEl);
   }, []);
 
   const getIsStuckToBottom = useCallback(
