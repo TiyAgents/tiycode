@@ -52,14 +52,6 @@ pub(crate) const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
 /// for meaningful input — this floor prevents degenerate cases where the
 /// derived budget collapses to zero.
 const SUMMARY_HISTORY_MIN_CHARS: usize = 8_000;
-/// Hard upper bound on the history chars we send to the summary model.
-///
-/// Even when a model advertises a huge context window, we cap the rendered
-/// history so a single compact call cannot accidentally request hundreds of
-/// KB on a slow connection or run the local renderer into quadratic
-/// concat costs. Real-world threads (including CJK-heavy ones) rarely need
-/// more than ~400K chars to carry full structure through a summary.
-const SUMMARY_HISTORY_MAX_CHARS: usize = 400_000;
 const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
 
 struct ActiveRun {
@@ -1897,11 +1889,13 @@ pub(crate) fn detect_prior_summary(messages: &[AgentMessage]) -> Option<(String,
 /// - A safety margin (1,000 tokens) for off-by-one token vs char estimation
 ///
 /// The remaining tokens are multiplied by 4 (the chars-per-token heuristic
-/// used elsewhere in the codebase) to produce a char budget, then clamped
-/// into `[SUMMARY_HISTORY_MIN_CHARS, SUMMARY_HISTORY_MAX_CHARS]` so no
-/// model's quirky reported `context_window` can push us into a degenerate
-/// regime. In practice this yields ~200K–400K chars for today's models,
-/// dramatically more than the previous hard-coded 18K cap.
+/// used elsewhere in the codebase) to produce a char budget. We floor the
+/// result at `SUMMARY_HISTORY_MIN_CHARS` so a missing or degenerate
+/// `context_window` cannot collapse the budget to zero, but we **do not**
+/// impose an upper cap — modern 1M/2M-token models need their full
+/// advertised window to compress long CJK-heavy threads without silent
+/// information loss. Provider limits (payload size, rate limits) are
+/// enforced downstream; here we trust the model's advertised capacity.
 fn summary_history_char_budget(model_role: &ResolvedModelRole) -> usize {
     let context_window = model_role.model.context_window as usize;
     let output_tokens = if model_role.model.reasoning {
@@ -1919,9 +1913,7 @@ fn summary_history_char_budget(model_role: &ResolvedModelRole) -> usize {
         .saturating_sub(overhead_tokens);
     let chars_for_history = tokens_for_history.saturating_mul(4);
 
-    chars_for_history
-        .max(SUMMARY_HISTORY_MIN_CHARS)
-        .min(SUMMARY_HISTORY_MAX_CHARS)
+    chars_for_history.max(SUMMARY_HISTORY_MIN_CHARS)
 }
 
 /// Render conversation history for the summary model.
