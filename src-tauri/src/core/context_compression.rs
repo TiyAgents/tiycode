@@ -426,10 +426,7 @@ pub fn generate_discard_summary(messages: &[AgentMessage]) -> String {
         out.push('\n');
     }
 
-    out.push_str(&format!(
-        "Total messages compressed: {}\n",
-        messages.len()
-    ));
+    out.push_str(&format!("Total messages compressed: {}\n", messages.len()));
     out.push_str("</context_summary>");
 
     out

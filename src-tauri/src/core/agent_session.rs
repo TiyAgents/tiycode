@@ -1068,7 +1068,9 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
         let weak = compression_weak_self.clone();
         let thread_id = compression_thread_id.clone();
         let run_id = compression_run_id.clone();
-        async move { run_auto_compression(messages, settings, model_role, weak, thread_id, run_id).await }
+        async move {
+            run_auto_compression(messages, settings, model_role, weak, thread_id, run_id).await
+        }
     });
 
     if let Some(api_key) = spec.model_plan.primary.api_key.clone() {
@@ -2898,44 +2900,43 @@ pub(crate) async fn run_auto_compression(
     // decay. The prior summary was injected by a previous compression pass and
     // lives at the head of `messages`; the delta to summarise is the rest of
     // `old_messages`.
-    let summary_result =
-        match crate::core::agent_run_manager::detect_prior_summary(old_messages) {
-            Some((prior_summary, prefix_len)) if prefix_len < old_messages.len() => {
-                let delta = &old_messages[prefix_len..];
-                tracing::info!(
-                    thread_id = %thread_id,
-                    delta_len = delta.len(),
-                    "Merging prior <context_summary> with new delta"
-                );
-                crate::core::agent_run_manager::generate_merge_summary(
-                    &model_role,
-                    &prior_summary,
-                    delta,
-                    None,
-                    abort_signal.clone(),
-                )
-                .await
-            }
-            Some((prior_summary, _prefix_len)) => {
-                // Prior summary with no new delta (unlikely, since
-                // should_compress fired). Reuse the prior summary verbatim
-                // instead of calling the model for nothing.
-                tracing::info!(
-                    thread_id = %thread_id,
-                    "Reusing prior <context_summary> — no delta to merge"
-                );
-                Ok(prior_summary)
-            }
-            None => {
-                crate::core::agent_run_manager::generate_primary_summary(
-                    &model_role,
-                    old_messages,
-                    None,
-                    abort_signal.clone(),
-                )
-                .await
-            }
-        };
+    let summary_result = match crate::core::agent_run_manager::detect_prior_summary(old_messages) {
+        Some((prior_summary, prefix_len)) if prefix_len < old_messages.len() => {
+            let delta = &old_messages[prefix_len..];
+            tracing::info!(
+                thread_id = %thread_id,
+                delta_len = delta.len(),
+                "Merging prior <context_summary> with new delta"
+            );
+            crate::core::agent_run_manager::generate_merge_summary(
+                &model_role,
+                &prior_summary,
+                delta,
+                None,
+                abort_signal.clone(),
+            )
+            .await
+        }
+        Some((prior_summary, _prefix_len)) => {
+            // Prior summary with no new delta (unlikely, since
+            // should_compress fired). Reuse the prior summary verbatim
+            // instead of calling the model for nothing.
+            tracing::info!(
+                thread_id = %thread_id,
+                "Reusing prior <context_summary> — no delta to merge"
+            );
+            Ok(prior_summary)
+        }
+        None => {
+            crate::core::agent_run_manager::generate_primary_summary(
+                &model_role,
+                old_messages,
+                None,
+                abort_signal.clone(),
+            )
+            .await
+        }
+    };
 
     // Boundary buffer used by both the success path (persist markers) and the
     // fallback path (persist markers before truncation). Defined once here so
@@ -3028,15 +3029,14 @@ pub(crate) async fn run_auto_compression(
 
             if let Some(session) = weak.upgrade() {
                 let boundary_n_from_end = recent_messages.len().saturating_add(BOUNDARY_BUFFER);
-                let boundary_id =
-                    crate::persistence::repo::message_repo::find_nth_from_end_id(
-                        &session.pool,
-                        &thread_id,
-                        boundary_n_from_end,
-                    )
-                    .await
-                    .ok()
-                    .flatten();
+                let boundary_id = crate::persistence::repo::message_repo::find_nth_from_end_id(
+                    &session.pool,
+                    &thread_id,
+                    boundary_n_from_end,
+                )
+                .await
+                .ok()
+                .flatten();
 
                 if let Err(persist_err) = session
                     .persist_compression_markers(
@@ -4582,9 +4582,7 @@ Used for prompt assembly coverage.
 
         /// Fetch the two markers we wrote, ordered by id ascending (reset then summary
         /// because UUID v7 is time-ordered and `reset` was written first).
-        async fn fetch_markers(
-            pool: &SqlitePool,
-        ) -> Vec<(String, String, String, Option<String>)> {
+        async fn fetch_markers(pool: &SqlitePool) -> Vec<(String, String, String, Option<String>)> {
             sqlx::query(
                 "SELECT id, content_markdown, message_type, metadata_json
                    FROM messages
@@ -4638,7 +4636,10 @@ Used for prompt assembly coverage.
             assert_eq!(reset_type, "summary_marker");
             assert_eq!(summary_type, "summary_marker");
             assert_eq!(reset_body, "Context is now reset");
-            assert_eq!(summary_body, "<context_summary>\nState A\n</context_summary>");
+            assert_eq!(
+                summary_body,
+                "<context_summary>\nState A\n</context_summary>"
+            );
 
             let reset_meta_val: serde_json::Value =
                 serde_json::from_str(reset_meta.as_ref().expect("reset metadata present"))
