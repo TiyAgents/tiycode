@@ -97,6 +97,8 @@ export type CommandEntry = {
   enabled?: boolean;
   version?: number;
   fileName?: string;
+  /** Client-only flag: entry exists locally but hasn't been persisted to the backend yet. */
+  pendingCreate?: boolean;
 };
 
 export type AgentProfile = {

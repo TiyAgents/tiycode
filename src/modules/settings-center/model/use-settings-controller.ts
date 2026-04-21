@@ -289,6 +289,9 @@ function isTauriNotFoundError(error: unknown): boolean {
   );
 }
 
+/** Track IDs of pending entries whose backend create call is in-flight. */
+const inflightCreateIds = new Set<string>();
+
 function mapProviderDto(provider: ProviderSettingsDto): ProviderEntry {
   return {
     id: provider.id,
@@ -523,7 +526,11 @@ export function useSettingsController() {
               setSettings((current) => ({
                 ...current,
                 commands: {
-                  commands: resolvedPromptCommands.map(mapPromptCommandDto),
+                  // Preserve local-only pending entries that haven't been persisted yet
+                  commands: [
+                    ...resolvedPromptCommands.map(mapPromptCommandDto),
+                    ...current.commands.commands.filter((c) => c.pendingCreate),
+                  ],
                 },
                 policy: mappedPolicy,
                 agentProfiles: persistedProfiles.length > 0 ? persistedProfiles : DEFAULT_AGENT_PROFILES,
@@ -1295,67 +1302,41 @@ export function useSettingsController() {
   };
 
   const addCommand = (entry: Omit<CommandEntry, "id">) => {
-    if (!isTauri()) {
-      setSettings((current) => ({
-        ...current,
-        commands: {
-          ...current.commands,
-          commands: [...current.commands.commands, { ...entry, id: crypto.randomUUID() }],
-        },
-      }));
-      return;
-    }
-
-    void promptCommandCreate({
-      name: entry.name,
-      path: entry.path,
-      argumentHint: entry.argumentHint,
-      description: entry.description,
-      prompt: entry.prompt,
-      source: entry.source ?? "user",
-      enabled: entry.enabled ?? true,
-      version: entry.version ?? 1,
-    })
-      .then((command) => {
-        const mapped = mapPromptCommandDto(command);
-        setSettings((current) => ({
-          ...current,
-          commands: {
-            ...current.commands,
-            commands: [...current.commands.commands, mapped],
-          },
-        }));
-      })
-      .catch((error) => {
-        console.warn("Failed to create prompt command", error);
-      });
+    // Always create a local entry first. In Tauri mode, mark it as pending
+    // so the backend create is deferred until the user fills in a valid name.
+    const tempId = crypto.randomUUID();
+    setSettings((current) => ({
+      ...current,
+      commands: {
+        ...current.commands,
+        commands: [
+          ...current.commands.commands,
+          { ...entry, id: tempId, pendingCreate: isTauri() ? true : undefined },
+        ],
+      },
+    }));
   };
 
   const removeCommand = (id: string) => {
-    if (!isTauri()) {
-      setSettings((current) => ({
-        ...current,
-        commands: {
-          ...current.commands,
-          commands: current.commands.commands.filter((cmd) => cmd.id !== id),
-        },
-      }));
+    const cmd = settingsRef.current.commands.commands.find((c) => c.id === id);
+
+    // Always remove from local state immediately
+    setSettings((current) => ({
+      ...current,
+      commands: {
+        ...current.commands,
+        commands: current.commands.commands.filter((c) => c.id !== id),
+      },
+    }));
+
+    // Pending entries were never persisted — skip backend delete
+    if (!isTauri() || cmd?.pendingCreate) {
       return;
     }
 
-    void promptCommandDelete(id)
-      .then(() => {
-        setSettings((current) => ({
-          ...current,
-          commands: {
-            ...current.commands,
-            commands: current.commands.commands.filter((cmd) => cmd.id !== id),
-          },
-        }));
-      })
-      .catch((error) => {
-        console.warn("Failed to delete prompt command", error);
-      });
+    void promptCommandDelete(id).catch((error) => {
+      console.warn("Failed to delete prompt command", error);
+    });
   };
 
   const updateCommand = (id: string, patch: Partial<Omit<CommandEntry, "id">>) => {
@@ -1365,17 +1346,69 @@ export function useSettingsController() {
     }
 
     const nextCommand = { ...currentCommand, ...patch };
+    // Strip the client-only pendingCreate flag unless we need to keep it
+    // (i.e. the entry is still pending and name is still empty).
+    const isPending = currentCommand.pendingCreate;
+    const shouldKeepPending = isPending && !nextCommand.name.trim();
+    const cleanCommand = shouldKeepPending
+      ? { ...nextCommand, pendingCreate: true as const }
+      : (({ pendingCreate: _, ...rest }) => rest)({ ...nextCommand });
+
     setSettings((current) => ({
       ...current,
       commands: {
         ...current.commands,
         commands: current.commands.commands.map((cmd) =>
-          cmd.id === id ? nextCommand : cmd,
+          cmd.id === id ? cleanCommand : cmd,
         ),
       },
     }));
 
     if (!isTauri()) {
+      return;
+    }
+
+    // If this entry is still pending (not yet persisted to backend),
+    // either defer — name is still empty — or create it now.
+    if (currentCommand.pendingCreate) {
+      if (!nextCommand.name.trim()) {
+        // Name still empty — keep the entry local-only
+        return;
+      }
+      // Already creating in flight — skip duplicate backend call
+      if (inflightCreateIds.has(id)) {
+        return;
+      }
+      // Name is valid — persist to backend for the first time
+      inflightCreateIds.add(id);
+      void promptCommandCreate({
+        name: nextCommand.name,
+        path: nextCommand.path,
+        argumentHint: nextCommand.argumentHint,
+        description: nextCommand.description,
+        prompt: nextCommand.prompt,
+        source: nextCommand.source ?? "user",
+        enabled: nextCommand.enabled ?? true,
+        version: nextCommand.version ?? 1,
+      })
+        .then((command) => {
+          const mapped = mapPromptCommandDto(command);
+          setSettings((current) => ({
+            ...current,
+            commands: {
+              ...current.commands,
+              commands: current.commands.commands.map((entry) =>
+                entry.id === id ? mapped : entry,
+              ),
+            },
+          }));
+        })
+        .catch((error) => {
+          console.warn("Failed to create prompt command", error);
+        })
+        .finally(() => {
+          inflightCreateIds.delete(id);
+        });
       return;
     }
 

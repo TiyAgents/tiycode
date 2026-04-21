@@ -846,7 +846,7 @@ impl PromptCommandManager {
             path: command_path,
             argument_hint: meta.argument_hint.unwrap_or_default(),
             description: meta.description.unwrap_or_default(),
-            prompt: body.trim().to_string(),
+            prompt: body.trim_end().to_string(),
             source,
             enabled: meta.enabled.unwrap_or(true),
             version: meta.version.unwrap_or(DEFAULT_PROMPT_VERSION),
@@ -893,7 +893,7 @@ impl PromptCommandManager {
             path: normalize_command_path(input.path),
             argument_hint: input.argument_hint.unwrap_or_default(),
             description: input.description.unwrap_or_default(),
-            prompt: input.prompt.trim().to_string(),
+            prompt: input.prompt,
             source: normalized_source,
             enabled: input
                 .enabled
