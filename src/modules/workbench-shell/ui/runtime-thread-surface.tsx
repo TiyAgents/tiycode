@@ -2102,6 +2102,7 @@ export function RuntimeThreadSurface({
   const [thinkingPlaceholder, setThinkingPlaceholder] = useState<ThinkingPlaceholder | null>(null);
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
   const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});
+  const [reasoningOpen, setReasoningOpen] = useState<Record<string, boolean>>({});
   const [taskBoards, setTaskBoards] = useState<TaskBoardState>(initialTaskBoardState);
   const previousHelperStatusesRef = useRef<Record<string, SurfaceHelperEntry["status"]>>({});
   const previousToolStatesRef = useRef<Record<string, SurfaceToolState>>({});
@@ -3221,28 +3222,35 @@ export function RuntimeThreadSurface({
         const isCompleted = entry.helper.status === "completed";
         const isOpen = helperOpen[entry.helper.id] ?? true;
         result.push({ id: entry.helper.id, completed: isCompleted, currentOpen: isOpen });
+      } else if (entry.kind === "message" && entry.message.messageType === "reasoning") {
+        const isCompleted = entry.message.status !== "streaming";
+        const isOpen = reasoningOpen[entry.message.id] ?? true;
+        result.push({ id: entry.message.id, completed: isCompleted, currentOpen: isOpen });
       }
-      // Reasoning blocks use defaultOpen + internal state; viewport auto-collapse
-      // is only applied to tool and helper blocks for now.
     }
     return result;
-  }, [presentationEntries, completedToolOpen, helperOpen]);
+  }, [presentationEntries, completedToolOpen, helperOpen, reasoningOpen]);
 
   // Keep a ref to presentationEntries for the viewport collapse callback.
   const presentationEntriesRef = useRef(presentationEntries);
   presentationEntriesRef.current = presentationEntries;
 
   const handleViewportCollapse = useCallback((id: string) => {
-    // Determine whether this id belongs to a tool or helper and only
-    // update the relevant state map.
+    // Determine whether this id belongs to a tool, helper, or reasoning
+    // and only update the relevant state map.
     const entry = presentationEntriesRef.current.find(
-      (e) => (e.kind === "tool" && e.tool.id === id) || (e.kind === "helper" && e.helper.id === id),
+      (e) =>
+        (e.kind === "tool" && e.tool.id === id)
+        || (e.kind === "helper" && e.helper.id === id)
+        || (e.kind === "message" && e.message.messageType === "reasoning" && e.message.id === id),
     );
     if (!entry) return;
     if (entry.kind === "tool") {
       setCompletedToolOpen((current) => (current[id] === false ? current : { ...current, [id]: false }));
-    } else {
+    } else if (entry.kind === "helper") {
       setHelperOpen((current) => (current[id] === false ? current : { ...current, [id]: false }));
+    } else {
+      setReasoningOpen((current) => (current[id] === false ? current : { ...current, [id]: false }));
     }
   }, []);
 
@@ -3296,7 +3304,15 @@ export function RuntimeThreadSurface({
         const previousState = previousToolStates[tool.id];
 
         if (previousState !== tool.state) {
-          next[tool.id] = !isCompletedToolState(tool.state);
+          // State changed — keep the block open (don't auto-collapse on
+          // completion).  Only force open when transitioning *to* a
+          // non-completed state so newly-started tools expand.
+          if (!isCompletedToolState(tool.state)) {
+            next[tool.id] = true;
+          } else {
+            // Completed: preserve current open state (default open).
+            next[tool.id] = tool.id in current ? current[tool.id] : true;
+          }
           continue;
         }
 
@@ -3337,10 +3353,17 @@ export function RuntimeThreadSurface({
 
       for (const helper of helpers) {
         const previousStatus = previousHelperStatuses[helper.id];
-        const preferredOpen = helper.status !== "completed";
+        const isCompleted = helper.status === "completed";
 
         if (previousStatus !== helper.status) {
-          next[helper.id] = preferredOpen;
+          // Status changed — only force open when transitioning *to* a
+          // non-completed state.  On completion, keep current open state
+          // (default open) so the block doesn't auto-collapse.
+          if (!isCompleted) {
+            next[helper.id] = true;
+          } else {
+            next[helper.id] = helper.id in current ? current[helper.id] : true;
+          }
           continue;
         }
 
@@ -3349,7 +3372,7 @@ export function RuntimeThreadSurface({
           continue;
         }
 
-        next[helper.id] = preferredOpen;
+        next[helper.id] = !isCompleted;
       }
 
       const currentKeys = Object.keys(current);
@@ -4018,15 +4041,36 @@ export function RuntimeThreadSurface({
                 }
 
                 if (message.messageType === "reasoning") {
+                  const reasoningIsStreaming = message.status === "streaming";
+                  const reasoningIsOpen = reasoningOpen[message.id] ?? (reasoningIsStreaming || runState === "running");
                   return (
-                    <div className={spacingClass} key={entry.key}>
+                    <div
+                      className={spacingClass}
+                      data-timeline-entry-id={message.id}
+                      key={entry.key}
+                      ref={(node) => {
+                        if (node) {
+                          wrapperRefsMap.current.set(message.id, node);
+                        } else {
+                          wrapperRefsMap.current.delete(message.id);
+                        }
+                      }}
+                    >
                       <Message className="max-w-full" from="assistant">
                         <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
                           <Reasoning
                             className="mb-0 w-full bg-transparent px-0 py-0"
                             autoClose={false}
-                            defaultOpen={message.status === "streaming" || runState === "running"}
-                            isStreaming={message.status === "streaming"}
+                            open={reasoningIsOpen}
+                            onOpenChange={(open) => {
+                              setReasoningOpen((current) =>
+                                current[message.id] === open ? current : { ...current, [message.id]: open },
+                              );
+                              if (open) {
+                                userManuallyOpenedIds.current.add(message.id);
+                              }
+                            }}
+                            isStreaming={reasoningIsStreaming}
                           >
                             <ReasoningTrigger />
                             <ReasoningContent>{message.content}</ReasoningContent>
