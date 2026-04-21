@@ -856,6 +856,7 @@ export function DashboardWorkbench() {
       stagedFiles: topBarGitSnapshot.stagedFiles,
       unstagedFiles: topBarGitSnapshot.unstagedFiles,
       untrackedFiles: topBarGitSnapshot.untrackedFiles,
+    conflictedFiles: topBarGitSnapshot.conflictedFiles,
     };
   }, [
     topBarGitSnapshot?.headRef,
@@ -863,6 +864,7 @@ export function DashboardWorkbench() {
     topBarGitSnapshot?.stagedFiles,
     topBarGitSnapshot?.unstagedFiles,
     topBarGitSnapshot?.untrackedFiles,
+    topBarGitSnapshot?.conflictedFiles,
   ]);
 
   useEffect(() => {

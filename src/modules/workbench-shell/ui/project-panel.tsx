@@ -400,6 +400,7 @@ const GIT_STATE_PRIORITY: Record<string, number> = {
   tracked: 2,
   modified: 3,
   untracked: 4,
+  conflicted: 5,
 };
 
 function strongestGitState(
@@ -1292,7 +1293,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                   const isIgnored = node.gitState === "ignored";
                   const isModified = node.gitState === "modified";
                   const isUntracked = node.gitState === "untracked";
-                  const badgeLabel = isUntracked ? "U" : isModified ? "M" : null;
+                  const isConflicted = node.gitState === "conflicted";
+                  const badgeLabel = isConflicted ? "C" : isUntracked ? "U" : isModified ? "M" : null;
                   const icon = inferIcon(node.name, node.isDir);
                   const isCopied = copiedPath === node.path;
 

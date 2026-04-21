@@ -199,6 +199,7 @@ const zhCN = {
   "sourceControl.staged": "已暂存",
   "sourceControl.tracked": "已跟踪",
   "sourceControl.untracked": "未跟踪",
+  "sourceControl.conflicts": "冲突",
   "sourceControl.failedLoadFileDiff": "加载文件差异失败",
 
   // ── Branch Selector ────────────────────────────────────────

@@ -323,6 +323,7 @@ pub fn run() {
             commands::git::git_get_snapshot,
             commands::git::git_get_history,
             commands::git::git_get_diff,
+            commands::git::git_get_conflict_diff,
             commands::git::git_get_file_status,
             commands::git::git_subscribe,
             commands::git::git_unsubscribe,

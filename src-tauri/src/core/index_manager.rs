@@ -1194,5 +1194,6 @@ fn git_state_priority(state: GitFileState) -> u8 {
         GitFileState::Tracked => 2,
         GitFileState::Modified => 3,
         GitFileState::Untracked => 4,
+        GitFileState::Conflicted => 5,
     }
 }
