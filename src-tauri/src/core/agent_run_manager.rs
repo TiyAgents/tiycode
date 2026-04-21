@@ -46,7 +46,20 @@ pub(crate) const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 2048;
 const PRIMARY_SUMMARY_MAX_TOKENS: u32 = 8192;
 const PRIMARY_SUMMARY_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
-const COMPACT_SUMMARY_CONTEXT_MAX_CHARS: usize = 18_000;
+/// Lower bound on the history chars we send to the summary model.
+///
+/// When context_window is very small (or unknown), we still want some room
+/// for meaningful input — this floor prevents degenerate cases where the
+/// derived budget collapses to zero.
+const SUMMARY_HISTORY_MIN_CHARS: usize = 8_000;
+/// Hard upper bound on the history chars we send to the summary model.
+///
+/// Even when a model advertises a huge context window, we cap the rendered
+/// history so a single compact call cannot accidentally request hundreds of
+/// KB on a slow connection or run the local renderer into quadratic
+/// concat costs. Real-world threads (including CJK-heavy ones) rarely need
+/// more than ~400K chars to carry full structure through a summary.
+const SUMMARY_HISTORY_MAX_CHARS: usize = 400_000;
 const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
 
 struct ActiveRun {
@@ -437,12 +450,34 @@ impl AgentRunManager {
         Ok(())
     }
 
+    /// Run a manual `/compact` against the given thread.
+    ///
+    /// Unlike its previous synchronous form, this method now integrates with
+    /// the standard run lifecycle so the frontend sees a "thinking" placeholder
+    /// and the thread is flagged Running during the potentially long LLM call:
+    ///
+    /// 1. The user `/compact` message is persisted up front (no optimistic
+    ///    loss on page reload before the summary finishes).
+    /// 2. An `ActiveRun` is registered with a dedicated broadcast channel so
+    ///    the frontend can subscribe via `thread_subscribe_run` if it misses
+    ///    the initial receiver.
+    /// 3. `RunStarted` + `ContextCompressing` events are emitted immediately
+    ///    (driving the thinking placeholder and the "Compressing context…"
+    ///    label on the frontend).
+    /// 4. The LLM call + marker persistence runs in a spawned task so the
+    ///    Tauri command returns right away, giving the UI a responsive feel.
+    /// 5. On completion (success or failure), `RunCompleted` / `RunFailed` is
+    ///    emitted and the active run is torn down, returning the thread to
+    ///    Idle.
+    ///
+    /// Returns `(run_id, event_rx)` so the caller can forward events over a
+    /// Tauri `Channel` identical to `start_run`.
     pub async fn compact_thread_context(
-        &self,
+        self: &Arc<Self>,
         thread_id: &str,
         instructions: Option<String>,
         model_plan_value: serde_json::Value,
-    ) -> Result<(), AppError> {
+    ) -> Result<(String, broadcast::Receiver<ThreadStreamEvent>), AppError> {
         if self.cancel_run_if_active(thread_id).await? {
             tracing::info!(thread_id = %thread_id, "Cancelled active run before compacting context");
         }
@@ -481,16 +516,6 @@ impl AgentRunManager {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
 
-        // Generate summary using the primary model — fail loudly if it errors,
-        // so the user can retry with /compact.
-        let summary = generate_primary_summary(
-            &preview_spec.model_plan.primary,
-            &history,
-            compact_instructions.as_deref(),
-            None,
-        )
-        .await?;
-
         let command_display_text = if let Some(extra) = compact_instructions.as_ref() {
             format!("/compact {}", extra)
         } else {
@@ -514,61 +539,233 @@ impl AgentRunManager {
                 }
             }
         });
-        let summary_metadata = serde_json::json!({
-            "kind": "context_summary",
-            "source": "compact",
-            "label": "Compacted context summary",
-        });
+
+        // Register a pseudo-run so the frontend can subscribe to events, the
+        // thread is marked Running, and the thinking placeholder has a real
+        // run_id to target.
+        let (frontend_tx, frontend_rx) =
+            broadcast::channel::<ThreadStreamEvent>(FRONTEND_EVENT_BUFFER_SIZE);
+        let run_id = uuid::Uuid::now_v7().to_string();
+
+        {
+            let mut runs = self.active_runs.lock().await;
+            if runs.values().any(|run| run.thread_id == thread_id) {
+                return Err(AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.run.already_active",
+                    "A run is already active for this thread",
+                ));
+            }
+            runs.insert(
+                run_id.clone(),
+                ActiveRun {
+                    run_id: run_id.clone(),
+                    thread_id: thread_id.to_string(),
+                    profile_id: None,
+                    frontend_tx: frontend_tx.clone(),
+                    lightweight_model_role: None,
+                    streaming_message_id: None,
+                    reasoning_message_id: None,
+                    cancellation_requested: false,
+                },
+            );
+        }
+        self.sleep_manager.set_has_active_runs(true).await;
+
+        // Persist the user message, reset marker, and a bare run row up front
+        // so anything the frontend reloads before the LLM completes already
+        // shows the correct structural state. The summary marker will be
+        // written in the spawned task once we have a summary body.
+        let user_message = MessageRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            thread_id: thread_id.to_string(),
+            run_id: None,
+            role: "user".to_string(),
+            content_markdown: command_display_text.clone(),
+            message_type: "plain_message".to_string(),
+            status: "completed".to_string(),
+            metadata_json: Some(command_metadata.to_string()),
+            attachments_json: None,
+            created_at: String::new(),
+        };
         let reset_metadata = serde_json::json!({
             "kind": "context_reset",
             "source": "compact",
             "label": "Context is now reset",
         });
+        let reset_message = MessageRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            thread_id: thread_id.to_string(),
+            run_id: None,
+            role: "system".to_string(),
+            content_markdown: "Context is now reset".to_string(),
+            message_type: "summary_marker".to_string(),
+            status: "completed".to_string(),
+            metadata_json: Some(reset_metadata.to_string()),
+            attachments_json: None,
+            created_at: String::new(),
+        };
 
-        let messages = vec![
-            MessageRecord {
-                id: uuid::Uuid::now_v7().to_string(),
-                thread_id: thread_id.to_string(),
-                run_id: None,
-                role: "user".to_string(),
-                content_markdown: command_display_text.clone(),
-                message_type: "plain_message".to_string(),
-                status: "completed".to_string(),
-                metadata_json: Some(command_metadata.to_string()),
-                attachments_json: None,
-                created_at: String::new(),
-            },
-            // Reset marker first (lower UUID v7 id), then summary (higher id).
-            // This ensures list_since_last_reset (WHERE id >= reset_id) includes the summary.
-            MessageRecord {
-                id: uuid::Uuid::now_v7().to_string(),
-                thread_id: thread_id.to_string(),
-                run_id: None,
-                role: "system".to_string(),
-                content_markdown: "Context is now reset".to_string(),
-                message_type: "summary_marker".to_string(),
-                status: "completed".to_string(),
-                metadata_json: Some(reset_metadata.to_string()),
-                attachments_json: None,
-                created_at: String::new(),
-            },
-            MessageRecord {
-                id: uuid::Uuid::now_v7().to_string(),
-                thread_id: thread_id.to_string(),
-                run_id: None,
-                role: "system".to_string(),
-                content_markdown: summary,
-                message_type: "summary_marker".to_string(),
-                status: "completed".to_string(),
-                metadata_json: Some(summary_metadata.to_string()),
-                attachments_json: None,
-                created_at: String::new(),
-            },
-        ];
-        self.persist_messages(&messages).await?;
-        thread_repo::touch_active(&self.pool, thread_id).await?;
-        thread_repo::update_status(&self.pool, &thread.id, &ThreadStatus::Idle).await?;
-        Ok(())
+        let setup = async {
+            message_repo::insert(&self.pool, &user_message).await?;
+            message_repo::insert(&self.pool, &reset_message).await?;
+            thread_repo::touch_active(&self.pool, thread_id).await?;
+            run_repo::insert(
+                &self.pool,
+                &run_repo::RunInsert {
+                    id: run_id.clone(),
+                    thread_id: thread_id.to_string(),
+                    profile_id: None,
+                    run_mode: "compact".to_string(),
+                    provider_id: None,
+                    model_id: None,
+                    effective_model_plan_json: Some(model_plan_value.to_string()),
+                    status: "running".to_string(),
+                },
+            )
+            .await?;
+            thread_repo::update_status(&self.pool, thread_id, &ThreadStatus::Running).await?;
+            Ok::<(), AppError>(())
+        }
+        .await;
+
+        if let Err(error) = setup {
+            self.remove_active_run(&run_id).await;
+            return Err(error);
+        }
+
+        // Announce the run + compression state to subscribers. These two
+        // events drive the frontend's thinking placeholder (`run_started`
+        // flips the composer to disabled, `context_compressing` relabels the
+        // placeholder to "Compressing context…").
+        let _ = frontend_tx.send(ThreadStreamEvent::RunStarted {
+            run_id: run_id.clone(),
+            run_mode: "compact".to_string(),
+        });
+        let _ = frontend_tx.send(ThreadStreamEvent::ContextCompressing {
+            run_id: run_id.clone(),
+        });
+
+        // Spawn the LLM call so the Tauri command returns immediately; the
+        // broadcast channel keeps the frontend updated via its subscription.
+        let manager = Arc::clone(self);
+        let spawn_thread_id = thread_id.to_string();
+        let spawn_run_id = run_id.clone();
+        let spawn_model_role = preview_spec.model_plan.primary.clone();
+        let spawn_frontend_tx = frontend_tx.clone();
+        tokio::spawn(async move {
+            manager
+                .run_compact_background(
+                    spawn_thread_id,
+                    spawn_run_id,
+                    spawn_model_role,
+                    history,
+                    compact_instructions,
+                    spawn_frontend_tx,
+                )
+                .await;
+        });
+
+        Ok((run_id, frontend_rx))
+    }
+
+    /// Body of the manual `/compact` background task.
+    ///
+    /// This is the LLM call + post-run bookkeeping, extracted so the
+    /// front-end-visible ceremony in `compact_thread_context` is easy to
+    /// audit. It always emits a terminal event (RunCompleted / RunFailed /
+    /// RunCancelled) and always clears the `ActiveRun`, even on panic-like
+    /// early returns, so the thread can't get stuck in Running state.
+    async fn run_compact_background(
+        self: Arc<Self>,
+        thread_id: String,
+        run_id: String,
+        model_role: ResolvedModelRole,
+        history: Vec<AgentMessage>,
+        compact_instructions: Option<String>,
+        frontend_tx: broadcast::Sender<ThreadStreamEvent>,
+    ) {
+        let summary_result =
+            generate_primary_summary(&model_role, &history, compact_instructions.as_deref(), None)
+                .await;
+
+        let final_event = match summary_result {
+            Ok(summary) => {
+                let summary_metadata = serde_json::json!({
+                    "kind": "context_summary",
+                    "source": "compact",
+                    "label": "Compacted context summary",
+                });
+                let summary_message = MessageRecord {
+                    id: uuid::Uuid::now_v7().to_string(),
+                    thread_id: thread_id.clone(),
+                    run_id: None,
+                    role: "system".to_string(),
+                    content_markdown: summary,
+                    message_type: "summary_marker".to_string(),
+                    status: "completed".to_string(),
+                    metadata_json: Some(summary_metadata.to_string()),
+                    attachments_json: None,
+                    created_at: String::new(),
+                };
+
+                if let Err(e) = message_repo::insert(&self.pool, &summary_message).await {
+                    tracing::error!(
+                        thread_id = %thread_id,
+                        run_id = %run_id,
+                        error = %e,
+                        "Failed to persist compact summary marker"
+                    );
+                    ThreadStreamEvent::RunFailed {
+                        run_id: run_id.clone(),
+                        error: format!("Failed to persist compact summary: {e}"),
+                    }
+                } else {
+                    ThreadStreamEvent::RunCompleted {
+                        run_id: run_id.clone(),
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    run_id = %run_id,
+                    error = %e,
+                    "Manual /compact LLM summary failed"
+                );
+                // Honour the cancellation error code so the frontend can
+                // distinguish a user-initiated cancel from a real failure.
+                if e.error_code == "runtime.context_compression.cancelled" {
+                    ThreadStreamEvent::RunCancelled {
+                        run_id: run_id.clone(),
+                    }
+                } else {
+                    ThreadStreamEvent::RunFailed {
+                        run_id: run_id.clone(),
+                        error: e.to_string(),
+                    }
+                }
+            }
+        };
+
+        // Final bookkeeping: run row status, thread status, active-run cleanup.
+        let final_status = match &final_event {
+            ThreadStreamEvent::RunCompleted { .. } => "completed",
+            ThreadStreamEvent::RunCancelled { .. } => "cancelled",
+            ThreadStreamEvent::RunFailed { .. } => "failed",
+            _ => "completed",
+        };
+        if let Err(e) = run_repo::update_status(&self.pool, &run_id, final_status).await {
+            tracing::warn!(run_id = %run_id, error = %e, "Failed to update compact run status");
+        }
+        if let Err(e) =
+            thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Idle).await
+        {
+            tracing::warn!(thread_id = %thread_id, error = %e, "Failed to reset thread status after compact");
+        }
+
+        let _ = frontend_tx.send(final_event);
+        self.remove_active_run(&run_id).await;
     }
 
     pub async fn subscribe_run(
@@ -1378,6 +1575,7 @@ fn build_compact_summary_system_prompt() -> String {
 fn build_compact_summary_messages(
     history: &[AgentMessage],
     instructions: Option<&str>,
+    max_history_chars: usize,
 ) -> Vec<TiyMessage> {
     let mut messages = Vec::new();
 
@@ -1392,7 +1590,7 @@ fn build_compact_summary_messages(
 
     messages.push(TiyMessage::User(UserMessage::text(format!(
         "Conversation history to compact:\n{}",
-        render_compact_summary_history(history)
+        render_compact_summary_history(history, max_history_chars)
     ))));
 
     messages
@@ -1414,10 +1612,11 @@ pub(crate) async fn generate_primary_summary(
     instructions: Option<&str>,
     abort: Option<tiycore::agent::AbortSignal>,
 ) -> Result<String, AppError> {
+    let max_history_chars = summary_history_char_budget(model_role);
     execute_summary_llm_call(
         model_role,
         build_compact_summary_system_prompt(),
-        build_compact_summary_messages(history, instructions),
+        build_compact_summary_messages(history, instructions, max_history_chars),
         instructions,
         abort,
         "primary",
@@ -1587,6 +1786,7 @@ fn build_merge_summary_messages(
     prior_summary: &str,
     delta_history: &[AgentMessage],
     instructions: Option<&str>,
+    max_history_chars: usize,
 ) -> Vec<TiyMessage> {
     let mut messages = Vec::new();
 
@@ -1606,7 +1806,7 @@ fn build_merge_summary_messages(
 
     messages.push(TiyMessage::User(UserMessage::text(format!(
         "New conversation delta (happened after the prior summary):\n{}",
-        render_compact_summary_history(delta_history)
+        render_compact_summary_history(delta_history, max_history_chars)
     ))));
 
     messages
@@ -1628,10 +1828,16 @@ pub(crate) async fn generate_merge_summary(
     instructions: Option<&str>,
     abort: Option<tiycore::agent::AbortSignal>,
 ) -> Result<String, AppError> {
+    let max_history_chars = summary_history_char_budget(model_role);
     execute_summary_llm_call(
         model_role,
         build_merge_summary_system_prompt(),
-        build_merge_summary_messages(prior_summary, delta_history, instructions),
+        build_merge_summary_messages(
+            prior_summary,
+            delta_history,
+            instructions,
+            max_history_chars,
+        ),
         instructions,
         abort,
         "merge",
@@ -1681,65 +1887,154 @@ pub(crate) fn detect_prior_summary(messages: &[AgentMessage]) -> Option<(String,
     Some((text.to_string(), 1))
 }
 
-fn render_compact_summary_history(history: &[AgentMessage]) -> String {
-    let mut rendered = String::new();
+/// Derive how many characters of conversation history we can afford to send
+/// to the summary LLM for a given model role.
+///
+/// The formula reserves room for:
+/// - The system prompt + instructions + wrapper text (~2,000 tokens)
+/// - The model's own output budget (`PRIMARY_SUMMARY_MAX_TOKENS`, doubled
+///   for reasoning-only models since reasoning tokens share the output slot)
+/// - A safety margin (1,000 tokens) for off-by-one token vs char estimation
+///
+/// The remaining tokens are multiplied by 4 (the chars-per-token heuristic
+/// used elsewhere in the codebase) to produce a char budget, then clamped
+/// into `[SUMMARY_HISTORY_MIN_CHARS, SUMMARY_HISTORY_MAX_CHARS]` so no
+/// model's quirky reported `context_window` can push us into a degenerate
+/// regime. In practice this yields ~200K–400K chars for today's models,
+/// dramatically more than the previous hard-coded 18K cap.
+fn summary_history_char_budget(model_role: &ResolvedModelRole) -> usize {
+    let context_window = model_role.model.context_window as usize;
+    let output_tokens = if model_role.model.reasoning {
+        // Reasoning models share the output slot with thinking tokens, so
+        // we must assume the doubled allowance to avoid collisions.
+        (PRIMARY_SUMMARY_MAX_TOKENS as usize).saturating_mul(2)
+    } else {
+        PRIMARY_SUMMARY_MAX_TOKENS as usize
+    };
+    // Non-history overhead: system prompt, instructions wrapper, safety margin.
+    let overhead_tokens: usize = 3_000;
 
-    for message in history {
-        match message {
+    let tokens_for_history = context_window
+        .saturating_sub(output_tokens)
+        .saturating_sub(overhead_tokens);
+    let chars_for_history = tokens_for_history.saturating_mul(4);
+
+    chars_for_history
+        .max(SUMMARY_HISTORY_MIN_CHARS)
+        .min(SUMMARY_HISTORY_MAX_CHARS)
+}
+
+/// Render conversation history for the summary model.
+///
+/// Strategy: pack **full** messages from newest to oldest within the char
+/// budget, then reverse so the model reads them in chronological order.
+/// Individual items are only truncated when a single item is itself larger
+/// than the remaining budget — in which case we prefer to keep the most
+/// recent portion of that item. Older messages that don't fit are dropped
+/// entirely rather than half-truncated, because the older end of the
+/// conversation is the least load-bearing for continuing the task.
+///
+/// This is a substantial behavioural change from the previous version
+/// (which pre-truncated every item to 300–1,500 chars and capped the whole
+/// payload at 18K chars). The previous formula was tight enough to drop
+/// most of a real compact call's context; the new formula preserves full
+/// content for typical threads and only activates the fallback on genuinely
+/// oversized payloads.
+fn render_compact_summary_history(history: &[AgentMessage], max_chars: usize) -> String {
+    // Rendered chunks in **reverse** order (newest first) for budget packing.
+    let mut chunks_reversed: Vec<String> = Vec::new();
+    let mut remaining = max_chars;
+
+    for message in history.iter().rev() {
+        if remaining == 0 {
+            break;
+        }
+
+        let chunk = match message {
             AgentMessage::User(user) => {
                 let text = user_message_to_text(user);
                 if text.is_empty() {
                     continue;
                 }
-                rendered.push_str("[user]\n");
-                rendered.push_str(&text);
-                rendered.push_str("\n\n");
+                format!("[user]\n{text}\n\n")
             }
             AgentMessage::Assistant(assistant) => {
                 let text = assistant_message_to_text(assistant);
                 if text.is_empty() {
                     continue;
                 }
-                rendered.push_str("[assistant]\n");
-                rendered.push_str(&text);
-                rendered.push_str("\n\n");
+                format!("[assistant]\n{text}\n\n")
             }
             AgentMessage::ToolResult(tool_result) => {
                 let text = tool_result_to_text(tool_result);
                 if text.is_empty() {
                     continue;
                 }
-                rendered.push_str("[tool_result]");
-                if !tool_result.tool_name.is_empty() {
-                    rendered.push(' ');
-                    rendered.push_str(&tool_result.tool_name);
-                }
-                rendered.push('\n');
-                rendered.push_str(&text);
-                rendered.push_str("\n\n");
+                let header = if tool_result.tool_name.is_empty() {
+                    "[tool_result]".to_string()
+                } else {
+                    format!("[tool_result] {}", tool_result.tool_name)
+                };
+                format!("{header}\n{text}\n\n")
             }
             AgentMessage::Custom { data, .. } => {
-                let text = truncate_chars(&collapse_whitespace(&data.to_string()), 600);
+                let text = collapse_whitespace(&data.to_string());
                 if text.is_empty() {
                     continue;
                 }
-                rendered.push_str("[custom]\n");
-                rendered.push_str(&text);
-                rendered.push_str("\n\n");
+                format!("[custom]\n{text}\n\n")
             }
-        }
+        };
 
-        if rendered.chars().count() >= COMPACT_SUMMARY_CONTEXT_MAX_CHARS {
+        let chunk_len = chunk.chars().count();
+        if chunk_len <= remaining {
+            remaining -= chunk_len;
+            chunks_reversed.push(chunk);
+        } else {
+            // This single item is larger than the remaining budget. Keep
+            // the TAIL of it (more recent tokens tend to matter more for
+            // continuation), prefixed with an ellipsis marker so the
+            // model knows the head was elided.
+            let truncated = truncate_chars_keep_tail(&chunk, remaining);
+            if !truncated.is_empty() {
+                chunks_reversed.push(truncated);
+            }
             break;
         }
     }
 
-    truncate_chars(&rendered, COMPACT_SUMMARY_CONTEXT_MAX_CHARS)
+    chunks_reversed.reverse();
+    chunks_reversed.concat()
+}
+
+/// Keep the tail `max_chars` of a string, prefixed with an ellipsis marker
+/// when truncation occurs. Char-boundary safe (walks by `char`, not byte).
+fn truncate_chars_keep_tail(text: &str, max_chars: usize) -> String {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_string();
+    }
+    // Reserve a few chars for the elision marker so the resulting string
+    // fits within max_chars total.
+    const MARKER: &str = "[…earlier content truncated…]\n";
+    let marker_len = MARKER.chars().count();
+    if max_chars <= marker_len {
+        // Budget too small for a marker — just return the tail without one.
+        let skip = total - max_chars;
+        return text.chars().skip(skip).collect();
+    }
+    let tail_len = max_chars - marker_len;
+    let skip = total - tail_len;
+    let tail: String = text.chars().skip(skip).collect();
+    format!("{MARKER}{tail}")
 }
 
 fn user_message_to_text(user: &UserMessage) -> String {
+    // Per-item truncation was removed so render_compact_summary_history can
+    // make a holistic budget decision. Trimming is still applied because we
+    // don't want leading/trailing whitespace polluting the rendered block.
     match &user.content {
-        tiycore::types::UserContent::Text(text) => truncate_chars(text.trim(), 1_200),
+        tiycore::types::UserContent::Text(text) => text.trim().to_string(),
         tiycore::types::UserContent::Blocks(blocks) => {
             let mut parts = Vec::new();
             for block in blocks {
@@ -1754,12 +2049,16 @@ fn user_message_to_text(user: &UserMessage) -> String {
                     _ => {}
                 }
             }
-            truncate_chars(&parts.join("\n"), 1_200)
+            parts.join("\n")
         }
     }
 }
 
 fn assistant_message_to_text(assistant: &tiycore::types::AssistantMessage) -> String {
+    // No per-item char caps: the caller (render_compact_summary_history)
+    // applies a single holistic budget, so the message can keep its full
+    // thinking blocks and tool-call arguments. That restores fidelity for
+    // long technical threads that the old 1,500-char cap silently clipped.
     let mut parts = Vec::new();
     for block in &assistant.content {
         match block {
@@ -1779,16 +2078,18 @@ fn assistant_message_to_text(assistant: &tiycore::types::AssistantMessage) -> St
                 parts.push(format!(
                     "[tool_call] {} {}",
                     tool_call.name,
-                    truncate_chars(&collapse_whitespace(&tool_call.arguments.to_string()), 300)
+                    collapse_whitespace(&tool_call.arguments.to_string())
                 ));
             }
             tiycore::types::ContentBlock::Image(_) => parts.push("[image]".to_string()),
         }
     }
-    truncate_chars(&parts.join("\n"), 1_500)
+    parts.join("\n")
 }
 
 fn tool_result_to_text(tool_result: &tiycore::types::ToolResultMessage) -> String {
+    // Unbounded: the holistic budget in render_compact_summary_history
+    // decides whether this item fits wholesale or must be tail-truncated.
     let mut parts = Vec::new();
     for block in &tool_result.content {
         if let tiycore::types::ContentBlock::Text(text) = block {
@@ -1798,7 +2099,7 @@ fn tool_result_to_text(tool_result: &tiycore::types::ToolResultMessage) -> Strin
             }
         }
     }
-    truncate_chars(&parts.join("\n"), 1_200)
+    parts.join("\n")
 }
 
 fn normalize_compact_summary(raw: String, instructions: Option<&str>) -> Option<String> {
@@ -2239,7 +2540,8 @@ mod tests {
         build_merge_summary_messages, build_merge_summary_system_prompt, build_title_prompt,
         collapse_whitespace, detect_prior_summary, extract_context_summary_block,
         mark_thread_run_cancellation_requested, normalize_compact_summary,
-        normalize_generated_title, should_complete_reasoning_for_event, truncate_chars, ActiveRun,
+        normalize_generated_title, render_compact_summary_history,
+        should_complete_reasoning_for_event, truncate_chars, truncate_chars_keep_tail, ActiveRun,
     };
     use crate::core::agent_session::ProfileResponseStyle;
     use crate::core::plan_checkpoint::{
@@ -2357,7 +2659,8 @@ mod tests {
         let history = vec![AgentMessage::User(UserMessage::text(
             "User asked for a compact summary",
         ))];
-        let messages = build_compact_summary_messages(&history, Some("Keep unresolved risks"));
+        let messages =
+            build_compact_summary_messages(&history, Some("Keep unresolved risks"), 100_000);
 
         assert_eq!(messages.len(), 2);
 
@@ -2580,6 +2883,7 @@ mod tests {
             "<context_summary>\nOld state\n</context_summary>",
             &delta,
             Some("Keep API choice intact"),
+            100_000,
         );
 
         assert_eq!(messages.len(), 3);
@@ -2621,6 +2925,7 @@ mod tests {
             "<context_summary>\nOld state\n</context_summary>",
             &delta,
             None,
+            100_000,
         );
 
         assert_eq!(
@@ -2651,6 +2956,7 @@ mod tests {
             "<context_summary>\nOld\n</context_summary>",
             &delta,
             Some("   \n\t  "),
+            100_000,
         );
         assert_eq!(
             messages.len(),
@@ -2728,5 +3034,124 @@ mod tests {
             .await
             .expect("without a signal, errors are not produced");
         assert_eq!(result, "hi");
+    }
+
+    // ----- render_compact_summary_history: budget-aware packing -----
+
+    fn build_assistant_text_message(text: &str) -> AgentMessage {
+        use tiycore::types::{
+            Api, AssistantMessage, ContentBlock, Provider, StopReason, TextContent, Usage,
+        };
+        AgentMessage::Assistant(
+            AssistantMessage::builder()
+                .content(vec![ContentBlock::Text(TextContent::new(text))])
+                .api(Api::OpenAICompletions)
+                .provider(Provider::OpenAI)
+                .model("test")
+                .usage(Usage::default())
+                .stop_reason(StopReason::Stop)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn render_compact_summary_history_preserves_full_messages_when_within_budget() {
+        // Pre-refactor behaviour capped user messages at 1,200 chars; a
+        // 3,000-char user message would get silently clipped. Verify the new
+        // holistic budget keeps it intact end-to-end.
+        let long = "x".repeat(3_000);
+        let history = vec![
+            AgentMessage::User(UserMessage::text(&long)),
+            build_assistant_text_message("short reply"),
+        ];
+
+        let rendered = render_compact_summary_history(&history, 100_000);
+        assert!(
+            rendered.contains(&long),
+            "expected full 3000-char user message to be preserved"
+        );
+        assert!(rendered.contains("short reply"));
+        // Chronological order: user before assistant.
+        let user_pos = rendered.find("[user]").unwrap();
+        let assistant_pos = rendered.find("[assistant]").unwrap();
+        assert!(user_pos < assistant_pos);
+    }
+
+    #[test]
+    fn render_compact_summary_history_drops_oldest_when_budget_exhausted() {
+        // With a tiny budget that only fits one message, the NEWEST should
+        // survive and the oldest should be dropped (newest-to-oldest packing,
+        // then reversed).
+        let history = vec![
+            AgentMessage::User(UserMessage::text("OLDEST: ancient message")),
+            build_assistant_text_message("MIDDLE: intermediate"),
+            AgentMessage::User(UserMessage::text("NEWEST: recent message")),
+        ];
+
+        // ~60 chars budget: fits only one short chunk (including header + \n\n).
+        let rendered = render_compact_summary_history(&history, 60);
+        assert!(rendered.contains("NEWEST"));
+        assert!(!rendered.contains("OLDEST"));
+    }
+
+    #[test]
+    fn render_compact_summary_history_tail_truncates_single_oversized_item() {
+        // A single item larger than the entire budget should not be dropped
+        // — the tail should be kept (more recent portion is more relevant)
+        // and an elision marker inserted so the model knows content was cut.
+        let massive = "line ".repeat(2_000); // 10_000 chars
+        let history = vec![AgentMessage::User(UserMessage::text(&massive))];
+
+        let rendered = render_compact_summary_history(&history, 500);
+        assert!(rendered.chars().count() <= 500);
+        assert!(rendered.contains("earlier content truncated"));
+    }
+
+    #[test]
+    fn render_compact_summary_history_skips_empty_chunks_instead_of_counting_them() {
+        // An empty user message must not consume any budget and must not
+        // emit a stray [user] header — those chunks are `continue`d.
+        use tiycore::types::{ContentBlock, TextContent};
+        let empty_blocks = UserMessage::blocks(vec![ContentBlock::Text(TextContent::new(""))]);
+        let history = vec![
+            AgentMessage::User(empty_blocks),
+            build_assistant_text_message("reply"),
+        ];
+        let rendered = render_compact_summary_history(&history, 100_000);
+        assert!(!rendered.contains("[user]"));
+        assert!(rendered.contains("reply"));
+    }
+
+    // ----- truncate_chars_keep_tail -----
+
+    #[test]
+    fn truncate_chars_keep_tail_is_noop_when_under_limit() {
+        assert_eq!(truncate_chars_keep_tail("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_chars_keep_tail_keeps_tail_with_marker_when_over_limit() {
+        let s = "abcdefghijklmnopqrstuvwxyz"; // 26 chars
+        let out = truncate_chars_keep_tail(s, 40); // > 26 → no-op
+        assert_eq!(out, s);
+
+        // Over limit: result must fit budget, end with tail, contain marker.
+        let big: String = "0123456789".repeat(20); // 200 chars
+        let out = truncate_chars_keep_tail(&big, 60);
+        assert!(out.chars().count() <= 60);
+        assert!(out.contains("earlier content truncated"));
+        assert!(out.ends_with("9")); // tail of big ends with '9'
+    }
+
+    #[test]
+    fn truncate_chars_keep_tail_handles_cjk_safely() {
+        // Each CJK char is 3 bytes in UTF-8; keep_tail must walk by char
+        // boundaries, not bytes, or it would panic mid-character.
+        let cjk = "一二三四五六七八九十"; // 10 chars, 30 bytes
+        let out = truncate_chars_keep_tail(cjk, 5);
+        // Output is either just the 5-char tail (no marker) or a mix — but
+        // must never panic and must not exceed the budget.
+        assert!(out.chars().count() <= 5);
     }
 }

@@ -24,7 +24,7 @@ import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationAct
 import { useViewportAutoCollapse, type ViewportAutoCollapseEntry } from "@/shared/hooks/use-viewport-auto-collapse";
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
 import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
-import { threadClearContext, threadCompactContext, threadLoad } from "@/services/bridge";
+import { threadClearContext, threadLoad } from "@/services/bridge";
 import {
   ThreadStream,
   type HelperEvent,
@@ -3065,12 +3065,20 @@ export function RuntimeThreadSurface({
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
-        await threadCompactContext(
+        // Route through the ThreadStream so the frontend receives the
+        // RunStarted + ContextCompressing events that drive the thinking
+        // placeholder and the "running" thread state during the LLM call.
+        // The stream's onRunStateChange callback will flip the thread back
+        // to idle once RunCompleted / RunFailed arrives.
+        await streamRef.current?.compactContext(
           threadId,
           submission.command.argumentsText || null,
           modelPlan,
         );
         await loadSnapshot();
+      } catch (error) {
+        setThinkingPlaceholder(null);
+        throw error;
       } finally {
         submittingRef.current = false;
       }

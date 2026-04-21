@@ -457,11 +457,20 @@ pub async fn thread_compact_context(
     thread_id: String,
     instructions: Option<String>,
     model_plan: Option<serde_json::Value>,
-) -> Result<(), AppError> {
-    state
+    on_event: Channel<ThreadStreamEvent>,
+) -> Result<String, AppError> {
+    let (run_id, event_rx) = state
         .agent_run_manager
+        .clone()
         .compact_thread_context(&thread_id, instructions, model_plan.unwrap_or_default())
-        .await
+        .await?;
+
+    // Forward events so the frontend sees RunStarted + ContextCompressing
+    // immediately (driving the thinking placeholder) and RunCompleted /
+    // RunFailed when the LLM call settles.
+    forward_thread_stream_events(run_id.clone(), event_rx, on_event);
+
+    Ok(run_id)
 }
 
 #[tauri::command]

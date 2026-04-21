@@ -462,14 +462,22 @@ export async function threadClearContext(threadId: string): Promise<void> {
 
 export async function threadCompactContext(
   threadId: string,
-  instructions?: string | null,
-  modelPlan?: RunModelPlanDto | null,
-): Promise<void> {
+  instructions: string | null | undefined,
+  modelPlan: RunModelPlanDto | null | undefined,
+  onEvent: (event: ThreadStreamEvent) => void,
+): Promise<string> {
   requireTauri("thread_compact_context");
-  return invoke("thread_compact_context", {
+
+  const channel = new Channel<RawThreadStreamEvent>();
+  channel.onmessage = (event) => {
+    onEvent(coerceThreadStreamEvent(event));
+  };
+
+  return invoke<string>("thread_compact_context", {
     threadId,
     instructions: instructions ?? null,
     modelPlan: modelPlan ?? null,
+    onEvent: channel,
   });
 }
 

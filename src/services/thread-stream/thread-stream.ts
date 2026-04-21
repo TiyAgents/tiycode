@@ -17,6 +17,7 @@
 
 import {
   threadCancelRun,
+  threadCompactContext,
   threadExecuteApprovedPlan,
   threadStartRun,
   threadSubscribeRun,
@@ -265,6 +266,47 @@ export class ThreadStream {
         threadId,
         approvalMessageId,
         action,
+        (event) => {
+          if (this.disposed) {
+            return;
+          }
+          this.handleEvent(event);
+        },
+      );
+
+      if (this.disposed) {
+        return runId;
+      }
+
+      this.currentRunId = runId;
+      return runId;
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      if (!this.disposed) {
+        this.onError?.(message, "");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Kick off a manual `/compact` and route its ThreadStreamEvents through
+   * the same pipeline as a regular run. Unlike `startRun`, the backend
+   * performs the LLM summary in a spawned task; events like
+   * `context_compressing` and `run_completed` arrive asynchronously so the
+   * UI can show the "Compressing context…" thinking placeholder and a
+   * running thread state.
+   */
+  async compactContext(
+    threadId: string,
+    instructions: string | null,
+    modelPlan: RunModelPlanDto | null,
+  ): Promise<string> {
+    try {
+      const runId = await threadCompactContext(
+        threadId,
+        instructions,
+        modelPlan,
         (event) => {
           if (this.disposed) {
             return;
