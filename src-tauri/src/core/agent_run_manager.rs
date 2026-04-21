@@ -72,6 +72,16 @@ struct ContextResetMessageBundle {
     persisted_messages: Vec<MessageRecord>,
 }
 
+async fn mark_thread_run_cancellation_requested(
+    active_runs: &Mutex<HashMap<String, ActiveRun>>,
+    thread_id: &str,
+) -> Option<String> {
+    let mut runs = active_runs.lock().await;
+    let run = runs.values_mut().find(|run| run.thread_id == thread_id)?;
+    run.cancellation_requested = true;
+    Some(run.run_id.clone())
+}
+
 pub struct AgentRunManager {
     pool: SqlitePool,
     app_handle: AppHandle,
@@ -578,27 +588,15 @@ impl AgentRunManager {
         Ok(Some((run.run_id.clone(), run.frontend_tx.subscribe())))
     }
 
-    pub async fn cancel_run(&self, thread_id: &str) -> Result<(), AppError> {
-        if self.cancel_run_if_active(thread_id).await? {
-            return Ok(());
-        }
-
-        Err(AppError::recoverable(
-            ErrorSource::Thread,
-            "thread.run.not_active",
-            "No active run for this thread",
-        ))
+    pub async fn cancel_run(&self, thread_id: &str) -> Result<bool, AppError> {
+        self.cancel_run_if_active(thread_id).await
     }
 
     pub async fn cancel_run_if_active(&self, thread_id: &str) -> Result<bool, AppError> {
-        let run_id = {
-            let mut runs = self.active_runs.lock().await;
-            let run = runs.values_mut().find(|run| run.thread_id == thread_id);
-            let Some(run) = run else {
-                return Ok(false);
-            };
-            run.cancellation_requested = true;
-            run.run_id.clone()
+        let Some(run_id) =
+            mark_thread_run_cancellation_requested(&self.active_runs, thread_id).await
+        else {
+            return Ok(false);
         };
 
         run_repo::update_status(&self.pool, &run_id, "cancelling").await?;
@@ -2242,16 +2240,53 @@ mod tests {
         build_compact_summary_system_prompt, build_implementation_handoff_prompt,
         build_merge_summary_messages, build_merge_summary_system_prompt, build_title_prompt,
         collapse_whitespace, detect_prior_summary, extract_context_summary_block,
-        normalize_compact_summary, normalize_generated_title, should_complete_reasoning_for_event,
-        truncate_chars,
+        mark_thread_run_cancellation_requested, normalize_compact_summary,
+        normalize_generated_title, should_complete_reasoning_for_event, truncate_chars, ActiveRun,
     };
     use crate::core::agent_session::ProfileResponseStyle;
     use crate::core::plan_checkpoint::{
         build_plan_artifact_from_tool_input, build_plan_message_metadata, PlanApprovalAction,
     };
     use crate::ipc::frontend_channels::ThreadStreamEvent;
+    use std::collections::HashMap;
     use tiycore::agent::AgentMessage;
     use tiycore::types::{Message as TiyMessage, UserMessage};
+    use tokio::sync::{broadcast, Mutex};
+
+    #[tokio::test]
+    async fn mark_thread_run_cancellation_requested_returns_falsey_none_when_thread_is_inactive() {
+        let active_runs = Mutex::new(HashMap::<String, ActiveRun>::new());
+
+        let run_id = mark_thread_run_cancellation_requested(&active_runs, "thread-missing").await;
+
+        assert_eq!(run_id, None);
+    }
+
+    #[tokio::test]
+    async fn mark_thread_run_cancellation_requested_marks_matching_run_and_returns_run_id() {
+        let (frontend_tx, _) = broadcast::channel::<ThreadStreamEvent>(1);
+        let active_runs = Mutex::new(HashMap::from([(
+            "run-1".to_string(),
+            ActiveRun {
+                run_id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                profile_id: None,
+                frontend_tx,
+                lightweight_model_role: None,
+                streaming_message_id: None,
+                reasoning_message_id: None,
+                cancellation_requested: false,
+            },
+        )]));
+
+        let run_id = mark_thread_run_cancellation_requested(&active_runs, "thread-1").await;
+
+        assert_eq!(run_id.as_deref(), Some("run-1"));
+        let runs = active_runs.lock().await;
+        assert!(runs
+            .get("run-1")
+            .is_some_and(|run| run.cancellation_requested));
+    }
 
     #[test]
     fn normalize_generated_title_strips_prefixes_and_wrappers() {

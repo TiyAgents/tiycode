@@ -4588,7 +4588,16 @@ export function RuntimeThreadSurface({
                 return;
               }
 
-              void streamRef.current?.cancelRun(threadId).then(() => {
+              void streamRef.current?.cancelRun(threadId).then((didCancel) => {
+                if (!didCancel) {
+                  // The backend no longer has an active run for this thread.
+                  // Reload the snapshot to reconcile the stale UI state with
+                  // the actual persisted terminal state without surfacing a
+                  // technical error to the user.
+                  void loadSnapshot();
+                  return;
+                }
+
                 // Optimistic UI update: immediately reflect the cancellation in
                 // the UI so the user sees instant feedback. The backend has
                 // accepted the cancel request but `RunCancelled` may arrive late
@@ -4609,10 +4618,9 @@ export function RuntimeThreadSurface({
                 // correct state and this timer becomes a harmless no-op.
                 return () => clearTimeout(timer);
               }).catch(() => {
-                // The cancel request failed — most likely the run already
-                // finished on the backend but the terminal event was lost or
-                // hasn't arrived yet.  Reload the snapshot to reconcile the
-                // UI with the actual backend state.
+                // The cancel request failed due to a real backend/runtime error.
+                // Reload the snapshot to reconcile the UI after surfacing that
+                // failure through the normal stream error path.
                 void loadSnapshot();
               });
             }}
