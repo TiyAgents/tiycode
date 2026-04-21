@@ -4490,6 +4490,7 @@ export function RuntimeThreadSurface({
                         isStreaming
                       >
                         <ReasoningTrigger
+                          showChevron={false}
                           getThinkingMessage={
                             thinkingPlaceholder?.label
                               ? (isStreaming: boolean) =>
