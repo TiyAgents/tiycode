@@ -7,6 +7,7 @@ pub enum GitFileState {
     Modified,
     Untracked,
     Ignored,
+    Conflicted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +68,7 @@ pub struct GitSnapshotDto {
     pub staged_files: Vec<GitFileChangeDto>,
     pub unstaged_files: Vec<GitFileChangeDto>,
     pub untracked_files: Vec<GitFileChangeDto>,
+    pub conflicted_files: Vec<GitFileChangeDto>,
     pub recent_commits: Vec<GitCommitSummaryDto>,
     pub last_refreshed_at: String,
 }
@@ -124,6 +126,7 @@ pub struct GitFileStatusDto {
     pub unstaged_status: Option<GitChangeKind>,
     pub is_untracked: bool,
     pub is_ignored: bool,
+    pub is_conflicted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

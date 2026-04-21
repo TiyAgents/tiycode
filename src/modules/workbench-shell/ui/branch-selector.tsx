@@ -48,7 +48,7 @@ export function BranchSelector({
   readOnly,
 }: {
   workspaceId: string | null;
-  snapshot: Pick<GitSnapshotDto, "headRef" | "isDetached" | "stagedFiles" | "unstagedFiles" | "untrackedFiles"> | null;
+  snapshot: Pick<GitSnapshotDto, "headRef" | "isDetached" | "stagedFiles" | "unstagedFiles" | "untrackedFiles" | "conflictedFiles"> | null;
   modelPlan: RunModelPlanDto | null;
   readOnly?: boolean;
 }) {
