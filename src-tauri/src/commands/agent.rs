@@ -468,7 +468,7 @@ pub async fn thread_compact_context(
 pub async fn thread_cancel_run(
     state: State<'_, AppState>,
     thread_id: String,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     state.agent_run_manager.cancel_run(&thread_id).await
 }
 

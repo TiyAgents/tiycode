@@ -244,9 +244,9 @@ export class ThreadStream {
   /**
    * Cancel the currently active run.
    */
-  async cancelRun(threadId: string): Promise<void> {
+  async cancelRun(threadId: string): Promise<boolean> {
     try {
-      await threadCancelRun(threadId);
+      return await threadCancelRun(threadId);
     } catch (error) {
       const message = extractErrorMessage(error);
       this.onError?.(message, this.currentRunId ?? "");

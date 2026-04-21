@@ -472,9 +472,9 @@ export async function threadCompactContext(
   });
 }
 
-export async function threadCancelRun(threadId: string): Promise<void> {
+export async function threadCancelRun(threadId: string): Promise<boolean> {
   requireTauri("thread_cancel_run");
-  return invoke("thread_cancel_run", { threadId });
+  return invoke<boolean>("thread_cancel_run", { threadId });
 }
 
 export async function toolApprovalRespond(
