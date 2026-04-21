@@ -19,7 +19,6 @@
 
 use tiycore::agent::AgentMessage;
 use tiycore::types::{ContentBlock, TextContent, UserMessage};
-
 /// Reserve this many tokens for the model's response + overhead.
 /// Matches pi-mono `DEFAULT_COMPACTION_SETTINGS.reserveTokens`.
 const RESERVE_TOKENS: u32 = 16_384;
@@ -257,11 +256,15 @@ pub fn build_compressed_messages(
 // Legacy / fallback: compress_context (pure truncation, no LLM summary)
 // ---------------------------------------------------------------------------
 
-/// Compress the message list using pure truncation (no LLM summary).
+/// Compress the message list using pure truncation with a **heuristic**
+/// summary (no LLM call).
 ///
-/// This is used as a **safety fallback** when the LLM summary generation
-/// fails. It truncates old tool results aggressively but does not produce
-/// a summary — the old messages are simply discarded.
+/// This is the safety-net path used when the LLM summary generation fails
+/// or is cancelled. Rather than silently dropping all old messages — which
+/// would leave the user with no trace of earlier context — we synthesize a
+/// best-effort structural summary (user topics, tools used, assistant
+/// actions) via `generate_discard_summary` and inject it as the first
+/// message, preserving at least a skeleton of earlier conversation.
 ///
 /// For the primary compression path (with LLM summary), use
 /// `should_compress` → `find_cut_point` → `build_compressed_messages` instead.
@@ -291,13 +294,18 @@ pub fn compress_context_fallback(
 
     let cut_index = find_cut_point(&messages, &token_estimates, settings.keep_recent_tokens);
 
+    // Not enough room for a summary+recent split: at least truncate old tool
+    // results in-place so the context shrinks, but leave the structural
+    // ordering untouched.
     if cut_index == 0 || messages.len() - cut_index < MIN_MESSAGES_TO_KEEP {
         return truncate_old_tool_results(messages, budget, &token_estimates);
     }
 
-    let recent_messages = &messages[cut_index..];
+    let (old_messages, recent_messages) = messages.split_at(cut_index);
+    let heuristic_summary = generate_discard_summary(old_messages);
 
-    let mut result = Vec::with_capacity(recent_messages.len());
+    let mut result = Vec::with_capacity(1 + recent_messages.len());
+    result.push(AgentMessage::User(UserMessage::text(heuristic_summary)));
     for msg in recent_messages {
         result.push(maybe_truncate_tool_result(msg.clone(), false));
     }
@@ -305,10 +313,137 @@ pub fn compress_context_fallback(
     tracing::info!(
         discarded = cut_index,
         kept = result.len(),
-        "Context compression fallback completed (no summary)"
+        "Context compression fallback completed (heuristic summary injected)"
     );
 
     result
+}
+
+/// Generate a structural summary of discarded messages when no LLM is
+/// available.
+///
+/// Produces a best-effort `<context_summary>` block with:
+/// - User requests (first 200 chars per turn, max 5 turns)
+/// - Tools used (unique, sorted)
+/// - Assistant actions (first 150 chars per turn, max 5 turns)
+/// - Compressed-message count
+///
+/// This is **deliberately mechanical** — it does not attempt to understand
+/// intent, only to leave a structural skeleton so the model can tell what
+/// kind of conversation happened before the reset. The block is wrapped in
+/// `<context_summary>…</context_summary>` so downstream code (e.g.
+/// `detect_prior_summary`) can treat it identically to an LLM-generated
+/// summary.
+pub fn generate_discard_summary(messages: &[AgentMessage]) -> String {
+    let mut user_topics: Vec<String> = Vec::new();
+    let mut tool_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut assistant_actions: Vec<String> = Vec::new();
+
+    for msg in messages {
+        match msg {
+            AgentMessage::User(user_msg) => {
+                let text = match &user_msg.content {
+                    tiycore::types::UserContent::Text(t) => t.clone(),
+                    tiycore::types::UserContent::Blocks(blocks) => blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text(tc) => Some(tc.text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                };
+                let topic = truncate_text_chars(text.trim(), 200);
+                if !topic.is_empty() {
+                    user_topics.push(topic);
+                }
+            }
+            AgentMessage::Assistant(assistant_msg) => {
+                for block in &assistant_msg.content {
+                    if let ContentBlock::ToolCall(tc) = block {
+                        tool_names.insert(tc.name.clone());
+                    }
+                }
+                let text = assistant_msg
+                    .content
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text(tc) => Some(tc.text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let brief = truncate_text_chars(text.trim(), 150);
+                if !brief.is_empty() {
+                    assistant_actions.push(brief);
+                }
+            }
+            AgentMessage::ToolResult(tool_result) => {
+                tool_names.insert(tool_result.tool_name.clone());
+            }
+            AgentMessage::Custom { .. } => {}
+        }
+    }
+
+    let mut out = String::from("<context_summary>\n");
+    out.push_str(
+        "Heuristic summary (LLM summary unavailable) of earlier conversation that was compressed to fit the context window.\n\n",
+    );
+
+    if !user_topics.is_empty() {
+        out.push_str("## User Requests\n");
+        for (i, topic) in user_topics.iter().enumerate().take(5) {
+            out.push_str(&format!("{}. {}\n", i + 1, topic));
+        }
+        if user_topics.len() > 5 {
+            out.push_str(&format!(
+                "... and {} more requests\n",
+                user_topics.len() - 5
+            ));
+        }
+        out.push('\n');
+    }
+
+    if !tool_names.is_empty() {
+        out.push_str("## Tools Used\n");
+        let mut sorted_tools: Vec<_> = tool_names.into_iter().collect();
+        sorted_tools.sort();
+        out.push_str(&sorted_tools.join(", "));
+        out.push_str("\n\n");
+    }
+
+    if !assistant_actions.is_empty() {
+        out.push_str("## Key Actions\n");
+        for (i, action) in assistant_actions.iter().enumerate().take(5) {
+            out.push_str(&format!("{}. {}\n", i + 1, action));
+        }
+        if assistant_actions.len() > 5 {
+            out.push_str(&format!(
+                "... and {} more actions\n",
+                assistant_actions.len() - 5
+            ));
+        }
+        out.push('\n');
+    }
+
+    out.push_str(&format!(
+        "Total messages compressed: {}\n",
+        messages.len()
+    ));
+    out.push_str("</context_summary>");
+
+    out
+}
+
+/// Truncate a string to `max_chars` (counted in `char`s, not bytes) and
+/// append an ellipsis if truncation occurred. Guarantees char-boundary
+/// safety for CJK / multi-byte input.
+fn truncate_text_chars(text: &str, max_chars: usize) -> String {
+    let mut iter = text.char_indices();
+    match iter.nth(max_chars) {
+        Some((byte_idx, _)) => format!("{}...", &text[..byte_idx]),
+        None => text.to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -589,5 +724,74 @@ mod tests {
         // Should equal sum of individual estimates
         let sum: u32 = messages.iter().map(estimate_message_tokens).sum();
         assert_eq!(total, sum);
+    }
+
+    #[test]
+    fn generate_discard_summary_wraps_with_context_summary_tags() {
+        let messages = vec![
+            make_user("Please refactor the context compression module."),
+            make_assistant_with_tool_call("read"),
+            make_tool_result("read", "<file contents>"),
+            make_assistant("I read the file and will refactor."),
+        ];
+        let summary = generate_discard_summary(&messages);
+        assert!(summary.starts_with("<context_summary>"));
+        assert!(summary.trim_end().ends_with("</context_summary>"));
+        assert!(summary.contains("User Requests"));
+        assert!(summary.contains("Tools Used"));
+        assert!(summary.contains("read"));
+        assert!(summary.contains("Total messages compressed: 4"));
+    }
+
+    #[test]
+    fn generate_discard_summary_handles_cjk_without_panicking() {
+        // Heuristic truncation must be char-boundary safe for multibyte input.
+        let long_cjk: String = "这是一条很长的中文用户请求".repeat(40);
+        let messages = vec![make_user(&long_cjk)];
+        let summary = generate_discard_summary(&messages);
+        assert!(summary.contains("User Requests"));
+        // No panic = char-boundary safe.
+    }
+
+    #[test]
+    fn compress_context_fallback_injects_heuristic_summary_when_over_budget() {
+        // Build a thread large enough to force compression, with a clear
+        // assistant+user boundary so find_cut_point can pick a sane split.
+        let mut messages = Vec::new();
+        for i in 0..20 {
+            messages.push(make_user(&format!("Question {}: {}", i, "x".repeat(400))));
+            messages.push(make_assistant(&format!(
+                "Answer {}: {}",
+                i,
+                "y".repeat(400)
+            )));
+        }
+
+        let s = CompressionSettings {
+            context_window: 2000,
+            reserve_tokens: 500,
+            keep_recent_tokens: 500,
+        };
+        assert!(should_compress(&messages, &s));
+
+        let result = compress_context_fallback(messages.clone(), &s);
+        assert!(result.len() < messages.len());
+
+        // The first message should be our heuristic <context_summary> so the
+        // user never fully loses the skeleton of earlier context.
+        match &result[0] {
+            AgentMessage::User(u) => {
+                let text = match &u.content {
+                    tiycore::types::UserContent::Text(t) => t.as_str(),
+                    _ => panic!("expected text user content"),
+                };
+                assert!(
+                    text.starts_with("<context_summary>"),
+                    "fallback should inject a heuristic summary, got: {}",
+                    text
+                );
+            }
+            other => panic!("expected heuristic summary at head, got {:?}", other),
+        }
     }
 }

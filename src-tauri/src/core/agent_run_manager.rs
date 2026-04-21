@@ -1423,6 +1423,34 @@ pub(crate) async fn generate_primary_summary(
     instructions: Option<&str>,
     abort: Option<tiycore::agent::AbortSignal>,
 ) -> Result<String, AppError> {
+    execute_summary_llm_call(
+        model_role,
+        build_compact_summary_system_prompt(),
+        build_compact_summary_messages(history, instructions),
+        instructions,
+        abort,
+        "primary",
+    )
+    .await
+}
+
+/// Shared implementation for primary- and merge-summary LLM calls.
+///
+/// Both call paths share the same provider setup, reasoning-aware
+/// `max_tokens` budget, stream options, and result-normalization logic.
+/// Extracting the shared tail prevents behavioural drift between the two
+/// public entry points when stream options or error handling change.
+///
+/// `kind` is a short label (e.g. "primary" / "merge") used only for error
+/// messages so a failure can be traced back to the originating call path.
+async fn execute_summary_llm_call(
+    model_role: &ResolvedModelRole,
+    system_prompt: String,
+    messages: Vec<TiyMessage>,
+    instructions: Option<&str>,
+    abort: Option<tiycore::agent::AbortSignal>,
+    kind: &str,
+) -> Result<String, AppError> {
     // Summary generation does not benefit from reasoning/thinking tokens.
     // Disable reasoning so the protocol layer omits thinking/reasoning parameters,
     // preventing reasoning tokens from consuming the PRIMARY_SUMMARY_MAX_TOKENS budget.
@@ -1435,15 +1463,15 @@ pub(crate) async fn generate_primary_summary(
             ErrorSource::Settings,
             "settings.primary_summary.provider_missing",
             format!(
-                "Provider type '{:?}' is not registered for primary summary generation.",
-                model_role.model.provider
+                "Provider type '{:?}' is not registered for {} summary generation.",
+                model_role.model.provider, kind
             ),
         )
     })?;
 
     let context = TiyContext {
-        system_prompt: Some(build_compact_summary_system_prompt()),
-        messages: build_compact_summary_messages(history, instructions),
+        system_prompt: Some(system_prompt),
+        messages,
         tools: None,
     };
 
@@ -1473,7 +1501,7 @@ pub(crate) async fn generate_primary_summary(
             return Err(AppError::recoverable(
                 ErrorSource::System,
                 "runtime.context_compression.empty_result",
-                "Primary summary generation returned empty result".to_string(),
+                format!("{} summary generation returned empty result", kind),
             ));
         }
     };
@@ -1482,7 +1510,7 @@ pub(crate) async fn generate_primary_summary(
         let detail = message
             .error_message
             .clone()
-            .unwrap_or_else(|| "primary summary generation failed".to_string());
+            .unwrap_or_else(|| format!("{} summary generation failed", kind));
         return Err(AppError::recoverable(
             ErrorSource::System,
             "runtime.context_compression.failed",
@@ -1496,7 +1524,7 @@ pub(crate) async fn generate_primary_summary(
         None => Err(AppError::recoverable(
             ErrorSource::System,
             "runtime.context_compression.empty_result",
-            "Primary summary generation produced no usable content".to_string(),
+            format!("{} summary generation produced no usable content", kind),
         )),
     }
 }
@@ -1604,78 +1632,15 @@ pub(crate) async fn generate_merge_summary(
     instructions: Option<&str>,
     abort: Option<tiycore::agent::AbortSignal>,
 ) -> Result<String, AppError> {
-    let mut model_role = model_role.clone();
-    let was_reasoning = model_role.model.reasoning;
-    model_role.model.reasoning = false;
-
-    let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
-        AppError::recoverable(
-            ErrorSource::Settings,
-            "settings.primary_summary.provider_missing",
-            format!(
-                "Provider type '{:?}' is not registered for primary summary generation.",
-                model_role.model.provider
-            ),
-        )
-    })?;
-
-    let context = TiyContext {
-        system_prompt: Some(build_merge_summary_system_prompt()),
-        messages: build_merge_summary_messages(prior_summary, delta_history, instructions),
-        tools: None,
-    };
-
-    let max_tokens = if was_reasoning {
-        PRIMARY_SUMMARY_MAX_TOKENS * 2
-    } else {
-        PRIMARY_SUMMARY_MAX_TOKENS
-    };
-
-    let options = TiyStreamOptions {
-        api_key: model_role.api_key.clone(),
-        max_tokens: Some(max_tokens),
-        headers: Some(tiycode_default_headers()),
-        on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
-        security: Some(tiycore::types::SecurityConfig::default().with_url(tiycode_url_policy())),
-        ..TiyStreamOptions::default()
-    };
-
-    let stream = provider.stream(&model_role.model, &context, options);
-    let stream_fut = stream.try_result(PRIMARY_SUMMARY_TIMEOUT);
-    let completion = await_summary_with_abort(stream_fut, abort).await?;
-
-    let message = match completion {
-        Some(message) => message,
-        None => {
-            return Err(AppError::recoverable(
-                ErrorSource::System,
-                "runtime.context_compression.empty_result",
-                "Merge summary generation returned empty result".to_string(),
-            ));
-        }
-    };
-
-    if message.stop_reason == StopReason::Error {
-        let detail = message
-            .error_message
-            .clone()
-            .unwrap_or_else(|| "merge summary generation failed".to_string());
-        return Err(AppError::recoverable(
-            ErrorSource::System,
-            "runtime.context_compression.failed",
-            detail,
-        ));
-    }
-
-    let summary = normalize_compact_summary(message.text_content(), instructions);
-    match summary {
-        Some(s) => Ok(s),
-        None => Err(AppError::recoverable(
-            ErrorSource::System,
-            "runtime.context_compression.empty_result",
-            "Merge summary generation produced no usable content".to_string(),
-        )),
-    }
+    execute_summary_llm_call(
+        model_role,
+        build_merge_summary_system_prompt(),
+        build_merge_summary_messages(prior_summary, delta_history, instructions),
+        instructions,
+        abort,
+        "merge",
+    )
+    .await
 }
 
 /// Detect whether the head of `messages` contains a previously injected
@@ -2606,21 +2571,41 @@ mod tests {
 
     #[tokio::test]
     async fn await_summary_with_abort_cancels_midflight_future() {
+        use std::sync::Arc;
+        use tokio::sync::Notify;
+
         let signal = tiycore::agent::AbortSignal::new();
         let signal_for_task = signal.clone();
 
-        // Cancel after a short delay — the future is otherwise a never-ending
-        // pending so the test will hang if the cancel path doesn't race.
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // Deterministic mid-flight handshake: the future below notifies once
+        // it has been polled at least once, and the canceller only fires
+        // *after* receiving that notification. This replaces a timing-based
+        // `sleep(20ms)` that could flake under CI load.
+        let polled = Arc::new(Notify::new());
+        let polled_for_canceller = polled.clone();
+
+        let canceller = tokio::spawn(async move {
+            polled_for_canceller.notified().await;
             signal_for_task.cancel();
         });
 
-        let blocker = std::future::pending::<u32>();
+        let polled_for_future = polled.clone();
+        let blocker = async move {
+            // Signal on the first poll, then block forever — the test only
+            // passes if the select branch picks up the subsequent cancel.
+            polled_for_future.notify_one();
+            std::future::pending::<u32>().await
+        };
+
         let error = await_summary_with_abort(blocker, Some(signal))
             .await
             .expect_err("expected cancellation to race the pending future");
         assert_eq!(error.error_code, "runtime.context_compression.cancelled");
+
+        // The canceller always completes: it only ever awaits `polled` once
+        // and then cancels. Awaiting it here guarantees no test leaks a
+        // dangling task on success.
+        canceller.await.expect("canceller task should complete");
     }
 
     #[tokio::test]
