@@ -809,7 +809,10 @@ fn collect_conflicted_files(
     while let Some(conflict) = conflict_iter.next() {
         let conflict = match conflict {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(error) => {
+                tracing::warn!("Skipping malformed conflict entry: {error}");
+                continue;
+            }
         };
 
         // conflict.ancestor, .our, .their are Option<IndexEntry>

@@ -1971,7 +1971,7 @@ export function GitDiffPreviewPanel({
           : null,
         fileStatus.isUntracked ? "untracked" : null,
         fileStatus.isIgnored ? "ignored" : null,
-      fileStatus.isConflicted ? "conflict" : null,
+      fileStatus.isConflicted ? "conflicted" : null,
       ].filter((value): value is string => value !== null);
 
   return (
