@@ -196,6 +196,7 @@ const en: Record<TranslationKey, string> = {
   "sourceControl.staged": "Staged",
   "sourceControl.tracked": "Tracked",
   "sourceControl.untracked": "Untracked",
+  "sourceControl.conflicts": "Conflicts",
   "sourceControl.failedLoadFileDiff": "Failed to load file diff",
 
   // ── Branch Selector ────────────────────────────────────────

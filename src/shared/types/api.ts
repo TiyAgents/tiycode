@@ -548,7 +548,7 @@ export type ThreadStreamEvent =
 // Git
 // ---------------------------------------------------------------------------
 
-export type GitFileState = "tracked" | "modified" | "untracked" | "ignored";
+export type GitFileState = "tracked" | "modified" | "untracked" | "ignored" | "conflicted";
 
 export type GitChangeKind =
   | "added"
@@ -593,6 +593,7 @@ export interface GitSnapshotDto {
   stagedFiles: GitFileChangeDto[];
   unstagedFiles: GitFileChangeDto[];
   untrackedFiles: GitFileChangeDto[];
+  conflictedFiles: GitFileChangeDto[];
   recentCommits: GitCommitSummaryDto[];
   lastRefreshedAt: string;
 }
@@ -637,6 +638,7 @@ export interface GitFileStatusDto {
   unstagedStatus: GitChangeKind | null;
   isUntracked: boolean;
   isIgnored: boolean;
+  isConflicted: boolean;
 }
 
 export type GitMutationAction = "commit" | "fetch" | "pull" | "push";

@@ -49,6 +49,7 @@ struct SnapshotParts {
     staged_files: Vec<GitFileChangeDto>,
     unstaged_files: Vec<GitFileChangeDto>,
     untracked_files: Vec<GitFileChangeDto>,
+    conflicted_files: Vec<GitFileChangeDto>,
     recent_commits: Vec<GitCommitSummaryDto>,
 }
 
@@ -287,6 +288,7 @@ impl GitManager {
                 unstaged_status: map_worktree_status(status),
                 is_untracked: status.is_wt_new(),
                 is_ignored: status.is_ignored(),
+                is_conflicted: status.is_conflicted(),
             })
         })
         .await
@@ -295,6 +297,42 @@ impl GitManager {
                 ErrorSource::Git,
                 format!("Git file status task failed: {error}"),
             )
+        })?
+    }
+
+    pub async fn get_conflict_diff(
+        &self,
+        workspace_path: &str,
+        path: &str,
+    ) -> Result<GitDiffDto, AppError> {
+        let workspace_root = self.cached_canonicalize(workspace_path).await;
+        let workspace_relative = normalize_workspace_relative_path(path);
+
+        tokio::task::spawn_blocking(move || {
+            // For conflict files, we read the workdir content (which contains
+            // conflict markers) and display it as all-new content.
+            // This gives users a clear view of the current state of the file
+            // including conflict markers (<<<<<<<, =======, >>>>>>>).
+            let hunks = build_added_file_fallback_hunks(&workspace_root, &workspace_relative);
+
+            let additions = hunks.iter().map(|h| h.lines.len() as u32).sum::<u32>();
+
+            Ok(GitDiffDto {
+                path: workspace_relative,
+                staged: false,
+                status: GitChangeKind::Unmerged,
+                old_path: None,
+                new_path: None,
+                additions,
+                deletions: 0,
+                is_binary: hunks.is_empty(),
+                truncated: false,
+                hunks,
+            })
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal(ErrorSource::Git, format!("Git conflict diff task failed: {error}"))
         })?
     }
 
@@ -440,6 +478,7 @@ fn build_snapshot(
         staged_files: parts.staged_files,
         unstaged_files: parts.unstaged_files,
         untracked_files: parts.untracked_files,
+        conflicted_files: parts.conflicted_files,
         recent_commits: parts.recent_commits,
         last_refreshed_at: Utc::now().to_rfc3339(),
     })
@@ -458,6 +497,7 @@ fn empty_snapshot(workspace_id: String, capabilities: GitRepoCapabilitiesDto) ->
         staged_files: Vec::new(),
         unstaged_files: Vec::new(),
         untracked_files: Vec::new(),
+        conflicted_files: Vec::new(),
         recent_commits: Vec::new(),
         last_refreshed_at: Utc::now().to_rfc3339(),
     }
@@ -483,6 +523,25 @@ fn collect_snapshot_parts(
     let staged_files = collect_staged_files(&repo, &repo_root, workspace_root)?;
     let unstaged_files = collect_unstaged_files(&repo, &repo_root, workspace_root)?;
     let untracked_files = collect_untracked_files(&repo, &repo_root, workspace_root)?;
+    let conflicted_files = collect_conflicted_files(&repo, &repo_root, workspace_root)?;
+
+    // Remove conflicted file paths from staged/unstaged/untracked lists so
+    // they only appear in the dedicated "Conflicts" section.
+    let conflict_paths: std::collections::HashSet<String> =
+        conflicted_files.iter().map(|f| f.path.clone()).collect();
+    let staged_files = staged_files
+        .into_iter()
+        .filter(|f| !conflict_paths.contains(&f.path))
+        .collect();
+    let unstaged_files = unstaged_files
+        .into_iter()
+        .filter(|f| !conflict_paths.contains(&f.path))
+        .collect();
+    let untracked_files = untracked_files
+        .into_iter()
+        .filter(|f| !conflict_paths.contains(&f.path))
+        .collect();
+
     let recent_commits = collect_history(&repo, history_limit)?;
 
     Ok(SnapshotParts {
@@ -495,6 +554,7 @@ fn collect_snapshot_parts(
         staged_files,
         unstaged_files,
         untracked_files,
+        conflicted_files,
         recent_commits,
     })
 }
@@ -704,6 +764,74 @@ fn collect_untracked_files(
             path: workspace_relative,
             previous_path: None,
             status: GitChangeKind::Added,
+            additions: 0,
+            deletions: 0,
+        });
+    }
+
+    sort_file_changes(&mut files);
+    Ok(files)
+}
+
+fn collect_conflicted_files(
+    repo: &Repository,
+    repo_root: &Path,
+    workspace_root: &Path,
+) -> Result<Vec<GitFileChangeDto>, AppError> {
+    let index = repo.index().map_err(|error| {
+        AppError::recoverable(
+            ErrorSource::Git,
+            "git.index.read_failed",
+            format!("Unable to read Git index: {error}"),
+        )
+    })?;
+
+    // Fast path: if no conflicts, return early.
+    if !index.has_conflicts() {
+        return Ok(Vec::new());
+    }
+
+    let mut files = Vec::new();
+
+    // Use the conflict iterator which yields each conflicted path exactly once.
+    // Each conflict has ancestor/ours/theirs entries; we only need the path.
+    let mut conflict_iter = index.conflicts().map_err(|error| {
+        AppError::recoverable(
+            ErrorSource::Git,
+            "git.index.read_failed",
+            format!("Unable to iterate Git index conflicts: {error}"),
+        )
+    })?;
+
+    while let Some(conflict) = conflict_iter.next() {
+        let conflict = match conflict {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        // conflict.ancestor, .our, .their are Option<IndexEntry>
+        // We just need the path from any entry that exists.
+        let path_entry = conflict.our
+            .as_ref()
+            .or(conflict.their.as_ref())
+            .or(conflict.ancestor.as_ref());
+
+        let Some(entry) = path_entry else {
+            continue;
+        };
+
+        let path = String::from_utf8_lossy(&entry.path).to_string();
+
+        let Some(workspace_relative) =
+            repo_path_to_workspace_path(repo_root, workspace_root, Path::new(&path))
+        else {
+            continue;
+        };
+
+        files.push(GitFileChangeDto {
+            path: workspace_relative,
+            previous_path: None,
+            status: GitChangeKind::Unmerged,
             additions: 0,
             deletions: 0,
         });
@@ -1172,7 +1300,9 @@ fn is_git_cli_available() -> bool {
 }
 
 fn map_overlay_status(status: Status) -> GitFileState {
-    if status.is_ignored() {
+    if status.is_conflicted() {
+        GitFileState::Conflicted
+    } else if status.is_ignored() {
         GitFileState::Ignored
     } else if status.is_wt_new() {
         GitFileState::Untracked
@@ -1315,6 +1445,7 @@ fn state_priority(state: &GitFileState) -> u8 {
         GitFileState::Tracked => 2,
         GitFileState::Modified => 3,
         GitFileState::Untracked => 4,
+        GitFileState::Conflicted => 5,
     }
 }
 

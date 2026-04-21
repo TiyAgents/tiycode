@@ -21,6 +21,7 @@ import {
   gitCommit,
   gitGenerateCommitMessage,
   gitGetDiff,
+  gitGetConflictDiff,
   gitGetFileStatus,
   gitGetHistory,
   gitFetch,
@@ -92,6 +93,7 @@ type GitPanelProps = {
 export type GitDiffSelection = GitFileChangeDto & {
   staged: boolean;
   icon: ProjectTreeItem["icon"];
+  isConflict?: boolean;
 };
 
 type GitDiffPreviewPanelProps = {
@@ -240,6 +242,7 @@ function buildMockSnapshot(): GitSnapshotDto {
     stagedFiles,
     unstagedFiles,
     untrackedFiles,
+    conflictedFiles: [],
     recentCommits: GIT_HISTORY_ITEMS.map((item) => ({
       id: item.id,
       shortId: item.hash,
@@ -480,11 +483,12 @@ function formatRelativeTime(value: string) {
   return formatter.format(Math.round(deltaSeconds / 604800), "week");
 }
 
-function toPreviewSelection(change: GitFileChangeDto, staged: boolean): GitDiffSelection {
+function toPreviewSelection(change: GitFileChangeDto, staged: boolean, isConflict?: boolean): GitDiffSelection {
   return {
     ...change,
     staged,
     icon: inferIconFromPath(change.path),
+    isConflict,
   };
 }
 
@@ -717,6 +721,70 @@ function ChangeGroup({
                 <Plus className="size-3.5" />
               )}
             </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConflictGroup({
+  title,
+  files,
+  t,
+  onOpenDiffPreview,
+}: {
+  title: string;
+  files: GitFileChangeDto[];
+  t: TFunc;
+  onOpenDiffPreview: (selection: GitDiffSelection) => void;
+}) {
+  if (files.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between px-2.5 pt-2">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-app-warning">
+          {title}
+        </p>
+        <span className="text-[11px] text-app-warning">{files.length}</span>
+      </div>
+
+      <div className={DRAWER_LIST_STACK_CLASS}>
+        {files.map((file) => (
+          <div
+            key={`conflict:${file.path}`}
+            role="button"
+            tabIndex={0}
+            title={file.path}
+            className={cn(
+              "flex items-center gap-2 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
+              DRAWER_LIST_ROW_CLASS,
+            )}
+            onClick={() => onOpenDiffPreview(toPreviewSelection(file, false, true))}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpenDiffPreview(toPreviewSelection(file, false, true));
+              }
+            }}
+          >
+            <span
+              className={cn(
+                "inline-flex min-w-5 shrink-0 items-center justify-center rounded px-1 text-[10px] font-semibold text-app-warning",
+              )}
+            >
+              C
+            </span>
+            <span className="shrink-0">
+              <ProjectTreeIcon icon={inferIconFromPath(file.path)} />
+            </span>
+            <span className={DRAWER_LIST_LABEL_CLASS}>
+              {file.path.split("/").pop() ?? file.path}
+            </span>
+            {renderChangeStats(file, t)}
           </div>
         ))}
       </div>
@@ -990,7 +1058,8 @@ export function GitPanel({
   const totalChanges =
     (snapshot?.stagedFiles.length ?? 0) +
     (snapshot?.unstagedFiles.length ?? 0) +
-    (snapshot?.untrackedFiles.length ?? 0);
+    (snapshot?.untrackedFiles.length ?? 0) +
+    (snapshot?.conflictedFiles.length ?? 0);
   const hasStagedChanges = (snapshot?.stagedFiles.length ?? 0) > 0;
   const gitCliAvailable = snapshot?.capabilities.gitCliAvailable ?? false;
   const commitDisabled =
@@ -1588,6 +1657,14 @@ export function GitPanel({
                   onToggleStage={handleToggleStage}
                   onToggleAll={handleToggleAll}
                 />
+                {snapshot.conflictedFiles.length > 0 && (
+                  <ConflictGroup
+                    title={t("sourceControl.conflicts")}
+                    files={snapshot.conflictedFiles}
+                    t={t}
+                    onOpenDiffPreview={onOpenDiffPreview}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -1828,7 +1905,9 @@ export function GitDiffPreviewPanel({
     setError(null);
 
     void Promise.all([
-      gitGetDiff(workspaceId, selection.path, selection.staged),
+      selection.isConflict
+        ? gitGetConflictDiff(workspaceId, selection.path)
+        : gitGetDiff(workspaceId, selection.path, selection.staged),
       gitGetFileStatus(workspaceId, selection.path),
     ])
       .then(([nextDiff, nextFileStatus]) => {
@@ -1892,6 +1971,7 @@ export function GitDiffPreviewPanel({
           : null,
         fileStatus.isUntracked ? "untracked" : null,
         fileStatus.isIgnored ? "ignored" : null,
+      fileStatus.isConflicted ? "conflict" : null,
       ].filter((value): value is string => value !== null);
 
   return (

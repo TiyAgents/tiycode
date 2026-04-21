@@ -58,6 +58,17 @@ export async function gitGetFileStatus(
   });
 }
 
+export async function gitGetConflictDiff(
+  workspaceId: string,
+  path: string,
+): Promise<GitDiffDto> {
+  requireTauri("git_get_conflict_diff");
+  return invoke<GitDiffDto>("git_get_conflict_diff", {
+    workspaceId,
+    path,
+  });
+}
+
 export async function gitSubscribe(
   workspaceId: string,
   onEvent: (event: GitStreamEvent) => void,

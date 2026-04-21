@@ -232,6 +232,20 @@ pub async fn git_get_file_status(
 }
 
 #[tauri::command]
+pub async fn git_get_conflict_diff(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    path: String,
+) -> Result<GitDiffDto, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+
+    state
+        .git_manager
+        .get_conflict_diff(&workspace.canonical_path, &path)
+        .await
+}
+
+#[tauri::command]
 pub async fn git_subscribe(
     state: State<'_, AppState>,
     workspace_id: String,
