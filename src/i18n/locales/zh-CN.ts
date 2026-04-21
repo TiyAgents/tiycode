@@ -794,7 +794,7 @@ const zhCN = {
 
   // ── Worktree ───────────────────────────────────────────
   "worktree.createTitle": "新建 Worktree",
-  "worktree.createDescription": "为当前 Git 仓库创建一个新的 worktree，基于现有分支新建分支。",
+  "worktree.createDescription": "为当前 Git 仓库创建一个新的 worktree。",
   "worktree.field.branch": "新分支名",
   "worktree.field.branchPlaceholder": "输入新分支名称",
   "worktree.field.baseBranch": "基于分支",
@@ -813,6 +813,11 @@ const zhCN = {
   "worktree.empty.branches": "暂无分支",
   "worktree.loading.branches": "加载中…",
   "worktree.tag.label": "Worktree",
+  "worktree.mode.newBranch": "新建分支",
+  "worktree.mode.existingBranch": "已有分支",
+  "worktree.field.selectBranch": "选择分支",
+  "worktree.field.selectBranchHint": "将检出此已有分支到新 worktree",
+  "worktree.error.selectBranch": "请选择一个分支",
 } as const;
 
 export type TranslationKey = keyof typeof zhCN;

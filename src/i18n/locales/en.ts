@@ -756,7 +756,7 @@ const en: Record<TranslationKey, string> = {
 
   // ── Worktree ───────────────────────────────────────────
   "worktree.createTitle": "New worktree",
-  "worktree.createDescription": "Create a new worktree with a new branch for this Git repository.",
+  "worktree.createDescription": "Create a new worktree for this Git repository.",
   "worktree.field.branch": "New branch name",
   "worktree.field.branchPlaceholder": "Type a new branch name",
   "worktree.field.baseBranch": "Base branch",
@@ -775,6 +775,11 @@ const en: Record<TranslationKey, string> = {
   "worktree.empty.branches": "No branches yet",
   "worktree.loading.branches": "Loading…",
   "worktree.tag.label": "Worktree",
+  "worktree.mode.newBranch": "New branch",
+  "worktree.mode.existingBranch": "Existing branch",
+  "worktree.field.selectBranch": "Select branch",
+  "worktree.field.selectBranchHint": "Check out this existing branch into a new worktree",
+  "worktree.error.selectBranch": "Please select a branch",
 };
 
 export default en;
