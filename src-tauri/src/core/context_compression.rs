@@ -1,7 +1,11 @@
 //! Context compression (compaction) for managing LLM context window limits.
 //!
-//! Inspired by pi-mono's compaction system, this module provides token-budget-aware
-//! context window management via the `transform_context` hook.
+//! Provides token-budget-aware context window management via the
+//! `transform_context` hook. The actual summary generation is done by
+//! calling the primary LLM model (via `generate_primary_summary` in
+//! `agent_run_manager`); this module handles the **mechanics** of
+//! detecting when compression is needed, finding a safe cut-point, and
+//! building the compressed message list.
 //!
 //! ## Strategy
 //!
@@ -9,10 +13,9 @@
 //! 2. **Threshold check**: Compress when `estimated_tokens > context_window - reserve_tokens`.
 //! 3. **Cut-point detection**: Walk backwards from newest message, keep `keep_recent_tokens`
 //!    worth of recent messages. Never cut in the middle of an assistant+tool_result pair.
-//! 4. **Tool result truncation**: Older tool results beyond the keep-window are summarized
-//!    to a short descriptor: `[Tool result: {tool_name}, truncated]`.
-//! 5. **Summary injection**: Old messages before the cut-point are replaced with a single
-//!    `AgentMessage::User` containing a structured summary of what was discarded.
+//! 4. **Summary injection**: Old messages before the cut-point are replaced with a single
+//!    `AgentMessage::User` containing the LLM-generated summary.
+//! 5. **Tool result truncation**: Large tool results in the recent region are truncated.
 
 use tiycore::agent::AgentMessage;
 use tiycore::types::{ContentBlock, TextContent, UserMessage};
@@ -22,10 +25,9 @@ use tiycore::types::{ContentBlock, TextContent, UserMessage};
 const RESERVE_TOKENS: u32 = 16_384;
 
 /// Keep at least this many tokens of recent conversation untouched.
-/// Raised from pi-mono's default (20 000) to preserve more multi-turn
-/// context — especially tool-call / tool-result pairs that are now
-/// included in the history.
-const KEEP_RECENT_TOKENS: u32 = 32_000;
+/// With LLM-generated summaries providing rich context, we can keep a
+/// smaller recent window to maximise the space saved per compression.
+const KEEP_RECENT_TOKENS: u32 = 16_000;
 
 /// Maximum characters for a tool result in the "old" region.
 /// Longer results are truncated with a summary marker.
@@ -34,33 +36,79 @@ const OLD_TOOL_RESULT_MAX_CHARS: usize = 800;
 /// Minimum number of messages to keep (never compress below this).
 const MIN_MESSAGES_TO_KEEP: usize = 4;
 
-/// Estimate the number of tokens for a string using the chars/4 heuristic.
+/// Estimate the number of tokens for a string.
 ///
-/// This matches pi-mono's `estimateTokens()` and is a reasonable approximation
-/// for most LLM tokenizers (GPT, Claude, etc.).
+/// Base model is the chars/4 heuristic (matches pi-mono's `estimateTokens()`
+/// and works well for English / code). For Chinese / Japanese / Korean text,
+/// chars/4 substantially underestimates because each CJK character typically
+/// consumes between one and two BPE tokens — we have seen real provider calls
+/// return 413/context-length errors even when our estimate was well under the
+/// advertised context window on CJK-heavy threads.
+///
+/// Strategy: count CJK characters and non-CJK bytes separately, estimate
+/// `cjk_chars + non_cjk_bytes / 4`, and take the max with the plain chars/4
+/// heuristic. The max keeps ASCII behaviour identical to the original (so
+/// existing tests remain valid) while raising the floor for CJK input.
 fn estimate_tokens(text: &str) -> u32 {
-    // For CJK-heavy text, chars/2 might be more accurate, but chars/4 is
-    // the industry standard heuristic that pi-mono uses.
-    (text.len() as u32).saturating_add(3) / 4
+    let base = (text.len() as u32).saturating_add(3) / 4;
+
+    // Fast path: pure-ASCII strings need no CJK accounting.
+    if text.is_ascii() {
+        return base;
+    }
+
+    let mut cjk_chars: u32 = 0;
+    let mut non_cjk_bytes: u32 = 0;
+    for ch in text.chars() {
+        if is_cjk_like(ch) {
+            cjk_chars = cjk_chars.saturating_add(1);
+        } else {
+            non_cjk_bytes = non_cjk_bytes.saturating_add(ch.len_utf8() as u32);
+        }
+    }
+    // One token per CJK char + chars/4 for the remaining ASCII/Latin part.
+    let cjk_weighted = cjk_chars.saturating_add(non_cjk_bytes.saturating_add(3) / 4);
+
+    base.max(cjk_weighted)
+}
+
+/// Classify a character as "CJK-like" for the purposes of token estimation.
+///
+/// Covers the ranges commonly used in real threads: CJK Unified Ideographs
+/// (basic + Extension A), Hiragana, Katakana, Hangul Syllables, plus CJK
+/// Symbols & Punctuation and Fullwidth forms. This deliberately overshoots
+/// (some of these, like fullwidth punctuation, may tokenise as a single token)
+/// because the intent is a conservative upper bound, not a precise count.
+fn is_cjk_like(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3000..=0x303F      // CJK Symbols and Punctuation
+        | 0x3040..=0x309F   // Hiragana
+        | 0x30A0..=0x30FF   // Katakana
+        | 0x3400..=0x4DBF   // CJK Extension A
+        | 0x4E00..=0x9FFF   // CJK Unified Ideographs
+        | 0xAC00..=0xD7AF   // Hangul Syllables
+        | 0xF900..=0xFAFF   // CJK Compatibility Ideographs
+        | 0xFF00..=0xFFEF   // Halfwidth and Fullwidth Forms
+    )
 }
 
 /// Estimate tokens for a single `AgentMessage`.
-fn estimate_message_tokens(message: &AgentMessage) -> u32 {
+pub fn estimate_message_tokens(message: &AgentMessage) -> u32 {
     match message {
         AgentMessage::User(user_msg) => {
             let text = match &user_msg.content {
                 tiycore::types::UserContent::Text(t) => t.as_str(),
                 tiycore::types::UserContent::Blocks(blocks) => {
-                    // Sum all text blocks; images contribute a fixed overhead
                     let mut total = 0u32;
                     for block in blocks {
                         total += match block {
                             ContentBlock::Text(tc) => estimate_tokens(&tc.text),
-                            ContentBlock::Image(_) => 1000, // rough image token estimate
+                            ContentBlock::Image(_) => 1000,
                             _ => 10,
                         };
                     }
-                    return total + 4; // message overhead
+                    return total + 4;
                 }
             };
             estimate_tokens(text) + 4
@@ -72,14 +120,12 @@ fn estimate_message_tokens(message: &AgentMessage) -> u32 {
                     ContentBlock::Text(tc) => estimate_tokens(&tc.text),
                     ContentBlock::Thinking(tc) => estimate_tokens(&tc.thinking),
                     ContentBlock::ToolCall(tc) => {
-                        // tool name + JSON args
                         estimate_tokens(&tc.name) + estimate_tokens(&tc.arguments.to_string()) + 20
-                        // overhead for tool call framing
                     }
                     ContentBlock::Image(_) => 1000,
                 };
             }
-            total + 4 // message overhead
+            total + 4
         }
         AgentMessage::ToolResult(tool_result) => {
             let mut total = 0u32;
@@ -89,7 +135,7 @@ fn estimate_message_tokens(message: &AgentMessage) -> u32 {
                     _ => 10,
                 };
             }
-            total + 10 // overhead for tool_call_id, tool_name, etc.
+            total + 10
         }
         AgentMessage::Custom { data, .. } => estimate_tokens(&data.to_string()) + 10,
     }
@@ -116,92 +162,36 @@ impl CompressionSettings {
     }
 
     /// The maximum tokens we can use for input context.
-    fn budget(&self) -> u32 {
+    pub fn budget(&self) -> u32 {
         self.context_window.saturating_sub(self.reserve_tokens)
     }
 }
 
-/// Compress the message list to fit within the context window budget.
-///
-/// This is designed to be called from `Agent::set_transform_context()`.
-///
-/// ## Algorithm
-///
-/// 1. Estimate total tokens across all messages.
-/// 2. If within budget, return messages unchanged.
-/// 3. Find a "cut point" that preserves the most recent `keep_recent_tokens`.
-/// 4. Truncate old tool results in the discarded region.
-/// 5. Replace discarded messages with a summary marker.
-pub fn compress_context(
-    messages: Vec<AgentMessage>,
-    settings: &CompressionSettings,
-) -> Vec<AgentMessage> {
+// ---------------------------------------------------------------------------
+// Public API: should_compress, find_cut_point, build_compressed_messages
+// ---------------------------------------------------------------------------
+
+/// Estimate total tokens across all messages.
+pub fn estimate_total_tokens(messages: &[AgentMessage]) -> u32 {
+    messages.iter().map(estimate_message_tokens).sum()
+}
+
+/// Check whether compression is needed for the given messages and settings.
+pub fn should_compress(messages: &[AgentMessage], settings: &CompressionSettings) -> bool {
     if messages.is_empty() {
-        return messages;
+        return false;
     }
-
-    let budget = settings.budget();
-
-    // Phase 1: Estimate total tokens
-    let token_estimates: Vec<u32> = messages.iter().map(estimate_message_tokens).collect();
-    let total_tokens: u32 = token_estimates.iter().sum();
-
-    // If within budget, no compression needed
-    if total_tokens <= budget {
-        return messages;
-    }
-
-    tracing::info!(
-        total_tokens,
-        budget,
-        message_count = messages.len(),
-        "Context compression triggered"
-    );
-
-    // Phase 2: Find the cut point
-    // Walk backwards from the end, accumulating tokens until we reach keep_recent_tokens.
-    let cut_index = find_cut_point(&messages, &token_estimates, settings.keep_recent_tokens);
-
-    // Safety: never discard everything
-    if cut_index == 0 || messages.len() - cut_index < MIN_MESSAGES_TO_KEEP {
-        // Can't compress meaningfully — try just truncating old tool results
-        return truncate_old_tool_results(messages, budget, &token_estimates);
-    }
-
-    // Phase 3: Build the compressed message list
-    let old_messages = &messages[..cut_index];
-    let recent_messages = &messages[cut_index..];
-
-    // Generate a summary of discarded messages
-    let summary = generate_discard_summary(old_messages);
-    let summary_message = AgentMessage::User(UserMessage::text(summary));
-
-    let mut result = Vec::with_capacity(1 + recent_messages.len());
-    result.push(summary_message);
-
-    // Phase 4: For recent messages, truncate large tool results that are still too big
-    for msg in recent_messages {
-        result.push(maybe_truncate_tool_result(msg.clone(), false));
-    }
-
-    tracing::info!(
-        discarded = cut_index,
-        kept = result.len(),
-        "Context compression completed"
-    );
-
-    result
+    let total_tokens = estimate_total_tokens(messages);
+    total_tokens > settings.budget()
 }
 
-pub fn summarize_messages(messages: &[AgentMessage]) -> String {
-    generate_discard_summary(messages)
-}
-
-/// Find the cut point index: the first message index where we start keeping messages.
+/// Find the cut-point index: messages before this index are "old" (to be
+/// discarded), messages from this index onward are "recent" (to be kept).
 ///
 /// Walks backwards from the end, accumulating token estimates.
-/// Never cuts between an assistant message with tool calls and its corresponding tool results.
-fn find_cut_point(
+/// Never cuts between an assistant message with tool calls and its
+/// corresponding tool results.
+pub fn find_cut_point(
     messages: &[AgentMessage],
     token_estimates: &[u32],
     keep_recent_tokens: u32,
@@ -220,10 +210,6 @@ fn find_cut_point(
     }
 
     // Adjust cut point: never cut between an assistant (with tool calls) and its tool results.
-    // Walk backwards from cut to find a safe boundary.
-    // A safe cut point is:
-    //   - Before a User message, OR
-    //   - At position 0
     while cut > 0 && cut < messages.len() {
         match &messages[cut] {
             AgentMessage::ToolResult(_) => {
@@ -231,12 +217,8 @@ fn find_cut_point(
                 cut -= 1;
             }
             AgentMessage::Assistant(assistant) if assistant.has_tool_calls() => {
-                // Don't cut right before an assistant with tool calls if its results follow
-                // Check if next message is a tool result
                 if cut + 1 < messages.len() {
                     if matches!(&messages[cut + 1], AgentMessage::ToolResult(_)) {
-                        // The tool results are already in the "keep" region — we need to
-                        // include this assistant message too
                         cut -= 1;
                         continue;
                     }
@@ -250,13 +232,95 @@ fn find_cut_point(
     cut
 }
 
+/// Build the compressed message list given a summary string and the recent
+/// messages to keep.
+///
+/// The summary is injected as the first `AgentMessage::User` message, followed
+/// by the recent messages (with large tool results truncated).
+pub fn build_compressed_messages(
+    summary: &str,
+    recent_messages: &[AgentMessage],
+) -> Vec<AgentMessage> {
+    let summary_message = AgentMessage::User(UserMessage::text(summary.to_string()));
+
+    let mut result = Vec::with_capacity(1 + recent_messages.len());
+    result.push(summary_message);
+
+    for msg in recent_messages {
+        result.push(maybe_truncate_tool_result(msg.clone(), false));
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Legacy / fallback: compress_context (pure truncation, no LLM summary)
+// ---------------------------------------------------------------------------
+
+/// Compress the message list using pure truncation (no LLM summary).
+///
+/// This is used as a **safety fallback** when the LLM summary generation
+/// fails. It truncates old tool results aggressively but does not produce
+/// a summary — the old messages are simply discarded.
+///
+/// For the primary compression path (with LLM summary), use
+/// `should_compress` → `find_cut_point` → `build_compressed_messages` instead.
+pub fn compress_context_fallback(
+    messages: Vec<AgentMessage>,
+    settings: &CompressionSettings,
+) -> Vec<AgentMessage> {
+    if messages.is_empty() {
+        return messages;
+    }
+
+    let budget = settings.budget();
+
+    let token_estimates: Vec<u32> = messages.iter().map(estimate_message_tokens).collect();
+    let total_tokens: u32 = token_estimates.iter().sum();
+
+    if total_tokens <= budget {
+        return messages;
+    }
+
+    tracing::warn!(
+        total_tokens,
+        budget,
+        message_count = messages.len(),
+        "Context compression fallback triggered (LLM summary failed)"
+    );
+
+    let cut_index = find_cut_point(&messages, &token_estimates, settings.keep_recent_tokens);
+
+    if cut_index == 0 || messages.len() - cut_index < MIN_MESSAGES_TO_KEEP {
+        return truncate_old_tool_results(messages, budget, &token_estimates);
+    }
+
+    let recent_messages = &messages[cut_index..];
+
+    let mut result = Vec::with_capacity(recent_messages.len());
+    for msg in recent_messages {
+        result.push(maybe_truncate_tool_result(msg.clone(), false));
+    }
+
+    tracing::info!(
+        discarded = cut_index,
+        kept = result.len(),
+        "Context compression fallback completed (no summary)"
+    );
+
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
 /// When we can't find a good cut point, at least truncate old tool results.
 fn truncate_old_tool_results(
     messages: Vec<AgentMessage>,
     _budget: u32,
     _token_estimates: &[u32],
 ) -> Vec<AgentMessage> {
-    // Truncate tool results in the first 2/3 of messages (the "old" region)
     let old_boundary = messages.len() * 2 / 3;
 
     messages
@@ -292,7 +356,6 @@ fn maybe_truncate_tool_result(message: AgentMessage, aggressive: bool) -> AgentM
                 .sum();
 
             if total_chars > max_chars {
-                // Truncate the text content
                 tool_result.content = tool_result
                     .content
                     .into_iter()
@@ -300,7 +363,6 @@ fn maybe_truncate_tool_result(message: AgentMessage, aggressive: bool) -> AgentM
                         ContentBlock::Text(tc) if tc.text.len() > max_chars => {
                             let mut truncated = tc.text;
                             truncated.truncate(max_chars);
-                            // Ensure valid UTF-8 boundary
                             while !truncated.is_char_boundary(truncated.len()) {
                                 truncated.pop();
                             }
@@ -318,110 +380,6 @@ fn maybe_truncate_tool_result(message: AgentMessage, aggressive: bool) -> AgentM
         }
         other => other,
     }
-}
-
-/// Generate a structured summary of discarded messages.
-///
-/// This follows pi-mono's summary format with key sections.
-fn generate_discard_summary(messages: &[AgentMessage]) -> String {
-    let mut user_topics = Vec::new();
-    let mut tool_names = std::collections::HashSet::new();
-    let mut assistant_actions = Vec::new();
-
-    for msg in messages {
-        match msg {
-            AgentMessage::User(user_msg) => {
-                let text = match &user_msg.content {
-                    tiycore::types::UserContent::Text(t) => t.clone(),
-                    tiycore::types::UserContent::Blocks(blocks) => blocks
-                        .iter()
-                        .filter_map(|b| b.as_text())
-                        .map(|t| t.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                };
-                // Take first 200 chars as a topic summary
-                let summary = if text.len() > 200 {
-                    format!(
-                        "{}...",
-                        &text[..text.char_indices().nth(200).map_or(text.len(), |(i, _)| i)]
-                    )
-                } else {
-                    text
-                };
-                if !summary.trim().is_empty() {
-                    user_topics.push(summary);
-                }
-            }
-            AgentMessage::Assistant(assistant_msg) => {
-                // Track tool calls made
-                for tc in assistant_msg.tool_calls() {
-                    tool_names.insert(tc.name.clone());
-                }
-                // Track brief text responses
-                let text = assistant_msg.text_content();
-                if !text.is_empty() {
-                    let brief = if text.len() > 150 {
-                        format!(
-                            "{}...",
-                            &text[..text.char_indices().nth(150).map_or(text.len(), |(i, _)| i)]
-                        )
-                    } else {
-                        text
-                    };
-                    assistant_actions.push(brief);
-                }
-            }
-            AgentMessage::ToolResult(tool_result) => {
-                tool_names.insert(tool_result.tool_name.clone());
-            }
-            _ => {}
-        }
-    }
-
-    let mut summary = String::from("<context_summary>\n");
-    summary.push_str("The following is a summary of earlier conversation that was compressed to fit the context window.\n\n");
-
-    if !user_topics.is_empty() {
-        summary.push_str("## User Requests\n");
-        for (i, topic) in user_topics.iter().enumerate().take(5) {
-            summary.push_str(&format!("{}. {}\n", i + 1, topic));
-        }
-        if user_topics.len() > 5 {
-            summary.push_str(&format!(
-                "... and {} more requests\n",
-                user_topics.len() - 5
-            ));
-        }
-        summary.push('\n');
-    }
-
-    if !tool_names.is_empty() {
-        summary.push_str("## Tools Used\n");
-        let mut sorted_tools: Vec<_> = tool_names.into_iter().collect();
-        sorted_tools.sort();
-        summary.push_str(&sorted_tools.join(", "));
-        summary.push_str("\n\n");
-    }
-
-    if !assistant_actions.is_empty() {
-        summary.push_str("## Key Actions\n");
-        for (i, action) in assistant_actions.iter().enumerate().take(5) {
-            summary.push_str(&format!("{}. {}\n", i + 1, action));
-        }
-        if assistant_actions.len() > 5 {
-            summary.push_str(&format!(
-                "... and {} more actions\n",
-                assistant_actions.len() - 5
-            ));
-        }
-        summary.push('\n');
-    }
-
-    summary.push_str(&format!("Total messages compressed: {}\n", messages.len()));
-    summary.push_str("</context_summary>");
-
-    summary
 }
 
 #[cfg(test)]
@@ -478,23 +436,74 @@ mod tests {
 
     #[test]
     fn test_estimate_tokens() {
-        assert_eq!(estimate_tokens(""), 0); // (0 + 3) / 4 = 0 with integer division
-        assert_eq!(estimate_tokens("hello world"), 3); // 11 chars -> (11+3)/4 = 3
-        assert_eq!(estimate_tokens("a"), 1); // (1+3)/4 = 1
-        assert_eq!(estimate_tokens("abcdefgh"), 2); // (8+3)/4 = 2
+        assert_eq!(estimate_tokens(""), 0);
+        assert_eq!(estimate_tokens("hello world"), 3);
+        assert_eq!(estimate_tokens("a"), 1);
+        assert_eq!(estimate_tokens("abcdefgh"), 2);
+    }
+
+    #[test]
+    fn estimate_tokens_weights_cjk_higher_than_ascii_heuristic() {
+        // 10 Chinese chars = 30 UTF-8 bytes. Plain chars/4 would estimate
+        // (30+3)/4 = 8 tokens, which is a serious underestimate for real
+        // tokenisers. The CJK-aware estimate should return approximately one
+        // token per CJK char (i.e. ≥ 10).
+        let cjk = "你好世界你好世界你好";
+        assert_eq!(cjk.chars().count(), 10);
+        let estimate = estimate_tokens(cjk);
+        assert!(
+            estimate >= 10,
+            "CJK estimate should be at least one per char, got {}",
+            estimate
+        );
+    }
+
+    #[test]
+    fn estimate_tokens_preserves_ascii_only_heuristic() {
+        // The ASCII fast path must not change behaviour — the original chars/4
+        // formula is still the right answer for English/code and any existing
+        // token-budget thresholds depend on it.
+        for text in &[
+            "",
+            "a",
+            "hello world",
+            "abcdefgh",
+            "The quick brown fox jumps over the lazy dog",
+        ] {
+            let base = (text.len() as u32).div_ceil(4);
+            assert_eq!(
+                estimate_tokens(text),
+                base,
+                "ASCII text '{}' should still match chars/4",
+                text
+            );
+        }
+    }
+
+    #[test]
+    fn estimate_tokens_handles_mixed_cjk_and_ascii() {
+        // Japanese/Chinese mixed with Latin punctuation — the two populations
+        // are estimated separately and summed.
+        let mixed = "Hello, 世界! 这是一个测试.";
+        let est = estimate_tokens(mixed);
+        let cjk_count = mixed.chars().filter(|c| is_cjk_like(*c)).count() as u32;
+        assert!(
+            est >= cjk_count,
+            "Mixed text should be at least cjk_count ({}) tokens, got {}",
+            cjk_count,
+            est
+        );
     }
 
     #[test]
     fn test_no_compression_when_within_budget() {
         let messages = vec![make_user("Hello"), make_assistant("Hi there!")];
         let s = settings(128_000);
-        let result = compress_context(messages.clone(), &s);
-        assert_eq!(result.len(), messages.len());
+        assert!(!should_compress(&messages, &s));
     }
 
     #[test]
     fn test_compression_triggers_when_over_budget() {
-        // Create a very small context window to force compression
         let mut messages = Vec::new();
         for i in 0..20 {
             messages.push(make_user(&format!("Question {}: {}", i, "x".repeat(500))));
@@ -505,18 +514,16 @@ mod tests {
             )));
         }
 
-        // With a tiny budget, compression should kick in
         let s = CompressionSettings {
             context_window: 2000,
             reserve_tokens: 500,
             keep_recent_tokens: 500,
         };
 
-        let result = compress_context(messages.clone(), &s);
-        // Should have fewer messages than original
+        assert!(should_compress(&messages, &s));
+
+        let result = compress_context_fallback(messages.clone(), &s);
         assert!(result.len() < messages.len());
-        // First message should be a summary
-        assert!(matches!(&result[0], AgentMessage::User(_)));
     }
 
     #[test]
@@ -531,12 +538,7 @@ mod tests {
 
         let token_estimates: Vec<u32> = messages.iter().map(estimate_message_tokens).collect();
 
-        // With very low keep_recent_tokens, it should still not cut between
-        // assistant+tool_call and tool_result
         let cut = find_cut_point(&messages, &token_estimates, 10);
-
-        // The cut should be at 0 or 3 (before the second user message),
-        // but never at 1 or 2 (splitting assistant+tool_result pair)
         assert!(
             cut == 0 || cut == 3,
             "Cut point was {}, expected 0 or 3",
@@ -563,19 +565,29 @@ mod tests {
     }
 
     #[test]
-    fn test_discard_summary_format() {
-        let messages = vec![
-            make_user("Help me fix a bug in my code"),
-            make_assistant_with_tool_call("read"),
-            make_tool_result("read", "contents..."),
-            make_assistant("I found the issue. Let me fix it."),
-        ];
+    fn test_build_compressed_messages() {
+        let recent = vec![make_user("What next?"), make_assistant("Let me check.")];
+        let result = build_compressed_messages("Summary of earlier conversation", &recent);
+        assert_eq!(result.len(), 3); // 1 summary + 2 recent
+                                     // First message is the summary
+        if let AgentMessage::User(u) = &result[0] {
+            let text = match &u.content {
+                tiycore::types::UserContent::Text(t) => t.as_str(),
+                _ => panic!("Expected text content"),
+            };
+            assert_eq!(text, "Summary of earlier conversation");
+        } else {
+            panic!("Expected User message");
+        }
+    }
 
-        let summary = generate_discard_summary(&messages);
-        assert!(summary.contains("<context_summary>"));
-        assert!(summary.contains("</context_summary>"));
-        assert!(summary.contains("User Requests"));
-        assert!(summary.contains("Tools Used"));
-        assert!(summary.contains("read"));
+    #[test]
+    fn test_estimate_total_tokens() {
+        let messages = vec![make_user("Hello"), make_assistant("Hi there!")];
+        let total = estimate_total_tokens(&messages);
+        assert!(total > 0);
+        // Should equal sum of individual estimates
+        let sum: u32 = messages.iter().map(estimate_message_tokens).sum();
+        assert_eq!(total, sum);
     }
 }

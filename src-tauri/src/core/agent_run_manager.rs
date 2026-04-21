@@ -21,7 +21,6 @@ use crate::core::agent_session::{
     ResolvedModelRole,
 };
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
-use crate::core::context_compression::summarize_messages;
 use crate::core::plan_checkpoint::{
     ApprovalPromptMetadata, PlanApprovalAction, PlanMessageMetadata,
     IMPLEMENTATION_PLAN_APPROVAL_KIND, IMPLEMENTATION_PLAN_APPROVED_STATE,
@@ -42,11 +41,10 @@ use crate::persistence::repo::{
 };
 
 pub(crate) const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(60);
-const COMPACT_SUMMARY_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const TITLE_GENERATION_MAX_TOKENS: u32 = 512;
 pub(crate) const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 2048;
-const COMPACT_SUMMARY_MAX_TOKENS: u32 = 4096;
-const COMPACT_SUMMARY_MAX_TOKENS_REASONING: u32 = 8192;
+const PRIMARY_SUMMARY_MAX_TOKENS: u32 = 8192;
+const PRIMARY_SUMMARY_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
 const COMPACT_SUMMARY_CONTEXT_MAX_CHARS: usize = 18_000;
 const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
@@ -470,21 +468,23 @@ impl AgentRunManager {
             &model_plan_value,
         )
         .await?;
-        let model = compact_summary_model(&preview_spec.model_plan);
+        let model = primary_summary_model(&preview_spec.model_plan);
         let history =
             convert_history_messages(&current_context_messages, &compact_tool_calls, &model);
         let compact_instructions = instructions
             .as_ref()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-        let summary = self
-            .build_compact_summary(
-                thread_id,
-                &history,
-                preview_spec.model_plan.lightweight.as_ref(),
-                compact_instructions.as_deref(),
-            )
-            .await;
+
+        // Generate summary using the primary model — fail loudly if it errors,
+        // so the user can retry with /compact.
+        let summary = generate_primary_summary(
+            &preview_spec.model_plan.primary,
+            &history,
+            compact_instructions.as_deref(),
+            None,
+        )
+        .await?;
 
         let command_display_text = if let Some(extra) = compact_instructions.as_ref() {
             format!("/compact {}", extra)
@@ -533,6 +533,8 @@ impl AgentRunManager {
                 attachments_json: None,
                 created_at: String::new(),
             },
+            // Reset marker first (lower UUID v7 id), then summary (higher id).
+            // This ensures list_since_last_reset (WHERE id >= reset_id) includes the summary.
             MessageRecord {
                 id: uuid::Uuid::now_v7().to_string(),
                 thread_id: thread_id.to_string(),
@@ -562,51 +564,6 @@ impl AgentRunManager {
         thread_repo::touch_active(&self.pool, thread_id).await?;
         thread_repo::update_status(&self.pool, &thread.id, &ThreadStatus::Idle).await?;
         Ok(())
-    }
-
-    async fn build_compact_summary(
-        &self,
-        thread_id: &str,
-        history: &[AgentMessage],
-        lightweight_model_role: Option<&ResolvedModelRole>,
-        instructions: Option<&str>,
-    ) -> String {
-        let fallback_summary = build_fallback_compact_summary(history, instructions);
-
-        if history.is_empty() {
-            return fallback_summary;
-        }
-
-        let Some(model_role) = lightweight_model_role else {
-            tracing::info!(
-                thread_id = %thread_id,
-                "compact summary falling back to heuristic summary: no lightweight model configured"
-            );
-            return fallback_summary;
-        };
-
-        match generate_compact_summary(model_role, history, instructions).await {
-            Ok(Some(summary)) => summary,
-            Ok(None) => {
-                tracing::warn!(
-                    thread_id = %thread_id,
-                    provider_id = %model_role.provider_id,
-                    model_id = %model_role.model_id,
-                    "compact summary generation returned empty result, falling back to heuristic summary"
-                );
-                fallback_summary
-            }
-            Err(error) => {
-                tracing::warn!(
-                    thread_id = %thread_id,
-                    provider_id = %model_role.provider_id,
-                    model_id = %model_role.model_id,
-                    error = %error,
-                    "compact summary generation failed, falling back to heuristic summary"
-                );
-                fallback_summary
-            }
-        }
     }
 
     pub async fn subscribe_run(
@@ -713,42 +670,12 @@ impl AgentRunManager {
     async fn build_context_reset_message_bundle(
         &self,
         thread_id: &str,
-        plan_message: &MessageRecord,
+        _plan_message: &MessageRecord,
         plan_metadata: &PlanMessageMetadata,
-        model_plan_value: &serde_json::Value,
+        _model_plan_value: &serde_json::Value,
     ) -> Result<ContextResetMessageBundle, AppError> {
-        let model = build_session_spec(
-            &self.pool,
-            "plan-reset-preview",
-            thread_id,
-            "",
-            "default",
-            model_plan_value,
-        )
-        .await?
-        .model_plan
-        .primary
-        .model;
-        let pre_plan_messages =
-            message_repo::list_recent(&self.pool, thread_id, Some(&plan_message.id), 1024).await?;
-        let current_context_messages = trim_history_to_current_context(&pre_plan_messages);
-        let summary = if current_context_messages.is_empty() {
-            "<context_summary>\nNo earlier plain-message context was available before this plan.\n</context_summary>"
-                .to_string()
-        } else {
-            let reset_run_ids: Vec<String> = current_context_messages
-                .iter()
-                .filter_map(|m| m.run_id.clone())
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect();
-            let reset_tool_calls =
-                tool_call_repo::list_by_run_ids(&self.pool, &reset_run_ids).await?;
-            let history =
-                convert_history_messages(&current_context_messages, &reset_tool_calls, &model);
-            summarize_messages(&history)
-        };
-
+        // Clear & Implement: no summary generation — the plan itself serves
+        // as the context seed for the next run.
         let reset_message = MessageRecord {
             id: uuid::Uuid::now_v7().to_string(),
             thread_id: thread_id.to_string(),
@@ -768,25 +695,6 @@ impl AgentRunManager {
             attachments_json: None,
             created_at: String::new(),
         };
-        let summary_message = MessageRecord {
-            id: uuid::Uuid::now_v7().to_string(),
-            thread_id: thread_id.to_string(),
-            run_id: None,
-            role: "system".to_string(),
-            content_markdown: summary,
-            message_type: "summary_marker".to_string(),
-            status: "completed".to_string(),
-            metadata_json: Some(
-                serde_json::json!({
-                    "kind": "context_summary",
-                    "source": "plan_approval",
-                    "label": "Historical context summary",
-                })
-                .to_string(),
-            ),
-            attachments_json: None,
-            created_at: String::new(),
-        };
         let approved_plan_message = MessageRecord {
             id: uuid::Uuid::now_v7().to_string(),
             thread_id: thread_id.to_string(),
@@ -800,8 +708,8 @@ impl AgentRunManager {
             created_at: String::new(),
         };
 
-        let history_override = vec![summary_message.clone(), approved_plan_message.clone()];
-        let persisted_messages = vec![reset_message, summary_message, approved_plan_message];
+        let history_override = vec![approved_plan_message.clone()];
+        let persisted_messages = vec![reset_message, approved_plan_message];
 
         Ok(ContextResetMessageBundle {
             history_override,
@@ -1437,26 +1345,12 @@ fn build_implementation_handoff_prompt(
     }
 }
 
-fn compact_summary_model(
+/// Returns the model to use for primary summary generation.
+/// Always uses the primary model to avoid context window mismatches.
+fn primary_summary_model(
     model_plan: &crate::core::agent_session::ResolvedRuntimeModelPlan,
 ) -> tiycore::types::Model {
-    model_plan
-        .auxiliary
-        .as_ref()
-        .unwrap_or(&model_plan.primary)
-        .model
-        .clone()
-}
-
-fn build_fallback_compact_summary(history: &[AgentMessage], instructions: Option<&str>) -> String {
-    let base_summary = if history.is_empty() {
-        "<context_summary>\nNo previous conversation was available to compact.\n</context_summary>"
-            .to_string()
-    } else {
-        summarize_messages(history)
-    };
-
-    append_compact_instructions(base_summary, instructions)
+    model_plan.primary.model.clone()
 }
 
 fn build_compact_summary_system_prompt() -> String {
@@ -1513,26 +1407,35 @@ fn build_compact_summary_messages(
     messages
 }
 
-async fn generate_compact_summary(
+/// Generate a context summary using the primary model.
+///
+/// Always uses the primary model (not lightweight) to ensure the summary
+/// stays within the model's context window. Returns `Err` on failure
+/// (no fallback), so callers can decide how to handle errors.
+///
+/// If `abort` is provided, the call short-circuits with a recoverable
+/// cancellation error as soon as the signal fires. This is used by the
+/// `transform_context` hook so that clicking Cancel during
+/// "Compressing context…" doesn't have to wait out the 90s timeout.
+pub(crate) async fn generate_primary_summary(
     model_role: &ResolvedModelRole,
     history: &[AgentMessage],
     instructions: Option<&str>,
-) -> Result<Option<String>, AppError> {
-    // Compact summary generation does not benefit from reasoning/thinking tokens.
+    abort: Option<tiycore::agent::AbortSignal>,
+) -> Result<String, AppError> {
+    // Summary generation does not benefit from reasoning/thinking tokens.
     // Disable reasoning so the protocol layer omits thinking/reasoning parameters,
-    // preventing reasoning tokens from consuming the COMPACT_SUMMARY_MAX_TOKENS budget.
-    // If the original model had reasoning enabled, bump max_tokens as a fallback —
-    // some reasoning-only models ignore the disable and still produce reasoning tokens.
-    let was_reasoning = model_role.model.reasoning;
+    // preventing reasoning tokens from consuming the PRIMARY_SUMMARY_MAX_TOKENS budget.
     let mut model_role = model_role.clone();
+    let was_reasoning = model_role.model.reasoning;
     model_role.model.reasoning = false;
 
     let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
         AppError::recoverable(
             ErrorSource::Settings,
-            "settings.compact_summary.provider_missing",
+            "settings.primary_summary.provider_missing",
             format!(
-                "Provider type '{:?}' is not registered for lightweight compact summary generation.",
+                "Provider type '{:?}' is not registered for primary summary generation.",
                 model_role.model.provider
             ),
         )
@@ -1544,45 +1447,277 @@ async fn generate_compact_summary(
         tools: None,
     };
 
+    let max_tokens = if was_reasoning {
+        // Bump for reasoning-only models that ignore the disable
+        PRIMARY_SUMMARY_MAX_TOKENS * 2
+    } else {
+        PRIMARY_SUMMARY_MAX_TOKENS
+    };
+
     let options = TiyStreamOptions {
         api_key: model_role.api_key.clone(),
-        max_tokens: Some(if was_reasoning {
-            COMPACT_SUMMARY_MAX_TOKENS_REASONING
-        } else {
-            COMPACT_SUMMARY_MAX_TOKENS
-        }),
+        max_tokens: Some(max_tokens),
         headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
         security: Some(tiycore::types::SecurityConfig::default().with_url(tiycode_url_policy())),
         ..TiyStreamOptions::default()
     };
 
-    let completion = provider
-        .stream(&model_role.model, &context, options)
-        .try_result(COMPACT_SUMMARY_TIMEOUT)
-        .await;
+    let stream = provider.stream(&model_role.model, &context, options);
+    let stream_fut = stream.try_result(PRIMARY_SUMMARY_TIMEOUT);
+    let completion = await_summary_with_abort(stream_fut, abort).await?;
 
     let message = match completion {
         Some(message) => message,
-        None => return Ok(None),
+        None => {
+            return Err(AppError::recoverable(
+                ErrorSource::System,
+                "runtime.context_compression.empty_result",
+                "Primary summary generation returned empty result".to_string(),
+            ));
+        }
     };
 
     if message.stop_reason == StopReason::Error {
         let detail = message
             .error_message
             .clone()
-            .unwrap_or_else(|| "lightweight compact summary generation failed".to_string());
+            .unwrap_or_else(|| "primary summary generation failed".to_string());
         return Err(AppError::recoverable(
-            ErrorSource::Settings,
-            "settings.compact_summary.failed",
+            ErrorSource::System,
+            "runtime.context_compression.failed",
             detail,
         ));
     }
 
-    Ok(normalize_compact_summary(
-        message.text_content(),
-        instructions,
-    ))
+    let summary = normalize_compact_summary(message.text_content(), instructions);
+    match summary {
+        Some(s) => Ok(s),
+        None => Err(AppError::recoverable(
+            ErrorSource::System,
+            "runtime.context_compression.empty_result",
+            "Primary summary generation produced no usable content".to_string(),
+        )),
+    }
+}
+
+/// Await a summary-generation future while also watching an optional
+/// `AbortSignal`. Returns `Err(cancelled)` as soon as the signal fires,
+/// allowing the caller to drop the stream future (and its in-flight HTTP
+/// connection) rather than wait for the provider timeout.
+async fn await_summary_with_abort<T>(
+    future: impl std::future::Future<Output = T>,
+    abort: Option<tiycore::agent::AbortSignal>,
+) -> Result<T, AppError> {
+    match abort {
+        Some(signal) if signal.is_cancelled() => Err(cancellation_error()),
+        Some(signal) => {
+            tokio::select! {
+                // Bias towards the primary future so, if both are ready at
+                // once, we return the summary result rather than a spurious
+                // cancel. Cancellation is checked again before returning.
+                biased;
+                value = future => Ok(value),
+                _ = signal.cancelled() => Err(cancellation_error()),
+            }
+        }
+        None => Ok(future.await),
+    }
+}
+
+fn cancellation_error() -> AppError {
+    AppError::recoverable(
+        ErrorSource::System,
+        "runtime.context_compression.cancelled",
+        "Context compression was cancelled".to_string(),
+    )
+}
+
+fn build_merge_summary_system_prompt() -> String {
+    [
+        "You maintain a rolling context summary for another model to continue after context reset.",
+        "You will be given the PRIOR summary (already in <context_summary> form) and a DELTA of conversation",
+        "that happened after that summary was last produced. Produce a SINGLE updated <context_summary>",
+        "that merges both — keeping still-relevant facts from the prior summary and folding in new information",
+        "from the delta. Treat the prior summary as authoritative for anything it covers and do not drop",
+        "details that remain pertinent.",
+        "",
+        "Requirements:",
+        "- Preserve the user's current goal and most recent requested outcome.",
+        "- Retain important constraints, preferences, and decisions from the prior summary unless the delta",
+        "  explicitly supersedes them.",
+        "- Fold newly completed work, findings, key files/commands, and remaining tasks from the delta in.",
+        "- Drop items the delta marks resolved; add items the delta newly raises.",
+        "- Be factual and concise. Do not invent details. Do not address the user.",
+        "- Prefer short bullet lists under clear section labels.",
+        "",
+        "Output rules:",
+        "- Start with <context_summary> on its own line.",
+        "- End with </context_summary> on its own line.",
+        "- Do not output any text before or after the wrapper.",
+    ]
+    .join("\n")
+}
+
+fn build_merge_summary_messages(
+    prior_summary: &str,
+    delta_history: &[AgentMessage],
+    instructions: Option<&str>,
+) -> Vec<TiyMessage> {
+    let mut messages = Vec::new();
+
+    if let Some(instructions) = instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        messages.push(TiyMessage::User(UserMessage::text(format!(
+            "Additional user instructions for this compact:\n{instructions}"
+        ))));
+    }
+
+    messages.push(TiyMessage::User(UserMessage::text(format!(
+        "Prior summary (authoritative for anything it covers):\n{}",
+        prior_summary.trim()
+    ))));
+
+    messages.push(TiyMessage::User(UserMessage::text(format!(
+        "New conversation delta (happened after the prior summary):\n{}",
+        render_compact_summary_history(delta_history)
+    ))));
+
+    messages
+}
+
+/// Generate an updated summary by merging a prior `<context_summary>` block with
+/// a delta of conversation history.
+///
+/// Used by auto-compression when the previous compression already left a summary
+/// in the in-memory context; merging avoids the "summary-of-summary" quality
+/// decay that would happen if we re-summarised the already-summarised prefix.
+///
+/// `abort` mirrors `generate_primary_summary`: the call short-circuits with a
+/// recoverable cancellation error when the signal fires.
+pub(crate) async fn generate_merge_summary(
+    model_role: &ResolvedModelRole,
+    prior_summary: &str,
+    delta_history: &[AgentMessage],
+    instructions: Option<&str>,
+    abort: Option<tiycore::agent::AbortSignal>,
+) -> Result<String, AppError> {
+    let mut model_role = model_role.clone();
+    let was_reasoning = model_role.model.reasoning;
+    model_role.model.reasoning = false;
+
+    let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
+        AppError::recoverable(
+            ErrorSource::Settings,
+            "settings.primary_summary.provider_missing",
+            format!(
+                "Provider type '{:?}' is not registered for primary summary generation.",
+                model_role.model.provider
+            ),
+        )
+    })?;
+
+    let context = TiyContext {
+        system_prompt: Some(build_merge_summary_system_prompt()),
+        messages: build_merge_summary_messages(prior_summary, delta_history, instructions),
+        tools: None,
+    };
+
+    let max_tokens = if was_reasoning {
+        PRIMARY_SUMMARY_MAX_TOKENS * 2
+    } else {
+        PRIMARY_SUMMARY_MAX_TOKENS
+    };
+
+    let options = TiyStreamOptions {
+        api_key: model_role.api_key.clone(),
+        max_tokens: Some(max_tokens),
+        headers: Some(tiycode_default_headers()),
+        on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
+        security: Some(tiycore::types::SecurityConfig::default().with_url(tiycode_url_policy())),
+        ..TiyStreamOptions::default()
+    };
+
+    let stream = provider.stream(&model_role.model, &context, options);
+    let stream_fut = stream.try_result(PRIMARY_SUMMARY_TIMEOUT);
+    let completion = await_summary_with_abort(stream_fut, abort).await?;
+
+    let message = match completion {
+        Some(message) => message,
+        None => {
+            return Err(AppError::recoverable(
+                ErrorSource::System,
+                "runtime.context_compression.empty_result",
+                "Merge summary generation returned empty result".to_string(),
+            ));
+        }
+    };
+
+    if message.stop_reason == StopReason::Error {
+        let detail = message
+            .error_message
+            .clone()
+            .unwrap_or_else(|| "merge summary generation failed".to_string());
+        return Err(AppError::recoverable(
+            ErrorSource::System,
+            "runtime.context_compression.failed",
+            detail,
+        ));
+    }
+
+    let summary = normalize_compact_summary(message.text_content(), instructions);
+    match summary {
+        Some(s) => Ok(s),
+        None => Err(AppError::recoverable(
+            ErrorSource::System,
+            "runtime.context_compression.empty_result",
+            "Merge summary generation produced no usable content".to_string(),
+        )),
+    }
+}
+
+/// Detect whether the head of `messages` contains a previously injected
+/// `<context_summary>` block (produced by an earlier auto-compression pass).
+///
+/// Returns `Some((prior_summary_text, consumed_prefix_len))` when found — the
+/// caller should treat the first `consumed_prefix_len` messages as a pinned
+/// prefix (the old summary) and summarise the **rest** as a delta.
+///
+/// Only the **first** user message is inspected: previous compression always
+/// places the summary as the new head of the context.
+pub(crate) fn detect_prior_summary(messages: &[AgentMessage]) -> Option<(String, usize)> {
+    let first = messages.first()?;
+    let user = match first {
+        AgentMessage::User(user) => user,
+        _ => return None,
+    };
+    let text = match &user.content {
+        tiycore::types::UserContent::Text(t) => t.as_str(),
+        tiycore::types::UserContent::Blocks(blocks) => {
+            // Accept only a single text block for detection.
+            blocks
+                .iter()
+                .find_map(|block| match block {
+                    tiycore::types::ContentBlock::Text(t) => Some(t.text.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("")
+        }
+    };
+
+    let trimmed = text.trim_start();
+    if !trimmed.starts_with("<context_summary>") {
+        return None;
+    }
+    // Require a closing wrapper too; a truncated block means the message
+    // isn't a well-formed prior summary and re-summarisation is safer.
+    if !trimmed.contains("</context_summary>") {
+        return None;
+    }
+
+    Some((text.to_string(), 1))
 }
 
 fn render_compact_summary_history(history: &[AgentMessage]) -> String {
@@ -2085,6 +2220,7 @@ fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> bool {
             | ThreadStreamEvent::ReasoningUpdated { .. }
             | ThreadStreamEvent::ThreadUsageUpdated { .. }
             | ThreadStreamEvent::RunCheckpointed { .. }
+            | ThreadStreamEvent::ContextCompressing { .. }
             | ThreadStreamEvent::RunCompleted { .. }
             | ThreadStreamEvent::RunLimitReached { .. }
             | ThreadStreamEvent::RunFailed { .. }
@@ -2137,9 +2273,10 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_compact_instructions, build_compact_summary_messages,
+        append_compact_instructions, await_summary_with_abort, build_compact_summary_messages,
         build_compact_summary_system_prompt, build_implementation_handoff_prompt,
-        build_title_prompt, collapse_whitespace, extract_context_summary_block,
+        build_merge_summary_messages, build_merge_summary_system_prompt, build_title_prompt,
+        collapse_whitespace, detect_prior_summary, extract_context_summary_block,
         normalize_compact_summary, normalize_generated_title, should_complete_reasoning_for_event,
         truncate_chars,
     };
@@ -2351,5 +2488,146 @@ mod tests {
         );
         assert!(prompt.contains("after clearing the planning conversation"));
         assert!(prompt.contains("agent_review with planFilePath"));
+    }
+
+    #[test]
+    fn detect_prior_summary_matches_wrapped_first_user_message() {
+        let messages = vec![
+            AgentMessage::User(UserMessage::text(
+                "<context_summary>\nState A\n</context_summary>",
+            )),
+            AgentMessage::User(UserMessage::text("follow-up question")),
+        ];
+
+        let (prior, prefix_len) =
+            detect_prior_summary(&messages).expect("prior summary should be detected");
+        assert!(prior.contains("State A"));
+        assert_eq!(prefix_len, 1);
+    }
+
+    #[test]
+    fn detect_prior_summary_tolerates_leading_whitespace() {
+        let messages = vec![AgentMessage::User(UserMessage::text(
+            "   \n<context_summary>\nState\n</context_summary>",
+        ))];
+        assert!(detect_prior_summary(&messages).is_some());
+    }
+
+    #[test]
+    fn detect_prior_summary_rejects_non_user_first_message() {
+        let messages = vec![AgentMessage::User(UserMessage::text(
+            "not a summary, just a question",
+        ))];
+        assert!(detect_prior_summary(&messages).is_none());
+    }
+
+    #[test]
+    fn detect_prior_summary_rejects_truncated_block_without_closing_tag() {
+        // An unterminated wrapper is not a well-formed prior summary — fall
+        // back to the normal re-summarise path rather than merging into a
+        // partial block.
+        let messages = vec![AgentMessage::User(UserMessage::text(
+            "<context_summary>\nState without close tag",
+        ))];
+        assert!(detect_prior_summary(&messages).is_none());
+    }
+
+    #[test]
+    fn merge_summary_system_prompt_explains_the_merge_contract() {
+        let prompt = build_merge_summary_system_prompt();
+        assert!(prompt.contains("PRIOR summary"));
+        assert!(prompt.contains("DELTA"));
+        assert!(prompt.contains("<context_summary>"));
+        assert!(prompt.contains("</context_summary>"));
+    }
+
+    #[test]
+    fn merge_summary_messages_include_prior_and_delta_in_order() {
+        let delta = vec![AgentMessage::User(UserMessage::text(
+            "New user input to fold into the summary",
+        ))];
+        let messages = build_merge_summary_messages(
+            "<context_summary>\nOld state\n</context_summary>",
+            &delta,
+            Some("Keep API choice intact"),
+        );
+
+        assert_eq!(messages.len(), 3);
+
+        // 0: instructions, 1: prior summary, 2: delta history
+        match &messages[1] {
+            TiyMessage::User(user) => {
+                let text = match &user.content {
+                    tiycore::types::UserContent::Text(t) => t,
+                    _ => panic!("expected text user message"),
+                };
+                assert!(text.starts_with("Prior summary"));
+                assert!(text.contains("Old state"));
+            }
+            _ => panic!("expected the prior-summary slot to be a user message"),
+        }
+
+        match &messages[2] {
+            TiyMessage::User(user) => {
+                let text = match &user.content {
+                    tiycore::types::UserContent::Text(t) => t,
+                    _ => panic!("expected text user message"),
+                };
+                assert!(text.starts_with("New conversation delta"));
+                assert!(text.contains("New user input to fold"));
+            }
+            _ => panic!("expected the delta slot to be a user message"),
+        }
+    }
+
+    #[tokio::test]
+    async fn await_summary_with_abort_returns_future_value_when_not_cancelled() {
+        let signal = tiycore::agent::AbortSignal::new();
+        let result = await_summary_with_abort(async { 42_u32 }, Some(signal))
+            .await
+            .expect("future should complete");
+        assert_eq!(result, 42);
+    }
+
+    #[tokio::test]
+    async fn await_summary_with_abort_short_circuits_when_signal_already_cancelled() {
+        let signal = tiycore::agent::AbortSignal::new();
+        signal.cancel();
+
+        // The future below would block indefinitely — the test only passes if
+        // the pre-check on the already-cancelled signal returns Err without
+        // polling the future.
+        let blocker = std::future::pending::<u32>();
+        let error = await_summary_with_abort(blocker, Some(signal))
+            .await
+            .expect_err("expected cancellation to short-circuit");
+        assert_eq!(error.error_code, "runtime.context_compression.cancelled");
+    }
+
+    #[tokio::test]
+    async fn await_summary_with_abort_cancels_midflight_future() {
+        let signal = tiycore::agent::AbortSignal::new();
+        let signal_for_task = signal.clone();
+
+        // Cancel after a short delay — the future is otherwise a never-ending
+        // pending so the test will hang if the cancel path doesn't race.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            signal_for_task.cancel();
+        });
+
+        let blocker = std::future::pending::<u32>();
+        let error = await_summary_with_abort(blocker, Some(signal))
+            .await
+            .expect_err("expected cancellation to race the pending future");
+        assert_eq!(error.error_code, "runtime.context_compression.cancelled");
+    }
+
+    #[tokio::test]
+    async fn await_summary_with_abort_passes_through_when_no_signal_provided() {
+        let result = await_summary_with_abort(async { "hi".to_string() }, None)
+            .await
+            .expect("without a signal, errors are not produced");
+        assert_eq!(result, "hi");
     }
 }

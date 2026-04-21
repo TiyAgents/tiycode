@@ -538,6 +538,7 @@ export type ThreadStreamEvent =
       usage: RunUsageDto;
     }
   | { type: "run_checkpointed"; runId: string }
+  | { type: "context_compressing"; runId: string }
   | { type: "run_completed"; runId: string }
   | { type: "run_limit_reached"; runId: string; error: string; maxTurns: number }
   | { type: "run_failed"; runId: string; error: string }

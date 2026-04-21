@@ -160,6 +160,7 @@ export class ThreadStream {
   onToolEvent: ((event: ToolEvent) => void) | null = null;
   onApproval: ((event: ApprovalEvent) => void) | null = null;
   onRunStateChange: ((state: RunState, runId: string) => void) | null = null;
+  onContextCompressing: ((runId: string) => void) | null = null;
   onPlan: ((event: PlanEvent) => void) | null = null;
   onReasoning: ((event: ReasoningEvent) => void) | null = null;
   onQueue: ((event: QueueEvent) => void) | null = null;
@@ -335,6 +336,7 @@ export class ThreadStream {
     this.onToolEvent = null;
     this.onApproval = null;
     this.onRunStateChange = null;
+    this.onContextCompressing = null;
     this.onPlan = null;
     this.onReasoning = null;
     this.onQueue = null;
@@ -580,6 +582,11 @@ export class ThreadStream {
       case "run_checkpointed":
         this.currentRunId = null;
         this.onRunStateChange?.("waiting_approval", event.runId);
+        break;
+
+      case "context_compressing":
+        // Context compression in progress — frontend shows placeholder
+        this.onContextCompressing?.(event.runId);
         break;
 
       case "run_completed":

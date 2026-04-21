@@ -346,6 +346,7 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         usage: readUsage(rawEvent),
       };
     case "run_checkpointed":
+    case "context_compressing":
     case "run_completed":
     case "run_cancelled":
     case "run_interrupted":

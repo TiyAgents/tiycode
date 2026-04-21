@@ -172,6 +172,7 @@ type ThinkingPlaceholder = {
   createdAt: string;
   id: string;
   runId?: string | null;
+  label?: string;
 };
 
 type RuntimeThreadSurfaceProps = {
@@ -1993,6 +1994,11 @@ function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
     case "run_limit_reached":
     case "run_checkpointed":
       return true;
+    // Note: `context_compressing` is intentionally NOT handled here.
+    // It's a placeholder-relabel event, not a phase-completion event — the
+    // placeholder is kept on screen with an updated "Compressing…" label via
+    // `stream.onContextCompressing`. Treating it as a completion would race
+    // with the re-show and can produce a one-frame flash of empty state.
     default:
       return false;
   }
@@ -2119,10 +2125,17 @@ export function RuntimeThreadSurface({
     }
   }, []);
 
-  const showThinkingPlaceholder = useCallback((runId?: string | null, createdAt?: string) => {
+  const showThinkingPlaceholder = useCallback((runId?: string | null, createdAt?: string, label?: string) => {
     setThinkingPlaceholder((current) => {
       if (current && current.runId === (runId ?? null)) {
-        return current;
+        // Same placeholder run — just update the label in-place (e.g. when
+        // "Thinking…" switches to "Compressing context…"). Keeping the same
+        // id avoids React remounting the placeholder and preserves the
+        // Shimmer animation state.
+        if (current.label === label) {
+          return current;
+        }
+        return { ...current, label };
       }
 
       return {
@@ -2132,6 +2145,7 @@ export function RuntimeThreadSurface({
             ? crypto.randomUUID()
             : `thinking-${Date.now()}`,
         runId: runId ?? null,
+        label,
       };
     });
   }, []);
@@ -2869,6 +2883,16 @@ export function RuntimeThreadSurface({
       ) {
         void loadSnapshot();
       }
+    });
+
+    stream.onContextCompressing = withActiveStream((runId) => {
+      // Context compression is happening — keep the thinking placeholder on
+      // screen but relabel it to "Compressing context…". The show-helper
+      // updates the label in place (same placeholder id) so the shimmer
+      // doesn't remount. This deliberately does NOT go through
+      // `completeThinkingPhase` / `showThinkingPlaceholder` separately, which
+      // would produce a one-frame empty state between the close and reopen.
+      showThinkingPlaceholder(runId, undefined, t("contextCompressing"));
     });
 
     stream.onError = withActiveStream((message, runId) => {
@@ -4307,7 +4331,16 @@ export function RuntimeThreadSurface({
                         defaultOpen={false}
                         isStreaming
                       >
-                        <ReasoningTrigger />
+                        <ReasoningTrigger
+                          getThinkingMessage={
+                            thinkingPlaceholder?.label
+                              ? (isStreaming: boolean) =>
+                                  isStreaming
+                                    ? <Shimmer>{thinkingPlaceholder.label!}</Shimmer>
+                                    : <p>{thinkingPlaceholder.label}</p>
+                              : undefined
+                          }
+                        />
                       </Reasoning>
                     </MessageContent>
                   </Message>

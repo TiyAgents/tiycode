@@ -357,6 +357,86 @@ impl AgentSession {
         }
     }
 
+    /// Persist context_summary and context_reset markers to the DB after
+    /// auto-compression.
+    ///
+    /// `boundary_message_id` is the id of the **first DB-backed message we
+    /// intend to keep** in the next run's loaded history. It is stored inside
+    /// the reset marker's metadata as `boundaryMessageId` so that
+    /// `list_since_last_reset` can use it as the lower bound — this is the
+    /// only way to keep the DB view aligned with the in-memory `cut_point`,
+    /// because UUID v7 timing means the reset marker itself is written *after*
+    /// some messages that the cut_point means to preserve.
+    ///
+    /// The reset marker is written first, then the summary, so both rows have
+    /// `id > boundary_message_id` and the next `list_since_last_reset(…)` call
+    /// will return `[boundary_message, …, reset_marker, summary_marker]` in
+    /// chronological order.
+    pub async fn persist_compression_markers(
+        &self,
+        thread_id: &str,
+        summary: &str,
+        source: &str,
+        boundary_message_id: Option<&str>,
+    ) -> Result<(), crate::model::errors::AppError> {
+        use crate::model::thread::MessageRecord;
+
+        let summary_metadata = serde_json::json!({
+            "kind": "context_summary",
+            "source": source,
+            "label": "Compacted context summary",
+        });
+        let mut reset_metadata = serde_json::json!({
+            "kind": "context_reset",
+            "source": source,
+            "label": "Context is now reset",
+        });
+        if let Some(boundary_id) = boundary_message_id {
+            if !boundary_id.is_empty() {
+                reset_metadata
+                    .as_object_mut()
+                    .expect("reset_metadata is an object literal")
+                    .insert(
+                        "boundaryMessageId".to_string(),
+                        serde_json::Value::String(boundary_id.to_string()),
+                    );
+            }
+        }
+
+        let reset_message = MessageRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            thread_id: thread_id.to_string(),
+            run_id: None,
+            role: "system".to_string(),
+            content_markdown: "Context is now reset".to_string(),
+            message_type: "summary_marker".to_string(),
+            status: "completed".to_string(),
+            metadata_json: Some(reset_metadata.to_string()),
+            attachments_json: None,
+            created_at: String::new(),
+        };
+        let summary_message = MessageRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            thread_id: thread_id.to_string(),
+            run_id: None,
+            role: "system".to_string(),
+            content_markdown: summary.to_string(),
+            message_type: "summary_marker".to_string(),
+            status: "completed".to_string(),
+            metadata_json: Some(summary_metadata.to_string()),
+            attachments_json: None,
+            created_at: String::new(),
+        };
+
+        // Write reset first, then summary — UUID v7 is time-ordered, so
+        // reset.id < summary.id, ensuring list_since_last_reset (WHERE id >= reset_id)
+        // includes the summary row.
+        crate::persistence::repo::message_repo::insert(&self.pool, &reset_message).await?;
+        crate::persistence::repo::message_repo::insert(&self.pool, &summary_message).await?;
+
+        Ok(())
+    }
+
     async fn execute_tool_call(
         &self,
         tool_name: &str,
@@ -1002,15 +1082,271 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
     agent.set_transport(spec.model_plan.transport);
     agent.set_security_config(main_agent_security_config());
 
-    // Context compression: automatically trim messages to fit the context window.
+    // Context compression: when messages exceed the token budget, generate
+    // a summary with the primary model, persist markers to DB, and keep only
+    // recent messages. Falls back to pure truncation if the LLM call fails.
+    //
+    // Two correctness hazards addressed here:
+    //
+    // 1. UUID v7 timing. The reset marker we write to DB uses `now_v7()`, but
+    //    `cut_point` in-memory points at a slice that includes messages the
+    //    current run persisted EARLIER than this call. A naive
+    //    `list_since_last_reset WHERE id >= reset_id` would exclude those
+    //    earlier messages and effectively "lose" the current user prompt on
+    //    the next reload. We therefore resolve a DB-backed boundary id
+    //    conservatively covering all recent messages and attach it to the
+    //    reset marker's metadata.
+    //
+    // 2. Summary-of-summary decay. If a previous auto-compression already
+    //    injected a `<context_summary>` as the head of `messages`, naively
+    //    re-summarising `old_messages` would re-summarise an already-
+    //    summarised prefix, losing detail each pass. Instead we detect the
+    //    prior summary, treat it as a pinned prefix, and ask the model to
+    //    **merge** the prior summary with the delta of messages since then.
     let compression_settings = crate::core::context_compression::CompressionSettings::new(
         spec.model_plan.primary.model.context_window,
     );
+    let primary_model_role = spec.model_plan.primary.clone();
+    let compression_weak_self = weak_self.clone();
+    let compression_thread_id = spec.thread_id.clone();
+    let compression_run_id = spec.run_id.clone();
     agent.set_transform_context(move |messages| {
         let settings = compression_settings.clone();
+        let model_role = primary_model_role.clone();
+        let weak = compression_weak_self.clone();
+        let thread_id = compression_thread_id.clone();
+        let run_id = compression_run_id.clone();
         async move {
-            let messages = crate::core::context_compression::compress_context(messages, &settings);
-            messages
+            // Phase 1: check if compression is needed
+            if !crate::core::context_compression::should_compress(&messages, &settings) {
+                return messages;
+            }
+
+            tracing::info!(
+                thread_id = %thread_id,
+                message_count = messages.len(),
+                "Auto context compression triggered"
+            );
+
+            // Phase 2: emit "compressing" event so the frontend shows placeholder
+            if let Some(session) = weak.upgrade() {
+                let _ = session.event_tx.send(
+                    crate::ipc::frontend_channels::ThreadStreamEvent::ContextCompressing {
+                        run_id,
+                    },
+                );
+            }
+
+            // Pick up the session-level abort signal so that a Cancel click
+            // during "Compressing context…" short-circuits the LLM call
+            // instead of waiting the 90s PRIMARY_SUMMARY_TIMEOUT.
+            let abort_signal = weak.upgrade().map(|session| session.abort_signal.clone());
+            if abort_signal.as_ref().is_some_and(|s| s.is_cancelled()) {
+                // Already cancelled before we even started — skip the LLM call.
+                tracing::info!(
+                    thread_id = %thread_id,
+                    "Auto compression skipped: cancellation already requested"
+                );
+                return crate::core::context_compression::compress_context_fallback(
+                    messages, &settings,
+                );
+            }
+
+            // Phase 3: decide cut point
+            let token_estimates: Vec<u32> = messages.iter()
+                .map(crate::core::context_compression::estimate_message_tokens)
+                .collect();
+            let cut_point = crate::core::context_compression::find_cut_point(
+                &messages, &token_estimates, settings.keep_recent_tokens,
+            );
+
+            let old_messages = &messages[..cut_point];
+            let recent_messages = &messages[cut_point..];
+
+            // Skip if nothing to compress. This happens when cut_point is
+            // driven all the way to 0 by the tool-call/tool-result boundary
+            // adjustment. Falling through to the fallback truncation is
+            // better than returning `messages` unchanged (which would exceed
+            // the context window on the very next provider call).
+            if old_messages.is_empty() {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    "Auto compression cut_point == 0 (tool-call boundary prevented compression); using truncation fallback"
+                );
+                return crate::core::context_compression::compress_context_fallback(
+                    messages, &settings,
+                );
+            }
+
+            // Phase 4: if the old region already begins with a prior
+            // <context_summary> block, merge instead of re-summarise to
+            // avoid summary-of-summary quality decay. The prior summary was
+            // injected by a previous compression pass and lives at the head
+            // of `messages`; the delta to summarise is the rest of
+            // `old_messages`.
+            let summary_result = match crate::core::agent_run_manager::detect_prior_summary(
+                old_messages,
+            ) {
+                Some((prior_summary, prefix_len)) if prefix_len < old_messages.len() => {
+                    let delta = &old_messages[prefix_len..];
+                    tracing::info!(
+                        thread_id = %thread_id,
+                        delta_len = delta.len(),
+                        "Merging prior <context_summary> with new delta"
+                    );
+                    crate::core::agent_run_manager::generate_merge_summary(
+                        &model_role,
+                        &prior_summary,
+                        delta,
+                        None,
+                        abort_signal.clone(),
+                    ).await
+                }
+                Some((prior_summary, _prefix_len)) => {
+                    // Prior summary with no new delta (unlikely, since
+                    // should_compress fired). Reuse the prior summary verbatim
+                    // instead of calling the model for nothing.
+                    tracing::info!(
+                        thread_id = %thread_id,
+                        "Reusing prior <context_summary> — no delta to merge"
+                    );
+                    Ok(prior_summary)
+                }
+                None => {
+                    crate::core::agent_run_manager::generate_primary_summary(
+                        &model_role,
+                        old_messages,
+                        None,
+                        abort_signal.clone(),
+                    ).await
+                }
+            };
+
+            match summary_result {
+                Ok(summary) => {
+                    // Phase 5: persist markers to DB.
+                    //
+                    // Resolve a conservative boundary id: the (recent_messages.len() + buffer)-th
+                    // most recent non-discarded message in the thread. Using a small buffer
+                    // absorbs the fact that one DB message may expand to multiple in-memory
+                    // AgentMessages (a plan/summary marker; a run's tool_calls split into
+                    // assistant+tool_result pairs), so exact matching isn't feasible. The
+                    // boundary may slightly overshoot (include a few more old DB rows in the
+                    // next reload than strictly necessary) but will NEVER undershoot — so no
+                    // in-memory recent message can get dropped by the next load.
+                    const BOUNDARY_BUFFER: usize = 16;
+                    let boundary_n_from_end = recent_messages.len().saturating_add(BOUNDARY_BUFFER);
+                    if let Some(session) = weak.upgrade() {
+                        let boundary_id = match crate::persistence::repo::message_repo::find_nth_from_end_id(
+                            &session.pool,
+                            &thread_id,
+                            boundary_n_from_end,
+                        )
+                        .await
+                        {
+                            Ok(id) => id,
+                            Err(e) => {
+                                tracing::warn!(
+                                    thread_id = %thread_id,
+                                    error = %e,
+                                    "Failed to resolve boundary message id; persisting reset marker without it"
+                                );
+                                None
+                            }
+                        };
+
+                        if let Err(e) = session.persist_compression_markers(
+                            &thread_id,
+                            &summary,
+                            "auto",
+                            boundary_id.as_deref(),
+                        ).await {
+                            tracing::warn!(
+                                thread_id = %thread_id,
+                                error = %e,
+                                "Failed to persist auto-compression markers, continuing without DB record"
+                            );
+                        }
+                    }
+
+                    // Phase 6: build compressed message list
+                    let result = crate::core::context_compression::build_compressed_messages(
+                        &summary,
+                        recent_messages,
+                    );
+
+                    tracing::info!(
+                        thread_id = %thread_id,
+                        discarded = cut_point,
+                        kept = result.len(),
+                        "Auto context compression completed"
+                    );
+
+                    result
+                }
+                Err(e) => {
+                    // LLM summary failed — fall back to pure truncation.
+                    // Persist a reset marker (with boundary id) so the next run
+                    // starts from a clean boundary instead of re-loading the full
+                    // history and triggering compression again in a loop.
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        error = %e,
+                        "Auto context compression LLM summary failed, falling back to truncation"
+                    );
+                    if let Some(session) = weak.upgrade() {
+                        const BOUNDARY_BUFFER: usize = 16;
+                        let boundary_n_from_end = recent_messages.len().saturating_add(BOUNDARY_BUFFER);
+                        let boundary_id = crate::persistence::repo::message_repo::find_nth_from_end_id(
+                            &session.pool, &thread_id, boundary_n_from_end,
+                        )
+                        .await
+                        .ok()
+                        .flatten();
+
+                        let mut reset_metadata = serde_json::json!({
+                            "kind": "context_reset",
+                            "source": "auto_fallback",
+                            "label": "Context is now reset (fallback — no summary)",
+                        });
+                        if let Some(id) = boundary_id.as_ref() {
+                            reset_metadata
+                                .as_object_mut()
+                                .expect("reset_metadata is object literal")
+                                .insert(
+                                    "boundaryMessageId".to_string(),
+                                    serde_json::Value::String(id.clone()),
+                                );
+                        }
+                        let reset_message = crate::model::thread::MessageRecord {
+                            id: uuid::Uuid::now_v7().to_string(),
+                            thread_id: thread_id.clone(),
+                            run_id: None,
+                            role: "system".to_string(),
+                            content_markdown: "Context is now reset".to_string(),
+                            message_type: "summary_marker".to_string(),
+                            status: "completed".to_string(),
+                            metadata_json: Some(reset_metadata.to_string()),
+                            attachments_json: None,
+                            created_at: String::new(),
+                        };
+                        if let Err(persist_err) = crate::persistence::repo::message_repo::insert(
+                            &session.pool, &reset_message,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                thread_id = %thread_id,
+                                error = %persist_err,
+                                "Failed to persist fallback reset marker"
+                            );
+                        }
+                    }
+                    crate::core::context_compression::compress_context_fallback(
+                        messages, &settings,
+                    )
+                }
+            }
         }
     });
 
