@@ -9,6 +9,7 @@ export type ThreadItem = {
 
 export type WorkspaceThreadItem = ThreadItem & {
   id: string;
+  profileId?: string | null;
 };
 
 export type WorkspaceItem = {

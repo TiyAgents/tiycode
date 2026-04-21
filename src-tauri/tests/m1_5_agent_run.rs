@@ -21,7 +21,7 @@ use tiycode::core::thread_manager::ThreadManager;
 async fn test_run_creation_with_default_status() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-run", "/tmp/run").await;
-    test_helpers::seed_thread(&pool, "t-run", "ws-run").await;
+    test_helpers::seed_thread(&pool, "t-run", "ws-run", None).await;
     test_helpers::seed_run(&pool, "r-create", "t-run", "created", "default").await;
 
     let row = sqlx::query("SELECT status, run_mode FROM thread_runs WHERE id = 'r-create'")
@@ -37,7 +37,7 @@ async fn test_run_creation_with_default_status() {
 async fn test_run_state_transitions() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-sm", "/tmp/sm").await;
-    test_helpers::seed_thread(&pool, "t-sm", "ws-sm").await;
+    test_helpers::seed_thread(&pool, "t-sm", "ws-sm", None).await;
     test_helpers::seed_run(&pool, "r-sm", "t-sm", "created", "default").await;
 
     // Transition: created → dispatching
@@ -83,7 +83,7 @@ async fn test_run_state_transitions() {
 async fn test_run_failure_with_error() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-fail", "/tmp/fail").await;
-    test_helpers::seed_thread(&pool, "t-fail", "ws-fail").await;
+    test_helpers::seed_thread(&pool, "t-fail", "ws-fail", None).await;
     test_helpers::seed_run(&pool, "r-fail", "t-fail", "running", "default").await;
 
     sqlx::query(
@@ -109,7 +109,7 @@ async fn test_run_failure_with_error() {
 async fn test_run_cancellation() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-cancel", "/tmp/cancel").await;
-    test_helpers::seed_thread(&pool, "t-cancel", "ws-cancel").await;
+    test_helpers::seed_thread(&pool, "t-cancel", "ws-cancel", None).await;
     test_helpers::seed_run(&pool, "r-cancel", "t-cancel", "running", "default").await;
 
     sqlx::query("UPDATE thread_runs SET status = 'cancelled', finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 'r-cancel'")
@@ -129,7 +129,7 @@ async fn test_run_cancellation() {
 async fn test_limit_reached_run_syncs_thread_to_needs_reply() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-limit", "/tmp/limit").await;
-    test_helpers::seed_thread(&pool, "t-limit", "ws-limit").await;
+    test_helpers::seed_thread(&pool, "t-limit", "ws-limit", None).await;
     test_helpers::seed_run(&pool, "r-limit", "t-limit", "running", "default").await;
 
     sqlx::query(
@@ -162,7 +162,7 @@ async fn test_limit_reached_run_syncs_thread_to_needs_reply() {
 async fn test_recover_interrupted_runs() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-rec", "/tmp/rec").await;
-    test_helpers::seed_thread(&pool, "t-rec", "ws-rec").await;
+    test_helpers::seed_thread(&pool, "t-rec", "ws-rec", None).await;
 
     // Create "dangling" runs that were in-progress when app crashed
     test_helpers::seed_run(&pool, "r-dangling-1", "t-rec", "running", "default").await;
@@ -297,7 +297,7 @@ async fn test_recover_interrupted_runs() {
 async fn test_active_runs_index() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-idx", "/tmp/idx").await;
-    test_helpers::seed_thread(&pool, "t-idx", "ws-idx").await;
+    test_helpers::seed_thread(&pool, "t-idx", "ws-idx", None).await;
 
     test_helpers::seed_run(&pool, "r-active", "t-idx", "running", "default").await;
     test_helpers::seed_run(&pool, "r-done", "t-idx", "completed", "default").await;
@@ -326,7 +326,7 @@ async fn test_active_runs_index() {
 async fn test_only_one_active_run_per_thread_check() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-1run", "/tmp/1run").await;
-    test_helpers::seed_thread(&pool, "t-1run", "ws-1run").await;
+    test_helpers::seed_thread(&pool, "t-1run", "ws-1run", None).await;
     test_helpers::seed_run(&pool, "r-existing", "t-1run", "running", "default").await;
 
     // Application-level check: count active runs before starting a new one
@@ -350,7 +350,7 @@ async fn test_only_one_active_run_per_thread_check() {
 async fn test_effective_model_plan_stored() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-mp", "/tmp/mp").await;
-    test_helpers::seed_thread(&pool, "t-mp", "ws-mp").await;
+    test_helpers::seed_thread(&pool, "t-mp", "ws-mp", None).await;
 
     let model_plan = r#"{"primary":{"provider":"openai","model":"gpt-4"},"auxiliary":{"provider":"anthropic","model":"claude-3"}}"#;
 
@@ -383,7 +383,7 @@ async fn test_build_session_spec_resolves_primary_model_and_profile_prompt() {
 
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-runtime", "/tmp/runtime").await;
-    test_helpers::seed_thread(&pool, "t-runtime", "ws-runtime").await;
+    test_helpers::seed_thread(&pool, "t-runtime", "ws-runtime", None).await;
     test_helpers::seed_message(
         &pool,
         "m-runtime",
@@ -463,7 +463,7 @@ async fn test_build_session_spec_uses_runtime_custom_instructions_when_profile_l
 
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-runtime-inline", "/tmp/runtime-inline").await;
-    test_helpers::seed_thread(&pool, "t-runtime-inline", "ws-runtime-inline").await;
+    test_helpers::seed_thread(&pool, "t-runtime-inline", "ws-runtime-inline", None).await;
 
     sqlx::query(
         "INSERT INTO providers (
@@ -521,7 +521,7 @@ async fn test_build_session_spec_adds_plan_mode_guardrails() {
 
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-plan", "/tmp/plan").await;
-    test_helpers::seed_thread(&pool, "t-plan", "ws-plan").await;
+    test_helpers::seed_thread(&pool, "t-plan", "ws-plan", None).await;
     test_helpers::seed_message(
         &pool,
         "m-plan",
@@ -592,7 +592,7 @@ async fn test_build_session_spec_keeps_reasoning_disabled_when_thinking_level_is
 
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-thinking-off", "/tmp/thinking-off").await;
-    test_helpers::seed_thread(&pool, "t-thinking-off", "ws-thinking-off").await;
+    test_helpers::seed_thread(&pool, "t-thinking-off", "ws-thinking-off", None).await;
 
     sqlx::query(
         "INSERT INTO providers (
@@ -641,7 +641,7 @@ async fn test_build_session_spec_enables_reasoning_when_thinking_level_is_set() 
 
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-thinking-on", "/tmp/thinking-on").await;
-    test_helpers::seed_thread(&pool, "t-thinking-on", "ws-thinking-on").await;
+    test_helpers::seed_thread(&pool, "t-thinking-on", "ws-thinking-on", None).await;
 
     sqlx::query(
         "INSERT INTO providers (
@@ -689,7 +689,7 @@ async fn test_build_session_spec_defaults_openai_compatible_to_system_role_compa
 
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-openai-compat", "/tmp/openai-compat").await;
-    test_helpers::seed_thread(&pool, "t-openai-compat", "ws-openai-compat").await;
+    test_helpers::seed_thread(&pool, "t-openai-compat", "ws-openai-compat", None).await;
 
     sqlx::query(
         "INSERT INTO providers (
@@ -751,7 +751,7 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
     fs::write(temp_dir.path().join("AGENTS.md"), "Agents instructions").unwrap();
 
     test_helpers::seed_workspace(&pool, "ws-ctx", &workspace_path).await;
-    test_helpers::seed_thread(&pool, "t-ctx", "ws-ctx").await;
+    test_helpers::seed_thread(&pool, "t-ctx", "ws-ctx", None).await;
     test_helpers::seed_message(&pool, "m-ctx", "t-ctx", "user", "Inspect the setup").await;
     test_helpers::seed_policy(&pool, "approval_policy", r#""require_all""#).await;
 
@@ -868,7 +868,7 @@ async fn test_build_session_spec_reads_object_style_approval_policy() {
     let workspace_path = temp_dir.path().to_string_lossy().to_string();
 
     test_helpers::seed_workspace(&pool, "ws-ctx-object", &workspace_path).await;
-    test_helpers::seed_thread(&pool, "t-ctx-object", "ws-ctx-object").await;
+    test_helpers::seed_thread(&pool, "t-ctx-object", "ws-ctx-object", None).await;
     test_helpers::seed_policy(&pool, "approval_policy", r#"{"mode":"require_all"}"#).await;
 
     sqlx::query(
@@ -913,7 +913,7 @@ async fn test_build_session_spec_reads_object_style_approval_policy() {
 async fn test_run_helpers_table_persists_collapsed_helper_summary() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-helper", "/tmp/helper").await;
-    test_helpers::seed_thread(&pool, "t-helper", "ws-helper").await;
+    test_helpers::seed_thread(&pool, "t-helper", "ws-helper", None).await;
     test_helpers::seed_run(&pool, "r-helper", "t-helper", "running", "default").await;
 
     sqlx::query(

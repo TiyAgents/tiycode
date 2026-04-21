@@ -1,7 +1,7 @@
 "use client";
 
-import { CheckCircle2Icon, CircleIcon, Loader2Icon, XCircleIcon } from "lucide-react";
-import type { ComponentProps } from "react";
+import { CheckCircle2Icon, ChevronRightIcon, CircleIcon, Loader2Icon, XCircleIcon } from "lucide-react";
+import { ComponentProps, useCallback, useState } from "react";
 import { cn } from "@/shared/lib/utils";
 import type { TaskBoardDto, TaskItemDto, TaskStage } from "@/shared/types/api";
 import { computeProgress, hasFailedTasks, isBoardCompleted } from "../model/task-board";
@@ -86,17 +86,22 @@ export const TaskItemRow = ({
 export type TaskBoardCardProps = ComponentProps<"div"> & {
   board: TaskBoardDto;
   showTitle?: boolean;
+  defaultCollapsed?: boolean;
 };
 
 export const TaskBoardCard = ({
   board,
   showTitle = true,
+  defaultCollapsed = false,
   className,
   ...props
 }: TaskBoardCardProps) => {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const progress = computeProgress(board);
   const completed = isBoardCompleted(board);
   const hasFailed = hasFailedTasks(board);
+
+  const toggleCollapse = useCallback(() => setCollapsed((c) => !c), []);
 
   return (
     <div
@@ -109,11 +114,23 @@ export const TaskBoardCard = ({
       {...props}
     >
       {showTitle && (
-        <div className="mb-3 flex items-center justify-between">
-          <h4 className="text-sm font-medium">{board.title}</h4>
+        <button
+          type="button"
+          onClick={toggleCollapse}
+          className="mb-3 flex w-full items-center justify-between gap-2 text-left"
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <ChevronRightIcon
+              className={cn(
+                "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200",
+                !collapsed && "rotate-90"
+              )}
+            />
+            <h4 className="truncate text-sm font-medium">{board.title}</h4>
+          </div>
           <span
             className={cn(
-              "text-xs tabular-nums",
+              "shrink-0 text-xs tabular-nums",
               completed && "text-success",
               hasFailed && "text-destructive",
               !completed && !hasFailed && "text-muted-foreground"
@@ -121,7 +138,7 @@ export const TaskBoardCard = ({
           >
             {progress}%
           </span>
-        </div>
+        </button>
       )}
 
       {/* Progress bar */}
@@ -138,18 +155,20 @@ export const TaskBoardCard = ({
       </div>
 
       {/* Task list */}
-      <ul className="space-y-0.5">
-        {board.tasks.map((task: TaskItemDto) => (
-          <TaskItemRow
-            key={task.id}
-            task={task}
-            isActive={task.id === board.activeTaskId}
-          />
-        ))}
-      </ul>
+      {!collapsed && (
+        <ul className="space-y-0.5">
+          {board.tasks.map((task: TaskItemDto) => (
+            <TaskItemRow
+              key={task.id}
+              task={task}
+              isActive={task.id === board.activeTaskId}
+            />
+          ))}
+        </ul>
+      )}
 
       {/* Status badge */}
-      {board.status !== "active" && (
+      {!collapsed && board.status !== "active" && (
         <div className="mt-2 text-xs text-muted-foreground">
           {board.status === "completed" ? "✓ Completed" : "⊘ Abandoned"}
         </div>

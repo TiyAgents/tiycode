@@ -35,7 +35,7 @@ async fn test_terminal_session_lifecycle_and_output() {
         .to_string();
 
     test_helpers::seed_workspace(&pool, "ws-terminal", &workspace_path).await;
-    test_helpers::seed_thread(&pool, "thread-terminal", "ws-terminal").await;
+    test_helpers::seed_thread(&pool, "thread-terminal", "ws-terminal", None).await;
 
     let shell = test_shell();
     let manager = Arc::new(TerminalManager::new(pool.clone()));
@@ -92,7 +92,7 @@ async fn test_terminal_recovery_marks_active_sessions_exited() {
     let now = chrono::Utc::now().to_rfc3339();
 
     test_helpers::seed_workspace(&pool, "ws-recovery", "/tmp/terminal-recovery").await;
-    test_helpers::seed_thread(&pool, "thread-recovery", "ws-recovery").await;
+    test_helpers::seed_thread(&pool, "thread-recovery", "ws-recovery", None).await;
 
     sqlx::query(
         "INSERT INTO terminal_sessions (id, thread_id, workspace_id, shell_path, cwd, status, created_at)

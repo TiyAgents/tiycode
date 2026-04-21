@@ -598,7 +598,7 @@ async fn test_policy_allows_mutating_paths_in_writable_roots() {
 async fn test_tool_call_crud() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-tc", "/tmp/tc").await;
-    test_helpers::seed_thread(&pool, "t-tc", "ws-tc").await;
+    test_helpers::seed_thread(&pool, "t-tc", "ws-tc", None).await;
     test_helpers::seed_run(&pool, "r-tc", "t-tc", "running", "default").await;
     test_helpers::seed_tool_call(&pool, "tc-001", "r-tc", "t-tc", "read", "requested").await;
 
@@ -615,7 +615,7 @@ async fn test_tool_call_crud() {
 async fn test_tool_call_approval_flow() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-appr", "/tmp/appr").await;
-    test_helpers::seed_thread(&pool, "t-appr", "ws-appr").await;
+    test_helpers::seed_thread(&pool, "t-appr", "ws-appr", None).await;
     test_helpers::seed_run(&pool, "r-appr", "t-appr", "running", "default").await;
     test_helpers::seed_tool_call(
         &pool,
@@ -651,7 +651,7 @@ async fn test_tool_call_approval_flow() {
 async fn test_tool_call_rejection() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-rej", "/tmp/rej").await;
-    test_helpers::seed_thread(&pool, "t-rej", "ws-rej").await;
+    test_helpers::seed_thread(&pool, "t-rej", "ws-rej", None).await;
     test_helpers::seed_run(&pool, "r-rej", "t-rej", "running", "default").await;
     test_helpers::seed_tool_call(
         &pool,
@@ -683,7 +683,7 @@ async fn test_tool_call_rejection() {
 async fn test_tool_call_completed_with_output() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-out", "/tmp/out").await;
-    test_helpers::seed_thread(&pool, "t-out", "ws-out").await;
+    test_helpers::seed_thread(&pool, "t-out", "ws-out", None).await;
     test_helpers::seed_run(&pool, "r-out", "t-out", "running", "default").await;
     test_helpers::seed_tool_call(&pool, "tc-out", "r-out", "t-out", "read", "running").await;
 
@@ -714,7 +714,7 @@ async fn test_tool_call_completed_with_output() {
 async fn test_tool_call_policy_verdict_stored() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-pv", "/tmp/pv").await;
-    test_helpers::seed_thread(&pool, "t-pv", "ws-pv").await;
+    test_helpers::seed_thread(&pool, "t-pv", "ws-pv", None).await;
     test_helpers::seed_run(&pool, "r-pv", "t-pv", "running", "default").await;
 
     let verdict = r#"{"toolName":"write","verdict":{"require_approval":{"reason":"Mutating tool"}},"checkedRules":["builtin","user_deny_list","workspace_boundary"]}"#;
@@ -748,7 +748,7 @@ async fn test_audit_event_recording() {
 
     // Seed required FK references
     test_helpers::seed_workspace(&pool, "ws-audit", "/tmp/audit").await;
-    test_helpers::seed_thread(&pool, "t-audit", "ws-audit").await;
+    test_helpers::seed_thread(&pool, "t-audit", "ws-audit", None).await;
     test_helpers::seed_run(&pool, "r-audit", "t-audit", "running", "default").await;
     test_helpers::seed_tool_call(&pool, "tc-audit", "r-audit", "t-audit", "read", "completed")
         .await;
@@ -785,7 +785,7 @@ async fn test_audit_event_recording() {
 async fn test_pending_tool_calls_query() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-pending", "/tmp/pending").await;
-    test_helpers::seed_thread(&pool, "t-pending", "ws-pending").await;
+    test_helpers::seed_thread(&pool, "t-pending", "ws-pending", None).await;
     test_helpers::seed_run(&pool, "r-pending", "t-pending", "running", "default").await;
 
     test_helpers::seed_tool_call(
@@ -867,7 +867,7 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
         workspace_root.to_str().unwrap(),
     )
     .await;
-    test_helpers::seed_thread(&pool, "t-helper-escalate", "ws-helper-escalate").await;
+    test_helpers::seed_thread(&pool, "t-helper-escalate", "ws-helper-escalate", None).await;
     test_helpers::seed_run(
         &pool,
         "r-helper-escalate",
@@ -983,7 +983,7 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
         workspace_root.to_str().unwrap(),
     )
     .await;
-    test_helpers::seed_thread(&pool, "t-search-relative", "ws-search-relative").await;
+    test_helpers::seed_thread(&pool, "t-search-relative", "ws-search-relative", None).await;
     test_helpers::seed_run(
         &pool,
         "r-search-relative",
@@ -1088,7 +1088,7 @@ async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
         workspace_root.to_str().unwrap(),
     )
     .await;
-    test_helpers::seed_thread(&pool, "t-search-wildcard", "ws-search-wildcard").await;
+    test_helpers::seed_thread(&pool, "t-search-wildcard", "ws-search-wildcard", None).await;
     test_helpers::seed_run(
         &pool,
         "r-search-wildcard",
@@ -1192,7 +1192,7 @@ async fn test_search_repo_treats_regex_metacharacters_as_literal_text() {
 
     test_helpers::seed_workspace(&pool, "ws-search-literal", workspace_root.to_str().unwrap())
         .await;
-    test_helpers::seed_thread(&pool, "t-search-literal", "ws-search-literal").await;
+    test_helpers::seed_thread(&pool, "t-search-literal", "ws-search-literal", None).await;
     test_helpers::seed_run(
         &pool,
         "r-search-literal",
@@ -1299,7 +1299,7 @@ async fn test_search_repo_supports_regex_count_mode_and_case_insensitive_matchin
         workspace_root.to_str().unwrap(),
     )
     .await;
-    test_helpers::seed_thread(&pool, "t-search-regex-count", "ws-search-regex-count").await;
+    test_helpers::seed_thread(&pool, "t-search-regex-count", "ws-search-regex-count", None).await;
     test_helpers::seed_run(
         &pool,
         "r-search-regex-count",
@@ -1387,7 +1387,7 @@ async fn test_execution_timeout_fires_for_slow_tool() {
     let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
 
     test_helpers::seed_workspace(&pool, "ws-timeout", workspace_root.to_str().unwrap()).await;
-    test_helpers::seed_thread(&pool, "t-timeout", "ws-timeout").await;
+    test_helpers::seed_thread(&pool, "t-timeout", "ws-timeout", None).await;
     test_helpers::seed_run(&pool, "r-timeout", "t-timeout", "running", "default").await;
     test_helpers::seed_tool_call(
         &pool,

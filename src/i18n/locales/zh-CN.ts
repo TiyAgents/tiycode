@@ -60,6 +60,7 @@ const zhCN = {
   "dashboard.error.loadMoreThreads": "加载更多会话失败",
   "dashboard.error.deleteThread": "删除会话失败",
   "dashboard.error.createThread": "创建会话失败",
+"dashboard.error.switchProfile": "切换 Agent 配置文件失败",
 
   // ── Composer ─────────────────────────────────────────────
   "composer.removeAttachment": "移除附件 {{name}}",
@@ -70,6 +71,8 @@ const zhCN = {
   "composer.removeFileReference": "移除文件引用 {{path}}",
   "composer.uploadFileOrImage": "上传文件或图片",
   "composer.noProfileAvailable": "未找到可用的 profile。",
+  "composer.profileDeleted": "Profile 已删除",
+  "composer.profileDeletedHint": "当前 thread 绑定的 profile 已被删除，请手动切换到其他 profile 后继续。",
   "composer.profileTier.primary": "主力",
   "composer.profileTier.auxiliary": "辅助",
   "composer.profileTier.lightweight": "轻量",
