@@ -332,7 +332,10 @@ impl GitManager {
         })
         .await
         .map_err(|error| {
-            AppError::internal(ErrorSource::Git, format!("Git conflict diff task failed: {error}"))
+            AppError::internal(
+                ErrorSource::Git,
+                format!("Git conflict diff task failed: {error}"),
+            )
         })?
     }
 
@@ -811,7 +814,8 @@ fn collect_conflicted_files(
 
         // conflict.ancestor, .our, .their are Option<IndexEntry>
         // We just need the path from any entry that exists.
-        let path_entry = conflict.our
+        let path_entry = conflict
+            .our
             .as_ref()
             .or(conflict.their.as_ref())
             .or(conflict.ancestor.as_ref());
