@@ -21,6 +21,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "@/components/ai-elements/confirmation";
+import { useViewportAutoCollapse, findScrollParent, type ViewportAutoCollapseEntry } from "@/shared/hooks/use-viewport-auto-collapse";
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
 import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
 import { threadClearContext, threadCompactContext, threadLoad } from "@/services/bridge";
@@ -2094,6 +2095,8 @@ export function RuntimeThreadSurface({
     if (prevThreadIdRef.current !== threadId) {
       prevThreadIdRef.current = threadId;
       setSelectedRunMode("default");
+      wrapperRefsMap.current.clear();
+      userManuallyOpenedIds.current.clear();
     }
   }, [threadId]);
   const [thinkingPlaceholder, setThinkingPlaceholder] = useState<ThinkingPlaceholder | null>(null);
@@ -2111,6 +2114,12 @@ export function RuntimeThreadSurface({
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
+
+  // --- Viewport auto-collapse infrastructure ---
+  const [scrollContainerEl, setScrollContainerEl] = useState<HTMLElement | null>(null);
+  const contentSentinelRef = useRef<HTMLDivElement | null>(null);
+  const wrapperRefsMap = useRef<Map<string, HTMLElement>>(new Map());
+  const userManuallyOpenedIds = useRef<Set<string>>(new Set());
 
   const clearScheduledThinkingPhase = useCallback(() => {
     if (thinkingTimerRef.current !== null) {
@@ -2136,7 +2145,7 @@ export function RuntimeThreadSurface({
     });
   }, []);
 
-  const scheduleThinkingPhase = useCallback((runId?: string | null, delayMs = 160) => {
+  const scheduleThinkingPhase = useCallback((runId?: string | null, delayMs = 500) => {
     clearScheduledThinkingPhase();
     thinkingTimerRef.current = setTimeout(() => {
       thinkingTimerRef.current = null;
@@ -3183,6 +3192,68 @@ export function RuntimeThreadSurface({
     [helpers, messages, visibleTools],
   );
   const presentationEntries = timelineEntries;
+
+  // --- Viewport auto-collapse: detect scroll container once content mounts ---
+  const contentSentinelCallback = useCallback((node: HTMLDivElement | null) => {
+    contentSentinelRef.current = node;
+    if (node) {
+      const scrollParent = findScrollParent(node);
+      setScrollContainerEl(scrollParent);
+    } else {
+      setScrollContainerEl(null);
+    }
+  }, []);
+
+  const getIsStuckToBottom = useCallback(
+    () => conversationContextRef.current?.isAtBottom ?? true,
+    [],
+  );
+
+  // Build entries for the viewport auto-collapse hook.
+  const viewportCollapseEntries = useMemo<ReadonlyArray<ViewportAutoCollapseEntry>>(() => {
+    const result: ViewportAutoCollapseEntry[] = [];
+    for (const entry of presentationEntries) {
+      if (entry.kind === "tool") {
+        const isCompleted = isCompletedToolState(entry.tool.state);
+        const isOpen = !isCompleted ? true : (completedToolOpen[entry.tool.id] ?? true);
+        result.push({ id: entry.tool.id, completed: isCompleted, currentOpen: isOpen });
+      } else if (entry.kind === "helper") {
+        const isCompleted = entry.helper.status === "completed";
+        const isOpen = helperOpen[entry.helper.id] ?? true;
+        result.push({ id: entry.helper.id, completed: isCompleted, currentOpen: isOpen });
+      }
+      // Reasoning blocks use defaultOpen + internal state; viewport auto-collapse
+      // is only applied to tool and helper blocks for now.
+    }
+    return result;
+  }, [presentationEntries, completedToolOpen, helperOpen]);
+
+  // Keep a ref to presentationEntries for the viewport collapse callback.
+  const presentationEntriesRef = useRef(presentationEntries);
+  presentationEntriesRef.current = presentationEntries;
+
+  const handleViewportCollapse = useCallback((id: string) => {
+    // Determine whether this id belongs to a tool or helper and only
+    // update the relevant state map.
+    const entry = presentationEntriesRef.current.find(
+      (e) => (e.kind === "tool" && e.tool.id === id) || (e.kind === "helper" && e.helper.id === id),
+    );
+    if (!entry) return;
+    if (entry.kind === "tool") {
+      setCompletedToolOpen((current) => (current[id] === false ? current : { ...current, [id]: false }));
+    } else {
+      setHelperOpen((current) => (current[id] === false ? current : { ...current, [id]: false }));
+    }
+  }, []);
+
+  useViewportAutoCollapse({
+    scrollContainer: scrollContainerEl,
+    getIsStuckToBottom,
+    entries: viewportCollapseEntries,
+    wrapperRefs: wrapperRefsMap.current,
+    userManuallyOpenedIds: userManuallyOpenedIds.current,
+    onCollapse: handleViewportCollapse,
+  });
   const lastPresentationRole = presentationEntries.length > 0
     ? getPresentationEntryRole(presentationEntries[presentationEntries.length - 1])
     : null;
@@ -3323,10 +3394,16 @@ export function RuntimeThreadSurface({
 
   const handleCompletedToolOpenChange = useCallback((toolId: string, open: boolean) => {
     setCompletedToolOpen((current) => (current[toolId] === open ? current : { ...current, [toolId]: open }));
+    if (open) {
+      userManuallyOpenedIds.current.add(toolId);
+    }
   }, []);
 
   const handleHelperOpenChange = useCallback((helperId: string, open: boolean) => {
     setHelperOpen((current) => (current[helperId] === open ? current : { ...current, [helperId]: open }));
+    if (open) {
+      userManuallyOpenedIds.current.add(helperId);
+    }
   }, []);
 
   const handlePlanApproval = useCallback(async (
@@ -3613,7 +3690,7 @@ export function RuntimeThreadSurface({
 
               handleCompletedToolOpenChange(tool.id, open);
             }}
-            open={!isCompletedToolState(tool.state) ? true : (completedToolOpen[tool.id] ?? false)}
+            open={!isCompletedToolState(tool.state) ? true : (completedToolOpen[tool.id] ?? true)}
           >
             <CompactCollapsibleHeader
               className={cn(
@@ -3844,6 +3921,8 @@ export function RuntimeThreadSurface({
             className="mx-auto w-full max-w-4xl gap-0 px-6 pt-8"
             style={{ paddingBottom: `${conversationBottomPadding}px` }}
           >
+            {/* Invisible sentinel used to locate the scroll container for viewport auto-collapse */}
+            <div ref={contentSentinelCallback} className="hidden" />
             {hasMoreMessages ? (
               <div className="pb-4">
                 <div className="flex flex-col items-center gap-2">
@@ -3945,6 +4024,7 @@ export function RuntimeThreadSurface({
                         <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
                           <Reasoning
                             className="mb-0 w-full bg-transparent px-0 py-0"
+                            autoClose={false}
                             defaultOpen={message.status === "streaming" || runState === "running"}
                             isStreaming={message.status === "streaming"}
                           >
@@ -4165,12 +4245,23 @@ export function RuntimeThreadSurface({
                   toolUses: helper.totalToolCalls,
                 });
                 return (
-                  <div className={spacingClass} key={entry.key}>
+                  <div
+                    className={spacingClass}
+                    data-timeline-entry-id={helper.id}
+                    key={entry.key}
+                    ref={(node) => {
+                      if (node) {
+                        wrapperRefsMap.current.set(helper.id, node);
+                      } else {
+                        wrapperRefsMap.current.delete(helper.id);
+                      }
+                    }}
+                  >
                     <Message className="max-w-full" from="assistant">
                       <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
                         <CompactCollapsible
                           onOpenChange={(open) => handleHelperOpenChange(helper.id, open)}
-                          open={helperOpen[helper.id] ?? helper.status !== "completed"}
+                          open={helperOpen[helper.id] ?? true}
                         >
                           <CompactCollapsibleHeader
                             className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground"
@@ -4280,7 +4371,18 @@ export function RuntimeThreadSurface({
 
               const { tool } = entry;
               return (
-                <div className={spacingClass} key={entry.key}>
+                <div
+                  className={spacingClass}
+                  data-timeline-entry-id={tool.id}
+                  key={entry.key}
+                  ref={(node) => {
+                    if (node) {
+                      wrapperRefsMap.current.set(tool.id, node);
+                    } else {
+                      wrapperRefsMap.current.delete(tool.id);
+                    }
+                  }}
+                >
                   {renderToolEntry(tool, entry.key)}
                 </div>
               );
