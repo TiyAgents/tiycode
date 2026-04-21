@@ -48,8 +48,12 @@ pub async fn thread_create(
     state: State<'_, AppState>,
     workspace_id: String,
     title: Option<String>,
+    profile_id: Option<String>,
 ) -> Result<ThreadSummaryDto, AppError> {
-    state.thread_manager.create(&workspace_id, title).await
+    state
+        .thread_manager
+        .create(&workspace_id, title, profile_id)
+        .await
 }
 
 #[tauri::command]
@@ -72,6 +76,18 @@ pub async fn thread_update_title(
     title: String,
 ) -> Result<(), AppError> {
     state.thread_manager.update_title(&id, &title).await
+}
+
+#[tauri::command]
+pub async fn thread_update_profile(
+    state: State<'_, AppState>,
+    id: String,
+    profile_id: Option<String>,
+) -> Result<(), AppError> {
+    state
+        .thread_manager
+        .update_profile(&id, profile_id.as_deref())
+        .await
 }
 
 #[tauri::command]

@@ -257,6 +257,7 @@ export type ThreadStatus =
 export interface ThreadSummaryDto {
   id: string;
   workspaceId: string;
+  profileId: string | null;
   title: string;
   status: ThreadStatus;
   lastActiveAt: string;

@@ -51,14 +51,20 @@ pub async fn seed_workspace(pool: &SqlitePool, id: &str, canonical_path: &str) {
 }
 
 /// Create a thread record for test setup.
-pub async fn seed_thread(pool: &SqlitePool, thread_id: &str, workspace_id: &str) {
+pub async fn seed_thread(
+    pool: &SqlitePool,
+    thread_id: &str,
+    workspace_id: &str,
+    profile_id: Option<&str>,
+) {
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO threads (id, workspace_id, title, status, last_active_at, created_at, updated_at)
-         VALUES (?, ?, 'Test Thread', 'idle', ?, ?, ?)",
+        "INSERT INTO threads (id, workspace_id, profile_id, title, status, last_active_at, created_at, updated_at)
+         VALUES (?, ?, ?, 'Test Thread', 'idle', ?, ?, ?)",
     )
     .bind(thread_id)
     .bind(workspace_id)
+    .bind(profile_id)
     .bind(&now)
     .bind(&now)
     .bind(&now)

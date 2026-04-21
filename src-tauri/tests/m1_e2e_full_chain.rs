@@ -22,7 +22,7 @@ async fn test_full_workspace_thread_message_chain() {
     test_helpers::seed_workspace(&pool, "ws-e2e", "/tmp/e2e-project").await;
 
     // 2. Create thread under workspace
-    test_helpers::seed_thread(&pool, "t-e2e", "ws-e2e").await;
+    test_helpers::seed_thread(&pool, "t-e2e", "ws-e2e", None).await;
 
     // 3. Add user message
     test_helpers::seed_message(&pool, "m-user", "t-e2e", "user", "Explain this codebase").await;
@@ -123,7 +123,7 @@ async fn test_full_workspace_thread_message_chain() {
 async fn test_full_approval_flow() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-appr", "/tmp/approval").await;
-    test_helpers::seed_thread(&pool, "t-appr", "ws-appr").await;
+    test_helpers::seed_thread(&pool, "t-appr", "ws-appr", None).await;
     test_helpers::seed_run(&pool, "r-appr", "t-appr", "running", "default").await;
 
     // 1. Tool requested
@@ -203,7 +203,7 @@ async fn test_full_approval_flow() {
 async fn test_multiple_runs_in_thread() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-multi", "/tmp/multi").await;
-    test_helpers::seed_thread(&pool, "t-multi", "ws-multi").await;
+    test_helpers::seed_thread(&pool, "t-multi", "ws-multi", None).await;
 
     // Run 1: completed
     test_helpers::seed_run(&pool, "r-1", "t-multi", "completed", "default").await;
@@ -327,7 +327,7 @@ async fn test_settings_provider_profile_chain() {
 async fn test_workspace_deletion_blocks_with_threads() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-cas", "/tmp/cascade").await;
-    test_helpers::seed_thread(&pool, "t-cas", "ws-cas").await;
+    test_helpers::seed_thread(&pool, "t-cas", "ws-cas", None).await;
 
     // Deleting workspace should fail because thread references it (FK constraint)
     let result = sqlx::query("DELETE FROM workspaces WHERE id = 'ws-cas'")
@@ -348,7 +348,7 @@ async fn test_workspace_deletion_blocks_with_threads() {
 async fn test_snapshot_recovery_after_crash() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-crash", "/tmp/crash").await;
-    test_helpers::seed_thread(&pool, "t-crash", "ws-crash").await;
+    test_helpers::seed_thread(&pool, "t-crash", "ws-crash", None).await;
     test_helpers::seed_message(&pool, "m-c1", "t-crash", "user", "Help me").await;
     test_helpers::seed_run(&pool, "r-crash", "t-crash", "running", "default").await;
     test_helpers::seed_tool_call(&pool, "tc-crash", "r-crash", "t-crash", "read", "running").await;

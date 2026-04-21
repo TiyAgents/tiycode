@@ -51,6 +51,7 @@ impl ThreadStatus {
 pub struct ThreadRecord {
     pub id: String,
     pub workspace_id: String,
+    pub profile_id: Option<String>,
     pub title: String,
     pub status: ThreadStatus,
     pub summary: Option<String>,
@@ -65,6 +66,7 @@ pub struct ThreadRecord {
 pub struct ThreadSummaryDto {
     pub id: String,
     pub workspace_id: String,
+    pub profile_id: Option<String>,
     pub title: String,
     pub status: ThreadStatus,
     pub last_active_at: String,
@@ -76,6 +78,7 @@ impl From<ThreadRecord> for ThreadSummaryDto {
         Self {
             id: r.id,
             workspace_id: r.workspace_id,
+            profile_id: r.profile_id,
             title: r.title,
             status: r.status,
             last_active_at: r.last_active_at,
