@@ -1063,13 +1063,51 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
     let compression_thread_id = spec.thread_id.clone();
     let compression_run_id = spec.run_id.clone();
     agent.set_transform_context(move |messages| {
+        // Cheap pass-through check first: only clone the heavy captured state
+        // (ResolvedModelRole, String ids, Weak) when compression will actually
+        // run. For long sessions with many turns this avoids per-turn heap
+        // allocations when the thread is still well under budget.
         let settings = compression_settings.clone();
-        let model_role = primary_model_role.clone();
-        let weak = compression_weak_self.clone();
-        let thread_id = compression_thread_id.clone();
-        let run_id = compression_run_id.clone();
+        let needs_compression =
+            crate::core::context_compression::should_compress(&messages, &settings);
+
+        let model_role = if needs_compression {
+            Some(primary_model_role.clone())
+        } else {
+            None
+        };
+        let weak = if needs_compression {
+            Some(compression_weak_self.clone())
+        } else {
+            None
+        };
+        let thread_id = if needs_compression {
+            Some(compression_thread_id.clone())
+        } else {
+            None
+        };
+        let run_id = if needs_compression {
+            Some(compression_run_id.clone())
+        } else {
+            None
+        };
+
         async move {
-            run_auto_compression(messages, settings, model_role, weak, thread_id, run_id).await
+            if !needs_compression {
+                return messages;
+            }
+            // Unwraps are sound: all `Some(_)` are populated together under
+            // `needs_compression`, so either all four are `Some` (compression
+            // path) or we returned above.
+            run_auto_compression(
+                messages,
+                settings,
+                model_role.expect("model_role populated when compressing"),
+                weak.expect("weak populated when compressing"),
+                thread_id.expect("thread_id populated when compressing"),
+                run_id.expect("run_id populated when compressing"),
+            )
+            .await
         }
     });
 
@@ -2837,7 +2875,13 @@ pub(crate) async fn run_auto_compression(
     thread_id: String,
     run_id: String,
 ) -> Vec<AgentMessage> {
-    // Phase 1: check if compression is needed
+    // Phase 1: check if compression is needed.
+    //
+    // The hot-path caller (the `set_transform_context` closure) already gates
+    // on `should_compress` before cloning the heavy state, so in production
+    // this branch should never hit. It stays here defensively so direct
+    // callers (e.g. unit tests) still get correct behaviour for under-budget
+    // inputs without having to duplicate the check.
     if !crate::core::context_compression::should_compress(&messages, &settings) {
         return messages;
     }
@@ -2953,26 +2997,14 @@ pub(crate) async fn run_auto_compression(
     match summary_result {
         Ok(summary) => {
             // Phase 5: persist markers to DB.
-            let boundary_n_from_end = recent_messages.len().saturating_add(BOUNDARY_BUFFER);
             if let Some(session) = weak.upgrade() {
-                let boundary_id =
-                    match crate::persistence::repo::message_repo::find_nth_from_end_id(
-                        &session.pool,
-                        &thread_id,
-                        boundary_n_from_end,
-                    )
-                    .await
-                    {
-                        Ok(id) => id,
-                        Err(e) => {
-                            tracing::warn!(
-                                thread_id = %thread_id,
-                                error = %e,
-                                "Failed to resolve boundary message id; persisting reset marker without it"
-                            );
-                            None
-                        }
-                    };
+                let boundary_id = resolve_boundary_id(
+                    &session.pool,
+                    &thread_id,
+                    recent_messages.len(),
+                    BOUNDARY_BUFFER,
+                )
+                .await;
 
                 if let Err(e) = session
                     .persist_compression_markers(
@@ -2989,6 +3021,12 @@ pub(crate) async fn run_auto_compression(
                         "Failed to persist auto-compression markers, continuing without DB record"
                     );
                 }
+            } else {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    "Skipping auto-compression marker persistence: AgentSession dropped mid-compression. \
+                    The next run will reload full history and re-trigger compression."
+                );
             }
 
             // Phase 6: build compressed message list
@@ -3028,15 +3066,13 @@ pub(crate) async fn run_auto_compression(
                 crate::core::context_compression::generate_discard_summary(old_messages);
 
             if let Some(session) = weak.upgrade() {
-                let boundary_n_from_end = recent_messages.len().saturating_add(BOUNDARY_BUFFER);
-                let boundary_id = crate::persistence::repo::message_repo::find_nth_from_end_id(
+                let boundary_id = resolve_boundary_id(
                     &session.pool,
                     &thread_id,
-                    boundary_n_from_end,
+                    recent_messages.len(),
+                    BOUNDARY_BUFFER,
                 )
-                .await
-                .ok()
-                .flatten();
+                .await;
 
                 if let Err(persist_err) = session
                     .persist_compression_markers(
@@ -3053,6 +3089,12 @@ pub(crate) async fn run_auto_compression(
                         "Failed to persist fallback compression markers"
                     );
                 }
+            } else {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    "Skipping fallback compression marker persistence: AgentSession dropped mid-compression. \
+                    The next run will reload full history and re-trigger compression."
+                );
             }
 
             let result = crate::core::context_compression::build_compressed_messages(
@@ -3068,6 +3110,39 @@ pub(crate) async fn run_auto_compression(
             );
 
             result
+        }
+    }
+}
+
+/// Resolve a conservative DB-backed boundary id for a compression pass.
+///
+/// Returns the id of the `(recent_len + buffer)`-th message from the end of
+/// the thread, or `None` if the lookup fails or there are fewer rows than
+/// that in the DB. `None` is always safe: it just means no `boundaryMessageId`
+/// will be embedded in the reset marker and `list_since_last_reset` will fall
+/// back to the reset row's own id as the lower bound.
+///
+/// Any error from the query is logged and converted to `None` — we never want
+/// a transient DB failure to block compression; the worst-case is a small
+/// extra reload on the next run.
+async fn resolve_boundary_id(
+    pool: &SqlitePool,
+    thread_id: &str,
+    recent_len: usize,
+    buffer: usize,
+) -> Option<String> {
+    let n_from_end = recent_len.saturating_add(buffer);
+    match crate::persistence::repo::message_repo::find_nth_from_end_id(pool, thread_id, n_from_end)
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(
+                thread_id = %thread_id,
+                error = %e,
+                "Failed to resolve boundary message id; persisting reset marker without it"
+            );
+            None
         }
     }
 }
@@ -3094,8 +3169,6 @@ pub(crate) async fn persist_compression_markers_to_pool(
     source: &str,
     boundary_message_id: Option<&str>,
 ) -> Result<(), crate::model::errors::AppError> {
-    use crate::model::thread::MessageRecord;
-
     let summary_metadata = serde_json::json!({
         "kind": "context_summary",
         "source": source,
@@ -3118,33 +3191,52 @@ pub(crate) async fn persist_compression_markers_to_pool(
         }
     }
 
-    let reset_message = MessageRecord {
-        id: uuid::Uuid::now_v7().to_string(),
-        thread_id: thread_id.to_string(),
-        run_id: None,
-        role: "system".to_string(),
-        content_markdown: "Context is now reset".to_string(),
-        message_type: "summary_marker".to_string(),
-        status: "completed".to_string(),
-        metadata_json: Some(reset_metadata.to_string()),
-        attachments_json: None,
-        created_at: String::new(),
-    };
-    let summary_message = MessageRecord {
-        id: uuid::Uuid::now_v7().to_string(),
-        thread_id: thread_id.to_string(),
-        run_id: None,
-        role: "system".to_string(),
-        content_markdown: summary.to_string(),
-        message_type: "summary_marker".to_string(),
-        status: "completed".to_string(),
-        metadata_json: Some(summary_metadata.to_string()),
-        attachments_json: None,
-        created_at: String::new(),
-    };
+    let reset_id = uuid::Uuid::now_v7().to_string();
+    let summary_id = uuid::Uuid::now_v7().to_string();
+    let reset_metadata_json = reset_metadata.to_string();
+    let summary_metadata_json = summary_metadata.to_string();
 
-    crate::persistence::repo::message_repo::insert(pool, &reset_message).await?;
-    crate::persistence::repo::message_repo::insert(pool, &summary_message).await?;
+    // Wrap both inserts in a single transaction so a mid-way failure (crash,
+    // constraint violation, disk error) cannot leave the thread in a state
+    // where the reset marker exists without the summary. Without this, a
+    // partial write would cause `list_since_last_reset` to load from the
+    // boundary but with no accompanying summary — effectively showing the
+    // user an uncompressed head with a reset marker dangling.
+    //
+    // This also reduces WAL lock round-trips from 2 → 1 on success.
+    let mut tx = pool.begin().await?;
+
+    const INSERT_SQL: &str = "INSERT INTO messages (id, thread_id, run_id, role, content_markdown,
+                message_type, status, metadata_json, attachments_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))";
+
+    sqlx::query(INSERT_SQL)
+        .bind(&reset_id)
+        .bind(thread_id)
+        .bind(None::<String>)
+        .bind("system")
+        .bind("Context is now reset")
+        .bind("summary_marker")
+        .bind("completed")
+        .bind(&reset_metadata_json)
+        .bind(None::<String>)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(INSERT_SQL)
+        .bind(&summary_id)
+        .bind(thread_id)
+        .bind(None::<String>)
+        .bind("system")
+        .bind(summary)
+        .bind("summary_marker")
+        .bind("completed")
+        .bind(&summary_metadata_json)
+        .bind(None::<String>)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
 
     Ok(())
 }
@@ -4737,6 +4829,141 @@ Used for prompt assembly coverage.
                 serde_json::from_str(rows[1].3.as_ref().unwrap()).unwrap();
             assert_eq!(reset_meta["source"], "manual_compact");
             assert_eq!(summary_meta["source"], "manual_compact");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // run_auto_compression — orchestration path coverage
+    //
+    // These tests drive the extracted run_auto_compression function directly
+    // without standing up a full AgentSession. By using `Weak::new()` (an
+    // already-dangling weak reference), we cover the paths that do NOT make
+    // an LLM call — should_compress early-return and cut_point==0 truncation
+    // fallback. Paths that actually invoke a provider need integration-level
+    // mocking and are out of scope here.
+    // -----------------------------------------------------------------------
+
+    mod run_auto_compression {
+        use super::super::{run_auto_compression, AgentSession};
+        use super::sample_resolved_model_role;
+        use std::sync::Weak;
+        use tiycore::agent::AgentMessage;
+        use tiycore::types::{
+            Api, AssistantMessage, ContentBlock, Provider, StopReason, TextContent,
+            ToolResultMessage, Usage, UserMessage,
+        };
+
+        fn make_user(text: &str) -> AgentMessage {
+            AgentMessage::User(UserMessage::text(text))
+        }
+
+        fn make_assistant(text: &str) -> AgentMessage {
+            AgentMessage::Assistant(
+                AssistantMessage::builder()
+                    .content(vec![ContentBlock::Text(TextContent::new(text))])
+                    .api(Api::OpenAICompletions)
+                    .provider(Provider::OpenAI)
+                    .model("test")
+                    .usage(Usage::default())
+                    .stop_reason(StopReason::Stop)
+                    .build()
+                    .unwrap(),
+            )
+        }
+
+        fn make_tool_result(name: &str, content: &str) -> AgentMessage {
+            AgentMessage::ToolResult(ToolResultMessage::text("tc-1", name, content, false))
+        }
+
+        fn settings_for_test(
+            context_window: u32,
+            reserve_tokens: u32,
+            keep_recent_tokens: u32,
+        ) -> crate::core::context_compression::CompressionSettings {
+            crate::core::context_compression::CompressionSettings {
+                context_window,
+                reserve_tokens,
+                keep_recent_tokens,
+            }
+        }
+
+        #[tokio::test]
+        async fn returns_messages_unchanged_when_under_budget() {
+            // With a generous budget, should_compress is false and the function
+            // is a pure pass-through — no clone of messages, no LLM call, no
+            // DB access. This exercises the most common hot-path behaviour.
+            let messages = vec![make_user("hi"), make_assistant("hello")];
+            let settings = settings_for_test(128_000, 1_024, 1_024);
+
+            let result = run_auto_compression(
+                messages.clone(),
+                settings,
+                sample_resolved_model_role("primary-model"),
+                Weak::<AgentSession>::new(),
+                "thread-x".to_string(),
+                "run-x".to_string(),
+            )
+            .await;
+
+            assert_eq!(result.len(), messages.len());
+            // Content should be byte-identical — no summary was injected.
+            match (&result[0], &messages[0]) {
+                (AgentMessage::User(a), AgentMessage::User(b)) => {
+                    let at = match &a.content {
+                        tiycore::types::UserContent::Text(t) => t.as_str(),
+                        _ => panic!("expected text"),
+                    };
+                    let bt = match &b.content {
+                        tiycore::types::UserContent::Text(t) => t.as_str(),
+                        _ => panic!("expected text"),
+                    };
+                    assert_eq!(at, bt);
+                }
+                _ => panic!("expected user message at head"),
+            }
+        }
+
+        #[tokio::test]
+        async fn cut_point_zero_falls_back_to_truncation_without_llm() {
+            // When cut_point resolves to 0 (e.g., a thread dominated by
+            // ToolResult messages with no safe cut boundary), the function
+            // returns via compress_context_fallback BEFORE making any LLM
+            // call. A dangling Weak reference proves no DB or session state
+            // is required on this branch.
+            let mut messages = Vec::new();
+            // A long sequence of tool results with no user/assistant split —
+            // find_cut_point will walk all the way back to 0 and the
+            // tool-result boundary adjustment keeps it there.
+            for i in 0..40 {
+                messages.push(make_tool_result(
+                    "read",
+                    &format!("contents {}: {}", i, "x".repeat(600)),
+                ));
+            }
+
+            // Tiny budget forces should_compress = true.
+            let settings = settings_for_test(2_000, 500, 500);
+            assert!(
+                crate::core::context_compression::should_compress(&messages, &settings),
+                "precondition: messages should be over budget"
+            );
+
+            let result = run_auto_compression(
+                messages.clone(),
+                settings.clone(),
+                sample_resolved_model_role("primary-model"),
+                Weak::<AgentSession>::new(),
+                "thread-y".to_string(),
+                "run-y".to_string(),
+            )
+            .await;
+
+            // compress_context_fallback was used — result has fewer messages,
+            // or (for all-tool-result threads) in-place truncated content.
+            // The crucial property is: the function returned successfully
+            // despite the dangling Weak, proving the LLM path was skipped.
+            assert!(!result.is_empty());
+            assert!(result.len() <= messages.len());
         }
     }
 }

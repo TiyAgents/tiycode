@@ -791,4 +791,83 @@ mod tests {
             other => panic!("expected heuristic summary at head, got {:?}", other),
         }
     }
+
+    #[test]
+    fn truncate_text_chars_is_noop_when_under_limit() {
+        assert_eq!(super::truncate_text_chars("hello", 10), "hello");
+        assert_eq!(super::truncate_text_chars("", 10), "");
+        // Exactly at limit — `nth(max_chars)` is `None`, so no ellipsis.
+        assert_eq!(super::truncate_text_chars("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_text_chars_appends_ellipsis_when_over_limit() {
+        // 10 chars, cap at 5, expect the first 5 + "...".
+        let out = super::truncate_text_chars("abcdefghij", 5);
+        assert_eq!(out, "abcde...");
+    }
+
+    #[test]
+    fn truncate_text_chars_is_char_boundary_safe_for_cjk() {
+        // Each Chinese char is 3 bytes in UTF-8. Naively slicing at byte 5
+        // would split a multi-byte code point and panic. Char-based indexing
+        // must preserve grapheme boundaries.
+        let cjk = "你好世界朋友"; // 6 chars, 18 bytes.
+        let out = super::truncate_text_chars(cjk, 3);
+        assert_eq!(out, "你好世...");
+
+        // At exact char count, no ellipsis, no panic.
+        assert_eq!(super::truncate_text_chars(cjk, 6), cjk);
+
+        // Over limit with a far cap — still a no-op, never panics.
+        assert_eq!(super::truncate_text_chars(cjk, 100), cjk);
+    }
+
+    #[test]
+    fn should_compress_returns_false_for_empty_messages() {
+        // Defensive: even with a tiny budget, zero messages can't be over it.
+        // The early-return in `should_compress` matters because its callers
+        // subtract `cut_point` in `usize` arithmetic — an uninitialised call
+        // path on an empty slice would otherwise burn cycles estimating.
+        let s = CompressionSettings {
+            context_window: 100,
+            reserve_tokens: 50,
+            keep_recent_tokens: 50,
+        };
+        assert!(!should_compress(&[], &s));
+    }
+
+    #[test]
+    fn find_cut_point_on_empty_messages_returns_zero() {
+        // No messages → no cut; returning 0 means the caller's slicing
+        // (`&messages[..0]` / `&messages[0..]`) yields two empty slices, which
+        // downstream logic handles cleanly (hits the `old_messages.is_empty()`
+        // fallback branch).
+        assert_eq!(find_cut_point(&[], &[], 500), 0);
+    }
+
+    #[test]
+    fn find_cut_point_on_single_message_returns_zero() {
+        // With only one message the recent-window accumulator immediately
+        // consumes it. The function should set cut = 0 so the entire message
+        // is preserved as "recent" and no compression is attempted.
+        let messages = vec![make_user("only message")];
+        let token_estimates: Vec<u32> = messages.iter().map(estimate_message_tokens).collect();
+        assert_eq!(find_cut_point(&messages, &token_estimates, 500), 0);
+    }
+
+    #[test]
+    fn find_cut_point_preserves_all_when_total_under_keep_tokens() {
+        // If the total token budget never reaches `keep_recent_tokens`, the
+        // loop runs to exhaustion and returns 0 — everything is "recent".
+        let messages = vec![
+            make_user("a"),
+            make_assistant("b"),
+            make_user("c"),
+            make_assistant("d"),
+        ];
+        let token_estimates: Vec<u32> = messages.iter().map(estimate_message_tokens).collect();
+        // Very large keep budget that we will never hit.
+        assert_eq!(find_cut_point(&messages, &token_estimates, 1_000_000), 0);
+    }
 }

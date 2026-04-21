@@ -323,12 +323,7 @@ impl AgentRunManager {
             PlanApprovalAction::ApplyPlan => (None, None),
             PlanApprovalAction::ApplyPlanWithContextReset => {
                 let message_bundle = self
-                    .build_context_reset_message_bundle(
-                        thread_id,
-                        &plan_message,
-                        &plan_metadata,
-                        &model_plan_value,
-                    )
+                    .build_context_reset_message_bundle(thread_id, &plan_metadata)
                     .await?;
                 (
                     Some(message_bundle.history_override),
@@ -668,9 +663,7 @@ impl AgentRunManager {
     async fn build_context_reset_message_bundle(
         &self,
         thread_id: &str,
-        _plan_message: &MessageRecord,
         plan_metadata: &PlanMessageMetadata,
-        _model_plan_value: &serde_json::Value,
     ) -> Result<ContextResetMessageBundle, AppError> {
         // Clear & Implement: no summary generation — the plan itself serves
         // as the context seed for the next run.
@@ -1539,9 +1532,14 @@ async fn await_summary_with_abort<T>(
         Some(signal) if signal.is_cancelled() => Err(cancellation_error()),
         Some(signal) => {
             tokio::select! {
-                // Bias towards the primary future so, if both are ready at
-                // once, we return the summary result rather than a spurious
-                // cancel. Cancellation is checked again before returning.
+                // Bias towards the primary future: if both branches are
+                // simultaneously ready, we prefer returning the summary
+                // result over a spurious cancel. (Note: this select does
+                // NOT re-check cancellation after the future wins — if the
+                // future completes at the exact same instant the signal
+                // fires, the summary is kept. That is acceptable because
+                // the caller will then be free to use the value; we'd only
+                // be throwing away work the user can still benefit from.)
                 biased;
                 value = future => Ok(value),
                 _ = signal.cancelled() => Err(cancellation_error()),
@@ -2533,6 +2531,38 @@ mod tests {
     }
 
     #[test]
+    fn detect_prior_summary_accepts_blocks_content_with_single_text_block() {
+        // The Blocks variant is used when an attachment or image is attached.
+        // For detection we only require a single Text block to carry a
+        // well-formed <context_summary>. Multi-modal Blocks should still
+        // detect the summary from whichever block contains the text.
+        use tiycore::types::{ContentBlock, TextContent};
+        let user_msg = UserMessage::blocks(vec![ContentBlock::Text(TextContent::new(
+            "<context_summary>\nBlocks-wrapped state\n</context_summary>",
+        ))]);
+        let messages = vec![AgentMessage::User(user_msg)];
+
+        let (prior, prefix_len) =
+            detect_prior_summary(&messages).expect("Blocks path should still detect summary");
+        assert!(prior.contains("Blocks-wrapped state"));
+        assert_eq!(prefix_len, 1);
+    }
+
+    #[test]
+    fn detect_prior_summary_rejects_blocks_with_only_image() {
+        // A Blocks user message that contains no Text at all (e.g. an
+        // image-only attachment) cannot carry a summary — the detector
+        // should treat it like "no summary present" and fall through.
+        use tiycore::types::{ContentBlock, ImageContent};
+        let user_msg = UserMessage::blocks(vec![ContentBlock::Image(ImageContent::new(
+            "AAAA",
+            "image/png",
+        ))]);
+        let messages = vec![AgentMessage::User(user_msg)];
+        assert!(detect_prior_summary(&messages).is_none());
+    }
+
+    #[test]
     fn merge_summary_system_prompt_explains_the_merge_contract() {
         let prompt = build_merge_summary_system_prompt();
         assert!(prompt.contains("PRIOR summary"));
@@ -2578,6 +2608,55 @@ mod tests {
             }
             _ => panic!("expected the delta slot to be a user message"),
         }
+    }
+
+    #[test]
+    fn merge_summary_messages_omit_instructions_slot_when_none() {
+        // No instructions = no leading instructions slot → exactly 2 messages
+        // (prior summary, delta history). If we accidentally start sending 3
+        // messages with an empty instructions block, the model would waste
+        // tokens on a stub prompt.
+        let delta = vec![AgentMessage::User(UserMessage::text("delta message"))];
+        let messages = build_merge_summary_messages(
+            "<context_summary>\nOld state\n</context_summary>",
+            &delta,
+            None,
+        );
+
+        assert_eq!(
+            messages.len(),
+            2,
+            "without instructions the merge-summary payload should be prior+delta only"
+        );
+
+        // Slot 0 must now be the prior-summary (not instructions).
+        match &messages[0] {
+            TiyMessage::User(user) => {
+                let text = match &user.content {
+                    tiycore::types::UserContent::Text(t) => t,
+                    _ => panic!("expected text user message"),
+                };
+                assert!(text.starts_with("Prior summary"));
+            }
+            _ => panic!("expected user message at slot 0"),
+        }
+    }
+
+    #[test]
+    fn merge_summary_messages_treat_whitespace_instructions_as_none() {
+        // Whitespace-only instructions are semantically equivalent to None and
+        // must not produce a dangling empty instructions slot.
+        let delta = vec![AgentMessage::User(UserMessage::text("delta"))];
+        let messages = build_merge_summary_messages(
+            "<context_summary>\nOld\n</context_summary>",
+            &delta,
+            Some("   \n\t  "),
+        );
+        assert_eq!(
+            messages.len(),
+            2,
+            "whitespace-only instructions should behave like None"
+        );
     }
 
     #[tokio::test]
