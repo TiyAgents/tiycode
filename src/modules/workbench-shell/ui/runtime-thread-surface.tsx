@@ -4457,7 +4457,7 @@ export function RuntimeThreadSurface({
                         defaultOpen={false}
                         isStreaming
                       >
-                        <ReasoningTrigger />
+                        <ReasoningTrigger showChevron={false} />
                       </Reasoning>
                     </MessageContent>
                   </Message>
