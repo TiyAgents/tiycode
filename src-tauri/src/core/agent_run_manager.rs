@@ -1972,6 +1972,15 @@ fn summary_history_char_budget(model_role: &ResolvedModelRole) -> usize {
 /// most of a real compact call's context; the new formula preserves full
 /// content for typical threads and only activates the fallback on genuinely
 /// oversized payloads.
+/// Per-tool-result budget cap inside `render_compact_summary_history`.
+///
+/// Tool results can be very large (file reads, command output). Letting a
+/// single one consume the entire remaining budget would crowd out other
+/// messages that provide better summarisation signal. This cap limits any
+/// single tool result body (the text portion, before the header) so the
+/// budget is distributed more evenly across the conversation.
+const SUMMARY_TOOL_RESULT_MAX_CHARS: usize = 6_000;
+
 fn render_compact_summary_history(history: &[AgentMessage], max_chars: usize) -> String {
     // Rendered chunks in **reverse** order (newest first) for budget packing.
     let mut chunks_reversed: Vec<String> = Vec::new();
@@ -1998,8 +2007,8 @@ fn render_compact_summary_history(history: &[AgentMessage], max_chars: usize) ->
                 format!("[assistant]\n{text}\n\n")
             }
             AgentMessage::ToolResult(tool_result) => {
-                let text = tool_result_to_text(tool_result);
-                if text.is_empty() {
+                let raw_text = tool_result_to_text(tool_result);
+                if raw_text.is_empty() {
                     continue;
                 }
                 let header = if tool_result.tool_name.is_empty() {
@@ -2007,6 +2016,14 @@ fn render_compact_summary_history(history: &[AgentMessage], max_chars: usize) ->
                 } else {
                     format!("[tool_result] {}", tool_result.tool_name)
                 };
+                // Apply per-item smart truncation: head+tail with overlap
+                // detection. This keeps the beginning (structure, headers,
+                // imports) and the end (errors, final output) of large tool
+                // results while compressing the less-informative middle.
+                let text = truncate_tool_result_head_tail(
+                    &raw_text,
+                    SUMMARY_TOOL_RESULT_MAX_CHARS.min(remaining),
+                );
                 format!("{header}\n{text}\n\n")
             }
             AgentMessage::Custom { data, .. } => {
@@ -2037,6 +2054,48 @@ fn render_compact_summary_history(history: &[AgentMessage], max_chars: usize) ->
 
     chunks_reversed.reverse();
     chunks_reversed.concat()
+}
+
+/// Smart head+tail truncation for tool result text.
+///
+/// When the text fits within `max_chars`, returns it as-is. Otherwise keeps
+/// the first 2/3 and last 1/3 of the budget (minus the elision marker),
+/// preserving both the beginning (structure, headers, imports) and the end
+/// (errors, final output) of large tool results. When the omitted middle
+/// section is very small (< 50 chars), a simple head truncation is used
+/// instead to avoid a gap marker that hides barely any content.
+fn truncate_tool_result_head_tail(text: &str, max_chars: usize) -> String {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_string();
+    }
+
+    const MARKER: &str = "\n[… middle content omitted …]\n";
+    let marker_len = MARKER.chars().count();
+
+    // Budget too small for marker + meaningful head/tail — just hard-truncate.
+    if max_chars <= marker_len + 2 {
+        return text.chars().take(max_chars).collect();
+    }
+
+    let content_budget = max_chars - marker_len;
+    let head_budget = content_budget * 2 / 3;
+    let tail_budget = content_budget - head_budget;
+
+    let omitted = total - head_budget - tail_budget;
+
+    // If the omitted section is tiny, a gap marker that hides just a few
+    // chars would be misleading — just do a simple head truncation instead.
+    if omitted < 50 {
+        let head: String = text.chars().take(max_chars - marker_len).collect();
+        return format!("{head}{MARKER}");
+    }
+
+    let tail_start = total - tail_budget;
+    let head: String = text.chars().take(head_budget).collect();
+    let tail: String = text.chars().skip(tail_start).collect();
+
+    format!("{head}\n[… {omitted} chars omitted …]\n{tail}")
 }
 
 /// Keep the tail `max_chars` of a string, prefixed with an ellipsis marker
@@ -2574,7 +2633,8 @@ mod tests {
         mark_thread_run_cancellation_requested, normalize_compact_summary,
         normalize_generated_title, render_compact_summary_history,
         should_complete_reasoning_for_event, summary_history_char_budget, truncate_chars,
-        truncate_chars_keep_tail, ActiveRun, SUMMARY_HISTORY_MIN_CHARS,
+        truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
+        SUMMARY_HISTORY_MIN_CHARS, SUMMARY_TOOL_RESULT_MAX_CHARS,
     };
     use crate::core::agent_session::{ProfileResponseStyle, ResolvedModelRole};
     use crate::core::plan_checkpoint::{
@@ -3312,6 +3372,107 @@ mod tests {
         // Output is either just the 5-char tail (no marker) or a mix — but
         // must never panic and must not exceed the budget.
         assert!(out.chars().count() <= 5);
+    }
+
+    // ----- truncate_tool_result_head_tail -----
+
+    #[test]
+    fn truncate_tool_result_head_tail_noop_when_under_limit() {
+        let text = "short tool output";
+        assert_eq!(truncate_tool_result_head_tail(text, 100), text.to_string());
+    }
+
+    #[test]
+    fn truncate_tool_result_head_tail_preserves_head_and_tail() {
+        // 10_000 chars, budget 200 → head ~2/3 + tail ~1/3 of (200 - marker).
+        let text: String = (0..10_000)
+            .map(|i| char::from(b'A' + (i % 26) as u8))
+            .collect();
+        let out = truncate_tool_result_head_tail(&text, 200);
+        assert!(out.chars().count() <= 200);
+        // Must contain the omission marker.
+        assert!(out.contains("chars omitted"));
+        // Head starts with same chars as original.
+        assert!(out.starts_with("ABCDE"));
+        // Tail ends with same chars as original.
+        let original_tail: String = text
+            .chars()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        assert!(out.ends_with(&original_tail));
+    }
+
+    #[test]
+    fn truncate_tool_result_head_tail_small_gap_falls_back_to_head_truncation() {
+        // When the text is only slightly over budget, the omitted middle
+        // section is tiny (< 50 chars). The function should skip the
+        // head+tail gap marker and use simple head truncation instead.
+        //
+        // marker_len = 31, budget = 100, content_budget = 69,
+        // head = 46, tail = 23, omitted = total - 69.
+        // For omitted < 50: total < 69 + 50 = 119.
+        // Use total = 110 → omitted = 110 - 69 = 41 < 50 → head fallback.
+        let text = "x".repeat(110);
+        let out = truncate_tool_result_head_tail(&text, 100);
+        assert!(out.chars().count() <= 100);
+        // Should NOT contain "chars omitted" (small gap → plain head truncation).
+        assert!(
+            !out.contains("chars omitted"),
+            "small-gap case should use plain head truncation, got: {}",
+            out
+        );
+        // Should contain the generic middle-omitted marker instead.
+        assert!(out.contains("middle content omitted"));
+    }
+
+    #[test]
+    fn truncate_tool_result_head_tail_handles_cjk() {
+        // CJK chars: 3 bytes each. Must not panic on char boundary.
+        let cjk = "你好世界测试数据".repeat(500); // 4000 chars
+        let out = truncate_tool_result_head_tail(&cjk, 200);
+        assert!(out.chars().count() <= 200);
+        // Must start with original head.
+        assert!(out.starts_with("你好世界"));
+    }
+
+    #[test]
+    fn truncate_tool_result_head_tail_tiny_budget() {
+        // Budget smaller than marker: just hard-truncate.
+        let text = "abcdefghijklmnop";
+        let out = truncate_tool_result_head_tail(text, 5);
+        assert!(out.chars().count() <= 5);
+    }
+
+    #[test]
+    fn render_compact_summary_history_applies_per_tool_result_cap() {
+        // A massive tool result should be capped by SUMMARY_TOOL_RESULT_MAX_CHARS
+        // even when the overall budget is much larger.
+        use tiycore::types::ToolResultMessage;
+        let big_content = "x".repeat(20_000);
+        let history = vec![
+            AgentMessage::User(UserMessage::text("do something")),
+            AgentMessage::ToolResult(ToolResultMessage::text("tc-1", "read", &big_content, false)),
+        ];
+
+        let rendered = render_compact_summary_history(&history, 100_000);
+        // The tool result body should be capped — the full 20K should NOT appear.
+        assert!(!rendered.contains(&big_content));
+        // But the header and some content should be present.
+        assert!(rendered.contains("[tool_result] read"));
+        // The overall rendered output should be well under the uncapped size.
+        assert!(rendered.chars().count() < 20_000 + 500);
+        // The tool result portion should respect SUMMARY_TOOL_RESULT_MAX_CHARS.
+        let tool_section_start = rendered.find("[tool_result] read").unwrap();
+        let tool_section = &rendered[tool_section_start..];
+        // The tool section (header + body + trailing \n\n) should be bounded.
+        assert!(
+            tool_section.chars().count() <= SUMMARY_TOOL_RESULT_MAX_CHARS + 200,
+            "tool section should be bounded by per-item cap + header overhead"
+        );
     }
 
     // ----- summary_history_char_budget -----

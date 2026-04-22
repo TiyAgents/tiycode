@@ -1917,10 +1917,14 @@ fn resolve_helper_model_role(
 }
 
 /// Maximum characters for a tool result output when replayed from history.
-/// Sits between the aggressive (800) and recent (3200) thresholds used by
-/// `context_compression`, providing a reasonable starting budget that the
-/// real-time compressor can further trim if needed.
-const HISTORY_TOOL_RESULT_MAX_CHARS: usize = 1600;
+///
+/// This deliberately oversizes vs. the aggressive (800) and recent (3200)
+/// thresholds in `context_compression` so that history loaded for summary
+/// generation retains enough raw material for the LLM to produce a faithful
+/// summary. `render_compact_summary_history` applies its own holistic budget
+/// downstream, so keeping more here improves summary quality without
+/// inflating the final context sent to the primary model.
+const HISTORY_TOOL_RESULT_MAX_CHARS: usize = 20_480;
 
 pub(crate) fn convert_history_messages(
     messages: &[MessageRecord],
