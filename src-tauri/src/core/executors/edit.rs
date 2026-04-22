@@ -423,12 +423,19 @@ pub(super) fn generate_diff(path: &Path, old_content: &str, new_content: &str) -
     let old_changed_end = old_lines.len() - common_suffix;
     let new_changed_start = common_prefix;
     let new_changed_end = new_lines.len() - common_suffix;
+    let old_changed_len = old_changed_end - old_changed_start;
+    let new_changed_len = new_changed_end - new_changed_start;
 
     // Context lines around the change (3 lines, matching standard unified diff)
     let context = 3;
     let display_start = old_changed_start.saturating_sub(context);
     let display_old_end = (old_changed_end + context).min(old_lines.len());
     let display_new_end = (new_changed_end + context).min(new_lines.len());
+    let context_before_len = old_changed_start - display_start;
+    let old_context_after_len = display_old_end - old_changed_end;
+    let new_context_after_len = display_new_end - new_changed_end;
+    let old_hunk_len = context_before_len + old_changed_len + old_context_after_len;
+    let new_hunk_len = context_before_len + new_changed_len + new_context_after_len;
 
     let mut diff = String::new();
     diff.push_str(&format!("--- {path_str}\n"));
@@ -436,10 +443,9 @@ pub(super) fn generate_diff(path: &Path, old_content: &str, new_content: &str) -
     diff.push_str(&format!(
         "@@ -{},{} +{},{} @@\n",
         display_start + 1,
-        display_old_end - display_start,
+        old_hunk_len,
         display_start + 1,
-        display_new_end - display_start - (old_changed_end - old_changed_start)
-            + (new_changed_end - new_changed_start),
+        new_hunk_len,
     ));
 
     // Context before
@@ -646,5 +652,18 @@ mod tests {
 
         assert_eq!(lines_added, 1);
         assert_eq!(lines_removed, 1);
+    }
+
+    #[test]
+    fn test_generate_diff_handles_line_deletions_without_underflow() {
+        let path = PathBuf::from("/test/file.rs");
+        let old = "line1\nline2\nline3";
+        let new = "line1";
+        let diff = generate_diff(&path, old, new);
+
+        assert!(diff.contains("@@ -1,3 +1,1 @@"));
+        assert!(diff.contains(" line1"));
+        assert!(diff.contains("-line2"));
+        assert!(diff.contains("-line3"));
     }
 }
