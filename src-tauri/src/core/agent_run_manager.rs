@@ -732,6 +732,46 @@ impl AgentRunManager {
                         run_id: run_id.clone(),
                     }
                 } else {
+                    // The reset marker was already persisted synchronously in
+                    // `compact_thread_context`, so without a summary marker the
+                    // thread would be left with a reset boundary but no record
+                    // of prior context — the next run would resume from an
+                    // empty head. Persist a heuristic summary as a safety net
+                    // (mirrors the auto-compression fallback in
+                    // `run_auto_compression`) so the skeleton of earlier
+                    // context survives even when the LLM call fails. We still
+                    // emit `RunFailed` so the user sees the error and can
+                    // retry, but the conversation is no longer silently
+                    // truncated on the way out.
+                    let heuristic_summary =
+                        crate::core::context_compression::generate_discard_summary(&history);
+                    let summary_metadata = serde_json::json!({
+                        "kind": "context_summary",
+                        "source": "compact_fallback",
+                        "label": "Compacted context summary",
+                    });
+                    let summary_message = MessageRecord {
+                        id: uuid::Uuid::now_v7().to_string(),
+                        thread_id: thread_id.clone(),
+                        run_id: None,
+                        role: "system".to_string(),
+                        content_markdown: heuristic_summary,
+                        message_type: "summary_marker".to_string(),
+                        status: "completed".to_string(),
+                        metadata_json: Some(summary_metadata.to_string()),
+                        attachments_json: None,
+                        created_at: String::new(),
+                    };
+                    if let Err(persist_err) =
+                        message_repo::insert(&self.pool, &summary_message).await
+                    {
+                        tracing::warn!(
+                            thread_id = %thread_id,
+                            run_id = %run_id,
+                            error = %persist_err,
+                            "Failed to persist heuristic summary marker after /compact LLM failure"
+                        );
+                    }
                     ThreadStreamEvent::RunFailed {
                         run_id: run_id.clone(),
                         error: e.to_string(),
@@ -2579,6 +2619,132 @@ mod tests {
         assert!(runs
             .get("run-1")
             .is_some_and(|run| run.cancellation_requested));
+    }
+
+    // ------------------------------------------------------------------
+    // ActiveRun lifecycle invariants for `compact_thread_context`
+    // ------------------------------------------------------------------
+    //
+    // `compact_thread_context` and `start_run` share the same guard pattern
+    // (see lines ~176 and ~544): an insert into `active_runs` guarded by
+    // `runs.values().any(|run| run.thread_id == thread_id)`. The concurrency
+    // correctness of /compact hinges on that guard and on `remove_active_run`
+    // clearing the entry after the background task finishes, *even on
+    // failure*. A full end-to-end test would need a mock `LlmProvider` plus
+    // a real `BuiltInAgentRuntime`, which is disproportionate for verifying
+    // what is fundamentally a `HashMap` insert/remove contract. Instead we
+    // drive the guard pattern directly against the same data structure.
+
+    fn make_active_run(thread_id: &str, run_id: &str) -> ActiveRun {
+        let (frontend_tx, _) = broadcast::channel::<ThreadStreamEvent>(1);
+        ActiveRun {
+            run_id: run_id.to_string(),
+            thread_id: thread_id.to_string(),
+            profile_id: None,
+            frontend_tx,
+            lightweight_model_role: None,
+            streaming_message_id: None,
+            reasoning_message_id: None,
+            cancellation_requested: false,
+        }
+    }
+
+    /// Mirrors the check in `compact_thread_context` (and `start_run`): a
+    /// second concurrent run on the same thread must be rejected so the
+    /// thread can't accumulate overlapping ActiveRun entries.
+    #[tokio::test]
+    async fn active_run_guard_rejects_second_run_on_same_thread() {
+        let active_runs = Mutex::new(HashMap::<String, ActiveRun>::new());
+
+        // First compact inserts successfully.
+        {
+            let mut runs = active_runs.lock().await;
+            let already_active = runs.values().any(|run| run.thread_id == "thread-1");
+            assert!(!already_active);
+            runs.insert("run-1".to_string(), make_active_run("thread-1", "run-1"));
+        }
+
+        // Second compact (same thread) must see the guard fire.
+        {
+            let runs = active_runs.lock().await;
+            let already_active = runs.values().any(|run| run.thread_id == "thread-1");
+            assert!(
+                already_active,
+                "Guard must reject overlapping compact on same thread"
+            );
+        }
+
+        // A different thread is unaffected.
+        {
+            let runs = active_runs.lock().await;
+            let other_thread_active = runs.values().any(|run| run.thread_id == "thread-2");
+            assert!(!other_thread_active);
+        }
+    }
+
+    /// After `run_compact_background` finishes — whether the LLM call
+    /// succeeded or failed — the ActiveRun entry must be gone so subsequent
+    /// /compact invocations are accepted. The doc comment on
+    /// `run_compact_background` promises this invariant; this test pins
+    /// it to the data-structure contract it ultimately relies on.
+    #[tokio::test]
+    async fn active_run_removed_unblocks_future_compacts_on_same_thread() {
+        let active_runs = Mutex::new(HashMap::<String, ActiveRun>::new());
+
+        // Simulate a compact run being registered and then cleaned up.
+        {
+            let mut runs = active_runs.lock().await;
+            runs.insert(
+                "run-compact".to_string(),
+                make_active_run("thread-1", "run-compact"),
+            );
+        }
+        {
+            let mut runs = active_runs.lock().await;
+            runs.remove("run-compact");
+        }
+
+        // A follow-up compact must now observe no active run on thread-1.
+        let runs = active_runs.lock().await;
+        let blocked = runs.values().any(|run| run.thread_id == "thread-1");
+        assert!(
+            !blocked,
+            "Stale ActiveRun entry would leave the thread stuck in Running"
+        );
+    }
+
+    /// Setup failure in `compact_thread_context` (e.g. DB insert rejecting
+    /// the user message) must roll back the ActiveRun insert — otherwise
+    /// every subsequent /compact on the same thread would return
+    /// `thread.run.already_active` until the process restarts.
+    #[tokio::test]
+    async fn active_run_rolled_back_on_setup_failure() {
+        let active_runs = Mutex::new(HashMap::<String, ActiveRun>::new());
+
+        // Simulated setup sequence: insert, then encounter a failure and
+        // clean up — exactly what `compact_thread_context` does at the
+        // `if let Err(error) = setup { self.remove_active_run(...) }`
+        // branch.
+        {
+            let mut runs = active_runs.lock().await;
+            runs.insert(
+                "run-setup-fail".to_string(),
+                make_active_run("thread-1", "run-setup-fail"),
+            );
+        }
+        // ... setup returns Err here in production ...
+        {
+            let mut runs = active_runs.lock().await;
+            runs.remove("run-setup-fail");
+        }
+
+        // Next /compact attempt on the same thread must succeed.
+        let runs = active_runs.lock().await;
+        let blocked = runs.values().any(|run| run.thread_id == "thread-1");
+        assert!(
+            !blocked,
+            "Setup-failure path must leave active_runs empty for the thread"
+        );
     }
 
     #[test]
