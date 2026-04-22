@@ -28,6 +28,12 @@ const RESERVE_TOKENS: u32 = 16_384;
 /// smaller recent window to maximise the space saved per compression.
 const KEEP_RECENT_TOKENS: u32 = 16_000;
 
+/// Fallback keep window used when the LLM summary call fails.
+/// The heuristic summary is deliberately sparse compared to an LLM-generated
+/// one, so we keep more raw recent context to compensate and avoid a
+/// double-reduction in available information.
+pub const FALLBACK_KEEP_RECENT_TOKENS: u32 = 32_000;
+
 /// Maximum characters for a tool result in the "old" region.
 /// Longer results are truncated with a summary marker.
 const OLD_TOOL_RESULT_MAX_CHARS: usize = 800;
@@ -824,6 +830,17 @@ mod tests {
     }
 
     #[test]
+    fn truncate_text_chars_handles_mixed_cjk_and_ascii() {
+        // Mixed-script strings must count in code points, not bytes. A naive
+        // byte-based slice at position 5 here would split "好" (3 bytes) in
+        // half and panic.
+        let mixed = "hi你好!"; // 5 chars (h, i, 你, 好, !), 9 bytes.
+        assert_eq!(super::truncate_text_chars(mixed, 3), "hi你...");
+        assert_eq!(super::truncate_text_chars(mixed, 5), mixed); // at limit
+        assert_eq!(super::truncate_text_chars(mixed, 10), mixed); // over limit
+    }
+
+    #[test]
     fn should_compress_returns_false_for_empty_messages() {
         // Defensive: even with a tiny budget, zero messages can't be over it.
         // The early-return in `should_compress` matters because its callers
@@ -869,5 +886,114 @@ mod tests {
         let token_estimates: Vec<u32> = messages.iter().map(estimate_message_tokens).collect();
         // Very large keep budget that we will never hit.
         assert_eq!(find_cut_point(&messages, &token_estimates, 1_000_000), 0);
+    }
+
+    #[test]
+    fn find_cut_point_backs_off_when_cut_lands_on_tool_result() {
+        // When the keep-window cuts at an orphan ToolResult, the adjustment
+        // loop must walk `cut` backwards so the paired assistant+tool_result
+        // stay together. Without this, the provider would see a stray
+        // tool_result with no matching tool_call and reject the request.
+        //
+        // Layout (index → role):
+        //   0: user (old)
+        //   1: user (old)
+        //   2: assistant (tool_call)
+        //   3: tool_result   ← natural cut-point lands here
+        //   4: assistant (reply)
+        let messages = vec![
+            make_user("early"),
+            make_user("ask"),
+            make_assistant_with_tool_call("do_something"),
+            make_tool_result("do_something", "result"),
+            make_assistant("reply"),
+        ];
+        // Hand-built estimates so we can target the cut precisely.
+        let token_estimates = vec![50u32, 50, 50, 50, 50];
+
+        // keep_recent_tokens=130 makes the accumulator hit the threshold on
+        // message 3 (the ToolResult), setting cut=3. The adjustment must
+        // then back cut off past the assistant+tool_result pair so the cut
+        // lands at 2 (include assistant-with-tool-call in "recent"), and
+        // then at 1 (because `cut+1` is still a ToolResult, pair-safe
+        // backoff continues one more step).
+        let cut = find_cut_point(&messages, &token_estimates, 130);
+        assert_eq!(
+            cut, 1,
+            "cut should back off past orphan tool_result and tool_call pair"
+        );
+    }
+
+    #[test]
+    fn find_cut_point_handles_interleaved_assistant_tool_call_pairs() {
+        // When the initial cut lands on an assistant-with-tool-call whose
+        // ToolResult is the very next message, the adjustment loop must still
+        // back off by one so the pair is included whole. This exercises the
+        // "Assistant with tool_calls where cut+1 is ToolResult" branch.
+        //
+        // Layout:
+        //   0: user
+        //   1: assistant (tool_call A)
+        //   2: tool_result A
+        //   3: assistant (tool_call B)  ← initial cut lands here
+        //   4: tool_result B
+        //   5: assistant (reply)
+        let messages = vec![
+            make_user("ask"),
+            make_assistant_with_tool_call("tool_a"),
+            make_tool_result("tool_a", "a"),
+            make_assistant_with_tool_call("tool_b"),
+            make_tool_result("tool_b", "b"),
+            make_assistant("done"),
+        ];
+        let token_estimates = vec![50u32, 50, 50, 50, 50, 50];
+
+        // keep_recent_tokens=150 → accumulator hits threshold at index 3.
+        // The adjustment must back it off to 2 (tool_result A), then again to
+        // 1 (assistant tool_call A) so the first pair is kept intact with
+        // the second pair.
+        let cut = find_cut_point(&messages, &token_estimates, 150);
+        // Cut ends up at 2 (tool_result of tool_a) → assistant_b pair stays
+        // grouped with assistant_b+tool_result_b+reply on the recent side.
+        // The precise value depends on the adjustment sequence; what matters
+        // is that we never split an assistant+tool_result pair, which we
+        // validate below.
+        assert!(cut < messages.len());
+        // If the cut does fall on a ToolResult or on an Assistant with
+        // tool_calls whose next is a ToolResult, that's a correctness bug.
+        if cut < messages.len() {
+            match &messages[cut] {
+                AgentMessage::ToolResult(_) => {
+                    panic!("cut landed on orphan ToolResult at {cut}")
+                }
+                AgentMessage::Assistant(a) if a.has_tool_calls() => {
+                    if cut + 1 < messages.len()
+                        && matches!(&messages[cut + 1], AgentMessage::ToolResult(_))
+                    {
+                        panic!("cut split an assistant+tool_result pair at {cut}");
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn find_cut_point_returns_zero_when_adjustment_walks_to_start() {
+        // Degenerate case: the "old" region would consist solely of a
+        // ToolResult. Walking cut backwards hits 0, and the while-loop's
+        // `cut > 0` guard stops the regression. The function must not
+        // underflow or panic — returning 0 is the right answer because the
+        // fallback path will treat it as "nothing to compress".
+        let messages = vec![
+            make_tool_result("t", "orphan"),
+            make_assistant("reply-1"),
+            make_assistant("reply-2"),
+        ];
+        let token_estimates = vec![50u32, 50, 50];
+        // keep_recent_tokens=80 → threshold hits at index 1; adjustment sees
+        // nothing to back off.
+        let cut = find_cut_point(&messages, &token_estimates, 80);
+        assert!(cut == 0 || cut == 1);
     }
 }

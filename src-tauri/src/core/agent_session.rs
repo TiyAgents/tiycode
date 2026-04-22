@@ -3057,6 +3057,22 @@ pub(crate) async fn run_auto_compression(
                 "Auto context compression LLM summary failed, falling back to heuristic summary + truncation"
             );
 
+            // On the fallback path the heuristic summary is much sparser than
+            // an LLM-generated one, so the normal 16K recent window would be a
+            // double reduction in available information. Recompute the cut
+            // point with a larger keep window so users don't lose too much raw
+            // recent context when the LLM call fails.
+            let fallback_cut_point = crate::core::context_compression::find_cut_point(
+                &messages,
+                &token_estimates,
+                crate::core::context_compression::FALLBACK_KEEP_RECENT_TOKENS,
+            );
+            // Never widen past the original cut point — the recent slice only
+            // ever grows, never shrinks.
+            let fallback_cut_point = fallback_cut_point.min(cut_point);
+            let old_messages = &messages[..fallback_cut_point];
+            let recent_messages = &messages[fallback_cut_point..];
+
             // Build the heuristic summary once so we can both persist it and
             // hand it to build_compressed_messages.
             // `compress_context_fallback` also generates one internally, but
@@ -3104,7 +3120,7 @@ pub(crate) async fn run_auto_compression(
 
             tracing::info!(
                 thread_id = %thread_id,
-                discarded = cut_point,
+                discarded = fallback_cut_point,
                 kept = result.len(),
                 "Auto context compression fallback completed (heuristic summary)"
             );

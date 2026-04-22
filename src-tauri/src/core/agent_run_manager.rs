@@ -2533,9 +2533,10 @@ mod tests {
         collapse_whitespace, detect_prior_summary, extract_context_summary_block,
         mark_thread_run_cancellation_requested, normalize_compact_summary,
         normalize_generated_title, render_compact_summary_history,
-        should_complete_reasoning_for_event, truncate_chars, truncate_chars_keep_tail, ActiveRun,
+        should_complete_reasoning_for_event, summary_history_char_budget, truncate_chars,
+        truncate_chars_keep_tail, ActiveRun, SUMMARY_HISTORY_MIN_CHARS,
     };
-    use crate::core::agent_session::ProfileResponseStyle;
+    use crate::core::agent_session::{ProfileResponseStyle, ResolvedModelRole};
     use crate::core::plan_checkpoint::{
         build_plan_artifact_from_tool_input, build_plan_message_metadata, PlanApprovalAction,
     };
@@ -3145,5 +3146,95 @@ mod tests {
         // Output is either just the 5-char tail (no marker) or a mix — but
         // must never panic and must not exceed the budget.
         assert!(out.chars().count() <= 5);
+    }
+
+    // ----- summary_history_char_budget -----
+
+    fn model_role_with(context_window: u32, reasoning: bool) -> ResolvedModelRole {
+        let model = tiycore::types::Model::builder()
+            .id("test-model")
+            .name("test-model")
+            .provider(tiycore::types::Provider::OpenAI)
+            .base_url("https://api.openai.com/v1")
+            .context_window(context_window)
+            .max_tokens(32_000)
+            .input(vec![tiycore::types::InputType::Text])
+            .cost(tiycore::types::Cost::default())
+            .reasoning(reasoning)
+            .build()
+            .expect("sample model");
+
+        ResolvedModelRole {
+            provider_id: "provider-test".to_string(),
+            model_record_id: "record-test".to_string(),
+            model_id: "test-model".to_string(),
+            model_name: "test-model".to_string(),
+            provider_type: "openai".to_string(),
+            provider_name: "OpenAI".to_string(),
+            api_key: None,
+            provider_options: None,
+            model,
+        }
+    }
+
+    #[test]
+    fn summary_history_char_budget_zero_context_window_returns_floor() {
+        // context_window = 0 → budget should collapse to the SUMMARY_HISTORY_MIN_CHARS
+        // floor rather than to zero (which would produce useless LLM inputs).
+        let role = model_role_with(0, false);
+        assert_eq!(
+            summary_history_char_budget(&role),
+            SUMMARY_HISTORY_MIN_CHARS
+        );
+    }
+
+    #[test]
+    fn summary_history_char_budget_tiny_context_window_returns_floor() {
+        // When context_window < output_tokens + overhead, saturating_sub
+        // drives tokens_for_history to 0 and we must return the floor.
+        let role = model_role_with(4_096, false); // < 8192 output + 3000 overhead
+        assert_eq!(
+            summary_history_char_budget(&role),
+            SUMMARY_HISTORY_MIN_CHARS
+        );
+    }
+
+    #[test]
+    fn summary_history_char_budget_scales_with_context_window() {
+        // 128K window → (128_000 - 8192 - 3000) * 4 = 466_432 chars.
+        let role = model_role_with(128_000, false);
+        let budget = summary_history_char_budget(&role);
+        let expected = (128_000usize - 8_192 - 3_000).saturating_mul(4);
+        assert_eq!(budget, expected);
+        // Also sanity-check it's well above the floor.
+        assert!(budget > SUMMARY_HISTORY_MIN_CHARS);
+    }
+
+    #[test]
+    fn summary_history_char_budget_doubles_output_budget_for_reasoning_models() {
+        // Reasoning models share the output slot with thinking tokens, so
+        // we subtract PRIMARY_SUMMARY_MAX_TOKENS * 2 = 16_384 instead of 8_192.
+        let reasoning = model_role_with(128_000, true);
+        let non_reasoning = model_role_with(128_000, false);
+        let reasoning_budget = summary_history_char_budget(&reasoning);
+        let non_reasoning_budget = summary_history_char_budget(&non_reasoning);
+
+        // Reasoning budget should be exactly 8_192 tokens smaller = 32_768 chars smaller.
+        assert_eq!(
+            non_reasoning_budget - reasoning_budget,
+            8_192usize.saturating_mul(4)
+        );
+    }
+
+    #[test]
+    fn summary_history_char_budget_1m_context_window_has_no_upper_cap() {
+        // Regression guard for the 400K-char cap removal. A 1M-context model
+        // should get its full advertised capacity (minus overhead) as budget.
+        let role = model_role_with(1_000_000, false);
+        let budget = summary_history_char_budget(&role);
+        let expected = (1_000_000usize - 8_192 - 3_000).saturating_mul(4);
+        assert_eq!(budget, expected);
+        // And must be well above any previous artificial cap.
+        assert!(budget > 400_000);
     }
 }
