@@ -25,6 +25,17 @@ export type TerminalHostHandle = {
   close: () => Promise<void>;
 };
 
+const COMPOSED_INPUT_FALLBACK_MS = 16;
+
+const hasPrintableTerminalText = (data: string) =>
+  /[^\u0000-\u001f\u007f]/u.test(data) && !data.includes("\u001b");
+
+const hasNonAsciiText = (data: string) => /[^\u0000-\u007f]/u.test(data);
+
+const findTerminalHelperTextarea = (container: HTMLDivElement | null) =>
+  container?.querySelector<HTMLTextAreaElement>("textarea.xterm-helper-textarea, textarea") ??
+  null;
+
 export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(function TerminalHost(
   { threadId, active, bootstrapError, idleMessage },
   ref,
@@ -38,6 +49,9 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
   const syncGeometryRef = useRef<(() => void) | null>(null);
   const writeInputRef = useRef<(data: string) => Promise<void>>(async () => {});
   const isReplayingRef = useRef(false);
+  const isComposingRef = useRef(false);
+  const pendingComposedTextRef = useRef<string | null>(null);
+  const pendingComposedFlushTimerRef = useRef<number | null>(null);
   const [geometry, setGeometry] = useState({ cols: 120, rows: 36 });
   const [isTerminalReady, setTerminalReady] = useState(false);
   const [isGeometrySettled, setGeometrySettled] = useState(false);
@@ -195,6 +209,73 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
   writeInputRef.current = (data: string) => terminalApi.writeInput(data);
 
   useEffect(() => {
+    return () => {
+      if (pendingComposedFlushTimerRef.current !== null) {
+        window.clearTimeout(pendingComposedFlushTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const helperTextarea = findTerminalHelperTextarea(containerRef.current);
+    if (!terminalRef.current || !helperTextarea) {
+      return;
+    }
+
+    const clearPendingComposedFlush = () => {
+      if (pendingComposedFlushTimerRef.current !== null) {
+        window.clearTimeout(pendingComposedFlushTimerRef.current);
+        pendingComposedFlushTimerRef.current = null;
+      }
+    };
+
+    const handleCompositionStart = () => {
+      isComposingRef.current = true;
+      pendingComposedTextRef.current = null;
+      clearPendingComposedFlush();
+    };
+
+    const handleCompositionEnd = (event: CompositionEvent) => {
+      isComposingRef.current = false;
+      const committedText = event.data ?? helperTextarea.value ?? "";
+      if (!committedText || !hasNonAsciiText(committedText)) {
+        pendingComposedTextRef.current = null;
+        clearPendingComposedFlush();
+        return;
+      }
+
+      pendingComposedTextRef.current = committedText;
+      clearPendingComposedFlush();
+      pendingComposedFlushTimerRef.current = window.setTimeout(() => {
+        const pendingText = pendingComposedTextRef.current;
+        pendingComposedTextRef.current = null;
+        pendingComposedFlushTimerRef.current = null;
+        if (!pendingText) {
+          return;
+        }
+        void writeInputRef.current(pendingText).catch(() => {});
+      }, COMPOSED_INPUT_FALLBACK_MS);
+    };
+
+    const handleBlur = () => {
+      isComposingRef.current = false;
+      pendingComposedTextRef.current = null;
+      clearPendingComposedFlush();
+    };
+
+    helperTextarea.addEventListener("compositionstart", handleCompositionStart);
+    helperTextarea.addEventListener("compositionend", handleCompositionEnd);
+    helperTextarea.addEventListener("blur", handleBlur);
+
+    return () => {
+      clearPendingComposedFlush();
+      helperTextarea.removeEventListener("compositionstart", handleCompositionStart);
+      helperTextarea.removeEventListener("compositionend", handleCompositionEnd);
+      helperTextarea.removeEventListener("blur", handleBlur);
+    };
+  }, [isTerminalReady]);
+
+  useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) {
       return;
@@ -204,6 +285,30 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
       if (isReplayingRef.current) {
         return;
       }
+
+      const pendingComposedText = pendingComposedTextRef.current;
+      if (pendingComposedText) {
+        if (pendingComposedText.startsWith(data)) {
+          if (pendingComposedFlushTimerRef.current !== null) {
+            window.clearTimeout(pendingComposedFlushTimerRef.current);
+            pendingComposedFlushTimerRef.current = null;
+          }
+
+          const remaining = pendingComposedText.slice(data.length);
+          pendingComposedTextRef.current = remaining.length > 0 ? remaining : null;
+          void writeInputRef.current(data).catch(() => {});
+          return;
+        }
+
+        if (hasPrintableTerminalText(data)) {
+          pendingComposedTextRef.current = null;
+          if (pendingComposedFlushTimerRef.current !== null) {
+            window.clearTimeout(pendingComposedFlushTimerRef.current);
+            pendingComposedFlushTimerRef.current = null;
+          }
+        }
+      }
+
       void writeInputRef.current(data).catch(() => {});
     });
 

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -250,6 +251,7 @@ impl TerminalManager {
             .unwrap_or("xterm-256color");
         command.env("TERM", term_value);
         command.env("COLORTERM", "truecolor");
+        let injected_locale = apply_unix_utf8_locale_env(&mut command);
         tracing::info!(
             session_id = %session_id,
             thread_id = %thread_id,
@@ -257,6 +259,7 @@ impl TerminalManager {
             cwd = %cwd.display(),
             TERM = %term_value,
             COLORTERM = "truecolor",
+            locale = ?injected_locale,
             "terminal session: env vars injected"
         );
 
@@ -896,6 +899,56 @@ fn resolve_shell(override_path: Option<&str>) -> String {
                 "/bin/zsh".to_string()
             }
         })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_unix_utf8_locale_env(command: &mut CommandBuilder) -> Option<String> {
+    let inherited_lc_all = std::env::var_os("LC_ALL").filter(|value| !value.is_empty());
+    if inherited_lc_all.as_deref().is_some() {
+        return None;
+    }
+
+    let inherited_lang = std::env::var_os("LANG").filter(|value| !value.is_empty());
+    let inherited_lc_ctype = std::env::var_os("LC_CTYPE").filter(|value| !value.is_empty());
+    if inherited_lang.as_deref().is_some() || inherited_lc_ctype.as_deref().is_some() {
+        return None;
+    }
+
+    let fallback_locale = default_unix_utf8_locale();
+    command.env("LANG", &fallback_locale);
+    command.env("LC_CTYPE", &fallback_locale);
+
+    Some(fallback_locale.to_string_lossy().into_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn apply_unix_utf8_locale_env(_command: &mut CommandBuilder) -> Option<String> {
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+fn default_unix_utf8_locale() -> OsString {
+    #[cfg(target_os = "macos")]
+    {
+        OsString::from("en_US.UTF-8")
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::env::var_os("LANG")
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                let lowercase = value.to_string_lossy().to_ascii_lowercase();
+                if lowercase.contains("utf-8") || lowercase.contains("utf8") {
+                    value
+                } else if let Some((prefix, _)) = value.to_string_lossy().split_once('.') {
+                    OsString::from(format!("{prefix}.UTF-8"))
+                } else {
+                    OsString::from(format!("{}.UTF-8", value.to_string_lossy()))
+                }
+            })
+            .unwrap_or_else(|| OsString::from("C.UTF-8"))
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
