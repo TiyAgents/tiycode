@@ -1646,7 +1646,7 @@ function getCommandOutputToolPresentation(tool: SurfaceToolEntry) {
 }
 
 const TOOL_DETAIL_CODE_BLOCK_CONTENT_CLASS =
-  "max-h-[min(50vh,28rem)] overscroll-contain";
+  "max-h-[min(50vh,28rem)]";
 
 function ToolCommandOutputBlocks({
   presentation,
@@ -1810,7 +1810,7 @@ function FileMutationDiffPreview({
   }
 
   return (
-    <div className="max-h-[22rem] overflow-auto overscroll-contain bg-app-drawer font-mono text-[12px] leading-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="max-h-[22rem] overflow-auto bg-app-drawer font-mono text-[12px] leading-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {rows.map((row, index) => (
         <div
           className={cn(
