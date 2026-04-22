@@ -15,6 +15,7 @@ use tiycore::types::{
 };
 use tokio::sync::mpsc;
 
+use crate::core::context_compression::ContextTokenCalibration;
 use crate::core::plan_checkpoint::{
     approval_prompt_markdown, build_approval_prompt_metadata, build_plan_artifact_from_tool_input,
     build_plan_message_metadata, parse_plan_message_metadata, plan_markdown, write_plan_file,
@@ -33,8 +34,10 @@ use crate::extensions::ExtensionsManager;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::AgentProfileRecord;
-use crate::model::thread::{MessageAttachmentDto, MessageRecord, RunUsageDto, ToolCallDto};
-use crate::persistence::repo::{message_repo, provider_repo, tool_call_repo};
+use crate::model::thread::{
+    MessageAttachmentDto, MessageRecord, RunSummaryDto, RunUsageDto, ToolCallDto,
+};
+use crate::persistence::repo::{message_repo, provider_repo, run_repo, tool_call_repo};
 
 /// Deprecated: previously used as the hard limit for `message_repo::list_recent` in
 /// `build_session_spec`.  Replaced by `message_repo::list_since_last_reset()` which
@@ -137,6 +140,7 @@ pub struct AgentSessionSpec {
     pub history_tool_calls: Vec<ToolCallDto>,
     pub model_plan: ResolvedRuntimeModelPlan,
     pub initial_prompt: Option<String>,
+    pub initial_context_calibration: ContextTokenCalibration,
 }
 
 pub async fn build_session_spec(
@@ -168,11 +172,20 @@ pub async fn build_session_spec(
         .into_iter()
         .collect();
     let history_tool_calls = tool_call_repo::list_by_run_ids(pool, &history_run_ids).await?;
+    let latest_historical_run =
+        run_repo::find_latest_with_input_usage_by_thread_excluding_run(pool, thread_id, run_id)
+            .await?;
 
     let system_prompt = build_system_prompt(pool, &raw_plan, workspace_path, run_mode).await?;
     let extension_tools = ExtensionsManager::new(pool.clone())
         .list_runtime_agent_tools(Some(workspace_path))
         .await?;
+    let initial_context_calibration = build_initial_context_token_calibration(
+        latest_historical_run.as_ref(),
+        &history_messages,
+        &history_tool_calls,
+        &resolved_plan.primary,
+    );
 
     Ok(AgentSessionSpec {
         run_id: run_id.to_string(),
@@ -189,6 +202,7 @@ pub async fn build_session_spec(
         history_tool_calls,
         model_plan: resolved_plan,
         initial_prompt: None,
+        initial_context_calibration,
     })
 }
 
@@ -206,6 +220,105 @@ pub(crate) fn trim_history_to_current_context(messages: &[MessageRecord]) -> Vec
         .collect()
 }
 
+#[derive(Debug, Default)]
+struct ContextCompressionRuntimeState {
+    calibration: ContextTokenCalibration,
+    pending_prompt_estimate: Option<u32>,
+}
+
+impl ContextCompressionRuntimeState {
+    fn new(initial_calibration: ContextTokenCalibration) -> Self {
+        Self {
+            calibration: initial_calibration,
+            pending_prompt_estimate: None,
+        }
+    }
+
+    fn calibration(&self) -> ContextTokenCalibration {
+        self.calibration
+    }
+
+    fn record_pending_prompt_estimate(&mut self, estimated_tokens: u32) {
+        self.pending_prompt_estimate = Some(estimated_tokens);
+    }
+
+    fn observe_input_usage(&mut self, actual_input_tokens: u64) {
+        let Some(estimated_tokens) = self.pending_prompt_estimate.take() else {
+            return;
+        };
+
+        self.calibration = self
+            .calibration
+            .observe(estimated_tokens, actual_input_tokens);
+    }
+}
+
+fn current_context_token_calibration(
+    state: &StdMutex<ContextCompressionRuntimeState>,
+) -> ContextTokenCalibration {
+    state
+        .lock()
+        .map(|state| state.calibration())
+        .unwrap_or_default()
+}
+
+fn record_pending_prompt_estimate(
+    state: &StdMutex<ContextCompressionRuntimeState>,
+    estimated_tokens: u32,
+) {
+    if let Ok(mut state) = state.lock() {
+        state.record_pending_prompt_estimate(estimated_tokens);
+    }
+}
+
+fn observe_context_usage_calibration(
+    state: &StdMutex<ContextCompressionRuntimeState>,
+    usage: &Usage,
+) {
+    if usage.input == 0 {
+        return;
+    }
+
+    if let Ok(mut state) = state.lock() {
+        state.observe_input_usage(usage.input);
+    }
+}
+
+fn build_initial_context_token_calibration(
+    latest_historical_run: Option<&RunSummaryDto>,
+    history_messages: &[MessageRecord],
+    history_tool_calls: &[ToolCallDto],
+    primary_model: &ResolvedModelRole,
+) -> ContextTokenCalibration {
+    let Some(latest_historical_run) = latest_historical_run else {
+        return ContextTokenCalibration::default();
+    };
+
+    if latest_historical_run.usage.input_tokens == 0
+        || !run_summary_matches_primary_model(latest_historical_run, primary_model)
+    {
+        return ContextTokenCalibration::default();
+    }
+
+    let history =
+        convert_history_messages(history_messages, history_tool_calls, &primary_model.model);
+    let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history);
+
+    ContextTokenCalibration::from_observation(
+        estimated_tokens,
+        latest_historical_run.usage.input_tokens,
+    )
+    .unwrap_or_default()
+}
+
+fn run_summary_matches_primary_model(
+    run_summary: &RunSummaryDto,
+    primary_model: &ResolvedModelRole,
+) -> bool {
+    run_summary.model_id.as_deref() == Some(primary_model.model_id.as_str())
+        || run_summary.model_id.as_deref() == Some(primary_model.model.id.as_str())
+}
+
 pub struct AgentSession {
     spec: AgentSessionSpec,
     pool: SqlitePool,
@@ -216,6 +329,7 @@ pub struct AgentSession {
     cancel_requested: Arc<AtomicBool>,
     checkpoint_requested: AtomicBool,
     abort_signal: tiycore::agent::AbortSignal,
+    context_compression_state: Arc<StdMutex<ContextCompressionRuntimeState>>,
 }
 
 impl AgentSession {
@@ -229,8 +343,16 @@ impl AgentSession {
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak_self| {
             let agent = Arc::new(Agent::with_model(spec.model_plan.primary.model.clone()));
+            let context_compression_state = Arc::new(StdMutex::new(
+                ContextCompressionRuntimeState::new(spec.initial_context_calibration),
+            ));
             agent.set_max_turns(max_turns);
-            configure_agent(&agent, &spec, weak_self.clone());
+            configure_agent(
+                &agent,
+                &spec,
+                weak_self.clone(),
+                Arc::clone(&context_compression_state),
+            );
 
             Self {
                 spec,
@@ -242,6 +364,7 @@ impl AgentSession {
                 cancel_requested: Arc::new(AtomicBool::new(false)),
                 checkpoint_requested: AtomicBool::new(false),
                 abort_signal: tiycore::agent::AbortSignal::new(),
+                context_compression_state,
             }
         })
     }
@@ -281,6 +404,7 @@ impl AgentSession {
         let reasoning_message_id_ref = Arc::clone(&current_reasoning_message_id);
         let last_usage_ref = Arc::clone(&last_usage);
         let reasoning_ref = Arc::clone(&reasoning_buffer);
+        let context_compression_state_ref = Arc::clone(&self.context_compression_state);
         let unsubscribe = self.agent.subscribe(move |event| {
             handle_agent_event(
                 &run_id,
@@ -289,6 +413,7 @@ impl AgentSession {
                 &last_completed_message_id_ref,
                 &reasoning_message_id_ref,
                 &last_usage_ref,
+                &context_compression_state_ref,
                 &reasoning_ref,
                 &context_window,
                 &model_display_name,
@@ -1021,7 +1146,12 @@ impl AgentSession {
     }
 }
 
-fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<AgentSession>) {
+fn configure_agent(
+    agent: &Arc<Agent>,
+    spec: &AgentSessionSpec,
+    weak_self: Weak<AgentSession>,
+    context_compression_state: Arc<StdMutex<ContextCompressionRuntimeState>>,
+) {
     agent.set_system_prompt(spec.system_prompt.clone());
     agent.replace_messages(convert_history_messages(
         &spec.history_messages,
@@ -1062,14 +1192,25 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
     let compression_weak_self = weak_self.clone();
     let compression_thread_id = spec.thread_id.clone();
     let compression_run_id = spec.run_id.clone();
+    let compression_state = Arc::clone(&context_compression_state);
     agent.set_transform_context(move |messages| {
         // Cheap pass-through check first: only clone the heavy captured state
         // (ResolvedModelRole, String ids, Weak) when compression will actually
         // run. For long sessions with many turns this avoids per-turn heap
         // allocations when the thread is still well under budget.
         let settings = compression_settings.clone();
-        let needs_compression =
-            crate::core::context_compression::should_compress(&messages, &settings);
+        let raw_estimated_tokens =
+            crate::core::context_compression::estimate_total_tokens(&messages);
+        let calibration = current_context_token_calibration(&compression_state);
+        let calibrated_total_tokens = crate::core::context_compression::calibrate_total_tokens(
+            raw_estimated_tokens,
+            Some(calibration),
+        );
+        let needs_compression = !messages.is_empty()
+            && crate::core::context_compression::should_compress_total_tokens(
+                calibrated_total_tokens,
+                &settings,
+            );
 
         let model_role = if needs_compression {
             Some(primary_model_role.clone())
@@ -1091,23 +1232,29 @@ fn configure_agent(agent: &Arc<Agent>, spec: &AgentSessionSpec, weak_self: Weak<
         } else {
             None
         };
+        let compression_state = Arc::clone(&compression_state);
 
         async move {
-            if !needs_compression {
-                return messages;
-            }
-            // Unwraps are sound: all `Some(_)` are populated together under
-            // `needs_compression`, so either all four are `Some` (compression
-            // path) or we returned above.
-            run_auto_compression(
-                messages,
-                settings,
-                model_role.expect("model_role populated when compressing"),
-                weak.expect("weak populated when compressing"),
-                thread_id.expect("thread_id populated when compressing"),
-                run_id.expect("run_id populated when compressing"),
-            )
-            .await
+            let transformed_messages = if !needs_compression {
+                messages
+            } else {
+                // Unwraps are sound: all `Some(_)` are populated together under
+                // `needs_compression`, so either all four are `Some` (compression
+                // path) or we returned above.
+                run_auto_compression(
+                    messages,
+                    settings,
+                    model_role.expect("model_role populated when compressing"),
+                    weak.expect("weak populated when compressing"),
+                    thread_id.expect("thread_id populated when compressing"),
+                    run_id.expect("run_id populated when compressing"),
+                )
+                .await
+            };
+            let sent_estimated_tokens =
+                crate::core::context_compression::estimate_total_tokens(&transformed_messages);
+            record_pending_prompt_estimate(&compression_state, sent_estimated_tokens);
+            transformed_messages
         }
     });
 
@@ -1155,6 +1302,7 @@ fn handle_agent_event(
     last_completed_message_id: &StdMutex<Option<String>>,
     current_reasoning_message_id: &StdMutex<Option<String>>,
     last_usage: &StdMutex<Option<Usage>>,
+    context_compression_state: &StdMutex<ContextCompressionRuntimeState>,
     reasoning_buffer: &StdMutex<String>,
     context_window: &str,
     model_display_name: &str,
@@ -1231,6 +1379,7 @@ fn handle_agent_event(
                     run_id,
                     event_tx,
                     last_usage,
+                    context_compression_state,
                     &partial.usage,
                     context_window,
                     model_display_name,
@@ -1245,6 +1394,7 @@ fn handle_agent_event(
                         run_id,
                         event_tx,
                         last_usage,
+                        context_compression_state,
                         &assistant.usage,
                         context_window,
                         model_display_name,
@@ -1258,6 +1408,7 @@ fn handle_agent_event(
                     run_id,
                     event_tx,
                     last_usage,
+                    context_compression_state,
                     &assistant.usage,
                     context_window,
                     model_display_name,
@@ -1290,6 +1441,7 @@ fn emit_usage_update_if_changed(
     run_id: &str,
     event_tx: &mpsc::UnboundedSender<ThreadStreamEvent>,
     last_usage: &StdMutex<Option<Usage>>,
+    context_compression_state: &StdMutex<ContextCompressionRuntimeState>,
     usage: &Usage,
     context_window: &str,
     model_display_name: &str,
@@ -1321,6 +1473,8 @@ fn emit_usage_update_if_changed(
     if !should_emit {
         return;
     }
+
+    observe_context_usage_calibration(context_compression_state, usage);
 
     let _ = event_tx.send(ThreadStreamEvent::ThreadUsageUpdated {
         run_id: run_id.to_string(),
@@ -3309,14 +3463,15 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_profile_response_prompt_parts, build_system_prompt, convert_history_messages,
+        build_initial_context_token_calibration, build_profile_response_prompt_parts,
+        build_system_prompt, convert_history_messages, current_context_token_calibration,
         handle_agent_event, main_agent_security_config, normalize_profile_response_language,
         normalize_profile_response_style, plan_mode_missing_checkpoint_error,
-        resolve_helper_model_role, resolve_helper_profile, response_style_system_instruction,
-        runtime_security_config, runtime_tools_for_profile,
+        record_pending_prompt_estimate, resolve_helper_model_role, resolve_helper_profile,
+        response_style_system_instruction, runtime_security_config, runtime_tools_for_profile,
         runtime_tools_for_profile_with_extensions, standard_tool_timeout,
-        trim_history_to_current_context, ProfileResponseStyle, ResolvedModelRole,
-        ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
+        trim_history_to_current_context, ContextCompressionRuntimeState, ProfileResponseStyle,
+        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
         MAIN_AGENT_TOOL_TIMEOUT_SECS, PLAN_MODE_MISSING_CHECKPOINT_ERROR,
         PLAN_READ_ONLY_TOOL_PROFILE, STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
@@ -3338,7 +3493,7 @@ mod tests {
     use crate::core::subagent::{RuntimeOrchestrationTool, SubagentProfile};
     use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::AgentProfileRecord;
-    use crate::model::thread::MessageRecord;
+    use crate::model::thread::{MessageRecord, RunSummaryDto, RunUsageDto};
     use crate::persistence::init_database;
 
     const TEST_CONTEXT_WINDOW: &str = "128000";
@@ -3421,6 +3576,42 @@ mod tests {
         }
     }
 
+    fn make_history_message(id: &str, run_id: &str, role: &str, content: &str) -> MessageRecord {
+        MessageRecord {
+            id: id.to_string(),
+            thread_id: "thread-1".to_string(),
+            run_id: Some(run_id.to_string()),
+            role: role.to_string(),
+            content_markdown: content.to_string(),
+            message_type: "plain_message".to_string(),
+            status: "completed".to_string(),
+            metadata_json: None,
+            attachments_json: None,
+            created_at: "2026-01-01T00:00:00.000Z".to_string(),
+        }
+    }
+
+    fn make_run_summary(model_id: &str, input_tokens: u64) -> RunSummaryDto {
+        RunSummaryDto {
+            id: "run-prev".to_string(),
+            thread_id: "thread-1".to_string(),
+            run_mode: "default".to_string(),
+            status: "completed".to_string(),
+            model_id: Some(model_id.to_string()),
+            model_display_name: Some(model_id.to_string()),
+            context_window: Some(TEST_CONTEXT_WINDOW.to_string()),
+            error_message: None,
+            started_at: "2026-01-01T00:00:00.000Z".to_string(),
+            usage: RunUsageDto {
+                input_tokens,
+                output_tokens: 128,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                total_tokens: input_tokens + 128,
+            },
+        }
+    }
+
     fn message_text(message: &AgentMessage) -> String {
         match message {
             AgentMessage::User(user) => match &user.content {
@@ -3458,6 +3649,29 @@ mod tests {
         reasoning_buffer: &StdMutex<String>,
         event: &AgentEvent,
     ) {
+        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        handle_test_agent_event_with_context_state(
+            run_id,
+            event_tx,
+            current_message_id,
+            current_reasoning_message_id,
+            last_usage,
+            &context_compression_state,
+            reasoning_buffer,
+            event,
+        );
+    }
+
+    fn handle_test_agent_event_with_context_state(
+        run_id: &str,
+        event_tx: &mpsc::UnboundedSender<ThreadStreamEvent>,
+        current_message_id: &StdMutex<Option<String>>,
+        current_reasoning_message_id: &StdMutex<Option<String>>,
+        last_usage: &StdMutex<Option<tiycore::types::Usage>>,
+        context_compression_state: &StdMutex<ContextCompressionRuntimeState>,
+        reasoning_buffer: &StdMutex<String>,
+        event: &AgentEvent,
+    ) {
         let last_completed_message_id = StdMutex::new(None::<String>);
         handle_agent_event(
             run_id,
@@ -3466,6 +3680,7 @@ mod tests {
             &last_completed_message_id,
             current_reasoning_message_id,
             last_usage,
+            context_compression_state,
             reasoning_buffer,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
@@ -3968,12 +4183,121 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn message_end_usage_updates_consume_pending_prompt_estimate_once() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
+        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let reasoning_buffer = StdMutex::new(String::new());
+        let assistant = AssistantMessage::builder()
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .model("gpt-test")
+            .usage(tiycore::types::Usage::from_tokens(1_500, 32))
+            .build()
+            .expect("assistant message with usage");
+
+        record_pending_prompt_estimate(&context_compression_state, 1_000);
+        handle_test_agent_event_with_context_state(
+            "run-usage-calibration",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            &AgentEvent::MessageEnd {
+                message: AgentMessage::Assistant(assistant.clone()),
+            },
+        );
+        handle_test_agent_event_with_context_state(
+            "run-usage-calibration",
+            &event_tx,
+            &current_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            &AgentEvent::MessageEnd {
+                message: AgentMessage::Assistant(assistant),
+            },
+        );
+
+        let usage_events = std::iter::from_fn(|| event_rx.try_recv().ok())
+            .filter(|event| matches!(event, ThreadStreamEvent::ThreadUsageUpdated { .. }))
+            .count();
+        let calibration = current_context_token_calibration(&context_compression_state);
+
+        assert_eq!(usage_events, 1);
+        assert_eq!(calibration.ratio_basis_points(), 15_000);
+        assert!(context_compression_state
+            .lock()
+            .expect("context compression state")
+            .pending_prompt_estimate
+            .is_none());
+    }
+
+    #[test]
+    fn build_initial_context_token_calibration_seeds_from_matching_historical_run() {
+        let primary_model = sample_resolved_model_role("primary-model");
+        let history_messages = vec![
+            make_history_message("msg-1", "run-prev", "user", &"x".repeat(600)),
+            make_history_message("msg-2", "run-prev", "assistant", &"y".repeat(600)),
+        ];
+        let history = convert_history_messages(&history_messages, &[], &primary_model.model);
+        let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history);
+        let run_summary = make_run_summary("primary-model", (estimated_tokens as u64) * 2);
+
+        let calibration = build_initial_context_token_calibration(
+            Some(&run_summary),
+            &history_messages,
+            &[],
+            &primary_model,
+        );
+
+        assert_eq!(calibration.ratio_basis_points(), 20_000);
+        assert_eq!(
+            calibration.apply_to_estimate(estimated_tokens),
+            estimated_tokens * 2
+        );
+    }
+
+    #[test]
+    fn build_initial_context_token_calibration_ignores_mismatched_models_and_zero_usage() {
+        let primary_model = sample_resolved_model_role("primary-model");
+        let history_messages = vec![make_history_message(
+            "msg-1",
+            "run-prev",
+            "user",
+            &"x".repeat(400),
+        )];
+
+        let mismatched = build_initial_context_token_calibration(
+            Some(&make_run_summary("other-model", 4_096)),
+            &history_messages,
+            &[],
+            &primary_model,
+        );
+        let zero_usage = build_initial_context_token_calibration(
+            Some(&make_run_summary("primary-model", 0)),
+            &history_messages,
+            &[],
+            &primary_model,
+        );
+
+        assert_eq!(mismatched.ratio_basis_points(), 10_000);
+        assert_eq!(zero_usage.ratio_basis_points(), 10_000);
+    }
+
+    #[test]
     fn turn_retrying_event_emits_runtime_retry_notice() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let current_message_id = StdMutex::new(None::<String>);
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
+        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
 
         handle_agent_event(
@@ -3983,6 +4307,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
+            &context_compression_state,
             &reasoning_buffer,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
@@ -4014,6 +4339,7 @@ Used for prompt assembly coverage.
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
+        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
         let assistant = sample_partial_assistant_message();
 
@@ -4024,6 +4350,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
+            &context_compression_state,
             &reasoning_buffer,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
@@ -4038,6 +4365,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
+            &context_compression_state,
             &reasoning_buffer,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,

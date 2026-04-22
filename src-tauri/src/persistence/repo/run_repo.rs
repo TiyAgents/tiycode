@@ -173,6 +173,33 @@ pub async fn find_latest_by_thread(
     Ok(row.map(map_run_summary))
 }
 
+/// Find the latest historical run for a thread that has non-zero input usage,
+/// excluding the currently created run. This is used to seed conservative
+/// context-token calibration for the next run on the same thread.
+pub async fn find_latest_with_input_usage_by_thread_excluding_run(
+    pool: &SqlitePool,
+    thread_id: &str,
+    excluded_run_id: &str,
+) -> Result<Option<RunSummaryDto>, AppError> {
+    let row = sqlx::query_as::<_, RunRow>(
+        "SELECT id, thread_id, run_mode, status, model_id, effective_model_plan_json,
+                error_message, started_at, input_tokens, output_tokens,
+                cache_read_tokens, cache_write_tokens, total_tokens
+         FROM thread_runs
+         WHERE thread_id = ?
+           AND id != ?
+           AND input_tokens > 0
+         ORDER BY started_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .bind(excluded_run_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(map_run_summary))
+}
+
 pub async fn list_thread_ids_with_active_runs(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
     let rows = sqlx::query_scalar::<_, String>(
         "SELECT DISTINCT thread_id
