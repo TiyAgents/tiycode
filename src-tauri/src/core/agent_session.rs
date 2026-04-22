@@ -1192,6 +1192,7 @@ fn configure_agent(
     let compression_weak_self = weak_self.clone();
     let compression_thread_id = spec.thread_id.clone();
     let compression_run_id = spec.run_id.clone();
+    let compression_response_language = spec.model_plan.raw.response_language.clone();
     let compression_state = Arc::clone(&context_compression_state);
     agent.set_transform_context(move |messages| {
         // Cheap pass-through check first: only clone the heavy captured state
@@ -1232,6 +1233,11 @@ fn configure_agent(
         } else {
             None
         };
+        let response_language = if needs_compression {
+            Some(compression_response_language.clone())
+        } else {
+            None
+        };
         let compression_state = Arc::clone(&compression_state);
 
         async move {
@@ -1248,6 +1254,7 @@ fn configure_agent(
                     weak.expect("weak populated when compressing"),
                     thread_id.expect("thread_id populated when compressing"),
                     run_id.expect("run_id populated when compressing"),
+                    response_language.expect("response_language populated when compressing"),
                 )
                 .await
             };
@@ -3032,6 +3039,7 @@ pub(crate) async fn run_auto_compression(
     weak: Weak<AgentSession>,
     thread_id: String,
     run_id: String,
+    response_language: Option<String>,
 ) -> Vec<AgentMessage> {
     // Phase 1: check if compression is needed.
     //
@@ -3102,6 +3110,7 @@ pub(crate) async fn run_auto_compression(
     // decay. The prior summary was injected by a previous compression pass and
     // lives at the head of `messages`; the delta to summarise is the rest of
     // `old_messages`.
+    let response_language = response_language.as_deref();
     let summary_result = match crate::core::agent_run_manager::detect_prior_summary(old_messages) {
         Some((prior_summary, prefix_len)) if prefix_len < old_messages.len() => {
             let delta = &old_messages[prefix_len..];
@@ -3115,6 +3124,7 @@ pub(crate) async fn run_auto_compression(
                 &prior_summary,
                 delta,
                 None,
+                response_language,
                 abort_signal.clone(),
             )
             .await
@@ -3134,6 +3144,7 @@ pub(crate) async fn run_auto_compression(
                 &model_role,
                 old_messages,
                 None,
+                response_language,
                 abort_signal.clone(),
             )
             .await
@@ -5250,6 +5261,7 @@ Used for prompt assembly coverage.
                 Weak::<AgentSession>::new(),
                 "thread-x".to_string(),
                 "run-x".to_string(),
+                None,
             )
             .await;
 
@@ -5303,6 +5315,7 @@ Used for prompt assembly coverage.
                 Weak::<AgentSession>::new(),
                 "thread-y".to_string(),
                 "run-y".to_string(),
+                None,
             )
             .await;
 

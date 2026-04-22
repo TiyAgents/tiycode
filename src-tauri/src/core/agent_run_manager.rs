@@ -40,7 +40,7 @@ use crate::persistence::repo::{
     message_repo, profile_repo, run_repo, thread_repo, tool_call_repo, workspace_repo,
 };
 
-pub(crate) const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const TITLE_GENERATION_MAX_TOKENS: u32 = 512;
 pub(crate) const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 2048;
 const PRIMARY_SUMMARY_MAX_TOKENS: u32 = 8192;
@@ -60,6 +60,8 @@ struct ActiveRun {
     profile_id: Option<String>,
     frontend_tx: broadcast::Sender<ThreadStreamEvent>,
     lightweight_model_role: Option<ResolvedModelRole>,
+    auxiliary_model_role: Option<ResolvedModelRole>,
+    primary_model_role: Option<ResolvedModelRole>,
     streaming_message_id: Option<String>,
     reasoning_message_id: Option<String>,
     cancellation_requested: bool,
@@ -234,6 +236,8 @@ impl AgentRunManager {
                     profile_id: profile_id.clone(),
                     frontend_tx: frontend_tx.clone(),
                     lightweight_model_role: None,
+                    auxiliary_model_role: None,
+                    primary_model_role: None,
                     streaming_message_id: None,
                     reasoning_message_id: None,
                     cancellation_requested: false,
@@ -296,6 +300,8 @@ impl AgentRunManager {
                 let mut runs = self.active_runs.lock().await;
                 if let Some(run) = runs.get_mut(&run_id) {
                     run.lightweight_model_role = spec.model_plan.lightweight.clone();
+                    run.auxiliary_model_role = spec.model_plan.auxiliary.clone();
+                    run.primary_model_role = Some(spec.model_plan.primary.clone());
                 }
             }
 
@@ -547,6 +553,7 @@ impl AgentRunManager {
         )
         .await?;
         let model = primary_summary_model(&preview_spec.model_plan);
+        let response_language = preview_spec.model_plan.raw.response_language.as_deref();
         let history =
             convert_history_messages(&current_context_messages, &compact_tool_calls, &model);
         let compact_instructions = instructions
@@ -602,6 +609,8 @@ impl AgentRunManager {
                     profile_id: None,
                     frontend_tx: frontend_tx.clone(),
                     lightweight_model_role: None,
+                    auxiliary_model_role: None,
+                    primary_model_role: None,
                     streaming_message_id: None,
                     reasoning_message_id: None,
                     cancellation_requested: false,
@@ -690,6 +699,7 @@ impl AgentRunManager {
         let spawn_thread_id = thread_id.to_string();
         let spawn_run_id = run_id.clone();
         let spawn_model_role = preview_spec.model_plan.primary.clone();
+        let spawn_response_language = response_language.map(str::to_owned);
         let spawn_frontend_tx = frontend_tx.clone();
         tokio::spawn(async move {
             manager
@@ -699,6 +709,7 @@ impl AgentRunManager {
                     spawn_model_role,
                     history,
                     compact_instructions,
+                    spawn_response_language,
                     spawn_frontend_tx,
                 )
                 .await;
@@ -721,11 +732,17 @@ impl AgentRunManager {
         model_role: ResolvedModelRole,
         history: Vec<AgentMessage>,
         compact_instructions: Option<String>,
+        response_language: Option<String>,
         frontend_tx: broadcast::Sender<ThreadStreamEvent>,
     ) {
-        let summary_result =
-            generate_primary_summary(&model_role, &history, compact_instructions.as_deref(), None)
-                .await;
+        let summary_result = generate_primary_summary(
+            &model_role,
+            &history,
+            compact_instructions.as_deref(),
+            response_language.as_deref(),
+            None,
+        )
+        .await;
 
         let final_event = match summary_result {
             Ok(summary) => {
@@ -1504,6 +1521,8 @@ impl AgentRunManager {
             profile_id,
             frontend_tx,
             lightweight_model_role,
+            auxiliary_model_role,
+            primary_model_role,
             streaming_message_id,
             reasoning_message_id,
         ) = {
@@ -1516,6 +1535,8 @@ impl AgentRunManager {
                 run.profile_id.clone(),
                 run.frontend_tx.clone(),
                 run.lightweight_model_role.clone(),
+                run.auxiliary_model_role.clone(),
+                run.primary_model_role.clone(),
                 run.streaming_message_id.clone(),
                 run.reasoning_message_id.clone(),
             )
@@ -1565,6 +1586,8 @@ impl AgentRunManager {
                 profile_id,
                 frontend_tx,
                 lightweight_model_role,
+                auxiliary_model_role,
+                primary_model_role,
                 self.app_handle.clone(),
             );
         }
@@ -1579,16 +1602,23 @@ impl AgentRunManager {
         profile_id: Option<String>,
         frontend_tx: broadcast::Sender<ThreadStreamEvent>,
         lightweight_model_role: Option<ResolvedModelRole>,
+        auxiliary_model_role: Option<ResolvedModelRole>,
+        primary_model_role: Option<ResolvedModelRole>,
         app_handle: AppHandle,
     ) {
-        let Some(model_role) = lightweight_model_role else {
+        let candidates = build_title_model_candidates(
+            lightweight_model_role.as_ref(),
+            auxiliary_model_role.as_ref(),
+            primary_model_role.as_ref(),
+        );
+        if candidates.is_empty() {
             tracing::debug!(
                 run_id = %run_id,
                 thread_id = %thread_id,
-                "skipping thread title generation: no lightweight model configured"
+                "skipping thread title generation: no title model configured"
             );
             return;
-        };
+        }
 
         let pool = self.pool.clone();
         tokio::spawn(async move {
@@ -1597,7 +1627,7 @@ impl AgentRunManager {
                 &run_id,
                 &thread_id,
                 profile_id,
-                model_role,
+                &candidates,
                 frontend_tx,
                 app_handle,
             )
@@ -1728,35 +1758,46 @@ fn primary_summary_model(
     model_plan.primary.model.clone()
 }
 
-fn build_compact_summary_system_prompt() -> String {
-    [
-        "You compress conversation state so another model can continue after context reset.",
-        "Return only one compact summary block using the exact XML-style wrapper below.",
-        "",
-        "Requirements:",
-        "- Preserve the user's current goal and latest requested outcome.",
-        "- Preserve important constraints, preferences, and decisions.",
-        "- List work already completed and important findings.",
-        "- List the most relevant remaining tasks, open questions, or risks.",
-        "- Mention key files, components, commands, tools, or errors only when they matter for continuation.",
-        "- Be factual and concise. Do not invent details.",
-        "- Do not address the user directly. Do not include greetings or commentary.",
-        "- Prefer short bullet lists under clear section labels.",
-        "- Keep the summary self-contained and suitable for direct insertion into future model context.",
-        "",
-        "Output rules:",
-        "- Start with <context_summary> on its own line.",
-        "- End with </context_summary> on its own line.",
-        "- Do not output any text before or after the wrapper.",
-        "",
-        "Example output:",
-        "<context_summary>",
-        "- User goal: Stabilize /compact summary formatting.",
-        "- Completed: Checked current local summarization flow and wrapper handling.",
-        "- Remaining: Move compact rules into system prompt and keep output parsing robust.",
-        "</context_summary>",
-    ]
-    .join("\n")
+fn build_compact_summary_system_prompt(response_language: Option<&str>) -> String {
+    let mut lines = vec![
+        "You compress conversation state so another model can continue after context reset.".to_string(),
+        "Return only one compact summary block using the exact XML-style wrapper below.".to_string(),
+        String::new(),
+        "Requirements:".to_string(),
+        "- Preserve the user's current goal and latest requested outcome.".to_string(),
+        "- Preserve important constraints, preferences, and decisions.".to_string(),
+        "- List work already completed and important findings.".to_string(),
+        "- List the most relevant remaining tasks, open questions, or risks.".to_string(),
+        "- Mention key files, components, commands, tools, or errors only when they matter for continuation.".to_string(),
+        "- Be factual and concise. Do not invent details.".to_string(),
+        "- Do not address the user directly. Do not include greetings or commentary.".to_string(),
+        "- Prefer short bullet lists under clear section labels.".to_string(),
+        "- Keep the summary self-contained and suitable for direct insertion into future model context.".to_string(),
+    ];
+
+    if let Some(language) = normalize_profile_response_language(response_language) {
+        lines.push(format!(
+            "- Respond in {language} unless the user explicitly asks for a different language."
+        ));
+    }
+
+    lines.extend([
+        String::new(),
+        "Output rules:".to_string(),
+        "- Start with <context_summary> on its own line.".to_string(),
+        "- End with </context_summary> on its own line.".to_string(),
+        "- Do not output any text before or after the wrapper.".to_string(),
+        String::new(),
+        "Example output:".to_string(),
+        "<context_summary>".to_string(),
+        "- User goal: Stabilize /compact summary formatting.".to_string(),
+        "- Completed: Checked current local summarization flow and wrapper handling.".to_string(),
+        "- Remaining: Move compact rules into system prompt and keep output parsing robust."
+            .to_string(),
+        "</context_summary>".to_string(),
+    ]);
+
+    lines.join("\n")
 }
 
 fn build_compact_summary_messages(
@@ -1797,12 +1838,13 @@ pub(crate) async fn generate_primary_summary(
     model_role: &ResolvedModelRole,
     history: &[AgentMessage],
     instructions: Option<&str>,
+    response_language: Option<&str>,
     abort: Option<tiycore::agent::AbortSignal>,
 ) -> Result<String, AppError> {
     let max_history_chars = summary_history_char_budget(model_role);
     execute_summary_llm_call(
         model_role,
-        build_compact_summary_system_prompt(),
+        build_compact_summary_system_prompt(response_language),
         build_compact_summary_messages(history, instructions, max_history_chars),
         instructions,
         abort,
@@ -1943,30 +1985,47 @@ fn cancellation_error() -> AppError {
     )
 }
 
-fn build_merge_summary_system_prompt() -> String {
-    [
-        "You maintain a rolling context summary for another model to continue after context reset.",
-        "You will be given the PRIOR summary (already in <context_summary> form) and a DELTA of conversation",
-        "that happened after that summary was last produced. Produce a SINGLE updated <context_summary>",
-        "that merges both — keeping still-relevant facts from the prior summary and folding in new information",
-        "from the delta. Treat the prior summary as authoritative for anything it covers and do not drop",
-        "details that remain pertinent.",
-        "",
-        "Requirements:",
-        "- Preserve the user's current goal and most recent requested outcome.",
-        "- Retain important constraints, preferences, and decisions from the prior summary unless the delta",
-        "  explicitly supersedes them.",
-        "- Fold newly completed work, findings, key files/commands, and remaining tasks from the delta in.",
-        "- Drop items the delta marks resolved; add items the delta newly raises.",
-        "- Be factual and concise. Do not invent details. Do not address the user.",
-        "- Prefer short bullet lists under clear section labels.",
-        "",
-        "Output rules:",
-        "- Start with <context_summary> on its own line.",
-        "- End with </context_summary> on its own line.",
-        "- Do not output any text before or after the wrapper.",
-    ]
-    .join("\n")
+fn build_merge_summary_system_prompt(response_language: Option<&str>) -> String {
+    let mut lines = vec![
+        "You maintain a rolling context summary for another model to continue after context reset."
+            .to_string(),
+        "You will be given the PRIOR summary (already in <context_summary> form) and a DELTA of conversation"
+            .to_string(),
+        "that happened after that summary was last produced. Produce a SINGLE updated <context_summary>"
+            .to_string(),
+        "that merges both — keeping still-relevant facts from the prior summary and folding in new information"
+            .to_string(),
+        "from the delta. Treat the prior summary as authoritative for anything it covers and do not drop"
+            .to_string(),
+        "details that remain pertinent.".to_string(),
+        String::new(),
+        "Requirements:".to_string(),
+        "- Preserve the user's current goal and most recent requested outcome.".to_string(),
+        "- Retain important constraints, preferences, and decisions from the prior summary unless the delta"
+            .to_string(),
+        "  explicitly supersedes them.".to_string(),
+        "- Fold newly completed work, findings, key files/commands, and remaining tasks from the delta in."
+            .to_string(),
+        "- Drop items the delta marks resolved; add items the delta newly raises.".to_string(),
+        "- Be factual and concise. Do not invent details. Do not address the user.".to_string(),
+        "- Prefer short bullet lists under clear section labels.".to_string(),
+    ];
+
+    if let Some(language) = normalize_profile_response_language(response_language) {
+        lines.push(format!(
+            "- Respond in {language} unless the user explicitly asks for a different language."
+        ));
+    }
+
+    lines.extend([
+        String::new(),
+        "Output rules:".to_string(),
+        "- Start with <context_summary> on its own line.".to_string(),
+        "- End with </context_summary> on its own line.".to_string(),
+        "- Do not output any text before or after the wrapper.".to_string(),
+    ]);
+
+    lines.join("\n")
 }
 
 fn build_merge_summary_messages(
@@ -2013,12 +2072,13 @@ pub(crate) async fn generate_merge_summary(
     prior_summary: &str,
     delta_history: &[AgentMessage],
     instructions: Option<&str>,
+    response_language: Option<&str>,
     abort: Option<tiycore::agent::AbortSignal>,
 ) -> Result<String, AppError> {
     let max_history_chars = summary_history_char_budget(model_role);
     execute_summary_llm_call(
         model_role,
-        build_merge_summary_system_prompt(),
+        build_merge_summary_system_prompt(response_language),
         build_merge_summary_messages(
             prior_summary,
             delta_history,
@@ -2433,12 +2493,30 @@ fn append_compact_instructions(base_summary: String, instructions: Option<&str>)
     )
 }
 
+/// Build a deduplicated list of title model candidates in priority order:
+/// lightweight → auxiliary → primary.
+/// Skips candidates whose model_id is identical to an already-included one.
+fn build_title_model_candidates(
+    lightweight: Option<&ResolvedModelRole>,
+    auxiliary: Option<&ResolvedModelRole>,
+    primary: Option<&ResolvedModelRole>,
+) -> Vec<ResolvedModelRole> {
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for candidate in [lightweight, auxiliary, primary].into_iter().flatten() {
+        if seen.insert(candidate.model_id.clone()) {
+            result.push(candidate.clone());
+        }
+    }
+    result
+}
+
 async fn maybe_generate_thread_title(
     pool: &SqlitePool,
     run_id: &str,
     thread_id: &str,
     profile_id: Option<String>,
-    model_role: ResolvedModelRole,
+    candidates: &[ResolvedModelRole],
     frontend_tx: broadcast::Sender<ThreadStreamEvent>,
     app_handle: AppHandle,
 ) -> Result<(), AppError> {
@@ -2451,16 +2529,15 @@ async fn maybe_generate_thread_title(
         return Ok(());
     }
 
-    let Some((user_message, assistant_message)) =
-        load_initial_title_context(pool, thread_id).await?
-    else {
+    let context_messages = load_title_context_messages(pool, thread_id).await?;
+    if context_messages.is_empty() {
         tracing::debug!(
             run_id = %run_id,
             thread_id = %thread_id,
-            "skipping thread title generation: could not load initial title context"
+            "skipping thread title generation: no user/assistant messages in current context"
         );
         return Ok(());
-    };
+    }
 
     let profile = match profile_id {
         Some(profile_id) => profile_repo::find_by_id(pool, &profile_id).await?,
@@ -2475,93 +2552,103 @@ async fn maybe_generate_thread_title(
             .and_then(|profile| profile.response_style.as_deref()),
     );
 
-    let Some(title) = generate_thread_title(
-        &model_role,
-        &user_message,
-        &assistant_message,
-        response_language.as_deref(),
-        response_style,
-    )
-    .await?
-    else {
-        tracing::warn!(
-            run_id = %run_id,
-            thread_id = %thread_id,
-            "thread title generation returned empty result (timeout or empty response)"
-        );
-        return Ok(());
-    };
+    let mut last_error: Option<AppError> = None;
+    for model_role in candidates {
+        match generate_thread_title(
+            model_role,
+            &context_messages,
+            response_language.as_deref(),
+            response_style,
+        )
+        .await
+        {
+            Ok(Some(title)) => {
+                thread_repo::update_title(pool, thread_id, &title).await?;
 
-    thread_repo::update_title(pool, thread_id, &title).await?;
+                tracing::info!(
+                    run_id = %run_id,
+                    thread_id = %thread_id,
+                    title = %title,
+                    "generated thread title, sending to frontend"
+                );
 
-    tracing::info!(
-        run_id = %run_id,
-        thread_id = %thread_id,
-        title = %title,
-        "generated thread title, sending to frontend"
-    );
+                // Broadcast a global event so the sidebar can pick up the new title even
+                // when no per-run stream subscription exists (e.g. inactive threads).
+                let _ = app_handle.emit(
+                    app_events::THREAD_TITLE_UPDATED,
+                    ThreadTitleUpdatedPayload {
+                        thread_id: thread_id.to_string(),
+                        title: title.clone(),
+                    },
+                );
 
-    // Broadcast a global event so the sidebar can pick up the new title even
-    // when no per-run stream subscription exists (e.g. inactive threads).
-    let _ = app_handle.emit(
-        app_events::THREAD_TITLE_UPDATED,
-        ThreadTitleUpdatedPayload {
-            thread_id: thread_id.to_string(),
-            title: title.clone(),
-        },
-    );
+                if frontend_tx
+                    .send(ThreadStreamEvent::ThreadTitleUpdated {
+                        run_id: run_id.to_string(),
+                        thread_id: thread_id.to_string(),
+                        title,
+                    })
+                    .is_err()
+                {
+                    tracing::warn!(
+                        run_id = %run_id,
+                        thread_id = %thread_id,
+                        "failed to send ThreadTitleUpdated event: frontend channel closed"
+                    );
+                }
 
-    if frontend_tx
-        .send(ThreadStreamEvent::ThreadTitleUpdated {
-            run_id: run_id.to_string(),
-            thread_id: thread_id.to_string(),
-            title,
-        })
-        .is_err()
-    {
-        tracing::warn!(
-            run_id = %run_id,
-            thread_id = %thread_id,
-            "failed to send ThreadTitleUpdated event: frontend channel closed"
-        );
+                return Ok(());
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    run_id = %run_id,
+                    thread_id = %thread_id,
+                    model_id = %model_role.model_id,
+                    "title generation returned empty result (timeout or empty response)"
+                );
+                last_error = Some(AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.regenerate_title.empty",
+                    "Title generation returned empty or timed out.",
+                ));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    run_id = %run_id,
+                    thread_id = %thread_id,
+                    model_id = %model_role.model_id,
+                    error = %e,
+                    "title generation failed"
+                );
+                last_error = Some(e);
+            }
+        }
+    }
+
+    if let Some(e) = last_error {
+        return Err(e);
     }
 
     Ok(())
 }
 
-async fn load_initial_title_context(
+async fn load_title_context_messages(
     pool: &SqlitePool,
     thread_id: &str,
-) -> Result<Option<(String, String)>, AppError> {
-    let messages = message_repo::list_recent(pool, thread_id, None, 12).await?;
-    let first_user_message = messages
-        .iter()
-        .find(|message| message.role == "user" && message.message_type == "plain_message")
-        .map(|message| message.content_markdown.trim())
-        .filter(|content| !content.is_empty());
-    let first_assistant_message = messages
-        .iter()
-        .find(|message| {
-            message.role == "assistant"
-                && message.message_type == "plain_message"
-                && message.status == "completed"
+) -> Result<Vec<MessageRecord>, AppError> {
+    let messages = message_repo::list_since_last_reset(pool, thread_id).await?;
+    let filtered: Vec<MessageRecord> = messages
+        .into_iter()
+        .filter(|m| {
+            m.message_type == "plain_message" && (m.role == "user" || m.role == "assistant")
         })
-        .map(|message| message.content_markdown.trim())
-        .filter(|content| !content.is_empty());
-
-    match (first_user_message, first_assistant_message) {
-        (Some(user_message), Some(assistant_message)) => Ok(Some((
-            truncate_chars(user_message, TITLE_CONTEXT_MAX_CHARS),
-            truncate_chars(assistant_message, TITLE_CONTEXT_MAX_CHARS),
-        ))),
-        _ => Ok(None),
-    }
+        .collect();
+    Ok(filtered)
 }
 
 async fn generate_thread_title(
     model_role: &ResolvedModelRole,
-    user_message: &str,
-    assistant_message: &str,
+    messages: &[MessageRecord],
     response_language: Option<&str>,
     response_style: ProfileResponseStyle,
 ) -> Result<Option<String>, AppError> {
@@ -2592,12 +2679,7 @@ async fn generate_thread_title(
         )
     })?;
 
-    let prompt = build_title_prompt(
-        user_message,
-        assistant_message,
-        response_language,
-        response_style,
-    );
+    let prompt = build_title_prompt_from_messages(messages, response_language, response_style);
     let context = TiyContext {
         system_prompt: Some(
             "You write concise conversation titles. Return only the title text.".to_string(),
@@ -2644,6 +2726,54 @@ async fn generate_thread_title(
     Ok(normalize_generated_title(&message.text_content()))
 }
 
+pub(crate) fn build_title_prompt_from_messages(
+    messages: &[MessageRecord],
+    response_language: Option<&str>,
+    response_style: ProfileResponseStyle,
+) -> String {
+    let language_rule = match response_language {
+        Some(language) => format!("- Write the title in {language}."),
+        None => "- Match the conversation language.".to_string(),
+    };
+    let style_rule = match response_style {
+        ProfileResponseStyle::Balanced => {
+            "- Keep the title clear and natural, with enough specificity to scan quickly."
+        }
+        ProfileResponseStyle::Concise => {
+            "- Keep the title especially terse, direct, and low-friction."
+        }
+        ProfileResponseStyle::Guide => {
+            "- Prefer a title that signals the user's goal or decision focus clearly."
+        }
+    };
+
+    let mut conversation = String::new();
+    // Messages are in chronological order (oldest first); iterate in reverse
+    // so the newest messages appear first in the prompt.
+    for msg in messages.iter().rev() {
+        let role_label = if msg.role == "user" {
+            "User"
+        } else {
+            "Assistant"
+        };
+        let content = truncate_chars(msg.content_markdown.trim(), TITLE_CONTEXT_MAX_CHARS);
+        conversation.push_str(&format!("{role_label}:\n{content}\n\n"));
+    }
+
+    format!(
+        "Create a short thread title for this conversation.\n\
+Rules:\n\
+{language_rule}\n\
+{style_rule}\n\
+- Prefer concrete nouns and actions.\n\
+- Max 18 Chinese characters or 7 English words.\n\
+- No quotes, no markdown, no prefixes.\n\
+\n\
+Conversation:\n{conversation}"
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn build_title_prompt(
     user_message: &str,
     assistant_message: &str,
@@ -2784,10 +2914,10 @@ mod tests {
         append_compact_instructions, await_summary_with_abort, build_compact_summary_messages,
         build_compact_summary_system_prompt, build_implementation_handoff_prompt,
         build_merge_summary_messages, build_merge_summary_system_prompt,
-        build_orphaned_run_terminal_event, build_title_prompt, collapse_whitespace,
-        detect_prior_summary, extract_context_summary_block,
-        mark_thread_run_cancellation_requested, normalize_compact_summary,
-        normalize_generated_title, render_compact_summary_history,
+        build_orphaned_run_terminal_event, build_title_model_candidates, build_title_prompt,
+        build_title_prompt_from_messages, collapse_whitespace, detect_prior_summary,
+        extract_context_summary_block, mark_thread_run_cancellation_requested,
+        normalize_compact_summary, normalize_generated_title, render_compact_summary_history,
         should_complete_reasoning_for_event, summary_history_char_budget, terminal_event_status,
         truncate_chars, truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
         SUMMARY_HISTORY_MIN_CHARS, SUMMARY_TOOL_RESULT_MAX_CHARS,
@@ -2797,6 +2927,7 @@ mod tests {
         build_plan_artifact_from_tool_input, build_plan_message_metadata, PlanApprovalAction,
     };
     use crate::ipc::frontend_channels::ThreadStreamEvent;
+    use crate::model::thread::MessageRecord;
     use std::collections::HashMap;
     use tiycore::agent::AgentMessage;
     use tiycore::types::{Message as TiyMessage, UserMessage};
@@ -2822,6 +2953,8 @@ mod tests {
                 profile_id: None,
                 frontend_tx,
                 lightweight_model_role: None,
+                auxiliary_model_role: None,
+                primary_model_role: None,
                 streaming_message_id: None,
                 reasoning_message_id: None,
                 cancellation_requested: false,
@@ -2859,6 +2992,8 @@ mod tests {
             profile_id: None,
             frontend_tx,
             lightweight_model_role: None,
+            auxiliary_model_role: None,
+            primary_model_role: None,
             streaming_message_id: None,
             reasoning_message_id: None,
             cancellation_requested: false,
@@ -3052,13 +3187,22 @@ mod tests {
 
     #[test]
     fn compact_summary_system_prompt_includes_wrapper_example() {
-        let prompt = build_compact_summary_system_prompt();
+        let prompt = build_compact_summary_system_prompt(None);
 
         assert!(prompt.contains("Output rules:"));
         assert!(prompt.contains("Do not output any text before or after the wrapper."));
         assert!(prompt.contains("Example output:"));
         assert!(prompt.contains("<context_summary>"));
         assert!(prompt.contains("</context_summary>"));
+    }
+
+    #[test]
+    fn compact_summary_system_prompt_uses_response_language_when_present() {
+        let prompt = build_compact_summary_system_prompt(Some(" 简体中文 "));
+
+        assert!(prompt.contains(
+            "Respond in 简体中文 unless the user explicitly asks for a different language."
+        ));
     }
 
     #[test]
@@ -3142,6 +3286,68 @@ mod tests {
 
         assert!(prompt.contains("Write the title in Japanese."));
         assert!(prompt.contains("signals the user's goal or decision focus clearly"));
+    }
+
+    #[test]
+    fn title_prompt_from_messages_renders_newest_messages_first() {
+        let messages = vec![
+            MessageRecord {
+                id: "msg-1".into(),
+                thread_id: "thread-1".into(),
+                run_id: None,
+                role: "user".into(),
+                content_markdown: "oldest user message".into(),
+                message_type: "plain_message".into(),
+                status: "completed".into(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-2".into(),
+                thread_id: "thread-1".into(),
+                run_id: None,
+                role: "assistant".into(),
+                content_markdown: "newer assistant reply".into(),
+                message_type: "plain_message".into(),
+                status: "completed".into(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-3".into(),
+                thread_id: "thread-1".into(),
+                run_id: None,
+                role: "user".into(),
+                content_markdown: "newest user follow-up".into(),
+                message_type: "plain_message".into(),
+                status: "completed".into(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: String::new(),
+            },
+        ];
+
+        let prompt = build_title_prompt_from_messages(
+            &messages,
+            Some("English"),
+            ProfileResponseStyle::Balanced,
+        );
+
+        let newest_idx = prompt
+            .find("User:\nnewest user follow-up")
+            .expect("newest message should be present");
+        let older_idx = prompt
+            .find("Assistant:\nnewer assistant reply")
+            .expect("older assistant message should be present");
+        let oldest_idx = prompt
+            .find("User:\noldest user message")
+            .expect("oldest message should be present");
+
+        assert!(newest_idx < older_idx);
+        assert!(older_idx < oldest_idx);
+        assert!(prompt.contains("Write the title in English."));
     }
 
     #[test]
@@ -3274,11 +3480,27 @@ mod tests {
 
     #[test]
     fn merge_summary_system_prompt_explains_the_merge_contract() {
-        let prompt = build_merge_summary_system_prompt();
+        let prompt = build_merge_summary_system_prompt(None);
         assert!(prompt.contains("PRIOR summary"));
         assert!(prompt.contains("DELTA"));
         assert!(prompt.contains("<context_summary>"));
         assert!(prompt.contains("</context_summary>"));
+    }
+
+    #[test]
+    fn merge_summary_system_prompt_uses_response_language_when_present() {
+        let prompt = build_merge_summary_system_prompt(Some("Japanese"));
+
+        assert!(prompt.contains(
+            "Respond in Japanese unless the user explicitly asks for a different language."
+        ));
+    }
+
+    #[test]
+    fn merge_summary_system_prompt_ignores_blank_response_language() {
+        let prompt = build_merge_summary_system_prompt(Some("   "));
+
+        assert!(!prompt.contains("Respond in"));
     }
 
     #[test]
@@ -3690,6 +3912,149 @@ mod tests {
             provider_options: None,
             model,
         }
+    }
+
+    fn model_role_with_id(model_id: &str) -> ResolvedModelRole {
+        let mut role = model_role_with(128_000, false);
+        role.model_id = model_id.to_string();
+        role.model_name = model_id.to_string();
+        role.model = tiycore::types::Model::builder()
+            .id(model_id)
+            .name(model_id)
+            .provider(tiycore::types::Provider::OpenAI)
+            .base_url("https://api.openai.com/v1")
+            .context_window(128_000)
+            .max_tokens(32_000)
+            .input(vec![tiycore::types::InputType::Text])
+            .cost(tiycore::types::Cost::default())
+            .reasoning(false)
+            .build()
+            .expect("sample model with custom id");
+        role
+    }
+
+    #[test]
+    fn build_title_model_candidates_prefers_priority_order() {
+        let lightweight = model_role_with_id("lite");
+        let auxiliary = model_role_with_id("aux");
+        let primary = model_role_with_id("primary");
+
+        let candidates =
+            build_title_model_candidates(Some(&lightweight), Some(&auxiliary), Some(&primary));
+
+        let ids: Vec<&str> = candidates
+            .iter()
+            .map(|role| role.model_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["lite", "aux", "primary"]);
+    }
+
+    #[test]
+    fn build_title_model_candidates_skips_missing_entries() {
+        let auxiliary = model_role_with_id("aux");
+        let primary = model_role_with_id("primary");
+
+        let candidates = build_title_model_candidates(None, Some(&auxiliary), Some(&primary));
+
+        let ids: Vec<&str> = candidates
+            .iter()
+            .map(|role| role.model_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["aux", "primary"]);
+    }
+
+    #[test]
+    fn build_title_model_candidates_returns_empty_when_all_missing() {
+        let candidates = build_title_model_candidates(None, None, None);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn build_title_model_candidates_deduplicates_same_model_id() {
+        let lightweight = model_role_with_id("shared");
+        let auxiliary = model_role_with_id("shared");
+        let primary = model_role_with_id("primary");
+
+        let candidates =
+            build_title_model_candidates(Some(&lightweight), Some(&auxiliary), Some(&primary));
+
+        let ids: Vec<&str> = candidates
+            .iter()
+            .map(|role| role.model_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["shared", "primary"]);
+    }
+
+    #[test]
+    fn title_prompt_from_messages_matches_conversation_language_when_none() {
+        let messages = vec![MessageRecord {
+            id: "msg-1".into(),
+            thread_id: "thread-1".into(),
+            run_id: None,
+            role: "user".into(),
+            content_markdown: "请帮我分析标题生成策略".into(),
+            message_type: "plain_message".into(),
+            status: "completed".into(),
+            metadata_json: None,
+            attachments_json: None,
+            created_at: String::new(),
+        }];
+
+        let prompt =
+            build_title_prompt_from_messages(&messages, None, ProfileResponseStyle::Balanced);
+
+        assert!(prompt.contains("Match the conversation language."));
+        assert!(prompt.contains("Keep the title clear and natural"));
+    }
+
+    #[test]
+    fn title_prompt_from_messages_includes_concise_style_rule() {
+        let messages = vec![MessageRecord {
+            id: "msg-1".into(),
+            thread_id: "thread-1".into(),
+            run_id: None,
+            role: "user".into(),
+            content_markdown: "Need a short title".into(),
+            message_type: "plain_message".into(),
+            status: "completed".into(),
+            metadata_json: None,
+            attachments_json: None,
+            created_at: String::new(),
+        }];
+
+        let prompt = build_title_prompt_from_messages(
+            &messages,
+            Some("English"),
+            ProfileResponseStyle::Concise,
+        );
+
+        assert!(prompt.contains("Write the title in English."));
+        assert!(prompt.contains("especially terse, direct, and low-friction"));
+    }
+
+    #[test]
+    fn title_prompt_from_messages_includes_guide_style_rule() {
+        let messages = vec![MessageRecord {
+            id: "msg-1".into(),
+            thread_id: "thread-1".into(),
+            run_id: None,
+            role: "assistant".into(),
+            content_markdown: "Let's decide whether to keep fallback behavior.".into(),
+            message_type: "plain_message".into(),
+            status: "completed".into(),
+            metadata_json: None,
+            attachments_json: None,
+            created_at: String::new(),
+        }];
+
+        let prompt = build_title_prompt_from_messages(
+            &messages,
+            Some("English"),
+            ProfileResponseStyle::Guide,
+        );
+
+        assert!(prompt.contains("Write the title in English."));
+        assert!(prompt.contains("signals the user's goal or decision focus clearly"));
     }
 
     #[test]

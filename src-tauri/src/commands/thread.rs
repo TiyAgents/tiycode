@@ -7,20 +7,29 @@ use tiycore::types::{
 };
 
 use crate::core::agent_run_manager::{
-    build_provider_options_payload_hook, normalize_generated_title, truncate_chars,
-    TITLE_CONTEXT_MAX_CHARS, TITLE_GENERATION_MAX_TOKENS, TITLE_GENERATION_MAX_TOKENS_REASONING,
+    build_provider_options_payload_hook, build_title_prompt_from_messages,
+    normalize_generated_title, TITLE_GENERATION_MAX_TOKENS, TITLE_GENERATION_MAX_TOKENS_REASONING,
     TITLE_GENERATION_TIMEOUT,
 };
+#[cfg(test)]
+use crate::core::agent_run_manager::{truncate_chars, TITLE_CONTEXT_MAX_CHARS};
+#[cfg(test)]
+use crate::core::agent_session::ProfileResponseStyle;
 use crate::core::agent_session::{
     normalize_profile_response_language, normalize_profile_response_style,
-    resolve_runtime_model_role, ProfileResponseStyle, RuntimeModelPlan, RuntimeModelRole,
+    resolve_runtime_model_role, RuntimeModelPlan, RuntimeModelRole,
 };
 use crate::core::app_state::AppState;
 use crate::core::tiycode_default_headers;
 use crate::core::tiycode_url_policy;
 use crate::model::errors::{AppError, ErrorSource};
-use crate::model::thread::{AddMessageInput, MessageDto, ThreadSnapshotDto, ThreadSummaryDto};
+use crate::model::thread::{
+    AddMessageInput, MessageDto, MessageRecord, ThreadSnapshotDto, ThreadSummaryDto,
+};
 use crate::persistence::repo::{message_repo, profile_repo};
+
+const MANUAL_TITLE_CONTEXT_MESSAGE_LIMIT: usize = 128;
+const MANUAL_TITLE_RELEVANT_MESSAGE_LIMIT: usize = 24;
 
 #[tauri::command]
 pub async fn thread_list(
@@ -123,12 +132,16 @@ pub async fn thread_regenerate_title(
             format!("Invalid model plan for title generation: {e}"),
         )
     })?;
-    let selected_model = select_title_model_role(&raw_plan)?;
-    let mut model_role = resolve_runtime_model_role(&state.pool, selected_model).await?;
 
-    // Disable reasoning for lightweight title generation.
-    let was_reasoning = model_role.model.reasoning;
-    model_role.model.reasoning = false;
+    // Build deduplicated candidates: lightweight → auxiliary → primary.
+    let candidates = select_title_model_roles(&raw_plan);
+    if candidates.is_empty() {
+        return Err(AppError::recoverable(
+            ErrorSource::Settings,
+            "settings.title.model_missing",
+            "Select an enabled lightweight, auxiliary, or primary model in the current profile before generating a title.",
+        ));
+    }
 
     // Load the profile to resolve language/style preferences.
     let profile = match raw_plan.profile_id {
@@ -142,19 +155,18 @@ pub async fn thread_regenerate_title(
         profile.as_ref().and_then(|p| p.response_style.as_deref()),
     );
 
-    // Load the most recent 5 plain messages for context.
-    // `list_recent` returns messages in reverse-chronological order (newest first).
-    // We filter and take 5, then reverse in the prompt to show chronological order.
-    let messages = message_repo::list_recent(&state.pool, &thread_id, None, 10).await?;
-    let relevant: Vec<_> = messages
-        .iter()
-        .filter(|m| {
-            m.message_type == "plain_message" && (m.role == "user" || m.role == "assistant")
-        })
-        .take(5)
-        .collect();
+    // Load the current context using the DB-backed reset boundary semantics,
+    // then restrict manual regeneration to the last 128 messages and finally
+    // the last 24 user/assistant plain messages.
+    let context_messages = message_repo::list_since_last_reset(&state.pool, &thread_id).await?;
+    let recent_context_messages =
+        collect_recent_messages(&context_messages, MANUAL_TITLE_CONTEXT_MESSAGE_LIMIT);
+    let recent_relevant = collect_recent_title_context_messages(
+        recent_context_messages,
+        MANUAL_TITLE_RELEVANT_MESSAGE_LIMIT,
+    );
 
-    if relevant.is_empty() {
+    if recent_relevant.is_empty() {
         return Err(AppError::recoverable(
             ErrorSource::Thread,
             "thread.regenerate_title.no_messages",
@@ -162,91 +174,169 @@ pub async fn thread_regenerate_title(
         ));
     }
 
-    let prompt =
-        build_regenerate_title_prompt(&relevant, response_language.as_deref(), response_style);
+    let prompt = build_title_prompt_from_messages(
+        &recent_relevant,
+        response_language.as_deref(),
+        response_style,
+    );
 
-    let provider = get_provider(&model_role.model.provider).ok_or_else(|| {
-        AppError::recoverable(
-            ErrorSource::Settings,
-            "settings.title.provider_missing",
-            format!(
-                "Provider type '{:?}' is not registered for title generation.",
-                model_role.model.provider
-            ),
-        )
-    })?;
+    // Try each candidate in order; skip duplicates.
+    let mut tried_model_ids = std::collections::HashSet::new();
+    let mut last_error: Option<AppError> = None;
 
-    let context = TiyContext {
-        system_prompt: Some(
-            "You write concise conversation titles. Return only the title text.".to_string(),
-        ),
-        messages: vec![TiyMessage::User(UserMessage::text(prompt))],
-        tools: None,
-    };
+    for candidate in &candidates {
+        let mut model_role = match resolve_runtime_model_role(&state.pool, candidate.clone()).await
+        {
+            Ok(role) => role,
+            Err(e) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    model_id = %candidate.model_id,
+                    error = %e,
+                    "failed to resolve title model role"
+                );
+                last_error = Some(e);
+                continue;
+            }
+        };
 
-    let options = TiyStreamOptions {
-        api_key: model_role.api_key.clone(),
-        max_tokens: Some(if was_reasoning {
-            TITLE_GENERATION_MAX_TOKENS_REASONING
-        } else {
-            TITLE_GENERATION_MAX_TOKENS
-        }),
-        headers: Some(tiycode_default_headers()),
-        on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
-        security: Some(tiycore::types::SecurityConfig::default().with_url(tiycode_url_policy())),
-        ..TiyStreamOptions::default()
-    };
-
-    let completion = provider
-        .stream(&model_role.model, &context, options)
-        .try_result(TITLE_GENERATION_TIMEOUT)
-        .await;
-
-    let message = match completion {
-        Some(msg) => msg,
-        None => {
-            return Err(AppError::recoverable(
-                ErrorSource::Thread,
-                "thread.regenerate_title.timeout",
-                "Title generation timed out or returned no result.",
-            ))
+        if !tried_model_ids.insert(model_role.model_id.clone()) {
+            continue;
         }
-    };
 
-    if message.stop_reason == tiycore::types::StopReason::Error {
-        return Err(AppError::recoverable(
-            ErrorSource::Thread,
-            "thread.regenerate_title.model_error",
-            "The model returned an error during title generation.",
-        ));
-    }
+        // Disable reasoning for lightweight title generation.
+        let was_reasoning = model_role.model.reasoning;
+        model_role.model.reasoning = false;
 
-    let title = normalize_generated_title(&message.text_content()).ok_or_else(|| {
-        AppError::recoverable(
+        let provider = match get_provider(&model_role.model.provider) {
+            Some(p) => p,
+            None => {
+                last_error = Some(AppError::recoverable(
+                    ErrorSource::Settings,
+                    "settings.title.provider_missing",
+                    format!(
+                        "Provider type '{:?}' is not registered for title generation.",
+                        model_role.model.provider
+                    ),
+                ));
+                continue;
+            }
+        };
+
+        let context = TiyContext {
+            system_prompt: Some(
+                "You write concise conversation titles. Return only the title text.".to_string(),
+            ),
+            messages: vec![TiyMessage::User(UserMessage::text(prompt.clone()))],
+            tools: None,
+        };
+
+        let options = TiyStreamOptions {
+            api_key: model_role.api_key.clone(),
+            max_tokens: Some(if was_reasoning {
+                TITLE_GENERATION_MAX_TOKENS_REASONING
+            } else {
+                TITLE_GENERATION_MAX_TOKENS
+            }),
+            headers: Some(tiycode_default_headers()),
+            on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
+            security: Some(
+                tiycore::types::SecurityConfig::default().with_url(tiycode_url_policy()),
+            ),
+            ..TiyStreamOptions::default()
+        };
+
+        let completion = provider
+            .stream(&model_role.model, &context, options)
+            .try_result(TITLE_GENERATION_TIMEOUT)
+            .await;
+
+        let message = match completion {
+            Some(msg) => msg,
+            None => {
+                last_error = Some(AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.regenerate_title.timeout",
+                    "Title generation timed out or returned no result.",
+                ));
+                continue;
+            }
+        };
+
+        if message.stop_reason == tiycore::types::StopReason::Error {
+            last_error = Some(AppError::recoverable(
+                ErrorSource::Thread,
+                "thread.regenerate_title.model_error",
+                "The model returned an error during title generation.",
+            ));
+            continue;
+        }
+
+        if let Some(title) = normalize_generated_title(&message.text_content()) {
+            return Ok(title);
+        }
+
+        last_error = Some(AppError::recoverable(
             ErrorSource::Thread,
             "thread.regenerate_title.empty",
             "The model returned an empty or unusable title.",
+        ));
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.regenerate_title.failed",
+            "All title generation candidates failed.",
         )
-    })?;
-
-    Ok(title)
+    }))
 }
 
-fn select_title_model_role(raw_plan: &RuntimeModelPlan) -> Result<RuntimeModelRole, AppError> {
-    raw_plan
-        .lightweight
-        .clone()
-        .or_else(|| raw_plan.auxiliary.clone())
-        .or_else(|| raw_plan.primary.clone())
-        .ok_or_else(|| {
-            AppError::recoverable(
-                ErrorSource::Settings,
-                "settings.title.model_missing",
-                "Select an enabled lightweight, auxiliary, or primary model in the current profile before generating a title.",
-            )
+fn collect_recent_messages(messages: &[MessageRecord], limit: usize) -> &[MessageRecord] {
+    let start = messages.len().saturating_sub(limit);
+    &messages[start..]
+}
+
+fn collect_recent_title_context_messages(
+    messages: &[MessageRecord],
+    limit: usize,
+) -> Vec<MessageRecord> {
+    let relevant: Vec<&MessageRecord> = messages
+        .iter()
+        .filter(|message| {
+            message.message_type == "plain_message"
+                && (message.role == "user" || message.role == "assistant")
         })
+        .collect();
+    let start = relevant.len().saturating_sub(limit);
+    relevant[start..]
+        .iter()
+        .map(|message| (*message).clone())
+        .collect()
 }
 
+/// Select title model candidates with fallback and deduplication.
+/// Fallback order: lightweight → auxiliary → primary.
+/// Skips candidates whose model_id matches an already-selected one.
+fn select_title_model_roles(raw_plan: &RuntimeModelPlan) -> Vec<RuntimeModelRole> {
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for candidate in [
+        raw_plan.lightweight.as_ref(),
+        raw_plan.auxiliary.as_ref(),
+        raw_plan.primary.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if seen.insert(candidate.model_id.clone()) {
+            result.push(candidate.clone());
+        }
+    }
+    result
+}
+
+#[cfg(test)]
 fn build_regenerate_title_prompt(
     messages: &[&crate::model::thread::MessageRecord],
     response_language: Option<&str>,
@@ -325,7 +415,7 @@ mod tests {
             run_id: None,
             role: role.into(),
             content_markdown: content.into(),
-            message_type: "message".into(),
+            message_type: "plain_message".into(),
             status: "completed".into(),
             metadata_json: None,
             attachments_json: None,
@@ -334,46 +424,121 @@ mod tests {
     }
 
     #[test]
-    fn select_title_model_role_prefers_lightweight() {
+    fn collect_recent_title_context_messages_keeps_tail_in_chronological_order() {
+        let messages = vec![
+            dummy_message("user", "m1"),
+            dummy_message("assistant", "m2"),
+            MessageRecord {
+                id: "marker".into(),
+                thread_id: "t1".into(),
+                run_id: None,
+                role: "system".into(),
+                content_markdown: "summary".into(),
+                message_type: "summary_marker".into(),
+                status: "completed".into(),
+                metadata_json: Some(serde_json::json!({ "kind": "context_summary" }).to_string()),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+            dummy_message("user", "m3"),
+            dummy_message("assistant", "m4"),
+        ];
+
+        let recent = collect_recent_title_context_messages(&messages, 3);
+        let contents: Vec<&str> = recent
+            .iter()
+            .map(|message| message.content_markdown.as_str())
+            .collect();
+
+        assert_eq!(contents, vec!["m2", "m3", "m4"]);
+    }
+
+    #[test]
+    fn collect_recent_title_context_messages_ignores_non_user_assistant_messages() {
+        let messages = vec![
+            dummy_message("user", "u1"),
+            MessageRecord {
+                id: "tool".into(),
+                thread_id: "t1".into(),
+                run_id: None,
+                role: "tool".into(),
+                content_markdown: "tool output".into(),
+                message_type: "plain_message".into(),
+                status: "completed".into(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+            dummy_message("assistant", "a1"),
+        ];
+
+        let recent = collect_recent_title_context_messages(&messages, 24);
+        let roles: Vec<&str> = recent.iter().map(|message| message.role.as_str()).collect();
+
+        assert_eq!(roles, vec!["user", "assistant"]);
+    }
+
+    #[test]
+    fn select_title_model_roles_prefers_lightweight() {
         let plan = RuntimeModelPlan {
             lightweight: Some(dummy_model_role("lite")),
             auxiliary: Some(dummy_model_role("aux")),
             primary: Some(dummy_model_role("primary")),
             ..Default::default()
         };
-        let role = select_title_model_role(&plan).unwrap();
-        assert_eq!(role.model, "lite");
+        let roles = select_title_model_roles(&plan);
+        assert_eq!(roles.len(), 3);
+        assert_eq!(roles[0].model, "lite");
+        assert_eq!(roles[1].model, "aux");
+        assert_eq!(roles[2].model, "primary");
     }
 
     #[test]
-    fn select_title_model_role_falls_back_to_auxiliary() {
+    fn select_title_model_roles_falls_back_to_auxiliary() {
         let plan = RuntimeModelPlan {
             lightweight: None,
             auxiliary: Some(dummy_model_role("aux")),
             primary: Some(dummy_model_role("primary")),
             ..Default::default()
         };
-        let role = select_title_model_role(&plan).unwrap();
-        assert_eq!(role.model, "aux");
+        let roles = select_title_model_roles(&plan);
+        assert_eq!(roles.len(), 2);
+        assert_eq!(roles[0].model, "aux");
+        assert_eq!(roles[1].model, "primary");
     }
 
     #[test]
-    fn select_title_model_role_falls_back_to_primary() {
+    fn select_title_model_roles_falls_back_to_primary() {
         let plan = RuntimeModelPlan {
             lightweight: None,
             auxiliary: None,
             primary: Some(dummy_model_role("primary")),
             ..Default::default()
         };
-        let role = select_title_model_role(&plan).unwrap();
-        assert_eq!(role.model, "primary");
+        let roles = select_title_model_roles(&plan);
+        assert_eq!(roles.len(), 1);
+        assert_eq!(roles[0].model, "primary");
     }
 
     #[test]
-    fn select_title_model_role_errors_when_all_missing() {
+    fn select_title_model_roles_returns_empty_when_all_missing() {
         let plan = RuntimeModelPlan::default();
-        let result = select_title_model_role(&plan);
-        assert!(result.is_err());
+        let roles = select_title_model_roles(&plan);
+        assert!(roles.is_empty());
+    }
+
+    #[test]
+    fn select_title_model_roles_skips_duplicate_model_ids() {
+        let plan = RuntimeModelPlan {
+            lightweight: Some(dummy_model_role("shared")),
+            auxiliary: Some(dummy_model_role("shared")),
+            primary: Some(dummy_model_role("unique")),
+            ..Default::default()
+        };
+        let roles = select_title_model_roles(&plan);
+        assert_eq!(roles.len(), 2);
+        assert_eq!(roles[0].model, "shared");
+        assert_eq!(roles[1].model, "unique");
     }
 
     #[test]
