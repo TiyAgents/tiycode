@@ -819,6 +819,7 @@ const zhCN = {
   "worktree.field.selectBranch": "选择分支",
   "worktree.field.selectBranchHint": "将检出此已有分支到新 worktree",
   "worktree.error.selectBranch": "请选择一个分支",
+  "contextCompressing": "正在压缩上下文…",
 } as const;
 
 export type TranslationKey = keyof typeof zhCN;

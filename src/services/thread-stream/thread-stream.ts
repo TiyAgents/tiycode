@@ -17,6 +17,7 @@
 
 import {
   threadCancelRun,
+  threadCompactContext,
   threadExecuteApprovedPlan,
   threadStartRun,
   threadSubscribeRun,
@@ -160,6 +161,7 @@ export class ThreadStream {
   onToolEvent: ((event: ToolEvent) => void) | null = null;
   onApproval: ((event: ApprovalEvent) => void) | null = null;
   onRunStateChange: ((state: RunState, runId: string) => void) | null = null;
+  onContextCompressing: ((runId: string) => void) | null = null;
   onPlan: ((event: PlanEvent) => void) | null = null;
   onReasoning: ((event: ReasoningEvent) => void) | null = null;
   onQueue: ((event: QueueEvent) => void) | null = null;
@@ -288,6 +290,47 @@ export class ThreadStream {
   }
 
   /**
+   * Kick off a manual `/compact` and route its ThreadStreamEvents through
+   * the same pipeline as a regular run. Unlike `startRun`, the backend
+   * performs the LLM summary in a spawned task; events like
+   * `context_compressing` and `run_completed` arrive asynchronously so the
+   * UI can show the "Compressing context…" thinking placeholder and a
+   * running thread state.
+   */
+  async compactContext(
+    threadId: string,
+    instructions: string | null,
+    modelPlan: RunModelPlanDto | null,
+  ): Promise<string> {
+    try {
+      const runId = await threadCompactContext(
+        threadId,
+        instructions,
+        modelPlan,
+        (event) => {
+          if (this.disposed) {
+            return;
+          }
+          this.handleEvent(event);
+        },
+      );
+
+      if (this.disposed) {
+        return runId;
+      }
+
+      this.currentRunId = runId;
+      return runId;
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      if (!this.disposed) {
+        this.onError?.(message, "");
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Respond to a tool approval request.
    */
   async respondToApproval(
@@ -335,6 +378,7 @@ export class ThreadStream {
     this.onToolEvent = null;
     this.onApproval = null;
     this.onRunStateChange = null;
+    this.onContextCompressing = null;
     this.onPlan = null;
     this.onReasoning = null;
     this.onQueue = null;
@@ -580,6 +624,11 @@ export class ThreadStream {
       case "run_checkpointed":
         this.currentRunId = null;
         this.onRunStateChange?.("waiting_approval", event.runId);
+        break;
+
+      case "context_compressing":
+        // Context compression in progress — frontend shows placeholder
+        this.onContextCompressing?.(event.runId);
         break;
 
       case "run_completed":

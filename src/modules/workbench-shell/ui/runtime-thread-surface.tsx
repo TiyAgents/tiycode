@@ -24,7 +24,7 @@ import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationAct
 import { useViewportAutoCollapse, type ViewportAutoCollapseEntry } from "@/shared/hooks/use-viewport-auto-collapse";
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
 import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
-import { threadClearContext, threadCompactContext, threadLoad } from "@/services/bridge";
+import { threadClearContext, threadLoad } from "@/services/bridge";
 import {
   ThreadStream,
   type HelperEvent,
@@ -173,6 +173,7 @@ type ThinkingPlaceholder = {
   createdAt: string;
   id: string;
   runId?: string | null;
+  label?: string;
 };
 
 type RuntimeThreadSurfaceProps = {
@@ -1994,6 +1995,11 @@ function shouldCompleteThinkingPhase(event: ThreadStreamEvent) {
     case "run_limit_reached":
     case "run_checkpointed":
       return true;
+    // Note: `context_compressing` is intentionally NOT handled here.
+    // It's a placeholder-relabel event, not a phase-completion event — the
+    // placeholder is kept on screen with an updated "Compressing…" label via
+    // `stream.onContextCompressing`. Treating it as a completion would race
+    // with the re-show and can produce a one-frame flash of empty state.
     default:
       return false;
   }
@@ -2129,10 +2135,17 @@ export function RuntimeThreadSurface({
     }
   }, []);
 
-  const showThinkingPlaceholder = useCallback((runId?: string | null, createdAt?: string) => {
+  const showThinkingPlaceholder = useCallback((runId?: string | null, createdAt?: string, label?: string) => {
     setThinkingPlaceholder((current) => {
       if (current && current.runId === (runId ?? null)) {
-        return current;
+        // Same placeholder run — just update the label in-place (e.g. when
+        // "Thinking…" switches to "Compressing context…"). Keeping the same
+        // id avoids React remounting the placeholder and preserves the
+        // Shimmer animation state.
+        if (current.label === label) {
+          return current;
+        }
+        return { ...current, label };
       }
 
       return {
@@ -2142,6 +2155,7 @@ export function RuntimeThreadSurface({
             ? crypto.randomUUID()
             : `thinking-${Date.now()}`,
         runId: runId ?? null,
+        label,
       };
     });
   }, []);
@@ -2881,6 +2895,16 @@ export function RuntimeThreadSurface({
       }
     });
 
+    stream.onContextCompressing = withActiveStream((runId) => {
+      // Context compression is happening — keep the thinking placeholder on
+      // screen but relabel it to "Compressing context…". The show-helper
+      // updates the label in place (same placeholder id) so the shimmer
+      // doesn't remount. This deliberately does NOT go through
+      // `completeThinkingPhase` / `showThinkingPlaceholder` separately, which
+      // would produce a one-frame empty state between the close and reopen.
+      showThinkingPlaceholder(runId, undefined, t("contextCompressing"));
+    });
+
     stream.onError = withActiveStream((message, runId) => {
       setApprovingPlanMessageId(null);
       if (runId) {
@@ -3041,12 +3065,20 @@ export function RuntimeThreadSurface({
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
-        await threadCompactContext(
+        // Route through the ThreadStream so the frontend receives the
+        // RunStarted + ContextCompressing events that drive the thinking
+        // placeholder and the "running" thread state during the LLM call.
+        // The stream's onRunStateChange callback will flip the thread back
+        // to idle once RunCompleted / RunFailed arrives.
+        await streamRef.current?.compactContext(
           threadId,
           submission.command.argumentsText || null,
           modelPlan,
         );
         await loadSnapshot();
+      } catch (error) {
+        setThinkingPlaceholder(null);
+        throw error;
       } finally {
         submittingRef.current = false;
       }
@@ -4457,7 +4489,17 @@ export function RuntimeThreadSurface({
                         defaultOpen={false}
                         isStreaming
                       >
-                        <ReasoningTrigger showChevron={false} />
+                        <ReasoningTrigger
+                          showChevron={false}
+                          getThinkingMessage={
+                            thinkingPlaceholder?.label
+                              ? (isStreaming: boolean) =>
+                                  isStreaming
+                                    ? <Shimmer>{thinkingPlaceholder.label!}</Shimmer>
+                                    : <p>{thinkingPlaceholder.label}</p>
+                              : undefined
+                          }
+                        />
                       </Reasoning>
                     </MessageContent>
                   </Message>

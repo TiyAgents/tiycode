@@ -146,6 +146,11 @@ pub enum ThreadStreamEvent {
     RunCheckpointed {
         run_id: String,
     },
+    /// Emitted when context compression is in progress (LLM generating summary).
+    /// The frontend should show a "Compressing context…" placeholder.
+    ContextCompressing {
+        run_id: String,
+    },
     RunCompleted {
         run_id: String,
     },

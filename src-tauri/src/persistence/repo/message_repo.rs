@@ -100,19 +100,31 @@ pub async fn list_recent(
 /// Strategy:
 /// 1. Query the DB for the most recent context_reset marker (uses the partial index
 ///    `idx_messages_type` on `(thread_id, message_type)` for summary_marker rows).
-/// 2. If found, load all messages whose id >= that marker (UUID v7 ordering).
-/// 3. If no reset marker exists, load the most recent messages (up to `SAFETY_LIMIT`).
-/// 4. Discarded messages (`status = "discarded"`) are filtered out.
+/// 2. If the reset marker's metadata contains `boundaryMessageId`, use it as the
+///    lower bound. This handles auto-compression where the reset marker is written
+///    *after* the recent messages it meant to preserve (UUID v7 timing issue) —
+///    the boundary id points at the first DB message we want to keep, regardless
+///    of the reset marker's own id.
+/// 3. Otherwise, load all messages whose id >= reset.id (legacy `/clear` + `/compact`
+///    behavior; those writes happen while the thread is idle so timing is safe).
+/// 4. If no reset marker exists, load the most recent messages (up to `SAFETY_LIMIT`).
+/// 5. Discarded messages (`status = "discarded"`) are filtered out.
 pub async fn list_since_last_reset(
     pool: &SqlitePool,
     thread_id: &str,
 ) -> Result<Vec<MessageRecord>, AppError> {
     const SAFETY_LIMIT: i64 = 2000;
 
-    let reset_id = find_last_context_reset_id(pool, thread_id).await?;
+    let reset = find_last_context_reset(pool, thread_id).await?;
 
-    let mut rows = match reset_id.as_deref() {
-        Some(cursor) => {
+    let mut rows = match reset.as_ref() {
+        Some(marker) => {
+            // Prefer boundaryMessageId if present (auto-compression case);
+            // else use the reset marker's own id (legacy /clear, /compact).
+            let cursor = marker
+                .boundary_message_id
+                .clone()
+                .unwrap_or_else(|| marker.id.clone());
             sqlx::query_as::<_, MessageRow>(
                 "SELECT id, thread_id, run_id, role, content_markdown, message_type,
                         status, metadata_json, attachments_json, created_at
@@ -149,6 +161,38 @@ pub async fn list_since_last_reset(
     Ok(rows.into_iter().map(|r| r.into_record()).collect())
 }
 
+/// Return the id of the Nth most-recent non-discarded message in a thread.
+///
+/// Used by auto-compression to resolve a DB-backed boundary id for the
+/// `boundaryMessageId` metadata field (see `list_since_last_reset`).
+///
+/// `n_from_end` is 1-based; `n_from_end == 1` returns the newest message id.
+/// Returns `Ok(None)` if the thread has fewer than `n_from_end` non-discarded
+/// messages.
+pub async fn find_nth_from_end_id(
+    pool: &SqlitePool,
+    thread_id: &str,
+    n_from_end: usize,
+) -> Result<Option<String>, AppError> {
+    if n_from_end == 0 {
+        return Ok(None);
+    }
+
+    let offset = (n_from_end as i64).saturating_sub(1);
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM messages
+         WHERE thread_id = ? AND status != 'discarded'
+         ORDER BY id DESC
+         LIMIT 1 OFFSET ?",
+    )
+    .bind(thread_id)
+    .bind(offset)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|(id,)| id))
+}
+
 /// Lightweight row for the context-reset-marker lookup (only the columns we need).
 #[derive(sqlx::FromRow)]
 struct MarkerRow {
@@ -156,16 +200,23 @@ struct MarkerRow {
     metadata_json: Option<String>,
 }
 
-/// Find the ID of the last context_reset summary_marker in a thread.
+/// Context-reset marker details used by `list_since_last_reset`.
+struct ContextResetMarker {
+    id: String,
+    boundary_message_id: Option<String>,
+}
+
+/// Find the most recent context_reset summary_marker in a thread, including
+/// any `boundaryMessageId` hint embedded in its metadata.
 ///
 /// Uses the partial index on `(thread_id, message_type)` to efficiently scan
 /// only `summary_marker` rows, then checks metadata in Rust for the `context_reset`
 /// kind (consistent with the existing application-layer check pattern).
 /// Discarded markers are skipped.
-async fn find_last_context_reset_id(
+async fn find_last_context_reset(
     pool: &SqlitePool,
     thread_id: &str,
-) -> Result<Option<String>, AppError> {
+) -> Result<Option<ContextResetMarker>, AppError> {
     // Load the most recent summary_marker messages; typically very few exist.
     let rows = sqlx::query_as::<_, MarkerRow>(
         "SELECT id, metadata_json
@@ -180,10 +231,25 @@ async fn find_last_context_reset_id(
 
     for row in rows {
         if metadata_kind_matches(row.metadata_json.as_deref(), "context_reset") {
-            return Ok(Some(row.id));
+            let boundary_message_id = extract_boundary_message_id(row.metadata_json.as_deref());
+            return Ok(Some(ContextResetMarker {
+                id: row.id,
+                boundary_message_id,
+            }));
         }
     }
     Ok(None)
+}
+
+/// Extract the optional `boundaryMessageId` string from a reset marker's metadata.
+fn extract_boundary_message_id(raw: Option<&str>) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(raw?).ok()?;
+    let id = value.get("boundaryMessageId")?.as_str()?;
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
 }
 
 /// Insert a new message (append-only).
@@ -261,4 +327,227 @@ fn metadata_kind_matches(raw: Option<&str>, expected: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-1', 'ws', '/tmp', '/tmp', '/tmp', 0, 0, 0, 'ready',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed workspace");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, created_at, updated_at, last_active_at)
+             VALUES ('t1', 'ws-1', 't', 'idle',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed thread");
+
+        pool
+    }
+
+    fn msg(id: &str, role: &str, content: &str) -> MessageRecord {
+        MessageRecord {
+            id: id.to_string(),
+            thread_id: "t1".to_string(),
+            run_id: None,
+            role: role.to_string(),
+            content_markdown: content.to_string(),
+            message_type: "plain_message".to_string(),
+            status: "completed".to_string(),
+            metadata_json: None,
+            attachments_json: None,
+            created_at: String::new(),
+        }
+    }
+
+    fn reset_marker(id: &str, metadata: serde_json::Value) -> MessageRecord {
+        MessageRecord {
+            id: id.to_string(),
+            thread_id: "t1".to_string(),
+            run_id: None,
+            role: "system".to_string(),
+            content_markdown: "Context is now reset".to_string(),
+            message_type: "summary_marker".to_string(),
+            status: "completed".to_string(),
+            metadata_json: Some(metadata.to_string()),
+            attachments_json: None,
+            created_at: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn find_nth_from_end_id_returns_expected_positions() {
+        let pool = setup_test_pool().await;
+
+        // UUID v7 ids are sortable; use monotonically increasing ids for the test.
+        insert(&pool, &msg("01", "user", "a")).await.unwrap();
+        insert(&pool, &msg("02", "assistant", "b")).await.unwrap();
+        insert(&pool, &msg("03", "user", "c")).await.unwrap();
+        insert(&pool, &msg("04", "assistant", "d")).await.unwrap();
+
+        assert_eq!(
+            find_nth_from_end_id(&pool, "t1", 1)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("04")
+        );
+        assert_eq!(
+            find_nth_from_end_id(&pool, "t1", 2)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("03")
+        );
+        assert_eq!(
+            find_nth_from_end_id(&pool, "t1", 4)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("01")
+        );
+        // Overshooting returns None rather than erroring.
+        assert!(find_nth_from_end_id(&pool, "t1", 99)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn list_since_last_reset_honors_boundary_message_id_even_when_reset_id_is_larger() {
+        // Simulates the UUID v7 timing issue: the run persists user + assistant
+        // messages first, and only *afterwards* the auto-compression writes its
+        // reset marker. The reset marker's own id is therefore LARGER than the
+        // messages we want to preserve. Without `boundaryMessageId`, those
+        // earlier messages would be excluded by `id >= reset_id`.
+        let pool = setup_test_pool().await;
+
+        // Pretend these are already-persisted current-run messages:
+        insert(&pool, &msg("10", "user", "ask for help"))
+            .await
+            .unwrap();
+        insert(&pool, &msg("11", "assistant", "here is part 1"))
+            .await
+            .unwrap();
+        insert(&pool, &msg("12", "assistant", "here is part 2"))
+            .await
+            .unwrap();
+        // Then auto-compression writes its reset + summary markers LATER:
+        insert(
+            &pool,
+            &reset_marker(
+                "20",
+                serde_json::json!({
+                    "kind": "context_reset",
+                    "source": "auto",
+                    "boundaryMessageId": "10",
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        insert(
+            &pool,
+            &MessageRecord {
+                id: "21".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "system".to_string(),
+                content_markdown: "<context_summary>state</context_summary>".to_string(),
+                message_type: "summary_marker".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(serde_json::json!({"kind": "context_summary"}).to_string()),
+                attachments_json: None,
+                created_at: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let messages = list_since_last_reset(&pool, "t1").await.unwrap();
+        // The earlier user + assistant messages must still appear because the
+        // boundaryMessageId hint points at them, even though their ids are
+        // smaller than the reset marker's id.
+        let ids: Vec<&str> = messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["10", "11", "12", "20", "21"]);
+    }
+
+    #[tokio::test]
+    async fn list_since_last_reset_falls_back_to_reset_id_when_boundary_absent() {
+        // Legacy /clear, /compact path: reset markers don't carry
+        // boundaryMessageId because they are written while the thread is idle,
+        // and the reset marker's own id is a safe lower bound.
+        let pool = setup_test_pool().await;
+        insert(&pool, &msg("10", "user", "ancient")).await.unwrap();
+        insert(
+            &pool,
+            &reset_marker(
+                "50",
+                serde_json::json!({"kind": "context_reset", "source": "clear"}),
+            ),
+        )
+        .await
+        .unwrap();
+        insert(&pool, &msg("60", "user", "after reset"))
+            .await
+            .unwrap();
+
+        let messages = list_since_last_reset(&pool, "t1").await.unwrap();
+        let ids: Vec<&str> = messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["50", "60"]);
+    }
+
+    #[test]
+    fn extract_boundary_message_id_is_tolerant_of_malformed_metadata() {
+        assert_eq!(extract_boundary_message_id(None), None);
+        assert_eq!(extract_boundary_message_id(Some("")), None);
+        assert_eq!(extract_boundary_message_id(Some("not-json")), None);
+        // Empty string values are treated as "no boundary".
+        assert_eq!(
+            extract_boundary_message_id(Some(r#"{"boundaryMessageId":""}"#)),
+            None
+        );
+        // Wrong type — boundary is numeric instead of string.
+        assert_eq!(
+            extract_boundary_message_id(Some(r#"{"boundaryMessageId":123}"#)),
+            None
+        );
+        assert_eq!(
+            extract_boundary_message_id(Some(
+                r#"{"kind":"context_reset","boundaryMessageId":"msg-42"}"#
+            ))
+            .as_deref(),
+            Some("msg-42")
+        );
+    }
 }
