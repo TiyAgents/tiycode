@@ -2719,10 +2719,11 @@ mod tests {
     use super::{
         append_compact_instructions, await_summary_with_abort, build_compact_summary_messages,
         build_compact_summary_system_prompt, build_implementation_handoff_prompt,
-        build_merge_summary_messages, build_merge_summary_system_prompt, build_title_prompt,
-        build_title_prompt_from_messages, collapse_whitespace, detect_prior_summary,
-        extract_context_summary_block, mark_thread_run_cancellation_requested,
-        normalize_compact_summary, normalize_generated_title, render_compact_summary_history,
+        build_merge_summary_messages, build_merge_summary_system_prompt,
+        build_title_model_candidates, build_title_prompt, build_title_prompt_from_messages,
+        collapse_whitespace, detect_prior_summary, extract_context_summary_block,
+        mark_thread_run_cancellation_requested, normalize_compact_summary,
+        normalize_generated_title, render_compact_summary_history,
         should_complete_reasoning_for_event, summary_history_char_budget, truncate_chars,
         truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
         SUMMARY_HISTORY_MIN_CHARS, SUMMARY_TOOL_RESULT_MAX_CHARS,
@@ -3660,6 +3661,149 @@ mod tests {
             provider_options: None,
             model,
         }
+    }
+
+    fn model_role_with_id(model_id: &str) -> ResolvedModelRole {
+        let mut role = model_role_with(128_000, false);
+        role.model_id = model_id.to_string();
+        role.model_name = model_id.to_string();
+        role.model = tiycore::types::Model::builder()
+            .id(model_id)
+            .name(model_id)
+            .provider(tiycore::types::Provider::OpenAI)
+            .base_url("https://api.openai.com/v1")
+            .context_window(128_000)
+            .max_tokens(32_000)
+            .input(vec![tiycore::types::InputType::Text])
+            .cost(tiycore::types::Cost::default())
+            .reasoning(false)
+            .build()
+            .expect("sample model with custom id");
+        role
+    }
+
+    #[test]
+    fn build_title_model_candidates_prefers_priority_order() {
+        let lightweight = model_role_with_id("lite");
+        let auxiliary = model_role_with_id("aux");
+        let primary = model_role_with_id("primary");
+
+        let candidates =
+            build_title_model_candidates(Some(&lightweight), Some(&auxiliary), Some(&primary));
+
+        let ids: Vec<&str> = candidates
+            .iter()
+            .map(|role| role.model_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["lite", "aux", "primary"]);
+    }
+
+    #[test]
+    fn build_title_model_candidates_skips_missing_entries() {
+        let auxiliary = model_role_with_id("aux");
+        let primary = model_role_with_id("primary");
+
+        let candidates = build_title_model_candidates(None, Some(&auxiliary), Some(&primary));
+
+        let ids: Vec<&str> = candidates
+            .iter()
+            .map(|role| role.model_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["aux", "primary"]);
+    }
+
+    #[test]
+    fn build_title_model_candidates_returns_empty_when_all_missing() {
+        let candidates = build_title_model_candidates(None, None, None);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn build_title_model_candidates_deduplicates_same_model_id() {
+        let lightweight = model_role_with_id("shared");
+        let auxiliary = model_role_with_id("shared");
+        let primary = model_role_with_id("primary");
+
+        let candidates =
+            build_title_model_candidates(Some(&lightweight), Some(&auxiliary), Some(&primary));
+
+        let ids: Vec<&str> = candidates
+            .iter()
+            .map(|role| role.model_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["shared", "primary"]);
+    }
+
+    #[test]
+    fn title_prompt_from_messages_matches_conversation_language_when_none() {
+        let messages = vec![MessageRecord {
+            id: "msg-1".into(),
+            thread_id: "thread-1".into(),
+            run_id: None,
+            role: "user".into(),
+            content_markdown: "请帮我分析标题生成策略".into(),
+            message_type: "plain_message".into(),
+            status: "completed".into(),
+            metadata_json: None,
+            attachments_json: None,
+            created_at: String::new(),
+        }];
+
+        let prompt =
+            build_title_prompt_from_messages(&messages, None, ProfileResponseStyle::Balanced);
+
+        assert!(prompt.contains("Match the conversation language."));
+        assert!(prompt.contains("Keep the title clear and natural"));
+    }
+
+    #[test]
+    fn title_prompt_from_messages_includes_concise_style_rule() {
+        let messages = vec![MessageRecord {
+            id: "msg-1".into(),
+            thread_id: "thread-1".into(),
+            run_id: None,
+            role: "user".into(),
+            content_markdown: "Need a short title".into(),
+            message_type: "plain_message".into(),
+            status: "completed".into(),
+            metadata_json: None,
+            attachments_json: None,
+            created_at: String::new(),
+        }];
+
+        let prompt = build_title_prompt_from_messages(
+            &messages,
+            Some("English"),
+            ProfileResponseStyle::Concise,
+        );
+
+        assert!(prompt.contains("Write the title in English."));
+        assert!(prompt.contains("especially terse, direct, and low-friction"));
+    }
+
+    #[test]
+    fn title_prompt_from_messages_includes_guide_style_rule() {
+        let messages = vec![MessageRecord {
+            id: "msg-1".into(),
+            thread_id: "thread-1".into(),
+            run_id: None,
+            role: "assistant".into(),
+            content_markdown: "Let's decide whether to keep fallback behavior.".into(),
+            message_type: "plain_message".into(),
+            status: "completed".into(),
+            metadata_json: None,
+            attachments_json: None,
+            created_at: String::new(),
+        }];
+
+        let prompt = build_title_prompt_from_messages(
+            &messages,
+            Some("English"),
+            ProfileResponseStyle::Guide,
+        );
+
+        assert!(prompt.contains("Write the title in English."));
+        assert!(prompt.contains("signals the user's goal or decision focus clearly"));
     }
 
     #[test]
