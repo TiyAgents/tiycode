@@ -253,7 +253,9 @@ export const TerminalHost = forwardRef<TerminalHostHandle, TerminalHostProps>(fu
         if (!pendingText) {
           return;
         }
-        void writeInputRef.current(pendingText).catch(() => {});
+        void writeInputRef.current(pendingText).catch((error) => {
+          console.warn("[TerminalHost] failed to flush composed terminal input", error);
+        });
       }, COMPOSED_INPUT_FALLBACK_MS);
     };
 

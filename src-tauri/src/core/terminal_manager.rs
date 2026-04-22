@@ -935,19 +935,7 @@ fn default_unix_utf8_locale() -> OsString {
 
     #[cfg(not(target_os = "macos"))]
     {
-        std::env::var_os("LANG")
-            .filter(|value| !value.is_empty())
-            .map(|value| {
-                let lowercase = value.to_string_lossy().to_ascii_lowercase();
-                if lowercase.contains("utf-8") || lowercase.contains("utf8") {
-                    value
-                } else if let Some((prefix, _)) = value.to_string_lossy().split_once('.') {
-                    OsString::from(format!("{prefix}.UTF-8"))
-                } else {
-                    OsString::from(format!("{}.UTF-8", value.to_string_lossy()))
-                }
-            })
-            .unwrap_or_else(|| OsString::from("C.UTF-8"))
+        OsString::from("C.UTF-8")
     }
 }
 

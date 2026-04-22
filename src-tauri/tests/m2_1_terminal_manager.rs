@@ -158,6 +158,8 @@ async fn test_terminal_session_lifecycle_and_output() {
 #[cfg(not(target_os = "windows"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_terminal_unicode_output_round_trip() {
+    let _locale_guard = locale_env_lock().lock().expect("locale env lock poisoned");
+
     let pool = test_helpers::setup_test_pool().await;
     let workspace_path = std::env::current_dir()
         .expect("workspace path")
