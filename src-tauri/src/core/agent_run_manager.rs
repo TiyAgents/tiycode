@@ -20,7 +20,7 @@ use crate::core::agent_session::{
     normalize_profile_response_style, trim_history_to_current_context, ProfileResponseStyle,
     ResolvedModelRole,
 };
-use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
+use crate::core::built_in_agent_runtime::{BuiltInAgentRuntime, RuntimeSessionFinishState};
 use crate::core::plan_checkpoint::{
     ApprovalPromptMetadata, PlanApprovalAction, PlanMessageMetadata,
     IMPLEMENTATION_PLAN_APPROVAL_KIND, IMPLEMENTATION_PLAN_APPROVED_STATE,
@@ -85,6 +85,51 @@ async fn mark_thread_run_cancellation_requested(
     let run = runs.values_mut().find(|run| run.thread_id == thread_id)?;
     run.cancellation_requested = true;
     Some(run.run_id.clone())
+}
+
+fn build_orphaned_run_terminal_event(
+    run_id: &str,
+    cancellation_requested: bool,
+) -> ThreadStreamEvent {
+    if cancellation_requested {
+        ThreadStreamEvent::RunCancelled {
+            run_id: run_id.to_string(),
+        }
+    } else {
+        ThreadStreamEvent::RunInterrupted {
+            run_id: run_id.to_string(),
+        }
+    }
+}
+
+fn terminal_event_status(
+    event: &ThreadStreamEvent,
+    cancellation_requested: bool,
+) -> Option<&'static str> {
+    match event {
+        ThreadStreamEvent::RunCompleted { .. } => Some("completed"),
+        ThreadStreamEvent::RunLimitReached { .. } => Some("limit_reached"),
+        ThreadStreamEvent::RunFailed { .. } => Some("failed"),
+        ThreadStreamEvent::RunCancelled { .. } => Some("cancelled"),
+        ThreadStreamEvent::RunInterrupted { .. } => Some(if cancellation_requested {
+            "cancelled"
+        } else {
+            "interrupted"
+        }),
+        _ => None,
+    }
+}
+
+fn is_terminal_runtime_event(event: &ThreadStreamEvent) -> bool {
+    matches!(
+        event,
+        ThreadStreamEvent::RunCheckpointed { .. }
+            | ThreadStreamEvent::RunCompleted { .. }
+            | ThreadStreamEvent::RunLimitReached { .. }
+            | ThreadStreamEvent::RunFailed { .. }
+            | ThreadStreamEvent::RunCancelled { .. }
+            | ThreadStreamEvent::RunInterrupted { .. }
+    )
 }
 
 pub struct AgentRunManager {
@@ -255,8 +300,9 @@ impl AgentRunManager {
             }
 
             let (runtime_tx, runtime_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
-            self.runtime.start_session(spec, runtime_tx).await?;
+            let runtime_finish_rx = self.runtime.start_session(spec, runtime_tx).await?;
             self.spawn_runtime_event_loop(run_id.clone(), runtime_rx);
+            self.spawn_runtime_finish_watchdog(run_id.clone(), runtime_finish_rx);
 
             Ok::<(), AppError>(())
         }
@@ -824,7 +870,31 @@ impl AgentRunManager {
         };
 
         run_repo::update_status(&self.pool, &run_id, "cancelling").await?;
-        self.runtime.cancel_session(&run_id).await?;
+        let cancel_delivered = self.runtime.cancel_session(&run_id).await?;
+
+        if !cancel_delivered {
+            tracing::warn!(
+                run_id = %run_id,
+                "runtime session missing during cancel; forcing cancelled cleanup"
+            );
+            self.handle_runtime_event(&run_id, build_orphaned_run_terminal_event(&run_id, true))
+                .await?;
+            return Ok(true);
+        }
+
+        if matches!(
+            self.runtime.session_finish_state(&run_id).await,
+            Some(RuntimeSessionFinishState::Panicked | RuntimeSessionFinishState::Cancelled)
+        ) {
+            tracing::warn!(
+                run_id = %run_id,
+                "runtime session was already finished when cancel was requested; forcing cancelled cleanup"
+            );
+            self.handle_runtime_event(&run_id, build_orphaned_run_terminal_event(&run_id, true))
+                .await?;
+            return Ok(true);
+        }
+
         tracing::info!(run_id = %run_id, "run cancel requested");
         Ok(true)
     }
@@ -1006,7 +1076,92 @@ impl AgentRunManager {
                     tracing::error!(run_id = %run_id, error = %error, "failed to handle runtime event");
                 }
             }
+
+            if let Err(error) = manager.handle_runtime_channel_closed(&run_id).await {
+                tracing::error!(
+                    run_id = %run_id,
+                    error = %error,
+                    "failed to reconcile run after runtime event channel closed"
+                );
+            }
         });
+    }
+
+    pub(crate) fn spawn_runtime_finish_watchdog(
+        self: &Arc<Self>,
+        run_id: String,
+        mut finish_rx: tokio::sync::watch::Receiver<RuntimeSessionFinishState>,
+    ) {
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            if finish_rx.changed().await.is_err() {
+                return;
+            }
+
+            let finish_state = *finish_rx.borrow();
+            if !manager.has_active_run(&run_id).await {
+                return;
+            }
+
+            let event = match finish_state {
+                RuntimeSessionFinishState::Running | RuntimeSessionFinishState::Completed => return,
+                RuntimeSessionFinishState::Panicked => ThreadStreamEvent::RunInterrupted {
+                    run_id: run_id.clone(),
+                },
+                RuntimeSessionFinishState::Cancelled => {
+                    build_orphaned_run_terminal_event(&run_id, true)
+                }
+            };
+
+            if let Err(error) = manager.handle_runtime_event(&run_id, event).await {
+                tracing::error!(
+                    run_id = %run_id,
+                    error = %error,
+                    finish_state = ?finish_state,
+                    "failed to reconcile run after runtime task finished"
+                );
+            }
+        });
+    }
+
+    async fn handle_runtime_channel_closed(&self, run_id: &str) -> Result<(), AppError> {
+        if !self.has_active_run(run_id).await {
+            return Ok(());
+        }
+
+        let runtime_state = self.runtime.session_state(run_id).await;
+        let runtime_finish_state = self.runtime.session_finish_state(run_id).await;
+        let cancellation_requested = self.was_cancel_requested(run_id).await;
+
+        let Some(terminal_event) = (match runtime_finish_state {
+            Some(RuntimeSessionFinishState::Completed) => None,
+            Some(RuntimeSessionFinishState::Panicked) => Some(ThreadStreamEvent::RunInterrupted {
+                run_id: run_id.to_string(),
+            }),
+            Some(RuntimeSessionFinishState::Cancelled) => {
+                Some(build_orphaned_run_terminal_event(run_id, true))
+            }
+            Some(RuntimeSessionFinishState::Running) | None => Some(
+                build_orphaned_run_terminal_event(run_id, cancellation_requested),
+            ),
+        }) else {
+            tracing::debug!(
+                run_id = %run_id,
+                runtime_state = ?runtime_state,
+                "runtime event channel closed after session completed; skipping forced cleanup"
+            );
+            return Ok(());
+        };
+
+        tracing::warn!(
+            run_id = %run_id,
+            cancellation_requested,
+            runtime_state = ?runtime_state,
+            runtime_finish_state = ?runtime_finish_state,
+            "runtime event channel closed before a terminal event; forcing run cleanup"
+        );
+
+        self.handle_runtime_event(run_id, terminal_event).await
     }
 
     async fn handle_runtime_event(
@@ -1014,6 +1169,15 @@ impl AgentRunManager {
         run_id: &str,
         event: ThreadStreamEvent,
     ) -> Result<(), AppError> {
+        if is_terminal_runtime_event(&event) && !self.has_active_run(run_id).await {
+            tracing::debug!(
+                run_id = %run_id,
+                event = ?event,
+                "ignoring duplicate terminal runtime event after run cleanup"
+            );
+            return Ok(());
+        }
+
         if should_complete_reasoning_for_event(&event) {
             self.complete_active_reasoning_message(run_id, "completed")
                 .await?;
@@ -1163,14 +1327,8 @@ impl AgentRunManager {
             | ThreadStreamEvent::RunCancelled { .. }
             | ThreadStreamEvent::RunInterrupted { .. } => {
                 let thread_id = self.get_thread_id(run_id).await;
-                let status = match &event {
-                    ThreadStreamEvent::RunCompleted { .. } => "completed",
-                    ThreadStreamEvent::RunLimitReached { .. } => "limit_reached",
-                    ThreadStreamEvent::RunFailed { .. } => "failed",
-                    ThreadStreamEvent::RunCancelled { .. } => "cancelled",
-                    ThreadStreamEvent::RunInterrupted { .. } => "interrupted",
-                    _ => unreachable!(),
-                };
+                let status = terminal_event_status(&event, self.was_cancel_requested(run_id).await)
+                    .expect("terminal run event should resolve to a status");
                 let _ = self.app_handle.emit(
                     app_events::THREAD_RUN_FINISHED,
                     ThreadRunFinishedPayload {
@@ -1183,15 +1341,7 @@ impl AgentRunManager {
             _ => {}
         }
 
-        if matches!(
-            event,
-            ThreadStreamEvent::RunCheckpointed { .. }
-                | ThreadStreamEvent::RunCompleted { .. }
-                | ThreadStreamEvent::RunLimitReached { .. }
-                | ThreadStreamEvent::RunFailed { .. }
-                | ThreadStreamEvent::RunCancelled { .. }
-                | ThreadStreamEvent::RunInterrupted { .. }
-        ) {
+        if is_terminal_runtime_event(&event) {
             self.runtime.remove_session(run_id).await;
             self.remove_active_run(run_id).await;
         }
@@ -1468,6 +1618,11 @@ impl AgentRunManager {
         runs.get(run_id)
             .map(|run| run.thread_id.clone())
             .unwrap_or_default()
+    }
+
+    async fn has_active_run(&self, run_id: &str) -> bool {
+        let runs = self.active_runs.lock().await;
+        runs.contains_key(run_id)
     }
 
     async fn was_cancel_requested(&self, run_id: &str) -> bool {
@@ -2628,12 +2783,13 @@ mod tests {
     use super::{
         append_compact_instructions, await_summary_with_abort, build_compact_summary_messages,
         build_compact_summary_system_prompt, build_implementation_handoff_prompt,
-        build_merge_summary_messages, build_merge_summary_system_prompt, build_title_prompt,
-        collapse_whitespace, detect_prior_summary, extract_context_summary_block,
+        build_merge_summary_messages, build_merge_summary_system_prompt,
+        build_orphaned_run_terminal_event, build_title_prompt, collapse_whitespace,
+        detect_prior_summary, extract_context_summary_block,
         mark_thread_run_cancellation_requested, normalize_compact_summary,
         normalize_generated_title, render_compact_summary_history,
-        should_complete_reasoning_for_event, summary_history_char_budget, truncate_chars,
-        truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
+        should_complete_reasoning_for_event, summary_history_char_budget, terminal_event_status,
+        truncate_chars, truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
         SUMMARY_HISTORY_MIN_CHARS, SUMMARY_TOOL_RESULT_MAX_CHARS,
     };
     use crate::core::agent_session::{ProfileResponseStyle, ResolvedModelRole};
@@ -2707,6 +2863,38 @@ mod tests {
             reasoning_message_id: None,
             cancellation_requested: false,
         }
+    }
+
+    #[test]
+    fn orphaned_run_terminal_event_uses_cancelled_when_user_requested_stop() {
+        let cancelled = build_orphaned_run_terminal_event("run-1", true);
+        let interrupted = build_orphaned_run_terminal_event("run-2", false);
+
+        assert!(matches!(
+            cancelled,
+            ThreadStreamEvent::RunCancelled { ref run_id } if run_id == "run-1"
+        ));
+        assert!(matches!(
+            interrupted,
+            ThreadStreamEvent::RunInterrupted { ref run_id } if run_id == "run-2"
+        ));
+    }
+
+    #[test]
+    fn terminal_event_status_maps_interrupted_to_cancelled_when_cancel_was_requested() {
+        let interrupted = ThreadStreamEvent::RunInterrupted {
+            run_id: "run-1".to_string(),
+        };
+        let cancelled = ThreadStreamEvent::RunCancelled {
+            run_id: "run-1".to_string(),
+        };
+
+        assert_eq!(terminal_event_status(&interrupted, true), Some("cancelled"));
+        assert_eq!(
+            terminal_event_status(&interrupted, false),
+            Some("interrupted")
+        );
+        assert_eq!(terminal_event_status(&cancelled, false), Some("cancelled"));
     }
 
     /// Mirrors the check in `compact_thread_context` (and `start_run`): a

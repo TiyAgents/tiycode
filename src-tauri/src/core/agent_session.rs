@@ -369,10 +369,10 @@ impl AgentSession {
         })
     }
 
-    pub fn start(self: Arc<Self>) {
+    pub fn start(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             self.run().await;
-        });
+        })
     }
 
     pub async fn cancel(&self) {

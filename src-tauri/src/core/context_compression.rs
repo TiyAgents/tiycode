@@ -841,6 +841,21 @@ mod tests {
     }
 
     #[test]
+    fn context_token_calibration_observe_ignores_zero_values() {
+        let baseline = ContextTokenCalibration::default();
+
+        assert_eq!(baseline.observe(0, 1_500), baseline);
+        assert_eq!(baseline.observe(1_000, 0), baseline);
+    }
+
+    #[test]
+    fn context_token_calibration_apply_to_zero_estimate_returns_zero() {
+        let calibration = ContextTokenCalibration::default().observe(1_000, 1_500);
+
+        assert_eq!(calibration.apply_to_estimate(0), 0);
+    }
+
+    #[test]
     fn should_compress_with_calibration_triggers_when_raw_estimate_is_under_budget() {
         let mut messages = Vec::new();
         for i in 0..4 {
