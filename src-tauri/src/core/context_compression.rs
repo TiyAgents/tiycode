@@ -46,12 +46,13 @@ const MIN_MESSAGES_TO_KEEP: usize = 4;
 const CALIBRATION_SCALE_BASIS_POINTS: u32 = 10_000;
 
 /// Conservative calibration for message-token estimates derived from real
-/// provider `usage.input` samples.
+/// provider prompt-token samples.
 ///
 /// The heuristic estimator only counts the message payload. Real provider
-/// usage also reflects system prompt, tool schema, and model-specific
-/// tokenisation differences. We therefore track the highest observed
-/// underestimate ratio and apply it to future heuristic totals.
+/// prompt usage also reflects system prompt, tool schema, model-specific
+/// tokenisation differences, and provider-side prompt caching reads. We
+/// therefore track the highest observed underestimate ratio and apply it to
+/// future heuristic totals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContextTokenCalibration {
     ratio_basis_points: u32,
@@ -66,23 +67,23 @@ impl Default for ContextTokenCalibration {
 }
 
 impl ContextTokenCalibration {
-    /// Build a calibration sample from one heuristic-vs-real observation.
-    pub fn from_observation(estimated_tokens: u32, actual_input_tokens: u64) -> Option<Self> {
-        if estimated_tokens == 0 || actual_input_tokens == 0 {
+    /// Build a calibration sample from one heuristic-vs-real prompt-token observation.
+    pub fn from_observation(estimated_tokens: u32, actual_prompt_tokens: u64) -> Option<Self> {
+        if estimated_tokens == 0 || actual_prompt_tokens == 0 {
             return None;
         }
 
-        Some(Self::default().observe(estimated_tokens, actual_input_tokens))
+        Some(Self::default().observe(estimated_tokens, actual_prompt_tokens))
     }
 
     /// Fold a new observation into the calibration, keeping the most
     /// conservative underestimate ratio seen so far.
-    pub fn observe(self, estimated_tokens: u32, actual_input_tokens: u64) -> Self {
-        if estimated_tokens == 0 || actual_input_tokens == 0 {
+    pub fn observe(self, estimated_tokens: u32, actual_prompt_tokens: u64) -> Self {
+        if estimated_tokens == 0 || actual_prompt_tokens == 0 {
             return self;
         }
 
-        let observed_ratio = (((actual_input_tokens as u128)
+        let observed_ratio = (((actual_prompt_tokens as u128)
             * (CALIBRATION_SCALE_BASIS_POINTS as u128))
             .saturating_add((estimated_tokens as u128).saturating_sub(1)))
             / (estimated_tokens as u128);
@@ -828,6 +829,15 @@ mod tests {
         // Should equal sum of individual estimates
         let sum: u32 = messages.iter().map(estimate_message_tokens).sum();
         assert_eq!(total, sum);
+    }
+
+    #[test]
+    fn context_token_calibration_from_observation_uses_prompt_token_observation() {
+        let calibration = ContextTokenCalibration::from_observation(1_000, 1_750)
+            .expect("non-zero prompt-token observation should produce calibration");
+
+        assert_eq!(calibration.ratio_basis_points(), 17_500);
+        assert_eq!(calibration.apply_to_estimate(2_000), 3_500);
     }
 
     #[test]

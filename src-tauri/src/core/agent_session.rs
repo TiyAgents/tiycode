@@ -173,7 +173,7 @@ pub async fn build_session_spec(
         .collect();
     let history_tool_calls = tool_call_repo::list_by_run_ids(pool, &history_run_ids).await?;
     let latest_historical_run =
-        run_repo::find_latest_with_input_usage_by_thread_excluding_run(pool, thread_id, run_id)
+        run_repo::find_latest_with_prompt_usage_by_thread_excluding_run(pool, thread_id, run_id)
             .await?;
 
     let system_prompt = build_system_prompt(pool, &raw_plan, workspace_path, run_mode).await?;
@@ -220,6 +220,10 @@ pub(crate) fn trim_history_to_current_context(messages: &[MessageRecord]) -> Vec
         .collect()
 }
 
+fn effective_prompt_tokens(input_tokens: u64, cache_read_tokens: u64) -> u64 {
+    input_tokens.saturating_add(cache_read_tokens)
+}
+
 #[derive(Debug, Default)]
 struct ContextCompressionRuntimeState {
     calibration: ContextTokenCalibration,
@@ -242,14 +246,14 @@ impl ContextCompressionRuntimeState {
         self.pending_prompt_estimate = Some(estimated_tokens);
     }
 
-    fn observe_input_usage(&mut self, actual_input_tokens: u64) {
+    fn observe_prompt_usage(&mut self, actual_prompt_tokens: u64) {
         let Some(estimated_tokens) = self.pending_prompt_estimate.take() else {
             return;
         };
 
         self.calibration = self
             .calibration
-            .observe(estimated_tokens, actual_input_tokens);
+            .observe(estimated_tokens, actual_prompt_tokens);
     }
 }
 
@@ -275,12 +279,13 @@ fn observe_context_usage_calibration(
     state: &StdMutex<ContextCompressionRuntimeState>,
     usage: &Usage,
 ) {
-    if usage.input == 0 {
+    let actual_prompt_tokens = effective_prompt_tokens(usage.input, usage.cache_read);
+    if actual_prompt_tokens == 0 {
         return;
     }
 
     if let Ok(mut state) = state.lock() {
-        state.observe_input_usage(usage.input);
+        state.observe_prompt_usage(actual_prompt_tokens);
     }
 }
 
@@ -294,7 +299,11 @@ fn build_initial_context_token_calibration(
         return ContextTokenCalibration::default();
     };
 
-    if latest_historical_run.usage.input_tokens == 0
+    let historical_prompt_tokens = effective_prompt_tokens(
+        latest_historical_run.usage.input_tokens,
+        latest_historical_run.usage.cache_read_tokens,
+    );
+    if historical_prompt_tokens == 0
         || !run_summary_matches_primary_model(latest_historical_run, primary_model)
     {
         return ContextTokenCalibration::default();
@@ -304,11 +313,8 @@ fn build_initial_context_token_calibration(
         convert_history_messages(history_messages, history_tool_calls, &primary_model.model);
     let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history);
 
-    ContextTokenCalibration::from_observation(
-        estimated_tokens,
-        latest_historical_run.usage.input_tokens,
-    )
-    .unwrap_or_default()
+    ContextTokenCalibration::from_observation(estimated_tokens, historical_prompt_tokens)
+        .unwrap_or_default()
 }
 
 fn run_summary_matches_primary_model(
@@ -3603,6 +3609,14 @@ mod tests {
     }
 
     fn make_run_summary(model_id: &str, input_tokens: u64) -> RunSummaryDto {
+        make_run_summary_with_cache(model_id, input_tokens, 0)
+    }
+
+    fn make_run_summary_with_cache(
+        model_id: &str,
+        input_tokens: u64,
+        cache_read_tokens: u64,
+    ) -> RunSummaryDto {
         RunSummaryDto {
             id: "run-prev".to_string(),
             thread_id: "thread-1".to_string(),
@@ -3616,9 +3630,9 @@ mod tests {
             usage: RunUsageDto {
                 input_tokens,
                 output_tokens: 128,
-                cache_read_tokens: 0,
+                cache_read_tokens,
                 cache_write_tokens: 0,
-                total_tokens: input_tokens + 128,
+                total_tokens: input_tokens + cache_read_tokens + 128,
             },
         }
     }
@@ -4250,6 +4264,61 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn usage_calibration_counts_cache_read_when_input_is_zero() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let last_completed_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
+        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let reasoning_buffer = StdMutex::new(String::new());
+        let assistant = AssistantMessage::builder()
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .model("gpt-test")
+            .usage(tiycore::types::Usage {
+                input: 0,
+                output: 32,
+                cache_read: 1_500,
+                cache_write: 0,
+                total_tokens: 1_532,
+                cost: tiycore::types::UsageCost::default(),
+            })
+            .build()
+            .expect("assistant message with cache-read usage");
+
+        record_pending_prompt_estimate(&context_compression_state, 1_000);
+        handle_agent_event(
+            "run-cache-read-calibration",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &AgentEvent::MessageEnd {
+                message: AgentMessage::Assistant(assistant),
+            },
+        );
+
+        let usage_events = std::iter::from_fn(|| event_rx.try_recv().ok())
+            .filter(|event| matches!(event, ThreadStreamEvent::ThreadUsageUpdated { .. }))
+            .count();
+        let calibration = current_context_token_calibration(&context_compression_state);
+
+        assert_eq!(usage_events, 1);
+        assert_eq!(calibration.ratio_basis_points(), 15_000);
+        assert!(context_compression_state
+            .lock()
+            .expect("context compression state")
+            .pending_prompt_estimate
+            .is_none());
+    }
+
+    #[test]
     fn build_initial_context_token_calibration_seeds_from_matching_historical_run() {
         let primary_model = sample_resolved_model_role("primary-model");
         let history_messages = vec![
@@ -4259,6 +4328,35 @@ Used for prompt assembly coverage.
         let history = convert_history_messages(&history_messages, &[], &primary_model.model);
         let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history);
         let run_summary = make_run_summary("primary-model", (estimated_tokens as u64) * 2);
+
+        let calibration = build_initial_context_token_calibration(
+            Some(&run_summary),
+            &history_messages,
+            &[],
+            &primary_model,
+        );
+
+        assert_eq!(calibration.ratio_basis_points(), 20_000);
+        assert_eq!(
+            calibration.apply_to_estimate(estimated_tokens),
+            estimated_tokens * 2
+        );
+    }
+
+    #[test]
+    fn build_initial_context_token_calibration_counts_cache_read_tokens() {
+        let primary_model = sample_resolved_model_role("primary-model");
+        let history_messages = vec![
+            make_history_message("msg-1", "run-prev", "user", &"x".repeat(600)),
+            make_history_message("msg-2", "run-prev", "assistant", &"y".repeat(600)),
+        ];
+        let history = convert_history_messages(&history_messages, &[], &primary_model.model);
+        let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history);
+        let run_summary = make_run_summary_with_cache(
+            "primary-model",
+            estimated_tokens as u64 / 2,
+            estimated_tokens as u64 * 3 / 2,
+        );
 
         let calibration = build_initial_context_token_calibration(
             Some(&run_summary),
