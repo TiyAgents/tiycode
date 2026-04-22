@@ -1,6 +1,7 @@
 pub mod edit;
 pub mod filesystem;
 pub mod git;
+pub mod output_sanitizer;
 pub mod process;
 pub mod search;
 pub mod terminal;
