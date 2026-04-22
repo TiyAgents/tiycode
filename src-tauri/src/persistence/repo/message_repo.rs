@@ -527,6 +527,71 @@ mod tests {
         assert_eq!(ids, vec!["50", "60"]);
     }
 
+    #[tokio::test]
+    async fn list_since_last_reset_supports_manual_title_tail_windowing_after_boundary() {
+        let pool = setup_test_pool().await;
+
+        for index in 0..140 {
+            let id = format!("{:03}", index + 1);
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            insert(&pool, &msg(&id, role, &format!("message-{index}")))
+                .await
+                .unwrap();
+        }
+
+        insert(
+            &pool,
+            &reset_marker(
+                "200",
+                serde_json::json!({
+                    "kind": "context_reset",
+                    "source": "auto",
+                    "boundaryMessageId": "050",
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        insert(
+            &pool,
+            &MessageRecord {
+                id: "201".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "system".to_string(),
+                content_markdown: "<context_summary>state</context_summary>".to_string(),
+                message_type: "summary_marker".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(serde_json::json!({"kind": "context_summary"}).to_string()),
+                attachments_json: None,
+                created_at: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let messages = list_since_last_reset(&pool, "t1").await.unwrap();
+        let tail_start = messages.len().saturating_sub(128);
+        let recent_tail = &messages[tail_start..];
+        let relevant: Vec<&MessageRecord> = recent_tail
+            .iter()
+            .filter(|message| {
+                message.message_type == "plain_message"
+                    && (message.role == "user" || message.role == "assistant")
+            })
+            .collect();
+        let relevant_start = relevant.len().saturating_sub(24);
+        let recent_relevant: Vec<&MessageRecord> = relevant[relevant_start..].to_vec();
+        let ids: Vec<&str> = recent_relevant
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect();
+
+        assert_eq!(ids.len(), 24);
+        assert_eq!(ids.first().copied(), Some("117"));
+        assert_eq!(ids.last().copied(), Some("140"));
+    }
+
     #[test]
     fn extract_boundary_message_id_is_tolerant_of_malformed_metadata() {
         assert_eq!(extract_boundary_message_id(None), None);

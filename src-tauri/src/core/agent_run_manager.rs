@@ -40,7 +40,7 @@ use crate::persistence::repo::{
     message_repo, profile_repo, run_repo, thread_repo, tool_call_repo, workspace_repo,
 };
 
-pub(crate) const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const TITLE_GENERATION_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const TITLE_GENERATION_MAX_TOKENS: u32 = 512;
 pub(crate) const TITLE_GENERATION_MAX_TOKENS_REASONING: u32 = 2048;
 const PRIMARY_SUMMARY_MAX_TOKENS: u32 = 8192;
@@ -60,6 +60,8 @@ struct ActiveRun {
     profile_id: Option<String>,
     frontend_tx: broadcast::Sender<ThreadStreamEvent>,
     lightweight_model_role: Option<ResolvedModelRole>,
+    auxiliary_model_role: Option<ResolvedModelRole>,
+    primary_model_role: Option<ResolvedModelRole>,
     streaming_message_id: Option<String>,
     reasoning_message_id: Option<String>,
     cancellation_requested: bool,
@@ -189,6 +191,8 @@ impl AgentRunManager {
                     profile_id: profile_id.clone(),
                     frontend_tx: frontend_tx.clone(),
                     lightweight_model_role: None,
+                    auxiliary_model_role: None,
+                    primary_model_role: None,
                     streaming_message_id: None,
                     reasoning_message_id: None,
                     cancellation_requested: false,
@@ -251,6 +255,8 @@ impl AgentRunManager {
                 let mut runs = self.active_runs.lock().await;
                 if let Some(run) = runs.get_mut(&run_id) {
                     run.lightweight_model_role = spec.model_plan.lightweight.clone();
+                    run.auxiliary_model_role = spec.model_plan.auxiliary.clone();
+                    run.primary_model_role = Some(spec.model_plan.primary.clone());
                 }
             }
 
@@ -556,6 +562,8 @@ impl AgentRunManager {
                     profile_id: None,
                     frontend_tx: frontend_tx.clone(),
                     lightweight_model_role: None,
+                    auxiliary_model_role: None,
+                    primary_model_role: None,
                     streaming_message_id: None,
                     reasoning_message_id: None,
                     cancellation_requested: false,
@@ -1354,6 +1362,8 @@ impl AgentRunManager {
             profile_id,
             frontend_tx,
             lightweight_model_role,
+            auxiliary_model_role,
+            primary_model_role,
             streaming_message_id,
             reasoning_message_id,
         ) = {
@@ -1366,6 +1376,8 @@ impl AgentRunManager {
                 run.profile_id.clone(),
                 run.frontend_tx.clone(),
                 run.lightweight_model_role.clone(),
+                run.auxiliary_model_role.clone(),
+                run.primary_model_role.clone(),
                 run.streaming_message_id.clone(),
                 run.reasoning_message_id.clone(),
             )
@@ -1415,6 +1427,8 @@ impl AgentRunManager {
                 profile_id,
                 frontend_tx,
                 lightweight_model_role,
+                auxiliary_model_role,
+                primary_model_role,
                 self.app_handle.clone(),
             );
         }
@@ -1429,16 +1443,23 @@ impl AgentRunManager {
         profile_id: Option<String>,
         frontend_tx: broadcast::Sender<ThreadStreamEvent>,
         lightweight_model_role: Option<ResolvedModelRole>,
+        auxiliary_model_role: Option<ResolvedModelRole>,
+        primary_model_role: Option<ResolvedModelRole>,
         app_handle: AppHandle,
     ) {
-        let Some(model_role) = lightweight_model_role else {
+        let candidates = build_title_model_candidates(
+            lightweight_model_role.as_ref(),
+            auxiliary_model_role.as_ref(),
+            primary_model_role.as_ref(),
+        );
+        if candidates.is_empty() {
             tracing::debug!(
                 run_id = %run_id,
                 thread_id = %thread_id,
-                "skipping thread title generation: no lightweight model configured"
+                "skipping thread title generation: no title model configured"
             );
             return;
-        };
+        }
 
         let pool = self.pool.clone();
         tokio::spawn(async move {
@@ -1447,7 +1468,7 @@ impl AgentRunManager {
                 &run_id,
                 &thread_id,
                 profile_id,
-                model_role,
+                &candidates,
                 frontend_tx,
                 app_handle,
             )
@@ -2278,12 +2299,30 @@ fn append_compact_instructions(base_summary: String, instructions: Option<&str>)
     )
 }
 
+/// Build a deduplicated list of title model candidates in priority order:
+/// lightweight → auxiliary → primary.
+/// Skips candidates whose model_id is identical to an already-included one.
+fn build_title_model_candidates(
+    lightweight: Option<&ResolvedModelRole>,
+    auxiliary: Option<&ResolvedModelRole>,
+    primary: Option<&ResolvedModelRole>,
+) -> Vec<ResolvedModelRole> {
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for candidate in [lightweight, auxiliary, primary].into_iter().flatten() {
+        if seen.insert(candidate.model_id.clone()) {
+            result.push(candidate.clone());
+        }
+    }
+    result
+}
+
 async fn maybe_generate_thread_title(
     pool: &SqlitePool,
     run_id: &str,
     thread_id: &str,
     profile_id: Option<String>,
-    model_role: ResolvedModelRole,
+    candidates: &[ResolvedModelRole],
     frontend_tx: broadcast::Sender<ThreadStreamEvent>,
     app_handle: AppHandle,
 ) -> Result<(), AppError> {
@@ -2296,16 +2335,15 @@ async fn maybe_generate_thread_title(
         return Ok(());
     }
 
-    let Some((user_message, assistant_message)) =
-        load_initial_title_context(pool, thread_id).await?
-    else {
+    let context_messages = load_title_context_messages(pool, thread_id).await?;
+    if context_messages.is_empty() {
         tracing::debug!(
             run_id = %run_id,
             thread_id = %thread_id,
-            "skipping thread title generation: could not load initial title context"
+            "skipping thread title generation: no user/assistant messages in current context"
         );
         return Ok(());
-    };
+    }
 
     let profile = match profile_id {
         Some(profile_id) => profile_repo::find_by_id(pool, &profile_id).await?,
@@ -2320,93 +2358,103 @@ async fn maybe_generate_thread_title(
             .and_then(|profile| profile.response_style.as_deref()),
     );
 
-    let Some(title) = generate_thread_title(
-        &model_role,
-        &user_message,
-        &assistant_message,
-        response_language.as_deref(),
-        response_style,
-    )
-    .await?
-    else {
-        tracing::warn!(
-            run_id = %run_id,
-            thread_id = %thread_id,
-            "thread title generation returned empty result (timeout or empty response)"
-        );
-        return Ok(());
-    };
+    let mut last_error: Option<AppError> = None;
+    for model_role in candidates {
+        match generate_thread_title(
+            model_role,
+            &context_messages,
+            response_language.as_deref(),
+            response_style,
+        )
+        .await
+        {
+            Ok(Some(title)) => {
+                thread_repo::update_title(pool, thread_id, &title).await?;
 
-    thread_repo::update_title(pool, thread_id, &title).await?;
+                tracing::info!(
+                    run_id = %run_id,
+                    thread_id = %thread_id,
+                    title = %title,
+                    "generated thread title, sending to frontend"
+                );
 
-    tracing::info!(
-        run_id = %run_id,
-        thread_id = %thread_id,
-        title = %title,
-        "generated thread title, sending to frontend"
-    );
+                // Broadcast a global event so the sidebar can pick up the new title even
+                // when no per-run stream subscription exists (e.g. inactive threads).
+                let _ = app_handle.emit(
+                    app_events::THREAD_TITLE_UPDATED,
+                    ThreadTitleUpdatedPayload {
+                        thread_id: thread_id.to_string(),
+                        title: title.clone(),
+                    },
+                );
 
-    // Broadcast a global event so the sidebar can pick up the new title even
-    // when no per-run stream subscription exists (e.g. inactive threads).
-    let _ = app_handle.emit(
-        app_events::THREAD_TITLE_UPDATED,
-        ThreadTitleUpdatedPayload {
-            thread_id: thread_id.to_string(),
-            title: title.clone(),
-        },
-    );
+                if frontend_tx
+                    .send(ThreadStreamEvent::ThreadTitleUpdated {
+                        run_id: run_id.to_string(),
+                        thread_id: thread_id.to_string(),
+                        title,
+                    })
+                    .is_err()
+                {
+                    tracing::warn!(
+                        run_id = %run_id,
+                        thread_id = %thread_id,
+                        "failed to send ThreadTitleUpdated event: frontend channel closed"
+                    );
+                }
 
-    if frontend_tx
-        .send(ThreadStreamEvent::ThreadTitleUpdated {
-            run_id: run_id.to_string(),
-            thread_id: thread_id.to_string(),
-            title,
-        })
-        .is_err()
-    {
-        tracing::warn!(
-            run_id = %run_id,
-            thread_id = %thread_id,
-            "failed to send ThreadTitleUpdated event: frontend channel closed"
-        );
+                return Ok(());
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    run_id = %run_id,
+                    thread_id = %thread_id,
+                    model_id = %model_role.model_id,
+                    "title generation returned empty result (timeout or empty response)"
+                );
+                last_error = Some(AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.regenerate_title.empty",
+                    "Title generation returned empty or timed out.",
+                ));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    run_id = %run_id,
+                    thread_id = %thread_id,
+                    model_id = %model_role.model_id,
+                    error = %e,
+                    "title generation failed"
+                );
+                last_error = Some(e);
+            }
+        }
+    }
+
+    if let Some(e) = last_error {
+        return Err(e);
     }
 
     Ok(())
 }
 
-async fn load_initial_title_context(
+async fn load_title_context_messages(
     pool: &SqlitePool,
     thread_id: &str,
-) -> Result<Option<(String, String)>, AppError> {
-    let messages = message_repo::list_recent(pool, thread_id, None, 12).await?;
-    let first_user_message = messages
-        .iter()
-        .find(|message| message.role == "user" && message.message_type == "plain_message")
-        .map(|message| message.content_markdown.trim())
-        .filter(|content| !content.is_empty());
-    let first_assistant_message = messages
-        .iter()
-        .find(|message| {
-            message.role == "assistant"
-                && message.message_type == "plain_message"
-                && message.status == "completed"
+) -> Result<Vec<MessageRecord>, AppError> {
+    let messages = message_repo::list_since_last_reset(pool, thread_id).await?;
+    let filtered: Vec<MessageRecord> = messages
+        .into_iter()
+        .filter(|m| {
+            m.message_type == "plain_message" && (m.role == "user" || m.role == "assistant")
         })
-        .map(|message| message.content_markdown.trim())
-        .filter(|content| !content.is_empty());
-
-    match (first_user_message, first_assistant_message) {
-        (Some(user_message), Some(assistant_message)) => Ok(Some((
-            truncate_chars(user_message, TITLE_CONTEXT_MAX_CHARS),
-            truncate_chars(assistant_message, TITLE_CONTEXT_MAX_CHARS),
-        ))),
-        _ => Ok(None),
-    }
+        .collect();
+    Ok(filtered)
 }
 
 async fn generate_thread_title(
     model_role: &ResolvedModelRole,
-    user_message: &str,
-    assistant_message: &str,
+    messages: &[MessageRecord],
     response_language: Option<&str>,
     response_style: ProfileResponseStyle,
 ) -> Result<Option<String>, AppError> {
@@ -2437,12 +2485,7 @@ async fn generate_thread_title(
         )
     })?;
 
-    let prompt = build_title_prompt(
-        user_message,
-        assistant_message,
-        response_language,
-        response_style,
-    );
+    let prompt = build_title_prompt_from_messages(messages, response_language, response_style);
     let context = TiyContext {
         system_prompt: Some(
             "You write concise conversation titles. Return only the title text.".to_string(),
@@ -2489,6 +2532,54 @@ async fn generate_thread_title(
     Ok(normalize_generated_title(&message.text_content()))
 }
 
+pub(crate) fn build_title_prompt_from_messages(
+    messages: &[MessageRecord],
+    response_language: Option<&str>,
+    response_style: ProfileResponseStyle,
+) -> String {
+    let language_rule = match response_language {
+        Some(language) => format!("- Write the title in {language}."),
+        None => "- Match the conversation language.".to_string(),
+    };
+    let style_rule = match response_style {
+        ProfileResponseStyle::Balanced => {
+            "- Keep the title clear and natural, with enough specificity to scan quickly."
+        }
+        ProfileResponseStyle::Concise => {
+            "- Keep the title especially terse, direct, and low-friction."
+        }
+        ProfileResponseStyle::Guide => {
+            "- Prefer a title that signals the user's goal or decision focus clearly."
+        }
+    };
+
+    let mut conversation = String::new();
+    // Messages are in chronological order (oldest first); iterate in reverse
+    // so the newest messages appear first in the prompt.
+    for msg in messages.iter().rev() {
+        let role_label = if msg.role == "user" {
+            "User"
+        } else {
+            "Assistant"
+        };
+        let content = truncate_chars(msg.content_markdown.trim(), TITLE_CONTEXT_MAX_CHARS);
+        conversation.push_str(&format!("{role_label}:\n{content}\n\n"));
+    }
+
+    format!(
+        "Create a short thread title for this conversation.\n\
+Rules:\n\
+{language_rule}\n\
+{style_rule}\n\
+- Prefer concrete nouns and actions.\n\
+- Max 18 Chinese characters or 7 English words.\n\
+- No quotes, no markdown, no prefixes.\n\
+\n\
+Conversation:\n{conversation}"
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn build_title_prompt(
     user_message: &str,
     assistant_message: &str,
@@ -2629,9 +2720,9 @@ mod tests {
         append_compact_instructions, await_summary_with_abort, build_compact_summary_messages,
         build_compact_summary_system_prompt, build_implementation_handoff_prompt,
         build_merge_summary_messages, build_merge_summary_system_prompt, build_title_prompt,
-        collapse_whitespace, detect_prior_summary, extract_context_summary_block,
-        mark_thread_run_cancellation_requested, normalize_compact_summary,
-        normalize_generated_title, render_compact_summary_history,
+        build_title_prompt_from_messages, collapse_whitespace, detect_prior_summary,
+        extract_context_summary_block, mark_thread_run_cancellation_requested,
+        normalize_compact_summary, normalize_generated_title, render_compact_summary_history,
         should_complete_reasoning_for_event, summary_history_char_budget, truncate_chars,
         truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
         SUMMARY_HISTORY_MIN_CHARS, SUMMARY_TOOL_RESULT_MAX_CHARS,
@@ -2641,6 +2732,7 @@ mod tests {
         build_plan_artifact_from_tool_input, build_plan_message_metadata, PlanApprovalAction,
     };
     use crate::ipc::frontend_channels::ThreadStreamEvent;
+    use crate::model::thread::MessageRecord;
     use std::collections::HashMap;
     use tiycore::agent::AgentMessage;
     use tiycore::types::{Message as TiyMessage, UserMessage};
@@ -2666,6 +2758,8 @@ mod tests {
                 profile_id: None,
                 frontend_tx,
                 lightweight_model_role: None,
+                auxiliary_model_role: None,
+                primary_model_role: None,
                 streaming_message_id: None,
                 reasoning_message_id: None,
                 cancellation_requested: false,
@@ -2703,6 +2797,8 @@ mod tests {
             profile_id: None,
             frontend_tx,
             lightweight_model_role: None,
+            auxiliary_model_role: None,
+            primary_model_role: None,
             streaming_message_id: None,
             reasoning_message_id: None,
             cancellation_requested: false,
@@ -2954,6 +3050,68 @@ mod tests {
 
         assert!(prompt.contains("Write the title in Japanese."));
         assert!(prompt.contains("signals the user's goal or decision focus clearly"));
+    }
+
+    #[test]
+    fn title_prompt_from_messages_renders_newest_messages_first() {
+        let messages = vec![
+            MessageRecord {
+                id: "msg-1".into(),
+                thread_id: "thread-1".into(),
+                run_id: None,
+                role: "user".into(),
+                content_markdown: "oldest user message".into(),
+                message_type: "plain_message".into(),
+                status: "completed".into(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-2".into(),
+                thread_id: "thread-1".into(),
+                run_id: None,
+                role: "assistant".into(),
+                content_markdown: "newer assistant reply".into(),
+                message_type: "plain_message".into(),
+                status: "completed".into(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-3".into(),
+                thread_id: "thread-1".into(),
+                run_id: None,
+                role: "user".into(),
+                content_markdown: "newest user follow-up".into(),
+                message_type: "plain_message".into(),
+                status: "completed".into(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: String::new(),
+            },
+        ];
+
+        let prompt = build_title_prompt_from_messages(
+            &messages,
+            Some("English"),
+            ProfileResponseStyle::Balanced,
+        );
+
+        let newest_idx = prompt
+            .find("User:\nnewest user follow-up")
+            .expect("newest message should be present");
+        let older_idx = prompt
+            .find("Assistant:\nnewer assistant reply")
+            .expect("older assistant message should be present");
+        let oldest_idx = prompt
+            .find("User:\noldest user message")
+            .expect("oldest message should be present");
+
+        assert!(newest_idx < older_idx);
+        assert!(older_idx < oldest_idx);
+        assert!(prompt.contains("Write the title in English."));
     }
 
     #[test]
