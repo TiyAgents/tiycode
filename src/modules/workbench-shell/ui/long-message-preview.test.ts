@@ -80,23 +80,20 @@ describe("getLongMessagePreview", () => {
 // ── shouldUseLongMessagePreview ─────────────────────────────
 
 describe("shouldUseLongMessagePreview", () => {
-  const longContent = "x".repeat(15_000);
-  const shortContent = "short";
-
-  it("returns true for completed plain_message with long content", () => {
+  it("returns true for completed plain_message", () => {
     expect(
       shouldUseLongMessagePreview({
-        content: longContent,
+        content: "any",
         messageType: "plain_message",
         status: "completed",
       }),
     ).toBe(true);
   });
 
-  it("returns true for failed plain_message with long content", () => {
+  it("returns true for failed plain_message", () => {
     expect(
       shouldUseLongMessagePreview({
-        content: longContent,
+        content: "any",
         messageType: "plain_message",
         status: "failed",
       }),
@@ -106,7 +103,7 @@ describe("shouldUseLongMessagePreview", () => {
   it("returns false for streaming message", () => {
     expect(
       shouldUseLongMessagePreview({
-        content: longContent,
+        content: "any",
         messageType: "plain_message",
         status: "streaming",
       }),
@@ -116,19 +113,19 @@ describe("shouldUseLongMessagePreview", () => {
   it("returns false for non-plain_message type", () => {
     expect(
       shouldUseLongMessagePreview({
-        content: longContent,
+        content: "any",
         messageType: "plan",
         status: "completed",
       }),
     ).toBe(false);
   });
 
-  it("returns false for completed plain_message with short content", () => {
+  it("returns false for discarded message", () => {
     expect(
       shouldUseLongMessagePreview({
-        content: shortContent,
+        content: "any",
         messageType: "plain_message",
-        status: "completed",
+        status: "discarded",
       }),
     ).toBe(false);
   });

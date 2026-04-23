@@ -863,7 +863,7 @@ export function shouldUseLongMessagePreview(message: Pick<SurfaceMessage, "conte
     return false;
   }
 
-  return getLongMessagePreview(message.content).isLong;
+  return true;
 }
 
 function mapRunSummaryToContextUsage(run: RunSummaryDto | null): ThreadContextUsage | null {
@@ -4039,7 +4039,7 @@ export function RuntimeThreadSurface({
     const content = message.content || (message.status === "streaming" ? "…" : "");
     const isExpanded = expandedLongMessageIds[message.id] ?? false;
     const preview = shouldUseLongMessagePreview(message) ? getLongMessagePreview(content) : null;
-    const canPreview = preview?.isLong === true;
+    const canPreview = preview !== null && preview.isLong;
     const usePreview = canPreview && !isExpanded;
 
     if (!usePreview) {
