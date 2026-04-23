@@ -404,10 +404,14 @@ async fn test_policy_allow_list_pattern_must_match() {
 // T1.6.2 — Plan mode blocks mutating tools
 // =========================================================================
 
-#[test]
-fn test_plan_mode_blocks_hard_deny_tools() {
+#[tokio::test]
+async fn test_plan_mode_blocks_hard_deny_tools() {
+    let pool = test_helpers::setup_test_pool().await;
+    let engine = PolicyEngine::new(pool);
+
     let hard_deny_tools = vec![
         "write",
+        "edit",
         "patch",
         "git_add",
         "git_stage",
@@ -417,52 +421,68 @@ fn test_plan_mode_blocks_hard_deny_tools() {
         "git_pull",
         "git_fetch",
         "term_write",
+        "term_restart",
+        "term_close",
         "market_install",
     ];
 
-    let run_mode = "plan";
     for tool in &hard_deny_tools {
-        let should_block = run_mode == "plan" && hard_deny_tools.contains(tool);
-        assert!(should_block, "Plan mode should hard-deny tool: {tool}");
+        let result = engine
+            .evaluate(
+                tool,
+                &json!({ "path": "/tmp/test" }),
+                None,
+                &[],
+                "plan",
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(result.verdict, PolicyVerdict::Deny { .. }),
+            "Plan mode should hard-deny tool '{tool}', got {:?}",
+            result.verdict
+        );
+        assert!(
+            result
+                .checked_rules
+                .contains(&"plan_mode_restriction".to_string()),
+            "Tool '{tool}' should trigger plan_mode_restriction rule"
+        );
     }
 }
 
-#[test]
-fn test_plan_mode_allows_read_tools() {
+#[tokio::test]
+async fn test_plan_mode_allows_read_tools() {
+    let pool = test_helpers::setup_test_pool().await;
+    let engine = PolicyEngine::new(pool);
+
     let read_only_tools = vec![
-        "read",
-        "list",
-        "search",
-        "git_status",
-        "git_diff",
-        "git_log",
+        ("read", json!({ "path": "/tmp/test" })),
+        ("list", json!({ "path": "/tmp/test" })),
+        ("search", json!({ "directory": "/tmp/test" })),
+        ("find", json!({ "path": "/tmp/test" })),
     ];
 
-    let hard_deny_tools = vec![
-        "write",
-        "patch",
-        "git_add",
-        "git_stage",
-        "git_unstage",
-        "git_commit",
-        "git_push",
-        "git_pull",
-        "git_fetch",
-        "term_write",
-        "market_install",
-    ];
+    for (tool, input) in &read_only_tools {
+        let result = engine
+            .evaluate(tool, input, None, &[], "plan", None)
+            .await
+            .unwrap();
 
-    for tool in &read_only_tools {
-        let blocked = hard_deny_tools.contains(tool);
-        assert!(!blocked, "Plan mode should allow read-only tool: {tool}");
+        assert!(
+            !matches!(result.verdict, PolicyVerdict::Deny { .. }),
+            "Plan mode should allow read-only tool '{tool}', got {:?}",
+            result.verdict
+        );
+        assert!(
+            !result
+                .checked_rules
+                .contains(&"plan_mode_restriction".to_string()),
+            "Read-only tool '{tool}' should not trigger plan_mode_restriction rule"
+        );
     }
-
-    // Shell is not in the hard-deny list; it follows the normal approval policy.
-    let blocked = hard_deny_tools.contains(&"shell");
-    assert!(
-        !blocked,
-        "Shell should follow normal approval policy in plan mode, not be hard-denied"
-    );
 }
 
 // =========================================================================
@@ -495,11 +515,113 @@ async fn test_plan_mode_shell_follows_approval_policy() {
         result.verdict
     );
     assert!(
-        result
+        !result
             .checked_rules
-            .contains(&"plan_mode_restriction".to_string())
-            == false,
+            .contains(&"plan_mode_restriction".to_string()),
         "shell should not trigger plan_mode_restriction rule"
+    );
+}
+
+// =========================================================================
+// T1.6.4 — Allow/deny list precedence: deny takes priority over allow
+// =========================================================================
+
+#[tokio::test]
+async fn test_deny_list_takes_precedence_over_allow_list() {
+    let pool = test_helpers::setup_test_pool().await;
+    // Seed both allow_list and deny_list with overlapping rules for the same tool
+    test_helpers::seed_policy(
+        &pool,
+        "allow_list",
+        r#"[{"tool":"shell","pattern":"npm test"}]"#,
+    )
+    .await;
+    test_helpers::seed_policy(
+        &pool,
+        "deny_list",
+        r#"[{"tool":"shell","pattern":"npm test"}]"#,
+    )
+    .await;
+
+    let engine = PolicyEngine::new(pool);
+
+    let result = engine
+        .evaluate(
+            "shell",
+            &json!({ "command": "npm test" }),
+            None,
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+
+    // deny_list is checked before allow_list, so the tool must be denied
+    assert!(
+        matches!(result.verdict, PolicyVerdict::Deny { .. }),
+        "deny_list should take precedence over allow_list, got {:?}",
+        result.verdict
+    );
+    assert!(
+        result.checked_rules.contains(&"user_deny_list".to_string()),
+        "user_deny_list rule should be checked"
+    );
+}
+
+#[tokio::test]
+async fn test_allow_list_works_when_no_deny_conflict() {
+    let pool = test_helpers::setup_test_pool().await;
+    // Seed allow_list for a command, deny_list for a different command
+    test_helpers::seed_policy(
+        &pool,
+        "allow_list",
+        r#"[{"tool":"shell","pattern":"npm test"}]"#,
+    )
+    .await;
+    test_helpers::seed_policy(
+        &pool,
+        "deny_list",
+        r#"[{"tool":"shell","pattern":"cargo build"}]"#,
+    )
+    .await;
+
+    let engine = PolicyEngine::new(pool);
+
+    // The allow-listed command should be auto-allowed since it does not match deny_list
+    let allowed = engine
+        .evaluate(
+            "shell",
+            &json!({ "command": "npm test" }),
+            None,
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(allowed.verdict, PolicyVerdict::AutoAllow),
+        "allow_list should grant AutoAllow when no deny conflict, got {:?}",
+        allowed.verdict
+    );
+
+    // The deny-listed command should still be denied
+    let denied = engine
+        .evaluate(
+            "shell",
+            &json!({ "command": "cargo build" }),
+            None,
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(denied.verdict, PolicyVerdict::Deny { .. }),
+        "deny_list entry should still be enforced, got {:?}",
+        denied.verdict
     );
 }
 
@@ -507,39 +629,104 @@ async fn test_plan_mode_shell_follows_approval_policy() {
 // T1.6.3 — Workspace boundary enforcement
 // =========================================================================
 
-#[test]
-fn test_workspace_boundary_check() {
-    let workspace_path = "/home/user/project";
+#[tokio::test]
+async fn test_workspace_boundary_allows_paths_in_workspace() {
+    let pool = test_helpers::setup_test_pool().await;
+    let engine = PolicyEngine::new(pool);
+    let workspace = tempfile::tempdir().expect("workspace");
 
-    // Paths within workspace
-    let valid_paths = vec![
-        "/home/user/project/src/main.rs",
-        "/home/user/project/README.md",
-        "/home/user/project/nested/deep/file.txt",
-    ];
+    let ws_path = workspace.path().to_string_lossy().to_string();
+    let inner_file = workspace.path().join("src/main.rs");
+    std::fs::create_dir_all(inner_file.parent().unwrap()).unwrap();
 
-    for path in &valid_paths {
-        assert!(
-            path.starts_with(workspace_path),
-            "Path '{path}' should be within workspace"
-        );
-    }
+    let result = engine
+        .evaluate(
+            "write",
+            &json!({ "path": inner_file.to_string_lossy().to_string() }),
+            Some(&ws_path),
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
 
-    // Paths outside workspace
-    let invalid_paths = vec![
-        "/home/user/other-project/file.rs",
-        "/etc/passwd",
-        "/home/user/project_evil/payload.sh", // sneaky: prefix match but different dir
-    ];
+    assert!(
+        !matches!(result.verdict, PolicyVerdict::Deny { .. }),
+        "Path within workspace should not be denied, got {:?}",
+        result.verdict
+    );
+    assert!(
+        result
+            .checked_rules
+            .contains(&"workspace_boundary".to_string()),
+        "workspace_boundary rule should be checked"
+    );
+}
 
-    for path in &invalid_paths {
-        // Proper boundary check requires trailing slash or exact match
-        let within = path.starts_with(&format!("{workspace_path}/")) || *path == workspace_path;
-        assert!(
-            !within,
-            "Path '{path}' should be OUTSIDE workspace boundary"
-        );
-    }
+#[tokio::test]
+async fn test_workspace_boundary_denies_paths_outside_workspace() {
+    let pool = test_helpers::setup_test_pool().await;
+    let engine = PolicyEngine::new(pool);
+    let workspace = tempfile::tempdir().expect("workspace");
+    let outside_dir = tempfile::tempdir().expect("outside dir");
+
+    let ws_path = workspace.path().to_string_lossy().to_string();
+    let outside_file = outside_dir.path().join("evil-payload.sh");
+
+    let result = engine
+        .evaluate(
+            "write",
+            &json!({ "path": outside_file.to_string_lossy().to_string() }),
+            Some(&ws_path),
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(result.verdict, PolicyVerdict::Deny { .. }),
+        "Path outside workspace and writable roots should be denied, got {:?}",
+        result.verdict
+    );
+    assert!(
+        result
+            .checked_rules
+            .contains(&"workspace_boundary".to_string()),
+        "workspace_boundary rule should be checked"
+    );
+}
+
+#[tokio::test]
+async fn test_workspace_boundary_denies_prefix_confusion_path() {
+    let pool = test_helpers::setup_test_pool().await;
+    let engine = PolicyEngine::new(pool);
+    let workspace = tempfile::tempdir().expect("workspace");
+
+    // Create a real dir whose name is a prefix of the workspace path
+    // e.g. workspace at /tmp/abc123, evil at /tmp/abc123_evil
+    let ws_path = workspace.path().to_string_lossy().to_string();
+    let evil_path = format!("{}_evil/payload.sh", ws_path);
+
+    let result = engine
+        .evaluate(
+            "write",
+            &json!({ "path": evil_path }),
+            Some(&ws_path),
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(result.verdict, PolicyVerdict::Deny { .. }),
+        "Prefix-confusion path should be denied, got {:?}",
+        result.verdict
+    );
 }
 
 #[tokio::test]
