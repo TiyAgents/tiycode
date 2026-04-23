@@ -786,6 +786,17 @@ export function DashboardWorkbench() {
     terminalWorkspaceBindings,
     currentProject?.path ?? null,
   );
+  const { isSidebarOpen, isDrawerOpen } = panelVisibilityState;
+  const isProjectPanelAutoRefreshActive =
+    resolvedWorkspaceId !== null
+    && isSidebarOpen
+    && isDrawerOpen
+    && activeDrawerPanel === "project";
+  const isGitPanelAutoRefreshActive =
+    resolvedWorkspaceId !== null
+    && isSidebarOpen
+    && isDrawerOpen
+    && activeDrawerPanel === "git";
   const newThreadTerminalBindingKey =
     selectedProjectWorkspaceId === null
       ? null
@@ -795,7 +806,6 @@ export function DashboardWorkbench() {
       ? null
       : (terminalThreadBindings[newThreadTerminalBindingKey] ?? null)
     : (activeThread?.id ?? null);
-  const { isSidebarOpen, isDrawerOpen } = panelVisibilityState;
   const activeTerminalStateKey = isNewThreadMode
     ? (newThreadTerminalBindingKey ?? UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY)
     : (activeThread?.id ?? null);
@@ -3680,12 +3690,14 @@ export function DashboardWorkbench() {
                         currentProject={currentProject}
                         workspaceId={resolvedWorkspaceId}
                         workspaceBootstrapError={terminalBootstrapError}
+                        isAutoRefreshActive={isProjectPanelAutoRefreshActive}
                       />
                     ) : (
                       <GitPanel
                         workspaceId={resolvedWorkspaceId}
                         currentProject={currentProject}
                         workspaceBootstrapError={terminalBootstrapError}
+                        isAutoRefreshActive={isGitPanelAutoRefreshActive}
                         layoutResizeSignal={
                           isTerminalCollapsed ? 0 : terminalHeight
                         }

@@ -83,6 +83,7 @@ type GitPanelProps = {
   workspaceId: string | null;
   currentProject: ProjectOption | null;
   workspaceBootstrapError: string | null;
+  isAutoRefreshActive: boolean;
   layoutResizeSignal: number;
   commitMessageLanguage: string;
   commitMessagePrompt: string;
@@ -103,6 +104,7 @@ type GitDiffPreviewPanelProps = {
 };
 
 const ACTION_ALERT_TIMEOUT_MS = 4200;
+const PANE_AUTO_REFRESH_INTERVAL_MS = 5_000;
 
 const DEFAULT_HISTORY_HEIGHT = 228;
 const MIN_CHANGES_BODY_HEIGHT = 160;
@@ -796,6 +798,7 @@ export function GitPanel({
   workspaceId,
   currentProject,
   workspaceBootstrapError,
+  isAutoRefreshActive,
   layoutResizeSignal,
   commitMessageLanguage,
   commitMessagePrompt,
@@ -810,6 +813,7 @@ export function GitPanel({
   const historyResizeHandleRef = useRef<HTMLDivElement | null>(null);
   const copyResetTimeoutRef = useRef<number>(0);
   const actionAlertTimeoutRef = useRef<number>(0);
+  const autoRefreshInFlightRef = useRef(false);
   const [snapshot, setSnapshot] = useState<GitSnapshotDto | null>(() =>
     isMockMode ? buildMockSnapshot() : null,
   );
@@ -833,6 +837,21 @@ export function GitPanel({
     startHeight: number;
   } | null>(null);
 
+  useEffect(() => {
+    autoRefreshInFlightRef.current = false;
+  }, [workspaceId]);
+
+  const isRefreshingRef = useRef(false);
+  const pendingActionRef = useRef<GitMutationAction | null>(null);
+
+  useEffect(() => {
+    isRefreshingRef.current = isRefreshing;
+  }, [isRefreshing]);
+
+  useEffect(() => {
+    pendingActionRef.current = pendingAction;
+  }, [pendingAction]);
+
   useEffect(
     () => () => {
       window.clearTimeout(copyResetTimeoutRef.current);
@@ -840,6 +859,38 @@ export function GitPanel({
     },
     [],
   );
+
+  useEffect(() => {
+    if (!isAutoRefreshActive || isMockMode || !workspaceId) {
+      autoRefreshInFlightRef.current = false;
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (
+        document.visibilityState !== "visible"
+        || isRefreshingRef.current
+        || pendingActionRef.current !== null
+        || autoRefreshInFlightRef.current
+      ) {
+        return;
+      }
+
+      autoRefreshInFlightRef.current = true;
+      void gitRefresh(workspaceId)
+        .catch((error) => {
+          console.warn("[git-panel] auto refresh failed:", formatUiError(error));
+        })
+        .finally(() => {
+          autoRefreshInFlightRef.current = false;
+        });
+    }, PANE_AUTO_REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+      autoRefreshInFlightRef.current = false;
+    };
+  }, [isAutoRefreshActive, isMockMode, workspaceId]);
 
   useEffect(() => {
     if (isMockMode) {
