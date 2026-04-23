@@ -59,6 +59,10 @@ brew upgrade tiycode
 
 Pre-built binaries for macOS, Windows, and Linux are available on the [Releases](https://github.com/TiyAgents/tiycode/releases) page.
 
+> **macOS requirement:** TiyCode currently requires **macOS 10.15 Catalina or later**. We recommend using a newer supported macOS release for the best compatibility.
+>
+> **Windows requirement:** TiyCode currently requires **Windows 10 version 1809 (build 17763) or later**. We recommend using the latest available version of **Windows 10 or Windows 11** for the best compatibility. The desktop app also depends on the **Microsoft Edge WebView2 Runtime**. On Windows 11 it is typically preinstalled; on supported Windows 10 systems the Tauri installer usually takes care of installing or updating it. In offline environments, you may need to install WebView2 manually before launching the app.
+
 ### Build from Source
 
 #### Prerequisites
