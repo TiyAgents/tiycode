@@ -293,6 +293,11 @@ impl AgentRunManager {
             let mut spec = spec;
             if let Some(history_override) = options.history_override {
                 spec.history_messages = history_override;
+                // When history is overridden (e.g. context-reset plan approval),
+                // the old tool calls are no longer relevant — the override
+                // messages have no matching run_ids, so stale tool calls would
+                // otherwise be appended to the LLM context as orphaned entries.
+                spec.history_tool_calls = Vec::new();
             }
             spec.initial_prompt = options.initial_prompt;
 
