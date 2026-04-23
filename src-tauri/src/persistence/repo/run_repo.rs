@@ -173,6 +173,34 @@ pub async fn find_latest_by_thread(
     Ok(row.map(map_run_summary))
 }
 
+/// Find the latest historical run for a thread that has non-zero prompt usage
+/// (`input_tokens + cache_read_tokens`), excluding the currently created run.
+/// This is used to seed conservative context-token calibration for the next
+/// run on the same thread.
+pub async fn find_latest_with_prompt_usage_by_thread_excluding_run(
+    pool: &SqlitePool,
+    thread_id: &str,
+    excluded_run_id: &str,
+) -> Result<Option<RunSummaryDto>, AppError> {
+    let row = sqlx::query_as::<_, RunRow>(
+        "SELECT id, thread_id, run_mode, status, model_id, effective_model_plan_json,
+                error_message, started_at, input_tokens, output_tokens,
+                cache_read_tokens, cache_write_tokens, total_tokens
+         FROM thread_runs
+         WHERE thread_id = ?
+           AND id != ?
+           AND (input_tokens > 0 OR cache_read_tokens > 0)
+         ORDER BY started_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .bind(excluded_run_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(map_run_summary))
+}
+
 pub async fn list_thread_ids_with_active_runs(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
     let rows = sqlx::query_scalar::<_, String>(
         "SELECT DISTINCT thread_id
@@ -257,4 +285,162 @@ fn extract_primary_model_details(
         .map(str::to_string);
 
     (model_display_name, context_window)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-1', 'ws', '/tmp', '/tmp', '/tmp', 0, 0, 0, 'ready',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed workspace");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, created_at, updated_at, last_active_at)
+             VALUES ('t1', 'ws-1', 't', 'idle',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed thread t1");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, created_at, updated_at, last_active_at)
+             VALUES ('t2', 'ws-1', 't2', 'idle',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed thread t2");
+
+        pool
+    }
+
+    async fn insert_run_with_started_at(
+        pool: &SqlitePool,
+        id: &str,
+        thread_id: &str,
+        started_at: &str,
+        input_tokens: i64,
+    ) {
+        insert_run_with_usage(pool, id, thread_id, started_at, input_tokens, 0).await;
+    }
+
+    async fn insert_run_with_usage(
+        pool: &SqlitePool,
+        id: &str,
+        thread_id: &str,
+        started_at: &str,
+        input_tokens: i64,
+        cache_read_tokens: i64,
+    ) {
+        sqlx::query(
+            "INSERT INTO thread_runs (
+                id, thread_id, profile_id, run_mode, provider_id, model_id,
+                effective_model_plan_json, status, started_at, input_tokens,
+                output_tokens, cache_read_tokens, cache_write_tokens, total_tokens
+             )
+             VALUES (?, ?, NULL, 'default', NULL, NULL, NULL, 'completed', ?, ?, 0, ?, 0, ?)",
+        )
+        .bind(id)
+        .bind(thread_id)
+        .bind(started_at)
+        .bind(input_tokens)
+        .bind(cache_read_tokens)
+        .bind(input_tokens.saturating_add(cache_read_tokens))
+        .execute(pool)
+        .await
+        .expect("seed run");
+    }
+
+    #[tokio::test]
+    async fn find_latest_with_prompt_usage_returns_none_when_no_matching_history_exists() {
+        let pool = setup_test_pool().await;
+
+        assert!(
+            find_latest_with_prompt_usage_by_thread_excluding_run(&pool, "t1", "run-x")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+
+        assert!(
+            find_latest_with_prompt_usage_by_thread_excluding_run(&pool, "t1", "run-x")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn find_latest_with_prompt_usage_filters_thread_zero_usage_and_excluded_run() {
+        let pool = setup_test_pool().await;
+
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 10).await;
+        insert_run_with_started_at(&pool, "run-2", "t1", "2026-04-22T09:05:00Z", 0).await;
+        insert_run_with_started_at(&pool, "run-3", "t1", "2026-04-22T09:10:00Z", 50).await;
+        insert_run_with_started_at(&pool, "run-4", "t2", "2026-04-22T09:20:00Z", 999).await;
+
+        let latest = find_latest_with_prompt_usage_by_thread_excluding_run(&pool, "t1", "run-x")
+            .await
+            .unwrap()
+            .expect("latest matching run for t1");
+        assert_eq!(latest.id, "run-3");
+        assert_eq!(latest.thread_id, "t1");
+        assert_eq!(latest.usage.input_tokens, 50);
+
+        let excluded = find_latest_with_prompt_usage_by_thread_excluding_run(&pool, "t1", "run-3")
+            .await
+            .unwrap()
+            .expect("previous matching run after exclusion");
+        assert_eq!(excluded.id, "run-1");
+        assert_eq!(excluded.usage.input_tokens, 10);
+    }
+
+    #[tokio::test]
+    async fn find_latest_with_prompt_usage_includes_cache_read_only_runs() {
+        let pool = setup_test_pool().await;
+
+        insert_run_with_usage(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 10, 0).await;
+        insert_run_with_usage(&pool, "run-2", "t1", "2026-04-22T09:05:00Z", 0, 64).await;
+        insert_run_with_usage(&pool, "run-3", "t1", "2026-04-22T09:10:00Z", 0, 0).await;
+
+        let latest = find_latest_with_prompt_usage_by_thread_excluding_run(&pool, "t1", "run-x")
+            .await
+            .unwrap()
+            .expect("cache-read-only run should qualify as prompt usage");
+        assert_eq!(latest.id, "run-2");
+        assert_eq!(latest.usage.input_tokens, 0);
+        assert_eq!(latest.usage.cache_read_tokens, 64);
+    }
 }
