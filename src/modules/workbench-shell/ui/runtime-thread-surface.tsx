@@ -2245,6 +2245,7 @@ export function RuntimeThreadSurface({
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
+  const lastOptimisticUserIdRef = useRef<string | null>(null);
 
   // --- Viewport auto-collapse infrastructure ---
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLElement | null>(null);
@@ -2336,6 +2337,7 @@ export function RuntimeThreadSurface({
   ) => {
     const userCreatedAt = new Date().toISOString();
     const localUserMessageId = `local-user-${Date.now()}`;
+    lastOptimisticUserIdRef.current = localUserMessageId;
 
     setMessages((current) => {
       const withoutStaleLocal = current.filter(
@@ -2428,9 +2430,31 @@ export function RuntimeThreadSurface({
         for (const localMsg of currentMessages) {
           const snapshotIdx = merged.findIndex((m) => m.id === localMsg.id);
           if (snapshotIdx === -1) {
-            // Message exists locally but not in snapshot — keep it when it
-            // has meaningful content (streaming or completed assistant reply).
+            // Message exists locally but not in snapshot.
             if (
+              localMsg.id.startsWith("local-user-") && localMsg.role === "user"
+              && lastOptimisticUserIdRef.current === localMsg.id
+            ) {
+              // Optimistic user message — check if snapshot contains its
+              // persisted counterpart (same role + content, new to this snapshot).
+              const persistedIdx = merged.findIndex(
+                (m) =>
+                  m.role === "user"
+                  && m.content === localMsg.content
+                  && !currentMessages.some((c) => c.id === m.id),
+              );
+              if (persistedIdx !== -1) {
+                // Backend has persisted the message. Replace the snapshot
+                // entry's id with the optimistic id so the React key stays
+                // stable and no DOM remount / scroll jump occurs.
+                merged[persistedIdx] = { ...merged[persistedIdx], id: localMsg.id };
+                lastOptimisticUserIdRef.current = null;
+              } else {
+                // DB write hasn't landed yet — keep the optimistic message
+                // so it doesn't vanish from the list mid-frame.
+                merged.push(localMsg);
+              }
+            } else if (
               localMsg.role === "assistant"
               && (localMsg.status === "streaming" || localMsg.status === "completed")
               && localMsg.content.length > 0
@@ -2611,6 +2635,7 @@ export function RuntimeThreadSurface({
     setRunState("idle");
     setSnapshotReady(false);
     setSnapshotThreadId(null);
+    lastOptimisticUserIdRef.current = null;
     clearScheduledThinkingPhase();
     setThinkingPlaceholder(null);
     setTools([]);
@@ -3188,7 +3213,7 @@ export function RuntimeThreadSurface({
 
     if (submission.kind === "command" && submission.command?.behavior === "clear") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, [], false);
-      conversationContextRef.current?.scrollToBottom();
+      conversationContextRef.current?.scrollToBottom("instant");
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
@@ -3202,7 +3227,7 @@ export function RuntimeThreadSurface({
 
     if (submission.kind === "command" && submission.command?.behavior === "compact") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, [], false);
-      conversationContextRef.current?.scrollToBottom();
+      conversationContextRef.current?.scrollToBottom("instant");
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
@@ -3234,7 +3259,7 @@ export function RuntimeThreadSurface({
 
     // Scroll to bottom when sending a new message to ensure the conversation
     // follows the new content even if the user had scrolled up previously.
-    conversationContextRef.current?.scrollToBottom();
+    conversationContextRef.current?.scrollToBottom("instant");
 
     try {
       await streamRef.current?.startRun(
@@ -3269,7 +3294,7 @@ export function RuntimeThreadSurface({
     setRuntimeError(null);
     setQueueArtifact(null);
     appendOptimisticUserMessage(displayText, null, []);
-    conversationContextRef.current?.scrollToBottom();
+    conversationContextRef.current?.scrollToBottom("instant");
 
     try {
       await streamRef.current.respondToClarify(tool.id, response);
@@ -3378,9 +3403,13 @@ export function RuntimeThreadSurface({
   }, []);
 
   useEffect(() => {
+    if (!snapshotReady) {
+      setScrollContainerEl(null);
+      return;
+    }
     const scrollEl = conversationContextRef.current?.scrollRef?.current ?? null;
     setScrollContainerEl(scrollEl);
-  }, []);
+  }, [snapshotReady]);
 
   const getIsStuckToBottom = useCallback(
     () => conversationContextRef.current?.isAtBottom ?? true,
@@ -4120,6 +4149,7 @@ export function RuntimeThreadSurface({
           className="size-full"
           contextRef={conversationContextRef}
           initialBehavior="instant"
+          resizeBehavior="instant"
         >
           <ConversationContent
             className="mx-auto w-full max-w-4xl gap-0 px-6 pt-8"
