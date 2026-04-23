@@ -54,7 +54,7 @@ keepawake = "0.6"
 portable-pty = "0.9"
 git2 = { version = "0.20", features = ["vendored-libgit2", "vendored-openssl"] }
 similar = "2"
-tiycore = "0.1.14-rc.26042313"
+tiycore = "0.1.14"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 smappservice-rs = "0.1.3"
