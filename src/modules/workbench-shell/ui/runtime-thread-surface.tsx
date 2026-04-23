@@ -727,7 +727,7 @@ function mapSnapshotHelper(
   };
 }
 
-function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
+export function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
   if (snapshot.activeRun) {
     switch (snapshot.activeRun.status) {
       case "waiting_approval":
@@ -738,8 +738,9 @@ function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
       case "dispatching":
       case "running":
       case "waiting_tool_result":
-      case "cancelling":
         return "running";
+      case "cancelling":
+        return "cancelled";
       case "failed":
       case "denied":
         return "failed";
