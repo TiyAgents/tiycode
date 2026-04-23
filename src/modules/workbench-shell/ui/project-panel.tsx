@@ -25,6 +25,7 @@ import {
   DRAWER_LIST_STACK_CLASS,
   PROJECT_TREE_ITEMS,
 } from "@/modules/workbench-shell/model/fixtures";
+import { PANE_AUTO_REFRESH_INTERVAL_MS } from "@/modules/workbench-shell/model/panel-auto-refresh";
 import { useWorkspaceOpenApps } from "@/modules/workbench-shell/model/use-workspace-open-apps";
 import type { ProjectOption, ProjectTreeItem, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
@@ -438,8 +439,6 @@ function applyGitOverlayToNode(
   return resolved;
 }
 
-const PANE_AUTO_REFRESH_INTERVAL_MS = 5_000;
-
 export function ProjectPanel({
   currentProject,
   workspaceId,
@@ -501,6 +500,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
         return;
       }
 
+      isRefreshingTreeRef.current = true;
       setRefreshingTree(true);
       setTreeReloadVersion((value) => value + 1);
     }, PANE_AUTO_REFRESH_INTERVAL_MS);

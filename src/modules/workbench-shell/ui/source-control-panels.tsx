@@ -69,6 +69,7 @@ import {
   GIT_HISTORY_ITEMS,
 } from "@/modules/workbench-shell/model/fixtures";
 import { buildGitDiffPreview, buildGitSplitDiffRows } from "@/modules/workbench-shell/model/helpers";
+import { PANE_AUTO_REFRESH_INTERVAL_MS } from "@/modules/workbench-shell/model/panel-auto-refresh";
 import type {
   GitChangeFile,
   GitSplitDiffRow,
@@ -104,7 +105,6 @@ type GitDiffPreviewPanelProps = {
 };
 
 const ACTION_ALERT_TIMEOUT_MS = 4200;
-const PANE_AUTO_REFRESH_INTERVAL_MS = 5_000;
 
 const DEFAULT_HISTORY_HEIGHT = 228;
 const MIN_CHANGES_BODY_HEIGHT = 160;
