@@ -86,25 +86,41 @@ export function useViewportAutoCollapse({
   // redundant work if the IO fires again for the same element.
   const autoCollapsedRef = useRef<Set<string>>(new Set());
 
+  // Track entry ids that have been observed as intersecting (visible) at least
+  // once.  We only auto-collapse entries that were previously visible and then
+  // scrolled out — never entries that were already above the viewport when
+  // first observed (e.g. a reasoning block that completed while off-screen).
+  const seenIntersectingRef = useRef<Set<string>>(new Set());
+
   /**
    * The IO callback.  For each entry reported as not intersecting *above*
    * the viewport, trigger a collapse + scrollTop compensation.
    */
   const handleIntersection = useCallback(
     (ioEntries: IntersectionObserverEntry[]) => {
-      if (!getIsStuckRef.current()) return;
-
       for (const ioEntry of ioEntries) {
-        if (ioEntry.isIntersecting) continue;
+        const el = ioEntry.target as HTMLElement;
+        const id = el.dataset.timelineEntryId;
+        if (!id) continue;
+
+        // Always track visibility so we know which entries have been on-screen.
+        if (ioEntry.isIntersecting) {
+          seenIntersectingRef.current.add(id);
+          continue;
+        }
+
+        // Only collapse when the scroll container is stuck to bottom.
+        if (!getIsStuckRef.current()) continue;
+
+        // Only collapse entries that were previously visible in the viewport.
+        // This prevents collapsing entries that were already above the viewport
+        // when first observed (e.g. a reasoning block pushed off-screen by
+        // tool calls during streaming, then completing while still off-screen).
+        if (!seenIntersectingRef.current.has(id)) continue;
 
         // Ensure the element is above the viewport, not below.
         const rootTop = ioEntry.rootBounds?.top ?? 0;
         if (ioEntry.boundingClientRect.bottom >= rootTop) continue;
-
-        // Find the id for this element.
-        const el = ioEntry.target as HTMLElement;
-        const id = el.dataset.timelineEntryId;
-        if (!id) continue;
 
         // Guard: only collapse completed + open entries that the user hasn't
         // manually re-opened and that we haven't already collapsed.
@@ -152,6 +168,7 @@ export function useViewportAutoCollapse({
     observerRef.current?.disconnect();
     observedElementsRef.current.clear();
     autoCollapsedRef.current.clear();
+    seenIntersectingRef.current.clear();
 
     const observer = new IntersectionObserver(handleIntersection, {
       root: scrollContainer,
