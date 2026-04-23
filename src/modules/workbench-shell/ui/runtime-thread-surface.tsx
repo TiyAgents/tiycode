@@ -3213,7 +3213,7 @@ export function RuntimeThreadSurface({
 
     if (submission.kind === "command" && submission.command?.behavior === "clear") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, [], false);
-      conversationContextRef.current?.scrollToBottom();
+      conversationContextRef.current?.scrollToBottom("instant");
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
@@ -3227,7 +3227,7 @@ export function RuntimeThreadSurface({
 
     if (submission.kind === "command" && submission.command?.behavior === "compact") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, [], false);
-      conversationContextRef.current?.scrollToBottom();
+      conversationContextRef.current?.scrollToBottom("instant");
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
         onContextUsageChange?.(null);
@@ -3259,7 +3259,7 @@ export function RuntimeThreadSurface({
 
     // Scroll to bottom when sending a new message to ensure the conversation
     // follows the new content even if the user had scrolled up previously.
-    conversationContextRef.current?.scrollToBottom();
+    conversationContextRef.current?.scrollToBottom("instant");
 
     try {
       await streamRef.current?.startRun(
@@ -3294,7 +3294,7 @@ export function RuntimeThreadSurface({
     setRuntimeError(null);
     setQueueArtifact(null);
     appendOptimisticUserMessage(displayText, null, []);
-    conversationContextRef.current?.scrollToBottom();
+    conversationContextRef.current?.scrollToBottom("instant");
 
     try {
       await streamRef.current.respondToClarify(tool.id, response);
@@ -3403,9 +3403,13 @@ export function RuntimeThreadSurface({
   }, []);
 
   useEffect(() => {
+    if (!snapshotReady) {
+      setScrollContainerEl(null);
+      return;
+    }
     const scrollEl = conversationContextRef.current?.scrollRef?.current ?? null;
     setScrollContainerEl(scrollEl);
-  }, []);
+  }, [snapshotReady]);
 
   const getIsStuckToBottom = useCallback(
     () => conversationContextRef.current?.isAtBottom ?? true,
@@ -4145,6 +4149,7 @@ export function RuntimeThreadSurface({
           className="size-full"
           contextRef={conversationContextRef}
           initialBehavior="instant"
+          resizeBehavior="instant"
         >
           <ConversationContent
             className="mx-auto w-full max-w-4xl gap-0 px-6 pt-8"
