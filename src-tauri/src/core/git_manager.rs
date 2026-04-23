@@ -309,12 +309,50 @@ impl GitManager {
         let workspace_relative = normalize_workspace_relative_path(path);
 
         tokio::task::spawn_blocking(move || {
-            // For conflict files, we read the workdir content (which contains
-            // conflict markers) and display it as all-new content.
-            // This gives users a clear view of the current state of the file
-            // including conflict markers (<<<<<<<, =======, >>>>>>>).
-            let hunks = build_added_file_fallback_hunks(&workspace_root, &workspace_relative);
+            // Try to get the ours blob from the index conflict to use as Old side.
+            // If that fails (e.g. delete-modify conflict, non-UTF-8 blob), fall
+            // back to the previous all-new-content behaviour.
+            let ours_text = (|| -> Option<String> {
+                let repo = open_repository(&workspace_root).ok()?;
+                let repo_root = repo_workdir(&repo).ok()?;
+                let repo_relative =
+                    workspace_path_to_repo_path(&repo_root, &workspace_root, &workspace_relative)
+                        .ok()?;
+                let index = repo.index().ok()?;
+                let conflict = index.conflict_get(Path::new(&repo_relative)).ok()?;
+                let ours_entry = conflict.our?;
+                let blob = repo.find_blob(ours_entry.id).ok()?;
+                if blob.is_binary() {
+                    return None;
+                }
+                std::str::from_utf8(blob.content())
+                    .ok()
+                    .map(|s| s.to_string())
+            })();
 
+            // Read current workdir content (New side, may contain conflict markers).
+            let new_text = std::fs::read_to_string(workspace_root.join(&workspace_relative)).ok();
+
+            if let (Some(old_text), Some(new_text)) = (&ours_text, &new_text) {
+                let (hunks, additions, deletions, truncated) =
+                    build_conflict_diff_hunks(old_text, new_text);
+
+                return Ok(GitDiffDto {
+                    path: workspace_relative.clone(),
+                    staged: false,
+                    status: GitChangeKind::Unmerged,
+                    old_path: Some(workspace_relative.clone()),
+                    new_path: Some(workspace_relative),
+                    additions,
+                    deletions,
+                    is_binary: false,
+                    truncated,
+                    hunks,
+                });
+            }
+
+            // Fallback: show workdir content as all-new (original behaviour).
+            let hunks = build_added_file_fallback_hunks(&workspace_root, &workspace_relative);
             let additions = hunks.iter().map(|h| h.lines.len() as u32).sum::<u32>();
 
             Ok(GitDiffDto {
@@ -1380,6 +1418,74 @@ fn trim_patch_line(bytes: &[u8]) -> String {
         .trim_end_matches('\n')
         .trim_end_matches('\r')
         .to_string()
+}
+
+/// Compare old (ours blob) text with new (workdir) text using `similar` and
+/// produce standard context/remove/add hunk data, respecting MAX_DIFF_LINES.
+fn build_conflict_diff_hunks(
+    old_text: &str,
+    new_text: &str,
+) -> (Vec<GitDiffHunkDto>, u32, u32, bool) {
+    use similar::{ChangeTag, TextDiff};
+
+    let text_diff = TextDiff::from_lines(old_text, new_text);
+    let mut lines = Vec::new();
+    let mut additions: u32 = 0;
+    let mut deletions: u32 = 0;
+    let mut old_line: u32 = 1;
+    let mut new_line: u32 = 1;
+    let mut truncated = false;
+
+    for change in text_diff.iter_all_changes() {
+        if lines.len() >= MAX_DIFF_LINES {
+            truncated = true;
+            break;
+        }
+
+        match change.tag() {
+            ChangeTag::Equal => {
+                lines.push(GitDiffLineDto {
+                    kind: GitDiffLineKind::Context,
+                    old_number: Some(old_line),
+                    new_number: Some(new_line),
+                    text: change.value().trim_end_matches('\n').to_string(),
+                });
+                old_line += 1;
+                new_line += 1;
+            }
+            ChangeTag::Delete => {
+                lines.push(GitDiffLineDto {
+                    kind: GitDiffLineKind::Remove,
+                    old_number: Some(old_line),
+                    new_number: None,
+                    text: change.value().trim_end_matches('\n').to_string(),
+                });
+                old_line += 1;
+                deletions += 1;
+            }
+            ChangeTag::Insert => {
+                lines.push(GitDiffLineDto {
+                    kind: GitDiffLineKind::Add,
+                    old_number: None,
+                    new_number: Some(new_line),
+                    text: change.value().trim_end_matches('\n').to_string(),
+                });
+                new_line += 1;
+                additions += 1;
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        return (Vec::new(), 0, 0, false);
+    }
+
+    let old_total = old_line.saturating_sub(1);
+    let new_total = new_line.saturating_sub(1);
+    let header = format!("@@ -1,{} +1,{} @@", old_total, new_total);
+
+    let hunks = vec![GitDiffHunkDto { header, lines }];
+    (hunks, additions, deletions, truncated)
 }
 
 fn build_added_file_fallback_hunks(
