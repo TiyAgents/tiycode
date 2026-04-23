@@ -15,7 +15,7 @@ export type ConversationProps = ComponentProps<typeof StickToBottom> & {
 
 export const Conversation = ({
   className,
-  initialBehavior = "instant",
+  initialBehavior = "smooth",
   resizeBehavior = "smooth",
   ...props
 }: ConversationProps) => (
