@@ -782,6 +782,12 @@ const en: Record<TranslationKey, string> = {
   "worktree.field.selectBranchHint": "Check out this existing branch into a new worktree",
   "worktree.error.selectBranch": "Please select a branch",
   "contextCompressing": "Compressing context…",
+
+  // ── Long message preview ──────────────────────────────────
+  "longMessage.collapseAll": "Collapse",
+  "longMessage.expandAll": "Expand",
+  "longMessage.hiddenLines": "~{{count}} lines collapsed",
+  "longMessage.hiddenContent": "Long content collapsed to optimize loading and scrolling",
 };
 
 export default en;

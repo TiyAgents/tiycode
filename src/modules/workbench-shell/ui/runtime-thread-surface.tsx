@@ -4065,7 +4065,7 @@ export function RuntimeThreadSurface({
                 variant="ghost"
               >
                 <ChevronUpIcon className="size-3.5" />
-                收起全文
+                {t("longMessage.collapseAll")}
               </Button>
             </div>
           ) : null}
@@ -4084,8 +4084,8 @@ export function RuntimeThreadSurface({
         <div className="flex items-center justify-between gap-3 text-xs text-app-subtle">
           <span>
             {preview.hiddenLineCount > 0
-              ? `已折叠约 ${preview.hiddenLineCount} 行内容`
-              : "已折叠部分长内容以优化加载与滚动性能"}
+              ? t("longMessage.hiddenLines", { count: preview.hiddenLineCount })
+              : t("longMessage.hiddenContent")}
           </span>
           <Button
             className="h-7 px-2.5 text-xs"
@@ -4097,12 +4097,12 @@ export function RuntimeThreadSurface({
             variant="outline"
           >
             <ChevronDownIcon className="size-3.5" />
-            展开全文
+            {t("longMessage.expandAll")}
           </Button>
         </div>
       </div>
     );
-  }, [expandedLongMessageIds, setExpandedLongMessageIds]);
+  }, [expandedLongMessageIds, setExpandedLongMessageIds, t]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">
