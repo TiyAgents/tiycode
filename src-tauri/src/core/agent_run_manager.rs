@@ -20,7 +20,7 @@ use crate::core::agent_session::{
     normalize_profile_response_style, trim_history_to_current_context, ProfileResponseStyle,
     ResolvedModelRole,
 };
-use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
+use crate::core::built_in_agent_runtime::{BuiltInAgentRuntime, RuntimeSessionFinishState};
 use crate::core::plan_checkpoint::{
     ApprovalPromptMetadata, PlanApprovalAction, PlanMessageMetadata,
     IMPLEMENTATION_PLAN_APPROVAL_KIND, IMPLEMENTATION_PLAN_APPROVED_STATE,
@@ -87,6 +87,51 @@ async fn mark_thread_run_cancellation_requested(
     let run = runs.values_mut().find(|run| run.thread_id == thread_id)?;
     run.cancellation_requested = true;
     Some(run.run_id.clone())
+}
+
+fn build_orphaned_run_terminal_event(
+    run_id: &str,
+    cancellation_requested: bool,
+) -> ThreadStreamEvent {
+    if cancellation_requested {
+        ThreadStreamEvent::RunCancelled {
+            run_id: run_id.to_string(),
+        }
+    } else {
+        ThreadStreamEvent::RunInterrupted {
+            run_id: run_id.to_string(),
+        }
+    }
+}
+
+fn terminal_event_status(
+    event: &ThreadStreamEvent,
+    cancellation_requested: bool,
+) -> Option<&'static str> {
+    match event {
+        ThreadStreamEvent::RunCompleted { .. } => Some("completed"),
+        ThreadStreamEvent::RunLimitReached { .. } => Some("limit_reached"),
+        ThreadStreamEvent::RunFailed { .. } => Some("failed"),
+        ThreadStreamEvent::RunCancelled { .. } => Some("cancelled"),
+        ThreadStreamEvent::RunInterrupted { .. } => Some(if cancellation_requested {
+            "cancelled"
+        } else {
+            "interrupted"
+        }),
+        _ => None,
+    }
+}
+
+fn is_terminal_runtime_event(event: &ThreadStreamEvent) -> bool {
+    matches!(
+        event,
+        ThreadStreamEvent::RunCheckpointed { .. }
+            | ThreadStreamEvent::RunCompleted { .. }
+            | ThreadStreamEvent::RunLimitReached { .. }
+            | ThreadStreamEvent::RunFailed { .. }
+            | ThreadStreamEvent::RunCancelled { .. }
+            | ThreadStreamEvent::RunInterrupted { .. }
+    )
 }
 
 pub struct AgentRunManager {
@@ -261,8 +306,9 @@ impl AgentRunManager {
             }
 
             let (runtime_tx, runtime_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
-            self.runtime.start_session(spec, runtime_tx).await?;
+            let runtime_finish_rx = self.runtime.start_session(spec, runtime_tx).await?;
             self.spawn_runtime_event_loop(run_id.clone(), runtime_rx);
+            self.spawn_runtime_finish_watchdog(run_id.clone(), runtime_finish_rx);
 
             Ok::<(), AppError>(())
         }
@@ -507,6 +553,7 @@ impl AgentRunManager {
         )
         .await?;
         let model = primary_summary_model(&preview_spec.model_plan);
+        let response_language = preview_spec.model_plan.raw.response_language.as_deref();
         let history =
             convert_history_messages(&current_context_messages, &compact_tool_calls, &model);
         let compact_instructions = instructions
@@ -652,6 +699,7 @@ impl AgentRunManager {
         let spawn_thread_id = thread_id.to_string();
         let spawn_run_id = run_id.clone();
         let spawn_model_role = preview_spec.model_plan.primary.clone();
+        let spawn_response_language = response_language.map(str::to_owned);
         let spawn_frontend_tx = frontend_tx.clone();
         tokio::spawn(async move {
             manager
@@ -661,6 +709,7 @@ impl AgentRunManager {
                     spawn_model_role,
                     history,
                     compact_instructions,
+                    spawn_response_language,
                     spawn_frontend_tx,
                 )
                 .await;
@@ -683,11 +732,17 @@ impl AgentRunManager {
         model_role: ResolvedModelRole,
         history: Vec<AgentMessage>,
         compact_instructions: Option<String>,
+        response_language: Option<String>,
         frontend_tx: broadcast::Sender<ThreadStreamEvent>,
     ) {
-        let summary_result =
-            generate_primary_summary(&model_role, &history, compact_instructions.as_deref(), None)
-                .await;
+        let summary_result = generate_primary_summary(
+            &model_role,
+            &history,
+            compact_instructions.as_deref(),
+            response_language.as_deref(),
+            None,
+        )
+        .await;
 
         let final_event = match summary_result {
             Ok(summary) => {
@@ -832,7 +887,31 @@ impl AgentRunManager {
         };
 
         run_repo::update_status(&self.pool, &run_id, "cancelling").await?;
-        self.runtime.cancel_session(&run_id).await?;
+        let cancel_delivered = self.runtime.cancel_session(&run_id).await?;
+
+        if !cancel_delivered {
+            tracing::warn!(
+                run_id = %run_id,
+                "runtime session missing during cancel; forcing cancelled cleanup"
+            );
+            self.handle_runtime_event(&run_id, build_orphaned_run_terminal_event(&run_id, true))
+                .await?;
+            return Ok(true);
+        }
+
+        if matches!(
+            self.runtime.session_finish_state(&run_id).await,
+            Some(RuntimeSessionFinishState::Panicked | RuntimeSessionFinishState::Cancelled)
+        ) {
+            tracing::warn!(
+                run_id = %run_id,
+                "runtime session was already finished when cancel was requested; forcing cancelled cleanup"
+            );
+            self.handle_runtime_event(&run_id, build_orphaned_run_terminal_event(&run_id, true))
+                .await?;
+            return Ok(true);
+        }
+
         tracing::info!(run_id = %run_id, "run cancel requested");
         Ok(true)
     }
@@ -1014,7 +1093,92 @@ impl AgentRunManager {
                     tracing::error!(run_id = %run_id, error = %error, "failed to handle runtime event");
                 }
             }
+
+            if let Err(error) = manager.handle_runtime_channel_closed(&run_id).await {
+                tracing::error!(
+                    run_id = %run_id,
+                    error = %error,
+                    "failed to reconcile run after runtime event channel closed"
+                );
+            }
         });
+    }
+
+    pub(crate) fn spawn_runtime_finish_watchdog(
+        self: &Arc<Self>,
+        run_id: String,
+        mut finish_rx: tokio::sync::watch::Receiver<RuntimeSessionFinishState>,
+    ) {
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            if finish_rx.changed().await.is_err() {
+                return;
+            }
+
+            let finish_state = *finish_rx.borrow();
+            if !manager.has_active_run(&run_id).await {
+                return;
+            }
+
+            let event = match finish_state {
+                RuntimeSessionFinishState::Running | RuntimeSessionFinishState::Completed => return,
+                RuntimeSessionFinishState::Panicked => ThreadStreamEvent::RunInterrupted {
+                    run_id: run_id.clone(),
+                },
+                RuntimeSessionFinishState::Cancelled => {
+                    build_orphaned_run_terminal_event(&run_id, true)
+                }
+            };
+
+            if let Err(error) = manager.handle_runtime_event(&run_id, event).await {
+                tracing::error!(
+                    run_id = %run_id,
+                    error = %error,
+                    finish_state = ?finish_state,
+                    "failed to reconcile run after runtime task finished"
+                );
+            }
+        });
+    }
+
+    async fn handle_runtime_channel_closed(&self, run_id: &str) -> Result<(), AppError> {
+        if !self.has_active_run(run_id).await {
+            return Ok(());
+        }
+
+        let runtime_state = self.runtime.session_state(run_id).await;
+        let runtime_finish_state = self.runtime.session_finish_state(run_id).await;
+        let cancellation_requested = self.was_cancel_requested(run_id).await;
+
+        let Some(terminal_event) = (match runtime_finish_state {
+            Some(RuntimeSessionFinishState::Completed) => None,
+            Some(RuntimeSessionFinishState::Panicked) => Some(ThreadStreamEvent::RunInterrupted {
+                run_id: run_id.to_string(),
+            }),
+            Some(RuntimeSessionFinishState::Cancelled) => {
+                Some(build_orphaned_run_terminal_event(run_id, true))
+            }
+            Some(RuntimeSessionFinishState::Running) | None => Some(
+                build_orphaned_run_terminal_event(run_id, cancellation_requested),
+            ),
+        }) else {
+            tracing::debug!(
+                run_id = %run_id,
+                runtime_state = ?runtime_state,
+                "runtime event channel closed after session completed; skipping forced cleanup"
+            );
+            return Ok(());
+        };
+
+        tracing::warn!(
+            run_id = %run_id,
+            cancellation_requested,
+            runtime_state = ?runtime_state,
+            runtime_finish_state = ?runtime_finish_state,
+            "runtime event channel closed before a terminal event; forcing run cleanup"
+        );
+
+        self.handle_runtime_event(run_id, terminal_event).await
     }
 
     async fn handle_runtime_event(
@@ -1022,6 +1186,15 @@ impl AgentRunManager {
         run_id: &str,
         event: ThreadStreamEvent,
     ) -> Result<(), AppError> {
+        if is_terminal_runtime_event(&event) && !self.has_active_run(run_id).await {
+            tracing::debug!(
+                run_id = %run_id,
+                event = ?event,
+                "ignoring duplicate terminal runtime event after run cleanup"
+            );
+            return Ok(());
+        }
+
         if should_complete_reasoning_for_event(&event) {
             self.complete_active_reasoning_message(run_id, "completed")
                 .await?;
@@ -1171,14 +1344,8 @@ impl AgentRunManager {
             | ThreadStreamEvent::RunCancelled { .. }
             | ThreadStreamEvent::RunInterrupted { .. } => {
                 let thread_id = self.get_thread_id(run_id).await;
-                let status = match &event {
-                    ThreadStreamEvent::RunCompleted { .. } => "completed",
-                    ThreadStreamEvent::RunLimitReached { .. } => "limit_reached",
-                    ThreadStreamEvent::RunFailed { .. } => "failed",
-                    ThreadStreamEvent::RunCancelled { .. } => "cancelled",
-                    ThreadStreamEvent::RunInterrupted { .. } => "interrupted",
-                    _ => unreachable!(),
-                };
+                let status = terminal_event_status(&event, self.was_cancel_requested(run_id).await)
+                    .expect("terminal run event should resolve to a status");
                 let _ = self.app_handle.emit(
                     app_events::THREAD_RUN_FINISHED,
                     ThreadRunFinishedPayload {
@@ -1191,15 +1358,7 @@ impl AgentRunManager {
             _ => {}
         }
 
-        if matches!(
-            event,
-            ThreadStreamEvent::RunCheckpointed { .. }
-                | ThreadStreamEvent::RunCompleted { .. }
-                | ThreadStreamEvent::RunLimitReached { .. }
-                | ThreadStreamEvent::RunFailed { .. }
-                | ThreadStreamEvent::RunCancelled { .. }
-                | ThreadStreamEvent::RunInterrupted { .. }
-        ) {
+        if is_terminal_runtime_event(&event) {
             self.runtime.remove_session(run_id).await;
             self.remove_active_run(run_id).await;
         }
@@ -1491,6 +1650,11 @@ impl AgentRunManager {
             .unwrap_or_default()
     }
 
+    async fn has_active_run(&self, run_id: &str) -> bool {
+        let runs = self.active_runs.lock().await;
+        runs.contains_key(run_id)
+    }
+
     async fn was_cancel_requested(&self, run_id: &str) -> bool {
         let runs = self.active_runs.lock().await;
         runs.get(run_id)
@@ -1594,35 +1758,46 @@ fn primary_summary_model(
     model_plan.primary.model.clone()
 }
 
-fn build_compact_summary_system_prompt() -> String {
-    [
-        "You compress conversation state so another model can continue after context reset.",
-        "Return only one compact summary block using the exact XML-style wrapper below.",
-        "",
-        "Requirements:",
-        "- Preserve the user's current goal and latest requested outcome.",
-        "- Preserve important constraints, preferences, and decisions.",
-        "- List work already completed and important findings.",
-        "- List the most relevant remaining tasks, open questions, or risks.",
-        "- Mention key files, components, commands, tools, or errors only when they matter for continuation.",
-        "- Be factual and concise. Do not invent details.",
-        "- Do not address the user directly. Do not include greetings or commentary.",
-        "- Prefer short bullet lists under clear section labels.",
-        "- Keep the summary self-contained and suitable for direct insertion into future model context.",
-        "",
-        "Output rules:",
-        "- Start with <context_summary> on its own line.",
-        "- End with </context_summary> on its own line.",
-        "- Do not output any text before or after the wrapper.",
-        "",
-        "Example output:",
-        "<context_summary>",
-        "- User goal: Stabilize /compact summary formatting.",
-        "- Completed: Checked current local summarization flow and wrapper handling.",
-        "- Remaining: Move compact rules into system prompt and keep output parsing robust.",
-        "</context_summary>",
-    ]
-    .join("\n")
+fn build_compact_summary_system_prompt(response_language: Option<&str>) -> String {
+    let mut lines = vec![
+        "You compress conversation state so another model can continue after context reset.".to_string(),
+        "Return only one compact summary block using the exact XML-style wrapper below.".to_string(),
+        String::new(),
+        "Requirements:".to_string(),
+        "- Preserve the user's current goal and latest requested outcome.".to_string(),
+        "- Preserve important constraints, preferences, and decisions.".to_string(),
+        "- List work already completed and important findings.".to_string(),
+        "- List the most relevant remaining tasks, open questions, or risks.".to_string(),
+        "- Mention key files, components, commands, tools, or errors only when they matter for continuation.".to_string(),
+        "- Be factual and concise. Do not invent details.".to_string(),
+        "- Do not address the user directly. Do not include greetings or commentary.".to_string(),
+        "- Prefer short bullet lists under clear section labels.".to_string(),
+        "- Keep the summary self-contained and suitable for direct insertion into future model context.".to_string(),
+    ];
+
+    if let Some(language) = normalize_profile_response_language(response_language) {
+        lines.push(format!(
+            "- Respond in {language} unless the user explicitly asks for a different language."
+        ));
+    }
+
+    lines.extend([
+        String::new(),
+        "Output rules:".to_string(),
+        "- Start with <context_summary> on its own line.".to_string(),
+        "- End with </context_summary> on its own line.".to_string(),
+        "- Do not output any text before or after the wrapper.".to_string(),
+        String::new(),
+        "Example output:".to_string(),
+        "<context_summary>".to_string(),
+        "- User goal: Stabilize /compact summary formatting.".to_string(),
+        "- Completed: Checked current local summarization flow and wrapper handling.".to_string(),
+        "- Remaining: Move compact rules into system prompt and keep output parsing robust."
+            .to_string(),
+        "</context_summary>".to_string(),
+    ]);
+
+    lines.join("\n")
 }
 
 fn build_compact_summary_messages(
@@ -1663,12 +1838,13 @@ pub(crate) async fn generate_primary_summary(
     model_role: &ResolvedModelRole,
     history: &[AgentMessage],
     instructions: Option<&str>,
+    response_language: Option<&str>,
     abort: Option<tiycore::agent::AbortSignal>,
 ) -> Result<String, AppError> {
     let max_history_chars = summary_history_char_budget(model_role);
     execute_summary_llm_call(
         model_role,
-        build_compact_summary_system_prompt(),
+        build_compact_summary_system_prompt(response_language),
         build_compact_summary_messages(history, instructions, max_history_chars),
         instructions,
         abort,
@@ -1809,30 +1985,47 @@ fn cancellation_error() -> AppError {
     )
 }
 
-fn build_merge_summary_system_prompt() -> String {
-    [
-        "You maintain a rolling context summary for another model to continue after context reset.",
-        "You will be given the PRIOR summary (already in <context_summary> form) and a DELTA of conversation",
-        "that happened after that summary was last produced. Produce a SINGLE updated <context_summary>",
-        "that merges both — keeping still-relevant facts from the prior summary and folding in new information",
-        "from the delta. Treat the prior summary as authoritative for anything it covers and do not drop",
-        "details that remain pertinent.",
-        "",
-        "Requirements:",
-        "- Preserve the user's current goal and most recent requested outcome.",
-        "- Retain important constraints, preferences, and decisions from the prior summary unless the delta",
-        "  explicitly supersedes them.",
-        "- Fold newly completed work, findings, key files/commands, and remaining tasks from the delta in.",
-        "- Drop items the delta marks resolved; add items the delta newly raises.",
-        "- Be factual and concise. Do not invent details. Do not address the user.",
-        "- Prefer short bullet lists under clear section labels.",
-        "",
-        "Output rules:",
-        "- Start with <context_summary> on its own line.",
-        "- End with </context_summary> on its own line.",
-        "- Do not output any text before or after the wrapper.",
-    ]
-    .join("\n")
+fn build_merge_summary_system_prompt(response_language: Option<&str>) -> String {
+    let mut lines = vec![
+        "You maintain a rolling context summary for another model to continue after context reset."
+            .to_string(),
+        "You will be given the PRIOR summary (already in <context_summary> form) and a DELTA of conversation"
+            .to_string(),
+        "that happened after that summary was last produced. Produce a SINGLE updated <context_summary>"
+            .to_string(),
+        "that merges both — keeping still-relevant facts from the prior summary and folding in new information"
+            .to_string(),
+        "from the delta. Treat the prior summary as authoritative for anything it covers and do not drop"
+            .to_string(),
+        "details that remain pertinent.".to_string(),
+        String::new(),
+        "Requirements:".to_string(),
+        "- Preserve the user's current goal and most recent requested outcome.".to_string(),
+        "- Retain important constraints, preferences, and decisions from the prior summary unless the delta"
+            .to_string(),
+        "  explicitly supersedes them.".to_string(),
+        "- Fold newly completed work, findings, key files/commands, and remaining tasks from the delta in."
+            .to_string(),
+        "- Drop items the delta marks resolved; add items the delta newly raises.".to_string(),
+        "- Be factual and concise. Do not invent details. Do not address the user.".to_string(),
+        "- Prefer short bullet lists under clear section labels.".to_string(),
+    ];
+
+    if let Some(language) = normalize_profile_response_language(response_language) {
+        lines.push(format!(
+            "- Respond in {language} unless the user explicitly asks for a different language."
+        ));
+    }
+
+    lines.extend([
+        String::new(),
+        "Output rules:".to_string(),
+        "- Start with <context_summary> on its own line.".to_string(),
+        "- End with </context_summary> on its own line.".to_string(),
+        "- Do not output any text before or after the wrapper.".to_string(),
+    ]);
+
+    lines.join("\n")
 }
 
 fn build_merge_summary_messages(
@@ -1879,12 +2072,13 @@ pub(crate) async fn generate_merge_summary(
     prior_summary: &str,
     delta_history: &[AgentMessage],
     instructions: Option<&str>,
+    response_language: Option<&str>,
     abort: Option<tiycore::agent::AbortSignal>,
 ) -> Result<String, AppError> {
     let max_history_chars = summary_history_char_budget(model_role);
     execute_summary_llm_call(
         model_role,
-        build_merge_summary_system_prompt(),
+        build_merge_summary_system_prompt(response_language),
         build_merge_summary_messages(
             prior_summary,
             delta_history,
@@ -2720,12 +2914,12 @@ mod tests {
         append_compact_instructions, await_summary_with_abort, build_compact_summary_messages,
         build_compact_summary_system_prompt, build_implementation_handoff_prompt,
         build_merge_summary_messages, build_merge_summary_system_prompt,
-        build_title_model_candidates, build_title_prompt, build_title_prompt_from_messages,
-        collapse_whitespace, detect_prior_summary, extract_context_summary_block,
-        mark_thread_run_cancellation_requested, normalize_compact_summary,
-        normalize_generated_title, render_compact_summary_history,
-        should_complete_reasoning_for_event, summary_history_char_budget, truncate_chars,
-        truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
+        build_orphaned_run_terminal_event, build_title_model_candidates, build_title_prompt,
+        build_title_prompt_from_messages, collapse_whitespace, detect_prior_summary,
+        extract_context_summary_block, mark_thread_run_cancellation_requested,
+        normalize_compact_summary, normalize_generated_title, render_compact_summary_history,
+        should_complete_reasoning_for_event, summary_history_char_budget, terminal_event_status,
+        truncate_chars, truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
         SUMMARY_HISTORY_MIN_CHARS, SUMMARY_TOOL_RESULT_MAX_CHARS,
     };
     use crate::core::agent_session::{ProfileResponseStyle, ResolvedModelRole};
@@ -2804,6 +2998,38 @@ mod tests {
             reasoning_message_id: None,
             cancellation_requested: false,
         }
+    }
+
+    #[test]
+    fn orphaned_run_terminal_event_uses_cancelled_when_user_requested_stop() {
+        let cancelled = build_orphaned_run_terminal_event("run-1", true);
+        let interrupted = build_orphaned_run_terminal_event("run-2", false);
+
+        assert!(matches!(
+            cancelled,
+            ThreadStreamEvent::RunCancelled { ref run_id } if run_id == "run-1"
+        ));
+        assert!(matches!(
+            interrupted,
+            ThreadStreamEvent::RunInterrupted { ref run_id } if run_id == "run-2"
+        ));
+    }
+
+    #[test]
+    fn terminal_event_status_maps_interrupted_to_cancelled_when_cancel_was_requested() {
+        let interrupted = ThreadStreamEvent::RunInterrupted {
+            run_id: "run-1".to_string(),
+        };
+        let cancelled = ThreadStreamEvent::RunCancelled {
+            run_id: "run-1".to_string(),
+        };
+
+        assert_eq!(terminal_event_status(&interrupted, true), Some("cancelled"));
+        assert_eq!(
+            terminal_event_status(&interrupted, false),
+            Some("interrupted")
+        );
+        assert_eq!(terminal_event_status(&cancelled, false), Some("cancelled"));
     }
 
     /// Mirrors the check in `compact_thread_context` (and `start_run`): a
@@ -2961,13 +3187,22 @@ mod tests {
 
     #[test]
     fn compact_summary_system_prompt_includes_wrapper_example() {
-        let prompt = build_compact_summary_system_prompt();
+        let prompt = build_compact_summary_system_prompt(None);
 
         assert!(prompt.contains("Output rules:"));
         assert!(prompt.contains("Do not output any text before or after the wrapper."));
         assert!(prompt.contains("Example output:"));
         assert!(prompt.contains("<context_summary>"));
         assert!(prompt.contains("</context_summary>"));
+    }
+
+    #[test]
+    fn compact_summary_system_prompt_uses_response_language_when_present() {
+        let prompt = build_compact_summary_system_prompt(Some(" 简体中文 "));
+
+        assert!(prompt.contains(
+            "Respond in 简体中文 unless the user explicitly asks for a different language."
+        ));
     }
 
     #[test]
@@ -3245,11 +3480,27 @@ mod tests {
 
     #[test]
     fn merge_summary_system_prompt_explains_the_merge_contract() {
-        let prompt = build_merge_summary_system_prompt();
+        let prompt = build_merge_summary_system_prompt(None);
         assert!(prompt.contains("PRIOR summary"));
         assert!(prompt.contains("DELTA"));
         assert!(prompt.contains("<context_summary>"));
         assert!(prompt.contains("</context_summary>"));
+    }
+
+    #[test]
+    fn merge_summary_system_prompt_uses_response_language_when_present() {
+        let prompt = build_merge_summary_system_prompt(Some("Japanese"));
+
+        assert!(prompt.contains(
+            "Respond in Japanese unless the user explicitly asks for a different language."
+        ));
+    }
+
+    #[test]
+    fn merge_summary_system_prompt_ignores_blank_response_language() {
+        let prompt = build_merge_summary_system_prompt(Some("   "));
+
+        assert!(!prompt.contains("Respond in"));
     }
 
     #[test]
