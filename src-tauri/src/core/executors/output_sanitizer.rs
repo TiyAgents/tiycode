@@ -123,35 +123,30 @@ mod tests {
 
     #[test]
     fn truncated_bare_esc_at_end() {
-        // Input ending with a bare ESC
         let sanitized = sanitize_terminal_output("hello\u{1b}");
         assert_eq!(sanitized, "hello");
     }
 
     #[test]
     fn truncated_csi_at_end() {
-        // ESC [ without a final byte
         let sanitized = sanitize_terminal_output("hello\u{1b}[31");
         assert_eq!(sanitized, "hello");
     }
 
     #[test]
     fn truncated_osc_at_end() {
-        // ESC ] without BEL/ST terminator
         let sanitized = sanitize_terminal_output("hello\u{1b}]0;title");
         assert_eq!(sanitized, "hello");
     }
 
     #[test]
     fn truncated_dcs_at_end() {
-        // ESC P without ST terminator
         let sanitized = sanitize_terminal_output("hello\u{1b}Pdata");
         assert_eq!(sanitized, "hello");
     }
 
     #[test]
     fn strips_apc_sequence() {
-        // APC (ESC _) with ST terminator — used by iTerm2 image protocol
         let raw = "before\u{1b}_payload\u{1b}\\after";
         let sanitized = sanitize_terminal_output(raw);
         assert_eq!(sanitized, "beforeafter");

@@ -1,8 +1,8 @@
 "use client";
 
 import type { ChatStatus } from "ai";
-import { AlertCircleIcon, BotIcon, Info, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircleIcon, BotIcon, ChevronDownIcon, ChevronUpIcon, Info, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useT, type TranslationKey } from "@/i18n";
 import { CodeBlock } from "@/components/ai-elements/code-block";
@@ -821,6 +821,49 @@ function getLatestVisibleRun(snapshot: ThreadSnapshotDto) {
   )
     ? snapshot.latestRun
     : null;
+}
+
+const LONG_MESSAGE_PREVIEW_CHAR_LIMIT = 12_000;
+const LONG_MESSAGE_PREVIEW_LINE_LIMIT = 120;
+
+export function getLongMessagePreview(content: string) {
+  const normalized = content.trimEnd();
+  const lines = normalized.split("\n");
+  const exceedsCharLimit = normalized.length > LONG_MESSAGE_PREVIEW_CHAR_LIMIT;
+  const exceedsLineLimit = lines.length > LONG_MESSAGE_PREVIEW_LINE_LIMIT;
+  const isLong = exceedsCharLimit || exceedsLineLimit;
+
+  if (!isLong) {
+    return {
+      hiddenLineCount: 0,
+      isLong: false,
+      previewText: normalized,
+    };
+  }
+
+  const limitedByLines = lines.slice(0, LONG_MESSAGE_PREVIEW_LINE_LIMIT).join("\n");
+  const previewText = exceedsCharLimit
+    ? limitedByLines.slice(0, LONG_MESSAGE_PREVIEW_CHAR_LIMIT)
+    : limitedByLines;
+  const previewLineCount = previewText.length === 0 ? 0 : previewText.split("\n").length;
+
+  return {
+    hiddenLineCount: Math.max(lines.length - previewLineCount, 0),
+    isLong: true,
+    previewText: previewText.trimEnd(),
+  };
+}
+
+export function shouldUseLongMessagePreview(message: Pick<SurfaceMessage, "content" | "messageType" | "status">) {
+  if (message.status !== "completed" && message.status !== "failed") {
+    return false;
+  }
+
+  if (message.messageType !== "plain_message") {
+    return false;
+  }
+
+  return true;
 }
 
 function mapRunSummaryToContextUsage(run: RunSummaryDto | null): ThreadContextUsage | null {
@@ -2051,6 +2094,85 @@ function getRoleSpacingClass(
 
 const BASE_CONVERSATION_BOTTOM_PADDING = 40;
 
+/**
+ * Body renderer for a single message that may need the long-message preview
+ * UI. Kept as a memoized child component (rather than an inline closure in
+ * the parent) so that:
+ *
+ *   1. Toggling expand/collapse on ONE message only re-renders that message
+ *      — not every other message in the thread. A previous implementation
+ *      held `expandedLongMessageIds` in the parent and read it from a
+ *      `renderMessageBody` useCallback, which invalidated the callback and
+ *      re-ran `getLongMessagePreview` for every long message on every toggle
+ *      (O(n·lineCount) work for an O(1) UI change).
+ *   2. When the thread changes, messages unmount and the per-message
+ *      expanded state resets naturally via component identity — no separate
+ *      `setExpandedLongMessageIds({})` bookkeeping is needed in the parent.
+ */
+const LongMessageBody = memo(function LongMessageBody({
+  message,
+  t,
+}: {
+  message: SurfaceMessage;
+  t: ReturnType<typeof useT>;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const content = message.content || (message.status === "streaming" ? "…" : "");
+  const preview = shouldUseLongMessagePreview(message)
+    ? getLongMessagePreview(content)
+    : null;
+  const canPreview = preview !== null && preview.isLong;
+  const usePreview = canPreview && !isExpanded;
+
+  if (!usePreview) {
+    return (
+      <div className="space-y-3">
+        <MessageResponse>{content}</MessageResponse>
+        {canPreview ? (
+          <div className="flex justify-end">
+            <Button
+              className="h-7 px-2.5 text-xs"
+              onClick={() => setIsExpanded(false)}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              <ChevronUpIcon className="size-3.5" />
+              {t("longMessage.collapseAll")}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-2xl border border-app-border/18 bg-app-surface/14 px-4 py-3">
+      <pre className="max-h-[28rem] overflow-hidden whitespace-pre-wrap break-words text-sm leading-6 text-app-foreground">
+        {preview!.previewText}
+        {preview!.previewText.length < content.length ? "\n…" : ""}
+      </pre>
+      <div className="flex items-center justify-between gap-3 text-xs text-app-subtle">
+        <span>
+          {preview!.hiddenLineCount > 0
+            ? t("longMessage.hiddenLines", { count: preview!.hiddenLineCount })
+            : t("longMessage.hiddenContent")}
+        </span>
+        <Button
+          className="h-7 px-2.5 text-xs"
+          onClick={() => setIsExpanded(true)}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <ChevronDownIcon className="size-3.5" />
+          {t("longMessage.expandAll")}
+        </Button>
+      </div>
+    </div>
+  );
+});
+
 export function RuntimeThreadSurface({
   activeAgentProfileId,
   agentProfiles,
@@ -2116,6 +2238,7 @@ export function RuntimeThreadSurface({
   const snapshotLoadRequestRef = useRef(0);
   const completedMessageResyncRequestRef = useRef(0);
   const streamRef = useRef<ThreadStream | null>(null);
+  const pendingThreadRestoreScrollRef = useRef(false);
   const submittingRef = useRef(false);
   const subscribingRef = useRef(false);
   const handledInitialPromptRequestIdRef = useRef<string | null>(null);
@@ -2471,6 +2594,7 @@ export function RuntimeThreadSurface({
 
   useEffect(() => {
     subscribingRef.current = false;
+    pendingThreadRestoreScrollRef.current = Boolean(threadId);
     setComposerError(null);
     if (!onComposerDraftChange) {
       setLocalComposerValue("");
@@ -2491,7 +2615,23 @@ export function RuntimeThreadSurface({
     setThinkingPlaceholder(null);
     setTools([]);
     void loadSnapshot();
-  }, [clearScheduledThinkingPhase, loadSnapshot, threadId]);
+  }, [clearScheduledThinkingPhase, loadSnapshot, onComposerDraftChange, threadId]);
+
+  useEffect(() => {
+    const isCurrentThreadSnapshotReady = snapshotReady && snapshotThreadId === threadId;
+    if (!threadId || !isCurrentThreadSnapshotReady || messages.length === 0 || !pendingThreadRestoreScrollRef.current) {
+      return;
+    }
+
+    pendingThreadRestoreScrollRef.current = false;
+    const rafId = window.requestAnimationFrame(() => {
+      void conversationContextRef.current?.scrollToBottom("instant");
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [messages.length, snapshotReady, snapshotThreadId, threadId]);
 
   useEffect(() => {
     if (!threadId) {
@@ -3976,7 +4116,11 @@ export function RuntimeThreadSurface({
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">
       <div className="pointer-events-none absolute left-1/2 top-0 h-56 w-[72rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(120,180,255,0.11),transparent_68%)] blur-3xl" />
       <div className="relative min-h-0 flex-1">
-        <Conversation className="size-full" contextRef={conversationContextRef}>
+        <Conversation
+          className="size-full"
+          contextRef={conversationContextRef}
+          initialBehavior="instant"
+        >
           <ConversationContent
             className="mx-auto w-full max-w-4xl gap-0 px-6 pt-8"
             style={{ paddingBottom: `${conversationBottomPadding}px` }}
@@ -4285,7 +4429,7 @@ export function RuntimeThreadSurface({
                                     url: attachment.url ?? undefined,
                                   }))}
                                 />
-                                <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
+                                {<LongMessageBody message={message} t={t} />}
                                 {expandedPrompt && expandedPrompt !== (message.content ?? "").trim() ? (
                                   <CompactCollapsible defaultOpen={false}>
                                     <CompactCollapsibleHeader className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground">

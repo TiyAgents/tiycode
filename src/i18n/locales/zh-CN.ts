@@ -820,6 +820,12 @@ const zhCN = {
   "worktree.field.selectBranchHint": "将检出此已有分支到新 worktree",
   "worktree.error.selectBranch": "请选择一个分支",
   "contextCompressing": "正在压缩上下文…",
+
+  // ── Long message preview ──────────────────────────────────
+  "longMessage.collapseAll": "收起全文",
+  "longMessage.expandAll": "展开全文",
+  "longMessage.hiddenLines": "已折叠约 {{count}} 行内容",
+  "longMessage.hiddenContent": "已折叠部分长内容以优化加载与滚动性能",
 } as const;
 
 export type TranslationKey = keyof typeof zhCN;

@@ -152,6 +152,12 @@ const DEFAULT_TERMINAL_COLLAPSED = true;
 const WORKSPACE_THREAD_PAGE_SIZE = 10;
 const SIDEBAR_AUTO_REFRESH_INTERVAL_MS = 2_000;
 const SIDEBAR_AUTO_REFRESH_GRACE_MS = 20_000;
+// Minimum gap between two fully independent `syncWorkspaceSidebar` executions.
+// If a caller invokes it again within this window of the previous run finishing,
+// the call is coalesced onto a single trailing run. Without this, any feedback
+// loop elsewhere in the component (effect dependency on state that sync itself
+// mutates) will saturate the IPC queue and block thread list rendering.
+const SIDEBAR_SYNC_MIN_GAP_MS = 300;
 
 /**
  * Resolve which profile the workbench should use for a given thread context.
@@ -698,6 +704,11 @@ export function DashboardWorkbench() {
   const [terminalWorkspaceBindings, setTerminalWorkspaceBindings] = useState<
     Record<string, string>
   >({});
+  // Ref mirror of `terminalWorkspaceBindings` — used by effects that need to
+  // read the latest bindings without depending on the object identity (which
+  // changes on every sync and would otherwise cause re-entrant effect firing).
+  const terminalWorkspaceBindingsRef = useRef(terminalWorkspaceBindings);
+  terminalWorkspaceBindingsRef.current = terminalWorkspaceBindings;
   const [_defaultWorkspaceId, setDefaultWorkspaceId] = useState<string | null>(
     null,
   );
@@ -734,6 +745,19 @@ export function DashboardWorkbench() {
   const editingThreadIdRef = useRef<string | null>(null);
   const sidebarAutoRefreshUntilRef = useRef(0);
   const sidebarSyncInFlightRef = useRef(false);
+  // Coalescing / throttling state for `syncWorkspaceSidebar`. `inFlightPromise`
+  // holds the currently-running sync (if any) so concurrent callers share it
+  // instead of stacking IPC requests. `lastFinishedAt` records when the last
+  // run completed, so the *next* call is delayed to honour the minimum gap.
+  // `pendingOptions` accumulates the options for a trailing call when one is
+  // queued, so overrides from any caller are merged correctly.
+  const sidebarSyncInFlightPromiseRef = useRef<Promise<void> | null>(null);
+  const sidebarSyncLastFinishedAtRef = useRef(0);
+  const sidebarSyncPendingPromiseRef = useRef<Promise<void> | null>(null);
+  const sidebarSyncPendingOptionsRef = useRef<{
+    preserveSelectedProjectIfMissing?: boolean;
+    threadDisplayCountOverrides: Record<string, number>;
+  } | null>(null);
   const workspaceThreadDisplayCountsRef = useRef<Record<string, number>>(
     isTauri() ? {} : buildInitialWorkspaceThreadDisplayCounts(),
   );
@@ -1099,14 +1123,26 @@ export function DashboardWorkbench() {
     getOrCreateNewThreadId,
   ]);
 
-  const syncWorkspaceSidebar = useCallback(
-    async ({
-      preserveSelectedProjectIfMissing = true,
-      threadDisplayCountOverrides = {},
-    }: {
+  // The actual work of a sidebar sync. Held in a ref so that the public
+  // `syncWorkspaceSidebar` callback below can have stable identity (empty
+  // deps) — callbacks that depend on it (useEffect, useCallback) then stay
+  // stable too, which is critical because `syncWorkspaceSidebar` mutates
+  // state that several effects observe, and we don't want those effects to
+  // re-trigger sync.
+  const runSyncWorkspaceSidebarRef = useRef<
+    (options: {
       preserveSelectedProjectIfMissing?: boolean;
-      threadDisplayCountOverrides?: Record<string, number>;
-    } = {}) => {
+      threadDisplayCountOverrides: Record<string, number>;
+    }) => Promise<void>
+  >(async () => {});
+
+  runSyncWorkspaceSidebarRef.current = async ({
+    preserveSelectedProjectIfMissing = true,
+    threadDisplayCountOverrides = {},
+  }: {
+    preserveSelectedProjectIfMissing?: boolean;
+    threadDisplayCountOverrides: Record<string, number>;
+  }) => {
       const syncStart = performance.now();
       const version = ++syncVersionRef.current;
 
@@ -1171,7 +1207,54 @@ export function DashboardWorkbench() {
                 || isSameWorkspacePath(project.path, defaultWorkspace.path),
             ) ?? null);
 
-      setTerminalWorkspaceBindings(nextBindings);
+      setTerminalWorkspaceBindings((current) => {
+        // Merge `nextBindings` with existing bindings instead of replacing
+        // outright. Other code paths (e.g. the effect at L1498 and the
+        // new-thread activation flow) can inject additional path aliases for
+        // a workspace — typically the user-facing path when it differs from
+        // `workspace.path` / `workspace.canonicalPath` after normalization
+        // (e.g. symlinks, macOS `/private` prefix, case differences on
+        // Windows). Blowing those aliases away every sync caused a feedback
+        // loop: effect re-injects the alias, next sync wipes it, effect fires
+        // again.
+        //
+        // Behaviour:
+        //   1. Keys pointing to a workspace that still exists in the latest
+        //      `workspaceEntries` are preserved (so user-injected aliases
+        //      survive), *unless* `nextBindings` itself rebinds that key.
+        //   2. Keys pointing to a workspace that has been removed are dropped.
+        //   3. `nextBindings` wins on conflict (authoritative path → id map).
+        const liveWorkspaceIds = new Set(
+          workspaceEntries.map((workspace) => workspace.id),
+        );
+        const preservedAliases: Record<string, string> = {};
+        for (const [pathKey, workspaceId] of Object.entries(current)) {
+          if (liveWorkspaceIds.has(workspaceId)) {
+            preservedAliases[pathKey] = workspaceId;
+          }
+        }
+        const merged = { ...preservedAliases, ...nextBindings };
+
+        // Avoid producing a new object reference if nothing actually changed.
+        // This is critical for any effect that still compares bindings by
+        // reference, and lets downstream memos stay stable.
+        const currentKeys = Object.keys(current);
+        const mergedKeys = Object.keys(merged);
+        if (currentKeys.length === mergedKeys.length) {
+          let identical = true;
+          for (const key of mergedKeys) {
+            if (current[key] !== merged[key]) {
+              identical = false;
+              break;
+            }
+          }
+          if (identical) {
+            return current;
+          }
+        }
+
+        return merged;
+      });
       setRecentProjects(nextProjects);
       setDefaultWorkspaceId(defaultWorkspace?.id ?? null);
       setWorkspaceThreadDisplayCounts(nextDisplayCounts);
@@ -1266,8 +1349,102 @@ export function DashboardWorkbench() {
         ),
       );
       console.log(`⏱ [sidebar-sync] total: ${(performance.now() - syncStart).toFixed(1)}ms`);
+    };
+
+  // Public entry point. Coalesces concurrent callers and enforces a minimum
+  // gap between fully independent runs. Keeping the callback identity stable
+  // (empty deps) is important so hooks/effects that depend on it don't
+  // retrigger every time state changes.
+  const syncWorkspaceSidebar = useCallback(
+    async (
+      options: {
+        preserveSelectedProjectIfMissing?: boolean;
+        threadDisplayCountOverrides?: Record<string, number>;
+      } = {},
+    ): Promise<void> => {
+      // Merge requested overrides into any pending options so a trailing run
+      // sees the union of what every caller asked for.
+      const existing = sidebarSyncPendingOptionsRef.current ?? {
+        preserveSelectedProjectIfMissing: undefined,
+        threadDisplayCountOverrides: {},
+      };
+      sidebarSyncPendingOptionsRef.current = {
+        preserveSelectedProjectIfMissing:
+          options.preserveSelectedProjectIfMissing
+            ?? existing.preserveSelectedProjectIfMissing,
+        threadDisplayCountOverrides: {
+          ...existing.threadDisplayCountOverrides,
+          ...(options.threadDisplayCountOverrides ?? {}),
+        },
+      };
+
+      // If a run is currently in flight, or a trailing run is already queued,
+      // join it instead of starting another one.
+      if (sidebarSyncPendingPromiseRef.current) {
+        return sidebarSyncPendingPromiseRef.current;
+      }
+      if (sidebarSyncInFlightPromiseRef.current) {
+        // Schedule a trailing run to start after the current one completes,
+        // once the minimum gap has elapsed.
+        const trailing = sidebarSyncInFlightPromiseRef.current.then(async () => {
+          const elapsed = Date.now() - sidebarSyncLastFinishedAtRef.current;
+          const wait = Math.max(0, SIDEBAR_SYNC_MIN_GAP_MS - elapsed);
+          if (wait > 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, wait));
+          }
+          const optionsToRun = sidebarSyncPendingOptionsRef.current ?? {
+            threadDisplayCountOverrides: {},
+          };
+          sidebarSyncPendingOptionsRef.current = null;
+          sidebarSyncPendingPromiseRef.current = null;
+          const run = runSyncWorkspaceSidebarRef.current({
+            preserveSelectedProjectIfMissing:
+              optionsToRun.preserveSelectedProjectIfMissing,
+            threadDisplayCountOverrides:
+              optionsToRun.threadDisplayCountOverrides,
+          });
+          sidebarSyncInFlightPromiseRef.current = run.finally(() => {
+            sidebarSyncLastFinishedAtRef.current = Date.now();
+            sidebarSyncInFlightPromiseRef.current = null;
+          });
+          return sidebarSyncInFlightPromiseRef.current;
+        });
+        sidebarSyncPendingPromiseRef.current = trailing;
+        return trailing;
+      }
+
+      // No run in flight: honour minimum gap before starting.
+      const elapsed = Date.now() - sidebarSyncLastFinishedAtRef.current;
+      const wait = Math.max(0, SIDEBAR_SYNC_MIN_GAP_MS - elapsed);
+      const start = async () => {
+        const optionsToRun = sidebarSyncPendingOptionsRef.current ?? {
+          threadDisplayCountOverrides: {},
+        };
+        sidebarSyncPendingOptionsRef.current = null;
+        const run = runSyncWorkspaceSidebarRef.current({
+          preserveSelectedProjectIfMissing:
+            optionsToRun.preserveSelectedProjectIfMissing,
+          threadDisplayCountOverrides:
+            optionsToRun.threadDisplayCountOverrides,
+        });
+        sidebarSyncInFlightPromiseRef.current = run.finally(() => {
+          sidebarSyncLastFinishedAtRef.current = Date.now();
+          sidebarSyncInFlightPromiseRef.current = null;
+        });
+        return sidebarSyncInFlightPromiseRef.current;
+      };
+      if (wait > 0) {
+        const delayed = new Promise<void>((resolve) =>
+          setTimeout(resolve, wait),
+        ).then(start);
+        sidebarSyncPendingPromiseRef.current = delayed.finally(() => {
+          sidebarSyncPendingPromiseRef.current = null;
+        });
+        return sidebarSyncPendingPromiseRef.current;
+      }
+      return start();
     },
-    [listVisibleWorkspaceThreads],
+    [],
   );
 
   // ---------------------------------------------------------------------------
@@ -1504,7 +1681,12 @@ export function DashboardWorkbench() {
       return;
     }
 
-    if (getWorkspaceBindingId(terminalWorkspaceBindings, currentProject.path)) {
+    // Read latest bindings via ref so that `setTerminalWorkspaceBindings`
+    // elsewhere (including from `syncWorkspaceSidebar` itself) does not
+    // retrigger this effect — that was the source of a ~40ms infinite loop
+    // where sync overwrote freshly-injected aliases and the effect kept
+    // re-injecting them.
+    if (getWorkspaceBindingId(terminalWorkspaceBindingsRef.current, currentProject.path)) {
       return;
     }
 
@@ -1562,7 +1744,7 @@ export function DashboardWorkbench() {
     return () => {
       cancelled = true;
     };
-  }, [currentProject, syncWorkspaceSidebar, terminalWorkspaceBindings]);
+  }, [currentProject, syncWorkspaceSidebar]);
 
   const handleTerminalResizeStart = (
     event: ReactMouseEvent<HTMLDivElement>,
@@ -2031,6 +2213,35 @@ export function DashboardWorkbench() {
         ...current,
         [threadId]: value,
       }));
+    },
+    [],
+  );
+
+  // Stable per-thread draft handler for <RuntimeThreadSurface />. Must not be
+  // a new arrow function on every render — the surface has a useEffect that
+  // depends on this prop and re-runs threadLoad() whenever its identity
+  // changes, which (when this component re-renders frequently due to sidebar
+  // sync) would keep the thread stuck in "Loading thread".
+  const handleRuntimeComposerDraftChange = useMemo(() => {
+    if (!resolvedTerminalThreadId) {
+      return undefined;
+    }
+    const threadId = resolvedTerminalThreadId;
+    return (value: string) => handleComposerDraftChange(threadId, value);
+  }, [resolvedTerminalThreadId, handleComposerDraftChange]);
+
+  const handleRuntimeConsumeInitialPrompt = useCallback(
+    (id: string) => {
+      setPendingThreadRuns((current) => {
+        const next = Object.fromEntries(
+          Object.entries(current).filter(
+            ([, pendingRun]) => pendingRun.id !== id,
+          ),
+        );
+        return Object.keys(next).length === Object.keys(current).length
+          ? current
+          : next;
+      });
     },
     [],
   );
@@ -3412,24 +3623,8 @@ export function DashboardWorkbench() {
                             ? (pendingThreadRuns[resolvedTerminalThreadId] ?? null)
                             : null
                         }
-                        onComposerDraftChange={
-                          resolvedTerminalThreadId
-                            ? (value) => handleComposerDraftChange(resolvedTerminalThreadId, value)
-                            : undefined
-                        }
-                        onConsumeInitialPrompt={(id) => {
-                          setPendingThreadRuns((current) => {
-                            const next = Object.fromEntries(
-                              Object.entries(current).filter(
-                                ([, pendingRun]) => pendingRun.id !== id,
-                              ),
-                            );
-                            return Object.keys(next).length ===
-                              Object.keys(current).length
-                              ? current
-                              : next;
-                          });
-                        }}
+                        onComposerDraftChange={handleRuntimeComposerDraftChange}
+                        onConsumeInitialPrompt={handleRuntimeConsumeInitialPrompt}
                         onContextUsageChange={setRuntimeContextUsage}
                         onRunStateChange={handleRuntimeThreadRunStateChange}
                         onSelectAgentProfile={handleSelectAgentProfileForThread}

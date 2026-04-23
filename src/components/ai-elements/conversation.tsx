@@ -8,13 +8,21 @@ import type { ComponentProps } from "react";
 import { useCallback } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
-export type ConversationProps = ComponentProps<typeof StickToBottom>;
+export type ConversationProps = ComponentProps<typeof StickToBottom> & {
+  initialBehavior?: ComponentProps<typeof StickToBottom>["initial"];
+  resizeBehavior?: ComponentProps<typeof StickToBottom>["resize"];
+};
 
-export const Conversation = ({ className, ...props }: ConversationProps) => (
+export const Conversation = ({
+  className,
+  initialBehavior = "smooth",
+  resizeBehavior = "smooth",
+  ...props
+}: ConversationProps) => (
   <StickToBottom
     className={cn("relative flex-1 overflow-y-hidden", className)}
-    initial="smooth"
-    resize="smooth"
+    initial={initialBehavior}
+    resize={resizeBehavior}
     role="log"
     {...props}
   />
@@ -77,10 +85,6 @@ export const ConversationScrollButton = ({
 }: ConversationScrollButtonProps) => {
   const { isAtBottom, scrollToBottom } = useStickToBottomContext();
 
-  const handleScrollToBottom = useCallback(() => {
-    scrollToBottom();
-  }, [scrollToBottom]);
-
   return (
     !isAtBottom && (
       <Button
@@ -88,7 +92,7 @@ export const ConversationScrollButton = ({
           "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full dark:bg-background dark:hover:bg-muted",
           className
         )}
-        onClick={handleScrollToBottom}
+        onClick={() => void scrollToBottom("smooth")}
         size="icon"
         type="button"
         variant="outline"
