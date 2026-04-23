@@ -1448,7 +1448,10 @@ fn build_conflict_diff_hunks(
                     kind: GitDiffLineKind::Context,
                     old_number: Some(old_line),
                     new_number: Some(new_line),
-                    text: change.value().trim_end_matches('\n').to_string(),
+                    text: change
+                        .value()
+                        .trim_end_matches(&['\r', '\n'][..])
+                        .to_string(),
                 });
                 old_line += 1;
                 new_line += 1;
@@ -1458,7 +1461,10 @@ fn build_conflict_diff_hunks(
                     kind: GitDiffLineKind::Remove,
                     old_number: Some(old_line),
                     new_number: None,
-                    text: change.value().trim_end_matches('\n').to_string(),
+                    text: change
+                        .value()
+                        .trim_end_matches(&['\r', '\n'][..])
+                        .to_string(),
                 });
                 old_line += 1;
                 deletions += 1;
@@ -1468,7 +1474,10 @@ fn build_conflict_diff_hunks(
                     kind: GitDiffLineKind::Add,
                     old_number: None,
                     new_number: Some(new_line),
-                    text: change.value().trim_end_matches('\n').to_string(),
+                    text: change
+                        .value()
+                        .trim_end_matches(&['\r', '\n'][..])
+                        .to_string(),
                 });
                 new_line += 1;
                 additions += 1;
@@ -1628,4 +1637,129 @@ fn collect_branches(repo: &Repository) -> Result<Vec<GitBranchDto>, AppError> {
     });
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conflict_diff_identical_texts() {
+        let text = "line1\nline2\nline3\n";
+        let (hunks, additions, deletions, truncated) = build_conflict_diff_hunks(text, text);
+        assert_eq!(additions, 0);
+        assert_eq!(deletions, 0);
+        assert!(!truncated);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].lines.len(), 3);
+        for line in &hunks[0].lines {
+            assert!(matches!(line.kind, GitDiffLineKind::Context));
+            assert!(line.old_number.is_some());
+            assert!(line.new_number.is_some());
+        }
+    }
+
+    #[test]
+    fn conflict_diff_empty_old() {
+        let (hunks, additions, deletions, truncated) = build_conflict_diff_hunks("", "a\nb\n");
+        assert_eq!(additions, 2);
+        assert_eq!(deletions, 0);
+        assert!(!truncated);
+        for line in &hunks[0].lines {
+            assert!(matches!(line.kind, GitDiffLineKind::Add));
+            assert!(line.old_number.is_none());
+            assert!(line.new_number.is_some());
+        }
+    }
+
+    #[test]
+    fn conflict_diff_empty_new() {
+        let (hunks, additions, deletions, truncated) = build_conflict_diff_hunks("a\nb\n", "");
+        assert_eq!(additions, 0);
+        assert_eq!(deletions, 2);
+        assert!(!truncated);
+        for line in &hunks[0].lines {
+            assert!(matches!(line.kind, GitDiffLineKind::Remove));
+            assert!(line.old_number.is_some());
+            assert!(line.new_number.is_none());
+        }
+    }
+
+    #[test]
+    fn conflict_diff_both_empty() {
+        let (hunks, additions, deletions, truncated) = build_conflict_diff_hunks("", "");
+        assert_eq!(additions, 0);
+        assert_eq!(deletions, 0);
+        assert!(!truncated);
+        assert!(hunks.is_empty());
+    }
+
+    #[test]
+    fn conflict_diff_mixed_changes() {
+        let old = "keep\nremove_me\nstay\n";
+        let new = "keep\nadd_me\nstay\n";
+        let (hunks, additions, deletions, truncated) = build_conflict_diff_hunks(old, new);
+        assert_eq!(additions, 1);
+        assert_eq!(deletions, 1);
+        assert!(!truncated);
+        assert_eq!(hunks.len(), 1);
+
+        let kinds: Vec<_> = hunks[0].lines.iter().map(|l| &l.kind).collect();
+        assert!(kinds.contains(&&GitDiffLineKind::Context));
+        assert!(kinds.contains(&&GitDiffLineKind::Remove));
+        assert!(kinds.contains(&&GitDiffLineKind::Add));
+    }
+
+    #[test]
+    fn conflict_diff_line_numbers_tracked_correctly() {
+        let old = "a\nb\nc\n";
+        let new = "a\nx\nc\n";
+        let (hunks, _, _, _) = build_conflict_diff_hunks(old, new);
+        let lines = &hunks[0].lines;
+
+        // line 1: context a → old=1, new=1
+        assert_eq!(lines[0].old_number, Some(1));
+        assert_eq!(lines[0].new_number, Some(1));
+        // line 2: remove b → old=2
+        assert_eq!(lines[1].old_number, Some(2));
+        assert_eq!(lines[1].new_number, None);
+        // line 3: add x → new=2
+        assert_eq!(lines[2].old_number, None);
+        assert_eq!(lines[2].new_number, Some(2));
+        // line 4: context c → old=3, new=3
+        assert_eq!(lines[3].old_number, Some(3));
+        assert_eq!(lines[3].new_number, Some(3));
+    }
+
+    #[test]
+    fn conflict_diff_crlf_trimmed() {
+        let old = "line\r\n";
+        let new = "changed\r\n";
+        let (hunks, _, _, _) = build_conflict_diff_hunks(old, new);
+        for line in &hunks[0].lines {
+            assert!(!line.text.ends_with('\r'));
+            assert!(!line.text.ends_with('\n'));
+        }
+    }
+
+    #[test]
+    fn conflict_diff_truncation_at_max() {
+        // Build input that exceeds MAX_DIFF_LINES (1200).
+        let old_lines: String = (0..700).map(|i| format!("old_{i}\n")).collect();
+        let new_lines: String = (0..700).map(|i| format!("new_{i}\n")).collect();
+        let (hunks, _, _, truncated) = build_conflict_diff_hunks(&old_lines, &new_lines);
+        assert!(truncated);
+        let total: usize = hunks.iter().map(|h| h.lines.len()).sum();
+        assert_eq!(total, MAX_DIFF_LINES);
+    }
+
+    #[test]
+    fn conflict_diff_hunk_header_format() {
+        let old = "a\nb\n";
+        let new = "a\nc\n";
+        let (hunks, _, _, _) = build_conflict_diff_hunks(old, new);
+        assert!(hunks[0].header.starts_with("@@ -1,"));
+        assert!(hunks[0].header.contains("+1,"));
+        assert!(hunks[0].header.ends_with("@@"));
+    }
 }
