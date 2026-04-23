@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-04-22
+### :boom: BREAKING CHANGES
+- due to [`11f0919`](https://github.com/TiyAgents/tiycode/commit/11f091968ebac2d3229631b96856092d597a78ca) - 🐛 Make workspace sidebar ordering deterministic *(PR [#91](https://github.com/TiyAgents/tiycode/pull/91) by [@HayWolf](https://github.com/HayWolf))*:
+
+  The default workspace feature has been removed. Applications that relied on the default workspace behavior will need to be updated.  
+  ---------
+
+
+### :sparkles: New Features
+- [`6f615fa`](https://github.com/TiyAgents/tiycode/commit/6f615fa44f92c4f928f5c60a6d4fd2be64d8817f) - **policy**: ✨ Allow shell in plan mode via approval policy with read-only constraint *(PR [#89](https://github.com/TiyAgents/tiycode/pull/89) by [@HayWolf](https://github.com/HayWolf))*
+- [`f2318e4`](https://github.com/TiyAgents/tiycode/commit/f2318e43dbc2fa8ff410fde75addc83a0d0ea8be) - **settings-center**: ✨ add worktree support with kind, parent, and hash properties *(PR [#94](https://github.com/TiyAgents/tiycode/pull/94) by [@jorben](https://github.com/jorben))*
+- [`2498c1b`](https://github.com/TiyAgents/tiycode/commit/2498c1bd7f13a9bc9051cbb213965f2ab53ab9ce) - **workbench**: ✨ scope active profile to selected thread *(PR [#96](https://github.com/TiyAgents/tiycode/pull/96) by [@jorben](https://github.com/jorben))*
+- [`117b167`](https://github.com/TiyAgents/tiycode/commit/117b167f0e3f15628488b5ff6e762f8ea7607c8b) - **worktree**: ✨ support checking out existing branch into new worktree *(PR [#100](https://github.com/TiyAgents/tiycode/pull/100) by [@HayWolf](https://github.com/HayWolf))*
+- [`fa7fb59`](https://github.com/TiyAgents/tiycode/commit/fa7fb59fadbdad8ca55d9d31832bb8ab9a82094a) - **workbench-shell**: ✨ integrate task boards and thread profiles *(PR [#98](https://github.com/TiyAgents/tiycode/pull/98) by [@jorben](https://github.com/jorben))*
+- [`5449744`](https://github.com/TiyAgents/tiycode/commit/5449744f2691c489afec745d940e560639b71bb1) - **source-control**: ✨ Add git merge conflict detection and diff viewing *(PR [#101](https://github.com/TiyAgents/tiycode/pull/101) by [@jorben](https://github.com/jorben))*
+- [`fc33fcb`](https://github.com/TiyAgents/tiycode/commit/fc33fcbc2115742c1546a5c55cbb5939255d388d) - **workbench**: ✨ Add viewport-based auto-collapse for completed timeline entries *(PR [#102](https://github.com/TiyAgents/tiycode/pull/102) by [@jorben](https://github.com/jorben))*
+- [`4663b08`](https://github.com/TiyAgents/tiycode/commit/4663b08428a5fc52d6b9427ee640f32604944875) - **thread**: ✨ return cancel status from run cancellation *(PR [#104](https://github.com/TiyAgents/tiycode/pull/104) by [@jorben](https://github.com/jorben))*
+- [`65edf39`](https://github.com/TiyAgents/tiycode/commit/65edf39c051c18ddbcef23760676a50bd6de2146) - ✨ Improve summary-based context compression *(PR [#103](https://github.com/TiyAgents/tiycode/pull/103) by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`11f0919`](https://github.com/TiyAgents/tiycode/commit/11f091968ebac2d3229631b96856092d597a78ca) - **workspace**: 🐛 Make workspace sidebar ordering deterministic *(PR [#91](https://github.com/TiyAgents/tiycode/pull/91) by [@HayWolf](https://github.com/HayWolf))*
+- [`10646e2`](https://github.com/TiyAgents/tiycode/commit/10646e267917fc3e01bc5775e9402a69affd063e) - **workbench**: 🐛 restore thinking placeholder during reasoning-to-action gaps *(PR [#92](https://github.com/TiyAgents/tiycode/pull/92) by [@jorben](https://github.com/jorben))*
+- [`8f197ec`](https://github.com/TiyAgents/tiycode/commit/8f197ec0fecc18786086990ea640ce81936ad677) - **ai**: 🐛 prevent duplicate tool error rendering *(PR [#95](https://github.com/TiyAgents/tiycode/pull/95) by [@jorben](https://github.com/jorben))*
+- [`eb1e1e0`](https://github.com/TiyAgents/tiycode/commit/eb1e1e08c4593c7799b4b835213b8a8c63a925a9) - **orchestrator**: 🐛 shorten sub-agent call_id prefix to stay under 64-char limit *(PR [#93](https://github.com/TiyAgents/tiycode/pull/93) by [@jorben](https://github.com/jorben))*
+- [`29743ac`](https://github.com/TiyAgents/tiycode/commit/29743ac9dfaec8261e6daf933a9d7b8b0e51a185) - **workbench-shell**: 🐛 keep thinking phase active until message delta *(PR [#97](https://github.com/TiyAgents/tiycode/pull/97) by [@jorben](https://github.com/jorben))*
+- [`18149ae`](https://github.com/TiyAgents/tiycode/commit/18149ae97e397aab7c147c181378394ea6dd7c1c) - **settings-center**: 🐛 auto-enable edit mode for newly added commands *(PR [#99](https://github.com/TiyAgents/tiycode/pull/99) by [@jorben](https://github.com/jorben))*
+- [`cd8274a`](https://github.com/TiyAgents/tiycode/commit/cd8274a0e792255aca079789df27eb96a9a98a18) - **workbench-shell**: 🐛 hide reasoning chevron in reason placeholder *(PR [#105](https://github.com/TiyAgents/tiycode/pull/105) by [@HayWolf](https://github.com/HayWolf))*
+- [`e1571cf`](https://github.com/TiyAgents/tiycode/commit/e1571cfa6096b1d38909d5343ec5511a9574af11) - **terminal**: 🐛 Restore Chinese input in embedded terminal *(PR [#106](https://github.com/TiyAgents/tiycode/pull/106) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.3.2] - 2026-04-19
 ### :sparkles: New Features
 - [`c002ada`](https://github.com/TiyAgents/tiycode/commit/c002adab18fb1a3265bc1fb0256ec2df142933e2) - **workbench**: ✨ Per-thread agent profile bindings *(PR [#83](https://github.com/TiyAgents/tiycode/pull/83) by [@HayWolf](https://github.com/HayWolf))*
@@ -547,3 +577,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.0]: https://github.com/TiyAgents/tiycode/compare/0.2.9...0.3.0
 [0.3.1]: https://github.com/TiyAgents/tiycode/compare/0.3.0...0.3.1
 [0.3.2]: https://github.com/TiyAgents/tiycode/compare/0.3.1...0.3.2
+[0.3.3]: https://github.com/TiyAgents/tiycode/compare/0.3.2...0.3.3
