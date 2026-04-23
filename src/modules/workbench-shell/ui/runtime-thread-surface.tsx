@@ -1,7 +1,7 @@
 "use client";
 
 import type { ChatStatus } from "ai";
-import { AlertCircleIcon, BotIcon, Info, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
+import { AlertCircleIcon, BotIcon, ChevronDownIcon, ChevronUpIcon, Info, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useT, type TranslationKey } from "@/i18n";
@@ -820,6 +820,49 @@ function getLatestVisibleRun(snapshot: ThreadSnapshotDto) {
   )
     ? snapshot.latestRun
     : null;
+}
+
+const LONG_MESSAGE_PREVIEW_CHAR_LIMIT = 12_000;
+const LONG_MESSAGE_PREVIEW_LINE_LIMIT = 120;
+
+function getLongMessagePreview(content: string) {
+  const normalized = content.trimEnd();
+  const lines = normalized.split("\n");
+  const exceedsCharLimit = normalized.length > LONG_MESSAGE_PREVIEW_CHAR_LIMIT;
+  const exceedsLineLimit = lines.length > LONG_MESSAGE_PREVIEW_LINE_LIMIT;
+  const isLong = exceedsCharLimit || exceedsLineLimit;
+
+  if (!isLong) {
+    return {
+      hiddenLineCount: 0,
+      isLong: false,
+      previewText: normalized,
+    };
+  }
+
+  const limitedByLines = lines.slice(0, LONG_MESSAGE_PREVIEW_LINE_LIMIT).join("\n");
+  const previewText = exceedsCharLimit
+    ? limitedByLines.slice(0, LONG_MESSAGE_PREVIEW_CHAR_LIMIT)
+    : limitedByLines;
+  const previewLineCount = previewText.length === 0 ? 0 : previewText.split("\n").length;
+
+  return {
+    hiddenLineCount: Math.max(lines.length - previewLineCount, 0),
+    isLong: true,
+    previewText: previewText.trimEnd(),
+  };
+}
+
+function shouldUseLongMessagePreview(message: SurfaceMessage) {
+  if (message.status !== "completed" && message.status !== "failed") {
+    return false;
+  }
+
+  if (message.messageType !== "plain_message") {
+    return false;
+  }
+
+  return getLongMessagePreview(message.content).isLong;
 }
 
 function mapRunSummaryToContextUsage(run: RunSummaryDto | null): ThreadContextUsage | null {
@@ -2087,6 +2130,7 @@ export function RuntimeThreadSurface({
   const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
+  const [expandedLongMessageIds, setExpandedLongMessageIds] = useState<Record<string, boolean>>({});
   const [queueArtifact, setQueueArtifact] = useState<unknown>(null);
   const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
   const [runState, setRunState] = useState<RunState>("idle");
@@ -2115,6 +2159,7 @@ export function RuntimeThreadSurface({
   const snapshotLoadRequestRef = useRef(0);
   const completedMessageResyncRequestRef = useRef(0);
   const streamRef = useRef<ThreadStream | null>(null);
+  const pendingThreadRestoreScrollRef = useRef(false);
   const submittingRef = useRef(false);
   const subscribingRef = useRef(false);
   const handledInitialPromptRequestIdRef = useRef<string | null>(null);
@@ -2470,6 +2515,7 @@ export function RuntimeThreadSurface({
 
   useEffect(() => {
     subscribingRef.current = false;
+    pendingThreadRestoreScrollRef.current = Boolean(threadId);
     setComposerError(null);
     if (!onComposerDraftChange) {
       setLocalComposerValue("");
@@ -2479,6 +2525,7 @@ export function RuntimeThreadSurface({
     setHistoryLoadError(null);
     setLoadError(null);
     setMessages([]);
+    setExpandedLongMessageIds({});
     setIsLoadingMoreMessages(false);
     setApprovingPlanMessageId(null);
     setQueueArtifact(null);
@@ -2490,7 +2537,23 @@ export function RuntimeThreadSurface({
     setThinkingPlaceholder(null);
     setTools([]);
     void loadSnapshot();
-  }, [clearScheduledThinkingPhase, loadSnapshot, threadId]);
+  }, [clearScheduledThinkingPhase, loadSnapshot, onComposerDraftChange, threadId]);
+
+  useEffect(() => {
+    const isCurrentThreadSnapshotReady = snapshotReady && snapshotThreadId === threadId;
+    if (!threadId || !isCurrentThreadSnapshotReady || messages.length === 0 || !pendingThreadRestoreScrollRef.current) {
+      return;
+    }
+
+    pendingThreadRestoreScrollRef.current = false;
+    const rafId = window.requestAnimationFrame(() => {
+      void conversationContextRef.current?.scrollToBottom("instant");
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [messages.length, snapshotReady, snapshotThreadId, threadId]);
 
   useEffect(() => {
     if (!threadId) {
@@ -3971,6 +4034,75 @@ export function RuntimeThreadSurface({
     );
   }, [completedToolOpen, handleCompletedToolOpenChange, respondToClarify, t]);
 
+  const renderMessageBody = useCallback((message: SurfaceMessage) => {
+    const content = message.content || (message.status === "streaming" ? "…" : "");
+    const isExpanded = expandedLongMessageIds[message.id] ?? false;
+    const canPreview = shouldUseLongMessagePreview(message);
+    const usePreview = canPreview && !isExpanded;
+
+    if (!usePreview) {
+      return (
+        <div className="space-y-3">
+          <MessageResponse>{content}</MessageResponse>
+          {canPreview ? (
+            <div className="flex justify-end">
+              <Button
+                className="h-7 px-2.5 text-xs"
+                onClick={() => {
+                  setExpandedLongMessageIds((current) => {
+                    if (!current[message.id]) {
+                      return current;
+                    }
+
+                    const next = { ...current };
+                    delete next[message.id];
+                    return next;
+                  });
+                }}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <ChevronUpIcon className="size-3.5" />
+                收起全文
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    const preview = getLongMessagePreview(content);
+
+    return (
+      <div className="space-y-3 rounded-2xl border border-app-border/18 bg-app-surface/14 px-4 py-3">
+        <pre className="max-h-[28rem] overflow-hidden whitespace-pre-wrap break-words text-sm leading-6 text-app-foreground">
+          {preview.previewText}
+          {preview.previewText.length < content.length ? "\n…" : ""}
+        </pre>
+        <div className="flex items-center justify-between gap-3 text-xs text-app-subtle">
+          <span>
+            {preview.hiddenLineCount > 0
+              ? `已折叠约 ${preview.hiddenLineCount} 行内容`
+              : "已折叠部分长内容以优化加载与滚动性能"}
+          </span>
+          <Button
+            className="h-7 px-2.5 text-xs"
+            onClick={() => {
+              setExpandedLongMessageIds((current) => ({ ...current, [message.id]: true }));
+            }}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <ChevronDownIcon className="size-3.5" />
+            展开全文
+          </Button>
+        </div>
+      </div>
+    );
+  }, [expandedLongMessageIds, setExpandedLongMessageIds]);
+
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">
       <div className="pointer-events-none absolute left-1/2 top-0 h-56 w-[72rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(120,180,255,0.11),transparent_68%)] blur-3xl" />
@@ -4284,7 +4416,7 @@ export function RuntimeThreadSurface({
                                     url: attachment.url ?? undefined,
                                   }))}
                                 />
-                                <MessageResponse>{message.content || (message.status === "streaming" ? "…" : "")}</MessageResponse>
+                                {renderMessageBody(message)}
                                 {expandedPrompt && expandedPrompt !== (message.content ?? "").trim() ? (
                                   <CompactCollapsible defaultOpen={false}>
                                     <CompactCollapsibleHeader className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground">
