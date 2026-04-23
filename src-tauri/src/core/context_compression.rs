@@ -9,8 +9,10 @@
 //!
 //! ## Strategy
 //!
-//! 1. **Token estimation**: `chars / 4` heuristic (matches pi-mono).
-//! 2. **Threshold check**: Compress when `estimated_tokens > context_window - reserve_tokens`.
+//! 1. **Token estimation**: heuristic message token estimation, with optional
+//!    calibration from real provider `usage.input` samples.
+//! 2. **Threshold check**: Compress when the calibrated input estimate exceeds
+//!    `context_window - reserve_tokens`.
 //! 3. **Cut-point detection**: Walk backwards from newest message, keep `keep_recent_tokens`
 //!    worth of recent messages. Never cut in the middle of an assistant+tool_result pair.
 //! 4. **Summary injection**: Old messages before the cut-point are replaced with a single
@@ -40,6 +42,76 @@ const OLD_TOOL_RESULT_MAX_CHARS: usize = 800;
 
 /// Minimum number of messages to keep (never compress below this).
 const MIN_MESSAGES_TO_KEEP: usize = 4;
+
+const CALIBRATION_SCALE_BASIS_POINTS: u32 = 10_000;
+
+/// Conservative calibration for message-token estimates derived from real
+/// provider prompt-token samples.
+///
+/// The heuristic estimator only counts the message payload. Real provider
+/// prompt usage also reflects system prompt, tool schema, model-specific
+/// tokenisation differences, and provider-side prompt caching reads. We
+/// therefore track the highest observed underestimate ratio and apply it to
+/// future heuristic totals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextTokenCalibration {
+    ratio_basis_points: u32,
+}
+
+impl Default for ContextTokenCalibration {
+    fn default() -> Self {
+        Self {
+            ratio_basis_points: CALIBRATION_SCALE_BASIS_POINTS,
+        }
+    }
+}
+
+impl ContextTokenCalibration {
+    /// Build a calibration sample from one heuristic-vs-real prompt-token observation.
+    pub fn from_observation(estimated_tokens: u32, actual_prompt_tokens: u64) -> Option<Self> {
+        if estimated_tokens == 0 || actual_prompt_tokens == 0 {
+            return None;
+        }
+
+        Some(Self::default().observe(estimated_tokens, actual_prompt_tokens))
+    }
+
+    /// Fold a new observation into the calibration, keeping the most
+    /// conservative underestimate ratio seen so far.
+    pub fn observe(self, estimated_tokens: u32, actual_prompt_tokens: u64) -> Self {
+        if estimated_tokens == 0 || actual_prompt_tokens == 0 {
+            return self;
+        }
+
+        let observed_ratio = (((actual_prompt_tokens as u128)
+            * (CALIBRATION_SCALE_BASIS_POINTS as u128))
+            .saturating_add((estimated_tokens as u128).saturating_sub(1)))
+            / (estimated_tokens as u128);
+        let observed_ratio = observed_ratio
+            .max(CALIBRATION_SCALE_BASIS_POINTS as u128)
+            .min(u32::MAX as u128) as u32;
+
+        Self {
+            ratio_basis_points: self.ratio_basis_points.max(observed_ratio),
+        }
+    }
+
+    /// Apply the conservative calibration ratio to a heuristic token total.
+    pub fn apply_to_estimate(self, estimated_tokens: u32) -> u32 {
+        if estimated_tokens == 0 {
+            return 0;
+        }
+
+        ((((estimated_tokens as u128) * (self.ratio_basis_points as u128))
+            .saturating_add((CALIBRATION_SCALE_BASIS_POINTS as u128).saturating_sub(1)))
+            / (CALIBRATION_SCALE_BASIS_POINTS as u128))
+            .min(u32::MAX as u128) as u32
+    }
+
+    pub fn ratio_basis_points(self) -> u32 {
+        self.ratio_basis_points
+    }
+}
 
 /// Estimate the number of tokens for a string.
 ///
@@ -181,13 +253,43 @@ pub fn estimate_total_tokens(messages: &[AgentMessage]) -> u32 {
     messages.iter().map(estimate_message_tokens).sum()
 }
 
-/// Check whether compression is needed for the given messages and settings.
-pub fn should_compress(messages: &[AgentMessage], settings: &CompressionSettings) -> bool {
+/// Apply an optional conservative calibration to a heuristic token estimate.
+pub(crate) fn calibrate_total_tokens(
+    total_tokens: u32,
+    calibration: Option<ContextTokenCalibration>,
+) -> u32 {
+    calibration
+        .unwrap_or_default()
+        .apply_to_estimate(total_tokens)
+}
+
+/// Check whether a token total exceeds the compression input budget.
+pub(crate) fn should_compress_total_tokens(
+    total_tokens: u32,
+    settings: &CompressionSettings,
+) -> bool {
+    total_tokens > settings.budget()
+}
+
+/// Check whether compression is needed for the given messages and settings,
+/// applying an optional conservative calibration derived from real provider
+/// `usage.input` samples.
+pub fn should_compress_with_calibration(
+    messages: &[AgentMessage],
+    settings: &CompressionSettings,
+    calibration: Option<ContextTokenCalibration>,
+) -> bool {
     if messages.is_empty() {
         return false;
     }
     let total_tokens = estimate_total_tokens(messages);
-    total_tokens > settings.budget()
+    let calibrated_total_tokens = calibrate_total_tokens(total_tokens, calibration);
+    should_compress_total_tokens(calibrated_total_tokens, settings)
+}
+
+/// Check whether compression is needed for the given messages and settings.
+pub fn should_compress(messages: &[AgentMessage], settings: &CompressionSettings) -> bool {
+    should_compress_with_calibration(messages, settings, None)
 }
 
 /// Find the cut-point index: messages before this index are "old" (to be
@@ -727,6 +829,71 @@ mod tests {
         // Should equal sum of individual estimates
         let sum: u32 = messages.iter().map(estimate_message_tokens).sum();
         assert_eq!(total, sum);
+    }
+
+    #[test]
+    fn context_token_calibration_from_observation_uses_prompt_token_observation() {
+        let calibration = ContextTokenCalibration::from_observation(1_000, 1_750)
+            .expect("non-zero prompt-token observation should produce calibration");
+
+        assert_eq!(calibration.ratio_basis_points(), 17_500);
+        assert_eq!(calibration.apply_to_estimate(2_000), 3_500);
+    }
+
+    #[test]
+    fn context_token_calibration_keeps_the_most_conservative_ratio() {
+        let calibration = ContextTokenCalibration::default()
+            .observe(1_000, 1_500)
+            .observe(1_000, 1_200);
+
+        assert_eq!(calibration.ratio_basis_points(), 15_000);
+        assert_eq!(calibration.apply_to_estimate(2_000), 3_000);
+    }
+
+    #[test]
+    fn context_token_calibration_observe_ignores_zero_values() {
+        let baseline = ContextTokenCalibration::default();
+
+        assert_eq!(baseline.observe(0, 1_500), baseline);
+        assert_eq!(baseline.observe(1_000, 0), baseline);
+    }
+
+    #[test]
+    fn context_token_calibration_apply_to_zero_estimate_returns_zero() {
+        let calibration = ContextTokenCalibration::default().observe(1_000, 1_500);
+
+        assert_eq!(calibration.apply_to_estimate(0), 0);
+    }
+
+    #[test]
+    fn should_compress_with_calibration_triggers_when_raw_estimate_is_under_budget() {
+        let mut messages = Vec::new();
+        for i in 0..4 {
+            messages.push(make_user(&format!("Question {}: {}", i, "x".repeat(400))));
+            messages.push(make_assistant(&format!(
+                "Answer {}: {}",
+                i,
+                "y".repeat(400)
+            )));
+        }
+
+        let settings = CompressionSettings {
+            context_window: 4_000,
+            reserve_tokens: 2_000,
+            keep_recent_tokens: 500,
+        };
+        let raw_total = estimate_total_tokens(&messages);
+        assert!(raw_total < settings.budget());
+
+        let calibration = ContextTokenCalibration::from_observation(raw_total, 2_500)
+            .expect("non-zero observation should produce calibration");
+
+        assert!(!should_compress(&messages, &settings));
+        assert!(should_compress_with_calibration(
+            &messages,
+            &settings,
+            Some(calibration),
+        ));
     }
 
     #[test]
