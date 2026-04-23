@@ -19,7 +19,7 @@ const BRAND_RULES: ReadonlyArray<BrandRule> = [
   { slug: "grok", providerPatterns: ["grok"], modelPatterns: ["grok"] },
   { slug: "sora", providerPatterns: ["sora"], modelPatterns: ["sora"] },
   { slug: "chatglm", providerPatterns: ["chatglm", "chat glm", "glm", "glmv"], modelPatterns: ["chatglm", "chat glm", "glm", "glmv"] },
-  { slug: "hunyuan", providerPatterns: ["hunyuan"], modelPatterns: ["hunyuan"] },
+  { slug: "hunyuan", providerPatterns: ["hunyuan"], modelPatterns: ["hunyuan", /(^|[^a-z0-9])hy\d+(?:[^a-z0-9]|$)/u] },
   { slug: "longcat", providerPatterns: ["longcat"], modelPatterns: ["longcat"] },
   { slug: "minimax", providerPatterns: ["minimax", "mini max"], modelPatterns: ["minimax", "mini max"] },
   { slug: "nanobanana", providerPatterns: ["nano banana", "nanobanana"], modelPatterns: ["nano banana", "nanobanana"] },
