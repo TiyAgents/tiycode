@@ -3,6 +3,8 @@
 //! Mirrors pi-mono's `truncate.ts` — provides a single, shared module that all
 //! executors use instead of each implementing its own truncation logic.
 
+use super::output_sanitizer::sanitize_terminal_output;
+
 /// Default limit for file-read style output (~100 KB).
 pub const READ_MAX_BYTES: usize = 100_000;
 /// Default max lines for file-read style output.
@@ -122,10 +124,11 @@ pub fn truncate_tail(content: &str, max_bytes: usize, max_lines: usize) -> (Stri
 }
 
 /// Convenience wrapper that accepts raw bytes (e.g. from process stdout/stderr)
-/// and returns a truncated-tail string.
+/// and returns a truncated-tail string after sanitizing ANSI/control sequences.
 pub fn truncate_tail_bytes(bytes: &[u8], max_bytes: usize, max_lines: usize) -> (String, bool) {
     let s = String::from_utf8_lossy(bytes);
-    truncate_tail(&s, max_bytes, max_lines)
+    let sanitized = sanitize_terminal_output(&s);
+    truncate_tail(&sanitized, max_bytes, max_lines)
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +209,36 @@ mod tests {
         assert!(truncated);
         assert!(result.contains("d\ne"));
         assert!(result.contains("[Output truncated"));
+    }
+
+    #[test]
+    fn truncate_tail_bytes_sanitizes_ansi_sequences() {
+        let bytes = b"\x1b[31m-red\x1b[0m\n\x1b[32m+green\x1b[0m\r\n";
+
+        let (result, truncated) = truncate_tail_bytes(bytes, 10_000, 100);
+
+        assert_eq!(result, "-red\n+green\n");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn truncate_tail_bytes_sanitizes_before_truncating() {
+        let bytes = concat!(
+            "keep\n",
+            "\u{1b}[31mremove-me\u{1b}[0m\n",
+            "\u{1b}]0;title\u{7}",
+            "abc\u{8}Z\n",
+            "tail\n"
+        )
+        .as_bytes();
+
+        let (result, truncated) = truncate_tail_bytes(bytes, 16, 2);
+
+        assert!(truncated);
+        assert!(result.contains("showing last 2 of 4 lines"));
+        assert!(result.contains("abZ\ntail"));
+        assert!(!result.contains("\u{1b}"));
+        assert!(!result.contains("remove-me"));
     }
 
     #[test]
