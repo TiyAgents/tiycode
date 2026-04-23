@@ -1,11 +1,11 @@
-//! M2.3 — Task Tracking tests
+//! Task board management tests
 //!
-//! Acceptance criteria:
-//! - Task boards can be created with steps
-//! - Task steps can be updated (start, complete, fail)
+//! Coverage:
+//! - Task board creation with steps
+//! - Task step state transitions (start, complete, fail)
 //! - Thread snapshot includes task boards
-//! - Task boards are deleted when thread is deleted
-//! - State machine guards prevent invalid transitions
+//! - Cascade deletion (thread → task boards)
+//! - State machine guards for invalid transitions
 
 mod test_helpers;
 

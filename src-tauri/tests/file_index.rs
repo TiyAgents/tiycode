@@ -1,10 +1,12 @@
-//! M1.8 — Index basics tests
+//! File tree & search index tests
 //!
-//! Acceptance criteria:
-//! - File tree loads for medium repo < 300ms
-//! - local search returns file path + line number + context
-//! - Tree scan hides .git and noisy files while keeping large directories performant
-//! - File filter can find deep files beyond the eagerly loaded tree
+//! Coverage:
+//! - File tree scan (hide .git/.DS_Store, collapse node_modules, pagination)
+//! - Local search integration (basic, max results, file patterns, multiline)
+//! - Extended search options (file type, query mode, output mode, case-insensitive)
+//! - Search stream batching and cancellation
+//! - File filter (find deep paths, reveal path for new files)
+//! - Performance and cache (scan < 3s, TTL expiry)
 
 // =========================================================================
 // T1.8.1 — File tree scan of real directory

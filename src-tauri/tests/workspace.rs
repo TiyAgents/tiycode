@@ -1,10 +1,11 @@
-//! M1.2 — Workspace management tests
+//! Workspace management tests
 //!
-//! Acceptance criteria:
-//! - Add workspace via folder, path canonicalized, stored in DB
-//! - Duplicate paths rejected
-//! - Sidebar workspace list loaded from SQLite
-//! - Startup re-validates path status (Missing/Ready)
+//! Coverage:
+//! - Workspace CRUD operations and duplicate path rejection
+//! - Default workspace creation and flag management
+//! - Path status validation (Ready/Missing)
+//! - Workspace ordering (default-first, name, kind, created_at)
+//! - Cascade deletion
 
 mod test_helpers;
 

@@ -1,3 +1,10 @@
+//! Terminal management tests
+//!
+//! Coverage:
+//! - Shell detection (bash vs cmd.exe)
+//! - Terminal session lifecycle
+//! - Unicode marker commands and output polling
+
 mod test_helpers;
 
 use std::ffi::OsString;

@@ -1,9 +1,10 @@
-//! M1.7 — Frontend full integration tests (Rust-side)
+//! Frontend serialization tests
 //!
-//! Acceptance criteria:
-//! - ThreadStreamEvent covers all event types for the frontend adapter
-//! - All Tauri commands are registered in invoke_handler
-//! - No mock data residual in Rust layer
+//! Coverage:
+//! - ThreadStreamEvent serialization (all 29 event variants)
+//! - Event type discriminator field verification
+//! - Model DTO camelCase serialization (workspace, thread, message)
+//! - Error response serialization (errorCode, userMessage)
 
 fn sample_subagent_snapshot() -> tiycode::core::subagent::SubagentProgressSnapshot {
     let mut snapshot = tiycode::core::subagent::SubagentProgressSnapshot::default();

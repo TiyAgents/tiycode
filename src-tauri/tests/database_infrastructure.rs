@@ -1,9 +1,12 @@
-//! M1.1 — Project infrastructure & database layer tests
+//! Database infrastructure tests
 //!
-//! Acceptance criteria:
-//! - `cargo build` passes; app startup creates `$HOME/.tiy/db/tiycode.db` with 17 tables
-//! - Logs written to platform-specific log path (macOS ~/Library/Logs/TiyAgents/)
-//! - `cargo test` persistence module passes
+//! Coverage:
+//! - SQLite pool creation and migration execution
+//! - WAL mode and pragma verification
+//! - Table schema validation (workspaces, threads, messages, runs, tool_calls)
+//! - Index verification
+//! - Foreign key constraint enforcement
+//! - AppError type serialization
 
 mod test_helpers;
 

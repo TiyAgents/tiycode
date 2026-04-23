@@ -1,9 +1,12 @@
-//! M1.3 — Settings & configuration system tests
+//! Settings & configuration tests
 //!
-//! Acceptance criteria:
-//! - Settings persist across restarts (no localStorage dependency)
-//! - Provider API Key stored (encrypted in production, stored in DB)
-//! - Profile three-layer model mapping configurable
+//! Coverage:
+//! - Settings CRUD and upsert
+//! - Policies CRUD (JSON storage)
+//! - Provider CRUD with cascade deletion (provider → models)
+//! - Provider model unique constraints
+//! - Agent profile three-layer model mapping
+//! - Built-in catalog seeding and custom provider protection
 
 mod test_helpers;
 

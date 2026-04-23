@@ -1,13 +1,10 @@
-//! M2.4 — Workspace worktree management tests
+//! Workspace worktree management tests
 //!
-//! Covers:
-//! - `WorktreeManager::create` produces a sibling worktree directory,
-//!   inserts a `kind='worktree'` workspace row, and records the parent link.
-//! - Creating a worktree against a non-repo workspace is rejected.
-//! - `WorkspaceManager::remove` on a worktree removes the `.git/worktrees/<name>`
-//!   registration and the DB row.
-//! - `WorkspaceManager::remove` on the parent repo also removes all child
-//!   worktree rows and their `.git/worktrees/<name>` registrations.
+//! Coverage:
+//! - WorktreeManager::create produces sibling worktree directory and DB row
+//! - Non-repo workspace rejection
+//! - Worktree removal cleans up .git/worktrees/<name> and DB row
+//! - Parent repo removal cascades to child worktrees
 //! - `WorkspaceManager::set_default` refuses worktree rows.
 //! - `WorkspaceManager::validate` upgrades a standalone Git workspace to
 //!   `kind='repo'` so the UI can surface worktree actions.

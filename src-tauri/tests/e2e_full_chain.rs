@@ -1,10 +1,9 @@
-//! M1 End-to-End — Full chain integration tests
+//! End-to-end full chain integration tests
 //!
 //! Verifies the complete data flow:
 //! Workspace → Thread → Message → Run → ToolCall → Audit
 //!
-//! These tests simulate the full lifecycle without Tauri or Sidecar,
-//! operating directly on the database layer.
+//! Operates directly on the database layer without Tauri or Sidecar.
 
 mod test_helpers;
 

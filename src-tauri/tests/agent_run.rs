@@ -1,9 +1,12 @@
-//! M1.5 — Built-in agent runtime tests
+//! Agent run lifecycle tests
 //!
-//! Acceptance criteria:
-//! - Run state machine: Created → Dispatching → Running ⇄ WaitingApproval → Completed/Failed/Cancelled/Interrupted
-//! - Crash recovery marks dangling runs as interrupted
-//! - Runtime model plan resolves into executable built-in agent sessions
+//! Coverage:
+//! - Run state machine transitions (created → dispatching → running ⇄ waiting_approval → terminal)
+//! - Crash recovery (dangling runs marked as interrupted)
+//! - Active runs index (partial index on non-terminal runs)
+//! - One active run per thread constraint
+//! - Effective model plan freeze
+//! - Built-in runtime session resolution (model, prompt, plan mode, thinking, approval policy)
 
 mod test_helpers;
 

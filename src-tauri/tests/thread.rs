@@ -1,10 +1,11 @@
-//! M1.4 — Thread core tests
+//! Thread & message persistence tests
 //!
-//! Acceptance criteria:
-//! - Thread belongs to workspace, sidebar sorted by last_active_at
-//! - Messages persisted, survive restart
-//! - Long threads support pagination (UUID v7 cursor-based)
-//! - ThreadStatus derived from latest run status
+//! Coverage:
+//! - Thread CRUD with profile_id, workspace association, sorting
+//! - Message append, persistence, and cursor-based pagination
+//! - ThreadStatus derivation from run states
+//! - Thread snapshot assembly (messages, runs, token usage)
+//! - Message metadata (JSON storage)
 
 mod test_helpers;
 

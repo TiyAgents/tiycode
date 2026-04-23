@@ -1,4 +1,9 @@
-//! M2.2a — Git-backed TreeView tests
+//! Git tree & operations tests
+//!
+//! Coverage:
+//! - Git-backed tree view (status overlay, diff, blame)
+//! - Git manager operations (commit, branch, stash)
+//! - Git stream events
 
 use std::path::Path;
 use std::process::Command;
