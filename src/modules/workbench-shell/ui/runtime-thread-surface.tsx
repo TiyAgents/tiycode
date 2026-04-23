@@ -826,7 +826,7 @@ function getLatestVisibleRun(snapshot: ThreadSnapshotDto) {
 const LONG_MESSAGE_PREVIEW_CHAR_LIMIT = 12_000;
 const LONG_MESSAGE_PREVIEW_LINE_LIMIT = 120;
 
-function getLongMessagePreview(content: string) {
+export function getLongMessagePreview(content: string) {
   const normalized = content.trimEnd();
   const lines = normalized.split("\n");
   const exceedsCharLimit = normalized.length > LONG_MESSAGE_PREVIEW_CHAR_LIMIT;
@@ -854,7 +854,7 @@ function getLongMessagePreview(content: string) {
   };
 }
 
-function shouldUseLongMessagePreview(message: SurfaceMessage) {
+export function shouldUseLongMessagePreview(message: Pick<SurfaceMessage, "content" | "messageType" | "status">) {
   if (message.status !== "completed" && message.status !== "failed") {
     return false;
   }
@@ -4038,7 +4038,8 @@ export function RuntimeThreadSurface({
   const renderMessageBody = useCallback((message: SurfaceMessage) => {
     const content = message.content || (message.status === "streaming" ? "…" : "");
     const isExpanded = expandedLongMessageIds[message.id] ?? false;
-    const canPreview = shouldUseLongMessagePreview(message);
+    const preview = shouldUseLongMessagePreview(message) ? getLongMessagePreview(content) : null;
+    const canPreview = preview?.isLong === true;
     const usePreview = canPreview && !isExpanded;
 
     if (!usePreview) {
@@ -4073,18 +4074,16 @@ export function RuntimeThreadSurface({
       );
     }
 
-    const preview = getLongMessagePreview(content);
-
     return (
       <div className="space-y-3 rounded-2xl border border-app-border/18 bg-app-surface/14 px-4 py-3">
         <pre className="max-h-[28rem] overflow-hidden whitespace-pre-wrap break-words text-sm leading-6 text-app-foreground">
-          {preview.previewText}
-          {preview.previewText.length < content.length ? "\n…" : ""}
+          {preview!.previewText}
+          {preview!.previewText.length < content.length ? "\n…" : ""}
         </pre>
         <div className="flex items-center justify-between gap-3 text-xs text-app-subtle">
           <span>
-            {preview.hiddenLineCount > 0
-              ? t("longMessage.hiddenLines", { count: preview.hiddenLineCount })
+            {preview!.hiddenLineCount > 0
+              ? t("longMessage.hiddenLines", { count: preview!.hiddenLineCount })
               : t("longMessage.hiddenContent")}
           </span>
           <Button
