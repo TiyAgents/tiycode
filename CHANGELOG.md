@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-04-23
+### :sparkles: New Features
+- [`7c9b5ee`](https://github.com/TiyAgents/tiycode/commit/7c9b5ee8faa030f5569a2da63e31b62d3b2b5610) - **title**: ✨ Add thread title fallback and context handling *(PR [#110](https://github.com/TiyAgents/tiycode/pull/110) by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`92648bd`](https://github.com/TiyAgents/tiycode/commit/92648bd9561fa1447e541eee958d57719cae7be9) - **core**: 🐛 Prevent context overflow with auto-compression *(PR [#109](https://github.com/TiyAgents/tiycode/pull/109) by [@jorben](https://github.com/jorben))*
+- [`332beb5`](https://github.com/TiyAgents/tiycode/commit/332beb56318056a179de9ed3119c75ae705361dc) - **shell-output**: 🐛 Strip ANSI escape sequences from tool output *(PR [#111](https://github.com/TiyAgents/tiycode/pull/111) by [@jorben](https://github.com/jorben))*
+- [`6a51bc4`](https://github.com/TiyAgents/tiycode/commit/6a51bc4b593e57d73b459d1bef4300cf30fff32e) - **git**: 🐛 Show ours blob as Old side in conflict diff view *(PR [#113](https://github.com/TiyAgents/tiycode/pull/113) by [@jorben](https://github.com/jorben))*
+- [`0782397`](https://github.com/TiyAgents/tiycode/commit/0782397c561f49b647d79a0595706d7ca51c2164) - **workbench**: 🐛 Fix shell output ANSI garbling and add long message preview *(PR [#112](https://github.com/TiyAgents/tiycode/pull/112) by [@jorben](https://github.com/jorben))*
+
+### :recycle: Refactors
+- [`c0858e1`](https://github.com/TiyAgents/tiycode/commit/c0858e13b334a5df8726f42e4702b16d534a1c3b) - **agent-run-manager**: 🧹 clear stale tool calls on history override *(PR [#114](https://github.com/TiyAgents/tiycode/pull/114) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.3.3] - 2026-04-22
 ### :boom: BREAKING CHANGES
 - due to [`11f0919`](https://github.com/TiyAgents/tiycode/commit/11f091968ebac2d3229631b96856092d597a78ca) - 🐛 Make workspace sidebar ordering deterministic *(PR [#91](https://github.com/TiyAgents/tiycode/pull/91) by [@HayWolf](https://github.com/HayWolf))*:
@@ -578,3 +592,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.1]: https://github.com/TiyAgents/tiycode/compare/0.3.0...0.3.1
 [0.3.2]: https://github.com/TiyAgents/tiycode/compare/0.3.1...0.3.2
 [0.3.3]: https://github.com/TiyAgents/tiycode/compare/0.3.2...0.3.3
+[0.3.4]: https://github.com/TiyAgents/tiycode/compare/0.3.3...0.3.4
