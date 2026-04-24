@@ -90,7 +90,7 @@ const BUILTIN_PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         provider_key: "minimax",
         provider_type: "minimax",
         display_name: "MiniMax",
-        default_base_url: "https://api.minimax.io/anthropic",
+        default_base_url: "https://api.minimax.io/anthropic/v1",
     },
     ProviderCatalogEntry {
         provider_key: "kimi-coding",
