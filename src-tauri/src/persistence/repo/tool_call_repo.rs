@@ -307,4 +307,82 @@ mod tests {
             "same run should not reuse a runtime tool call id"
         );
     }
+
+    #[tokio::test]
+    async fn list_by_run_ids_falls_back_to_storage_id_for_legacy_rows() {
+        let pool = setup_test_pool().await;
+
+        sqlx::query(
+            "INSERT INTO tool_calls (id, run_id, thread_id, tool_name, tool_input_json, status, started_at, tool_call_id)
+             VALUES ('legacy-storage-1', 'r1', 't1', 'shell', '{}', 'completed', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert legacy tool call");
+
+        let calls = list_by_run_ids(&pool, &["r1".to_string()])
+            .await
+            .expect("list tool calls");
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "legacy-storage-1");
+        assert_eq!(calls[0].storage_id, "legacy-storage-1");
+    }
+
+    #[tokio::test]
+    async fn update_operations_target_rows_by_storage_id_when_runtime_ids_overlap() {
+        let pool = setup_test_pool().await;
+
+        insert(&pool, &insert_record("storage-1", "shell:3", "r1", "t1"))
+            .await
+            .expect("insert first tool call");
+        insert(&pool, &insert_record("storage-2", "shell:3", "r2", "t2"))
+            .await
+            .expect("insert second tool call with same runtime id");
+
+        update_status(&pool, "storage-1", "running")
+            .await
+            .expect("update first status by storage id");
+        update_approval(&pool, "storage-2", "approved", "approved")
+            .await
+            .expect("update second approval by storage id");
+        update_result(
+            &pool,
+            "storage-2",
+            &serde_json::json!({ "ok": true }).to_string(),
+            "completed",
+        )
+        .await
+        .expect("update second result by storage id");
+
+        let first = sqlx::query(
+            "SELECT status, approval_status, tool_output_json FROM tool_calls WHERE id = 'storage-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("first row");
+        assert_eq!(first.get::<String, _>("status"), "running");
+        assert!(first.get::<Option<String>, _>("approval_status").is_none());
+        assert!(first.get::<Option<String>, _>("tool_output_json").is_none());
+
+        let second = sqlx::query(
+            "SELECT status, approval_status, tool_output_json FROM tool_calls WHERE id = 'storage-2'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("second row");
+        assert_eq!(second.get::<String, _>("status"), "completed");
+        assert_eq!(
+            second
+                .get::<Option<String>, _>("approval_status")
+                .as_deref(),
+            Some("approved")
+        );
+        assert_eq!(
+            second
+                .get::<Option<String>, _>("tool_output_json")
+                .as_deref(),
+            Some(r#"{"ok":true}"#)
+        );
+    }
 }

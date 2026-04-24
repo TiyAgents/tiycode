@@ -261,6 +261,7 @@ mod tests {
 
     async fn seed_tool_call(
         pool: &sqlx::SqlitePool,
+        storage_id: &str,
         tool_call_id: &str,
         run_id: &str,
         thread_id: &str,
@@ -271,7 +272,7 @@ mod tests {
             "INSERT INTO tool_calls (id, tool_call_id, run_id, thread_id, tool_name, tool_input_json, status, started_at)
              VALUES (?, ?, ?, ?, ?, '{}', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         )
-        .bind(tool_call_id)
+        .bind(storage_id)
         .bind(tool_call_id)
         .bind(run_id)
         .bind(thread_id)
@@ -351,6 +352,7 @@ mod tests {
         .await;
         seed_tool_call(
             &pool,
+            "tc-storage-dup-approval",
             "tc-dup-approval",
             "r-dup-approval",
             "t-dup-approval",
@@ -374,7 +376,7 @@ mod tests {
                         run_id: "r-dup-approval".into(),
                         thread_id: "t-dup-approval".into(),
                         tool_call_id: "tc-dup-approval".into(),
-                        tool_call_storage_id: "tc-dup-approval".into(),
+                        tool_call_storage_id: "tc-storage-dup-approval".into(),
                         tool_name: "write".into(),
                         tool_input: serde_json::json!({
                             "path": target_file_text,
@@ -424,7 +426,7 @@ mod tests {
         }
 
         let row = sqlx::query(
-            "SELECT status, approval_status FROM tool_calls WHERE id = 'tc-dup-approval'",
+            "SELECT status, approval_status FROM tool_calls WHERE id = 'tc-storage-dup-approval'",
         )
         .fetch_one(&pool)
         .await
