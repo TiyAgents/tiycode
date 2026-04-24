@@ -194,6 +194,7 @@ pub struct RunSummaryDto {
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallDto {
     pub id: String,
+    pub storage_id: String,
     pub run_id: String,
     pub thread_id: String,
     pub tool_name: String,

@@ -336,6 +336,7 @@ export interface RunUsageDto {
 
 export interface ToolCallDto {
   id: string;
+  storageId: string;
   runId: string;
   threadId: string;
   toolName: string;
