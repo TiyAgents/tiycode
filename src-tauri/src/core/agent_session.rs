@@ -2122,13 +2122,26 @@ pub(crate) fn convert_history_messages(
     tool_calls: &[ToolCallDto],
     model: &Model,
 ) -> Vec<AgentMessage> {
-    // Phase 1: Convert message records into (sort_key, AgentMessage) pairs.
+    // Timeline entries: either a real message or a pending-thinking placeholder
+    // that will be merged into the next assistant message after sorting.
+    enum TimelineEntry {
+        Msg(AgentMessage),
+        PendingThinking(ContentBlock),
+    }
+
+    // Phase 1: Convert message records into (sort_key, TimelineEntry) pairs.
     // Messages arrive from the DB in chronological order (sorted by UUID v7 id).
     // We use a zero-padded positional index as the primary sort key to preserve
     // this order exactly, then interleave tool calls using their `started_at`
     // timestamp mapped into the same key space.
-    let mut timeline: Vec<(SortKey, AgentMessage)> = Vec::new();
-    let mut pending_thinking: Vec<ContentBlock> = Vec::new();
+    //
+    // Reasoning messages are placed into the timeline as PendingThinking
+    // placeholders instead of being eagerly drained into the next assistant
+    // text message.  This allows the post-sort pass (Phase 4) to attach
+    // thinking blocks to whichever assistant message follows them — whether
+    // that is a plain text reply or a tool-call assistant message inserted by
+    // Phase 2.
+    let mut timeline: Vec<(SortKey, TimelineEntry)> = Vec::new();
 
     for (pos, message) in messages.iter().enumerate() {
         let key = SortKey::positional(pos);
@@ -2139,40 +2152,46 @@ pub(crate) fn convert_history_messages(
                     .as_deref()
                     .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
                     .and_then(|v| v.get("thinking_signature")?.as_str().map(String::from));
-                pending_thinking.push(ContentBlock::Thinking(ThinkingContent {
-                    thinking: message.content_markdown.clone(),
-                    thinking_signature: signature,
-                    redacted: false,
-                }));
+                timeline.push((
+                    key,
+                    TimelineEntry::PendingThinking(ContentBlock::Thinking(ThinkingContent {
+                        thinking: message.content_markdown.clone(),
+                        thinking_signature: signature,
+                        redacted: false,
+                    })),
+                ));
             }
             "plain_message" => match message.role.as_str() {
                 "user" => {
-                    // Discard any pending thinking that precedes a user message
-                    // (should not happen in normal flow, but be defensive).
-                    pending_thinking.clear();
                     timeline.push((
                         key,
-                        AgentMessage::User(history_user_message(message, model)),
+                        TimelineEntry::Msg(AgentMessage::User(history_user_message(
+                            message, model,
+                        ))),
                     ));
                 }
                 "assistant" => {
-                    let blocks =
-                        drain_pending_thinking(&mut pending_thinking, &message.content_markdown);
+                    let blocks = vec![ContentBlock::Text(TextContent::new(
+                        &message.content_markdown,
+                    ))];
                     timeline.push((
                         key,
-                        AgentMessage::Assistant(assistant_message_with_blocks(blocks, model)),
+                        TimelineEntry::Msg(AgentMessage::Assistant(assistant_message_with_blocks(
+                            blocks, model,
+                        ))),
                     ));
                 }
                 _ => {}
             },
             "plan" if message.role == "assistant" => {
-                let blocks = drain_pending_thinking(
-                    &mut pending_thinking,
+                let blocks = vec![ContentBlock::Text(TextContent::new(
                     &format_plan_history_message(message),
-                );
+                ))];
                 timeline.push((
                     key,
-                    AgentMessage::Assistant(assistant_message_with_blocks(blocks, model)),
+                    TimelineEntry::Msg(AgentMessage::Assistant(assistant_message_with_blocks(
+                        blocks, model,
+                    ))),
                 ));
             }
             "summary_marker" if is_context_summary_marker(message) => {
@@ -2180,7 +2199,9 @@ pub(crate) fn convert_history_messages(
                 if !summary.is_empty() {
                     timeline.push((
                         key,
-                        AgentMessage::User(UserMessage::text(summary.to_string())),
+                        TimelineEntry::Msg(AgentMessage::User(UserMessage::text(
+                            summary.to_string(),
+                        ))),
                     ));
                 }
             }
@@ -2237,7 +2258,7 @@ pub(crate) fn convert_history_messages(
                 .expect("history tool-call assistant message should always build");
             timeline.push((
                 SortKey::before_position(insert_pos, tc_idx * 2),
-                AgentMessage::Assistant(assistant),
+                TimelineEntry::Msg(AgentMessage::Assistant(assistant)),
             ));
 
             // Build the tool result message (truncated to avoid blowing up context).
@@ -2250,7 +2271,7 @@ pub(crate) fn convert_history_messages(
             let tool_result = ToolResultMessage::text(&tc.id, &tc.tool_name, result_text, false);
             timeline.push((
                 SortKey::before_position(insert_pos, tc_idx * 2 + 1),
-                AgentMessage::ToolResult(tool_result),
+                TimelineEntry::Msg(AgentMessage::ToolResult(tool_result)),
             ));
         }
     }
@@ -2258,8 +2279,42 @@ pub(crate) fn convert_history_messages(
     // Phase 3: Sort by the sort key to produce a chronological sequence.
     timeline.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Return only the messages.
-    timeline.into_iter().map(|(_, msg)| msg).collect()
+    // Phase 4: Post-sort pass — attach pending thinking blocks to the next
+    // assistant message.  This correctly associates reasoning with both plain
+    // text replies and tool-call assistant messages that were interleaved by
+    // Phase 2.
+    let mut result: Vec<AgentMessage> = Vec::new();
+    let mut pending_thinking: Vec<ContentBlock> = Vec::new();
+
+    for (_, entry) in timeline {
+        match entry {
+            TimelineEntry::PendingThinking(block) => {
+                pending_thinking.push(block);
+            }
+            TimelineEntry::Msg(AgentMessage::Assistant(mut assistant)) => {
+                if !pending_thinking.is_empty() {
+                    // Prepend accumulated thinking blocks before the existing content.
+                    let mut merged = pending_thinking.drain(..).collect::<Vec<_>>();
+                    merged.append(&mut assistant.content);
+                    assistant.content = merged;
+                }
+                result.push(AgentMessage::Assistant(assistant));
+            }
+            TimelineEntry::Msg(msg @ AgentMessage::User(_)) => {
+                // Discard any pending thinking that precedes a user message
+                // (should not happen in normal flow, but be defensive).
+                pending_thinking.clear();
+                result.push(msg);
+            }
+            TimelineEntry::Msg(msg) => {
+                result.push(msg);
+            }
+        }
+    }
+    // Any remaining pending_thinking blocks (orphan reasoning at the end with
+    // no following assistant message) are silently dropped.
+
+    result
 }
 
 /// Sort key for interleaving messages and tool calls chronologically.
@@ -2691,14 +2746,6 @@ fn format_plan_history_message(message: &MessageRecord) -> String {
 #[allow(dead_code)]
 fn assistant_message_from_text(content: &str, model: &Model) -> AssistantMessage {
     assistant_message_with_blocks(vec![ContentBlock::Text(TextContent::new(content))], model)
-}
-
-/// Drain accumulated thinking blocks and combine them with the given text
-/// content into a single `Vec<ContentBlock>` suitable for an assistant message.
-fn drain_pending_thinking(pending: &mut Vec<ContentBlock>, text: &str) -> Vec<ContentBlock> {
-    let mut blocks: Vec<ContentBlock> = pending.drain(..).collect();
-    blocks.push(ContentBlock::Text(TextContent::new(text)));
-    blocks
 }
 
 fn assistant_message_with_blocks(blocks: Vec<ContentBlock>, model: &Model) -> AssistantMessage {
@@ -3563,7 +3610,7 @@ mod tests {
     use crate::core::subagent::{RuntimeOrchestrationTool, SubagentProfile};
     use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::AgentProfileRecord;
-    use crate::model::thread::{MessageRecord, RunSummaryDto, RunUsageDto};
+    use crate::model::thread::{MessageRecord, RunSummaryDto, RunUsageDto, ToolCallDto};
     use crate::persistence::init_database;
 
     const TEST_CONTEXT_WINDOW: &str = "128000";
@@ -5287,6 +5334,344 @@ Used for prompt assembly coverage.
         // Only the user message should appear; the orphan reasoning is dropped.
         assert_eq!(history.len(), 1);
         assert!(matches!(&history[0], AgentMessage::User(_)));
+    }
+
+    #[test]
+    fn convert_history_messages_attaches_reasoning_to_tool_call() {
+        // Scenario: user → reasoning → tool_call (no intermediate text).
+        // The reasoning block should be attached to the tool-call assistant
+        // message, not lost or deferred to a later text message.
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Run a command".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-reasoning".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Let me think about the command.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            // A plain_message that comes AFTER the tool call in time.
+            MessageRecord {
+                id: "msg-assistant".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Done.".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:05.000Z".to_string(),
+            },
+        ];
+
+        let tool_calls = vec![ToolCallDto {
+            id: "tc-1".to_string(),
+            storage_id: "st-1".to_string(),
+            run_id: "run-1".to_string(),
+            thread_id: "thread-1".to_string(),
+            tool_name: "shell".to_string(),
+            tool_input: serde_json::json!({"command": "ls"}),
+            tool_output: Some(serde_json::json!("file.txt")),
+            status: "completed".to_string(),
+            approval_status: None,
+            started_at: "2026-01-01T00:00:02.000Z".to_string(),
+            finished_at: Some("2026-01-01T00:00:03.000Z".to_string()),
+        }];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &tool_calls, model);
+
+        // Expected: User → Assistant[Thinking, ToolCall] → ToolResult → Assistant[Text]
+        assert_eq!(
+            history.len(),
+            4,
+            "should have User + TC-Assistant + ToolResult + Text-Assistant"
+        );
+
+        // 1. User message
+        assert!(matches!(&history[0], AgentMessage::User(_)));
+
+        // 2. Tool-call assistant with reasoning prepended
+        match &history[1] {
+            AgentMessage::Assistant(assistant) => {
+                assert_eq!(
+                    assistant.content.len(),
+                    2,
+                    "tool-call assistant should have Thinking + ToolCall blocks, got: {:?}",
+                    assistant.content
+                );
+                assert!(
+                    assistant.content[0].is_thinking(),
+                    "first block should be Thinking"
+                );
+                let thinking = assistant.content[0].as_thinking().unwrap();
+                assert_eq!(thinking.thinking, "Let me think about the command.");
+                assert_eq!(
+                    thinking.thinking_signature.as_deref(),
+                    Some("reasoning_content")
+                );
+                assert!(
+                    assistant.content[1].is_tool_call(),
+                    "second block should be ToolCall"
+                );
+            }
+            other => panic!("expected Assistant for tool call, got {:?}", other),
+        }
+
+        // 3. Tool result
+        assert!(matches!(&history[2], AgentMessage::ToolResult(_)));
+
+        // 4. Final text assistant (no thinking blocks — they were consumed by the tool call)
+        match &history[3] {
+            AgentMessage::Assistant(assistant) => {
+                assert_eq!(
+                    assistant.content.len(),
+                    1,
+                    "text assistant should have only Text"
+                );
+                assert!(assistant.content[0].is_text());
+            }
+            other => panic!("expected text Assistant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn convert_history_messages_multiple_reasoning_tool_call_cycles() {
+        // Scenario: user → R1 → text1 → TC1 → R2 → TC2 → R3 → text2
+        // R1 should attach to text1, R2 to TC2 (not TC1), R3 to text2.
+        let messages = vec![
+            MessageRecord {
+                id: "msg-01-user".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Go".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            // R1
+            MessageRecord {
+                id: "msg-02-r1".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "R1 thinking".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(serde_json::json!({"thinking_signature": "sig"}).to_string()),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            // text1 (comes after TC1 in time, but is the anchor message for TC1)
+            MessageRecord {
+                id: "msg-03-text1".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Text 1".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:05.000Z".to_string(),
+            },
+            // R2
+            MessageRecord {
+                id: "msg-04-r2".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "R2 thinking".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(serde_json::json!({"thinking_signature": "sig"}).to_string()),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:06.000Z".to_string(),
+            },
+            // R3
+            MessageRecord {
+                id: "msg-05-r3".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "R3 thinking".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(serde_json::json!({"thinking_signature": "sig"}).to_string()),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:09.000Z".to_string(),
+            },
+            // text2 — final reply
+            MessageRecord {
+                id: "msg-06-text2".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Text 2".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:12.000Z".to_string(),
+            },
+        ];
+
+        let tool_calls = vec![
+            // TC1: started after R1, before text1
+            ToolCallDto {
+                id: "tc-1".to_string(),
+                storage_id: "st-1".to_string(),
+                run_id: "run-1".to_string(),
+                thread_id: "t1".to_string(),
+                tool_name: "shell".to_string(),
+                tool_input: serde_json::json!({"command": "ls"}),
+                tool_output: Some(serde_json::json!("out1")),
+                status: "completed".to_string(),
+                approval_status: None,
+                started_at: "2026-01-01T00:00:02.000Z".to_string(),
+                finished_at: Some("2026-01-01T00:00:03.000Z".to_string()),
+            },
+            // TC2: started after R2, before R3
+            ToolCallDto {
+                id: "tc-2".to_string(),
+                storage_id: "st-2".to_string(),
+                run_id: "run-1".to_string(),
+                thread_id: "t1".to_string(),
+                tool_name: "shell".to_string(),
+                tool_input: serde_json::json!({"command": "pwd"}),
+                tool_output: Some(serde_json::json!("out2")),
+                status: "completed".to_string(),
+                approval_status: None,
+                started_at: "2026-01-01T00:00:07.000Z".to_string(),
+                finished_at: Some("2026-01-01T00:00:08.000Z".to_string()),
+            },
+        ];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &tool_calls, model);
+
+        // Expected timeline after sort:
+        // pos 0: User("Go")
+        // pos 1 (reasoning): R1 → PendingThinking
+        // before pos 2: TC1-assistant (gets R1 thinking prepended) → [Thinking(R1), ToolCall]
+        // before pos 2: TC1-result
+        // pos 2: text1 → Assistant[Text("Text 1")]
+        // pos 3: R2 → PendingThinking
+        // pos 4: R3 → PendingThinking
+        // before pos 5: TC2-assistant → ... wait, TC2 started at 00:07, find first msg
+        //   in run-1 with created_at >= 00:07 → msg-05-r3 at 00:09 (pos 4)? No,
+        //   reasoning messages are not plain_message/assistant so they are in msg_positions
+        //   but the find looks for created_at >= started_at.
+
+        // Actually, msg_positions includes ALL messages (including reasoning).
+        // TC2 started_at = 00:07. First message in run-1 with created_at >= 00:07:
+        //   msg-04-r2 created_at 00:06 < 00:07 → no
+        //   msg-05-r3 created_at 00:09 >= 00:07 → pos 4!
+        // So TC2 inserts before pos 4 (msg-05-r3).
+        //
+        // Timeline:
+        // (0,2,0) User
+        // (1,2,0) PendingThinking(R1)
+        // (2,0,0) TC1-assistant  ← gets R1
+        // (2,0,1) TC1-result
+        // (2,2,0) text1 (Assistant[Text])
+        // (3,2,0) PendingThinking(R2)
+        // (4,0,2) TC2-assistant  ← gets R2
+        // (4,0,3) TC2-result
+        // (4,2,0) PendingThinking(R3)
+        // (5,2,0) text2 (Assistant[Text]) ← gets R3
+        //
+        // Result: User, Asst[T(R1),TC1], TR1, Asst[Text1], Asst[T(R2),TC2], TR2, Asst[T(R3),Text2]
+        assert_eq!(
+            history.len(),
+            7,
+            "expected 7 messages, got {}: {:?}",
+            history.len(),
+            history
+                .iter()
+                .map(|m| match m {
+                    AgentMessage::User(_) => "User",
+                    AgentMessage::Assistant(_) => "Assistant",
+                    AgentMessage::ToolResult(_) => "ToolResult",
+                    _ => "Other",
+                })
+                .collect::<Vec<_>>()
+        );
+
+        // 1. User
+        assert!(matches!(&history[0], AgentMessage::User(_)));
+
+        // 2. TC1 assistant with R1 thinking
+        match &history[1] {
+            AgentMessage::Assistant(a) => {
+                assert_eq!(a.content.len(), 2, "TC1 assistant: Thinking + ToolCall");
+                assert!(a.content[0].is_thinking());
+                assert_eq!(a.content[0].as_thinking().unwrap().thinking, "R1 thinking");
+                assert!(a.content[1].is_tool_call());
+            }
+            other => panic!("expected TC1 assistant, got {:?}", other),
+        }
+
+        // 3. TC1 result
+        assert!(matches!(&history[2], AgentMessage::ToolResult(_)));
+
+        // 4. text1 — no thinking (R1 was consumed by TC1)
+        match &history[3] {
+            AgentMessage::Assistant(a) => {
+                assert_eq!(a.content.len(), 1, "text1 should have only Text");
+                assert!(a.content[0].is_text());
+                assert_eq!(a.content[0].as_text().unwrap().text, "Text 1");
+            }
+            other => panic!("expected text1 assistant, got {:?}", other),
+        }
+
+        // 5. TC2 assistant with R2 thinking
+        match &history[4] {
+            AgentMessage::Assistant(a) => {
+                assert_eq!(a.content.len(), 2, "TC2 assistant: Thinking + ToolCall");
+                assert!(a.content[0].is_thinking());
+                assert_eq!(a.content[0].as_thinking().unwrap().thinking, "R2 thinking");
+                assert!(a.content[1].is_tool_call());
+            }
+            other => panic!("expected TC2 assistant, got {:?}", other),
+        }
+
+        // 6. TC2 result
+        assert!(matches!(&history[5], AgentMessage::ToolResult(_)));
+
+        // 7. text2 with R3 thinking
+        match &history[6] {
+            AgentMessage::Assistant(a) => {
+                assert_eq!(a.content.len(), 2, "text2: Thinking(R3) + Text");
+                assert!(a.content[0].is_thinking());
+                assert_eq!(a.content[0].as_thinking().unwrap().thinking, "R3 thinking");
+                assert!(a.content[1].is_text());
+                assert_eq!(a.content[1].as_text().unwrap().text, "Text 2");
+            }
+            other => panic!("expected text2 assistant, got {:?}", other),
+        }
     }
 
     // -----------------------------------------------------------------------
