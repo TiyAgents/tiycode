@@ -268,9 +268,10 @@ mod tests {
         status: &str,
     ) {
         sqlx::query(
-            "INSERT INTO tool_calls (id, run_id, thread_id, tool_name, tool_input_json, status, started_at)
-             VALUES (?, ?, ?, ?, '{}', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+            "INSERT INTO tool_calls (id, tool_call_id, run_id, thread_id, tool_name, tool_input_json, status, started_at)
+             VALUES (?, ?, ?, ?, ?, '{}', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         )
+        .bind(tool_call_id)
         .bind(tool_call_id)
         .bind(run_id)
         .bind(thread_id)
@@ -373,6 +374,7 @@ mod tests {
                         run_id: "r-dup-approval".into(),
                         thread_id: "t-dup-approval".into(),
                         tool_call_id: "tc-dup-approval".into(),
+                        tool_call_storage_id: "tc-dup-approval".into(),
                         tool_name: "write".into(),
                         tool_input: serde_json::json!({
                             "path": target_file_text,

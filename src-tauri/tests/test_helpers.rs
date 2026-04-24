@@ -127,9 +127,10 @@ pub async fn seed_tool_call(
     status: &str,
 ) {
     sqlx::query(
-        "INSERT INTO tool_calls (id, run_id, thread_id, tool_name, status)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO tool_calls (id, tool_call_id, run_id, thread_id, tool_name, status)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
+    .bind(tool_call_id)
     .bind(tool_call_id)
     .bind(run_id)
     .bind(thread_id)
