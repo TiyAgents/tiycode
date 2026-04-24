@@ -10,8 +10,8 @@ use tiycore::agent::{
 use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{
     AssistantMessage, AssistantMessageEvent, ContentBlock, Cost, ImageContent, InputType, Model,
-    OpenAICompletionsCompat, Provider, StopReason, TextContent, ToolCall, ToolResultMessage,
-    Transport, Usage, UserMessage,
+    OpenAICompletionsCompat, Provider, StopReason, TextContent, ThinkingContent, ToolCall,
+    ToolResultMessage, Transport, Usage, UserMessage,
 };
 use tokio::sync::mpsc;
 
@@ -1359,10 +1359,13 @@ fn handle_agent_event(
                             run_id: run_id.to_string(),
                             message_id,
                             reasoning: buffer.clone(),
+                            thinking_signature: None,
                         });
                     }
                 }
-                AssistantMessageEvent::ThinkingEnd { content, .. } => {
+                AssistantMessageEvent::ThinkingEnd {
+                    content, partial, ..
+                } => {
                     let reasoning = if let Ok(mut buffer) = reasoning_buffer.lock() {
                         buffer.clear();
                         buffer.push_str(content);
@@ -1376,11 +1379,23 @@ fn handle_agent_event(
                         return;
                     }
 
+                    // Extract thinking_signature from the partial message's last
+                    // Thinking content block.  The signature is populated by the
+                    // protocol layer during streaming and is complete by the time
+                    // ThinkingEnd fires.
+                    let thinking_signature = partial
+                        .content
+                        .iter()
+                        .rev()
+                        .find_map(|b| b.as_thinking())
+                        .and_then(|t| t.thinking_signature.clone());
+
                     let message_id = ensure_message_id(current_reasoning_message_id);
                     let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
                         run_id: run_id.to_string(),
                         message_id,
                         reasoning,
+                        thinking_signature,
                     });
                     reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
                 }
@@ -2104,35 +2119,51 @@ pub(crate) fn convert_history_messages(
     // this order exactly, then interleave tool calls using their `started_at`
     // timestamp mapped into the same key space.
     let mut timeline: Vec<(SortKey, AgentMessage)> = Vec::new();
+    let mut pending_thinking: Vec<ContentBlock> = Vec::new();
 
     for (pos, message) in messages.iter().enumerate() {
         let key = SortKey::positional(pos);
         match message.message_type.as_str() {
+            "reasoning" if message.role == "assistant" => {
+                let signature = message
+                    .metadata_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                    .and_then(|v| v.get("thinking_signature")?.as_str().map(String::from));
+                pending_thinking.push(ContentBlock::Thinking(ThinkingContent {
+                    thinking: message.content_markdown.clone(),
+                    thinking_signature: signature,
+                    redacted: false,
+                }));
+            }
             "plain_message" => match message.role.as_str() {
                 "user" => {
+                    // Discard any pending thinking that precedes a user message
+                    // (should not happen in normal flow, but be defensive).
+                    pending_thinking.clear();
                     timeline.push((
                         key,
                         AgentMessage::User(history_user_message(message, model)),
                     ));
                 }
                 "assistant" => {
+                    let blocks =
+                        drain_pending_thinking(&mut pending_thinking, &message.content_markdown);
                     timeline.push((
                         key,
-                        AgentMessage::Assistant(assistant_message_from_text(
-                            &message.content_markdown,
-                            model,
-                        )),
+                        AgentMessage::Assistant(assistant_message_with_blocks(blocks, model)),
                     ));
                 }
                 _ => {}
             },
             "plan" if message.role == "assistant" => {
+                let blocks = drain_pending_thinking(
+                    &mut pending_thinking,
+                    &format_plan_history_message(message),
+                );
                 timeline.push((
                     key,
-                    AgentMessage::Assistant(assistant_message_from_text(
-                        &format_plan_history_message(message),
-                        model,
-                    )),
+                    AgentMessage::Assistant(assistant_message_with_blocks(blocks, model)),
                 ));
             }
             "summary_marker" if is_context_summary_marker(message) => {
@@ -2648,9 +2679,22 @@ fn format_plan_history_message(message: &MessageRecord) -> String {
     )
 }
 
+#[allow(dead_code)]
 fn assistant_message_from_text(content: &str, model: &Model) -> AssistantMessage {
+    assistant_message_with_blocks(vec![ContentBlock::Text(TextContent::new(content))], model)
+}
+
+/// Drain accumulated thinking blocks and combine them with the given text
+/// content into a single `Vec<ContentBlock>` suitable for an assistant message.
+fn drain_pending_thinking(pending: &mut Vec<ContentBlock>, text: &str) -> Vec<ContentBlock> {
+    let mut blocks: Vec<ContentBlock> = pending.drain(..).collect();
+    blocks.push(ContentBlock::Text(TextContent::new(text)));
+    blocks
+}
+
+fn assistant_message_with_blocks(blocks: Vec<ContentBlock>, model: &Model) -> AssistantMessage {
     AssistantMessage::builder()
-        .content(vec![ContentBlock::Text(TextContent::new(content))])
+        .content(blocks)
         .api(effective_api_for_model(model))
         .provider(model.provider.clone())
         .model(model.id.clone())
@@ -5077,6 +5121,163 @@ Used for prompt assembly coverage.
             message_text(&history[0]),
             "<context_summary>\nCarry this forward.\n</context_summary>"
         );
+    }
+
+    #[test]
+    fn convert_history_messages_merges_reasoning_into_assistant() {
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Hello".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-reasoning".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Let me think about this.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-assistant".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Here is the answer.".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:02.000Z".to_string(),
+            },
+        ];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &[], model);
+
+        // Should produce: User + Assistant (with Thinking + Text blocks)
+        assert_eq!(history.len(), 2);
+        match &history[0] {
+            AgentMessage::User(_) => {}
+            other => panic!("expected User, got {:?}", other),
+        }
+        match &history[1] {
+            AgentMessage::Assistant(assistant) => {
+                assert_eq!(
+                    assistant.content.len(),
+                    2,
+                    "assistant should have Thinking + Text blocks"
+                );
+                assert!(assistant.content[0].is_thinking());
+                assert!(assistant.content[1].is_text());
+                let thinking = assistant.content[0].as_thinking().unwrap();
+                assert_eq!(thinking.thinking, "Let me think about this.");
+                assert_eq!(
+                    thinking.thinking_signature.as_deref(),
+                    Some("reasoning_content")
+                );
+                let text = assistant.content[1].as_text().unwrap();
+                assert_eq!(text.text, "Here is the answer.");
+            }
+            other => panic!("expected Assistant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn convert_history_messages_reasoning_without_signature_still_merges() {
+        let messages = vec![
+            MessageRecord {
+                id: "msg-reasoning".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Thinking...".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None, // no signature (old data)
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-assistant".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Result.".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:02.000Z".to_string(),
+            },
+        ];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &[], model);
+
+        assert_eq!(history.len(), 1);
+        match &history[0] {
+            AgentMessage::Assistant(assistant) => {
+                assert_eq!(assistant.content.len(), 2);
+                let thinking = assistant.content[0].as_thinking().unwrap();
+                assert_eq!(thinking.thinking, "Thinking...");
+                assert!(thinking.thinking_signature.is_none());
+            }
+            other => panic!("expected Assistant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn convert_history_messages_orphan_reasoning_at_end_is_dropped() {
+        // A reasoning message at the end with no following assistant text
+        // (e.g. interrupted run) should be silently dropped.
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Hello".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-reasoning".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Orphan reasoning".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+        ];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &[], model);
+
+        // Only the user message should appear; the orphan reasoning is dropped.
+        assert_eq!(history.len(), 1);
+        assert!(matches!(&history[0], AgentMessage::User(_)));
     }
 
     // -----------------------------------------------------------------------

@@ -1248,10 +1248,19 @@ impl AgentRunManager {
             ThreadStreamEvent::ReasoningUpdated {
                 message_id,
                 reasoning,
+                thinking_signature,
                 ..
             } => {
                 let persisted_id = self.ensure_reasoning_message(run_id, message_id).await?;
                 message_repo::replace_content(&self.pool, &persisted_id, reasoning).await?;
+                if let Some(sig) = thinking_signature {
+                    message_repo::update_metadata(
+                        &self.pool,
+                        &persisted_id,
+                        Some(&serde_json::json!({"thinking_signature": sig}).to_string()),
+                    )
+                    .await?;
+                }
             }
             ThreadStreamEvent::ToolRequested { .. } => {
                 run_repo::update_status(&self.pool, run_id, "waiting_tool_result").await?;
@@ -3368,6 +3377,7 @@ mod tests {
                 run_id: "run-1".into(),
                 message_id: "reasoning-1".into(),
                 reasoning: "Inspecting".into(),
+                thinking_signature: None,
             }
         ));
         assert!(should_complete_reasoning_for_event(
