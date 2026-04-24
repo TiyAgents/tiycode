@@ -2211,12 +2211,17 @@ pub(crate) fn convert_history_messages(
 
     // Phase 2: Interleave completed tool calls from the tool_calls table.
     //
-    // Each completed tool call becomes an assistant message (with a ToolCall
-    // content block) followed by a ToolResult message.  Tool calls are placed
-    // right before the assistant text message that follows them in the same
-    // run.  We find the correct position by looking up which message position
-    // each run_id corresponds to and placing tool calls just before the next
-    // message after `started_at`.
+    // When the preceding assistant text message in the same run exists in the
+    // timeline, the tool call is **merged** into that message rather than
+    // creating a separate assistant message.  This is critical for providers
+    // like DeepSeek that require `reasoning_content` on every assistant message
+    // that originally contained it — the original API response has
+    // `{reasoning_content, content, tool_calls}` as a single message, and we
+    // must reconstruct it the same way.
+    //
+    // When no preceding assistant text exists (e.g. reasoning → tool_call with
+    // no intermediate text), a standalone assistant message is created so that
+    // Phase 4 can attach the pending thinking block to it.
     if !tool_calls.is_empty() {
         // Build a lookup: for each message, record (run_id, created_at, position)
         // so we can find where tool calls slot in.
@@ -2225,6 +2230,17 @@ pub(crate) fn convert_history_messages(
             .enumerate()
             .map(|(i, m)| (m.run_id.as_deref(), m.created_at.as_str(), i))
             .collect();
+
+        // Build an index from message position → timeline index so we can
+        // find and modify existing assistant entries for merging.
+        let mut pos_to_timeline_idx: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        for (tl_idx, (key, _)) in timeline.iter().enumerate() {
+            if key.sub == 2 {
+                // sub == 2 means a positional message (not a tool call)
+                pos_to_timeline_idx.insert(key.position, tl_idx);
+            }
+        }
 
         for (tc_idx, tc) in tool_calls.iter().enumerate() {
             if tc.status != "completed" {
@@ -2244,9 +2260,74 @@ pub(crate) fn convert_history_messages(
                 .map(|(_, _, pos)| *pos)
                 .unwrap_or(messages.len());
 
-            // Build the assistant message containing the tool call.
+            // Try to find the preceding assistant text message in the same run
+            // to merge this tool call into.  We search backwards from
+            // insert_pos to find the last plain_message assistant in the same
+            // run.  This handles the common case where a single API response
+            // contains reasoning_content + content + tool_calls.
+            //
+            // We only merge when there is **no** reasoning message between the
+            // candidate text message and insert_pos — a reasoning message in
+            // between indicates the tool call came from a different model
+            // response and must remain a separate assistant message.
+            let merge_target_pos = msg_positions[..insert_pos]
+                .iter()
+                .rev()
+                .find(|(run_id, _, pos)| {
+                    run_id.map_or(false, |r| r == tc.run_id) && {
+                        let m = &messages[*pos];
+                        m.role == "assistant" && m.message_type == "plain_message"
+                    }
+                })
+                .map(|(_, _, pos)| *pos)
+                .filter(|&merge_pos| {
+                    // Reject when any reasoning message from the same run sits
+                    // between the merge target and the insert position.
+                    !msg_positions[merge_pos + 1..insert_pos]
+                        .iter()
+                        .any(|(run_id, _, pos)| {
+                            run_id.map_or(false, |r| r == tc.run_id)
+                                && messages[*pos].message_type == "reasoning"
+                        })
+                });
+
             let tool_call_block =
                 ContentBlock::ToolCall(ToolCall::new(&tc.id, &tc.tool_name, tc.tool_input.clone()));
+
+            if let Some(merge_pos) = merge_target_pos {
+                if let Some(&tl_idx) = pos_to_timeline_idx.get(&merge_pos) {
+                    // Merge the tool call into the existing assistant message.
+                    if let (_, TimelineEntry::Msg(AgentMessage::Assistant(ref mut assistant))) =
+                        &mut timeline[tl_idx]
+                    {
+                        assistant.content.push(tool_call_block);
+                        assistant.stop_reason = StopReason::ToolUse;
+                    }
+
+                    // Place the tool result right after the merged message but
+                    // before the next positional entry.
+                    let result_text = tc
+                        .tool_output
+                        .as_ref()
+                        .map(|v| {
+                            truncate_tool_result_text(&v.to_string(), HISTORY_TOOL_RESULT_MAX_CHARS)
+                        })
+                        .unwrap_or_else(|| "[no output]".to_string());
+                    let tool_result =
+                        ToolResultMessage::text(&tc.id, &tc.tool_name, result_text, false);
+                    // Use the merge_pos + 1 so the result sorts right after
+                    // the merged assistant message (sub=0 < sub=2).
+                    timeline.push((
+                        SortKey::before_position(merge_pos + 1, tc_idx * 2 + 1),
+                        TimelineEntry::Msg(AgentMessage::ToolResult(tool_result)),
+                    ));
+
+                    continue;
+                }
+            }
+
+            // No preceding assistant text to merge into — create a standalone
+            // assistant message (Phase 4 will attach any pending thinking).
             let assistant = AssistantMessage::builder()
                 .content(vec![tool_call_block])
                 .api(effective_api_for_model(model))
@@ -3598,7 +3679,9 @@ mod tests {
     use tempfile::tempdir;
     use tiycore::agent::{AgentEvent, AgentMessage, AgentTool};
     use tiycore::thinking::ThinkingLevel;
-    use tiycore::types::{Api, AssistantMessage, AssistantMessageEvent, ContentBlock, Provider};
+    use tiycore::types::{
+        Api, AssistantMessage, AssistantMessageEvent, ContentBlock, Provider, StopReason,
+    };
     use tokio::sync::mpsc;
 
     use crate::core::plan_checkpoint::{
@@ -5339,8 +5422,8 @@ Used for prompt assembly coverage.
     #[test]
     fn convert_history_messages_attaches_reasoning_to_tool_call() {
         // Scenario: user → reasoning → tool_call (no intermediate text).
-        // The reasoning block should be attached to the tool-call assistant
-        // message, not lost or deferred to a later text message.
+        // No text message to merge into, so tool call gets its own assistant
+        // message and Phase 4 attaches the pending thinking block.
         let messages = vec![
             MessageRecord {
                 id: "msg-user".to_string(),
@@ -5368,7 +5451,7 @@ Used for prompt assembly coverage.
                 attachments_json: None,
                 created_at: "2026-01-01T00:00:01.000Z".to_string(),
             },
-            // A plain_message that comes AFTER the tool call in time.
+            // A plain_message from a LATER response (after tool result).
             MessageRecord {
                 id: "msg-assistant".to_string(),
                 thread_id: "thread-1".to_string(),
@@ -5400,6 +5483,7 @@ Used for prompt assembly coverage.
         let model = &sample_resolved_model_role("primary").model;
         let history = convert_history_messages(&messages, &tool_calls, model);
 
+        // No preceding text in same run before TC1 → standalone assistant.
         // Expected: User → Assistant[Thinking, ToolCall] → ToolResult → Assistant[Text]
         assert_eq!(
             history.len(),
@@ -5451,6 +5535,167 @@ Used for prompt assembly coverage.
                 assert!(assistant.content[0].is_text());
             }
             other => panic!("expected text Assistant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn convert_history_messages_merges_tool_call_into_preceding_text() {
+        // Scenario mimicking real DeepSeek flow: a single API response produces
+        // reasoning + text + tool_call.  The text is saved first, then the tool
+        // is executed (started_at > text.created_at).  The tool call must be
+        // merged into the text assistant message so they share the same
+        // reasoning_content.
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Do something".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            // Reasoning from the first response
+            MessageRecord {
+                id: "msg-r1".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Let me run a command.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            // Text from the first response (saved during streaming)
+            MessageRecord {
+                id: "msg-text1".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Running the command now.".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:02.000Z".to_string(),
+            },
+            // Reasoning from the SECOND response (after tool result)
+            MessageRecord {
+                id: "msg-r2".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "The command succeeded.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:06.000Z".to_string(),
+            },
+            // Text from the second response
+            MessageRecord {
+                id: "msg-text2".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "All done!".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:07.000Z".to_string(),
+            },
+        ];
+
+        // TC1 from the first response — started AFTER the text was saved.
+        let tool_calls = vec![ToolCallDto {
+            id: "tc-1".to_string(),
+            storage_id: "st-1".to_string(),
+            run_id: "run-1".to_string(),
+            thread_id: "t1".to_string(),
+            tool_name: "shell".to_string(),
+            tool_input: serde_json::json!({"command": "ls"}),
+            tool_output: Some(serde_json::json!("file.txt")),
+            status: "completed".to_string(),
+            approval_status: None,
+            // started_at > text1.created_at but < r2.created_at
+            started_at: "2026-01-01T00:00:03.000Z".to_string(),
+            finished_at: Some("2026-01-01T00:00:04.000Z".to_string()),
+        }];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &tool_calls, model);
+
+        // TC1 should merge into text1 (same run, no reasoning between them).
+        // Expected: User → Assistant[Thinking(R1), Text, ToolCall] → ToolResult → Assistant[Thinking(R2), Text]
+        assert_eq!(
+            history.len(),
+            4,
+            "should have User + merged-Assistant + ToolResult + final-Assistant, got {:?}",
+            history
+                .iter()
+                .map(|m| match m {
+                    AgentMessage::User(_) => "User",
+                    AgentMessage::Assistant(_) => "Assistant",
+                    AgentMessage::ToolResult(_) => "ToolResult",
+                    _ => "Other",
+                })
+                .collect::<Vec<_>>()
+        );
+
+        // 1. User
+        assert!(matches!(&history[0], AgentMessage::User(_)));
+
+        // 2. Merged assistant with Thinking + Text + ToolCall
+        match &history[1] {
+            AgentMessage::Assistant(a) => {
+                assert_eq!(
+                    a.content.len(),
+                    3,
+                    "merged assistant should have Thinking + Text + ToolCall, got: {:?}",
+                    a.content
+                );
+                assert!(a.content[0].is_thinking(), "block 0 should be Thinking");
+                assert_eq!(
+                    a.content[0].as_thinking().unwrap().thinking,
+                    "Let me run a command."
+                );
+                assert!(a.content[1].is_text(), "block 1 should be Text");
+                assert_eq!(
+                    a.content[1].as_text().unwrap().text,
+                    "Running the command now."
+                );
+                assert!(a.content[2].is_tool_call(), "block 2 should be ToolCall");
+                assert_eq!(a.stop_reason, StopReason::ToolUse);
+            }
+            other => panic!("expected merged Assistant, got {:?}", other),
+        }
+
+        // 3. Tool result
+        assert!(matches!(&history[2], AgentMessage::ToolResult(_)));
+
+        // 4. Final text with R2 reasoning
+        match &history[3] {
+            AgentMessage::Assistant(a) => {
+                assert_eq!(a.content.len(), 2, "final: Thinking(R2) + Text");
+                assert!(a.content[0].is_thinking());
+                assert_eq!(
+                    a.content[0].as_thinking().unwrap().thinking,
+                    "The command succeeded."
+                );
+                assert!(a.content[1].is_text());
+                assert_eq!(a.content[1].as_text().unwrap().text, "All done!");
+            }
+            other => panic!("expected final Assistant, got {:?}", other),
         }
     }
 
