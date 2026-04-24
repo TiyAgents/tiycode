@@ -1979,6 +1979,14 @@ function isRuntimeOrchestrationTool(toolName: string) {
   );
 }
 
+function isTaskBoardTool(toolName: string) {
+  return (
+    toolName === "create_task"
+    || toolName === "update_task"
+    || toolName === "query_task"
+  );
+}
+
 function isVisibleTimelineTool(
   tool: SurfaceToolEntry,
   helperIds: ReadonlySet<string>,
@@ -3422,7 +3430,9 @@ export function RuntimeThreadSurface({
     for (const entry of presentationEntries) {
       if (entry.kind === "tool") {
         const isCompleted = isCompletedToolState(entry.tool.state);
-        const isOpen = !isCompleted ? true : (completedToolOpen[entry.tool.id] ?? true);
+        const isOpen = isTaskBoardTool(entry.tool.name)
+          ? (completedToolOpen[entry.tool.id] ?? false)
+          : (!isCompleted ? true : (completedToolOpen[entry.tool.id] ?? true));
         result.push({ id: entry.tool.id, completed: isCompleted, currentOpen: isOpen });
       } else if (entry.kind === "helper") {
         const isCompleted = entry.helper.status === "completed";
@@ -3919,7 +3929,7 @@ export function RuntimeThreadSurface({
 
               handleCompletedToolOpenChange(tool.id, open);
             }}
-            open={!isCompletedToolState(tool.state) ? true : (completedToolOpen[tool.id] ?? true)}
+            open={isTaskBoardTool(tool.name) ? (completedToolOpen[tool.id] ?? false) : (!isCompletedToolState(tool.state) ? true : (completedToolOpen[tool.id] ?? true))}
           >
             <CompactCollapsibleHeader
               className={cn(
