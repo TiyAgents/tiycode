@@ -25,6 +25,7 @@ import {
   DRAWER_LIST_STACK_CLASS,
   PROJECT_TREE_ITEMS,
 } from "@/modules/workbench-shell/model/fixtures";
+import { PANE_AUTO_REFRESH_INTERVAL_MS } from "@/modules/workbench-shell/model/panel-auto-refresh";
 import { useWorkspaceOpenApps } from "@/modules/workbench-shell/model/use-workspace-open-apps";
 import type { ProjectOption, ProjectTreeItem, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
@@ -442,10 +443,12 @@ export function ProjectPanel({
   currentProject,
   workspaceId,
   workspaceBootstrapError = null,
+  isAutoRefreshActive = false,
 }: {
   currentProject: ProjectOption | null;
   workspaceId: string | null;
   workspaceBootstrapError?: string | null;
+  isAutoRefreshActive?: boolean;
 }) {
   const t = useT();
   const [filterValue, setFilterValue] = useState("");
@@ -470,11 +473,42 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const revealTimeoutRef = useRef<number | null>(null);
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
   const treeRowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const isRefreshingTreeRef = useRef(false);
   const { data: openApps, error: openAppsError, isLoading: isLoadingOpenApps } = useWorkspaceOpenApps();
   const normalizedFilter = deferredFilterValue.trim().toLowerCase();
   const projectName = currentProject?.name ?? "Project";
   const projectPath = currentProject?.path ?? null;
   const preferredOpenApp = openApps.find((app) => app.id === preferredOpenAppId) ?? openApps[0] ?? null;
+
+  useEffect(() => {
+    isRefreshingTreeRef.current = isRefreshingTree;
+  }, [isRefreshingTree]);
+
+  useEffect(() => {
+    if (
+      !isAutoRefreshActive
+      || !isTauri()
+      || !projectPath
+      || !workspaceId
+      || normalizedFilter.length > 0
+    ) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== "visible" || isRefreshingTreeRef.current) {
+        return;
+      }
+
+      isRefreshingTreeRef.current = true;
+      setRefreshingTree(true);
+      setTreeReloadVersion((value) => value + 1);
+    }, PANE_AUTO_REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [projectPath, isAutoRefreshActive, normalizedFilter.length, workspaceId]);
 
   useEffect(() => {
     return () => {
