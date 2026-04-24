@@ -9,6 +9,7 @@ import {
   ImageIcon,
   LoaderCircle,
   PaperclipIcon,
+  Settings,
   UserStar,
   XIcon,
 } from "lucide-react";
@@ -57,12 +58,14 @@ import {
   resolveProfileModelByTier,
 } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
+import { sortAgentProfilesByName } from "@/modules/settings-center/model/profile-utils";
 import type { SkillRecord } from "@/shared/types/extensions";
 import type { RunMode } from "@/shared/types/api";
 import { indexFilterFiles, type FileFilterMatch } from "@/services/bridge";
 import { useT } from "@/i18n";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
+import { Button } from "@/shared/ui/button";
 import { ModelBrandIcon } from "@/shared/ui/model-brand-icon";
 import { Switch } from "@/shared/ui/switch";
 
@@ -104,6 +107,7 @@ type WorkbenchPromptComposerProps = {
   enabledSkills?: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "scope" | "source" | "tags" | "triggers" | "contentPreview">>;
   error?: string | null;
   onErrorMessageChange?: (message: string | null) => void;
+  onOpenProfileSettings?: () => void;
   onRunModeChange?: (mode: RunMode) => void;
   onSelectAgentProfile: (id: string) => void;
   onStop: () => void;
@@ -136,7 +140,8 @@ function buildSubmissionFromPromptInput(
   runMode: RunMode,
   referencedFiles: ReadonlyArray<ComposerReferencedFile>,
 ): ComposerSubmission {
-  const trimmedText = message.text?.trim() ?? "";
+  const rawText = message.text ?? "";
+  const trimmedText = rawText.trim();
   const attachments = mapComposerAttachments(message.files);
   const parsedCommand = trimmedText ? parseSlashCommandInput(trimmedText, registry) : null;
   const referencedFilesMetadata = referencedFiles.length > 0
@@ -148,10 +153,10 @@ function buildSubmissionFromPromptInput(
     : [];
 
   if (!parsedCommand?.command) {
-    const effectivePrompt = trimmedText;
+    const effectivePrompt = rawText;
     return {
       kind: "plain",
-      displayText: trimmedText,
+      displayText: rawText,
       effectivePrompt,
       rawMessage: message,
       attachments,
@@ -159,7 +164,7 @@ function buildSubmissionFromPromptInput(
         ? {
             composer: {
               kind: "plain",
-              displayText: trimmedText,
+              displayText: rawText,
               effectivePrompt,
               referencedFiles: referencedFilesMetadata,
             },
@@ -176,7 +181,7 @@ function buildSubmissionFromPromptInput(
 
   return {
     kind: "command",
-    displayText: trimmedText,
+    displayText: rawText,
     effectivePrompt,
     rawMessage: message,
     attachments,
@@ -194,7 +199,7 @@ function buildSubmissionFromPromptInput(
     metadata: {
       composer: {
         kind: "command",
-        displayText: trimmedText,
+        displayText: rawText,
         effectivePrompt,
         referencedFiles: referencedFilesMetadata,
         command: {
@@ -859,45 +864,111 @@ function ProfileSelectorItem({
   profile: AgentProfile;
   providers: ReadonlyArray<ProviderEntry>;
 }) {
-  const t = useT();
-  const primaryModel = resolveProfileModelByTier("primary", profile, providers);
-  const assistantModel = resolveProfileModelByTier("assistant", profile, providers);
-  const liteModel = resolveProfileModelByTier("lite", profile, providers);
+  const primaryModelId = getProfilePrimaryModelId(profile, providers) || profile.name;
+  const primaryModelLabel = getProfilePrimaryModelLabel(profile, providers);
 
-  const tiers: Array<{ label: string; model: { displayName: string; modelId: string } | null }> = [
-    { label: t("composer.profileTier.primary"), model: primaryModel },
-    { label: t("composer.profileTier.auxiliary"), model: assistantModel },
-    { label: t("composer.profileTier.lightweight"), model: liteModel },
+  return (
+    <ModelSelectorItem
+      className="items-center gap-3 rounded-lg px-3 py-2"
+      onSelect={onSelect}
+      value={profile.id}
+    >
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-app-surface-muted/70 text-app-foreground ring-1 ring-app-border/45">
+        <UserStar className="size-3.5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium text-app-foreground">{profile.name}</div>
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-app-muted">
+          <ModelBrandIcon
+            className="size-3.5 shrink-0 text-app-muted"
+            displayName={primaryModelLabel}
+            modelId={primaryModelId}
+          />
+          <span className="min-w-0 truncate">{primaryModelLabel}</span>
+        </div>
+      </div>
+      {isActive ? <CheckIcon className="size-4 shrink-0 text-app-info" /> : <span className="size-4 shrink-0" />}
+    </ModelSelectorItem>
+  );
+}
+
+type ProfileModelTier = "primary" | "assistant" | "lite";
+
+function getProfileTierProviderId(profile: AgentProfile, tier: ProfileModelTier) {
+  if (tier === "primary") {
+    return profile.primaryProviderId;
+  }
+  if (tier === "assistant") {
+    return profile.assistantProviderId;
+  }
+  return profile.liteProviderId;
+}
+
+function getResponseStyleLabel(responseStyle: AgentProfile["responseStyle"], t: ReturnType<typeof useT>) {
+  if (responseStyle === "concise") {
+    return t("composer.responseStyle.concise");
+  }
+  if (responseStyle === "guide") {
+    return t("composer.responseStyle.guide");
+  }
+  return t("composer.responseStyle.balanced");
+}
+
+function ProfileDetailRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-2 text-[11px] leading-5">
+      <span className="text-app-subtle">{label}</span>
+      <span className="min-w-0 truncate text-app-foreground/90">{value}</span>
+    </div>
+  );
+}
+
+function ProfileDetailsPanel({
+  profile,
+  providers,
+}: {
+  profile: AgentProfile | null;
+  providers: ReadonlyArray<ProviderEntry>;
+}) {
+  const t = useT();
+
+  if (!profile) {
+    return <p className="text-[11px] text-app-muted">{t("composer.noProfileAvailable")}</p>;
+  }
+
+  const tiers: Array<{ label: string; tier: ProfileModelTier }> = [
+    { label: t("composer.profileTier.primary"), tier: "primary" },
+    { label: t("composer.profileTier.auxiliary"), tier: "assistant" },
+    { label: t("composer.profileTier.lightweight"), tier: "lite" },
   ];
 
   return (
-    <ModelSelectorItem onSelect={onSelect} value={profile.id}>
-      <div className="min-w-0 flex flex-1 flex-col gap-2">
-        {/* Profile header */}
-        <ProfileInlineIdentity profile={profile} providers={providers} showModel={false} />
-        {/* Three-tier model rows */}
-        <div className="flex flex-col gap-1 pl-8">
-          {tiers.map(({ label, model }) => (
-            <div className="flex items-center gap-1.5" key={label}>
-              <span className="w-[54px] shrink-0 text-[10px] font-medium text-app-subtle">{label}</span>
-              {model ? (
-                <>
-                  <ModelBrandIcon
-                    className="size-3 shrink-0 text-app-muted"
-                    displayName={model.displayName}
-                    modelId={model.modelId}
-                  />
-                  <span className="min-w-0 truncate text-[11px] text-app-muted">{model.displayName}</span>
-                </>
-              ) : (
-                <span className="text-[11px] italic text-app-subtle/60">{t("composer.profileTier.notConfigured")}</span>
-              )}
-            </div>
-          ))}
-        </div>
+    <div className="px-3 pb-3 pt-2">
+      <p className="mb-1.5 text-[11px] font-medium text-app-muted">{t("composer.profileDetailsTitle")}</p>
+      <div className="space-y-0.5">
+        {tiers.map(({ label, tier }) => {
+          const providerId = getProfileTierProviderId(profile, tier);
+          const provider = providers.find((candidate) => candidate.id === providerId) ?? null;
+          const model = resolveProfileModelByTier(tier, profile, providers);
+          const value = model
+            ? `${(provider?.displayName ?? providerId) || t("composer.profileTier.notConfigured")} · ${model.displayName}`
+            : t("composer.profileTier.notConfigured");
+
+          return <ProfileDetailRow key={tier} label={label} value={value} />;
+        })}
+        <ProfileDetailRow label={t("composer.profileResponseStyle")} value={getResponseStyleLabel(profile.responseStyle, t)} />
+        <ProfileDetailRow
+          label={t("composer.profileResponseLanguage")}
+          value={profile.responseLanguage || t("composer.profileTier.notConfigured")}
+        />
       </div>
-      {isActive ? <CheckIcon className="ml-auto size-4 shrink-0" /> : <span className="ml-auto size-4 shrink-0" />}
-    </ModelSelectorItem>
+    </div>
   );
 }
 
@@ -987,6 +1058,7 @@ export function WorkbenchPromptComposer({
   enabledSkills = [],
   error,
   onErrorMessageChange,
+  onOpenProfileSettings,
   onRunModeChange = () => undefined,
   onSelectAgentProfile,
   onStop,
@@ -1032,6 +1104,7 @@ export function WorkbenchPromptComposer({
     }
     return agentProfiles[0] ?? null;
   }, [activeAgentProfileId, agentProfiles, allowMissingActiveProfile]);
+  const sortedAgentProfiles = useMemo(() => sortAgentProfilesByName(agentProfiles), [agentProfiles]);
   const hasMissingActiveProfile =
     allowMissingActiveProfile && Boolean(activeAgentProfileId) && activeProfile === null;
   const canSwitchProfiles = agentProfiles.length > 0;
@@ -1652,7 +1725,7 @@ export function WorkbenchPromptComposer({
                 {canSwitchProfiles ? (
                   <ModelSelector onOpenChange={setProfileSelectorOpen} open={isProfileSelectorOpen}>
                     <ModelSelectorTrigger asChild>
-                      <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" size="sm">
+                      <PromptInputButton className="h-auto max-w-[260px] justify-start gap-3 px-3 py-2" size="sm">
                         {activeProfile ? (
                           <ProfileInlineIdentity badge={false} profile={activeProfile} providers={providers} showModel={false} />
                         ) : (
@@ -1664,27 +1737,49 @@ export function WorkbenchPromptComposer({
                       </PromptInputButton>
                     </ModelSelectorTrigger>
                     <ModelSelectorContent
+                      className="sm:max-w-[340px]"
                       commandProps={{ value: activeAgentProfileId ?? undefined }}
                       showCloseButton={false}
-                      title="Profile Selector"
+                      title={t("composer.agentProfilesTitle")}
                     >
-                      <ModelSelectorList>
-                        <ModelSelectorEmpty>{t("composer.noProfileAvailable")}</ModelSelectorEmpty>
-                        <ModelSelectorGroup heading="Agent Profiles">
-                          {agentProfiles.map((profile) => (
-                            <ProfileSelectorItem
-                              isActive={profile.id === activeAgentProfileId}
-                              key={profile.id}
-                              onSelect={() => {
-                                onSelectAgentProfile(profile.id);
-                                setProfileSelectorOpen(false);
-                              }}
-                              profile={profile}
-                              providers={providers}
-                            />
-                          ))}
-                        </ModelSelectorGroup>
-                      </ModelSelectorList>
+                      <div className="flex items-center justify-between gap-3 border-b border-app-border/55 px-3 py-2">
+                        <p className="text-[11px] font-medium text-app-muted">{t("composer.agentProfilesTitle")}</p>
+                        <Button
+                          aria-label={t("composer.editProfiles")}
+                          className="size-7 shrink-0 rounded-full text-app-muted hover:text-app-foreground"
+                          disabled={!onOpenProfileSettings}
+                          onClick={() => {
+                            setProfileSelectorOpen(false);
+                            onOpenProfileSettings?.();
+                          }}
+                          size="icon-sm"
+                          title={t("composer.editProfiles")}
+                          type="button"
+                          variant="ghost"
+                        >
+                          <Settings className="size-3.5" />
+                        </Button>
+                      </div>
+                      <div className="px-3 pb-2 pt-2">
+                        <ModelSelectorList className="max-h-[150px] rounded-lg border border-app-border/55 bg-app-surface/45 p-1">
+                          <ModelSelectorEmpty>{t("composer.noProfileAvailable")}</ModelSelectorEmpty>
+                          <ModelSelectorGroup className="p-0">
+                            {sortedAgentProfiles.map((profile) => (
+                              <ProfileSelectorItem
+                                isActive={profile.id === activeAgentProfileId}
+                                key={profile.id}
+                                onSelect={() => {
+                                  onSelectAgentProfile(profile.id);
+                                }}
+                                profile={profile}
+                                providers={providers}
+                              />
+                            ))}
+                          </ModelSelectorGroup>
+                        </ModelSelectorList>
+                      </div>
+                      <div className="mx-3 h-px bg-app-border/55" />
+                      <ProfileDetailsPanel profile={activeProfile} providers={providers} />
                     </ModelSelectorContent>
                   </ModelSelector>
                 ) : (

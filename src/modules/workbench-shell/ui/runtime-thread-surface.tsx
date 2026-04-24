@@ -187,6 +187,7 @@ type RuntimeThreadSurfaceProps = {
   onConsumeInitialPrompt?: (id: string) => void;
   onContextUsageChange?: (usage: ThreadContextUsage | null) => void;
   onRunStateChange?: (state: RunState) => void;
+  onOpenProfileSettings?: () => void;
   onSelectAgentProfile: (id: string) => void;
   onThreadTitleChange?: (threadId: string, title: string) => void;
   providers: ReadonlyArray<ProviderEntry>;
@@ -2212,6 +2213,7 @@ export function RuntimeThreadSurface({
   onConsumeInitialPrompt,
   onContextUsageChange,
   onRunStateChange,
+  onOpenProfileSettings,
   onSelectAgentProfile,
   onThreadTitleChange,
   providers,
@@ -3185,9 +3187,10 @@ export function RuntimeThreadSurface({
           runMode: runModeOverride,
         }
       : submissionOrPrompt;
-    const prompt = submission.effectivePrompt.trim();
+    const prompt = submission.effectivePrompt ?? "";
+    const trimmedPrompt = prompt.trim();
 
-    if (!prompt) {
+    if (!trimmedPrompt) {
       setComposerError("Type a prompt before starting a run.");
       return;
     }
@@ -3631,8 +3634,9 @@ export function RuntimeThreadSurface({
   }, [helpers]);
 
   const handleSubmit = useCallback(async (submission: ComposerSubmission) => {
-    const prompt = submission.effectivePrompt?.trim() ?? "";
-    if (!prompt) {
+    const prompt = submission.effectivePrompt ?? "";
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) {
       return;
     }
 
@@ -4797,6 +4801,7 @@ export function RuntimeThreadSurface({
             error={composerError}
             onErrorMessageChange={setComposerError}
             onRunModeChange={setSelectedRunMode}
+            onOpenProfileSettings={onOpenProfileSettings}
             onSelectAgentProfile={onSelectAgentProfile}
             onStop={() => {
               if (!threadId) {
