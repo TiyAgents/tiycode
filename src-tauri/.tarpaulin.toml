@@ -1,0 +1,26 @@
+# cargo-tarpaulin configuration for tiycode backend coverage
+#
+# Excluded files:
+# - `src/commands/*`     Tauri IPC wrappers; integration tests exercise the
+#                        managers directly so these thin wrappers produce
+#                        misleading 0% figures. Coverage goal applies to core logic.
+# - `src/main.rs`        Tauri binary entry; only reachable from a real app.
+# - `src/lib.rs`         Tauri app setup (plugins, tray, window state);
+#                        requires a live Tauri runtime to exercise.
+#
+# Usage:
+#   cd src-tauri
+#   cargo tarpaulin --workspace --timeout 1800 --out Lcov --output-dir ../coverage/rust
+# (flags here apply unless overridden on the CLI)
+
+[default]
+workspace = true
+timeout = "1800s"
+skip-clean = true
+out = ["Stdout", "Lcov"]
+output-dir = "../coverage/rust"
+exclude-files = [
+    "src/commands/*",
+    "src/main.rs",
+    "src/lib.rs",
+]

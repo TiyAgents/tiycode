@@ -6719,6 +6719,696 @@ rl.on("line", (line) => {
         // `${}` should be preserved as-is, not lose the closing `}`
         assert_eq!(expand_env_vars("before ${}after"), "before ${}after");
     }
+
+    // --------------------------------------------------------------------
+    // Pure helpers: naming, path rendering, comparisons
+    // --------------------------------------------------------------------
+
+    #[test]
+    fn display_config_path_uses_tilde_under_home_and_absolute_elsewhere() {
+        use std::env;
+        // Unix: $HOME resolves to a real directory; the display form replaces it with "~".
+        if let Ok(home) = env::var("HOME") {
+            let nested = Path::new(&home).join("foo/bar");
+            let rendered = display_config_path(&nested);
+            assert!(
+                rendered.starts_with('~'),
+                "expected ~-prefixed path but got {rendered}"
+            );
+        }
+
+        let absolute = display_config_path(Path::new("/tmp/tiycode-test-abs-path"));
+        assert!(absolute.starts_with('/'), "{absolute}");
+    }
+
+    #[test]
+    fn is_builtin_marketplace_source_id_matches_known_ids() {
+        for record in builtin_marketplace_sources() {
+            assert!(is_builtin_marketplace_source_id(&record.id));
+        }
+        assert!(!is_builtin_marketplace_source_id("user-custom"));
+        assert!(!is_builtin_marketplace_source_id(""));
+    }
+
+    #[test]
+    fn marketplace_source_id_is_stable_hash_of_url() {
+        let id_a = marketplace_source_id("https://example.com/marketplace.json");
+        let id_b = marketplace_source_id("https://example.com/marketplace.json");
+        let id_c = marketplace_source_id("https://other.com/marketplace.json");
+        assert_eq!(id_a, id_b, "same url should hash equally");
+        assert_ne!(id_a, id_c, "different urls must differ");
+        assert!(!id_a.is_empty());
+    }
+
+    #[test]
+    fn update_named_membership_adds_when_enabled_and_sorts() {
+        let mut values = vec!["foo".to_string(), "baz".to_string()];
+        update_named_membership(&mut values, "bar", true);
+        assert_eq!(values, vec!["bar", "baz", "foo"]);
+    }
+
+    #[test]
+    fn update_named_membership_removes_when_disabled() {
+        let mut values = vec!["foo".to_string(), "bar".to_string()];
+        update_named_membership(&mut values, "foo", false);
+        assert_eq!(values, vec!["bar".to_string()]);
+    }
+
+    #[test]
+    fn update_named_membership_deduplicates_when_reenabled() {
+        let mut values = vec!["foo".to_string(), "foo".to_string(), "bar".to_string()];
+        update_named_membership(&mut values, "foo", true);
+        assert_eq!(values, vec!["bar".to_string(), "foo".to_string()]);
+    }
+
+    // --------------------------------------------------------------------
+    // YAML / frontmatter helpers
+    // --------------------------------------------------------------------
+
+    #[test]
+    fn split_frontmatter_extracts_block_and_body() {
+        let raw = "---\ntitle: Hello\n---\nBody text\n";
+        let (front, body) = split_frontmatter(raw).expect("should parse");
+        assert_eq!(front.trim(), "title: Hello");
+        assert_eq!(body.trim(), "Body text");
+    }
+
+    #[test]
+    fn split_frontmatter_returns_none_when_no_marker() {
+        assert!(split_frontmatter("no frontmatter here").is_none());
+        assert!(split_frontmatter("---\nonly open\n").is_none());
+    }
+
+    #[test]
+    fn split_frontmatter_handles_crlf_line_endings() {
+        let raw = "---\r\nkey: value\r\n---\r\nbody\r\n";
+        let parsed = split_frontmatter(raw);
+        assert!(parsed.is_some(), "CRLF frontmatter should parse");
+    }
+
+    #[test]
+    fn parse_frontmatter_map_reads_simple_kv() {
+        let map = parse_frontmatter_map("title: Hello\ntags: [a, b]\n");
+        assert_eq!(map.get("title").map(String::as_str), Some("Hello"));
+        assert!(map.contains_key("tags"));
+    }
+
+    #[test]
+    fn parse_frontmatter_map_skips_comments_and_blanks() {
+        let map = parse_frontmatter_map("# comment\n\ntitle: X\n");
+        assert_eq!(map.get("title").map(String::as_str), Some("X"));
+        assert!(!map.contains_key("# comment"));
+    }
+
+    #[test]
+    fn parse_frontmatter_map_supports_folded_block_scalar() {
+        let map = parse_frontmatter_map("description: >\n  first line\n  second line\n");
+        assert_eq!(
+            map.get("description").map(String::as_str),
+            Some("first line second line")
+        );
+    }
+
+    #[test]
+    fn parse_frontmatter_map_supports_literal_block_scalar() {
+        let map = parse_frontmatter_map("steps: |\n  one\n  two\n");
+        assert_eq!(map.get("steps").map(String::as_str), Some("one\ntwo"));
+    }
+
+    #[test]
+    fn parse_frontmatter_map_supports_yaml_list_form() {
+        let map = parse_frontmatter_map("tags:\n  - alpha\n  - beta\n");
+        assert_eq!(map.get("tags").map(String::as_str), Some("alpha\nbeta"));
+    }
+
+    #[test]
+    fn parse_array_field_handles_inline_and_multiline_and_empty() {
+        assert_eq!(parse_array_field(None), Vec::<String>::new());
+        assert_eq!(
+            parse_array_field(Some(&"".to_string())),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_array_field(Some(&"[one, two, three]".to_string())),
+            vec!["one", "two", "three"]
+        );
+        assert_eq!(
+            parse_array_field(Some(&"single".to_string())),
+            vec!["single".to_string()]
+        );
+        assert_eq!(
+            parse_array_field(Some(&"line1\nline2\n".to_string())),
+            vec!["line1", "line2"]
+        );
+    }
+
+    #[test]
+    fn parse_array_field_strips_quotes_around_inline_values() {
+        assert_eq!(
+            parse_array_field(Some(&"[\"quoted\", 'single']".to_string())),
+            vec!["quoted", "single"]
+        );
+    }
+
+    #[test]
+    fn trim_yaml_scalar_removes_matching_quotes() {
+        assert_eq!(trim_yaml_scalar(" \"hello\" "), "hello");
+        assert_eq!(trim_yaml_scalar("'hi'"), "hi");
+        assert_eq!(trim_yaml_scalar("plain"), "plain");
+    }
+
+    #[test]
+    fn fold_yaml_block_scalar_joins_lines_with_spaces_and_preserves_blanks() {
+        let lines = vec!["first".to_string(), "second".to_string()];
+        assert_eq!(fold_yaml_block_scalar(&lines), "first second");
+
+        let with_blank = vec![
+            "para one".to_string(),
+            "".to_string(),
+            "para two".to_string(),
+        ];
+        assert_eq!(fold_yaml_block_scalar(&with_blank), "para one\n\npara two");
+    }
+
+    // --------------------------------------------------------------------
+    // serde_json reader helpers
+    // --------------------------------------------------------------------
+
+    #[test]
+    fn read_named_value_prefers_label_then_name_then_id() {
+        assert_eq!(
+            read_named_value(&serde_json::json!({"label": "L", "name": "N", "id": "I"})),
+            Some("L".to_string())
+        );
+        assert_eq!(
+            read_named_value(&serde_json::json!({"name": "N", "id": "I"})),
+            Some("N".to_string())
+        );
+        assert_eq!(
+            read_named_value(&serde_json::json!({"id": "I"})),
+            Some("I".to_string())
+        );
+        assert_eq!(read_named_value(&serde_json::json!({"other": "X"})), None);
+    }
+
+    #[test]
+    fn read_string_value_trims_and_rejects_blank() {
+        assert_eq!(
+            read_string_value(&serde_json::json!("  hi  ")),
+            Some("hi".to_string())
+        );
+        assert_eq!(read_string_value(&serde_json::json!("   ")), None);
+        assert_eq!(read_string_value(&serde_json::json!(42)), None);
+        assert_eq!(read_string_value(&serde_json::json!(null)), None);
+    }
+
+    #[test]
+    fn read_string_keys_finds_first_present_key() {
+        let raw = serde_json::json!({"a": "  X  ", "b": "Y"});
+        let object = raw.as_object().unwrap();
+        assert_eq!(read_string_keys(object, &["b", "a"]), Some("Y".to_string()));
+        assert_eq!(
+            read_string_keys(object, &["missing", "a"]),
+            Some("X".to_string())
+        );
+        assert_eq!(read_string_keys(object, &["none"]), None);
+    }
+
+    #[test]
+    fn read_string_array_keys_dedupes_and_sorts() {
+        let raw = serde_json::json!({"items": ["b", "a", "b", "c"]});
+        let object = raw.as_object().unwrap();
+        assert_eq!(
+            read_string_array_keys(object, &["items"]),
+            vec!["a", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn read_string_array_keys_returns_empty_for_missing_or_wrong_type() {
+        let empty = serde_json::Map::new();
+        assert!(read_string_array_keys(&empty, &["x"]).is_empty());
+
+        let wrong = serde_json::json!({"items": "not an array"});
+        assert!(read_string_array_keys(wrong.as_object().unwrap(), &["items"]).is_empty());
+    }
+
+    #[test]
+    fn read_string_map_keys_returns_none_when_empty_or_missing() {
+        let empty = serde_json::Map::new();
+        assert!(read_string_map_keys(&empty, &["x"]).is_none());
+
+        let blank_values = serde_json::json!({"env": {"A": "", "B": null}});
+        assert!(
+            read_string_map_keys(blank_values.as_object().unwrap(), &["env"]).is_none(),
+            "map with no valid string values must be None"
+        );
+    }
+
+    #[test]
+    fn read_string_map_keys_keeps_only_string_entries() {
+        let raw = serde_json::json!({"env": {"OK": "value", "BAD": 1, "BLANK": ""}});
+        let map = read_string_map_keys(raw.as_object().unwrap(), &["env"]).expect("map present");
+        assert_eq!(map.get("OK").map(String::as_str), Some("value"));
+        assert!(!map.contains_key("BAD"));
+        assert!(!map.contains_key("BLANK"));
+    }
+
+    #[test]
+    fn read_bool_keys_and_u64_keys_find_first_valid_value() {
+        let raw = serde_json::json!({"flag": "not bool", "enabled": true, "count": 42});
+        let object = raw.as_object().unwrap();
+        assert_eq!(read_bool_keys(object, &["flag", "enabled"]), Some(true));
+        assert_eq!(read_u64_keys(object, &["count", "missing"]), Some(42));
+        assert_eq!(read_u64_keys(object, &["flag"]), None);
+    }
+
+    #[test]
+    fn read_author_name_accepts_string_or_object_with_label() {
+        assert_eq!(
+            read_author_name(Some(&serde_json::json!("Alice"))),
+            Some("Alice".to_string())
+        );
+        assert_eq!(
+            read_author_name(Some(&serde_json::json!({"name": "Bob"}))),
+            Some("Bob".to_string())
+        );
+        assert_eq!(read_author_name(Some(&serde_json::json!({}))), None);
+        assert_eq!(read_author_name(None), None);
+    }
+
+    #[test]
+    fn read_optional_string_array_keys_returns_none_when_empty() {
+        let empty = serde_json::Map::new();
+        assert!(read_optional_string_array_keys(&empty, &["missing"]).is_none());
+
+        let raw = serde_json::json!({"items": ["x"]});
+        let object = raw.as_object().unwrap();
+        assert_eq!(
+            read_optional_string_array_keys(object, &["items"]),
+            Some(vec!["x".to_string()])
+        );
+    }
+
+    #[test]
+    fn read_config_schema_requires_path_and_defaults_type() {
+        let no_path = serde_json::json!({});
+        assert!(read_config_schema(Some(&no_path)).is_none());
+
+        let with_path = serde_json::json!({"path": "config.schema.json"});
+        let schema = read_config_schema(Some(&with_path)).unwrap();
+        assert_eq!(schema.path, "config.schema.json");
+        assert_eq!(schema.r#type, "json-schema");
+
+        let explicit = serde_json::json!({"path": "x", "type": "yaml-schema"});
+        let schema = read_config_schema(Some(&explicit)).unwrap();
+        assert_eq!(schema.r#type, "yaml-schema");
+    }
+
+    // --------------------------------------------------------------------
+    // MCP helpers
+    // --------------------------------------------------------------------
+
+    #[test]
+    fn plugin_managed_mcp_prefix_and_id_format() {
+        assert_eq!(
+            plugin_managed_mcp_prefix("my-plugin"),
+            "plugin::my-plugin::"
+        );
+        assert_eq!(
+            plugin_managed_mcp_id("my-plugin", "server-one"),
+            "plugin::my-plugin::server-one"
+        );
+    }
+
+    #[test]
+    fn normalize_plugin_managed_mcp_name_strips_non_alphanumeric_and_lowercases() {
+        assert_eq!(
+            normalize_plugin_managed_mcp_name("My-Server.v1"),
+            "myserverv1"
+        );
+        assert_eq!(
+            normalize_plugin_managed_mcp_name("  Hello World  "),
+            "helloworld"
+        );
+        assert_eq!(normalize_plugin_managed_mcp_name(""), "");
+    }
+
+    #[test]
+    fn plugin_managed_mcp_names_match_ignores_case_and_punctuation() {
+        assert!(plugin_managed_mcp_names_match("my-server", "MyServer"));
+        assert!(plugin_managed_mcp_names_match("A.B-C", "abc"));
+        assert!(!plugin_managed_mcp_names_match("server1", "server2"));
+    }
+
+    #[test]
+    fn canonicalize_mcp_transport_normalizes_common_aliases() {
+        assert_eq!(canonicalize_mcp_transport("stdio"), "stdio");
+        assert_eq!(canonicalize_mcp_transport("STDIO"), "stdio");
+        assert_eq!(
+            canonicalize_mcp_transport("streamable-http"),
+            "streamable-http"
+        );
+        assert_eq!(
+            canonicalize_mcp_transport("http-streamable"),
+            "streamable-http"
+        );
+        assert_eq!(
+            canonicalize_mcp_transport("  STREAMABLE-HTTP  "),
+            "streamable-http"
+        );
+        assert_eq!(canonicalize_mcp_transport("unknown"), "");
+        assert_eq!(canonicalize_mcp_transport(""), "");
+    }
+
+    #[test]
+    fn parse_content_length_header_is_case_insensitive() {
+        assert_eq!(
+            parse_content_length_header("Content-Length: 123"),
+            Some(123)
+        );
+        assert_eq!(parse_content_length_header("content-length: 0"), Some(0));
+        assert_eq!(
+            parse_content_length_header("CONTENT-LENGTH:  42  "),
+            Some(42)
+        );
+        assert_eq!(parse_content_length_header("Other-Header: 5"), None);
+        assert_eq!(parse_content_length_header("no colon here"), None);
+        assert_eq!(
+            parse_content_length_header("Content-Length: not a number"),
+            None
+        );
+    }
+
+    #[test]
+    fn message_id_matches_compares_numeric_ids_only() {
+        let msg = serde_json::json!({"id": 42});
+        assert!(message_id_matches(&msg, 42));
+        assert!(!message_id_matches(&msg, 41));
+
+        let missing = serde_json::json!({});
+        assert!(!message_id_matches(&missing, 42));
+
+        let wrong_type = serde_json::json!({"id": "42"});
+        assert!(!message_id_matches(&wrong_type, 42));
+    }
+
+    #[test]
+    fn mcp_capability_enabled_returns_true_only_if_key_present() {
+        let caps = serde_json::json!({"tools": {}, "resources": null});
+        assert!(mcp_capability_enabled(&caps, "tools"));
+        // Null is still "present"; that's by design — the function only checks key existence.
+        assert!(mcp_capability_enabled(&caps, "resources"));
+        assert!(!mcp_capability_enabled(&caps, "missing"));
+
+        let not_object = serde_json::json!(42);
+        assert!(!mcp_capability_enabled(&not_object, "any"));
+    }
+
+    #[test]
+    fn mcp_tool_name_is_provider_safe_validates_characters() {
+        assert!(mcp_tool_name_is_provider_safe("simple_name"));
+        assert!(mcp_tool_name_is_provider_safe("dash-name"));
+        assert!(mcp_tool_name_is_provider_safe("Mix123"));
+        assert!(!mcp_tool_name_is_provider_safe(""));
+        assert!(!mcp_tool_name_is_provider_safe("has space"));
+        assert!(!mcp_tool_name_is_provider_safe("has.dot"));
+        assert!(!mcp_tool_name_is_provider_safe("has/slash"));
+    }
+
+    #[test]
+    fn mcp_runtime_record_is_disabled_matches_error_phases() {
+        let mut rec = McpRuntimeRecord {
+            tools: vec![],
+            resources: vec![],
+            stale_snapshot: false,
+            last_error: None,
+            status: None,
+            phase: None,
+            updated_at: None,
+        };
+        assert!(!mcp_runtime_record_is_disabled(&rec));
+
+        rec.status = Some("connected".to_string());
+        assert!(!mcp_runtime_record_is_disabled(&rec));
+
+        rec.status = Some("error".to_string());
+        assert!(mcp_runtime_record_is_disabled(&rec));
+
+        rec.status = None;
+        rec.phase = Some("shutdown".to_string());
+        assert!(mcp_runtime_record_is_disabled(&rec));
+    }
+
+    #[test]
+    fn sanitize_mcp_runtime_name_segment_replaces_disallowed_chars_and_trims_underscores() {
+        assert_eq!(
+            sanitize_mcp_runtime_name_segment("simple-name_1"),
+            "simple-name_1"
+        );
+        assert_eq!(
+            sanitize_mcp_runtime_name_segment("hello world"),
+            "hello_world"
+        );
+        assert_eq!(
+            sanitize_mcp_runtime_name_segment("_leading_trailing_"),
+            "leading_trailing"
+        );
+        assert_eq!(sanitize_mcp_runtime_name_segment("!!!"), "tool");
+        assert_eq!(sanitize_mcp_runtime_name_segment(""), "tool");
+    }
+
+    #[test]
+    fn build_mcp_runtime_tool_name_uses_server_tail_segment() {
+        assert_eq!(
+            build_mcp_runtime_tool_name("plugin::foo::server-a", "my tool"),
+            "__mcp_server-a_my_tool"
+        );
+        assert_eq!(
+            build_mcp_runtime_tool_name("plain-server", "tool"),
+            "__mcp_plain-server_tool"
+        );
+    }
+
+    #[test]
+    fn parse_mcp_tools_filters_blank_names_and_sorts() {
+        let result = serde_json::json!({
+            "tools": [
+                {"name": "  ", "description": "blank"},
+                {"name": "bravo", "description": "second"},
+                {"name": "alpha", "inputSchema": {"type": "object"}},
+            ]
+        });
+        let tools = parse_mcp_tools(&result, "srv");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "alpha");
+        assert_eq!(tools[1].name, "bravo");
+        assert!(tools[0].qualified_name.starts_with("__mcp_srv_"));
+        assert!(tools[0].input_schema.is_some());
+    }
+
+    #[test]
+    fn parse_mcp_tools_returns_empty_when_missing_or_wrong_type() {
+        assert!(parse_mcp_tools(&serde_json::json!({}), "srv").is_empty());
+        assert!(parse_mcp_tools(&serde_json::json!({"tools": "string"}), "srv").is_empty());
+    }
+
+    #[test]
+    fn parse_mcp_resources_filters_blank_uris_and_defaults_name_to_uri() {
+        let result = serde_json::json!({
+            "resources": [
+                {"uri": "", "name": "skip me"},
+                {"uri": "file://one", "description": "d1", "mimeType": "text/plain"},
+                {"uri": "file://two", "name": "  "}
+            ]
+        });
+        let resources = parse_mcp_resources(&result);
+        assert_eq!(resources.len(), 2);
+        let two = resources.iter().find(|r| r.uri == "file://two").unwrap();
+        assert_eq!(two.name, "file://two", "blank name falls back to uri");
+    }
+
+    // --------------------------------------------------------------------
+    // Plugin-managed MCP config merge
+    // --------------------------------------------------------------------
+
+    #[test]
+    fn merge_plugin_managed_mcp_config_returns_managed_when_no_existing() {
+        let managed = McpServerConfigInput {
+            id: "srv".to_string(),
+            label: "Srv".to_string(),
+            transport: "stdio".to_string(),
+            enabled: true,
+            auto_start: true,
+            command: Some("echo".to_string()),
+            args: Some(vec!["hi".to_string()]),
+            env: None,
+            cwd: None,
+            url: None,
+            headers: None,
+            timeout_ms: Some(1_000),
+        };
+        let result = merge_plugin_managed_mcp_config(None, managed.clone());
+        assert_eq!(result.id, managed.id);
+        assert_eq!(result.enabled, managed.enabled);
+    }
+
+    #[test]
+    fn merge_plugin_managed_mcp_config_preserves_user_toggle_over_managed_defaults() {
+        let existing = McpServerConfigInput {
+            id: "srv".to_string(),
+            label: "Srv".to_string(),
+            transport: "stdio".to_string(),
+            enabled: false,
+            auto_start: false,
+            command: None,
+            args: None,
+            env: None,
+            cwd: None,
+            url: None,
+            headers: None,
+            timeout_ms: Some(9_999),
+        };
+        let managed = McpServerConfigInput {
+            id: "srv".to_string(),
+            label: "Srv".to_string(),
+            transport: "stdio".to_string(),
+            enabled: true,
+            auto_start: true,
+            command: Some("default-cmd".to_string()),
+            args: Some(vec![]),
+            env: None,
+            cwd: None,
+            url: None,
+            headers: None,
+            timeout_ms: Some(1_000),
+        };
+        let merged = merge_plugin_managed_mcp_config(Some(&existing), managed.clone());
+        assert!(!merged.enabled, "user-disabled stays disabled");
+        assert!(!merged.auto_start);
+        assert_eq!(merged.timeout_ms, Some(9_999), "user timeout wins");
+        assert_eq!(merged.command, managed.command, "managed cmd flows through");
+    }
+
+    // --------------------------------------------------------------------
+    // Masking helpers
+    // --------------------------------------------------------------------
+
+    #[test]
+    fn mask_sensitive_value_short_returns_four_stars() {
+        assert_eq!(mask_sensitive_value("a"), "****");
+        assert_eq!(mask_sensitive_value("abcd"), "****");
+        assert_eq!(mask_sensitive_value(""), "****");
+    }
+
+    #[test]
+    fn mask_sensitive_value_long_keeps_first_four_and_appends_stars() {
+        assert_eq!(mask_sensitive_value("abcdef"), "abcd****");
+        assert_eq!(mask_sensitive_value("secret-key-1234"), "secr****");
+    }
+
+    #[test]
+    fn mask_url_redacts_query_string() {
+        assert_eq!(
+            mask_url("https://example.com/api?token=abc".to_string()),
+            "https://example.com/api?****"
+        );
+        assert_eq!(
+            mask_url("https://no-query.example.com".to_string()),
+            "https://no-query.example.com"
+        );
+    }
+
+    #[test]
+    fn substitute_variables_replaces_braced_occurrences() {
+        let mut vars = HashMap::new();
+        vars.insert("workspace".to_string(), "/home/user/proj".to_string());
+        vars.insert("thread_id".to_string(), "thr-1".to_string());
+        assert_eq!(
+            substitute_variables("cd ${workspace} && echo ${thread_id}", &vars),
+            "cd /home/user/proj && echo thr-1"
+        );
+        // Unknown placeholders are preserved
+        assert_eq!(substitute_variables("${unknown}", &vars), "${unknown}");
+    }
+
+    #[test]
+    fn build_plugin_variables_includes_workspace_and_plugin_dir() {
+        let dir = Path::new("/opt/plugins/foo");
+        let values = build_plugin_variables("/ws", dir, Some("thr-42"));
+        assert_eq!(values.get("workspace").map(String::as_str), Some("/ws"));
+        assert_eq!(
+            values.get("plugin_dir").map(String::as_str),
+            Some(dir.to_str().unwrap())
+        );
+        assert_eq!(values.get("thread_id").map(String::as_str), Some("thr-42"));
+
+        let no_thread = build_plugin_variables("/ws", dir, None);
+        assert!(!no_thread.contains_key("thread_id"));
+    }
+
+    // --------------------------------------------------------------------
+    // Masked-map merge (sensitive env / headers)
+    // --------------------------------------------------------------------
+
+    #[test]
+    fn merge_masked_string_map_unmasks_entries_that_match_existing_mask() {
+        let mut existing = HashMap::new();
+        existing.insert("TOKEN".to_string(), "real-secret-xyz".to_string());
+        existing.insert("OTHER".to_string(), "short".to_string());
+
+        let mut incoming = HashMap::new();
+        incoming.insert("TOKEN".to_string(), mask_sensitive_value("real-secret-xyz"));
+        incoming.insert("OTHER".to_string(), "new-value".to_string());
+
+        let merged = merge_masked_string_map(Some(&existing), Some(incoming)).expect("map");
+        assert_eq!(
+            merged.get("TOKEN").map(String::as_str),
+            Some("real-secret-xyz"),
+            "masked token must unwrap to original"
+        );
+        assert_eq!(
+            merged.get("OTHER").map(String::as_str),
+            Some("new-value"),
+            "non-masked updates survive"
+        );
+    }
+
+    #[test]
+    fn merge_masked_string_map_returns_none_for_none_incoming() {
+        assert!(merge_masked_string_map(None, None).is_none());
+    }
+
+    // --------------------------------------------------------------------
+    // DTO sorting (existing comparisons keep — verify with a second example)
+    // --------------------------------------------------------------------
+
+    #[test]
+    fn apply_skill_state_applies_disabled_and_enabled_lists() {
+        let mut record = SkillRecordDto {
+            id: "skill-a".to_string(),
+            name: "Skill A".to_string(),
+            description: None,
+            tags: vec![],
+            triggers: vec![],
+            tools: vec![],
+            priority: None,
+            source: "builtin".to_string(),
+            path: String::new(),
+            enabled: true,
+            scope: "global".to_string(),
+            content_preview: String::new(),
+            prompt_budget_chars: 0,
+        };
+        let mut state = SkillStateStore::default();
+        state.disabled = vec!["skill-a".to_string()];
+        apply_skill_state(&mut record, &state);
+        assert!(!record.enabled);
+
+        state.enabled = vec!["skill-a".to_string()];
+        apply_skill_state(&mut record, &state);
+        assert!(record.enabled, "enabled list overrides disabled");
+    }
 }
 
 fn build_plugin_variables(

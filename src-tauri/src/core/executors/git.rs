@@ -1050,9 +1050,15 @@ fn upstream_matches_remote(upstream_name: Option<&str>, remote_branch_name: &str
 #[cfg(test)]
 mod tests {
     use super::{
-        select_push_remote, upstream_matches_remote, validate_local_branch_name,
-        validate_relative_git_path,
+        append_optional_path, build_diff_args, build_log_args, build_status_args, first_line,
+        local_branch_name_from_remote, map_cli_failure, normalize_workspace_relative_paths,
+        read_context_lines, read_log_limit, read_optional_path, read_paths, render_cli_hint,
+        select_push_remote, success_summary, trim_output, upstream_matches_remote,
+        validate_local_branch_name, validate_relative_git_path, workspace_path_to_repo_path,
+        GIT_OUTPUT_LIMIT,
     };
+    use crate::model::git::GitMutationAction;
+    use std::path::Path;
 
     #[test]
     fn validate_local_branch_name_accepts_conventional_names() {
@@ -1136,5 +1142,502 @@ mod tests {
             "origin/feat/foo"
         ));
         assert!(!upstream_matches_remote(None, "origin/feat/foo"));
+    }
+
+    // ------------------------------------------------------------------
+    // Input parsing helpers
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn read_paths_rejects_missing_or_empty_arrays() {
+        let missing = serde_json::json!({});
+        assert_eq!(
+            read_paths(&missing).unwrap_err().error_code,
+            "git.path.invalid"
+        );
+
+        let wrong_type = serde_json::json!({ "paths": "src/lib.rs" });
+        assert_eq!(
+            read_paths(&wrong_type).unwrap_err().error_code,
+            "git.path.invalid"
+        );
+
+        let empty = serde_json::json!({ "paths": [] });
+        assert_eq!(
+            read_paths(&empty).unwrap_err().error_code,
+            "git.path.invalid"
+        );
+
+        let only_non_strings = serde_json::json!({ "paths": [1, 2, null] });
+        assert_eq!(
+            read_paths(&only_non_strings).unwrap_err().error_code,
+            "git.path.invalid"
+        );
+    }
+
+    #[test]
+    fn read_paths_keeps_string_entries_and_drops_non_strings() {
+        let input = serde_json::json!({ "paths": ["a.rs", 1, "b.rs", null] });
+        let paths = read_paths(&input).unwrap();
+        assert_eq!(paths, vec!["a.rs".to_string(), "b.rs".to_string()]);
+    }
+
+    #[test]
+    fn read_optional_path_returns_none_for_missing_or_blank() {
+        assert_eq!(read_optional_path(&serde_json::json!({})).unwrap(), None);
+        assert_eq!(
+            read_optional_path(&serde_json::json!({"path": ""})).unwrap(),
+            None
+        );
+        assert_eq!(
+            read_optional_path(&serde_json::json!({"path": "   "})).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn read_optional_path_validates_non_empty_paths() {
+        let ok = read_optional_path(&serde_json::json!({"path": "src/lib.rs"})).unwrap();
+        assert_eq!(ok, Some("src/lib.rs".to_string()));
+
+        let abs = read_optional_path(&serde_json::json!({"path": "/etc/passwd"})).unwrap_err();
+        assert_eq!(abs.error_code, "git.path.absolute_disallowed");
+
+        let traversal = read_optional_path(&serde_json::json!({"path": "../oops"})).unwrap_err();
+        assert_eq!(traversal.error_code, "git.path.traversal_disallowed");
+    }
+
+    #[test]
+    fn read_context_lines_defaults_and_bounds() {
+        assert_eq!(read_context_lines(&serde_json::json!({})).unwrap(), 3);
+        assert_eq!(
+            read_context_lines(&serde_json::json!({"contextLines": 10})).unwrap(),
+            10
+        );
+        assert_eq!(
+            read_context_lines(&serde_json::json!({"contextLines": 20})).unwrap(),
+            20
+        );
+
+        let zero = read_context_lines(&serde_json::json!({"contextLines": 0})).unwrap_err();
+        assert_eq!(zero.error_code, "git.diff.context_invalid");
+
+        let too_big = read_context_lines(&serde_json::json!({"contextLines": 21})).unwrap_err();
+        assert_eq!(too_big.error_code, "git.diff.context_invalid");
+    }
+
+    #[test]
+    fn read_log_limit_defaults_and_bounds() {
+        assert_eq!(read_log_limit(&serde_json::json!({})).unwrap(), 10);
+        assert_eq!(
+            read_log_limit(&serde_json::json!({"limit": 50})).unwrap(),
+            50
+        );
+        assert_eq!(
+            read_log_limit(&serde_json::json!({"limit": 100})).unwrap(),
+            100
+        );
+
+        let zero = read_log_limit(&serde_json::json!({"limit": 0})).unwrap_err();
+        assert_eq!(zero.error_code, "git.log.limit_invalid");
+
+        let too_big = read_log_limit(&serde_json::json!({"limit": 101})).unwrap_err();
+        assert_eq!(too_big.error_code, "git.log.limit_invalid");
+    }
+
+    // ------------------------------------------------------------------
+    // Argument builders
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn build_status_args_without_path() {
+        assert_eq!(
+            build_status_args(None),
+            vec![
+                "status".to_string(),
+                "--short".to_string(),
+                "--branch".to_string(),
+                "--untracked-files=normal".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_status_args_with_path_appends_pathspec_separator() {
+        let args = build_status_args(Some("src"));
+        assert_eq!(args.last().map(String::as_str), Some("src"));
+        assert!(args.contains(&"--".to_string()));
+    }
+
+    #[test]
+    fn build_diff_args_honours_staged_flag_and_context() {
+        let unstaged = build_diff_args(None, false, 3);
+        assert_eq!(unstaged[0], "diff");
+        assert!(unstaged.contains(&"--unified=3".to_string()));
+        assert!(!unstaged.contains(&"--cached".to_string()));
+
+        let staged = build_diff_args(Some("README.md"), true, 5);
+        assert!(staged.contains(&"--cached".to_string()));
+        assert!(staged.contains(&"--unified=5".to_string()));
+        assert!(staged.contains(&"--".to_string()));
+        assert_eq!(staged.last().map(String::as_str), Some("README.md"));
+    }
+
+    #[test]
+    fn build_log_args_formats_limit_and_appends_path() {
+        let args = build_log_args(Some("src/app"), 25);
+        assert_eq!(args[0], "log");
+        assert_eq!(args[1], "--oneline");
+        assert_eq!(args[2], "-n25");
+        assert_eq!(args.last().map(String::as_str), Some("src/app"));
+    }
+
+    #[test]
+    fn append_optional_path_skips_blank_entries() {
+        let mut args = vec!["log".to_string()];
+        append_optional_path(&mut args, None);
+        append_optional_path(&mut args, Some(""));
+        append_optional_path(&mut args, Some("   "));
+        assert_eq!(args, vec!["log".to_string()]);
+    }
+
+    #[test]
+    fn append_optional_path_adds_separator_only_once() {
+        let mut args = vec!["diff".to_string()];
+        append_optional_path(&mut args, Some("  src/lib.rs  "));
+        assert_eq!(
+            args,
+            vec![
+                "diff".to_string(),
+                "--".to_string(),
+                "src/lib.rs".to_string()
+            ]
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // CLI failure classification
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn map_cli_failure_detects_auth_errors() {
+        let err = map_cli_failure(
+            GitMutationAction::Pull,
+            "",
+            "fatal: Authentication failed for 'https://github.com/foo/bar'",
+        );
+        assert_eq!(err.error_code, "git.remote.auth_failed");
+        assert!(err.retryable);
+
+        let ssh = map_cli_failure(
+            GitMutationAction::Push,
+            "",
+            "Permission denied (publickey).",
+        );
+        assert_eq!(ssh.error_code, "git.remote.auth_failed");
+
+        let username = map_cli_failure(
+            GitMutationAction::Fetch,
+            "could not read Username for 'https://github.com'",
+            "",
+        );
+        assert_eq!(username.error_code, "git.remote.auth_failed");
+    }
+
+    #[test]
+    fn map_cli_failure_detects_network_errors() {
+        for stderr in [
+            "fatal: could not resolve host github.com",
+            "failed to connect to github.com port 443",
+            "Connection timed out",
+            "Network is unreachable",
+        ] {
+            let err = map_cli_failure(GitMutationAction::Fetch, "", stderr);
+            assert_eq!(
+                err.error_code, "git.remote.network_failed",
+                "failed for stderr: {stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn map_cli_failure_detects_commit_specific_errors() {
+        let no_changes = map_cli_failure(
+            GitMutationAction::Commit,
+            "nothing to commit, working tree clean",
+            "",
+        );
+        assert_eq!(no_changes.error_code, "git.commit.no_staged_changes");
+        assert!(!no_changes.retryable);
+
+        let identity = map_cli_failure(
+            GitMutationAction::Commit,
+            "",
+            "Author identity unknown\n\n*** Please tell me who you are.",
+        );
+        assert_eq!(identity.error_code, "git.commit.identity_missing");
+    }
+
+    #[test]
+    fn map_cli_failure_commit_identity_matches_either_stdout_or_stderr() {
+        let stdout_only =
+            map_cli_failure(GitMutationAction::Commit, "Please tell me who you are.", "");
+        assert_eq!(stdout_only.error_code, "git.commit.identity_missing");
+    }
+
+    #[test]
+    fn map_cli_failure_detects_pull_conflicts() {
+        for msg in [
+            "error: Pulling is not possible because you have unmerged files",
+            "error: Your local changes to the following files would be overwritten by merge",
+            "Please commit your changes or stash them before you merge",
+        ] {
+            let err = map_cli_failure(GitMutationAction::Pull, "", msg);
+            assert_eq!(err.error_code, "git.pull.blocked_by_local_changes", "{msg}");
+        }
+    }
+
+    #[test]
+    fn map_cli_failure_detects_push_no_upstream() {
+        for msg in [
+            "fatal: The current branch feat has no upstream branch.",
+            "no upstream configured for branch",
+            "To push the current branch and set the remote as upstream, use\n    git push --set-upstream",
+        ] {
+            let err = map_cli_failure(GitMutationAction::Push, "", msg);
+            assert_eq!(err.error_code, "git.push.no_upstream", "{msg}");
+        }
+    }
+
+    #[test]
+    fn map_cli_failure_detects_checkout_errors() {
+        let blocked = map_cli_failure(
+            GitMutationAction::Checkout,
+            "",
+            "error: Your local changes to the following files would be overwritten by checkout",
+        );
+        assert_eq!(blocked.error_code, "git.checkout.blocked_by_local_changes");
+
+        let exists = map_cli_failure(
+            GitMutationAction::CreateBranch,
+            "",
+            "fatal: A branch named 'feat/foo' already exists.",
+        );
+        assert_eq!(exists.error_code, "git.create_branch.already_exists");
+
+        let invalid = map_cli_failure(
+            GitMutationAction::CreateBranch,
+            "",
+            "fatal: 'bad..name' is not a valid branch name.",
+        );
+        assert_eq!(invalid.error_code, "git.branch.invalid_name");
+
+        let not_found = map_cli_failure(
+            GitMutationAction::Checkout,
+            "",
+            "error: pathspec 'nope' did not match any file(s) known to git",
+        );
+        assert_eq!(not_found.error_code, "git.checkout.not_found");
+    }
+
+    #[test]
+    fn map_cli_failure_falls_back_to_generic_action_error() {
+        let err = map_cli_failure(GitMutationAction::Fetch, "", "some obscure failure");
+        assert_eq!(err.error_code, "git.fetch.failed");
+        assert!(err.retryable);
+        assert!(err.user_message.contains("Git fetch failed"));
+    }
+
+    #[test]
+    fn map_cli_failure_includes_cli_hint_in_message() {
+        let err = map_cli_failure(GitMutationAction::Push, "", "remote: rejected");
+        assert!(err.user_message.contains("remote: rejected"));
+    }
+
+    // ------------------------------------------------------------------
+    // Output trimming & hint rendering
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn trim_output_trims_whitespace() {
+        assert_eq!(trim_output("  hello  \n"), "hello");
+        assert_eq!(trim_output(""), "");
+    }
+
+    #[test]
+    fn trim_output_truncates_beyond_limit() {
+        let big = "a".repeat(GIT_OUTPUT_LIMIT + 100);
+        let trimmed = trim_output(&big);
+        assert_eq!(trimmed.len(), GIT_OUTPUT_LIMIT);
+    }
+
+    #[test]
+    fn render_cli_hint_prefers_stderr_over_stdout() {
+        assert_eq!(render_cli_hint("out", "err"), ": err");
+        assert_eq!(render_cli_hint("out", ""), ": out");
+        assert_eq!(render_cli_hint("", ""), "");
+    }
+
+    #[test]
+    fn render_cli_hint_uses_only_first_line() {
+        assert_eq!(
+            render_cli_hint("", "first line\nsecond line"),
+            ": first line"
+        );
+    }
+
+    #[test]
+    fn first_line_falls_back_to_full_text_when_single_line() {
+        assert_eq!(first_line("no newline here"), "no newline here");
+        assert_eq!(first_line("line1\nline2\nline3"), "line1");
+        assert_eq!(first_line(""), "");
+    }
+
+    #[test]
+    fn success_summary_covers_every_mutation_action() {
+        assert_eq!(
+            success_summary(GitMutationAction::Commit),
+            "Committed staged changes"
+        );
+        assert_eq!(
+            success_summary(GitMutationAction::Fetch),
+            "Fetched remote updates"
+        );
+        assert_eq!(
+            success_summary(GitMutationAction::Pull),
+            "Pulled remote updates"
+        );
+        assert_eq!(
+            success_summary(GitMutationAction::Push),
+            "Pushed local commits"
+        );
+        assert_eq!(
+            success_summary(GitMutationAction::Checkout),
+            "Switched branch"
+        );
+        assert_eq!(
+            success_summary(GitMutationAction::CreateBranch),
+            "Created and switched to new branch"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Workspace-relative path helpers
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn workspace_path_to_repo_path_computes_repo_relative_forward_slashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().to_path_buf();
+        let workspace_root = repo_root.join("nested/workspace");
+        std::fs::create_dir_all(&workspace_root).unwrap();
+
+        let canon_repo = std::fs::canonicalize(&repo_root).unwrap();
+        let canon_workspace = std::fs::canonicalize(&workspace_root).unwrap();
+
+        let result =
+            workspace_path_to_repo_path(&canon_repo, &canon_workspace, "src/lib.rs").unwrap();
+        assert_eq!(result, "nested/workspace/src/lib.rs");
+    }
+
+    #[test]
+    fn workspace_path_to_repo_path_rejects_empty_input() {
+        let err =
+            workspace_path_to_repo_path(Path::new("/tmp/repo"), Path::new("/tmp/repo"), "   ")
+                .unwrap_err();
+        assert_eq!(err.error_code, "git.path.empty");
+    }
+
+    #[test]
+    fn workspace_path_to_repo_path_rejects_paths_outside_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = std::fs::canonicalize(tmp.path()).unwrap();
+        let other = std::env::temp_dir();
+        // Picking an absolute path via '..' traversal. Use two separate dirs.
+        let outside = std::fs::canonicalize(&other).unwrap();
+
+        // Only run if repo_root and outside truly differ.
+        if repo_root != outside {
+            let err = workspace_path_to_repo_path(&repo_root, &outside, "file.txt").unwrap_err();
+            assert_eq!(err.error_code, "git.path.out_of_workspace");
+        }
+    }
+
+    #[test]
+    fn normalize_workspace_relative_paths_strips_slashes_and_filters_blanks() {
+        let input = vec![
+            " /src/lib.rs/ ".to_string(),
+            "".to_string(),
+            "  ".to_string(),
+            "docs/".to_string(),
+        ];
+        let normalized = normalize_workspace_relative_paths(&input).unwrap();
+        assert_eq!(
+            normalized,
+            vec!["src/lib.rs".to_string(), "docs".to_string()]
+        );
+    }
+
+    #[test]
+    fn normalize_workspace_relative_paths_rejects_all_empty_input() {
+        let err = normalize_workspace_relative_paths(&[]).unwrap_err();
+        assert_eq!(err.error_code, "git.path.empty");
+
+        let err =
+            normalize_workspace_relative_paths(&["".to_string(), "  ".to_string()]).unwrap_err();
+        assert_eq!(err.error_code, "git.path.empty");
+    }
+
+    // ------------------------------------------------------------------
+    // Remote branch name extraction
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn local_branch_name_from_remote_returns_suffix_after_first_slash() {
+        assert_eq!(
+            local_branch_name_from_remote("origin/feat/foo").unwrap(),
+            "feat/foo"
+        );
+        assert_eq!(
+            local_branch_name_from_remote("upstream/main").unwrap(),
+            "main"
+        );
+    }
+
+    #[test]
+    fn local_branch_name_from_remote_rejects_names_without_slash() {
+        let err = local_branch_name_from_remote("mybranch").unwrap_err();
+        assert_eq!(err.error_code, "git.checkout.not_found");
+    }
+
+    #[test]
+    fn local_branch_name_from_remote_rejects_empty_and_invalid() {
+        assert_eq!(
+            local_branch_name_from_remote("   ").unwrap_err().error_code,
+            "git.branch.name_empty"
+        );
+        let invalid = local_branch_name_from_remote("origin/bad..name").unwrap_err();
+        assert_eq!(invalid.error_code, "git.branch.name_invalid");
+    }
+
+    // ------------------------------------------------------------------
+    // Dispatch error path for execute()
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn execute_returns_failure_for_unknown_tool() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = super::execute(
+            "git_unknown_tool",
+            &serde_json::json!({}),
+            tmp.path().to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(!out.success);
+        assert_eq!(
+            out.result["error"],
+            serde_json::json!("Unknown git tool: git_unknown_tool")
+        );
     }
 }
