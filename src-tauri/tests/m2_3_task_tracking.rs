@@ -10,13 +10,13 @@
 mod test_helpers;
 
 use sqlx::Row;
-use tiycode::core::task_board_manager;
-use tiycode::core::thread_manager::ThreadManager;
-use tiycode::model::task_board::{
+use tiycode_lib::core::task_board_manager;
+use tiycode_lib::core::thread_manager::ThreadManager;
+use tiycode_lib::model::task_board::{
     CreateTaskInput, CreateTaskStep, QueryTaskScope, TaskBoardStatus, UpdateTaskAction,
     UpdateTaskInput,
 };
-use tiycode::model::task_item::TaskStage;
+use tiycode_lib::model::task_item::TaskStage;
 
 // =========================================================================
 // T2.3.1 — Task Board CRUD

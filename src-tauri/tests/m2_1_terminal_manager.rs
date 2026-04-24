@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use sqlx::Row;
-use tiycode::core::terminal_manager::TerminalManager;
+use tiycode_lib::core::terminal_manager::TerminalManager;
 
 #[cfg(not(target_os = "windows"))]
 fn locale_env_lock() -> &'static Mutex<()> {

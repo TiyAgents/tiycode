@@ -10,7 +10,7 @@ mod test_helpers;
 
 use sqlx::Row;
 
-use tiycode::core::thread_manager::ThreadManager;
+use tiycode_lib::core::thread_manager::ThreadManager;
 
 // =========================================================================
 // T1.4.1 — Thread CRUD
