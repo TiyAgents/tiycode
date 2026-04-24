@@ -174,6 +174,7 @@ export class ThreadStream {
 
   private currentRunId: string | null = null;
   private hiddenToolCallIds = new Set<string>();
+  private toolNameCache = new Map<string, string>();
   private disposed = false;
 
   get runId() {
@@ -366,6 +367,7 @@ export class ThreadStream {
   reset() {
     this.currentRunId = null;
     this.hiddenToolCallIds.clear();
+    this.toolNameCache.clear();
   }
 
   /**
@@ -510,6 +512,7 @@ export class ThreadStream {
         break;
 
       case "tool_requested":
+        this.toolNameCache.set(event.toolCallId, event.toolName);
         if (isRuntimeOrchestrationToolName(event.toolName)) {
           this.hiddenToolCallIds.add(event.toolCallId);
           break;
@@ -524,6 +527,7 @@ export class ThreadStream {
         break;
 
       case "approval_required":
+        this.toolNameCache.set(event.toolCallId, event.toolName);
         this.onRunStateChange?.("waiting_approval", event.runId);
         this.onApproval?.({
           kind: "required",
@@ -536,6 +540,7 @@ export class ThreadStream {
         break;
 
       case "clarify_required":
+        this.toolNameCache.set(event.toolCallId, event.toolName);
         this.onRunStateChange?.("needs_reply", event.runId);
         this.onToolEvent?.({
           kind: "clarify-required",
@@ -552,6 +557,7 @@ export class ThreadStream {
           kind: "resolved",
           runId: event.runId,
           toolCallId: event.toolCallId,
+          toolName: this.toolNameCache.get(event.toolCallId),
           approved: event.approved,
         });
         break;
@@ -562,6 +568,7 @@ export class ThreadStream {
           kind: "clarify-resolved",
           runId: event.runId,
           toolCallId: event.toolCallId,
+          toolName: this.toolNameCache.get(event.toolCallId),
           response: event.response,
           result: event.response,
         });
@@ -575,33 +582,40 @@ export class ThreadStream {
           kind: "running",
           runId: event.runId,
           toolCallId: event.toolCallId,
+          toolName: this.toolNameCache.get(event.toolCallId),
         });
         break;
 
       case "tool_completed":
         if (this.hiddenToolCallIds.has(event.toolCallId)) {
           this.hiddenToolCallIds.delete(event.toolCallId);
+          this.toolNameCache.delete(event.toolCallId);
           break;
         }
         this.onToolEvent?.({
           kind: "completed",
           runId: event.runId,
           toolCallId: event.toolCallId,
+          toolName: this.toolNameCache.get(event.toolCallId),
           result: event.result,
         });
+        this.toolNameCache.delete(event.toolCallId);
         break;
 
       case "tool_failed":
         if (this.hiddenToolCallIds.has(event.toolCallId)) {
           this.hiddenToolCallIds.delete(event.toolCallId);
+          this.toolNameCache.delete(event.toolCallId);
           break;
         }
         this.onToolEvent?.({
           kind: "failed",
           runId: event.runId,
           toolCallId: event.toolCallId,
+          toolName: this.toolNameCache.get(event.toolCallId),
           error: event.error,
         });
+        this.toolNameCache.delete(event.toolCallId);
         break;
 
       case "thread_title_updated":
