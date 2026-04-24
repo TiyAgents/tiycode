@@ -1979,6 +1979,34 @@ function isRuntimeOrchestrationTool(toolName: string) {
   );
 }
 
+/** Whether this tool name is a task-board management tool that should be collapsed by default. */
+export function isTaskBoardTool(toolName: string) {
+  return (
+    toolName === "create_task"
+    || toolName === "update_task"
+    || toolName === "query_task"
+  );
+}
+
+/**
+ * Determine the default open state for a tool's collapsible detail block.
+ * Task board tools default to collapsed; other tools default to expanded
+ * (and stay force-expanded while still running).
+ */
+export function getDefaultToolOpenState(
+  toolName: string,
+  toolState: SurfaceToolState,
+  explicitOpen: boolean | undefined,
+): boolean {
+  if (isTaskBoardTool(toolName)) {
+    return explicitOpen ?? false;
+  }
+  if (!isCompletedToolState(toolState)) {
+    return true;
+  }
+  return explicitOpen ?? true;
+}
+
 function isVisibleTimelineTool(
   tool: SurfaceToolEntry,
   helperIds: ReadonlySet<string>,
@@ -3422,7 +3450,7 @@ export function RuntimeThreadSurface({
     for (const entry of presentationEntries) {
       if (entry.kind === "tool") {
         const isCompleted = isCompletedToolState(entry.tool.state);
-        const isOpen = !isCompleted ? true : (completedToolOpen[entry.tool.id] ?? true);
+        const isOpen = getDefaultToolOpenState(entry.tool.name, entry.tool.state, completedToolOpen[entry.tool.id]);
         result.push({ id: entry.tool.id, completed: isCompleted, currentOpen: isOpen });
       } else if (entry.kind === "helper") {
         const isCompleted = entry.helper.status === "completed";
@@ -3513,7 +3541,10 @@ export function RuntimeThreadSurface({
           // State changed — keep the block open (don't auto-collapse on
           // completion).  Only force open when transitioning *to* a
           // non-completed state so newly-started tools expand.
-          if (!isCompletedToolState(tool.state)) {
+          // Task board tools always default to collapsed regardless of state.
+          if (isTaskBoardTool(tool.name)) {
+            next[tool.id] = tool.id in current ? current[tool.id] : false;
+          } else if (!isCompletedToolState(tool.state)) {
             next[tool.id] = true;
           } else {
             // Completed: preserve current open state (default open).
@@ -3527,7 +3558,7 @@ export function RuntimeThreadSurface({
           continue;
         }
 
-        next[tool.id] = !isCompletedToolState(tool.state);
+        next[tool.id] = isTaskBoardTool(tool.name) ? false : !isCompletedToolState(tool.state);
       }
 
       const currentKeys = Object.keys(current);
@@ -3919,7 +3950,7 @@ export function RuntimeThreadSurface({
 
               handleCompletedToolOpenChange(tool.id, open);
             }}
-            open={!isCompletedToolState(tool.state) ? true : (completedToolOpen[tool.id] ?? true)}
+            open={getDefaultToolOpenState(tool.name, tool.state, completedToolOpen[tool.id])}
           >
             <CompactCollapsibleHeader
               className={cn(
