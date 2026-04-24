@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-04-24
+### :sparkles: New Features
+- [`b4de51f`](https://github.com/TiyAgents/tiycode/commit/b4de51f021f5a9411a9e304e59c5c5c1d5a750d2) - **workbench-shell**: ✨ Default collapse task board tool details in timeline *(PR [#123](https://github.com/TiyAgents/tiycode/pull/123) by [@jorben](https://github.com/jorben))*
+- [`5bbd4ff`](https://github.com/TiyAgents/tiycode/commit/5bbd4ff567225937df54bba20e0610ac3aba277a) - **workbench-shell**: ✨ Add compact profile selector *(PR [#127](https://github.com/TiyAgents/tiycode/pull/127) by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`9a0c824`](https://github.com/TiyAgents/tiycode/commit/9a0c82480e44f3754d2b3b3fd424201e1ab9d3a1) - **persistence**: 🐛 Separate tool call storage and runtime IDs *(PR [#124](https://github.com/TiyAgents/tiycode/pull/124) by [@jorben](https://github.com/jorben))*
+- [`e3f3e1c`](https://github.com/TiyAgents/tiycode/commit/e3f3e1cab904456ce8b4c5d2aaae2baac1e07411) - **settings**: 🐛 correct MiniMax provider base URL to include API version path *(PR [#126](https://github.com/TiyAgents/tiycode/pull/126) by [@jorben](https://github.com/jorben))*
+- [`a9e3457`](https://github.com/TiyAgents/tiycode/commit/a9e3457d92cdb80c650d2ea2bb5e0a1d991754d5) - **agent-session**: 🐛 Restore thinking/reasoning content in cross-run history *(PR [#125](https://github.com/TiyAgents/tiycode/pull/125) by [@jorben](https://github.com/jorben))*
+- [`95670d9`](https://github.com/TiyAgents/tiycode/commit/95670d985be0e1581145cbfbf61cae89714689db) - **thread-stream**: 🐛 Cache toolName in ThreadStream to fix task board tool collapse *(PR [#128](https://github.com/TiyAgents/tiycode/pull/128) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.3.5] - 2026-04-24
 ### :sparkles: New Features
 - [`0e1bc5b`](https://github.com/TiyAgents/tiycode/commit/0e1bc5bca862987848bad604e6c2be59ebd7eeed) - **workbench**: add auto refresh for drawer panels *(PR [#120](https://github.com/TiyAgents/tiycode/pull/120) by [@jorben](https://github.com/jorben))*
@@ -609,3 +621,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.3]: https://github.com/TiyAgents/tiycode/compare/0.3.2...0.3.3
 [0.3.4]: https://github.com/TiyAgents/tiycode/compare/0.3.3...0.3.4
 [0.3.5]: https://github.com/TiyAgents/tiycode/compare/0.3.4...0.3.5
+[0.3.6]: https://github.com/TiyAgents/tiycode/compare/0.3.5...0.3.6
