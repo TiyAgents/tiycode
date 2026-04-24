@@ -542,10 +542,12 @@ impl AgentSession {
                 .await;
         }
 
+        let tool_call_storage_id = uuid::Uuid::now_v7().to_string();
         let insert_result = tool_call_repo::insert(
             &self.pool,
             &tool_call_repo::ToolCallInsert {
-                id: tool_call_id.to_string(),
+                id: tool_call_storage_id.clone(),
+                tool_call_id: tool_call_id.to_string(),
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
                 tool_name: tool_name.to_string(),
@@ -561,7 +563,7 @@ impl AgentSession {
 
         if let Some(tool) = RuntimeOrchestrationTool::parse(tool_name) {
             return self
-                .execute_helper_tool(tool, tool_call_id, tool_input)
+                .execute_helper_tool(tool, tool_call_id, &tool_call_storage_id, tool_input)
                 .await;
         }
 
@@ -576,6 +578,7 @@ impl AgentSession {
             run_id: self.spec.run_id.clone(),
             thread_id: self.spec.thread_id.clone(),
             tool_call_id: tool_call_id.to_string(),
+            tool_call_storage_id: tool_call_storage_id.clone(),
             tool_name: tool_name.to_string(),
             tool_input: tool_input.clone(),
             workspace_path: self.spec.workspace_path.clone(),
@@ -668,7 +671,7 @@ impl AgentSession {
                         let result = serde_json::json!({ "error": message.clone() });
                         tool_call_repo::update_result(
                             &self.pool,
-                            tool_call_id,
+                            &tool_call_storage_id,
                             &result.to_string(),
                             "failed",
                         )
@@ -710,10 +713,12 @@ impl AgentSession {
             return agent_error_result(error);
         }
 
+        let tool_call_storage_id = uuid::Uuid::now_v7().to_string();
         if let Err(error) = tool_call_repo::insert(
             &self.pool,
             &tool_call_repo::ToolCallInsert {
-                id: tool_call_id.to_string(),
+                id: tool_call_storage_id.clone(),
+                tool_call_id: tool_call_id.to_string(),
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
                 tool_name: tool_name.to_string(),
@@ -737,6 +742,7 @@ impl AgentSession {
             run_id: self.spec.run_id.clone(),
             thread_id: self.spec.thread_id.clone(),
             tool_call_id: tool_call_id.to_string(),
+            tool_call_storage_id: tool_call_storage_id.clone(),
             tool_name: tool_name.to_string(),
             tool_input: tool_input.clone(),
             workspace_path: self.spec.workspace_path.clone(),
@@ -790,6 +796,7 @@ impl AgentSession {
         &self,
         tool: RuntimeOrchestrationTool,
         tool_call_id: &str,
+        tool_call_storage_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
         let (task, review_request) = if tool == RuntimeOrchestrationTool::Review {
@@ -798,7 +805,7 @@ impl AgentSession {
                 Err(error) => {
                     tool_call_repo::update_result(
                         &self.pool,
-                        tool_call_id,
+                        tool_call_storage_id,
                         &serde_json::json!({ "error": error }).to_string(),
                         "failed",
                     )
@@ -820,7 +827,7 @@ impl AgentSession {
         if task.is_empty() {
             tool_call_repo::update_result(
                 &self.pool,
-                tool_call_id,
+                tool_call_storage_id,
                 &serde_json::json!({ "error": "missing helper task" }).to_string(),
                 "failed",
             )
@@ -869,7 +876,7 @@ impl AgentSession {
                 });
                 tool_call_repo::update_result(
                     &self.pool,
-                    tool_call_id,
+                    tool_call_storage_id,
                     &result.to_string(),
                     "completed",
                 )
@@ -884,7 +891,7 @@ impl AgentSession {
             Err(error) => {
                 tool_call_repo::update_result(
                     &self.pool,
-                    tool_call_id,
+                    tool_call_storage_id,
                     &serde_json::json!({ "error": error.to_string() }).to_string(),
                     "failed",
                 )
@@ -993,10 +1000,12 @@ impl AgentSession {
         use crate::model::task_board::{CreateTaskInput, QueryTaskInput, UpdateTaskInput};
 
         // Persist the tool call record
+        let tool_call_storage_id = uuid::Uuid::now_v7().to_string();
         if let Err(error) = tool_call_repo::insert(
             &self.pool,
             &tool_call_repo::ToolCallInsert {
-                id: tool_call_id.to_string(),
+                id: tool_call_storage_id.clone(),
+                tool_call_id: tool_call_id.to_string(),
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
                 tool_name: tool_name.to_string(),
@@ -1085,7 +1094,7 @@ impl AgentSession {
             Ok(result_json) => {
                 tool_call_repo::update_result(
                     &self.pool,
-                    tool_call_id,
+                    &tool_call_storage_id,
                     &result_json.to_string(),
                     "completed",
                 )
@@ -1110,7 +1119,7 @@ impl AgentSession {
                 let error_json = serde_json::json!({ "error": &error });
                 tool_call_repo::update_result(
                     &self.pool,
-                    tool_call_id,
+                    &tool_call_storage_id,
                     &error_json.to_string(),
                     "failed",
                 )

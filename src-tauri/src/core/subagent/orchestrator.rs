@@ -199,10 +199,12 @@ impl HelperAgentOrchestrator {
                     |progress| progress.record_started(&tool_name, &action.current_action),
                 );
 
+                let tool_call_storage_id = uuid::Uuid::now_v7().to_string();
                 if let Err(error) = tool_call_repo::insert(
                     &helper_pool,
                     &tool_call_repo::ToolCallInsert {
-                        id: persisted_tool_call_id.clone(),
+                        id: tool_call_storage_id.clone(),
+                        tool_call_id: persisted_tool_call_id.clone(),
                         run_id: helper_run_id.clone(),
                         thread_id: helper_thread_id.clone(),
                         tool_name: tool_name.clone(),
@@ -232,6 +234,7 @@ impl HelperAgentOrchestrator {
                     run_id: helper_run_id.clone(),
                     thread_id: helper_thread_id.clone(),
                     tool_call_id: persisted_tool_call_id.clone(),
+                    tool_call_storage_id: tool_call_storage_id.clone(),
                     tool_name: tool_name.clone(),
                     tool_input: tool_input.clone(),
                     workspace_path: helper_workspace_path.clone(),

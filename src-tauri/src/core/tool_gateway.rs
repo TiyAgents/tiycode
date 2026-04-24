@@ -28,7 +28,10 @@ use crate::persistence::repo::{
 pub struct ToolExecutionRequest {
     pub run_id: String,
     pub thread_id: String,
+    /// Runtime/provider correlation id used for model tool-result pairing and UI events.
     pub tool_call_id: String,
+    /// Internal database primary key for the persisted tool_calls row.
+    pub tool_call_storage_id: String,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub workspace_path: String,
@@ -159,12 +162,13 @@ impl ToolGateway {
 
         match verdict {
             PolicyVerdict::Deny { reason } => {
-                tool_call_repo::update_status(&self.pool, &request.tool_call_id, "denied").await?;
+                tool_call_repo::update_status(&self.pool, &request.tool_call_storage_id, "denied")
+                    .await?;
 
                 self.write_audit(
                     &request.run_id,
                     &request.thread_id,
-                    &request.tool_call_id,
+                    &request.tool_call_storage_id,
                     &request.tool_name,
                     "tool_denied",
                     &policy_json,
@@ -207,7 +211,7 @@ impl ToolGateway {
                 if !options.allow_user_approval {
                     tool_call_repo::update_approval(
                         &self.pool,
-                        &request.tool_call_id,
+                        &request.tool_call_storage_id,
                         "escalation_required",
                         "denied",
                     )
@@ -216,7 +220,7 @@ impl ToolGateway {
                     self.write_audit(
                         &request.run_id,
                         &request.thread_id,
-                        &request.tool_call_id,
+                        &request.tool_call_storage_id,
                         &request.tool_name,
                         "tool_approval_escalated",
                         &policy_json,
@@ -236,7 +240,7 @@ impl ToolGateway {
 
                 tool_call_repo::update_status(
                     &self.pool,
-                    &request.tool_call_id,
+                    &request.tool_call_storage_id,
                     "waiting_approval",
                 )
                 .await?;
@@ -269,7 +273,7 @@ impl ToolGateway {
                     Some(true) => {
                         tool_call_repo::update_approval(
                             &self.pool,
-                            &request.tool_call_id,
+                            &request.tool_call_storage_id,
                             "approved",
                             "approved",
                         )
@@ -299,7 +303,7 @@ impl ToolGateway {
                     Some(false) => {
                         tool_call_repo::update_approval(
                             &self.pool,
-                            &request.tool_call_id,
+                            &request.tool_call_storage_id,
                             "denied",
                             "denied",
                         )
@@ -308,7 +312,7 @@ impl ToolGateway {
                         self.write_audit(
                             &request.run_id,
                             &request.thread_id,
-                            &request.tool_call_id,
+                            &request.tool_call_storage_id,
                             &request.tool_name,
                             "tool_approval_denied",
                             &serde_json::to_string(&check).unwrap_or_default(),
@@ -328,7 +332,7 @@ impl ToolGateway {
                     None => {
                         tool_call_repo::update_status(
                             &self.pool,
-                            &request.tool_call_id,
+                            &request.tool_call_storage_id,
                             "cancelled",
                         )
                         .await?;
@@ -336,7 +340,7 @@ impl ToolGateway {
                         self.write_audit(
                             &request.run_id,
                             &request.thread_id,
-                            &request.tool_call_id,
+                            &request.tool_call_storage_id,
                             &request.tool_name,
                             "tool_cancelled",
                             &serde_json::to_string(&check).unwrap_or_default(),
@@ -429,13 +433,17 @@ impl ToolGateway {
     where
         FR: FnMut(),
     {
-        tool_call_repo::update_status(&self.pool, &request.tool_call_id, "waiting_clarification")
-            .await?;
+        tool_call_repo::update_status(
+            &self.pool,
+            &request.tool_call_storage_id,
+            "waiting_clarification",
+        )
+        .await?;
 
         self.write_audit(
             &request.run_id,
             &request.thread_id,
-            &request.tool_call_id,
+            &request.tool_call_storage_id,
             &request.tool_name,
             "tool_clarification_requested",
             "{}",
@@ -472,7 +480,7 @@ impl ToolGateway {
             Some(response) => {
                 tool_call_repo::update_result(
                     &self.pool,
-                    &request.tool_call_id,
+                    &request.tool_call_storage_id,
                     &response.to_string(),
                     "completed",
                 )
@@ -481,7 +489,7 @@ impl ToolGateway {
                 self.write_audit(
                     &request.run_id,
                     &request.thread_id,
-                    &request.tool_call_id,
+                    &request.tool_call_storage_id,
                     &request.tool_name,
                     "tool_clarification_resolved",
                     "{}",
@@ -496,13 +504,17 @@ impl ToolGateway {
                 })
             }
             None => {
-                tool_call_repo::update_status(&self.pool, &request.tool_call_id, "cancelled")
-                    .await?;
+                tool_call_repo::update_status(
+                    &self.pool,
+                    &request.tool_call_storage_id,
+                    "cancelled",
+                )
+                .await?;
 
                 self.write_audit(
                     &request.run_id,
                     &request.thread_id,
-                    &request.tool_call_id,
+                    &request.tool_call_storage_id,
                     &request.tool_name,
                     "tool_cancelled",
                     "{}",
@@ -581,7 +593,7 @@ impl ToolGateway {
         policy_json: &str,
         resolved_tool: Option<&ResolvedTool>,
     ) -> Result<ToolOutput, crate::model::errors::AppError> {
-        tool_call_repo::update_status(&self.pool, &request.tool_call_id, "running").await?;
+        tool_call_repo::update_status(&self.pool, &request.tool_call_storage_id, "running").await?;
         let writable_roots = self.load_writable_roots().await?;
 
         let output = match if let Some(resolved_tool) = resolved_tool {
@@ -611,7 +623,7 @@ impl ToolGateway {
 
                 tool_call_repo::update_result(
                     &self.pool,
-                    &request.tool_call_id,
+                    &request.tool_call_storage_id,
                     &result_json,
                     "failed",
                 )
@@ -621,7 +633,7 @@ impl ToolGateway {
                 self.write_audit(
                     &request.run_id,
                     &request.thread_id,
-                    &request.tool_call_id,
+                    &request.tool_call_storage_id,
                     &request.tool_name,
                     "tool_failed",
                     policy_json,
@@ -641,13 +653,18 @@ impl ToolGateway {
         } else {
             "failed"
         };
-        tool_call_repo::update_result(&self.pool, &request.tool_call_id, &result_json, status)
-            .await?;
+        tool_call_repo::update_result(
+            &self.pool,
+            &request.tool_call_storage_id,
+            &result_json,
+            status,
+        )
+        .await?;
 
         self.write_audit(
             &request.run_id,
             &request.thread_id,
-            &request.tool_call_id,
+            &request.tool_call_storage_id,
             &request.tool_name,
             &format!("tool_{status}"),
             policy_json,
@@ -664,7 +681,7 @@ impl ToolGateway {
                 &request.workspace_path,
                 &request.thread_id,
                 &request.run_id,
-                &request.tool_call_id,
+                &request.tool_call_storage_id,
             )
             .await
             .ok();
@@ -743,7 +760,7 @@ impl ToolGateway {
                 &request.workspace_path,
                 &request.thread_id,
                 &request.run_id,
-                &request.tool_call_id,
+                &request.tool_call_storage_id,
             )
             .await
     }

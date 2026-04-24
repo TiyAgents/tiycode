@@ -145,8 +145,8 @@ async fn test_tool_call_policy_verdict_stored() {
     let verdict = r#"{"toolName":"write","verdict":{"require_approval":{"reason":"Mutating tool"}},"checkedRules":["builtin","user_deny_list","workspace_boundary"]}"#;
 
     sqlx::query(
-        "INSERT INTO tool_calls (id, run_id, thread_id, tool_name, status, policy_verdict_json)
-         VALUES ('tc-pv', 'r-pv', 't-pv', 'write', 'waiting_approval', ?)",
+        "INSERT INTO tool_calls (id, tool_call_id, run_id, thread_id, tool_name, status, policy_verdict_json)
+         VALUES ('tc-pv', 'tc-pv', 'r-pv', 't-pv', 'write', 'waiting_approval', ?)",
     )
     .bind(verdict)
     .execute(&pool)
@@ -323,6 +323,7 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
                 run_id: "r-helper-escalate".into(),
                 thread_id: "t-helper-escalate".into(),
                 tool_call_id: "tc-helper-escalate".into(),
+                tool_call_storage_id: "tc-helper-escalate".into(),
                 tool_name: "write".into(),
                 tool_input: serde_json::json!({
                     "path": readme_path.display().to_string(),
@@ -436,6 +437,7 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
                 run_id: "r-search-relative".into(),
                 thread_id: "t-search-relative".into(),
                 tool_call_id: "tc-search-relative".into(),
+                tool_call_storage_id: "tc-search-relative".into(),
                 tool_name: "search".into(),
                 tool_input: serde_json::json!({
                     "query": "hello",
@@ -541,6 +543,7 @@ async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
                 run_id: "r-search-wildcard".into(),
                 thread_id: "t-search-wildcard".into(),
                 tool_call_id: "tc-search-wildcard".into(),
+                tool_call_storage_id: "tc-search-wildcard".into(),
                 tool_name: "search".into(),
                 tool_input: serde_json::json!({
                     "query": "hello",
@@ -645,6 +648,7 @@ async fn test_search_repo_treats_regex_metacharacters_as_literal_text() {
                 run_id: "r-search-literal".into(),
                 thread_id: "t-search-literal".into(),
                 tool_call_id: "tc-search-literal".into(),
+                tool_call_storage_id: "tc-search-literal".into(),
                 tool_name: "search".into(),
                 tool_input: serde_json::json!({
                     "query": "warn!(",
@@ -752,6 +756,7 @@ async fn test_search_repo_supports_regex_count_mode_and_case_insensitive_matchin
                 run_id: "r-search-regex-count".into(),
                 thread_id: "t-search-regex-count".into(),
                 tool_call_id: "tc-search-regex-count".into(),
+                tool_call_storage_id: "tc-search-regex-count".into(),
                 tool_name: "search".into(),
                 tool_input: serde_json::json!({
                     "query": "warn!\\(",
@@ -851,6 +856,7 @@ async fn test_execution_timeout_fires_for_slow_tool() {
                 run_id: "r-timeout".into(),
                 thread_id: "t-timeout".into(),
                 tool_call_id: "tc-timeout".into(),
+                tool_call_storage_id: "tc-timeout".into(),
                 tool_name: "shell".into(),
                 tool_input: serde_json::json!({
                     "command": "sleep 30",
