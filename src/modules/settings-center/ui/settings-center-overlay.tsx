@@ -2298,6 +2298,8 @@ function ProviderSettingsPanel({
   const [modelTestFeedback, setModelTestFeedback] = useState<Record<string, ProviderModelConnectionTestResultDto>>({});
   const [isMiniMaxCustomBaseUrl, setIsMiniMaxCustomBaseUrl] = useState(false);
   const modelTestFeedbackTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const pendingSelectNewProviderRef = useRef(false);
+  const previousProviderIdsRef = useRef(new Set(providers.map((provider) => provider.id)));
 
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? null;
   const isMiniMaxProvider = selectedProvider?.providerKey === "minimax";
@@ -2336,6 +2338,22 @@ function ProviderSettingsPanel({
         })),
     [providerCatalog],
   );
+
+  useEffect(() => {
+    const currentProviderIds = new Set(providers.map((provider) => provider.id));
+
+    if (pendingSelectNewProviderRef.current) {
+      for (const provider of providers) {
+        if (!previousProviderIdsRef.current.has(provider.id)) {
+          setSelectedProviderId(provider.id);
+          pendingSelectNewProviderRef.current = false;
+          break;
+        }
+      }
+    }
+
+    previousProviderIdsRef.current = currentProviderIds;
+  }, [providers]);
 
   useEffect(() => {
     if (!providers.some((provider) => provider.id === selectedProviderId)) {
@@ -2396,6 +2414,7 @@ function ProviderSettingsPanel({
       enabled: false,
       models: [],
     };
+    pendingSelectNewProviderRef.current = true;
     onAddProvider(newProvider);
   };
 
