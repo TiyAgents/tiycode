@@ -41,6 +41,7 @@ import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
+import { sortAgentProfilesByName } from "@/modules/settings-center/model/profile-utils";
 import { matchProviderIcon } from "@/shared/lib/llm-brand-matcher";
 import type { ProviderModelConnectionTestResultDto } from "@/shared/types/api";
 import type { ConfigDiagnostic } from "@/shared/types/extensions";
@@ -817,7 +818,8 @@ function ProfilePicker({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
 
-  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? profiles[0];
+  const sortedProfiles = useMemo(() => sortAgentProfilesByName(profiles), [profiles]);
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? sortedProfiles[0];
 
   useLayoutEffect(() => {
     if (!isOpen || !triggerRef.current) return;
@@ -879,7 +881,7 @@ function ProfilePicker({
               style={dropdownStyle}
               className="z-[100] overflow-y-auto rounded-xl border border-app-border bg-app-surface p-1 shadow-lg"
             >
-              {profiles.map((profile) => (
+              {sortedProfiles.map((profile) => (
                 <div
                   key={profile.id}
                   className={cn(

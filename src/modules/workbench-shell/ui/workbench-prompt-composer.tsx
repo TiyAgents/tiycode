@@ -58,6 +58,7 @@ import {
   resolveProfileModelByTier,
 } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
+import { sortAgentProfilesByName } from "@/modules/settings-center/model/profile-utils";
 import type { SkillRecord } from "@/shared/types/extensions";
 import type { RunMode } from "@/shared/types/api";
 import { indexFilterFiles, type FileFilterMatch } from "@/services/bridge";
@@ -1102,6 +1103,7 @@ export function WorkbenchPromptComposer({
     }
     return agentProfiles[0] ?? null;
   }, [activeAgentProfileId, agentProfiles, allowMissingActiveProfile]);
+  const sortedAgentProfiles = useMemo(() => sortAgentProfilesByName(agentProfiles), [agentProfiles]);
   const hasMissingActiveProfile =
     allowMissingActiveProfile && Boolean(activeAgentProfileId) && activeProfile === null;
   const canSwitchProfiles = agentProfiles.length > 0;
@@ -1761,7 +1763,7 @@ export function WorkbenchPromptComposer({
                         <ModelSelectorList className="max-h-[150px] rounded-lg border border-app-border/55 bg-app-surface/45 p-1">
                           <ModelSelectorEmpty>{t("composer.noProfileAvailable")}</ModelSelectorEmpty>
                           <ModelSelectorGroup className="p-0">
-                            {agentProfiles.map((profile) => (
+                            {sortedAgentProfiles.map((profile) => (
                               <ProfileSelectorItem
                                 isActive={profile.id === activeAgentProfileId}
                                 key={profile.id}
