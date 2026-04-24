@@ -11,6 +11,7 @@ struct ToolCallRow {
     tool_call_id: String,
     run_id: String,
     thread_id: String,
+    helper_id: Option<String>,
     tool_name: String,
     tool_input_json: String,
     tool_output_json: Option<String>,
@@ -27,6 +28,7 @@ impl ToolCallRow {
             storage_id: self.storage_id,
             run_id: self.run_id,
             thread_id: self.thread_id,
+            helper_id: self.helper_id,
             tool_name: self.tool_name,
             tool_input: serde_json::from_str(&self.tool_input_json)
                 .unwrap_or(serde_json::Value::String(self.tool_input_json)),
@@ -46,6 +48,7 @@ pub struct ToolCallInsert {
     pub tool_call_id: String,
     pub run_id: String,
     pub thread_id: String,
+    pub helper_id: Option<String>,
     pub tool_name: String,
     pub tool_input_json: String,
     pub status: String,
@@ -54,12 +57,13 @@ pub struct ToolCallInsert {
 pub async fn insert(pool: &SqlitePool, r: &ToolCallInsert) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO tool_calls (id, run_id, thread_id, tool_name, tool_input_json, status, started_at, tool_call_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tool_calls (id, run_id, thread_id, helper_id, tool_name, tool_input_json, status, started_at, tool_call_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&r.id)
     .bind(&r.run_id)
     .bind(&r.thread_id)
+    .bind(&r.helper_id)
     .bind(&r.tool_name)
     .bind(&r.tool_input_json)
     .bind(&r.status)
@@ -148,12 +152,32 @@ pub async fn list_by_run_ids(
     pool: &SqlitePool,
     run_ids: &[String],
 ) -> Result<Vec<ToolCallDto>, AppError> {
+    list_by_run_ids_with_visibility(pool, run_ids, ToolCallVisibility::All).await
+}
+
+pub async fn list_parent_visible_by_run_ids(
+    pool: &SqlitePool,
+    run_ids: &[String],
+) -> Result<Vec<ToolCallDto>, AppError> {
+    list_by_run_ids_with_visibility(pool, run_ids, ToolCallVisibility::ParentVisible).await
+}
+
+enum ToolCallVisibility {
+    All,
+    ParentVisible,
+}
+
+async fn list_by_run_ids_with_visibility(
+    pool: &SqlitePool,
+    run_ids: &[String],
+    visibility: ToolCallVisibility,
+) -> Result<Vec<ToolCallDto>, AppError> {
     if run_ids.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut query = QueryBuilder::new(
-        "SELECT id AS storage_id, COALESCE(tool_call_id, id) AS tool_call_id, run_id, thread_id, tool_name, tool_input_json, tool_output_json,
+        "SELECT id AS storage_id, COALESCE(tool_call_id, id) AS tool_call_id, run_id, thread_id, helper_id, tool_name, tool_input_json, tool_output_json,
                 status, approval_status, started_at, finished_at
          FROM tool_calls
          WHERE run_id IN (",
@@ -164,7 +188,16 @@ pub async fn list_by_run_ids(
             separated.push_bind(run_id);
         }
     }
-    query.push(") ORDER BY started_at ASC, id ASC");
+    query.push(")");
+    if matches!(visibility, ToolCallVisibility::ParentVisible) {
+        // `helper_id IS NULL` is the durable schema marker for top-level model tool calls.
+        // The colon check is a legacy-compatibility guard for helper-internal rows
+        // persisted before `helper_id` existed, whose ids were stored as
+        // `{helper-id-prefix}:{provider-tool-call-id}`. New helper rows should be
+        // excluded by `helper_id`, not by depending on provider id formatting.
+        query.push(" AND helper_id IS NULL AND instr(COALESCE(tool_call_id, id), ':') = 0");
+    }
+    query.push(" ORDER BY started_at ASC, id ASC");
 
     let rows = query
         .build_query_as::<ToolCallRow>()
@@ -242,11 +275,22 @@ mod tests {
         run_id: &str,
         thread_id: &str,
     ) -> ToolCallInsert {
+        insert_record_with_helper(storage_id, raw_id, run_id, thread_id, None)
+    }
+
+    fn insert_record_with_helper(
+        storage_id: &str,
+        raw_id: &str,
+        run_id: &str,
+        thread_id: &str,
+        helper_id: Option<&str>,
+    ) -> ToolCallInsert {
         ToolCallInsert {
             id: storage_id.to_string(),
             tool_call_id: raw_id.to_string(),
             run_id: run_id.to_string(),
             thread_id: thread_id.to_string(),
+            helper_id: helper_id.map(str::to_string),
             tool_name: "shell".to_string(),
             tool_input_json: serde_json::json!({ "command": "git status" }).to_string(),
             status: "requested".to_string(),
@@ -327,6 +371,50 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].id, "legacy-storage-1");
         assert_eq!(calls[0].storage_id, "legacy-storage-1");
+    }
+
+    #[tokio::test]
+    async fn list_parent_visible_by_run_ids_excludes_helper_internal_calls() {
+        let pool = setup_test_pool().await;
+
+        insert(
+            &pool,
+            &insert_record("storage-parent", "call_parent", "r1", "t1"),
+        )
+        .await
+        .expect("insert parent tool call");
+        insert(
+            &pool,
+            &insert_record_with_helper(
+                "storage-helper",
+                "019dbed5:call_helper",
+                "r1",
+                "t1",
+                Some("helper-1"),
+            ),
+        )
+        .await
+        .expect("insert helper tool call");
+        insert(
+            &pool,
+            &insert_record("storage-legacy-helper", "019dbed5:call_legacy", "r1", "t1"),
+        )
+        .await
+        .expect("insert legacy helper tool call");
+
+        let all_calls = list_by_run_ids(&pool, &["r1".to_string()])
+            .await
+            .expect("list all tool calls");
+        assert_eq!(all_calls.len(), 3);
+        assert_eq!(all_calls[1].helper_id.as_deref(), Some("helper-1"));
+
+        let parent_visible = list_parent_visible_by_run_ids(&pool, &["r1".to_string()])
+            .await
+            .expect("list parent-visible tool calls");
+
+        assert_eq!(parent_visible.len(), 1);
+        assert_eq!(parent_visible[0].id, "call_parent");
+        assert!(parent_visible[0].helper_id.is_none());
     }
 
     #[tokio::test]

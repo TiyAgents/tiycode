@@ -339,6 +339,7 @@ export interface ToolCallDto {
   storageId: string;
   runId: string;
   threadId: string;
+  helperId: string | null;
   toolName: string;
   toolInput: unknown;
   toolOutput: unknown | null;

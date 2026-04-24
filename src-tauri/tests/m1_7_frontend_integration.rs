@@ -252,6 +252,7 @@ fn test_thread_stream_event_reasoning_updated_serialization() {
         run_id: "run-1".into(),
         message_id: "reasoning-1".into(),
         reasoning: "Inspecting the repository layout".into(),
+        thinking_signature: None,
     };
 
     let json = serde_json::to_value(&event).unwrap();
@@ -261,6 +262,8 @@ fn test_thread_stream_event_reasoning_updated_serialization() {
         json["reasoning"].as_str().unwrap(),
         "Inspecting the repository layout"
     );
+    // thinking_signature is None → should be absent from JSON
+    assert!(json.get("thinking_signature").is_none());
 }
 
 #[test]
@@ -373,6 +376,7 @@ fn test_all_events_have_type_field() {
             run_id: "r".into(),
             message_id: "rm".into(),
             reasoning: "r".into(),
+            thinking_signature: None,
         },
         ThreadStreamEvent::QueueUpdated {
             run_id: "r".into(),
