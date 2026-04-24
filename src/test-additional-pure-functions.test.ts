@@ -21,14 +21,14 @@ describe("messagesToMarkdown", () => {
 
   it("converts user message to text", () => {
     const result = messagesToMarkdown([
-      { id: "1", role: "user", content: "Hello AI" },
+      { id: "1", role: "user", parts: [{ type: "text", text: "Hello AI" }] },
     ] as any);
     expect(result).toContain("Hello AI");
   });
 
   it("converts assistant message to text", () => {
     const result = messagesToMarkdown([
-      { id: "1", role: "assistant", content: "Hi there!" },
+      { id: "1", role: "assistant", parts: [{ type: "text", text: "Hi there!" }] },
     ] as any);
     expect(result).toContain("Hi there!");
   });
@@ -62,11 +62,17 @@ describe("ONBOARDING_STEPS", () => {
     expect(ONBOARDING_STEPS.length).toBeGreaterThan(0);
   });
 
-  it("each step has an id and label", () => {
+  it("each step is a non-empty string", () => {
     for (const step of ONBOARDING_STEPS) {
-      expect(step.id).toBeTruthy();
-      expect(step.label).toBeTruthy();
+      expect(typeof step).toBe("string");
+      expect(step.length).toBeGreaterThan(0);
     }
+  });
+
+  it("contains the expected steps", () => {
+    expect(ONBOARDING_STEPS).toContain("language-theme");
+    expect(ONBOARDING_STEPS).toContain("provider");
+    expect(ONBOARDING_STEPS).toContain("complete");
   });
 });
 
@@ -76,22 +82,18 @@ function makeTaskItem(overrides: Record<string, unknown> = {}): any {
   return {
     id: "task-1",
     title: "Test task",
-    status: "pending" as const,
-    stage: "todo" as const,
+    stage: "pending" as const,
     ...overrides,
   };
 }
 
-function makeBoard(tasks: any[] = []): any {
+function makeBoard(tasks: any[] = [], overrides: Record<string, unknown> = {}): any {
   return {
     id: "board-1",
     title: "Test board",
-    items: tasks,
-    stages: [
-      { id: "todo", title: "Todo", itemIds: [] },
-      { id: "doing", title: "Doing", itemIds: [] },
-      { id: "done", title: "Done", itemIds: [] },
-    ],
+    status: "in_progress",
+    tasks,
+    ...overrides,
   };
 }
 
@@ -102,67 +104,65 @@ describe("computeProgress", () => {
 
   it("returns 100 when all tasks done", () => {
     const board = makeBoard([
-      makeTaskItem({ status: "completed", stage: "done" }),
-      makeTaskItem({ status: "completed", stage: "done" }),
+      makeTaskItem({ id: "t1", stage: "completed" }),
+      makeTaskItem({ id: "t2", stage: "completed" }),
     ]);
-    // Need to put tasks in done stage
-    board.stages[2].itemIds = ["task-1", "task-2"];
     expect(computeProgress(board)).toBe(100);
   });
 
   it("returns 50 when half done", () => {
     const board = makeBoard([
-      makeTaskItem({ id: "t1", status: "completed", stage: "done" }),
-      makeTaskItem({ id: "t2", status: "pending", stage: "todo" }),
+      makeTaskItem({ id: "t1", stage: "completed" }),
+      makeTaskItem({ id: "t2", stage: "pending" }),
     ]);
-    board.stages[0].itemIds = ["t2"];
-    board.stages[2].itemIds = ["t1"];
     const progress = computeProgress(board);
-    expect(progress).toBeGreaterThanOrEqual(40);
-    expect(progress).toBeLessThanOrEqual(60);
+    expect(progress).toBe(50);
   });
 });
 
 describe("isBoardCompleted", () => {
   it("returns true when all tasks completed", () => {
     const board = makeBoard([
-      makeTaskItem({ status: "completed" }),
+      makeTaskItem({ stage: "completed" }),
     ]);
-    board.stages[2].itemIds = ["task-1"];
+    expect(isBoardCompleted(board)).toBe(true);
+  });
+
+  it("returns true when board status is completed", () => {
+    const board = makeBoard([makeTaskItem()], { status: "completed" });
     expect(isBoardCompleted(board)).toBe(true);
   });
 
   it("returns false when pending tasks exist", () => {
-    const board = makeBoard([makeTaskItem()]);
-    board.stages[0].itemIds = ["task-1"];
+    const board = makeBoard([makeTaskItem({ stage: "pending" })]);
     expect(isBoardCompleted(board)).toBe(false);
   });
 });
 
 describe("hasFailedTasks", () => {
   it("returns true when a task failed", () => {
-    const board = makeBoard([makeTaskItem({ status: "failed" })]);
+    const board = makeBoard([makeTaskItem({ stage: "failed" })]);
     expect(hasFailedTasks(board)).toBe(true);
   });
 
   it("returns false when no failures", () => {
-    const board = makeBoard([makeTaskItem({ status: "completed" })]);
+    const board = makeBoard([makeTaskItem({ stage: "completed" })]);
     expect(hasFailedTasks(board)).toBe(false);
   });
 });
 
 describe("getActiveTask", () => {
-  it("returns running task if exists", () => {
+  it("returns in_progress task if exists", () => {
     const board = makeBoard([
-      makeTaskItem({ id: "t1", status: "running" }),
-      makeTaskItem({ id: "t2", status: "pending" }),
+      makeTaskItem({ id: "t1", stage: "in_progress" }),
+      makeTaskItem({ id: "t2", stage: "pending" }),
     ]);
     const active = getActiveTask(board);
     expect(active?.id).toBe("t1");
   });
 
-  it("returns undefined when no running task", () => {
-    const board = makeBoard([makeTaskItem()]);
+  it("returns undefined when no in_progress task", () => {
+    const board = makeBoard([makeTaskItem({ stage: "pending" })]);
     expect(getActiveTask(board)).toBeUndefined();
   });
 });
@@ -170,16 +170,16 @@ describe("getActiveTask", () => {
 describe("getNextPendingTask", () => {
   it("returns first pending task", () => {
     const board = makeBoard([
-      makeTaskItem({ id: "t1", status: "completed" }),
-      makeTaskItem({ id: "t2", status: "pending" }),
-      makeTaskItem({ id: "t3", status: "pending" }),
+      makeTaskItem({ id: "t1", stage: "completed" }),
+      makeTaskItem({ id: "t2", stage: "pending" }),
+      makeTaskItem({ id: "t3", stage: "pending" }),
     ]);
     const next = getNextPendingTask(board);
     expect(next?.id).toBe("t2");
   });
 
   it("returns undefined when no pending tasks", () => {
-    const board = makeBoard([makeTaskItem({ status: "completed" })]);
+    const board = makeBoard([makeTaskItem({ stage: "completed" })]);
     expect(getNextPendingTask(board)).toBeUndefined();
   });
 });
