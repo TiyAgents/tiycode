@@ -269,8 +269,8 @@ function getApprovalPolicyOptions(t: TFunc) {
 }
 
 const MINIMAX_BASE_URL_OPTIONS = [
-  "https://api.minimax.io/anthropic",
-  "https://api.minimaxi.com/anthropic",
+  "https://api.minimax.io/anthropic/v1",
+  "https://api.minimaxi.com/anthropic/v1",
 ] as const;
 
 function deriveWorkspaceNameFromPath(path: string) {
