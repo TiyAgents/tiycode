@@ -1,0 +1,1 @@
+export const PANE_AUTO_REFRESH_INTERVAL_MS = 30_000;

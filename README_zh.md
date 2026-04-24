@@ -59,6 +59,10 @@ brew upgrade tiycode
 
 macOS、Windows 和 Linux 的预编译安装包可在 [Releases](https://github.com/TiyAgents/tiycode/releases) 页面下载。
 
+> **macOS 版本要求：** TiyCode 当前要求 **macOS 10.15 Catalina 及以上版本**。为了获得更好的兼容性，建议使用较新的受支持 macOS 版本。
+>
+> **Windows 版本要求：** TiyCode 当前要求 **Windows 10 1809（build 17763）及以上版本**。为了获得更好的兼容性，建议使用最新可用的 **Windows 10 或 Windows 11**。桌面应用还依赖 **Microsoft Edge WebView2 Runtime**。在 Windows 11 上它通常已预装；在受支持的 Windows 10 系统上，Tauri 安装器一般会自动完成安装或更新。如果处于离线环境，你可能需要先手动安装 WebView2，随后再启动应用。
+
 ### 从源码构建
 
 #### 环境准备
