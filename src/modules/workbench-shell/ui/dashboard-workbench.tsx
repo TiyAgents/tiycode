@@ -2407,7 +2407,7 @@ export function DashboardWorkbench() {
     const commandBehavior = submission.command?.behavior ?? null;
     const effectivePrompt = submission.effectivePrompt;
 
-    if (!effectivePrompt) {
+    if (!effectivePrompt.trim()) {
       return;
     }
 

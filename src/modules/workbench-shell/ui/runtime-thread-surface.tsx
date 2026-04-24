@@ -3187,9 +3187,10 @@ export function RuntimeThreadSurface({
           runMode: runModeOverride,
         }
       : submissionOrPrompt;
-    const prompt = submission.effectivePrompt.trim();
+    const prompt = submission.effectivePrompt ?? "";
+    const trimmedPrompt = prompt.trim();
 
-    if (!prompt) {
+    if (!trimmedPrompt) {
       setComposerError("Type a prompt before starting a run.");
       return;
     }
@@ -3633,8 +3634,9 @@ export function RuntimeThreadSurface({
   }, [helpers]);
 
   const handleSubmit = useCallback(async (submission: ComposerSubmission) => {
-    const prompt = submission.effectivePrompt?.trim() ?? "";
-    if (!prompt) {
+    const prompt = submission.effectivePrompt ?? "";
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) {
       return;
     }
 

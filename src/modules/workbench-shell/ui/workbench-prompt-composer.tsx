@@ -140,7 +140,8 @@ function buildSubmissionFromPromptInput(
   runMode: RunMode,
   referencedFiles: ReadonlyArray<ComposerReferencedFile>,
 ): ComposerSubmission {
-  const trimmedText = message.text?.trim() ?? "";
+  const rawText = message.text ?? "";
+  const trimmedText = rawText.trim();
   const attachments = mapComposerAttachments(message.files);
   const parsedCommand = trimmedText ? parseSlashCommandInput(trimmedText, registry) : null;
   const referencedFilesMetadata = referencedFiles.length > 0
@@ -152,10 +153,10 @@ function buildSubmissionFromPromptInput(
     : [];
 
   if (!parsedCommand?.command) {
-    const effectivePrompt = trimmedText;
+    const effectivePrompt = rawText;
     return {
       kind: "plain",
-      displayText: trimmedText,
+      displayText: rawText,
       effectivePrompt,
       rawMessage: message,
       attachments,
@@ -163,7 +164,7 @@ function buildSubmissionFromPromptInput(
         ? {
             composer: {
               kind: "plain",
-              displayText: trimmedText,
+              displayText: rawText,
               effectivePrompt,
               referencedFiles: referencedFilesMetadata,
             },
@@ -180,7 +181,7 @@ function buildSubmissionFromPromptInput(
 
   return {
     kind: "command",
-    displayText: trimmedText,
+    displayText: rawText,
     effectivePrompt,
     rawMessage: message,
     attachments,
@@ -198,7 +199,7 @@ function buildSubmissionFromPromptInput(
     metadata: {
       composer: {
         kind: "command",
-        displayText: trimmedText,
+        displayText: rawText,
         effectivePrompt,
         referencedFiles: referencedFilesMetadata,
         command: {

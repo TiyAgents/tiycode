@@ -334,8 +334,9 @@ export function buildComposerSubmission(
   registry: ReadonlyArray<ComposerCommandDescriptor>,
   runMode?: RunMode,
 ): ComposerSubmission | null {
-  const displayText = message.text?.trim() ?? "";
-  if (!displayText && message.files.length === 0) {
+  const rawText = message.text ?? "";
+  const trimmedText = rawText.trim();
+  if (!trimmedText && message.files.length === 0) {
     return null;
   }
 
@@ -345,12 +346,12 @@ export function buildComposerSubmission(
     name: file.filename?.trim() || `附件 ${index + 1}`,
     url: file.url ?? null,
   }));
-  const parsedCommand = displayText ? parseSlashCommandInput(displayText, registry) : null;
+  const parsedCommand = trimmedText ? parseSlashCommandInput(trimmedText, registry) : null;
   if (!parsedCommand?.command) {
     return {
       kind: "plain",
-      displayText,
-      effectivePrompt: displayText,
+      displayText: rawText,
+      effectivePrompt: rawText,
       rawMessage: message,
       attachments,
       metadata: null,
@@ -372,7 +373,7 @@ export function buildComposerSubmission(
 
   return {
     kind: "command",
-    displayText,
+    displayText: rawText,
     effectivePrompt,
     rawMessage: message,
     attachments,
@@ -380,7 +381,7 @@ export function buildComposerSubmission(
     metadata: {
       composer: {
         kind: "command",
-        displayText,
+        displayText: rawText,
         effectivePrompt,
         command: invocation,
       },
