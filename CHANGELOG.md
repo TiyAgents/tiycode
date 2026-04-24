@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-04-24
+### :sparkles: New Features
+- [`0e1bc5b`](https://github.com/TiyAgents/tiycode/commit/0e1bc5bca862987848bad604e6c2be59ebd7eeed) - **workbench**: add auto refresh for drawer panels *(PR [#120](https://github.com/TiyAgents/tiycode/pull/120) by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`98f172c`](https://github.com/TiyAgents/tiycode/commit/98f172cd61da9e8c6e636bb1edd14c0cd293584b) - **workbench**: 🐛 Fix scroll jump when sending messages in existing threads *(PR [#118](https://github.com/TiyAgents/tiycode/pull/118) by [@HayWolf](https://github.com/HayWolf))*
+- [`73cff97`](https://github.com/TiyAgents/tiycode/commit/73cff971cda56c4259a5380417d6978cebff6a59) - **settings**: 🐛 auto-select newly added provider in settings panel *(PR [#121](https://github.com/TiyAgents/tiycode/pull/121) by [@HayWolf](https://github.com/HayWolf))*
+
+### :white_check_mark: Tests
+- [`742cad8`](https://github.com/TiyAgents/tiycode/commit/742cad864d6d53dd42c9542eee0c3b1dc2ee176f) - **lib**: ✅ add tests for hunyuan model pattern matching *(PR [#119](https://github.com/TiyAgents/tiycode/pull/119) by [@jorben](https://github.com/jorben))*
+
+### :wrench: Chores
+- [`e798224`](https://github.com/TiyAgents/tiycode/commit/e798224969fc14316240e42cddd2c26ffef93081) - **deps**: 🔧 upgrade dependency versions *(PR [#117](https://github.com/TiyAgents/tiycode/pull/117) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.3.4] - 2026-04-23
 ### :sparkles: New Features
 - [`7c9b5ee`](https://github.com/TiyAgents/tiycode/commit/7c9b5ee8faa030f5569a2da63e31b62d3b2b5610) - **title**: ✨ Add thread title fallback and context handling *(PR [#110](https://github.com/TiyAgents/tiycode/pull/110) by [@jorben](https://github.com/jorben))*
@@ -593,3 +608,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.2]: https://github.com/TiyAgents/tiycode/compare/0.3.1...0.3.2
 [0.3.3]: https://github.com/TiyAgents/tiycode/compare/0.3.2...0.3.3
 [0.3.4]: https://github.com/TiyAgents/tiycode/compare/0.3.3...0.3.4
+[0.3.5]: https://github.com/TiyAgents/tiycode/compare/0.3.4...0.3.5
