@@ -3517,6 +3517,7 @@ export function DashboardWorkbench() {
                             error={composerError}
                             onErrorMessageChange={setComposerError}
                             onRunModeChange={setNewThreadRunMode}
+                            onOpenProfileSettings={() => handleOpenSettings("general")}
                             onSelectAgentProfile={handleSelectAgentProfileForThread}
                             onStop={() => undefined}
                             onSubmit={handleComposerSubmit}
@@ -3637,6 +3638,7 @@ export function DashboardWorkbench() {
                         onConsumeInitialPrompt={handleRuntimeConsumeInitialPrompt}
                         onContextUsageChange={setRuntimeContextUsage}
                         onRunStateChange={handleRuntimeThreadRunStateChange}
+                        onOpenProfileSettings={() => handleOpenSettings("general")}
                         onSelectAgentProfile={handleSelectAgentProfileForThread}
                         onThreadTitleChange={handleRuntimeThreadTitleChange}
                         providers={providers}

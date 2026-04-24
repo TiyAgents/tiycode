@@ -187,6 +187,7 @@ type RuntimeThreadSurfaceProps = {
   onConsumeInitialPrompt?: (id: string) => void;
   onContextUsageChange?: (usage: ThreadContextUsage | null) => void;
   onRunStateChange?: (state: RunState) => void;
+  onOpenProfileSettings?: () => void;
   onSelectAgentProfile: (id: string) => void;
   onThreadTitleChange?: (threadId: string, title: string) => void;
   providers: ReadonlyArray<ProviderEntry>;
@@ -2212,6 +2213,7 @@ export function RuntimeThreadSurface({
   onConsumeInitialPrompt,
   onContextUsageChange,
   onRunStateChange,
+  onOpenProfileSettings,
   onSelectAgentProfile,
   onThreadTitleChange,
   providers,
@@ -4797,6 +4799,7 @@ export function RuntimeThreadSurface({
             error={composerError}
             onErrorMessageChange={setComposerError}
             onRunModeChange={setSelectedRunMode}
+            onOpenProfileSettings={onOpenProfileSettings}
             onSelectAgentProfile={onSelectAgentProfile}
             onStop={() => {
               if (!threadId) {
