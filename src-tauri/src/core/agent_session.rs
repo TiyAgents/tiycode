@@ -171,7 +171,8 @@ pub async fn build_session_spec(
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
-    let history_tool_calls = tool_call_repo::list_by_run_ids(pool, &history_run_ids).await?;
+    let history_tool_calls =
+        tool_call_repo::list_parent_visible_by_run_ids(pool, &history_run_ids).await?;
     let latest_historical_run =
         run_repo::find_latest_with_prompt_usage_by_thread_excluding_run(pool, thread_id, run_id)
             .await?;
@@ -550,6 +551,7 @@ impl AgentSession {
                 tool_call_id: tool_call_id.to_string(),
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
+                helper_id: None,
                 tool_name: tool_name.to_string(),
                 tool_input_json: tool_input.to_string(),
                 status: "requested".to_string(),
@@ -721,6 +723,7 @@ impl AgentSession {
                 tool_call_id: tool_call_id.to_string(),
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
+                helper_id: None,
                 tool_name: tool_name.to_string(),
                 tool_input_json: tool_input.to_string(),
                 status: "requested".to_string(),
@@ -1008,6 +1011,7 @@ impl AgentSession {
                 tool_call_id: tool_call_id.to_string(),
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
+                helper_id: None,
                 tool_name: tool_name.to_string(),
                 tool_input_json: tool_input.to_string(),
                 status: "running".to_string(),
@@ -2328,19 +2332,46 @@ pub(crate) fn convert_history_messages(
 
             // No preceding assistant text to merge into — create a standalone
             // assistant message (Phase 4 will attach any pending thinking).
-            let assistant = AssistantMessage::builder()
-                .content(vec![tool_call_block])
-                .api(effective_api_for_model(model))
-                .provider(model.provider.clone())
-                .model(model.id.clone())
-                .usage(Usage::default())
-                .stop_reason(StopReason::ToolUse)
-                .build()
-                .expect("history tool-call assistant message should always build");
-            timeline.push((
-                SortKey::before_position(insert_pos, tc_idx * 2),
-                TimelineEntry::Msg(AgentMessage::Assistant(assistant)),
-            ));
+            //
+            // However, if a previous standalone tool-call assistant was already
+            // inserted at the same insert_pos (meaning the two tool calls come
+            // from the same API response), merge into that message instead of
+            // creating yet another standalone.  This avoids the problem where
+            // only the first standalone gets reasoning_content from Phase 4.
+            let merged_into_prev_standalone = timeline
+                .iter()
+                .rposition(|(key, entry)| {
+                    key.position == insert_pos
+                        && key.sub == 0
+                        && matches!(entry, TimelineEntry::Msg(AgentMessage::Assistant(_)))
+                })
+                .and_then(|tl_idx| {
+                    if let (_, TimelineEntry::Msg(AgentMessage::Assistant(ref mut prev))) =
+                        &mut timeline[tl_idx]
+                    {
+                        prev.content.push(tool_call_block.clone());
+                        Some(tl_idx)
+                    } else {
+                        None
+                    }
+                })
+                .is_some();
+
+            if !merged_into_prev_standalone {
+                let assistant = AssistantMessage::builder()
+                    .content(vec![tool_call_block])
+                    .api(effective_api_for_model(model))
+                    .provider(model.provider.clone())
+                    .model(model.id.clone())
+                    .usage(Usage::default())
+                    .stop_reason(StopReason::ToolUse)
+                    .build()
+                    .expect("history tool-call assistant message should always build");
+                timeline.push((
+                    SortKey::before_position(insert_pos, tc_idx * 2),
+                    TimelineEntry::Msg(AgentMessage::Assistant(assistant)),
+                ));
+            }
 
             // Build the tool result message (truncated to avoid blowing up context).
             let result_text = tc
@@ -5471,6 +5502,7 @@ Used for prompt assembly coverage.
             storage_id: "st-1".to_string(),
             run_id: "run-1".to_string(),
             thread_id: "thread-1".to_string(),
+            helper_id: None,
             tool_name: "shell".to_string(),
             tool_input: serde_json::json!({"command": "ls"}),
             tool_output: Some(serde_json::json!("file.txt")),
@@ -5535,6 +5567,133 @@ Used for prompt assembly coverage.
                 assert!(assistant.content[0].is_text());
             }
             other => panic!("expected text Assistant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn convert_history_messages_merges_multiple_standalone_tool_calls_at_same_position() {
+        // Scenario: one DeepSeek response emits reasoning + two tool calls and no text.
+        // Both tool calls insert before the same later assistant text message, so they
+        // must be reconstructed as a single assistant message sharing reasoning_content.
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Run two commands".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-reasoning".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "I need to run two independent commands.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-assistant".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Both commands finished.".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:10.000Z".to_string(),
+            },
+        ];
+
+        let tool_calls = vec![
+            ToolCallDto {
+                id: "tc-1".to_string(),
+                storage_id: "st-1".to_string(),
+                run_id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                helper_id: None,
+                tool_name: "shell".to_string(),
+                tool_input: serde_json::json!({"command": "pwd"}),
+                tool_output: Some(serde_json::json!("/tmp/project")),
+                status: "completed".to_string(),
+                approval_status: None,
+                started_at: "2026-01-01T00:00:02.000Z".to_string(),
+                finished_at: Some("2026-01-01T00:00:03.000Z".to_string()),
+            },
+            ToolCallDto {
+                id: "tc-2".to_string(),
+                storage_id: "st-2".to_string(),
+                run_id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                helper_id: None,
+                tool_name: "shell".to_string(),
+                tool_input: serde_json::json!({"command": "ls"}),
+                tool_output: Some(serde_json::json!("file.txt")),
+                status: "completed".to_string(),
+                approval_status: None,
+                started_at: "2026-01-01T00:00:04.000Z".to_string(),
+                finished_at: Some("2026-01-01T00:00:05.000Z".to_string()),
+            },
+        ];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &tool_calls, model);
+
+        // Expected: User → Assistant[Thinking, ToolCall1, ToolCall2]
+        // → ToolResult1 → ToolResult2 → Assistant[Text]
+        assert_eq!(history.len(), 5, "unexpected history: {history:?}");
+        assert!(matches!(&history[0], AgentMessage::User(_)));
+
+        match &history[1] {
+            AgentMessage::Assistant(assistant) => {
+                assert_eq!(
+                    assistant.content.len(),
+                    3,
+                    "assistant should contain Thinking + both ToolCalls"
+                );
+                let thinking = assistant.content[0].as_thinking().unwrap();
+                assert_eq!(thinking.thinking, "I need to run two independent commands.");
+                assert_eq!(
+                    thinking.thinking_signature.as_deref(),
+                    Some("reasoning_content")
+                );
+                assert!(assistant.content[1].is_tool_call());
+                assert!(assistant.content[2].is_tool_call());
+                assert_eq!(assistant.stop_reason, StopReason::ToolUse);
+            }
+            other => panic!("expected merged standalone Assistant, got {:?}", other),
+        }
+
+        match &history[2] {
+            AgentMessage::ToolResult(result) => assert_eq!(result.tool_call_id, "tc-1"),
+            other => panic!("expected first ToolResult, got {:?}", other),
+        }
+        match &history[3] {
+            AgentMessage::ToolResult(result) => assert_eq!(result.tool_call_id, "tc-2"),
+            other => panic!("expected second ToolResult, got {:?}", other),
+        }
+
+        match &history[4] {
+            AgentMessage::Assistant(assistant) => {
+                assert_eq!(assistant.content.len(), 1);
+                assert!(assistant.content[0].is_text());
+                assert_eq!(
+                    assistant.content[0].as_text().unwrap().text,
+                    "Both commands finished."
+                );
+            }
+            other => panic!("expected final text Assistant, got {:?}", other),
         }
     }
 
@@ -5622,6 +5781,7 @@ Used for prompt assembly coverage.
             storage_id: "st-1".to_string(),
             run_id: "run-1".to_string(),
             thread_id: "t1".to_string(),
+            helper_id: None,
             tool_name: "shell".to_string(),
             tool_input: serde_json::json!({"command": "ls"}),
             tool_output: Some(serde_json::json!("file.txt")),
@@ -5790,6 +5950,7 @@ Used for prompt assembly coverage.
                 storage_id: "st-1".to_string(),
                 run_id: "run-1".to_string(),
                 thread_id: "t1".to_string(),
+                helper_id: None,
                 tool_name: "shell".to_string(),
                 tool_input: serde_json::json!({"command": "ls"}),
                 tool_output: Some(serde_json::json!("out1")),
@@ -5804,6 +5965,7 @@ Used for prompt assembly coverage.
                 storage_id: "st-2".to_string(),
                 run_id: "run-1".to_string(),
                 thread_id: "t1".to_string(),
+                helper_id: None,
                 tool_name: "shell".to_string(),
                 tool_input: serde_json::json!({"command": "pwd"}),
                 tool_output: Some(serde_json::json!("out2")),

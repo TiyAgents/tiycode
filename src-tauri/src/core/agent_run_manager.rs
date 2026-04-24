@@ -543,7 +543,7 @@ impl AgentRunManager {
             .into_iter()
             .collect();
         let compact_tool_calls =
-            tool_call_repo::list_by_run_ids(&self.pool, &compact_run_ids).await?;
+            tool_call_repo::list_parent_visible_by_run_ids(&self.pool, &compact_run_ids).await?;
         let workspace_path = workspace_repo::find_by_id(&self.pool, &thread.workspace_id)
             .await?
             .map(|workspace| workspace.canonical_path)

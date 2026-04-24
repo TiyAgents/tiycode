@@ -17,6 +17,7 @@ dist-ssr
 .tmp-tauri-scaffold
 .superpowers
 .workbuddy
+.firecrawl/
 
 # Rust
 src-tauri/target

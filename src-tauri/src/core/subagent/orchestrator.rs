@@ -183,6 +183,7 @@ impl HelperAgentOrchestrator {
             let progress_state_ref = Arc::clone(&progress_state_ref);
             let progress_event_tx = progress_event_tx.clone();
             let helper_id_for_events = helper_id_for_events.clone();
+            let helper_id_for_storage = helper_id_for_events.clone();
             let helper_started_at_for_events = helper_started_at_for_events.clone();
 
             async move {
@@ -207,6 +208,7 @@ impl HelperAgentOrchestrator {
                         tool_call_id: persisted_tool_call_id.clone(),
                         run_id: helper_run_id.clone(),
                         thread_id: helper_thread_id.clone(),
+                        helper_id: Some(helper_id_for_storage.clone()),
                         tool_name: tool_name.clone(),
                         tool_input_json: tool_input.to_string(),
                         status: "requested".to_string(),

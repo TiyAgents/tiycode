@@ -197,6 +197,7 @@ pub struct ToolCallDto {
     pub storage_id: String,
     pub run_id: String,
     pub thread_id: String,
+    pub helper_id: Option<String>,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub tool_output: Option<serde_json::Value>,
