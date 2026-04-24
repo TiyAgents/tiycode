@@ -1,4 +1,4 @@
-//! M1.6 — Tool Gateway & Policy Engine tests
+//! Tool Gateway and Policy Engine tests
 //!
 //! Acceptance criteria:
 //! - require-approval tools trigger confirmation UI

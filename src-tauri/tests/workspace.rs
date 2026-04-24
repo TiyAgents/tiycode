@@ -1,4 +1,4 @@
-//! M1.2 — Workspace management tests
+//! Workspace management tests
 //!
 //! Acceptance criteria:
 //! - Add workspace via folder, path canonicalized, stored in DB

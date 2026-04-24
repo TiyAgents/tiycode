@@ -1,4 +1,4 @@
-//! M1.7 — Frontend full integration tests (Rust-side)
+//! Frontend integration DTO tests (Rust-side)
 //!
 //! Acceptance criteria:
 //! - ThreadStreamEvent covers all event types for the frontend adapter

@@ -1,4 +1,4 @@
-//! M1.3 — Settings & configuration system tests
+//! Settings and configuration system tests
 //!
 //! Acceptance criteria:
 //! - Settings persist across restarts (no localStorage dependency)

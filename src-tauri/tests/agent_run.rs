@@ -1,4 +1,4 @@
-//! M1.5 — Built-in agent runtime tests
+//! Built-in agent runtime tests
 //!
 //! Acceptance criteria:
 //! - Run state machine: Created → Dispatching → Running ⇄ WaitingApproval → Completed/Failed/Cancelled/Interrupted

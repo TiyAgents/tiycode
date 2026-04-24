@@ -1,4 +1,4 @@
-//! M2.2a — Git-backed TreeView tests
+//! Git tree and repository operation tests
 
 use std::path::Path;
 use std::process::Command;

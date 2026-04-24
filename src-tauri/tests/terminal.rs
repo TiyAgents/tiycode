@@ -1,3 +1,5 @@
+//! Terminal manager tests
+
 mod test_helpers;
 
 use std::ffi::OsString;

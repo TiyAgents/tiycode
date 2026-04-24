@@ -1,4 +1,4 @@
-//! M2.4 — Workspace worktree management tests
+//! Workspace worktree management tests
 //!
 //! Covers:
 //! - `WorktreeManager::create` produces a sibling worktree directory,

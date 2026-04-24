@@ -1,4 +1,4 @@
-//! M1.1 — Project infrastructure & database layer tests
+//! Infrastructure and database layer tests
 //!
 //! Acceptance criteria:
 //! - `cargo build` passes; app startup creates `$HOME/.tiy/db/tiycode.db` with 17 tables

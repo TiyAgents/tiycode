@@ -1,4 +1,4 @@
-//! M1.8 — Index basics tests
+//! Index basics tests
 //!
 //! Acceptance criteria:
 //! - File tree loads for medium repo < 300ms

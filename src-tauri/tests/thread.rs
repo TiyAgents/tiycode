@@ -1,4 +1,4 @@
-//! M1.4 — Thread core tests
+//! Thread core tests
 //!
 //! Acceptance criteria:
 //! - Thread belongs to workspace, sidebar sorted by last_active_at

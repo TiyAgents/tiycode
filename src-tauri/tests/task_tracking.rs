@@ -1,4 +1,4 @@
-//! M2.3 — Task Tracking tests
+//! Task tracking tests
 //!
 //! Acceptance criteria:
 //! - Task boards can be created with steps
