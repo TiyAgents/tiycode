@@ -73,6 +73,7 @@ const zhCN = {
   "composer.noProfileAvailable": "未找到可用的 profile。",
   "composer.agentProfilesTitle": "智能体配置",
   "composer.profileSelectLabel": "切换当前 Profile",
+  "composer.activeProfileLabel": "当前 Profile",
   "composer.editProfiles": "在设置中编辑 Profile",
   "composer.profileDetailsTitle": "Profile 详情",
   "composer.profileResponseStyle": "风格",

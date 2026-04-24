@@ -75,6 +75,7 @@ const en: Record<TranslationKey, string> = {
   "composer.noProfileAvailable": "No available profile found.",
   "composer.agentProfilesTitle": "Agent Profiles",
   "composer.profileSelectLabel": "Switch the active profile",
+  "composer.activeProfileLabel": "Active Profile",
   "composer.editProfiles": "Edit profiles in Settings",
   "composer.profileDetailsTitle": "Profile details",
   "composer.profileResponseStyle": "Style",
