@@ -443,4 +443,188 @@ mod tests {
         assert_eq!(latest.usage.input_tokens, 0);
         assert_eq!(latest.usage.cache_read_tokens, 64);
     }
+
+    #[tokio::test]
+    async fn insert_run_persists_fields() {
+        let pool = setup_test_pool().await;
+        let r = RunInsert {
+            id: "run-1".into(),
+            thread_id: "t1".into(),
+            profile_id: Some("prof-1".into()),
+            run_mode: "default".into(),
+            provider_id: Some("prov-1".into()),
+            model_id: Some("gpt-4".into()),
+            effective_model_plan_json: Some("{}".into()),
+            status: "running".into(),
+        };
+        insert(&pool, &r).await.unwrap();
+
+        let found = find_active_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.id, "run-1");
+        assert_eq!(found.status, "running");
+    }
+
+    #[tokio::test]
+    async fn update_status_sets_finished_at_for_terminal() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+
+        update_status(&pool, "run-1", "completed").await.unwrap();
+
+        let found = find_latest_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn update_status_for_non_terminal_does_not_set_finished_at() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+
+        update_status(&pool, "run-1", "waiting_approval")
+            .await
+            .unwrap();
+
+        let found = find_latest_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.status, "waiting_approval");
+    }
+
+    #[tokio::test]
+    async fn update_usage_persists_token_counts() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+
+        let usage = tiycore::types::Usage {
+            input: 500,
+            output: 300,
+            cache_read: 100,
+            cache_write: 50,
+            total_tokens: 950,
+            cost: tiycore::types::UsageCost::default(),
+        };
+        update_usage(&pool, "run-1", &usage).await.unwrap();
+
+        let found = find_latest_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.usage.input_tokens, 500);
+        assert_eq!(found.usage.total_tokens, 950);
+    }
+
+    #[tokio::test]
+    async fn set_error_message_persists() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+
+        set_error_message(&pool, "run-1", "oops").await.unwrap();
+
+        let found = find_latest_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.error_message, Some("oops".into()));
+    }
+
+    #[tokio::test]
+    async fn find_effective_model_plan_json_returns_json() {
+        let pool = setup_test_pool().await;
+        let r = RunInsert {
+            id: "run-1".into(),
+            thread_id: "t1".into(),
+            profile_id: None,
+            run_mode: "default".into(),
+            provider_id: None,
+            model_id: None,
+            effective_model_plan_json: Some(r#"{"primary":{"modelDisplayName":"GPT-4"}}"#.into()),
+            status: "completed".into(),
+        };
+        insert(&pool, &r).await.unwrap();
+
+        let json = find_effective_model_plan_json(&pool, "run-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert!(json.contains("GPT-4"));
+    }
+
+    #[tokio::test]
+    async fn find_effective_model_plan_json_returns_none_for_missing() {
+        let pool = setup_test_pool().await;
+        let json = find_effective_model_plan_json(&pool, "nope").await.unwrap();
+        assert!(json.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_active_by_thread_skips_terminal_and_waiting_approval() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        // run-1 is 'completed' status → not active
+        assert!(find_active_by_thread(&pool, "t1").await.unwrap().is_none());
+
+        let r = RunInsert {
+            id: "run-2".into(),
+            thread_id: "t1".into(),
+            profile_id: None,
+            run_mode: "default".into(),
+            provider_id: None,
+            model_id: None,
+            effective_model_plan_json: None,
+            status: "running".into(),
+        };
+        insert(&pool, &r).await.unwrap();
+        assert!(find_active_by_thread(&pool, "t1").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn list_thread_ids_with_active_runs_finds_running() {
+        let pool = setup_test_pool().await;
+        let r = RunInsert {
+            id: "run-1".into(),
+            thread_id: "t1".into(),
+            profile_id: None,
+            run_mode: "default".into(),
+            provider_id: None,
+            model_id: None,
+            effective_model_plan_json: None,
+            status: "running".into(),
+        };
+        insert(&pool, &r).await.unwrap();
+
+        let ids = list_thread_ids_with_active_runs(&pool).await.unwrap();
+        assert!(ids.contains(&"t1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn interrupt_active_runs_marks_non_terminal() {
+        let pool = setup_test_pool().await;
+        let r = RunInsert {
+            id: "run-1".into(),
+            thread_id: "t1".into(),
+            profile_id: None,
+            run_mode: "default".into(),
+            provider_id: None,
+            model_id: None,
+            effective_model_plan_json: None,
+            status: "running".into(),
+        };
+        insert(&pool, &r).await.unwrap();
+
+        let affected = interrupt_active_runs(&pool).await.unwrap();
+        assert_eq!(affected, 1);
+
+        let found = find_latest_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.status, "interrupted");
+    }
 }

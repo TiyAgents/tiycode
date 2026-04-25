@@ -337,3 +337,294 @@ pub async fn set_default(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
     tx.commit().await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        pool
+    }
+
+    fn make_ws(
+        id: &str,
+        name: &str,
+        path: &str,
+        is_default: bool,
+        kind: WorkspaceKind,
+    ) -> WorkspaceRecord {
+        WorkspaceRecord {
+            id: id.into(),
+            name: name.into(),
+            path: path.into(),
+            canonical_path: path.into(),
+            display_path: path.into(),
+            is_default,
+            is_git: false,
+            auto_work_tree: false,
+            status: WorkspaceStatus::Ready,
+            last_validated_at: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            kind,
+            parent_workspace_id: None,
+            git_common_dir: None,
+            branch: None,
+            worktree_name: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_all_returns_workspaces_ordered() {
+        let pool = setup_test_pool().await;
+        insert(
+            &pool,
+            &make_ws("ws-2", "Beta", "/beta", false, WorkspaceKind::Repo),
+        )
+        .await
+        .unwrap();
+        insert(
+            &pool,
+            &make_ws("ws-1", "Alpha", "/alpha", true, WorkspaceKind::Repo),
+        )
+        .await
+        .unwrap();
+        insert(
+            &pool,
+            &make_ws("ws-3", "Alpha", "/alpha2", false, WorkspaceKind::Standalone),
+        )
+        .await
+        .unwrap();
+
+        let list = list_all(&pool).await.unwrap();
+        assert_eq!(list.len(), 3);
+        // Default first
+        assert_eq!(list[0].id, "ws-1");
+    }
+
+    #[tokio::test]
+    async fn find_by_id_returns_workspace() {
+        let pool = setup_test_pool().await;
+        insert(
+            &pool,
+            &make_ws("ws-1", "Test", "/test", false, WorkspaceKind::Repo),
+        )
+        .await
+        .unwrap();
+
+        let found = find_by_id(&pool, "ws-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.name, "Test");
+        assert_eq!(found.kind, WorkspaceKind::Repo);
+
+        let missing = find_by_id(&pool, "nonexistent").await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_by_canonical_path_matches_path() {
+        let pool = setup_test_pool().await;
+        insert(
+            &pool,
+            &make_ws(
+                "ws-1",
+                "Test",
+                "/home/user/project",
+                false,
+                WorkspaceKind::Repo,
+            ),
+        )
+        .await
+        .unwrap();
+
+        let found = find_by_canonical_path(&pool, "/home/user/project")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.id, "ws-1");
+
+        let missing = find_by_canonical_path(&pool, "/other").await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_worktrees_of_returns_only_worktrees() {
+        let pool = setup_test_pool().await;
+        insert(
+            &pool,
+            &make_ws("parent", "Parent", "/parent", false, WorkspaceKind::Repo),
+        )
+        .await
+        .unwrap();
+
+        let mut wt1 = make_ws("wt-1", "WT1", "/wt1", false, WorkspaceKind::Worktree);
+        wt1.parent_workspace_id = Some("parent".into());
+        insert(&pool, &wt1).await.unwrap();
+
+        let mut wt2 = make_ws("wt-2", "WT2", "/wt2", false, WorkspaceKind::Worktree);
+        wt2.parent_workspace_id = Some("parent".into());
+        insert(&pool, &wt2).await.unwrap();
+
+        let worktrees = list_worktrees_of(&pool, "parent").await.unwrap();
+        assert_eq!(worktrees.len(), 2);
+        assert!(worktrees.iter().all(|w| w.kind == WorkspaceKind::Worktree));
+    }
+
+    #[tokio::test]
+    async fn delete_removes_workspace_and_cascades() {
+        let pool = setup_test_pool().await;
+        insert(
+            &pool,
+            &make_ws("ws-1", "Test", "/test", false, WorkspaceKind::Repo),
+        )
+        .await
+        .unwrap();
+
+        let deleted = delete(&pool, "ws-1").await.unwrap();
+        assert!(deleted);
+
+        let result = find_by_id(&pool, "ws-1").await.unwrap();
+        assert!(result.is_none());
+
+        // Non-existent should return false
+        let deleted = delete(&pool, "ws-1").await.unwrap();
+        assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn update_status_changes_status_and_validated_at() {
+        let pool = setup_test_pool().await;
+        insert(
+            &pool,
+            &make_ws("ws-1", "Test", "/test", false, WorkspaceKind::Repo),
+        )
+        .await
+        .unwrap();
+
+        let validated_at = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        update_status(&pool, "ws-1", &WorkspaceStatus::Missing, validated_at)
+            .await
+            .unwrap();
+
+        let ws = find_by_id(&pool, "ws-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(ws.status, WorkspaceStatus::Missing);
+        assert!(ws.last_validated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn update_is_git_flips_flag() {
+        let pool = setup_test_pool().await;
+        insert(
+            &pool,
+            &make_ws("ws-1", "Test", "/test", false, WorkspaceKind::Repo),
+        )
+        .await
+        .unwrap();
+
+        update_is_git(&pool, "ws-1", true).await.unwrap();
+        let ws = find_by_id(&pool, "ws-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert!(ws.is_git);
+
+        update_is_git(&pool, "ws-1", false).await.unwrap();
+        let ws = find_by_id(&pool, "ws-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert!(!ws.is_git);
+    }
+
+    #[tokio::test]
+    async fn update_kind_metadata_sets_fields() {
+        let pool = setup_test_pool().await;
+        insert(
+            &pool,
+            &make_ws("ws-1", "Test", "/test", false, WorkspaceKind::Standalone),
+        )
+        .await
+        .unwrap();
+
+        update_kind_metadata(
+            &pool,
+            "ws-1",
+            WorkspaceKind::Repo,
+            None,
+            Some("abcdef-fix"),
+            Some("main"),
+            Some("/common"),
+        )
+        .await
+        .unwrap();
+
+        let ws = find_by_id(&pool, "ws-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(ws.kind, WorkspaceKind::Repo);
+        assert_eq!(ws.worktree_name, Some("abcdef-fix".into()));
+        assert_eq!(ws.branch, Some("main".into()));
+        assert_eq!(ws.git_common_dir, Some("/common".into()));
+    }
+
+    #[tokio::test]
+    async fn set_default_marks_workspace_as_default() {
+        let pool = setup_test_pool().await;
+        insert(
+            &pool,
+            &make_ws("ws-1", "First", "/first", true, WorkspaceKind::Repo),
+        )
+        .await
+        .unwrap();
+        insert(
+            &pool,
+            &make_ws("ws-2", "Second", "/second", false, WorkspaceKind::Repo),
+        )
+        .await
+        .unwrap();
+
+        set_default(&pool, "ws-2").await.unwrap();
+
+        let ws1 = find_by_id(&pool, "ws-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert!(!ws1.is_default);
+
+        let ws2 = find_by_id(&pool, "ws-2")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert!(ws2.is_default);
+    }
+
+    #[tokio::test]
+    async fn set_default_errors_for_nonexistent_workspace() {
+        let pool = setup_test_pool().await;
+        let err = set_default(&pool, "nowhere").await.unwrap_err();
+        assert!(err.to_string().contains("workspace"));
+    }
+}

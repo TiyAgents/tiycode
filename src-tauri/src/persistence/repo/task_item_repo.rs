@@ -104,3 +104,142 @@ pub async fn list_dtos_by_task_boards(
     let rows = query.fetch_all(pool).await?;
     Ok(rows.into_iter().map(|r| r.into_record().into()).collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::task_board::TaskBoardRecord;
+    use crate::model::task_board::TaskBoardStatus;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        // Seed FK chain: workspaces → threads → task_boards
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-1', 'ws', '/tmp', '/tmp', '/tmp', 0, 0, 0, 'ready',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed workspace");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, created_at, updated_at, last_active_at)
+             VALUES ('t1', 'ws-1', 't', 'idle',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed thread");
+
+        sqlx::query(
+            "INSERT INTO task_boards (id, thread_id, title, status, created_at, updated_at)
+             VALUES ('tb-1', 't1', 'Board 1', 'active',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed task_board");
+
+        sqlx::query(
+            "INSERT INTO task_boards (id, thread_id, title, status, created_at, updated_at)
+             VALUES ('tb-2', 't1', 'Board 2', 'completed',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed task_board 2");
+
+        pool
+    }
+
+    async fn seed_item(pool: &SqlitePool, id: &str, board_id: &str, desc: &str, sort: i32) {
+        sqlx::query(
+            "INSERT INTO task_items (id, task_board_id, description, stage, sort_order, created_at, updated_at)
+             VALUES (?, ?, ?, 'pending', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .bind(id)
+        .bind(board_id)
+        .bind(desc)
+        .bind(sort)
+        .execute(pool)
+        .await
+        .expect("seed task_item");
+    }
+
+    #[tokio::test]
+    async fn list_by_task_board_orders_by_sort_order() {
+        let pool = setup_test_pool().await;
+        seed_item(&pool, "ti-2", "tb-1", "Item 2", 2).await;
+        seed_item(&pool, "ti-1", "tb-1", "Item 1", 1).await;
+
+        let items = list_by_task_board(&pool, "tb-1").await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "ti-1");
+        assert_eq!(items[1].id, "ti-2");
+    }
+
+    #[tokio::test]
+    async fn find_by_id_returns_none_for_missing() {
+        let pool = setup_test_pool().await;
+        assert!(find_by_id(&pool, "nope").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn update_stage_sets_error_detail() {
+        let pool = setup_test_pool().await;
+        seed_item(&pool, "ti-1", "tb-1", "Item", 1).await;
+
+        update_stage(&pool, "ti-1", &TaskStage::Failed, Some("oops"))
+            .await
+            .unwrap();
+
+        let item = find_by_id(&pool, "ti-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(item.stage, TaskStage::Failed);
+        assert_eq!(item.error_detail, Some("oops".into()));
+    }
+
+    #[tokio::test]
+    async fn list_dtos_by_task_boards_returns_empty_for_empty_input() {
+        let pool = setup_test_pool().await;
+        let dtos = list_dtos_by_task_boards(&pool, &[]).await.unwrap();
+        assert!(dtos.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_dtos_by_task_boards_filters_by_board_ids() {
+        let pool = setup_test_pool().await;
+        seed_item(&pool, "ti-1", "tb-1", "For tb-1", 1).await;
+        seed_item(&pool, "ti-2", "tb-2", "For tb-2", 1).await;
+
+        let dtos = list_dtos_by_task_boards(&pool, &["tb-1".into()])
+            .await
+            .unwrap();
+        assert_eq!(dtos.len(), 1);
+        assert_eq!(dtos[0].id, "ti-1");
+    }
+}

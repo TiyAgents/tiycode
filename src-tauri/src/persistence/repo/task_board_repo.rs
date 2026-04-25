@@ -103,3 +103,133 @@ pub async fn update_active_task(
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-1', 'ws', '/tmp', '/tmp', '/tmp', 0, 0, 0, 'ready',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed workspace");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, created_at, updated_at, last_active_at)
+             VALUES ('t1', 'ws-1', 't', 'idle',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed thread");
+
+        pool
+    }
+
+    async fn seed_board(pool: &SqlitePool, id: &str, status: &str) {
+        sqlx::query(
+            "INSERT INTO task_boards (id, thread_id, title, status, created_at, updated_at)
+             VALUES (?, 't1', 'Board', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .bind(id)
+        .bind(status)
+        .execute(pool)
+        .await
+        .expect("seed board");
+    }
+
+    #[tokio::test]
+    async fn list_by_thread_returns_boards() {
+        let pool = setup_test_pool().await;
+        seed_board(&pool, "b-1", "active").await;
+        seed_board(&pool, "b-2", "completed").await;
+
+        let boards = list_by_thread(&pool, "t1").await.unwrap();
+        assert_eq!(boards.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn find_active_by_thread_returns_only_active() {
+        let pool = setup_test_pool().await;
+        seed_board(&pool, "b-1", "completed").await;
+        seed_board(&pool, "b-2", "active").await;
+
+        let active = find_active_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(active.id, "b-2");
+        assert_eq!(active.status, TaskBoardStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn find_active_by_thread_returns_none_when_no_active() {
+        let pool = setup_test_pool().await;
+        seed_board(&pool, "b-1", "completed").await;
+
+        let result = find_active_by_thread(&pool, "t1").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_status_persists() {
+        let pool = setup_test_pool().await;
+        seed_board(&pool, "b-1", "active").await;
+
+        update_status(&pool, "b-1", &TaskBoardStatus::Completed)
+            .await
+            .unwrap();
+
+        let board = find_by_id(&pool, "b-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(board.status, TaskBoardStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn update_active_task_sets_and_clears() {
+        let pool = setup_test_pool().await;
+        seed_board(&pool, "b-1", "active").await;
+
+        update_active_task(&pool, "b-1", Some("task-1"))
+            .await
+            .unwrap();
+        let board = find_by_id(&pool, "b-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(board.active_task_id, Some("task-1".into()));
+
+        update_active_task(&pool, "b-1", None).await.unwrap();
+        let board = find_by_id(&pool, "b-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(board.active_task_id, None);
+    }
+}
