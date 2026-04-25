@@ -271,3 +271,262 @@ describe("ThreadStream commands", () => {
     expect(onError).toHaveBeenCalledWith("backend unavailable", "");
   });
 });
+
+describe("ThreadStream uncovered events", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("routes subagent_failed events", async () => {
+    const stream = new ThreadStream();
+    const onHelperEvent = vi.fn();
+    const onRawEvent = vi.fn();
+    stream.onHelperEvent = onHelperEvent;
+    stream.onRawEvent = onRawEvent;
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "subagent_failed", runId: "run-1", subtaskId: "sub-1", helperKind: "review", startedAt: "now", error: "review failed", snapshot: helperSnapshot },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "hi" });
+    expect(onHelperEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: "failed", subtaskId: "sub-1", error: "review failed" }));
+  });
+
+  it("routes run_failed events", async () => {
+    const stream = new ThreadStream();
+    const onRunStateChange = vi.fn();
+    const onError = vi.fn();
+    stream.onRunStateChange = onRunStateChange;
+    stream.onError = onError;
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "run_failed", runId: "run-1", error: "fatal error" },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "hi" });
+    expect(onRunStateChange).toHaveBeenCalledWith("failed", "run-1");
+    expect(onError).toHaveBeenCalledWith("fatal error", "run-1");
+  });
+
+  it("routes run_cancelled events", async () => {
+    const stream = new ThreadStream();
+    const onRunStateChange = vi.fn();
+    stream.onRunStateChange = onRunStateChange;
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "run_cancelled", runId: "run-1" },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "hi" });
+    expect(onRunStateChange).toHaveBeenCalledWith("cancelled", "run-1");
+  });
+
+  it("routes run_interrupted events", async () => {
+    const stream = new ThreadStream();
+    const onRunStateChange = vi.fn();
+    stream.onRunStateChange = onRunStateChange;
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "run_interrupted", runId: "run-1" },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "hi" });
+    expect(onRunStateChange).toHaveBeenCalledWith("interrupted", "run-1");
+  });
+
+  it("routes run_checkpointed events", async () => {
+    const stream = new ThreadStream();
+    const onRunStateChange = vi.fn();
+    stream.onRunStateChange = onRunStateChange;
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "run_checkpointed", runId: "run-1" },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "hi" });
+    expect(onRunStateChange).toHaveBeenCalledWith("waiting_approval", "run-1");
+  });
+
+  it("routes run_retrying events", async () => {
+    const stream = new ThreadStream();
+    const onRunStateChange = vi.fn();
+    stream.onRunStateChange = onRunStateChange;
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "run_retrying", runId: "run-1", attempt: 1, maxAttempts: 3, delayMs: 1000, reason: "timeout" },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "hi" });
+    expect(onRunStateChange).toHaveBeenCalledWith("running", "run-1");
+    expect(stream.runId).toBe("run-1");
+  });
+
+  it("routes tool_failed events for visible tools", async () => {
+    const stream = new ThreadStream();
+    const onToolEvent = vi.fn();
+    stream.onToolEvent = onToolEvent;
+
+    // First request the tool to cache its name
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "tool_requested", runId: "run-1", toolCallId: "tool-1", toolName: "read", toolInput: {} },
+      { type: "tool_failed", runId: "run-1", toolCallId: "tool-1", error: "read failed" },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "hi" });
+    expect(onToolEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: "failed", toolName: "read", error: "read failed" }));
+  });
+
+  it("routes tool_failed events for hidden tools (silent cleanup)", async () => {
+    const stream = new ThreadStream();
+    const onToolEvent = vi.fn();
+    stream.onToolEvent = onToolEvent;
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "tool_requested", runId: "run-1", toolCallId: "tool-hid", toolName: "agent_review", toolInput: {} },
+      { type: "tool_failed", runId: "run-1", toolCallId: "tool-hid", error: "hidden fail" },
+      // After hidden tool is cleaned up, same ID should be visible again
+      { type: "tool_requested", runId: "run-1", toolCallId: "tool-hid", toolName: "read", toolInput: {} },
+      { type: "tool_running", runId: "run-1", toolCallId: "tool-hid" },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "hi" });
+    // The hidden tool failure should not emit, but the re-requested visible tool should
+    expect(onToolEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: "requested", toolName: "read" }));
+    expect(onToolEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: "running", toolName: "read" }));
+    expect(onToolEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "failed" }));
+  });
+});
+
+describe("ThreadStream error paths", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reports subscribe errors", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    threadSubscribeRunMock.mockRejectedValueOnce(new Error("subscribe failed"));
+
+    await expect(stream.subscribe("thread-1")).rejects.toThrow("subscribe failed");
+    expect(onError).toHaveBeenCalledWith("subscribe failed", "");
+  });
+
+  it("reports executeApprovedPlan errors", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    threadExecuteApprovedPlanMock.mockRejectedValueOnce(new Error("plan failed"));
+
+    await expect(stream.executeApprovedPlan("thread-1", "msg-1", "apply_plan")).rejects.toThrow("plan failed");
+    expect(onError).toHaveBeenCalledWith("plan failed", "");
+  });
+
+  it("reports compactContext errors", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    threadCompactContextMock.mockRejectedValueOnce(new Error("compact failed"));
+
+    await expect(stream.compactContext("thread-1", "short", null)).rejects.toThrow("compact failed");
+    expect(onError).toHaveBeenCalledWith("compact failed", "");
+  });
+
+  it("reports respondToApproval errors", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    toolApprovalRespondMock.mockRejectedValueOnce(new Error("approval failed"));
+
+    await expect(stream.respondToApproval("tool-1", "run-1", true)).rejects.toThrow("approval failed");
+    expect(onError).toHaveBeenCalledWith("approval failed", "run-1");
+  });
+
+  it("reports respondToClarify errors", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    toolClarifyRespondMock.mockRejectedValueOnce(new Error("clarify failed"));
+
+    await expect(stream.respondToClarify("tool-2", { answer: "ok" })).rejects.toThrow("clarify failed");
+    expect(onError).toHaveBeenCalledWith("clarify failed", "");
+  });
+});
+
+describe("ThreadStream extractErrorMessage (via error paths)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("extracts error.message from plain objects", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    threadStartRunMock.mockRejectedValueOnce({ message: "custom message" });
+
+    await expect(stream.startRun("thread-1", { prompt: "hi" })).rejects.toEqual({ message: "custom message" });
+    expect(onError).toHaveBeenCalledWith("custom message", "");
+  });
+
+  it("extracts error.description from plain objects", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    threadStartRunMock.mockRejectedValueOnce({ description: "descriptive error" });
+
+    await expect(stream.startRun("thread-1", { prompt: "hi" })).rejects.toEqual({ description: "descriptive error" });
+    expect(onError).toHaveBeenCalledWith("descriptive error", "");
+  });
+
+  it("extracts string errors directly", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    threadCancelRunMock.mockRejectedValueOnce("plain string error");
+
+    await expect(stream.cancelRun("thread-1")).rejects.toBe("plain string error");
+    expect(onError).toHaveBeenCalledWith("plain string error", "");
+  });
+
+  it("JSON.stringifies objects without standard fields", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    threadStartRunMock.mockRejectedValueOnce({ foo: "bar", baz: 42 });
+
+    await expect(stream.startRun("thread-1", { prompt: "hi" })).rejects.toEqual({ foo: "bar", baz: 42 });
+    expect(onError).toHaveBeenCalledWith('{"foo":"bar","baz":42}', "");
+  });
+
+  it("falls back to String() for objects that fail JSON.stringify", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    const circular: any = {};
+    circular.self = circular;
+    threadStartRunMock.mockRejectedValueOnce(circular);
+
+    await expect(stream.startRun("thread-1", { prompt: "hi" })).rejects.toBe(circular);
+    expect(onError).toHaveBeenCalledWith("[object Object]", "");
+  });
+
+  it("falls back to String() for empty objects", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    threadStartRunMock.mockRejectedValueOnce({});
+
+    await expect(stream.startRun("thread-1", { prompt: "hi" })).rejects.toEqual({});
+    expect(onError).toHaveBeenCalledWith("{}", "");
+  });
+
+  it("falls back to String() for null rejection", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    threadStartRunMock.mockRejectedValueOnce(null);
+
+    await expect(stream.startRun("thread-1", { prompt: "hi" })).rejects.toBeNull();
+    expect(onError).toHaveBeenCalledWith("null", "");
+  });
+});

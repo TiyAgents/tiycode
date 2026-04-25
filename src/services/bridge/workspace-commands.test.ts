@@ -74,4 +74,28 @@ describe("workspace bridge commands", () => {
     expect(invokeMock).toHaveBeenCalledWith("workspace_remove_worktree", { id: "worktree-1", force: true });
     expect(invokeMock).toHaveBeenCalledWith("workspace_prune_worktrees", { workspaceId: "workspace-1" });
   });
+
+  it("passes force: true to workspace_remove", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockResolvedValue(undefined);
+
+    await workspaceRemove("workspace-1", true);
+    expect(invokeMock).toHaveBeenCalledWith("workspace_remove", { id: "workspace-1", force: true });
+  });
+
+  it("omits name from workspace_add when not provided", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockResolvedValue({ id: "new" });
+
+    await workspaceAdd("/repo");
+    expect(invokeMock).toHaveBeenCalledWith("workspace_add", { path: "/repo", name: undefined });
+  });
+
+  it("defaults force to false for workspace_remove_worktree", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockResolvedValue(undefined);
+
+    await workspaceRemoveWorktree("worktree-1");
+    expect(invokeMock).toHaveBeenCalledWith("workspace_remove_worktree", { id: "worktree-1", force: false });
+  });
 });
