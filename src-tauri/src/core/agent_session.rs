@@ -389,8 +389,15 @@ impl AgentSession {
 
     pub async fn cancel(&self) {
         self.cancel_requested.store(true, Ordering::SeqCst);
+        // 1. Cascade-cancel all in-flight tool_gateway calls (including subagent ones
+        //    via child tokens) so they return Cancelled immediately.
         self.abort_signal.cancel();
+        // 2. Abort subagent Agent instances so their LLM streaming / run loops stop.
         self.helper_orchestrator.cancel_run(&self.spec.run_id).await;
+        // 3. Yield to let already-aborted subagents finish cleanup and emit
+        //    SubagentFailed before the main agent terminates.
+        tokio::task::yield_now().await;
+        // 4. Finally abort the main agent.
         self.agent.abort();
     }
 
@@ -861,6 +868,7 @@ impl AgentSession {
                 workspace_path: self.spec.workspace_path.clone(),
                 run_mode: self.spec.run_mode.clone(),
                 event_tx: self.event_tx.clone(),
+                session_abort_signal: self.abort_signal.clone(),
             })
             .await;
 

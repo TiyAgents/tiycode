@@ -203,6 +203,7 @@ impl ToolGateway {
                     &policy_json,
                     resolved_tool.as_ref(),
                     options.execution_timeout,
+                    abort_signal.clone(),
                     false,
                 )
                 .await
@@ -296,6 +297,7 @@ impl ToolGateway {
                             &policy_json,
                             resolved_tool.as_ref(),
                             options.execution_timeout,
+                            abort_signal.clone(),
                             true,
                         )
                         .await
@@ -371,29 +373,45 @@ impl ToolGateway {
         policy_json: &str,
         resolved_tool: Option<&ResolvedTool>,
         execution_timeout: Option<std::time::Duration>,
+        abort_signal: tiycore::agent::AbortSignal,
         approval_required: bool,
     ) -> Result<ToolGatewayOutcome, crate::model::errors::AppError> {
+        let tool_call_id = request.tool_call_id.clone();
+        let exec_future = self.execute_and_audit(&request, policy_json, resolved_tool);
+
         let output = if let Some(timeout) = execution_timeout {
-            match tokio::time::timeout(
-                timeout,
-                self.execute_and_audit(&request, policy_json, resolved_tool),
-            )
-            .await
-            {
-                Ok(result) => result?,
-                Err(_) => {
+            tokio::select! {
+                result = tokio::time::timeout(timeout, exec_future) => {
+                    match result {
+                        Ok(inner) => inner?,
+                        Err(_) => {
+                            return Ok(ToolGatewayOutcome {
+                                approval_required,
+                                result: ToolGatewayResult::TimedOut {
+                                    tool_call_id,
+                                    timeout_secs: timeout.as_secs(),
+                                },
+                            });
+                        }
+                    }
+                }
+                _ = abort_signal.cancelled() => {
                     return Ok(ToolGatewayOutcome {
                         approval_required,
-                        result: ToolGatewayResult::TimedOut {
-                            tool_call_id: request.tool_call_id,
-                            timeout_secs: timeout.as_secs(),
-                        },
+                        result: ToolGatewayResult::Cancelled { tool_call_id },
                     });
                 }
             }
         } else {
-            self.execute_and_audit(&request, policy_json, resolved_tool)
-                .await?
+            tokio::select! {
+                result = exec_future => result?,
+                _ = abort_signal.cancelled() => {
+                    return Ok(ToolGatewayOutcome {
+                        approval_required,
+                        result: ToolGatewayResult::Cancelled { tool_call_id },
+                    });
+                }
+            }
         };
 
         Ok(ToolGatewayOutcome {

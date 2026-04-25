@@ -33,6 +33,10 @@ pub struct HelperRunRequest {
     pub workspace_path: String,
     pub run_mode: String,
     pub event_tx: tokio::sync::mpsc::UnboundedSender<ThreadStreamEvent>,
+    /// Session-level abort signal. Child tokens derived from this signal are
+    /// passed to each subagent tool call so that session cancellation cascades
+    /// into in-flight tool executions.
+    pub session_abort_signal: tiycore::agent::AbortSignal,
 }
 
 pub struct HelperRunResult {
@@ -58,10 +62,17 @@ pub struct SubagentProgressSnapshot {
     pub recent_actions: Vec<String>,
 }
 
+/// Tracks active helper agents for a single run, with a cancellation guard
+/// that prevents new helpers from registering after `cancel_run` has fired.
+struct RunHelpersState {
+    helpers: Vec<Arc<Agent>>,
+    cancelled: bool,
+}
+
 pub struct HelperAgentOrchestrator {
     pool: SqlitePool,
     tool_gateway: Arc<ToolGateway>,
-    active_helpers: Arc<Mutex<HashMap<String, Vec<Arc<Agent>>>>>,
+    active_helpers: Arc<Mutex<HashMap<String, RunHelpersState>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +178,7 @@ impl HelperAgentOrchestrator {
         let escalation_summary_ref = Arc::clone(&escalation_summary);
         let progress_state_ref = Arc::clone(&progress_state);
         let progress_event_tx = request.event_tx.clone();
+        let helper_session_abort_signal = request.session_abort_signal.clone();
         agent.set_tool_executor(move |tool_name, tool_call_id, tool_input, _update_cb| {
             let tool_name = tool_name.to_string();
             let tool_input = tool_input.clone();
@@ -185,6 +197,7 @@ impl HelperAgentOrchestrator {
             let helper_id_for_events = helper_id_for_events.clone();
             let helper_id_for_storage = helper_id_for_events.clone();
             let helper_started_at_for_events = helper_started_at_for_events.clone();
+            let helper_abort_signal = helper_session_abort_signal.clone();
 
             async move {
                 let action = describe_subagent_action(&tool_name, &tool_input);
@@ -246,7 +259,7 @@ impl HelperAgentOrchestrator {
                 match helper_gateway
                     .execute_tool_call(
                         request,
-                        tiycore::agent::AbortSignal::new(),
+                        helper_abort_signal.child_token(),
                         ToolExecutionOptions {
                             allow_user_approval: false,
                             execution_timeout: None,
@@ -378,10 +391,19 @@ impl HelperAgentOrchestrator {
 
         {
             let mut helpers = self.active_helpers.lock().await;
-            helpers
+            let state = helpers
                 .entry(request.run_id.clone())
-                .or_default()
-                .push(Arc::clone(&agent));
+                .or_insert_with(|| RunHelpersState {
+                    helpers: Vec::new(),
+                    cancelled: false,
+                });
+            if state.cancelled {
+                return Err(AppError::internal(
+                    ErrorSource::Thread,
+                    "run cancelled".to_string(),
+                ));
+            }
+            state.helpers.push(Arc::clone(&agent));
         }
 
         let helper_run_id_for_usage = request.run_id.clone();
@@ -488,7 +510,12 @@ impl HelperAgentOrchestrator {
     pub async fn cancel_run(&self, run_id: &str) {
         let helpers = {
             let mut active = self.active_helpers.lock().await;
-            active.remove(run_id).unwrap_or_default()
+            if let Some(state) = active.get_mut(run_id) {
+                state.cancelled = true;
+                std::mem::take(&mut state.helpers)
+            } else {
+                Vec::new()
+            }
         };
 
         for helper in helpers {
@@ -498,9 +525,11 @@ impl HelperAgentOrchestrator {
 
     async fn remove_helper(&self, run_id: &str, helper: &Arc<Agent>) {
         let mut active = self.active_helpers.lock().await;
-        if let Some(helpers) = active.get_mut(run_id) {
-            helpers.retain(|candidate| !Arc::ptr_eq(candidate, helper));
-            if helpers.is_empty() {
+        if let Some(state) = active.get_mut(run_id) {
+            state
+                .helpers
+                .retain(|candidate| !Arc::ptr_eq(candidate, helper));
+            if state.helpers.is_empty() {
                 active.remove(run_id);
             }
         }
