@@ -152,3 +152,101 @@ pub enum UpdateTaskAction {
         reason: Option<String>,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn task_board_status_maps_database_strings_and_defaults_unknown_to_active() {
+        assert_eq!(TaskBoardStatus::Active.as_str(), "active");
+        assert_eq!(TaskBoardStatus::Completed.as_str(), "completed");
+        assert_eq!(TaskBoardStatus::Abandoned.as_str(), "abandoned");
+
+        assert_eq!(
+            TaskBoardStatus::from_db_str("active"),
+            TaskBoardStatus::Active
+        );
+        assert_eq!(
+            TaskBoardStatus::from_db_str("completed"),
+            TaskBoardStatus::Completed
+        );
+        assert_eq!(
+            TaskBoardStatus::from_db_str("abandoned"),
+            TaskBoardStatus::Abandoned
+        );
+        assert_eq!(
+            TaskBoardStatus::from_db_str("paused"),
+            TaskBoardStatus::Active
+        );
+    }
+
+    #[test]
+    fn query_task_input_defaults_scope_to_active() {
+        let default_input: QueryTaskInput = serde_json::from_value(json!({})).unwrap();
+        let explicit_all: QueryTaskInput =
+            serde_json::from_value(json!({ "scope": "all" })).unwrap();
+
+        assert_eq!(default_input.scope, QueryTaskScope::Active);
+        assert_eq!(explicit_all.scope, QueryTaskScope::All);
+        assert_eq!(QueryTaskScope::Active.as_str(), "active");
+        assert_eq!(QueryTaskScope::All.as_str(), "all");
+    }
+
+    #[test]
+    fn update_task_input_deserializes_tagged_actions() {
+        let start: UpdateTaskInput = serde_json::from_value(json!({
+            "taskBoardId": "board-1",
+            "action": "start_step",
+            "stepId": "step-1"
+        }))
+        .unwrap();
+        assert_eq!(start.task_board_id, "board-1");
+        match start.action {
+            UpdateTaskAction::StartStep { step_id } => assert_eq!(step_id, "step-1"),
+            _ => panic!("expected start_step action"),
+        }
+
+        let advance: UpdateTaskInput = serde_json::from_value(json!({
+            "taskBoardId": "board-1",
+            "action": "advance_step"
+        }))
+        .unwrap();
+        match advance.action {
+            UpdateTaskAction::AdvanceStep { step_id } => assert_eq!(step_id, None),
+            _ => panic!("expected advance_step action"),
+        }
+
+        let fail: UpdateTaskInput = serde_json::from_value(json!({
+            "taskBoardId": "board-1",
+            "action": "fail_step",
+            "stepId": "step-2",
+            "errorDetail": "command failed"
+        }))
+        .unwrap();
+        match fail.action {
+            UpdateTaskAction::FailStep {
+                step_id,
+                error_detail,
+            } => {
+                assert_eq!(step_id, "step-2");
+                assert_eq!(error_detail, "command failed");
+            }
+            _ => panic!("expected fail_step action"),
+        }
+
+        let abandon: UpdateTaskInput = serde_json::from_value(json!({
+            "taskBoardId": "board-1",
+            "action": "abandon_board",
+            "reason": "obsolete"
+        }))
+        .unwrap();
+        match abandon.action {
+            UpdateTaskAction::AbandonBoard { reason } => {
+                assert_eq!(reason.as_deref(), Some("obsolete"))
+            }
+            _ => panic!("expected abandon_board action"),
+        }
+    }
+}
