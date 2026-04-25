@@ -1444,7 +1444,23 @@ fn handle_agent_event(
         tiycore::agent::AgentEvent::MessageEnd { message } => {
             if let AgentMessage::Assistant(assistant) = message {
                 let content = assistant.text_content();
-                if content.is_empty() && assistant.has_tool_calls() {
+
+                // Skip emitting MessageCompleted when the assistant produced
+                // no usable text content.  Two sub-cases:
+                //
+                // a) Empty content WITH tool calls — the tool-call-only path.
+                //    Tool calls are persisted separately; no plain_message needed.
+                //
+                // b) Empty content WITHOUT tool calls — typically a provider
+                //    error (transport error, 500, 403, etc.) that interrupted
+                //    the stream before any text was generated.  Persisting an
+                //    empty plain_message would poison the history: on the next
+                //    run, convert_history_messages creates an AssistantMessage
+                //    with only a Text("") block; tiycore serialises it with
+                //    `content: null` (the empty text is filtered) while
+                //    reasoning_content may be present, causing DeepSeek to
+                //    reject the request with 400.
+                if content.is_empty() {
                     emit_usage_update_if_changed(
                         run_id,
                         event_tx,
@@ -2189,6 +2205,15 @@ pub(crate) fn convert_history_messages(
                     ));
                 }
                 "assistant" => {
+                    // Skip empty assistant plain_messages — these are left
+                    // behind when a provider error interrupts the stream
+                    // before any text is generated.  An empty Text("") block
+                    // serialises to `content: null` in tiycore, which causes
+                    // DeepSeek to reject the request (content or tool_calls
+                    // must be set).
+                    if message.content_markdown.trim().is_empty() {
+                        continue;
+                    }
                     let blocks = vec![ContentBlock::Text(TextContent::new(
                         &message.content_markdown,
                     ))];
@@ -3751,6 +3776,7 @@ mod tests {
     use tiycore::thinking::ThinkingLevel;
     use tiycore::types::{
         Api, AssistantMessage, AssistantMessageEvent, ContentBlock, Provider, StopReason,
+        TextContent,
     };
     use tokio::sync::mpsc;
 
@@ -4707,7 +4733,17 @@ Used for prompt assembly coverage.
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
-        let assistant = sample_partial_assistant_message();
+        // Build an assistant message with actual text content so that
+        // MessageEnd emits MessageCompleted (empty content is now skipped).
+        let assistant = AssistantMessage::builder()
+            .content(vec![ContentBlock::Text(TextContent::new(
+                "Here is the answer.",
+            ))])
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .model("gpt-test")
+            .build()
+            .expect("partial assistant message with content");
 
         handle_agent_event(
             "run-discard",
@@ -6122,6 +6158,129 @@ Used for prompt assembly coverage.
             }
             other => panic!("expected text2 assistant, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn convert_history_messages_skips_empty_assistant_plain_message() {
+        // Scenario: a provider error left an empty assistant plain_message
+        // in the DB.  The reasoning before it should be treated as orphan
+        // and dropped; the empty assistant should be skipped entirely.
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Do something".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            // Reasoning from a run that later failed
+            MessageRecord {
+                id: "msg-reasoning".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Thinking about the task.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            // Empty assistant plain_message left by the failed run
+            MessageRecord {
+                id: "msg-empty".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: String::new(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:02.000Z".to_string(),
+            },
+            // Next user message (new run)
+            MessageRecord {
+                id: "msg-user-2".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Continue".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:03.000Z".to_string(),
+            },
+        ];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &[], model);
+
+        // Empty assistant is skipped; reasoning before it becomes orphan
+        // (no following assistant to attach to before the next user message)
+        // and is also dropped.  Result: User, User.
+        assert_eq!(
+            history.len(),
+            2,
+            "expected 2 messages (both users), got {}: {:?}",
+            history.len(),
+            history
+                .iter()
+                .map(|m| match m {
+                    AgentMessage::User(_) => "User",
+                    AgentMessage::Assistant(_) => "Assistant",
+                    AgentMessage::ToolResult(_) => "ToolResult",
+                    _ => "Other",
+                })
+                .collect::<Vec<_>>()
+        );
+        assert!(matches!(&history[0], AgentMessage::User(_)));
+        assert!(matches!(&history[1], AgentMessage::User(_)));
+    }
+
+    #[test]
+    fn convert_history_messages_skips_whitespace_only_assistant_plain_message() {
+        // Same as above but with whitespace-only content (trimmed to empty).
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Hello".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-ws".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "   \n  ".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+        ];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &[], model);
+
+        assert_eq!(history.len(), 1);
+        assert!(matches!(&history[0], AgentMessage::User(_)));
     }
 
     // -----------------------------------------------------------------------
