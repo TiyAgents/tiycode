@@ -5493,6 +5493,422 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
+    #[test]
+    fn config_scope_parses_workspace_and_defaults_to_global() {
+        assert_eq!(ConfigScope::from_option(None), ConfigScope::Global);
+        assert_eq!(
+            ConfigScope::from_option(Some("workspace")),
+            ConfigScope::Workspace
+        );
+        assert_eq!(
+            ConfigScope::from_option(Some("unknown")),
+            ConfigScope::Global
+        );
+        assert_eq!(ConfigScope::from_str("workspace"), ConfigScope::Workspace);
+        assert_eq!(ConfigScope::from_str("global"), ConfigScope::Global);
+        assert_eq!(ConfigScope::Global.as_str(), "global");
+        assert_eq!(ConfigScope::Workspace.as_str(), "workspace");
+    }
+
+    fn mcp_config(transport: &str) -> McpServerConfigInput {
+        McpServerConfigInput {
+            id: "server".to_string(),
+            label: "Server".to_string(),
+            transport: transport.to_string(),
+            enabled: true,
+            auto_start: true,
+            command: Some("node".to_string()),
+            args: Some(vec!["server.js".to_string()]),
+            env: Some(HashMap::from([(
+                "TOKEN".to_string(),
+                "super-secret".to_string(),
+            )])),
+            cwd: Some("/tmp/server".to_string()),
+            url: Some("https://example.com/mcp?token=secret".to_string()),
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer test-token".to_string(),
+            )])),
+            timeout_ms: Some(5_000),
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_mcp_input_accepts_supported_transports_and_rejects_invalid_configs() {
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+
+        assert!(manager.validate_mcp_input(&mcp_config("stdio")).is_ok());
+        assert!(manager
+            .validate_mcp_input(&mcp_config("http-streamable"))
+            .is_ok());
+
+        let mut missing_identity = mcp_config("stdio");
+        missing_identity.id = "  ".to_string();
+        assert_eq!(
+            manager
+                .validate_mcp_input(&missing_identity)
+                .unwrap_err()
+                .user_message,
+            "MCP id and label are required"
+        );
+
+        let mut missing_command = mcp_config("stdio");
+        missing_command.command = Some("  ".to_string());
+        assert_eq!(
+            manager
+                .validate_mcp_input(&missing_command)
+                .unwrap_err()
+                .user_message,
+            "stdio MCP servers require a command"
+        );
+
+        let mut missing_url = mcp_config("streamable-http");
+        missing_url.url = None;
+        assert_eq!(
+            manager
+                .validate_mcp_input(&missing_url)
+                .unwrap_err()
+                .user_message,
+            "streamable-http MCP servers require a URL"
+        );
+
+        let unsupported = mcp_config("sse");
+        assert_eq!(
+            manager
+                .validate_mcp_input(&unsupported)
+                .unwrap_err()
+                .user_message,
+            "Unsupported MCP transport"
+        );
+    }
+
+    #[tokio::test]
+    async fn mask_mcp_config_redacts_sensitive_values_and_preserves_shape() {
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+        let masked = manager.mask_mcp_config(&mcp_config("streamable-http"));
+
+        assert_eq!(masked.id, "server");
+        assert_eq!(masked.label, "Server");
+        assert_eq!(masked.transport, "streamable-http");
+        assert!(masked.enabled);
+        assert_eq!(masked.command.as_deref(), Some("node"));
+        assert_eq!(masked.args, vec!["server.js".to_string()]);
+        assert_eq!(masked.cwd.as_deref(), Some("/tmp/server"));
+        assert_eq!(masked.timeout_ms, Some(5_000));
+        assert_ne!(
+            masked.env.get("TOKEN").map(String::as_str),
+            Some("super-secret")
+        );
+        assert_ne!(
+            masked.headers.get("Authorization").map(String::as_str),
+            Some("Bearer test-token")
+        );
+        assert_ne!(
+            masked.url.as_deref(),
+            Some("https://example.com/mcp?token=secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_mcp_state_maps_disabled_invalid_not_started_connected_and_degraded() {
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+
+        let mut disabled = mcp_config("stdio");
+        disabled.enabled = false;
+        let state = manager.build_mcp_state(&disabled, None, ConfigScope::Workspace.as_str());
+        assert_eq!(state.status, "disconnected");
+        assert_eq!(state.phase, "shutdown");
+        assert_eq!(state.scope, "workspace");
+
+        let mut invalid = mcp_config("stdio");
+        invalid.command = None;
+        let state = manager.build_mcp_state(&invalid, None, ConfigScope::Global.as_str());
+        assert_eq!(state.status, "config_error");
+        assert_eq!(state.phase, "config_load");
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some("stdio MCP servers require a command")
+        );
+
+        let state = manager.build_mcp_state(&mcp_config("stdio"), None, "global");
+        assert_eq!(state.status, "disconnected");
+        assert_eq!(state.phase, "not_started");
+
+        let connected_runtime = McpRuntimeRecord {
+            tools: vec![McpToolSummaryDto {
+                name: "lookup".to_string(),
+                qualified_name: "__mcp_server_lookup".to_string(),
+                description: Some("Lookup docs".to_string()),
+                input_schema: Some(serde_json::json!({ "type": "object" })),
+            }],
+            resources: vec![McpResourceSummaryDto {
+                uri: "file:///docs/readme.md".to_string(),
+                name: "README".to_string(),
+                description: None,
+                mime_type: Some("text/markdown".to_string()),
+            }],
+            stale_snapshot: false,
+            last_error: None,
+            status: Some("connected".to_string()),
+            phase: Some("ready".to_string()),
+            updated_at: Some("2026-04-25T00:00:00Z".to_string()),
+        };
+        let state =
+            manager.build_mcp_state(&mcp_config("stdio"), Some(&connected_runtime), "global");
+        assert_eq!(state.status, "connected");
+        assert_eq!(state.phase, "ready");
+        assert_eq!(state.tools.len(), 1);
+        assert_eq!(state.resources.len(), 1);
+        assert_eq!(state.updated_at, "2026-04-25T00:00:00Z");
+
+        let degraded_runtime = McpRuntimeRecord {
+            stale_snapshot: true,
+            last_error: Some("probe failed".to_string()),
+            status: Some("error".to_string()),
+            phase: Some("runtime_probe".to_string()),
+            ..connected_runtime
+        };
+        let state =
+            manager.build_mcp_state(&mcp_config("stdio"), Some(&degraded_runtime), "global");
+        assert_eq!(state.status, "degraded");
+        assert_eq!(state.phase, "runtime_probe");
+        assert!(state.stale_snapshot);
+        assert_eq!(state.last_error.as_deref(), Some("probe failed"));
+    }
+
+    #[test]
+    fn plugin_manifest_helpers_parse_aliases_and_optional_sections() {
+        let plugin_dir = Path::new("/plugins/demo");
+        let manifest = parse_plugin_manifest(
+            r#"{
+              "id": "demo.plugin",
+              "name": "Demo Plugin",
+              "version": "1.2.3",
+              "summary": "Demo summary",
+              "author": { "name": "Ada" },
+              "repository": "https://example.com/repo.git",
+              "default_enabled": false,
+              "capabilities": ["tools", "tools", "commands"],
+              "permissions": ["shell", "network"],
+              "hooks": { "pre_tool_use": ["pre"], "postToolUse": ["post"] },
+              "tools": [
+                { "name": "run", "description": "Run command", "command": "node", "args": ["tool.js"], "permission": "shell" }
+              ],
+              "commands": [
+                { "name": "review", "description": "Review code", "prompt": "Review this" }
+              ],
+              "timeout_ms": 42,
+              "skills_dir": "skills",
+              "config_schema": { "path": "schema.json", "type": "json-schema" }
+            }"#,
+            plugin_dir,
+        )
+        .expect("manifest");
+
+        assert_eq!(manifest.id, "demo.plugin");
+        assert_eq!(manifest.description.as_deref(), Some("Demo summary"));
+        assert_eq!(manifest.author.as_deref(), Some("Ada"));
+        assert_eq!(
+            manifest.homepage.as_deref(),
+            Some("https://example.com/repo.git")
+        );
+        assert_eq!(manifest.default_enabled, Some(false));
+        assert_eq!(
+            manifest.capabilities,
+            vec!["commands".to_string(), "tools".to_string()]
+        );
+        assert_eq!(
+            manifest.permissions,
+            vec!["network".to_string(), "shell".to_string()]
+        );
+        assert!(manifest
+            .hooks
+            .as_ref()
+            .and_then(|hooks| hooks.pre_tool_use.as_ref())
+            .is_some());
+        assert_eq!(manifest.tools[0].required_permission, "read");
+        assert_eq!(manifest.commands[0].description, "Review code");
+        assert_eq!(manifest.timeout_ms, Some(42));
+        assert_eq!(manifest.skills_dir.as_deref(), Some("skills"));
+        assert_eq!(
+            manifest
+                .config_schema
+                .as_ref()
+                .map(|schema| schema.path.as_str()),
+            Some("schema.json")
+        );
+
+        let invalid = parse_plugin_manifest("{not json", plugin_dir).unwrap_err();
+        assert!(invalid.contains("manifest is not valid JSON"));
+    }
+
+    #[test]
+    fn low_level_manifest_readers_trim_deduplicate_and_ignore_invalid_values() {
+        let object = serde_json::json!({
+            "name": "  Demo  ",
+            "empty": "   ",
+            "args": [" b ", 12, "a", "a", ""],
+            "env": { "TOKEN": " secret ", "EMPTY": " ", "NUMBER": 12 },
+            "enabled": true,
+            "timeout_ms": 120,
+            "author": { "label": "Grace" },
+            "hooks": { "onRunStart": ["start", "start"], "on_run_complete": ["done"] },
+            "schema": { "path": "schema.json" }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        assert_eq!(
+            read_string_keys(&object, &["missing", "name"]).as_deref(),
+            Some("Demo")
+        );
+        assert_eq!(read_string_keys(&object, &["empty"]), None);
+        assert_eq!(
+            read_string_array_keys(&object, &["args"]),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(
+            read_string_map_keys(&object, &["env"])
+                .unwrap()
+                .get("TOKEN")
+                .map(String::as_str),
+            Some("secret")
+        );
+        assert_eq!(read_bool_keys(&object, &["enabled"]), Some(true));
+        assert_eq!(read_u64_keys(&object, &["timeout_ms"]), Some(120));
+        assert_eq!(
+            read_author_name(object.get("author")).as_deref(),
+            Some("Grace")
+        );
+        assert_eq!(
+            read_plugin_hooks(object.get("hooks"))
+                .and_then(|hooks| hooks.on_run_complete)
+                .unwrap(),
+            vec!["done".to_string()]
+        );
+        assert_eq!(
+            read_config_schema(object.get("schema")).map(|schema| schema.r#type),
+            Some("json-schema".to_string())
+        );
+    }
+
+    #[test]
+    fn mcp_runtime_parsers_sort_and_sanitize_tool_and_resource_names() {
+        let result = serde_json::json!({
+            "tools": [
+                { "name": "z tool", "description": "Zed", "inputSchema": { "type": "object" } },
+                { "name": "alpha", "description": "Alpha" },
+                { "name": "  " },
+                { "description": "missing name" }
+            ],
+            "resources": [
+                { "uri": "file:///z", "name": "Zed", "mimeType": "text/plain" },
+                { "uri": "file:///a", "description": "No name" },
+                { "uri": "  " }
+            ]
+        });
+
+        let tools = parse_mcp_tools(&result, "plugin::server one");
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "z tool"]
+        );
+        assert_eq!(tools[1].qualified_name, "__mcp_server_one_z_tool");
+        assert!(mcp_tool_name_is_provider_safe(&tools[0].qualified_name));
+        assert!(!mcp_tool_name_is_provider_safe("bad name"));
+        assert_eq!(sanitize_mcp_runtime_name_segment(" !! "), "tool");
+
+        let resources = parse_mcp_resources(&result);
+        assert_eq!(
+            resources
+                .iter()
+                .map(|resource| resource.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["file:///a", "Zed"]
+        );
+        assert_eq!(resources[0].description.as_deref(), Some("No name"));
+        assert_eq!(resources[1].mime_type.as_deref(), Some("text/plain"));
+    }
+
+    #[test]
+    fn streamable_http_response_helpers_parse_arrays_sse_and_errors() {
+        let array_payload = serde_json::json!([
+            { "jsonrpc": "2.0", "id": 1, "result": { "ok": false } },
+            { "jsonrpc": "2.0", "id": 2, "result": { "ok": true } }
+        ]);
+        assert_eq!(
+            extract_streamable_http_jsonrpc_result(&array_payload, 2, "tools/list").unwrap(),
+            serde_json::json!({ "ok": true })
+        );
+
+        let wrong_id = serde_json::json!({ "jsonrpc": "2.0", "id": 3, "result": {} });
+        assert_eq!(
+            extract_streamable_http_jsonrpc_result(&wrong_id, 2, "tools/list")
+                .unwrap_err()
+                .error_code,
+            "extensions.mcp.read_failed"
+        );
+
+        let rpc_error = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "error": { "code": -32601, "message": "missing" }
+        });
+        let error =
+            extract_streamable_http_jsonrpc_result(&rpc_error, 2, "tools/list").unwrap_err();
+        assert_eq!(error.error_code, "extensions.mcp.rpc_error");
+        assert!(error.user_message.contains("missing"));
+
+        let sse = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"a\":1}}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"b\":2}}\n\n";
+        let parsed = parse_streamable_http_sse_payload(sse).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+        assert_eq!(
+            parse_streamable_http_sse_payload("event: ping\n\n")
+                .unwrap_err()
+                .error_code,
+            "extensions.mcp.read_failed"
+        );
+    }
+
+    #[test]
+    fn config_path_and_marketplace_helpers_are_stable() {
+        let workspace = tempdir().expect("workspace");
+        assert!(workspace_mcp_path(Some(workspace.path().to_str().unwrap()))
+            .unwrap()
+            .ends_with(".tiy/mcp.local.json"));
+        assert_eq!(
+            workspace_mcp_path(None).unwrap_err().error_code,
+            "settings.validation"
+        );
+
+        let diagnostic_id =
+            config_diagnostic_id(Path::new("/tmp/config.json"), "mcp", ConfigScope::Workspace);
+        assert!(diagnostic_id.starts_with("workspace:mcp:"));
+
+        let builtins = builtin_marketplace_sources();
+        assert_eq!(builtins.len(), 1);
+        assert!(is_builtin_marketplace_source_id(&builtins[0].id));
+        let id = marketplace_source_id("https://example.com/catalog.git");
+        assert!(!id.is_empty());
+        assert!(id.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
     #[derive(Debug, Clone)]
     struct ObservedHttpRequest {
         method: String,

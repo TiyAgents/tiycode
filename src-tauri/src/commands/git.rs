@@ -1245,3 +1245,305 @@ fn truncate_to_char_boundary(value: &str, max_bytes: usize) -> String {
 
     value[..end].trim_end().to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        git_change_kind_label, git_diff_status_label, merge_json_value,
+        normalize_commit_message_language, normalize_commit_message_prompt,
+        normalize_generated_commit_message, render_diff_for_commit_prompt,
+        select_commit_message_changes, select_commit_message_model_role, truncate_to_char_boundary,
+    };
+    use crate::core::agent_session::{RuntimeModelPlan, RuntimeModelRole};
+    use crate::model::git::{
+        GitChangeKind, GitDiffDto, GitDiffHunkDto, GitDiffLineDto, GitDiffLineKind,
+        GitFileChangeDto, GitRepoCapabilitiesDto, GitSnapshotDto,
+    };
+
+    fn change(path: &str, status: GitChangeKind) -> GitFileChangeDto {
+        GitFileChangeDto {
+            path: path.to_string(),
+            previous_path: None,
+            status,
+            additions: 2,
+            deletions: 1,
+        }
+    }
+
+    fn snapshot(
+        staged_files: Vec<GitFileChangeDto>,
+        unstaged_files: Vec<GitFileChangeDto>,
+        untracked_files: Vec<GitFileChangeDto>,
+    ) -> GitSnapshotDto {
+        GitSnapshotDto {
+            workspace_id: "workspace-1".to_string(),
+            repo_root: Some("/repo".to_string()),
+            capabilities: GitRepoCapabilitiesDto {
+                repo_available: true,
+                git_cli_available: true,
+            },
+            head_ref: Some("main".to_string()),
+            head_oid: Some("abc123".to_string()),
+            is_detached: false,
+            ahead_count: 0,
+            behind_count: 0,
+            staged_files,
+            unstaged_files,
+            untracked_files,
+            conflicted_files: Vec::new(),
+            recent_commits: Vec::new(),
+            last_refreshed_at: "2026-04-25T00:00:00Z".to_string(),
+        }
+    }
+
+    fn runtime_role(model_id: &str) -> RuntimeModelRole {
+        RuntimeModelRole {
+            provider_id: format!("provider-{model_id}"),
+            model_record_id: format!("record-{model_id}"),
+            provider: None,
+            provider_key: Some("openai".to_string()),
+            provider_type: "openai".to_string(),
+            provider_name: Some("OpenAI".to_string()),
+            model: model_id.to_string(),
+            model_id: model_id.to_string(),
+            model_display_name: Some(model_id.to_string()),
+            base_url: "https://api.example.test".to_string(),
+            context_window: Some("128000".to_string()),
+            max_output_tokens: Some("4096".to_string()),
+            supports_image_input: Some(false),
+            custom_headers: None,
+            provider_options: None,
+        }
+    }
+
+    #[test]
+    fn select_commit_message_model_role_prefers_lightweight_then_auxiliary_then_primary() {
+        let primary = runtime_role("primary");
+        let auxiliary = runtime_role("auxiliary");
+        let lightweight = runtime_role("lightweight");
+
+        let plan = RuntimeModelPlan {
+            primary: Some(primary.clone()),
+            auxiliary: Some(auxiliary.clone()),
+            lightweight: Some(lightweight.clone()),
+            ..RuntimeModelPlan::default()
+        };
+        assert_eq!(
+            select_commit_message_model_role(&plan).unwrap().model_id,
+            "lightweight"
+        );
+
+        let plan = RuntimeModelPlan {
+            primary: Some(primary.clone()),
+            auxiliary: Some(auxiliary.clone()),
+            lightweight: None,
+            ..RuntimeModelPlan::default()
+        };
+        assert_eq!(
+            select_commit_message_model_role(&plan).unwrap().model_id,
+            "auxiliary"
+        );
+
+        let plan = RuntimeModelPlan {
+            primary: Some(primary),
+            auxiliary: None,
+            lightweight: None,
+            ..RuntimeModelPlan::default()
+        };
+        assert_eq!(
+            select_commit_message_model_role(&plan).unwrap().model_id,
+            "primary"
+        );
+
+        let missing = select_commit_message_model_role(&RuntimeModelPlan::default()).unwrap_err();
+        assert_eq!(missing.error_code, "settings.commit_message.model_missing");
+    }
+
+    #[test]
+    fn select_commit_message_changes_prefers_staged_then_working_tree() {
+        let staged = change("src/lib.rs", GitChangeKind::Modified);
+        let unstaged = change("src/main.rs", GitChangeKind::Deleted);
+        let untracked = change("README.md", GitChangeKind::Added);
+
+        let (label, staged_only, changes) = select_commit_message_changes(&snapshot(
+            vec![staged.clone()],
+            vec![unstaged.clone()],
+            vec![untracked.clone()],
+        ))
+        .unwrap();
+        assert_eq!(label, "staged changes only");
+        assert!(staged_only);
+        assert_eq!(changes[0].path, staged.path);
+
+        let (label, staged_only, changes) =
+            select_commit_message_changes(&snapshot(vec![], vec![unstaged], vec![untracked]))
+                .unwrap();
+        assert_eq!(label, "working tree changes");
+        assert!(!staged_only);
+        assert_eq!(changes.len(), 2);
+
+        let empty = select_commit_message_changes(&snapshot(vec![], vec![], vec![])).unwrap_err();
+        assert_eq!(empty.error_code, "git.commit_message.no_changes");
+    }
+
+    #[test]
+    fn normalize_commit_message_language_and_prompt_apply_defaults() {
+        assert_eq!(normalize_commit_message_language(None), "English");
+        assert_eq!(
+            normalize_commit_message_language(Some("  简体中文  ")),
+            "简体中文"
+        );
+        assert_eq!(normalize_commit_message_language(Some("  ")), "English");
+
+        let default_prompt = normalize_commit_message_prompt(None);
+        assert_eq!(default_prompt, super::COMMIT_MESSAGE_GENERATOR_PROMPT);
+        assert_eq!(
+            normalize_commit_message_prompt(Some("  custom prompt  ")),
+            "custom prompt"
+        );
+        assert_eq!(normalize_commit_message_prompt(Some("  ")), default_prompt);
+    }
+
+    #[test]
+    fn render_diff_for_commit_prompt_handles_binary_and_text_diffs() {
+        let binary = GitDiffDto {
+            path: "assets/logo.png".to_string(),
+            staged: true,
+            status: GitChangeKind::Added,
+            old_path: None,
+            new_path: None,
+            additions: 0,
+            deletions: 0,
+            is_binary: true,
+            truncated: false,
+            hunks: Vec::new(),
+        };
+        assert_eq!(
+            render_diff_for_commit_prompt(&binary),
+            "File: assets/logo.png\nStatus: binary added\n"
+        );
+
+        let text = GitDiffDto {
+            path: "src/lib.rs".to_string(),
+            staged: false,
+            status: GitChangeKind::Renamed,
+            old_path: Some("src/old.rs".to_string()),
+            new_path: Some("src/lib.rs".to_string()),
+            additions: 1,
+            deletions: 1,
+            is_binary: false,
+            truncated: false,
+            hunks: vec![GitDiffHunkDto {
+                header: "@@ -1,2 +1,2 @@".to_string(),
+                lines: vec![
+                    GitDiffLineDto {
+                        kind: GitDiffLineKind::Context,
+                        old_number: Some(1),
+                        new_number: Some(1),
+                        text: "fn main() {".to_string(),
+                    },
+                    GitDiffLineDto {
+                        kind: GitDiffLineKind::Remove,
+                        old_number: Some(2),
+                        new_number: None,
+                        text: "old();".to_string(),
+                    },
+                    GitDiffLineDto {
+                        kind: GitDiffLineKind::Add,
+                        old_number: None,
+                        new_number: Some(2),
+                        text: "new();".to_string(),
+                    },
+                ],
+            }],
+        };
+        let rendered = render_diff_for_commit_prompt(&text);
+        assert!(rendered.contains("File: src/lib.rs"));
+        assert!(rendered.contains("Status: renamed"));
+        assert!(rendered.contains("Scope: working_tree"));
+        assert!(rendered.contains("--- src/old.rs"));
+        assert!(rendered.contains("+++ src/lib.rs"));
+        assert!(rendered.contains(" fn main() {"));
+        assert!(rendered.contains("-old();"));
+        assert!(rendered.contains("+new();"));
+    }
+
+    #[test]
+    fn git_change_and_diff_labels_cover_all_kinds() {
+        for (kind, expected) in [
+            (GitChangeKind::Added, "added"),
+            (GitChangeKind::Deleted, "deleted"),
+            (GitChangeKind::Renamed, "renamed"),
+            (GitChangeKind::Typechange, "typechange"),
+            (GitChangeKind::Unmerged, "unmerged"),
+            (GitChangeKind::Modified, "modified"),
+        ] {
+            let change = change("file", kind);
+            assert_eq!(git_change_kind_label(&change), expected);
+            let diff = GitDiffDto {
+                path: "file".to_string(),
+                staged: true,
+                status: kind,
+                old_path: None,
+                new_path: None,
+                additions: 0,
+                deletions: 0,
+                is_binary: false,
+                truncated: false,
+                hunks: Vec::new(),
+            };
+            assert_eq!(git_diff_status_label(&diff), expected);
+        }
+    }
+
+    #[test]
+    fn merge_json_value_recursively_merges_objects_and_replaces_scalars() {
+        let mut base = serde_json::json!({
+            "model": "demo",
+            "options": { "temperature": 0.2, "nested": { "a": 1 } },
+            "replace": { "old": true }
+        });
+        let patch = serde_json::json!({
+            "options": { "top_p": 0.9, "nested": { "b": 2 } },
+            "replace": false,
+            "new": [1, 2, 3]
+        });
+
+        merge_json_value(&mut base, &patch);
+
+        assert_eq!(base["model"], "demo");
+        assert_eq!(base["options"]["temperature"], 0.2);
+        assert_eq!(base["options"]["top_p"], 0.9);
+        assert_eq!(
+            base["options"]["nested"],
+            serde_json::json!({ "a": 1, "b": 2 })
+        );
+        assert_eq!(base["replace"], false);
+        assert_eq!(base["new"], serde_json::json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn normalize_generated_commit_message_strips_fences_and_prefixes() {
+        assert_eq!(
+            normalize_generated_commit_message("```text\nfeat: add search\n```").as_deref(),
+            Some("feat: add search")
+        );
+        assert_eq!(
+            normalize_generated_commit_message("Commit message: fix: repair sync").as_deref(),
+            Some("fix: repair sync")
+        );
+        assert_eq!(
+            normalize_generated_commit_message("提交信息：修复同步问题").as_deref(),
+            Some("修复同步问题")
+        );
+        assert_eq!(normalize_generated_commit_message("   "), None);
+    }
+
+    #[test]
+    fn truncate_to_char_boundary_is_utf8_safe() {
+        assert_eq!(truncate_to_char_boundary("hello", 10), "hello");
+        assert_eq!(truncate_to_char_boundary("hello world", 5), "hello");
+        assert_eq!(truncate_to_char_boundary("你好世界", 7), "你好");
+        assert_eq!(truncate_to_char_boundary("hello   world", 8), "hello");
+    }
+}

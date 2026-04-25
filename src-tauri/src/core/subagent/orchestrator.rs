@@ -938,11 +938,9 @@ fn helper_agent_error_result(message: impl Into<String>) -> AgentToolResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_helper_system_prompt, collect_prompt_sections, describe_subagent_action,
-        finalize_helper_summary, inherited_helper_prompt_sections,
-    };
+    use super::*;
     use crate::core::subagent::SubagentProfile;
+    use std::sync::Arc;
 
     #[test]
     fn helper_system_prompt_preserves_parent_language_instruction() {
@@ -1060,5 +1058,136 @@ mod tests {
 
         let log = describe_subagent_action("git_log", &serde_json::json!({ "path": "" }));
         assert_eq!(log.current_action, "reading git history for repository");
+    }
+
+    #[test]
+    fn subagent_progress_state_tracks_counts_and_recent_actions() {
+        let mut state = SubagentProgressState::default();
+
+        state.record_started("read", "reading src/lib.rs");
+        assert_eq!(state.snapshot.total_tool_calls, 1);
+        assert_eq!(
+            state.snapshot.current_action.as_deref(),
+            Some("reading src/lib.rs")
+        );
+        assert_eq!(state.snapshot.tool_counts.get("read"), Some(&1));
+
+        state.record_started("read", "reading src/main.rs");
+        state.record_started("search", "searching code");
+        state.record_finished(Some("Search complete".to_string()));
+        assert_eq!(state.snapshot.completed_steps, 1);
+        assert_eq!(state.snapshot.current_action, None);
+        assert_eq!(state.snapshot.tool_counts.get("read"), Some(&2));
+        assert_eq!(state.snapshot.tool_counts.get("search"), Some(&1));
+
+        for index in 0..10 {
+            state.push_action(format!("action {index}"));
+        }
+        assert_eq!(
+            state.snapshot.recent_actions.len(),
+            super::MAX_RECENT_ACTIONS
+        );
+        assert_eq!(
+            state.snapshot.recent_actions.first().map(String::as_str),
+            Some("action 5")
+        );
+        assert_eq!(
+            state.snapshot.recent_actions.last().map(String::as_str),
+            Some("action 9")
+        );
+    }
+
+    #[test]
+    fn snapshot_from_progress_clones_state_and_defaults_on_poison() {
+        let progress = Arc::new(std::sync::Mutex::new(SubagentProgressState::default()));
+        {
+            let mut state = progress.lock().unwrap();
+            state.record_started("list", "listing workspace");
+        }
+
+        let snapshot = snapshot_from_progress(&progress);
+        assert_eq!(snapshot.total_tool_calls, 1);
+        assert_eq!(
+            snapshot.current_action.as_deref(),
+            Some("listing workspace")
+        );
+    }
+
+    #[test]
+    fn helper_inherited_section_accepts_exact_and_suffixed_titles() {
+        assert!(is_helper_inherited_section(
+            "Project Context (workspace instructions)"
+        ));
+        assert!(is_helper_inherited_section("Runtime Context (workspace)"));
+        assert!(is_helper_inherited_section("  Profile Instructions  "));
+        assert!(!is_helper_inherited_section("Behavioral Guidelines"));
+    }
+
+    #[test]
+    fn merge_payload_recursively_merges_json() {
+        let base = serde_json::json!({
+            "model": "demo",
+            "options": { "temperature": 0.1, "nested": { "a": true } },
+            "replace": [1]
+        });
+        let patch = serde_json::json!({
+            "options": { "top_p": 0.8, "nested": { "b": false } },
+            "replace": "done"
+        });
+
+        let merged = merge_payload(base, &patch);
+        assert_eq!(merged["model"], "demo");
+        assert_eq!(merged["options"]["temperature"], 0.1);
+        assert_eq!(merged["options"]["top_p"], 0.8);
+        assert_eq!(
+            merged["options"]["nested"],
+            serde_json::json!({ "a": true, "b": false })
+        );
+        assert_eq!(merged["replace"], "done");
+    }
+
+    #[test]
+    fn take_escalation_summary_consumes_value_once() {
+        let summary = Arc::new(std::sync::Mutex::new(Some("Need parent help".to_string())));
+        assert_eq!(
+            take_escalation_summary(&summary).as_deref(),
+            Some("Need parent help")
+        );
+        assert_eq!(take_escalation_summary(&summary), None);
+    }
+
+    #[test]
+    fn helper_agent_tool_result_from_output_wraps_success_and_error() {
+        let success = helper_agent_tool_result_from_output(ToolOutput {
+            success: true,
+            result: serde_json::json!({ "ok": true }),
+        });
+        assert_eq!(success.details, Some(serde_json::json!({ "ok": true })));
+        assert!(success.content[0]
+            .as_text()
+            .unwrap()
+            .text
+            .contains("\"ok\":true"));
+
+        let failure = helper_agent_tool_result_from_output(ToolOutput {
+            success: false,
+            result: serde_json::json!({ "message": "denied" }),
+        });
+        assert_eq!(
+            failure.details,
+            Some(serde_json::json!({ "message": "denied" }))
+        );
+        assert!(failure.content[0]
+            .as_text()
+            .unwrap()
+            .text
+            .starts_with("Error: "));
+
+        let direct_error = helper_agent_error_result("boom");
+        assert_eq!(direct_error.details, None);
+        assert_eq!(
+            direct_error.content[0].as_text().unwrap().text,
+            "Error: boom"
+        );
     }
 }

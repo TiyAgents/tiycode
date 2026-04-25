@@ -2930,8 +2930,9 @@ mod tests {
         build_merge_summary_messages, build_merge_summary_system_prompt,
         build_orphaned_run_terminal_event, build_title_model_candidates, build_title_prompt,
         build_title_prompt_from_messages, collapse_whitespace, detect_prior_summary,
-        extract_context_summary_block, mark_thread_run_cancellation_requested,
-        normalize_compact_summary, normalize_generated_title, render_compact_summary_history,
+        extract_context_summary_block, extract_run_model_refs, extract_run_string,
+        mark_thread_run_cancellation_requested, merge_json_value, normalize_compact_summary,
+        normalize_generated_title, render_compact_summary_history,
         should_complete_reasoning_for_event, summary_history_char_budget, terminal_event_status,
         truncate_chars, truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
         SUMMARY_HISTORY_MIN_CHARS, SUMMARY_TOOL_RESULT_MAX_CHARS,
@@ -3362,6 +3363,111 @@ mod tests {
         assert!(newest_idx < older_idx);
         assert!(older_idx < oldest_idx);
         assert!(prompt.contains("Write the title in English."));
+    }
+
+    #[test]
+    fn terminal_event_status_and_runtime_event_classification_cover_terminal_outcomes() {
+        let completed = ThreadStreamEvent::RunCompleted {
+            run_id: "run-1".to_string(),
+        };
+        assert_eq!(terminal_event_status(&completed, false), Some("completed"));
+        assert!(super::is_terminal_runtime_event(&completed));
+
+        let limit = ThreadStreamEvent::RunLimitReached {
+            run_id: "run-1".to_string(),
+            error: "too many turns".to_string(),
+            max_turns: 10,
+        };
+        assert_eq!(terminal_event_status(&limit, false), Some("limit_reached"));
+        assert!(super::is_terminal_runtime_event(&limit));
+
+        let failed = ThreadStreamEvent::RunFailed {
+            run_id: "run-1".to_string(),
+            error: "boom".to_string(),
+        };
+        assert_eq!(terminal_event_status(&failed, false), Some("failed"));
+
+        let cancelled = ThreadStreamEvent::RunCancelled {
+            run_id: "run-1".to_string(),
+        };
+        assert_eq!(terminal_event_status(&cancelled, false), Some("cancelled"));
+
+        let interrupted = ThreadStreamEvent::RunInterrupted {
+            run_id: "run-1".to_string(),
+        };
+        assert_eq!(
+            terminal_event_status(&interrupted, false),
+            Some("interrupted")
+        );
+        assert_eq!(terminal_event_status(&interrupted, true), Some("cancelled"));
+
+        let delta = ThreadStreamEvent::MessageDelta {
+            run_id: "run-1".to_string(),
+            message_id: "message-1".to_string(),
+            delta: "hi".to_string(),
+        };
+        assert_eq!(terminal_event_status(&delta, false), None);
+        assert!(!super::is_terminal_runtime_event(&delta));
+    }
+
+    #[test]
+    fn extract_run_model_refs_reads_profile_provider_and_model_fallbacks() {
+        let plan = serde_json::json!({
+            "profileId": "profile-1",
+            "primary": {
+                "providerId": "provider-1",
+                "modelRecordId": "record-1",
+                "modelId": "model-1"
+            }
+        });
+        assert_eq!(
+            extract_run_string(&plan, &["primary", "providerId"]).as_deref(),
+            Some("provider-1")
+        );
+        assert_eq!(
+            extract_run_model_refs(&plan),
+            (
+                Some("profile-1".to_string()),
+                Some("provider-1".to_string()),
+                Some("record-1".to_string())
+            )
+        );
+
+        let fallback = serde_json::json!({
+            "primary": { "providerId": "provider-2", "modelId": "model-2" }
+        });
+        assert_eq!(
+            extract_run_model_refs(&fallback),
+            (
+                None,
+                Some("provider-2".to_string()),
+                Some("model-2".to_string())
+            )
+        );
+        assert_eq!(extract_run_string(&fallback, &["primary", "missing"]), None);
+    }
+
+    #[test]
+    fn agent_run_manager_merge_json_value_recursively_merges_payload_options() {
+        let mut base = serde_json::json!({
+            "messages": [],
+            "providerOptions": { "temperature": 0.1, "nested": { "a": 1 } },
+            "replace": { "old": true }
+        });
+        let patch = serde_json::json!({
+            "providerOptions": { "topP": 0.9, "nested": { "b": 2 } },
+            "replace": null
+        });
+
+        merge_json_value(&mut base, &patch);
+
+        assert_eq!(base["providerOptions"]["temperature"], 0.1);
+        assert_eq!(base["providerOptions"]["topP"], 0.9);
+        assert_eq!(
+            base["providerOptions"]["nested"],
+            serde_json::json!({ "a": 1, "b": 2 })
+        );
+        assert_eq!(base["replace"], serde_json::Value::Null);
     }
 
     #[test]
