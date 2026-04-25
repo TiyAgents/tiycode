@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { mapSnapshotToRunState, isTaskBoardTool, getDefaultToolOpenState } from "./runtime-thread-surface";
+import { mapSnapshotToRunState, isTaskBoardTool, getDefaultToolOpenState } from "./runtime-thread-surface-logic";
 import type { RunStatus, ThreadSnapshotDto } from "@/shared/types/api";
 
 function makeSnapshot(activeStatus: RunStatus | null): ThreadSnapshotDto {

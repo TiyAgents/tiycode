@@ -35,3 +35,6 @@ src-tauri/target
 
 .cargo-home
 src-tauri/.tmp
+
+# Test coverage
+coverage

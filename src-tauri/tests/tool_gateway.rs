@@ -1,4 +1,4 @@
-//! M1.6 — Tool Gateway & Policy Engine tests
+//! Tool Gateway and Policy Engine tests
 //!
 //! Acceptance criteria:
 //! - require-approval tools trigger confirmation UI
@@ -13,7 +13,7 @@ use serde_json::json;
 use sqlx::Row;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tiycode::core::policy_engine::{PolicyEngine, PolicyVerdict};
+use tiycode_lib::core::policy_engine::{PolicyEngine, PolicyVerdict};
 
 // =========================================================================
 // T1.6.1 — Dangerous command hard deny
@@ -848,8 +848,8 @@ async fn test_pending_tool_calls_query() {
 
 #[tokio::test]
 async fn test_tool_gateway_can_fold_approval_into_escalation() {
-    use tiycode::core::terminal_manager::TerminalManager;
-    use tiycode::core::tool_gateway::{
+    use tiycode_lib::core::terminal_manager::TerminalManager;
+    use tiycode_lib::core::tool_gateway::{
         ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
     };
 
@@ -961,8 +961,8 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
 
 #[tokio::test]
 async fn test_search_repo_allows_relative_directory_within_workspace() {
-    use tiycode::core::terminal_manager::TerminalManager;
-    use tiycode::core::tool_gateway::{
+    use tiycode_lib::core::terminal_manager::TerminalManager;
+    use tiycode_lib::core::tool_gateway::{
         ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
     };
 
@@ -1063,8 +1063,8 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
 
 #[tokio::test]
 async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
-    use tiycode::core::terminal_manager::TerminalManager;
-    use tiycode::core::tool_gateway::{
+    use tiycode_lib::core::terminal_manager::TerminalManager;
+    use tiycode_lib::core::tool_gateway::{
         ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
     };
 
@@ -1177,8 +1177,8 @@ async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
 
 #[tokio::test]
 async fn test_search_repo_treats_regex_metacharacters_as_literal_text() {
-    use tiycode::core::terminal_manager::TerminalManager;
-    use tiycode::core::tool_gateway::{
+    use tiycode_lib::core::terminal_manager::TerminalManager;
+    use tiycode_lib::core::tool_gateway::{
         ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
     };
 
@@ -1281,8 +1281,8 @@ async fn test_search_repo_treats_regex_metacharacters_as_literal_text() {
 
 #[tokio::test]
 async fn test_search_repo_supports_regex_count_mode_and_case_insensitive_matching() {
-    use tiycode::core::terminal_manager::TerminalManager;
-    use tiycode::core::tool_gateway::{
+    use tiycode_lib::core::terminal_manager::TerminalManager;
+    use tiycode_lib::core::tool_gateway::{
         ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
     };
 
@@ -1381,8 +1381,8 @@ async fn test_search_repo_supports_regex_count_mode_and_case_insensitive_matchin
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_execution_timeout_fires_for_slow_tool() {
     use std::time::Duration;
-    use tiycode::core::terminal_manager::TerminalManager;
-    use tiycode::core::tool_gateway::{
+    use tiycode_lib::core::terminal_manager::TerminalManager;
+    use tiycode_lib::core::tool_gateway::{
         ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
     };
 

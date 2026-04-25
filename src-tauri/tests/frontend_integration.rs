@@ -1,12 +1,12 @@
-//! M1.7 — Frontend full integration tests (Rust-side)
+//! Frontend integration DTO tests (Rust-side)
 //!
 //! Acceptance criteria:
 //! - ThreadStreamEvent covers all event types for the frontend adapter
 //! - All Tauri commands are registered in invoke_handler
 //! - No mock data residual in Rust layer
 
-fn sample_subagent_snapshot() -> tiycode::core::subagent::SubagentProgressSnapshot {
-    let mut snapshot = tiycode::core::subagent::SubagentProgressSnapshot::default();
+fn sample_subagent_snapshot() -> tiycode_lib::core::subagent::SubagentProgressSnapshot {
+    let mut snapshot = tiycode_lib::core::subagent::SubagentProgressSnapshot::default();
     snapshot.total_tool_calls = 2;
     snapshot.completed_steps = 1;
     snapshot.current_action = Some("reading src-tauri/src/core/agent_session.rs".into());
@@ -25,7 +25,7 @@ fn sample_subagent_snapshot() -> tiycode::core::subagent::SubagentProgressSnapsh
 
 #[test]
 fn test_thread_stream_event_run_started_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::RunStarted {
         run_id: "run-1".into(),
@@ -40,7 +40,7 @@ fn test_thread_stream_event_run_started_serialization() {
 
 #[test]
 fn test_thread_stream_event_stream_resync_required_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::StreamResyncRequired {
         run_id: "run-1".into(),
@@ -55,7 +55,7 @@ fn test_thread_stream_event_stream_resync_required_serialization() {
 
 #[test]
 fn test_thread_stream_event_message_delta_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::MessageDelta {
         run_id: "run-1".into(),
@@ -70,7 +70,7 @@ fn test_thread_stream_event_message_delta_serialization() {
 
 #[test]
 fn test_thread_stream_event_message_completed_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::MessageCompleted {
         run_id: "run-1".into(),
@@ -85,7 +85,7 @@ fn test_thread_stream_event_message_completed_serialization() {
 
 #[test]
 fn test_thread_stream_event_approval_required_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::ApprovalRequired {
         run_id: "run-1".into(),
@@ -107,7 +107,7 @@ fn test_thread_stream_event_approval_required_serialization() {
 
 #[test]
 fn test_thread_stream_event_tool_completed_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::ToolCompleted {
         run_id: "run-1".into(),
@@ -122,7 +122,7 @@ fn test_thread_stream_event_tool_completed_serialization() {
 
 #[test]
 fn test_thread_stream_event_tool_completed_preserves_edit_diff_counts() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::ToolCompleted {
         run_id: "run-1".into(),
@@ -151,7 +151,7 @@ fn test_thread_stream_event_tool_completed_preserves_edit_diff_counts() {
 
 #[test]
 fn test_thread_stream_event_tool_failed_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::ToolFailed {
         run_id: "run-1".into(),
@@ -166,7 +166,7 @@ fn test_thread_stream_event_tool_failed_serialization() {
 
 #[test]
 fn test_thread_stream_event_run_completed_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::RunCompleted {
         run_id: "run-1".into(),
@@ -178,7 +178,7 @@ fn test_thread_stream_event_run_completed_serialization() {
 
 #[test]
 fn test_thread_stream_event_run_checkpointed_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::RunCheckpointed {
         run_id: "run-1".into(),
@@ -190,7 +190,7 @@ fn test_thread_stream_event_run_checkpointed_serialization() {
 
 #[test]
 fn test_thread_stream_event_run_failed_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::RunFailed {
         run_id: "run-1".into(),
@@ -204,7 +204,7 @@ fn test_thread_stream_event_run_failed_serialization() {
 
 #[test]
 fn test_thread_stream_event_run_cancelled_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::RunCancelled {
         run_id: "run-1".into(),
@@ -216,7 +216,7 @@ fn test_thread_stream_event_run_cancelled_serialization() {
 
 #[test]
 fn test_thread_stream_event_plan_updated_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::PlanUpdated {
         run_id: "run-1".into(),
@@ -230,7 +230,7 @@ fn test_thread_stream_event_plan_updated_serialization() {
 
 #[test]
 fn test_thread_stream_event_tool_requested_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::ToolRequested {
         run_id: "run-1".into(),
@@ -246,7 +246,7 @@ fn test_thread_stream_event_tool_requested_serialization() {
 
 #[test]
 fn test_thread_stream_event_reasoning_updated_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let event = ThreadStreamEvent::ReasoningUpdated {
         run_id: "run-1".into(),
@@ -268,7 +268,7 @@ fn test_thread_stream_event_reasoning_updated_serialization() {
 
 #[test]
 fn test_thread_stream_event_subagent_events_serialization() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     // SubagentStarted
     let event = ThreadStreamEvent::SubagentStarted {
@@ -289,7 +289,7 @@ fn test_thread_stream_event_subagent_events_serialization() {
         subtask_id: "sub-1".into(),
         helper_kind: "helper_explore".into(),
         started_at: "2026-03-20T00:00:00Z".into(),
-        activity: tiycode::core::subagent::SubagentActivityStatus::Started,
+        activity: tiycode_lib::core::subagent::SubagentActivityStatus::Started,
         message: "Reading src-tauri/src/core/agent_session.rs".into(),
         snapshot: sample_subagent_snapshot(),
     };
@@ -335,7 +335,7 @@ fn test_thread_stream_event_subagent_events_serialization() {
 
 #[test]
 fn test_all_events_have_type_field() {
-    use tiycode::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
     let events: Vec<ThreadStreamEvent> = vec![
         ThreadStreamEvent::RunStarted {
@@ -394,7 +394,7 @@ fn test_all_events_have_type_field() {
             subtask_id: "s".into(),
             helper_kind: "helper_explore".into(),
             started_at: "2026-03-20T00:00:00Z".into(),
-            activity: tiycode::core::subagent::SubagentActivityStatus::Started,
+            activity: tiycode_lib::core::subagent::SubagentActivityStatus::Started,
             message: "Reading foo".into(),
             snapshot: sample_subagent_snapshot(),
         },
@@ -475,7 +475,7 @@ fn test_all_events_have_type_field() {
             run_id: "r".into(),
             model_display_name: Some("GPT-5".into()),
             context_window: Some("128000".into()),
-            usage: tiycode::model::thread::RunUsageDto {
+            usage: tiycode_lib::model::thread::RunUsageDto {
                 input_tokens: 10,
                 output_tokens: 12,
                 cache_read_tokens: 0,
@@ -522,7 +522,7 @@ fn test_all_events_have_type_field() {
 
 #[test]
 fn test_workspace_dto_camel_case() {
-    use tiycode::model::workspace::{WorkspaceDto, WorkspaceStatus};
+    use tiycode_lib::model::workspace::{WorkspaceDto, WorkspaceStatus};
 
     let dto = WorkspaceDto {
         id: "ws-1".into(),
@@ -537,7 +537,7 @@ fn test_workspace_dto_camel_case() {
         last_validated_at: Some("2026-03-16T00:00:00Z".into()),
         created_at: "2026-03-16T00:00:00Z".into(),
         updated_at: "2026-03-16T00:00:00Z".into(),
-        kind: tiycode::model::workspace::WorkspaceKind::Repo,
+        kind: tiycode_lib::model::workspace::WorkspaceKind::Repo,
         parent_workspace_id: None,
         git_common_dir: None,
         branch: None,
@@ -586,7 +586,7 @@ fn test_workspace_dto_camel_case() {
 
 #[test]
 fn test_thread_summary_dto_camel_case() {
-    use tiycode::model::thread::{ThreadStatus, ThreadSummaryDto};
+    use tiycode_lib::model::thread::{ThreadStatus, ThreadSummaryDto};
 
     let dto = ThreadSummaryDto {
         id: "t-1".into(),
@@ -606,7 +606,7 @@ fn test_thread_summary_dto_camel_case() {
 
 #[test]
 fn test_message_dto_camel_case() {
-    use tiycode::model::thread::MessageDto;
+    use tiycode_lib::model::thread::MessageDto;
 
     let dto = MessageDto {
         id: "m-1".into(),
@@ -635,7 +635,7 @@ fn test_message_dto_camel_case() {
 
 #[test]
 fn test_app_error_serialization_camel_case() {
-    use tiycode::model::errors::{AppError, ErrorSource};
+    use tiycode_lib::model::errors::{AppError, ErrorSource};
 
     let err = AppError::recoverable(
         ErrorSource::Workspace,

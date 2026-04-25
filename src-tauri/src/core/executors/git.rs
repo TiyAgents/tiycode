@@ -1049,10 +1049,324 @@ fn upstream_matches_remote(upstream_name: Option<&str>, remote_branch_name: &str
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use serde_json::json;
+
     use super::{
-        select_push_remote, upstream_matches_remote, validate_local_branch_name,
-        validate_relative_git_path,
+        append_optional_path, build_diff_args, build_log_args, build_status_args, first_line,
+        local_branch_name_from_remote, map_cli_failure, normalize_workspace_relative_paths,
+        read_context_lines, read_log_limit, read_optional_path, read_paths, render_cli_hint,
+        require_branch_name, select_push_remote, success_summary, trim_output,
+        upstream_matches_remote, validate_local_branch_name, validate_relative_git_path,
+        workspace_path_to_repo_path, GIT_OUTPUT_LIMIT,
     };
+    use crate::model::git::GitMutationAction;
+
+    #[test]
+    fn build_git_read_only_args_include_optional_path_and_flags() {
+        assert_eq!(
+            build_status_args(Some(" src/main.rs ")),
+            vec![
+                "status",
+                "--short",
+                "--branch",
+                "--untracked-files=normal",
+                "--",
+                "src/main.rs"
+            ]
+        );
+        assert_eq!(
+            build_status_args(Some("  ")),
+            vec!["status", "--short", "--branch", "--untracked-files=normal"]
+        );
+
+        assert_eq!(
+            build_diff_args(Some("src/lib.rs"), true, 7),
+            vec![
+                "diff",
+                "--no-ext-diff",
+                "--unified=7",
+                "--cached",
+                "--",
+                "src/lib.rs"
+            ]
+        );
+        assert_eq!(
+            build_diff_args(None, false, 2),
+            vec!["diff", "--no-ext-diff", "--unified=2"]
+        );
+
+        assert_eq!(
+            build_log_args(Some("docs/readme.md"), 25),
+            vec!["log", "--oneline", "-n25", "--", "docs/readme.md"]
+        );
+    }
+
+    #[test]
+    fn append_optional_path_skips_empty_paths() {
+        let mut args = vec!["status".to_string()];
+        append_optional_path(&mut args, None);
+        append_optional_path(&mut args, Some("  "));
+        assert_eq!(args, vec!["status"]);
+
+        append_optional_path(&mut args, Some("src/lib.rs"));
+        assert_eq!(args, vec!["status", "--", "src/lib.rs"]);
+    }
+
+    #[test]
+    fn read_paths_requires_non_empty_string_array() {
+        assert_eq!(
+            read_paths(&json!({ "paths": ["src/lib.rs", 42, "README.md"] })).unwrap(),
+            vec!["src/lib.rs".to_string(), "README.md".to_string()]
+        );
+
+        let missing = read_paths(&json!({})).unwrap_err();
+        assert_eq!(missing.error_code, "git.path.invalid");
+        assert!(missing.retryable);
+
+        let empty = read_paths(&json!({ "paths": [false, null] })).unwrap_err();
+        assert_eq!(empty.error_code, "git.path.invalid");
+    }
+
+    #[test]
+    fn read_optional_path_trims_and_validates_relative_path() {
+        assert_eq!(read_optional_path(&json!({})).unwrap(), None);
+        assert_eq!(read_optional_path(&json!({ "path": "  " })).unwrap(), None);
+        assert_eq!(
+            read_optional_path(&json!({ "path": " src/lib.rs " })).unwrap(),
+            Some("src/lib.rs".to_string())
+        );
+
+        let absolute = read_optional_path(&json!({ "path": "/tmp/file.rs" })).unwrap_err();
+        assert_eq!(absolute.error_code, "git.path.absolute_disallowed");
+
+        let traversal = read_optional_path(&json!({ "path": "../file.rs" })).unwrap_err();
+        assert_eq!(traversal.error_code, "git.path.traversal_disallowed");
+    }
+
+    #[test]
+    fn read_context_lines_and_log_limit_validate_bounds() {
+        assert_eq!(read_context_lines(&json!({})).unwrap(), 3);
+        assert_eq!(
+            read_context_lines(&json!({ "contextLines": 20 })).unwrap(),
+            20
+        );
+        assert_eq!(
+            read_context_lines(&json!({ "contextLines": 0 }))
+                .unwrap_err()
+                .error_code,
+            "git.diff.context_invalid"
+        );
+        assert_eq!(
+            read_context_lines(&json!({ "contextLines": 21 }))
+                .unwrap_err()
+                .error_code,
+            "git.diff.context_invalid"
+        );
+
+        assert_eq!(read_log_limit(&json!({})).unwrap(), 10);
+        assert_eq!(read_log_limit(&json!({ "limit": 100 })).unwrap(), 100);
+        assert_eq!(
+            read_log_limit(&json!({ "limit": 0 }))
+                .unwrap_err()
+                .error_code,
+            "git.log.limit_invalid"
+        );
+        assert_eq!(
+            read_log_limit(&json!({ "limit": 101 }))
+                .unwrap_err()
+                .error_code,
+            "git.log.limit_invalid"
+        );
+    }
+
+    #[test]
+    fn map_cli_failure_classifies_common_git_errors() {
+        let auth = map_cli_failure(
+            GitMutationAction::Fetch,
+            "",
+            "Permission denied (publickey). Could not read from remote repository.",
+        );
+        assert_eq!(auth.error_code, "git.remote.auth_failed");
+        assert!(auth.retryable);
+
+        let network = map_cli_failure(
+            GitMutationAction::Pull,
+            "",
+            "fatal: Could not resolve host: github.com",
+        );
+        assert_eq!(network.error_code, "git.remote.network_failed");
+
+        let no_changes = map_cli_failure(GitMutationAction::Commit, "nothing to commit", "");
+        assert_eq!(no_changes.error_code, "git.commit.no_staged_changes");
+        assert!(!no_changes.retryable);
+
+        let identity = map_cli_failure(GitMutationAction::Commit, "", "Author identity unknown");
+        assert_eq!(identity.error_code, "git.commit.identity_missing");
+
+        let blocked_pull = map_cli_failure(
+            GitMutationAction::Pull,
+            "",
+            "Your local changes to the following files would be overwritten",
+        );
+        assert_eq!(blocked_pull.error_code, "git.pull.blocked_by_local_changes");
+
+        let no_upstream = map_cli_failure(
+            GitMutationAction::Push,
+            "",
+            "fatal: The current branch has no upstream branch",
+        );
+        assert_eq!(no_upstream.error_code, "git.push.no_upstream");
+    }
+
+    #[test]
+    fn map_cli_failure_classifies_checkout_and_generic_errors() {
+        let local_changes = map_cli_failure(
+            GitMutationAction::Checkout,
+            "",
+            "Your local changes to the following files would be overwritten",
+        );
+        assert_eq!(
+            local_changes.error_code,
+            "git.checkout.blocked_by_local_changes"
+        );
+
+        let exists = map_cli_failure(
+            GitMutationAction::CreateBranch,
+            "",
+            "fatal: branch already exists",
+        );
+        assert_eq!(exists.error_code, "git.create_branch.already_exists");
+
+        let invalid = map_cli_failure(
+            GitMutationAction::CreateBranch,
+            "",
+            "fatal: 'bad name' is not a valid branch name",
+        );
+        assert_eq!(invalid.error_code, "git.branch.invalid_name");
+
+        let not_found = map_cli_failure(
+            GitMutationAction::Checkout,
+            "",
+            "pathspec 'missing' did not match any file(s) known to git",
+        );
+        assert_eq!(not_found.error_code, "git.checkout.not_found");
+
+        let generic = map_cli_failure(GitMutationAction::Fetch, "first stdout\nsecond", "");
+        assert_eq!(generic.error_code, "git.fetch.failed");
+        assert!(generic.user_message.contains("first stdout"));
+        assert!(!generic.user_message.contains("second"));
+        assert!(generic.retryable);
+    }
+
+    #[test]
+    fn cli_hint_and_success_summary_are_stable() {
+        assert_eq!(first_line("one\ntwo"), "one");
+        assert_eq!(render_cli_hint("stdout line", ""), ": stdout line");
+        assert_eq!(render_cli_hint("stdout", "stderr\nmore"), ": stderr");
+        assert_eq!(render_cli_hint("", ""), "");
+
+        assert_eq!(
+            success_summary(GitMutationAction::Commit),
+            "Committed staged changes"
+        );
+        assert_eq!(
+            success_summary(GitMutationAction::Fetch),
+            "Fetched remote updates"
+        );
+        assert_eq!(
+            success_summary(GitMutationAction::Pull),
+            "Pulled remote updates"
+        );
+        assert_eq!(
+            success_summary(GitMutationAction::Push),
+            "Pushed local commits"
+        );
+        assert_eq!(
+            success_summary(GitMutationAction::Checkout),
+            "Switched branch"
+        );
+        assert_eq!(
+            success_summary(GitMutationAction::CreateBranch),
+            "Created and switched to new branch"
+        );
+    }
+
+    #[test]
+    fn trim_output_trims_whitespace_and_caps_long_output() {
+        assert_eq!(trim_output("  hello\n"), "hello");
+
+        let long = format!("{}tail", "a".repeat(GIT_OUTPUT_LIMIT + 10));
+        let trimmed = trim_output(&long);
+        assert_eq!(trimmed.len(), GIT_OUTPUT_LIMIT);
+        assert!(!trimmed.contains("tail"));
+    }
+
+    #[test]
+    fn workspace_path_helpers_normalize_and_reject_invalid_paths() {
+        assert_eq!(
+            normalize_workspace_relative_paths(&[
+                " /src/lib.rs ".to_string(),
+                "".to_string(),
+                "docs/readme.md/".to_string(),
+            ])
+            .unwrap(),
+            vec!["src/lib.rs".to_string(), "docs/readme.md".to_string()]
+        );
+        assert_eq!(
+            normalize_workspace_relative_paths(&["  ".to_string()])
+                .unwrap_err()
+                .error_code,
+            "git.path.empty"
+        );
+
+        let repo_root = Path::new("/repo");
+        let workspace_root = Path::new("/repo/packages/app");
+        assert_eq!(
+            workspace_path_to_repo_path(repo_root, workspace_root, "src/main.rs").unwrap(),
+            "packages/app/src/main.rs"
+        );
+        assert_eq!(
+            workspace_path_to_repo_path(Path::new("/other"), workspace_root, "src/main.rs")
+                .unwrap_err()
+                .error_code,
+            "git.path.out_of_workspace"
+        );
+        assert_eq!(
+            workspace_path_to_repo_path(repo_root, workspace_root, "  ")
+                .unwrap_err()
+                .error_code,
+            "git.path.empty"
+        );
+    }
+
+    #[test]
+    fn branch_name_helpers_trim_and_validate_remote_names() {
+        assert_eq!(
+            require_branch_name(" feature/test ").unwrap(),
+            "feature/test"
+        );
+        assert_eq!(
+            require_branch_name(" ").unwrap_err().error_code,
+            "git.branch.name_empty"
+        );
+
+        assert_eq!(
+            local_branch_name_from_remote("origin/feature/test").unwrap(),
+            "feature/test"
+        );
+        assert_eq!(
+            local_branch_name_from_remote("feature/test").unwrap(),
+            "test"
+        );
+        assert_eq!(
+            local_branch_name_from_remote("origin/bad name")
+                .unwrap_err()
+                .error_code,
+            "git.branch.name_invalid"
+        );
+    }
 
     #[test]
     fn validate_local_branch_name_accepts_conventional_names() {

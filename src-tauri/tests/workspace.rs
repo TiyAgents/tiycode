@@ -1,4 +1,4 @@
-//! M1.2 — Workspace management tests
+//! Workspace management tests
 //!
 //! Acceptance criteria:
 //! - Add workspace via folder, path canonicalized, stored in DB
@@ -12,8 +12,8 @@ use sqlx::Row;
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use tiycode::core::workspace_manager::WorkspaceManager;
-use tiycode::model::workspace::WorkspaceAddInput;
+use tiycode_lib::core::workspace_manager::WorkspaceManager;
+use tiycode_lib::model::workspace::WorkspaceAddInput;
 
 fn home_env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();

@@ -1,4 +1,4 @@
-//! M1.4 — Thread core tests
+//! Thread core tests
 //!
 //! Acceptance criteria:
 //! - Thread belongs to workspace, sidebar sorted by last_active_at
@@ -10,7 +10,7 @@ mod test_helpers;
 
 use sqlx::Row;
 
-use tiycode::core::thread_manager::ThreadManager;
+use tiycode_lib::core::thread_manager::ThreadManager;
 
 // =========================================================================
 // T1.4.1 — Thread CRUD

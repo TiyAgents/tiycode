@@ -1031,6 +1031,115 @@ mod tests {
         assert_eq!(directory, src_dir.to_string_lossy());
     }
 
+    #[test]
+    fn containing_directory_returns_empty_parent_for_bare_relative_file_names() {
+        let directory = containing_directory_path("main.rs")
+            .expect("bare relative file names resolve to an empty parent path");
+
+        assert_eq!(directory, "");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn build_open_with_omits_finder_and_keeps_other_app_paths() {
+        use super::{build_open_with, WorkspaceOpenAppSpec};
+        use std::path::Path;
+
+        let finder = WorkspaceOpenAppSpec {
+            id: "finder",
+            name: "Finder",
+            bundle_names: &["Finder.app"],
+            preferred_paths: &[],
+        };
+        let cursor = WorkspaceOpenAppSpec {
+            id: "cursor",
+            name: "Cursor",
+            bundle_names: &["Cursor.app"],
+            preferred_paths: &[],
+        };
+
+        assert_eq!(
+            build_open_with(&finder, Path::new("/System/Finder.app")),
+            None
+        );
+        assert_eq!(
+            build_open_with(&cursor, Path::new("/Applications/Cursor.app")),
+            Some("/Applications/Cursor.app".to_string())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn find_workspace_open_app_spec_returns_known_apps_only() {
+        use super::find_workspace_open_app_spec;
+
+        let spec = find_workspace_open_app_spec("vscode").expect("vscode spec should exist");
+        assert_eq!(spec.name, "VS Code");
+        assert_eq!(spec.bundle_names, &["Visual Studio Code.app"]);
+        assert!(find_workspace_open_app_spec("missing-editor").is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn percent_encode_uri_component_keeps_path_separators_and_unreserved_bytes() {
+        use super::percent_encode_uri_component;
+
+        assert_eq!(
+            percent_encode_uri_component("/Users/me/My Project/你好?x=1&y=two"),
+            "/Users/me/My%20Project/%E4%BD%A0%E5%A5%BD%3Fx%3D1%26y%3Dtwo"
+        );
+        assert_eq!(
+            percent_encode_uri_component("AZaz09-_.~/nested"),
+            "AZaz09-_.~/nested"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn find_bundle_in_dir_recurses_but_skips_nested_app_bundles() {
+        use super::find_bundle_in_dir;
+
+        let tempdir = tempfile::tempdir().expect("should create tempdir");
+        let root = tempdir.path();
+        let setapp_dir = root.join("Setapp");
+        let nested_app = root.join("Container.app").join("Contents");
+        let expected = setapp_dir.join("Cursor.app");
+        let ignored_inside_app = nested_app.join("Cursor.app");
+        fs::create_dir_all(&expected).expect("should create expected app bundle");
+        fs::create_dir_all(&ignored_inside_app).expect("should create ignored nested app bundle");
+
+        assert_eq!(find_bundle_in_dir(root, &["Cursor.app"], 3), Some(expected));
+        assert_eq!(find_bundle_in_dir(root, &["Missing.app"], 3), None);
+        assert_eq!(find_bundle_in_dir(root, &["Cursor.app"], 0), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_icon_path_prefers_plist_icon_then_falls_back_to_any_icns() {
+        use super::resolve_icon_path;
+
+        let tempdir = tempfile::tempdir().expect("should create tempdir");
+        let app = tempdir.path().join("Demo.app");
+        let contents = app.join("Contents");
+        let resources = contents.join("Resources");
+        fs::create_dir_all(&resources).expect("should create resources");
+        fs::write(
+            contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleIconFile</key><string>PrimaryIcon</string></dict></plist>"#,
+        )
+        .expect("should write plist");
+        let primary = resources.join("PrimaryIcon.icns");
+        fs::write(&primary, "primary").expect("should write primary icon");
+        let fallback = resources.join("Fallback.icns");
+        fs::write(&fallback, "fallback").expect("should write fallback icon");
+
+        assert_eq!(resolve_icon_path(&app), Some(primary.clone()));
+        fs::remove_file(&primary).expect("should remove primary icon");
+        assert_eq!(resolve_icon_path(&app), Some(fallback));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_tree_path_behavior_matches_app_capabilities() {

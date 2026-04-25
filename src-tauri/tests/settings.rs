@@ -1,4 +1,4 @@
-//! M1.3 — Settings & configuration system tests
+//! Settings and configuration system tests
 //!
 //! Acceptance criteria:
 //! - Settings persist across restarts (no localStorage dependency)
@@ -8,8 +8,8 @@
 mod test_helpers;
 
 use sqlx::Row;
-use tiycode::core::settings_manager::SettingsManager;
-use tiycode::model::provider::{CustomProviderCreateInput, ProviderModelInput};
+use tiycode_lib::core::settings_manager::SettingsManager;
+use tiycode_lib::model::provider::{CustomProviderCreateInput, ProviderModelInput};
 
 // =========================================================================
 // T1.3.1 — Settings CRUD

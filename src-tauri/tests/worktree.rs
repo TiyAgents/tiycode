@@ -1,4 +1,4 @@
-//! M2.4 — Workspace worktree management tests
+//! Workspace worktree management tests
 //!
 //! Covers:
 //! - `WorktreeManager::create` produces a sibling worktree directory,
@@ -19,9 +19,9 @@ use std::process::Command;
 
 use git2::{Repository, Signature};
 use sqlx::Row;
-use tiycode::core::workspace_manager::WorkspaceManager;
-use tiycode::core::worktree_manager::WorktreeManager;
-use tiycode::model::workspace::{
+use tiycode_lib::core::workspace_manager::WorkspaceManager;
+use tiycode_lib::core::worktree_manager::WorktreeManager;
+use tiycode_lib::model::workspace::{
     WorkspaceAddInput, WorkspaceKind, WorkspaceStatus, WorktreeCreateInput,
 };
 
@@ -59,7 +59,7 @@ fn canonical(path: &Path) -> String {
 async fn setup_repo_workspace(
     pool: &sqlx::SqlitePool,
     repo_root: &Path,
-) -> tiycode::model::workspace::WorkspaceRecord {
+) -> tiycode_lib::model::workspace::WorkspaceRecord {
     let manager = WorkspaceManager::new(pool.clone());
     manager
         .add(WorkspaceAddInput {

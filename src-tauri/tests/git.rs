@@ -1,14 +1,14 @@
-//! M2.2a — Git-backed TreeView tests
+//! Git tree and repository operation tests
 
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
 use git2::{Repository, Signature};
-use tiycode::core::git_manager::GitManager;
-use tiycode::core::index_manager::IndexManager;
-use tiycode::ipc::frontend_channels::GitStreamEvent;
-use tiycode::model::git::{GitChangeKind, GitFileState};
+use tiycode_lib::core::git_manager::GitManager;
+use tiycode_lib::core::index_manager::IndexManager;
+use tiycode_lib::ipc::frontend_channels::GitStreamEvent;
+use tiycode_lib::model::git::{GitChangeKind, GitFileState};
 
 #[tokio::test]
 async fn test_git_overlay_reports_non_repo_workspace() {
@@ -170,7 +170,7 @@ async fn test_git_overlay_does_not_bubble_ignored_state_to_parent_directories() 
         .get_children(&root.to_string_lossy(), "src", None, None)
         .await
         .expect("should load src children");
-    let mut overlay_root = tiycode::core::index_manager::FileTreeNode {
+    let mut overlay_root = tiycode_lib::core::index_manager::FileTreeNode {
         name: "src".to_string(),
         path: "src".to_string(),
         is_dir: true,
@@ -228,7 +228,7 @@ async fn test_git_overlay_marks_modified_files_and_ancestors() {
         .get_children(&root.to_string_lossy(), "src", None, None)
         .await
         .expect("should load modified directory children");
-    let mut overlay_root = tiycode::core::index_manager::FileTreeNode {
+    let mut overlay_root = tiycode_lib::core::index_manager::FileTreeNode {
         name: "src".to_string(),
         path: "src".to_string(),
         is_dir: true,
@@ -789,9 +789,9 @@ fn run_git(cwd: &Path, args: &[&str]) -> String {
 }
 
 fn find_node<'a>(
-    node: &'a tiycode::core::index_manager::FileTreeNode,
+    node: &'a tiycode_lib::core::index_manager::FileTreeNode,
     target_path: &str,
-) -> Option<&'a tiycode::core::index_manager::FileTreeNode> {
+) -> Option<&'a tiycode_lib::core::index_manager::FileTreeNode> {
     if node.path == target_path {
         return Some(node);
     }
@@ -804,7 +804,7 @@ fn find_node<'a>(
 }
 
 fn find_git_state(
-    node: &tiycode::core::index_manager::FileTreeNode,
+    node: &tiycode_lib::core::index_manager::FileTreeNode,
     target_path: &str,
 ) -> Option<GitFileState> {
     find_node(node, target_path).and_then(|child| child.git_state)

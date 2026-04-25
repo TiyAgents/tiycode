@@ -165,3 +165,100 @@ pub struct WorktreeCreateInput {
     #[serde(default)]
     pub path: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use serde_json::json;
+
+    #[test]
+    fn workspace_status_maps_known_values_and_defaults_unknown_to_invalid() {
+        assert_eq!(WorkspaceStatus::Ready.as_str(), "ready");
+        assert_eq!(WorkspaceStatus::Missing.as_str(), "missing");
+        assert_eq!(WorkspaceStatus::Inaccessible.as_str(), "inaccessible");
+        assert_eq!(WorkspaceStatus::Invalid.as_str(), "invalid");
+
+        assert_eq!(WorkspaceStatus::from_str("ready"), WorkspaceStatus::Ready);
+        assert_eq!(
+            WorkspaceStatus::from_str("missing"),
+            WorkspaceStatus::Missing
+        );
+        assert_eq!(
+            WorkspaceStatus::from_str("inaccessible"),
+            WorkspaceStatus::Inaccessible
+        );
+        assert_eq!(
+            WorkspaceStatus::from_str("archived"),
+            WorkspaceStatus::Invalid
+        );
+    }
+
+    #[test]
+    fn workspace_kind_maps_known_values_and_defaults_unknown_to_standalone() {
+        assert_eq!(WorkspaceKind::Standalone.as_str(), "standalone");
+        assert_eq!(WorkspaceKind::Repo.as_str(), "repo");
+        assert_eq!(WorkspaceKind::Worktree.as_str(), "worktree");
+
+        assert_eq!(WorkspaceKind::from_str("repo"), WorkspaceKind::Repo);
+        assert_eq!(WorkspaceKind::from_str("worktree"), WorkspaceKind::Worktree);
+        assert_eq!(WorkspaceKind::from_str("folder"), WorkspaceKind::Standalone);
+    }
+
+    #[test]
+    fn workspace_dto_from_record_preserves_worktree_fields_and_formats_dates() {
+        let created_at = Utc.with_ymd_and_hms(2026, 4, 24, 1, 2, 3).unwrap();
+        let updated_at = Utc.with_ymd_and_hms(2026, 4, 24, 4, 5, 6).unwrap();
+        let last_validated_at = Utc.with_ymd_and_hms(2026, 4, 24, 7, 8, 9).unwrap();
+
+        let dto = WorkspaceDto::from(WorkspaceRecord {
+            id: "ws-worktree".to_string(),
+            name: "Feature Worktree".to_string(),
+            path: "/repo-feature".to_string(),
+            canonical_path: "/canonical/repo-feature".to_string(),
+            display_path: "~/repo-feature".to_string(),
+            is_default: true,
+            is_git: true,
+            auto_work_tree: true,
+            status: WorkspaceStatus::Ready,
+            last_validated_at: Some(last_validated_at),
+            created_at,
+            updated_at,
+            kind: WorkspaceKind::Worktree,
+            parent_workspace_id: Some("ws-parent".to_string()),
+            git_common_dir: Some("/repo/.git/worktrees/feature".to_string()),
+            branch: Some("feature/test".to_string()),
+            worktree_name: Some("abc123-feature-test".to_string()),
+        });
+
+        assert_eq!(dto.id, "ws-worktree");
+        assert_eq!(dto.status, WorkspaceStatus::Ready);
+        assert_eq!(dto.kind, WorkspaceKind::Worktree);
+        assert_eq!(dto.parent_workspace_id.as_deref(), Some("ws-parent"));
+        assert_eq!(
+            dto.git_common_dir.as_deref(),
+            Some("/repo/.git/worktrees/feature")
+        );
+        assert_eq!(dto.branch.as_deref(), Some("feature/test"));
+        assert_eq!(dto.worktree_name.as_deref(), Some("abc123-feature-test"));
+        assert_eq!(dto.created_at, created_at.to_rfc3339());
+        assert_eq!(dto.updated_at, updated_at.to_rfc3339());
+        assert_eq!(
+            dto.last_validated_at.as_deref(),
+            Some(last_validated_at.to_rfc3339().as_str())
+        );
+    }
+
+    #[test]
+    fn worktree_create_input_uses_serde_defaults() {
+        let input: WorktreeCreateInput = serde_json::from_value(json!({
+            "branch": "feature/test"
+        }))
+        .unwrap();
+
+        assert_eq!(input.branch, "feature/test");
+        assert_eq!(input.base_ref, None);
+        assert!(!input.create_branch);
+        assert_eq!(input.path, None);
+    }
+}
