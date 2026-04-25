@@ -1467,3 +1467,73 @@ async fn test_execution_timeout_fires_for_slow_tool() {
         _ => panic!("expected TimedOut, got a different variant"),
     }
 }
+
+// =========================================================================
+// T1.6.y — Pre-cancelled abort signal returns Cancelled immediately
+// =========================================================================
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_abort_signal_cancels_tool_execution() {
+    use tiycode_lib::core::terminal_manager::TerminalManager;
+    use tiycode_lib::core::tool_gateway::{
+        ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
+    };
+    use tiycore::agent::AbortSignal;
+
+    let pool = test_helpers::setup_test_pool().await;
+    let workspace_root = std::env::temp_dir().join(format!("tiy-abort-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+
+    test_helpers::seed_workspace(&pool, "ws-abort", workspace_root.to_str().unwrap()).await;
+    test_helpers::seed_thread(&pool, "t-abort", "ws-abort", None).await;
+    test_helpers::seed_run(&pool, "r-abort", "t-abort", "running", "default").await;
+    test_helpers::seed_tool_call(&pool, "tc-abort", "r-abort", "t-abort", "read", "requested")
+        .await;
+
+    // Create a file for the read tool to target so the policy check
+    // resolves to AutoAllow and the execution reaches execute_with_timeout.
+    let target_file = workspace_root.join("abort_test.txt");
+    std::fs::write(&target_file, "hello").unwrap();
+
+    let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+    let gateway = Arc::new(ToolGateway::new(pool, terminal_manager));
+
+    // Pre-cancel the abort signal before calling execute_tool_call.
+    // The AutoAllow branch in execute_with_timeout should immediately
+    // select the abort_signal.cancelled() branch and return Cancelled.
+    let abort_signal = AbortSignal::new();
+    abort_signal.cancel();
+
+    let outcome = gateway
+        .execute_tool_call(
+            ToolExecutionRequest {
+                run_id: "r-abort".into(),
+                thread_id: "t-abort".into(),
+                tool_call_id: "tc-abort".into(),
+                tool_call_storage_id: "tc-abort".into(),
+                tool_name: "read".into(),
+                tool_input: serde_json::json!({
+                    "path": target_file.display().to_string(),
+                }),
+                workspace_path: workspace_root.display().to_string(),
+                run_mode: "default".into(),
+            },
+            abort_signal,
+            ToolExecutionOptions {
+                allow_user_approval: false,
+                execution_timeout: None,
+            },
+            |_| {},
+            || {},
+        )
+        .await
+        .unwrap();
+
+    match outcome.result {
+        ToolGatewayResult::Cancelled { tool_call_id } => {
+            assert_eq!(tool_call_id, "tc-abort");
+        }
+        _ => panic!("expected Cancelled, got a different variant"),
+    }
+}
