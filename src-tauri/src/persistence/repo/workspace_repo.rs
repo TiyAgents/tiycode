@@ -499,11 +499,53 @@ mod tests {
         .await
         .unwrap();
 
+        // Seed child records so we can verify cascade deletion
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, created_at, updated_at, last_active_at)
+             VALUES ('t-1', 'ws-1', 'Thread', 'idle',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO terminal_sessions (id, thread_id, workspace_id, status, created_at)
+             VALUES ('term-1', 't-1', 'ws-1', 'running',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
         let deleted = delete(&pool, "ws-1").await.unwrap();
         assert!(deleted);
 
+        // Workspace itself should be gone
         let result = find_by_id(&pool, "ws-1").await.unwrap();
         assert!(result.is_none());
+
+        // Child records should have been cascade-deleted
+        let thread_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM threads WHERE id = 't-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            thread_count.0, 0,
+            "thread should be deleted along with workspace"
+        );
+
+        let session_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM terminal_sessions WHERE id = 'term-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            session_count.0, 0,
+            "terminal session should be deleted along with workspace"
+        );
 
         // Non-existent should return false
         let deleted = delete(&pool, "ws-1").await.unwrap();

@@ -128,6 +128,7 @@ pub async fn mark_all_active_exited(pool: &SqlitePool) -> Result<u64, AppError> 
 mod tests {
     use super::*;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::Row;
     use std::str::FromStr;
 
     async fn setup_test_pool() -> SqlitePool {
@@ -239,8 +240,27 @@ mod tests {
 
         update_exited(&pool, "s-1", Some(0)).await.unwrap();
 
+        // Session should no longer be active
         let found = find_active_by_thread(&pool, "t1").await.unwrap();
-        assert!(found.is_none()); // No longer active
+        assert!(found.is_none());
+
+        // Verify exit_code and exited_at are actually persisted
+        let row =
+            sqlx::query("SELECT exit_code, exited_at FROM terminal_sessions WHERE id = 's-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let exit_code: Option<i32> = row.get(0);
+        let exited_at: Option<String> = row.get(1);
+        assert_eq!(
+            exit_code,
+            Some(0),
+            "exit_code should be set to the provided value"
+        );
+        assert!(
+            exited_at.is_some(),
+            "exited_at should be set to a non-null timestamp"
+        );
     }
 
     #[tokio::test]

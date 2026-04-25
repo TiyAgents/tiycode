@@ -388,15 +388,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_all_by_key_returns_multiple() {
+    async fn find_all_by_key_returns_single_match() {
         let pool = setup_test_pool().await;
-        let mut p1 = make_provider("p-1", "openai-key", "First");
-        p1.provider_key = "openai-key-a".into();
-        let mut p2 = make_provider("p-2", "openai-key", "Second");
-        p2.provider_key = "openai-key-b".into();
-        // Use find_all_by_key with a shared prefix to test multiple results
-        // But provider_key is UNIQUE, so we can't have duplicate keys.
-        // Instead verify single row matches
+        // find_all_by_key uses exact match on provider_key, which has a UNIQUE constraint,
+        // so it can only return at most one result per key.
         insert(&pool, &make_provider("p-1", "openai-key", "Test"))
             .await
             .unwrap();

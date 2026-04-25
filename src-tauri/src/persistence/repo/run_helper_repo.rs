@@ -455,12 +455,20 @@ mod tests {
         assert_eq!(status, "interrupted");
 
         // Completed/failed/interrupted/cancelled should be untouched
-        let status: String = sqlx::query("SELECT status FROM run_helpers WHERE id = 'h-completed'")
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .get(0);
-        assert_eq!(status, "completed");
+        for (id, expected) in [
+            ("h-completed", "completed"),
+            ("h-failed", "failed"),
+            ("h-interrupted", "interrupted"),
+            ("h-cancelled", "cancelled"),
+        ] {
+            let status: String =
+                sqlx::query(&format!("SELECT status FROM run_helpers WHERE id = '{id}'"))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+                    .get(0);
+            assert_eq!(status, expected, "{id} status should remain '{expected}'");
+        }
     }
 
     #[tokio::test]
