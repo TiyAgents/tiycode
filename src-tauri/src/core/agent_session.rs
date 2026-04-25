@@ -3293,7 +3293,13 @@ pub(crate) async fn run_auto_compression(
             thread_id = %thread_id,
             "Auto compression skipped: cancellation already requested"
         );
-        return crate::core::context_compression::compress_context_fallback(messages, &settings);
+        let fallback =
+            crate::core::context_compression::compress_context_fallback(messages, &settings);
+        // Write back so subsequent turns start from the compressed base.
+        if let Some(session) = weak.upgrade() {
+            session.agent.replace_messages(fallback.clone());
+        }
+        return fallback;
     }
 
     // Phase 3: decide cut point
@@ -3320,7 +3326,13 @@ pub(crate) async fn run_auto_compression(
             thread_id = %thread_id,
             "Auto compression cut_point == 0 (tool-call boundary prevented compression); using truncation fallback"
         );
-        return crate::core::context_compression::compress_context_fallback(messages, &settings);
+        let fallback =
+            crate::core::context_compression::compress_context_fallback(messages, &settings);
+        // Write back so subsequent turns start from the compressed base.
+        if let Some(session) = weak.upgrade() {
+            session.agent.replace_messages(fallback.clone());
+        }
+        return fallback;
     }
 
     // Phase 4: if the old region already begins with a prior <context_summary>
@@ -3422,6 +3434,13 @@ pub(crate) async fn run_auto_compression(
                 recent_messages,
             );
 
+            // Phase 6.5: write back compressed messages to Agent internal state
+            // so subsequent turns in the same run start from the compressed base
+            // instead of re-compressing the full history every turn.
+            if let Some(session) = weak.upgrade() {
+                session.agent.replace_messages(result.clone());
+            }
+
             tracing::info!(
                 thread_id = %thread_id,
                 discarded = cut_point,
@@ -3504,6 +3523,12 @@ pub(crate) async fn run_auto_compression(
                 &heuristic_summary,
                 recent_messages,
             );
+
+            // Write back fallback-compressed messages to Agent internal state
+            // so subsequent turns start from the compressed base.
+            if let Some(session) = weak.upgrade() {
+                session.agent.replace_messages(result.clone());
+            }
 
             tracing::info!(
                 thread_id = %thread_id,
