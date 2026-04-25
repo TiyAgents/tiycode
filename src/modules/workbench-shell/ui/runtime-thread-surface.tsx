@@ -2658,7 +2658,6 @@ export function RuntimeThreadSurface({
 
     stream.onReasoning = withActiveStream((event) => {
       setThinkingPlaceholder(null);
-      scheduleThinkingPhase(event.runId);
       const reasoningMessageId = event.messageId ?? `reasoning-${event.runId}`;
       setMessages((current) =>
         appendOrReplaceMessage(

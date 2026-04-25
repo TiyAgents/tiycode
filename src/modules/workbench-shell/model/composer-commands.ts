@@ -266,17 +266,39 @@ export function buildComposerCommandRegistry(settingsCommands: ReadonlyArray<Com
   return [...BUILTIN_COMMANDS, ...customCommands];
 }
 
+/**
+ * Text length above which slash-command parsing is skipped.
+ * Matches the threshold used in workbench-prompt-composer.tsx.
+ */
+const LARGE_TEXT_THRESHOLD = 10_240;
+
 export function parseSlashCommandInput(
   value: string,
   registry: ReadonlyArray<ComposerCommandDescriptor>,
 ): { activeToken: string; command: ComposerCommandDescriptor | null; query: string; argumentsText: string } | null {
-  const trimmedStart = value.trimStart();
-  if (!trimmedStart.startsWith("/")) {
+  // Short-circuit for large text — no slash command needs this much input.
+  if (value.length > LARGE_TEXT_THRESHOLD) {
     return null;
   }
 
-  const firstLine = trimmedStart.split(/\r?\n/, 1)[0] ?? "";
-  const commandToken = firstLine.trim();
+  // Find the first non-whitespace character without allocating a trimmed copy.
+  let start = 0;
+  while (start < value.length) {
+    const ch = value.charCodeAt(start);
+    if (ch === 32 || ch === 9 || ch === 10 || ch === 13) {
+      start++;
+    } else {
+      break;
+    }
+  }
+  if (start >= value.length || value.charCodeAt(start) !== 47 /* '/' */) {
+    return null;
+  }
+
+  // Extract the first line from the trimmed-start position without split().
+  const nlIndex = value.indexOf("\n", start);
+  const firstLine = nlIndex >= 0 ? value.slice(start, nlIndex).trimEnd() : value.slice(start).trimEnd();
+  const commandToken = firstLine;
   if (!commandToken.startsWith("/")) {
     return null;
   }

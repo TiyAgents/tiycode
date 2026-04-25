@@ -216,6 +216,28 @@ pub async fn list_thread_ids_with_active_runs(pool: &SqlitePool) -> Result<Vec<S
     Ok(rows)
 }
 
+/// Cancel all `waiting_approval` runs for a thread, setting them to `cancelled`
+/// with a `finished_at` timestamp.  Called when a pending plan approval is
+/// superseded by a new run so the old run does not linger as a zombie.
+pub async fn cancel_waiting_approval_by_thread(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "UPDATE thread_runs
+         SET status = 'cancelled',
+             finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE thread_id = ?
+           AND status = 'waiting_approval'
+           AND finished_at IS NULL",
+    )
+    .bind(thread_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
 /// Mark all non-terminal runs for a thread as interrupted (crash recovery).
 pub async fn interrupt_active_runs(pool: &SqlitePool) -> Result<u64, AppError> {
     let result = sqlx::query(
@@ -626,5 +648,59 @@ mod tests {
             .unwrap()
             .expect("should exist");
         assert_eq!(found.status, "interrupted");
+    }
+
+    #[tokio::test]
+    async fn cancel_waiting_approval_by_thread_terminates_zombie_run() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+
+        // Move run-1 to waiting_approval (non-terminal, no finished_at)
+        update_status(&pool, "run-1", "waiting_approval")
+            .await
+            .unwrap();
+        let before = find_latest_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(before.status, "waiting_approval");
+
+        let affected = cancel_waiting_approval_by_thread(&pool, "t1")
+            .await
+            .unwrap();
+        assert_eq!(affected, 1);
+
+        let after = find_latest_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(after.status, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn cancel_waiting_approval_by_thread_ignores_other_statuses() {
+        let pool = setup_test_pool().await;
+        let r = RunInsert {
+            id: "run-1".into(),
+            thread_id: "t1".into(),
+            profile_id: None,
+            run_mode: "default".into(),
+            provider_id: None,
+            model_id: None,
+            effective_model_plan_json: None,
+            status: "running".into(),
+        };
+        insert(&pool, &r).await.unwrap();
+
+        let affected = cancel_waiting_approval_by_thread(&pool, "t1")
+            .await
+            .unwrap();
+        assert_eq!(affected, 0);
+
+        let found = find_latest_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.status, "running");
     }
 }
