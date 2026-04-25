@@ -139,3 +139,82 @@ pub async fn run_command(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run_command;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn run_command_returns_error_output_when_command_is_missing() {
+        let output = run_command(&json!({}), "/tmp")
+            .await
+            .expect("missing command should not fail transport");
+
+        assert!(!output.success);
+        assert_eq!(output.result["error"], "Missing 'command' field");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn run_command_captures_stdout_stderr_and_exit_code() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let output = run_command(
+            &json!({
+                "command": "printf 'hello'; printf 'warn' >&2",
+                "cwd": tempdir.path(),
+                "timeout": 5,
+            }),
+            "/tmp",
+        )
+        .await
+        .expect("command should run");
+
+        assert!(output.success);
+        assert_eq!(
+            output.result["command"],
+            "printf 'hello'; printf 'warn' >&2"
+        );
+        assert_eq!(output.result["exitCode"], 0);
+        assert_eq!(output.result["stdout"], "hello");
+        assert_eq!(output.result["stderr"], "warn");
+        assert_eq!(output.result["stdoutTruncated"], false);
+        assert_eq!(output.result["stderrTruncated"], false);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn run_command_reports_nonzero_exit_status_without_transport_error() {
+        let output = run_command(
+            &json!({
+                "command": "printf 'bad' >&2; exit 7",
+                "timeout": 5,
+            }),
+            "/tmp",
+        )
+        .await
+        .expect("command should run");
+
+        assert!(!output.success);
+        assert_eq!(output.result["exitCode"], 7);
+        assert_eq!(output.result["stderr"], "bad");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn run_command_times_out_and_reports_command() {
+        let output = run_command(
+            &json!({
+                "command": "sleep 2",
+                "timeout": 0,
+            }),
+            "/tmp",
+        )
+        .await
+        .expect("timeout should be reported as tool output");
+
+        assert!(!output.success);
+        assert_eq!(output.result["command"], "sleep 2");
+        assert_eq!(output.result["error"], "Command timed out after 0s");
+    }
+}

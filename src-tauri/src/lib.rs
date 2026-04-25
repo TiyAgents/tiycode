@@ -587,9 +587,87 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{log_dir, LOG_FILE_PREFIX, LOG_FILE_SUFFIX};
+    use super::{
+        init_directories, log_dir, parse_bool_setting, persisted_window_state_flags, tiy_home,
+        LOG_FILE_PREFIX, LOG_FILE_SUFFIX,
+    };
+    use crate::model::settings::SettingRecord;
     use std::io::Write;
+    use tauri_plugin_window_state::StateFlags;
     use tracing_appender::rolling::{RollingFileAppender, Rotation};
+
+    fn setting(value_json: &str) -> SettingRecord {
+        SettingRecord {
+            key: "test.setting".to_string(),
+            value_json: value_json.to_string(),
+            updated_at: "2026-04-25T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn tiy_home_uses_dot_tiy_under_user_home() {
+        let path = tiy_home();
+        assert!(
+            path.ends_with(".tiy"),
+            "expected tiy home to end with .tiy, got {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn persisted_window_state_flags_include_only_restorable_window_state() {
+        let flags = persisted_window_state_flags();
+
+        assert!(flags.contains(StateFlags::SIZE));
+        assert!(flags.contains(StateFlags::POSITION));
+        assert!(flags.contains(StateFlags::MAXIMIZED));
+        assert!(flags.contains(StateFlags::FULLSCREEN));
+        assert!(!flags.contains(StateFlags::VISIBLE));
+        assert!(!flags.contains(StateFlags::DECORATIONS));
+    }
+
+    #[test]
+    fn init_directories_creates_expected_tiy_subdirectories() {
+        let tempdir = tempfile::tempdir().expect("should create tempdir");
+        let base = tempdir.path().join(".tiy-test");
+
+        init_directories(&base).expect("should create app directories");
+
+        for relative in [
+            "db",
+            "db/backups",
+            "skills",
+            "prompts",
+            "plugins",
+            "automations",
+            "workspace",
+            "cache",
+            "cache/index",
+            "catalog",
+        ] {
+            let path = base.join(relative);
+            assert!(
+                path.is_dir(),
+                "expected {} to be a directory",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn parse_bool_setting_accepts_only_json_booleans() {
+        assert!(parse_bool_setting(Some(setting("true")), "test.setting"));
+        assert!(!parse_bool_setting(Some(setting("false")), "test.setting"));
+        assert!(!parse_bool_setting(
+            Some(setting("\"true\"")),
+            "test.setting"
+        ));
+        assert!(!parse_bool_setting(
+            Some(setting("not-json")),
+            "test.setting"
+        ));
+        assert!(!parse_bool_setting(None, "test.setting"));
+    }
 
     #[test]
     fn log_dir_uses_platform_native_location() {

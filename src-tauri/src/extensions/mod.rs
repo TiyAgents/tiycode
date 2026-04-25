@@ -5688,6 +5688,233 @@ mod tests {
         assert_eq!(state.last_error.as_deref(), Some("probe failed"));
     }
 
+    #[tokio::test]
+    async fn extension_builders_render_plugin_mcp_skill_and_marketplace_dtos() {
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+        let plugin_dir = tempdir().expect("plugin dir");
+        let commands_dir = plugin_dir.path().join("commands");
+        let skills_dir = plugin_dir.path().join("skills/alpha-skill");
+        fs::create_dir_all(&commands_dir).expect("commands dir");
+        fs::create_dir_all(&skills_dir).expect("skills dir");
+        fs::write(commands_dir.join("fix.md"), "Fix it").expect("command file");
+        fs::write(
+            skills_dir.join("SKILL.md"),
+            "---\nname: Alpha Skill\ntags:\n- docs\n---\nSkill body",
+        )
+        .expect("skill file");
+        fs::write(
+            plugin_dir.path().join(".mcp.json"),
+            serde_json::json!({
+                "servers": [
+                    { "name": "Docs Server" },
+                    { "id": "api-server", "label": "API Server" }
+                ]
+            })
+            .to_string(),
+        )
+        .expect("mcp bundle");
+
+        let manifest = PluginManifest {
+            id: "demo.plugin".to_string(),
+            name: "Demo Plugin".to_string(),
+            version: "1.0.0".to_string(),
+            description: Some("Demo description".to_string()),
+            author: Some("Ada".to_string()),
+            homepage: Some("https://example.com".to_string()),
+            default_enabled: Some(false),
+            capabilities: vec!["tools".to_string(), "commands".to_string()],
+            permissions: vec!["shell".to_string()],
+            hooks: Some(PluginManifestHooks {
+                pre_tool_use: Some(vec!["pre".to_string()]),
+                post_tool_use: Some(vec!["post".to_string()]),
+                on_run_start: Some(vec!["start".to_string()]),
+                on_run_complete: Some(vec!["done".to_string()]),
+            }),
+            tools: vec![PluginManifestTool {
+                name: "run".to_string(),
+                description: "Run a task".to_string(),
+                command: "node".to_string(),
+                args: vec!["tool.js".to_string()],
+                env: None,
+                cwd: Some("tools".to_string()),
+                timeout_ms: Some(1234),
+                required_permission: "shell".to_string(),
+            }],
+            commands: vec![PluginManifestCommand {
+                name: "review".to_string(),
+                description: "Review code".to_string(),
+                prompt_template: Some("Review this".to_string()),
+            }],
+            timeout_ms: Some(30_000),
+            skills_dir: Some("skills".to_string()),
+            config_schema: Some(PluginManifestSchema {
+                r#type: "json-schema".to_string(),
+                path: "schema.json".to_string(),
+            }),
+        };
+        let runtime = InstalledPluginRuntime {
+            manifest: manifest.clone(),
+            path: plugin_dir.path().to_path_buf(),
+            enabled: true,
+        };
+
+        let summary = manager.build_plugin_summary(
+            &runtime,
+            ExtensionInstallState::Enabled,
+            Some("ignored because description exists".to_string()),
+        );
+        assert_eq!(summary.kind, ExtensionKind::Plugin);
+        assert_eq!(summary.health, ExtensionHealth::Healthy);
+        assert_eq!(summary.description.as_deref(), Some("Demo description"));
+        assert_eq!(summary.permissions, vec!["shell".to_string()]);
+        assert_eq!(
+            summary.tags,
+            vec!["tools".to_string(), "commands".to_string()]
+        );
+        assert!(matches!(
+            summary.source,
+            ExtensionSourceDto::LocalDir { .. }
+        ));
+
+        let error_summary = manager.build_plugin_summary(
+            &InstalledPluginRuntime {
+                manifest: PluginManifest {
+                    description: None,
+                    ..manifest.clone()
+                },
+                ..runtime.clone()
+            },
+            ExtensionInstallState::Error,
+            Some("load failed".to_string()),
+        );
+        assert_eq!(error_summary.health, ExtensionHealth::Error);
+        assert_eq!(error_summary.description.as_deref(), Some("load failed"));
+
+        let detail = manager.build_plugin_detail(&runtime, Some("previous error".to_string()));
+        assert_eq!(detail.author.as_deref(), Some("Ada"));
+        assert!(!detail.default_enabled);
+        assert!(detail.enabled);
+        assert_eq!(detail.hooks.len(), 4);
+        assert_eq!(detail.tools[0].required_permission, "shell");
+        assert_eq!(
+            detail
+                .commands
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["fix", "review"]
+        );
+        assert_eq!(detail.bundled_skills, vec!["Alpha Skill".to_string()]);
+        assert_eq!(
+            detail.bundled_mcp_servers,
+            vec!["API Server".to_string(), "Docs Server".to_string()]
+        );
+        assert_eq!(detail.config_schema_path.as_deref(), Some("schema.json"));
+        assert_eq!(detail.last_error.as_deref(), Some("previous error"));
+
+        let mcp_state = |status: &str, enabled: bool, stale_snapshot: bool, transport: &str| {
+            McpServerStateDto {
+                id: format!("docs-{status}"),
+                label: "Docs".to_string(),
+                scope: "global".to_string(),
+                status: status.to_string(),
+                phase: "ready".to_string(),
+                tools: Vec::new(),
+                resources: Vec::new(),
+                stale_snapshot,
+                last_error: Some("runtime note".to_string()),
+                updated_at: "now".to_string(),
+                config: McpServerConfigDto {
+                    id: format!("docs-{status}"),
+                    label: "Docs".to_string(),
+                    transport: transport.to_string(),
+                    enabled,
+                    auto_start: true,
+                    command: None,
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                    url: Some("https://example.com/mcp".to_string()),
+                    headers: HashMap::new(),
+                    timeout_ms: None,
+                },
+            }
+        };
+        let connected =
+            manager.build_mcp_summary(&mcp_state("connected", true, false, "streamable-http"));
+        assert_eq!(connected.install_state, ExtensionInstallState::Enabled);
+        assert_eq!(connected.health, ExtensionHealth::Healthy);
+        assert_eq!(connected.permissions, vec!["network-access".to_string()]);
+        let degraded = manager.build_mcp_summary(&mcp_state("degraded", true, true, "stdio"));
+        assert_eq!(degraded.health, ExtensionHealth::Degraded);
+        assert!(degraded.tags.contains(&"stale-snapshot".to_string()));
+        assert_eq!(degraded.permissions, vec!["shell-exec".to_string()]);
+        let config_error =
+            manager.build_mcp_summary(&mcp_state("config_error", true, false, "stdio"));
+        assert_eq!(config_error.install_state, ExtensionInstallState::Error);
+        assert_eq!(config_error.health, ExtensionHealth::Error);
+        let disabled = manager.build_mcp_summary(&mcp_state("disconnected", false, false, "stdio"));
+        assert_eq!(disabled.install_state, ExtensionInstallState::Disabled);
+        assert_eq!(disabled.health, ExtensionHealth::Unknown);
+
+        let skill = SkillRecordDto {
+            id: "skill-alpha".to_string(),
+            name: "Alpha Skill".to_string(),
+            description: Some("Helps with docs".to_string()),
+            tags: vec!["docs".to_string()],
+            triggers: Vec::new(),
+            tools: Vec::new(),
+            priority: None,
+            source: "workspace".to_string(),
+            path: "/workspace/.tiy/skills/alpha".to_string(),
+            enabled: false,
+            scope: "workspace".to_string(),
+            content_preview: "preview".to_string(),
+            prompt_budget_chars: 7,
+        };
+        let skill_summary = manager.build_skill_summary(&skill);
+        assert_eq!(skill_summary.kind, ExtensionKind::Skill);
+        assert_eq!(skill_summary.install_state, ExtensionInstallState::Disabled);
+        assert_eq!(skill_summary.health, ExtensionHealth::Healthy);
+        assert!(matches!(
+            skill_summary.source,
+            ExtensionSourceDto::LocalDir { .. }
+        ));
+        assert_eq!(skill_summary.tags, vec!["docs".to_string()]);
+
+        let marketplace = manager.build_marketplace_source_dto(
+            &MarketplaceSourceRecord {
+                id: "custom-source".to_string(),
+                name: "Custom Source".to_string(),
+                url: "https://example.com/catalog.git".to_string(),
+                kind: "git".to_string(),
+                last_synced_at: Some("2026-04-25T00:00:00Z".to_string()),
+                last_error: None,
+            },
+            Some(3),
+        );
+        assert_eq!(marketplace.status, "ready");
+        assert_eq!(marketplace.plugin_count, 3);
+        assert!(!marketplace.builtin);
+        let marketplace_error = manager.build_marketplace_source_dto(
+            &MarketplaceSourceRecord {
+                id: "custom-source".to_string(),
+                name: "Custom Source".to_string(),
+                url: "https://example.com/catalog.git".to_string(),
+                kind: "git".to_string(),
+                last_synced_at: None,
+                last_error: Some("git failed".to_string()),
+            },
+            None,
+        );
+        assert_eq!(marketplace_error.status, "error");
+        assert_eq!(marketplace_error.plugin_count, 0);
+    }
+
     #[test]
     fn plugin_manifest_helpers_parse_aliases_and_optional_sections() {
         let plugin_dir = Path::new("/plugins/demo");
