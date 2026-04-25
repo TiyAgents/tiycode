@@ -432,6 +432,10 @@ impl AgentRunManager {
         )
         .await?;
 
+        // Terminate the planning run that was parked in waiting_approval so it
+        // does not linger as a zombie with no finished_at timestamp.
+        run_repo::update_status(&self.pool, &planning_run_id, "completed").await?;
+
         Ok(result)
     }
 
@@ -977,6 +981,10 @@ impl AgentRunManager {
             )
             .await?;
         }
+
+        // Terminate any waiting_approval runs so they don't linger as zombies
+        // in the database with no finished_at timestamp.
+        run_repo::cancel_waiting_approval_by_thread(&self.pool, thread_id).await?;
 
         Ok(())
     }
