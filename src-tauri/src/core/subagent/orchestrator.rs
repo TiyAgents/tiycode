@@ -529,7 +529,7 @@ impl HelperAgentOrchestrator {
             state
                 .helpers
                 .retain(|candidate| !Arc::ptr_eq(candidate, helper));
-            if state.helpers.is_empty() && !state.cancelled {
+            if state.helpers.is_empty() {
                 active.remove(run_id);
             }
         }
