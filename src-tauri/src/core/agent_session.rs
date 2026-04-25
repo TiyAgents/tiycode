@@ -2381,7 +2381,7 @@ pub(crate) fn convert_history_messages(
                 .iter()
                 .rposition(|(key, entry)| {
                     key.position == insert_pos
-                        && key.sub == 0
+                        && key.sub == 3
                         && matches!(entry, TimelineEntry::Msg(AgentMessage::Assistant(_)))
                 })
                 .and_then(|tl_idx| {
@@ -2407,7 +2407,7 @@ pub(crate) fn convert_history_messages(
                     .build()
                     .expect("history tool-call assistant message should always build");
                 timeline.push((
-                    SortKey::before_position(insert_pos, tc_idx * 2),
+                    SortKey::after_position(insert_pos, tc_idx * 2),
                     TimelineEntry::Msg(AgentMessage::Assistant(assistant)),
                 ));
             }
@@ -2420,8 +2420,11 @@ pub(crate) fn convert_history_messages(
                 .unwrap_or_else(|| "[no output]".to_string());
 
             let tool_result = ToolResultMessage::text(&tc.id, &tc.tool_name, result_text, false);
+            // Standalone and merged-into-standalone tool results use
+            // after_position so they sort after reasoning PendingThinking
+            // at the same position (matching the standalone assistant key).
             timeline.push((
-                SortKey::before_position(insert_pos, tc_idx * 2 + 1),
+                SortKey::after_position(insert_pos, tc_idx * 2 + 1),
                 TimelineEntry::Msg(AgentMessage::ToolResult(tool_result)),
             ));
         }
@@ -2471,15 +2474,20 @@ pub(crate) fn convert_history_messages(
 /// Sort key for interleaving messages and tool calls chronologically.
 ///
 /// Messages get a whole-number position (their index in the original list).
-/// Tool calls are placed just before a specific position using fractional keys.
+/// Tool calls are placed relative to a specific position using sub-keys.
+///
+/// Sub-key ordering (ascending):
+///   0 = merged tool-call result placed *before* a positional message
+///   2 = positional message (Phase 1 text / reasoning / plan entries)
+///   3 = standalone tool-call assistant + result placed *after* positional
+///       messages so that Phase 4 can attach preceding PendingThinking
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct SortKey {
     /// Main position (message index).
     position: usize,
-    /// 0 = a tool call slot before this position, 1 = the actual message at this position.
-    /// For tool call pairs: sub 0 = assistant+tool_call, sub 1 = tool_result.
+    /// Determines ordering within the same position — see doc above.
     sub: u8,
-    /// Tiebreaker for multiple tool calls before the same position.
+    /// Tiebreaker for multiple entries at the same (position, sub).
     seq: usize,
 }
 
@@ -2487,7 +2495,7 @@ impl SortKey {
     fn positional(pos: usize) -> Self {
         Self {
             position: pos,
-            sub: 2, // after any tool calls inserted before this position
+            sub: 2,
             seq: 0,
         }
     }
@@ -2496,6 +2504,19 @@ impl SortKey {
         Self {
             position: pos,
             sub: 0,
+            seq,
+        }
+    }
+
+    /// Place a standalone tool-call assistant (or its result) **after** all
+    /// positional entries at the same position.  This ensures Phase 4's
+    /// `PendingThinking` from reasoning messages at this position is
+    /// accumulated *before* the standalone is processed, so the standalone
+    /// receives the correct `reasoning_content`.
+    fn after_position(pos: usize, seq: usize) -> Self {
+        Self {
+            position: pos,
+            sub: 3,
             seq,
         }
     }
@@ -3764,9 +3785,10 @@ mod tests {
         response_style_system_instruction, runtime_security_config, runtime_tools_for_profile,
         runtime_tools_for_profile_with_extensions, standard_tool_timeout,
         trim_history_to_current_context, ContextCompressionRuntimeState, ProfileResponseStyle,
-        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
-        MAIN_AGENT_TOOL_TIMEOUT_SECS, PLAN_MODE_MISSING_CHECKPOINT_ERROR,
-        PLAN_READ_ONLY_TOOL_PROFILE, STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
+        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, SortKey,
+        DEFAULT_FULL_TOOL_PROFILE, MAIN_AGENT_TOOL_TIMEOUT_SECS,
+        PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
+        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
     use std::sync::Mutex as StdMutex;
@@ -5578,8 +5600,11 @@ Used for prompt assembly coverage.
     #[test]
     fn convert_history_messages_attaches_reasoning_to_tool_call() {
         // Scenario: user → reasoning → tool_call (no intermediate text).
-        // No text message to merge into, so tool call gets its own assistant
-        // message and Phase 4 attaches the pending thinking block.
+        // No text message to merge into, so tool call gets its own standalone
+        // assistant message.  The reasoning message's position IS the
+        // insert_pos for the tool call.  With SortKey::after_position the
+        // standalone sorts after the reasoning, so Phase 4 attaches the
+        // PendingThinking correctly.
         let messages = vec![
             MessageRecord {
                 id: "msg-user".to_string(),
@@ -5593,6 +5618,9 @@ Used for prompt assembly coverage.
                 attachments_json: None,
                 created_at: "2026-01-01T00:00:00.000Z".to_string(),
             },
+            // Reasoning arrives at 00:00:02 — AFTER the tool call's started_at
+            // so that insert_pos points here (the first message in run-1 with
+            // created_at >= tc.started_at).
             MessageRecord {
                 id: "msg-reasoning".to_string(),
                 thread_id: "thread-1".to_string(),
@@ -5605,7 +5633,7 @@ Used for prompt assembly coverage.
                     serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
                 ),
                 attachments_json: None,
-                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+                created_at: "2026-01-01T00:00:02.000Z".to_string(),
             },
             // A plain_message from a LATER response (after tool result).
             MessageRecord {
@@ -5633,14 +5661,16 @@ Used for prompt assembly coverage.
             tool_output: Some(serde_json::json!("file.txt")),
             status: "completed".to_string(),
             approval_status: None,
-            started_at: "2026-01-01T00:00:02.000Z".to_string(),
+            started_at: "2026-01-01T00:00:01.000Z".to_string(),
             finished_at: Some("2026-01-01T00:00:03.000Z".to_string()),
         }];
 
         let model = &sample_resolved_model_role("primary").model;
         let history = convert_history_messages(&messages, &tool_calls, model);
 
-        // No preceding text in same run before TC1 → standalone assistant.
+        // insert_pos = reasoning (index 1), no preceding text → standalone.
+        // Phase 4: reasoning PendingThinking at (1,2) → standalone at (1,3)
+        // gets Thinking attached.
         // Expected: User → Assistant[Thinking, ToolCall] → ToolResult → Assistant[Text]
         assert_eq!(
             history.len(),
@@ -5698,7 +5728,7 @@ Used for prompt assembly coverage.
     #[test]
     fn convert_history_messages_merges_multiple_standalone_tool_calls_at_same_position() {
         // Scenario: one DeepSeek response emits reasoning + two tool calls and no text.
-        // Both tool calls insert before the same later assistant text message, so they
+        // Both tool calls insert at the same position (reasoning message), so they
         // must be reconstructed as a single assistant message sharing reasoning_content.
         let messages = vec![
             MessageRecord {
@@ -5713,6 +5743,8 @@ Used for prompt assembly coverage.
                 attachments_json: None,
                 created_at: "2026-01-01T00:00:00.000Z".to_string(),
             },
+            // Reasoning arrives at 00:00:02 — AFTER both tool calls' started_at
+            // so that insert_pos points here for both tool calls.
             MessageRecord {
                 id: "msg-reasoning".to_string(),
                 thread_id: "thread-1".to_string(),
@@ -5725,7 +5757,7 @@ Used for prompt assembly coverage.
                     serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
                 ),
                 attachments_json: None,
-                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+                created_at: "2026-01-01T00:00:02.000Z".to_string(),
             },
             MessageRecord {
                 id: "msg-assistant".to_string(),
@@ -5753,7 +5785,7 @@ Used for prompt assembly coverage.
                 tool_output: Some(serde_json::json!("/tmp/project")),
                 status: "completed".to_string(),
                 approval_status: None,
-                started_at: "2026-01-01T00:00:02.000Z".to_string(),
+                started_at: "2026-01-01T00:00:01.000Z".to_string(),
                 finished_at: Some("2026-01-01T00:00:03.000Z".to_string()),
             },
             ToolCallDto {
@@ -5767,7 +5799,7 @@ Used for prompt assembly coverage.
                 tool_output: Some(serde_json::json!("file.txt")),
                 status: "completed".to_string(),
                 approval_status: None,
-                started_at: "2026-01-01T00:00:04.000Z".to_string(),
+                started_at: "2026-01-01T00:00:01.500Z".to_string(),
                 finished_at: Some("2026-01-01T00:00:05.000Z".to_string()),
             },
         ];
@@ -5985,9 +6017,47 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn sortkey_ordering() {
+        // Same position: before (sub=0) < positional (sub=2) < after (sub=3)
+        let before = SortKey::before_position(5, 1);
+        let positional = SortKey::positional(5);
+        let after = SortKey::after_position(5, 2);
+        assert!(
+            before < positional,
+            "before_position should sort before positional"
+        );
+        assert!(
+            positional < after,
+            "positional should sort before after_position"
+        );
+        assert!(
+            before < after,
+            "before_position should sort before after_position"
+        );
+
+        // Seq tiebreaker for same (position, sub)
+        let a = SortKey::before_position(5, 10);
+        let b = SortKey::before_position(5, 20);
+        assert!(
+            a < b,
+            "lower seq should sort before higher seq at same (position, sub)"
+        );
+
+        // Different positions should still respect sub ordering when positions differ
+        let later_pos_before = SortKey::before_position(10, 0);
+        let earlier_pos_after = SortKey::after_position(5, 0);
+        assert!(
+            earlier_pos_after < later_pos_before,
+            "position should be primary sort key"
+        );
+    }
+
+    #[test]
     fn convert_history_messages_multiple_reasoning_tool_call_cycles() {
-        // Scenario: user → R1 → text1 → TC1 → R2 → TC2 → R3 → text2
-        // R1 should attach to text1, R2 to TC2 (not TC1), R3 to text2.
+        // Scenario: user → R1 → text1 → R2 → TC2 → R3 → text2
+        // TC1 merges into text1 (no intervening reasoning).
+        // TC2 cannot merge because R2 sits between text1 and its insert_pos.
+        // R1 attaches to text1, R2 attaches to TC2 standalone, R3 to text2.
         let messages = vec![
             MessageRecord {
                 id: "msg-01-user".to_string(),
@@ -6014,7 +6084,7 @@ Used for prompt assembly coverage.
                 attachments_json: None,
                 created_at: "2026-01-01T00:00:01.000Z".to_string(),
             },
-            // text1 (comes after TC1 in time, but is the anchor message for TC1)
+            // text1 — TC1 merges into this (no reasoning between text1 and TC1)
             MessageRecord {
                 id: "msg-03-text1".to_string(),
                 thread_id: "t1".to_string(),
@@ -6027,7 +6097,7 @@ Used for prompt assembly coverage.
                 attachments_json: None,
                 created_at: "2026-01-01T00:00:05.000Z".to_string(),
             },
-            // R2
+            // R2 — blocks TC2 from merging into text1
             MessageRecord {
                 id: "msg-04-r2".to_string(),
                 thread_id: "t1".to_string(),
@@ -6069,7 +6139,8 @@ Used for prompt assembly coverage.
         ];
 
         let tool_calls = vec![
-            // TC1: started after R1, before text1
+            // TC1: started AFTER text1, no reasoning between text1 and TC1's
+            // insert_pos → merges into text1.
             ToolCallDto {
                 id: "tc-1".to_string(),
                 storage_id: "st-1".to_string(),
@@ -6081,10 +6152,13 @@ Used for prompt assembly coverage.
                 tool_output: Some(serde_json::json!("out1")),
                 status: "completed".to_string(),
                 approval_status: None,
-                started_at: "2026-01-01T00:00:02.000Z".to_string(),
-                finished_at: Some("2026-01-01T00:00:03.000Z".to_string()),
+                started_at: "2026-01-01T00:00:05.500Z".to_string(),
+                finished_at: Some("2026-01-01T00:00:05.800Z".to_string()),
             },
-            // TC2: started after R2, before R3
+            // TC2: started after R2 but before R3.  insert_pos points to R3
+            // (first msg in run-1 with created_at >= 00:00:07).
+            // R2 sits between text1 and R3 → merge blocked → standalone.
+            // after_position: standalone sorts AFTER R3's PendingThinking.
             ToolCallDto {
                 id: "tc-2".to_string(),
                 storage_id: "st-2".to_string(),
@@ -6104,43 +6178,44 @@ Used for prompt assembly coverage.
         let model = &sample_resolved_model_role("primary").model;
         let history = convert_history_messages(&messages, &tool_calls, model);
 
-        // Expected timeline after sort:
-        // pos 0: User("Go")
-        // pos 1 (reasoning): R1 → PendingThinking
-        // before pos 2: TC1-assistant (gets R1 thinking prepended) → [Thinking(R1), ToolCall]
-        // before pos 2: TC1-result
-        // pos 2: text1 → Assistant[Text("Text 1")]
-        // pos 3: R2 → PendingThinking
-        // pos 4: R3 → PendingThinking
-        // before pos 5: TC2-assistant → ... wait, TC2 started at 00:07, find first msg
-        //   in run-1 with created_at >= 00:07 → msg-05-r3 at 00:09 (pos 4)? No,
-        //   reasoning messages are not plain_message/assistant so they are in msg_positions
-        //   but the find looks for created_at >= started_at.
-
-        // Actually, msg_positions includes ALL messages (including reasoning).
-        // TC2 started_at = 00:07. First message in run-1 with created_at >= 00:07:
-        //   msg-04-r2 created_at 00:06 < 00:07 → no
-        //   msg-05-r3 created_at 00:09 >= 00:07 → pos 4!
-        // So TC2 inserts before pos 4 (msg-05-r3).
+        // Timeline after sort:
+        //   (0,2) User
+        //   (1,2) PendingThinking(R1)
+        //   (2,0,0) TC1-result (merged into text1, result before pos 3)
+        //   (2,2) text1 merged with TC1 → Assistant[Thinking(R1), Text, ToolCall]
+        //   (3,2) PendingThinking(R2)
+        //   (4,2) PendingThinking(R3)
+        //   (4,3,2) TC2-standalone → gets R2+R3
+        //   (4,3,3) TC2-result
+        //   (5,2) text2 → Assistant[Text]
         //
-        // Timeline:
-        // (0,2,0) User
-        // (1,2,0) PendingThinking(R1)
-        // (2,0,0) TC1-assistant  ← gets R1
-        // (2,0,1) TC1-result
-        // (2,2,0) text1 (Assistant[Text])
-        // (3,2,0) PendingThinking(R2)
-        // (4,0,2) TC2-assistant  ← gets R2
-        // (4,0,3) TC2-result
-        // (4,2,0) PendingThinking(R3)
-        // (5,2,0) text2 (Assistant[Text]) ← gets R3
+        // Wait, TC1 merge: text1 is at index 2. TC1 insert_pos: first msg in
+        // run-1 with created_at >= 00:00:05.5 → msg-04-r2 at 00:06 (index 3).
+        // merge_target: search backwards from index 3 for plain_message in run-1
+        // → msg-03-text1 at index 2. Check no reasoning between index 2+1=3 and
+        // insert_pos 3 → range [3..3) is empty → merge allowed!
+        // TC1 merges into text1 at index 2.
         //
-        // Result: User, Asst[T(R1),TC1], TR1, Asst[Text1], Asst[T(R2),TC2], TR2, Asst[T(R3),Text2]
+        // TC2: insert_pos → msg-05-r3 at 00:09 (index 4).
+        // merge_target: search backwards from index 4 → msg-03-text1 at index 2.
+        // Check reasoning between 3..4 → msg-04-r2 at index 3 is reasoning → blocked!
+        // Standalone at (4, 3, ...).
+        //
+        // Phase 4:
+        //   R1(PendingThinking) → accumulated
+        //   text1+TC1 at (2,2) → consumes R1, becomes [Thinking(R1), Text, ToolCall]
+        //   TC1-result at (3,0) → pass through
+        //   R2(PendingThinking at 3,2) → accumulated
+        //   R3(PendingThinking at 4,2) → accumulated
+        //   TC2-standalone at (4,3) → consumes R2+R3
+        //   TC2-result → pass through
+        //   text2 at (5,2) → no pending thinking → just Text
+        //
+        // Result: User, Asst[T(R1),Text1,TC1], TR1, Asst[T(R2),T(R3),TC2], TR2, Asst[Text2]
         assert_eq!(
             history.len(),
-            7,
-            "expected 7 messages, got {}: {:?}",
-            history.len(),
+            6,
+            "expected 6 messages: {:?}",
             history
                 .iter()
                 .map(|m| match m {
@@ -6155,52 +6230,57 @@ Used for prompt assembly coverage.
         // 1. User
         assert!(matches!(&history[0], AgentMessage::User(_)));
 
-        // 2. TC1 assistant with R1 thinking
+        // 2. text1 merged with TC1, R1 thinking prepended
         match &history[1] {
             AgentMessage::Assistant(a) => {
-                assert_eq!(a.content.len(), 2, "TC1 assistant: Thinking + ToolCall");
+                assert_eq!(
+                    a.content.len(),
+                    3,
+                    "text1+TC1: Thinking(R1) + Text + ToolCall, got: {:?}",
+                    a.content
+                );
                 assert!(a.content[0].is_thinking());
                 assert_eq!(a.content[0].as_thinking().unwrap().thinking, "R1 thinking");
-                assert!(a.content[1].is_tool_call());
+                assert!(a.content[1].is_text());
+                assert!(a.content[2].is_tool_call());
             }
-            other => panic!("expected TC1 assistant, got {:?}", other),
+            other => panic!("expected text1+TC1 assistant, got {:?}", other),
         }
 
         // 3. TC1 result
         assert!(matches!(&history[2], AgentMessage::ToolResult(_)));
 
-        // 4. text1 — no thinking (R1 was consumed by TC1)
+        // 4. TC2 standalone with R2+R3 thinking
         match &history[3] {
             AgentMessage::Assistant(a) => {
-                assert_eq!(a.content.len(), 1, "text1 should have only Text");
-                assert!(a.content[0].is_text());
-                assert_eq!(a.content[0].as_text().unwrap().text, "Text 1");
-            }
-            other => panic!("expected text1 assistant, got {:?}", other),
-        }
-
-        // 5. TC2 assistant with R2 thinking
-        match &history[4] {
-            AgentMessage::Assistant(a) => {
-                assert_eq!(a.content.len(), 2, "TC2 assistant: Thinking + ToolCall");
+                // R2 and R3 both accumulated as PendingThinking before TC2
+                assert_eq!(
+                    a.content.len(),
+                    3,
+                    "TC2 should have Thinking(R2) + Thinking(R3) + ToolCall"
+                );
                 assert!(a.content[0].is_thinking());
                 assert_eq!(a.content[0].as_thinking().unwrap().thinking, "R2 thinking");
-                assert!(a.content[1].is_tool_call());
+                assert!(a.content[1].is_thinking());
+                assert_eq!(a.content[1].as_thinking().unwrap().thinking, "R3 thinking");
+                assert!(a.content[2].is_tool_call());
             }
-            other => panic!("expected TC2 assistant, got {:?}", other),
+            other => panic!("expected TC2 standalone assistant, got {:?}", other),
         }
 
-        // 6. TC2 result
-        assert!(matches!(&history[5], AgentMessage::ToolResult(_)));
+        // 5. TC2 result
+        assert!(matches!(&history[4], AgentMessage::ToolResult(_)));
 
-        // 7. text2 with R3 thinking
-        match &history[6] {
+        // 6. text2 — no pending thinking, just text
+        match &history[5] {
             AgentMessage::Assistant(a) => {
-                assert_eq!(a.content.len(), 2, "text2: Thinking(R3) + Text");
-                assert!(a.content[0].is_thinking());
-                assert_eq!(a.content[0].as_thinking().unwrap().thinking, "R3 thinking");
-                assert!(a.content[1].is_text());
-                assert_eq!(a.content[1].as_text().unwrap().text, "Text 2");
+                assert_eq!(
+                    a.content.len(),
+                    1,
+                    "text2 should have only Text, no thinking"
+                );
+                assert!(a.content[0].is_text());
+                assert_eq!(a.content[0].as_text().unwrap().text, "Text 2");
             }
             other => panic!("expected text2 assistant, got {:?}", other),
         }
@@ -6327,6 +6407,166 @@ Used for prompt assembly coverage.
 
         assert_eq!(history.len(), 1);
         assert!(matches!(&history[0], AgentMessage::User(_)));
+    }
+
+    #[test]
+    fn convert_history_messages_standalone_tool_call_gets_reasoning_when_at_same_position() {
+        // Scenario that triggered DeepSeek 400:
+        //   user → reasoning-1 → reasoning-2 → text (later)
+        //   tool_call starts between reasoning-1 and reasoning-2
+        //
+        // No preceding plain_message in run-1 → standalone.
+        // insert_pos points to reasoning-2 (first msg >= tc.started_at).
+        // With SortKey::after_position, the standalone sorts AFTER
+        // reasoning-2's PendingThinking at the same position, so Phase 4
+        // attaches reasoning-1 + reasoning-2 to the standalone.
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Do something".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-reasoning-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Let me plan this.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            // reasoning-2 created AFTER tc.started_at → this is the insert_pos
+            MessageRecord {
+                id: "msg-reasoning-2".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Checking output now.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:04.000Z".to_string(),
+            },
+            // A later text response after the tool result
+            MessageRecord {
+                id: "msg-text".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "All done.".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:08.000Z".to_string(),
+            },
+        ];
+
+        // TC started_at=00:00:03 < reasoning-2 created_at=00:00:04
+        // → insert_pos = reasoning-2 (index 2)
+        // No preceding plain_message in run-1 → standalone
+        let tool_calls = vec![ToolCallDto {
+            id: "tc-1".to_string(),
+            storage_id: "st-1".to_string(),
+            run_id: "run-1".to_string(),
+            thread_id: "thread-1".to_string(),
+            helper_id: None,
+            tool_name: "shell".to_string(),
+            tool_input: serde_json::json!({"command": "cargo test"}),
+            tool_output: Some(serde_json::json!("ok")),
+            status: "completed".to_string(),
+            approval_status: None,
+            started_at: "2026-01-01T00:00:03.000Z".to_string(),
+            finished_at: Some("2026-01-01T00:00:03.500Z".to_string()),
+        }];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &tool_calls, model);
+
+        // Timeline after sort:
+        //   (0,2) User
+        //   (1,2) PendingThinking(reasoning-1)
+        //   (2,2) PendingThinking(reasoning-2)
+        //   (2,3) Standalone assistant → gets reasoning-1 + reasoning-2
+        //   (2,3) ToolResult
+        //   (3,2) Assistant[Text("All done.")]
+        //
+        // Expected: User → Assistant[Thinking×2, ToolCall] → ToolResult → Assistant[Text]
+        assert_eq!(
+            history.len(),
+            4,
+            "should have User + standalone-TC + ToolResult + text-assistant, got {}: {:?}",
+            history.len(),
+            history
+                .iter()
+                .map(|m| match m {
+                    AgentMessage::User(_) => "User",
+                    AgentMessage::Assistant(_) => "Assistant",
+                    AgentMessage::ToolResult(_) => "ToolResult",
+                    _ => "Other",
+                })
+                .collect::<Vec<_>>()
+        );
+
+        // The standalone tool-call assistant MUST have Thinking blocks
+        match &history[1] {
+            AgentMessage::Assistant(assistant) => {
+                // reasoning-1 and reasoning-2 both attached
+                assert!(
+                    assistant.content.len() >= 2,
+                    "standalone should have Thinking(s) + ToolCall, got: {:?}",
+                    assistant.content
+                );
+                assert!(
+                    assistant.content[0].is_thinking(),
+                    "first block should be Thinking, got: {:?}",
+                    assistant.content[0]
+                );
+                let thinking = assistant.content[0].as_thinking().unwrap();
+                assert_eq!(thinking.thinking, "Let me plan this.");
+                assert_eq!(
+                    thinking.thinking_signature.as_deref(),
+                    Some("reasoning_content"),
+                    "thinking_signature must be preserved for DeepSeek"
+                );
+                // Last block must be ToolCall
+                assert!(
+                    assistant.content.last().unwrap().is_tool_call(),
+                    "last block should be ToolCall"
+                );
+            }
+            other => panic!("expected standalone Assistant at index 1, got {:?}", other),
+        }
+
+        // Tool result at index 2
+        assert!(
+            matches!(&history[2], AgentMessage::ToolResult(_)),
+            "index 2 should be ToolResult"
+        );
+
+        // Final text assistant has no orphan thinking
+        match &history[3] {
+            AgentMessage::Assistant(assistant) => {
+                assert_eq!(assistant.content.len(), 1);
+                assert!(assistant.content[0].is_text());
+            }
+            other => panic!("expected text Assistant at index 3, got {:?}", other),
+        }
     }
 
     // -----------------------------------------------------------------------
