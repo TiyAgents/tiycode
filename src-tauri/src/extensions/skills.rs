@@ -664,3 +664,155 @@ pub(super) fn fold_yaml_block_scalar(lines: &[String]) -> String {
 
     result.trim().to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn compare_skill_records_sorts_enabled_then_name() {
+        let mut items = vec![
+            SkillRecordDto {
+                id: "skill-zeta".to_string(),
+                name: "Zeta".to_string(),
+                description: None,
+                tags: Vec::new(),
+                triggers: Vec::new(),
+                tools: Vec::new(),
+                priority: None,
+                source: "builtin".to_string(),
+                path: "/tmp/zeta".to_string(),
+                enabled: false,
+                scope: "global".to_string(),
+                content_preview: String::new(),
+                prompt_budget_chars: 100,
+            },
+            SkillRecordDto {
+                id: "skill-alpha".to_string(),
+                name: "Alpha".to_string(),
+                description: None,
+                tags: Vec::new(),
+                triggers: Vec::new(),
+                tools: Vec::new(),
+                priority: None,
+                source: "builtin".to_string(),
+                path: "/tmp/alpha".to_string(),
+                enabled: true,
+                scope: "global".to_string(),
+                content_preview: String::new(),
+                prompt_budget_chars: 100,
+            },
+            SkillRecordDto {
+                id: "skill-bravo".to_string(),
+                name: "bravo".to_string(),
+                description: None,
+                tags: Vec::new(),
+                triggers: Vec::new(),
+                tools: Vec::new(),
+                priority: None,
+                source: "builtin".to_string(),
+                path: "/tmp/bravo".to_string(),
+                enabled: true,
+                scope: "global".to_string(),
+                content_preview: String::new(),
+                prompt_budget_chars: 100,
+            },
+        ];
+
+        items.sort_by(compare_skill_records);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["skill-alpha", "skill-bravo", "skill-zeta"]
+        );
+    }
+
+    #[test]
+    fn skill_state_store_deserializes_legacy_pinned_alias_without_serializing_it() {
+        let store: SkillStateStore = serde_json::from_value(serde_json::json!({
+            "enabled": ["skill-a"],
+            "disabled": ["skill-b"],
+            "pinned": ["skill-legacy"]
+        }))
+        .expect("deserialize skill state");
+
+        assert_eq!(store.enabled, vec!["skill-a"]);
+        assert_eq!(store.disabled, vec!["skill-b"]);
+        assert_eq!(store.legacy_pinned, vec!["skill-legacy"]);
+
+        let serialized = serde_json::to_value(&store).expect("serialize skill state");
+        assert_eq!(
+            serialized.get("enabled"),
+            Some(&serde_json::json!(["skill-a"]))
+        );
+        assert_eq!(
+            serialized.get("disabled"),
+            Some(&serde_json::json!(["skill-b"]))
+        );
+        assert!(serialized.get("pinned").is_none());
+        assert!(serialized.get("legacyPinned").is_none());
+    }
+
+    #[test]
+    fn parse_skill_markdown_namespaces_non_builtin_sources() {
+        let skill_dir = tempdir().expect("tempdir");
+        let raw = r#"---
+name: Skill Alpha
+description: Example skill
+---
+
+Body text
+"#;
+
+        let (builtin_record, _) =
+            parse_skill_markdown(raw, skill_dir.path(), "builtin").expect("builtin skill");
+        let (workspace_record, _) =
+            parse_skill_markdown(raw, skill_dir.path(), "workspace").expect("workspace skill");
+
+        assert!(!builtin_record.id.is_empty());
+        assert_eq!(
+            workspace_record.id,
+            format!("workspace:{}", builtin_record.id)
+        );
+    }
+
+    #[test]
+    fn parse_skill_markdown_supports_folded_descriptions_and_yaml_lists() {
+        let skill_dir = tempdir().expect("tempdir");
+        let raw = r#"---
+name: project-docs-sync
+description: >-
+  Proactively detect when project documentation files need updating.
+  Automatically applies targeted edits to keep docs in sync.
+tags:
+  - documentation
+  - automation
+triggers:
+  - README.md
+  - AGENTS.md
+tools:
+  - git
+  - rg
+---
+
+Body text
+"#;
+
+        let (record, _) = parse_skill_markdown(raw, skill_dir.path(), "builtin")
+            .expect("folded description skill");
+
+        assert_eq!(
+            record.description.as_deref(),
+            Some(
+                "Proactively detect when project documentation files need updating. Automatically applies targeted edits to keep docs in sync."
+            )
+        );
+        assert_eq!(record.tags, vec!["documentation", "automation"]);
+        assert_eq!(record.triggers, vec!["README.md", "AGENTS.md"]);
+        assert_eq!(record.tools, vec!["git", "rg"]);
+    }
+}

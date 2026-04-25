@@ -1,5 +1,29 @@
 use super::*;
 
+// --- Marketplace types ---
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub(super) struct MarketplaceSourceStore {
+    #[serde(default)]
+    pub(super) sources: Vec<MarketplaceSourceRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct MarketplaceSourceRecord {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) url: String,
+    pub(super) kind: String,
+    pub(super) last_synced_at: Option<String>,
+    pub(super) last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub(super) struct MarketplaceSourceManifest {
+    pub(super) name: Option<String>,
+    pub(super) description: Option<String>,
+}
+
 // --- Marketplace impl methods ---
 
 impl ExtensionsManager {
@@ -570,4 +594,110 @@ pub(super) fn compare_marketplace_items(
         .then_with(|| right.installed.cmp(&left.installed))
         .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
         .then_with(|| left.id.cmp(&right.id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extensions::mcp::workspace_mcp_path;
+    use tempfile::tempdir;
+
+    #[test]
+    fn config_path_and_marketplace_helpers_are_stable() {
+        let workspace = tempdir().expect("workspace");
+        assert!(workspace_mcp_path(Some(workspace.path().to_str().unwrap()))
+            .unwrap()
+            .ends_with(".tiy/mcp.local.json"));
+        assert_eq!(
+            workspace_mcp_path(None).unwrap_err().error_code,
+            "settings.validation"
+        );
+
+        let diagnostic_id =
+            config_diagnostic_id(Path::new("/tmp/config.json"), "mcp", ConfigScope::Workspace);
+        assert!(diagnostic_id.starts_with("workspace:mcp:"));
+
+        let builtins = builtin_marketplace_sources();
+        assert_eq!(builtins.len(), 1);
+        assert!(is_builtin_marketplace_source_id(&builtins[0].id));
+        let id = marketplace_source_id("https://example.com/catalog.git");
+        assert!(!id.is_empty());
+        assert!(id.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn compare_marketplace_items_sorts_enabled_then_installed_then_name() {
+        let mut items = vec![
+            MarketplaceItemDto {
+                id: "market-zeta".to_string(),
+                source_id: "source".to_string(),
+                source_name: "Source".to_string(),
+                kind: "plugin".to_string(),
+                name: "Zeta".to_string(),
+                version: "1.0.0".to_string(),
+                summary: "summary".to_string(),
+                description: "description".to_string(),
+                publisher: "publisher".to_string(),
+                tags: Vec::new(),
+                hooks: Vec::new(),
+                command_names: Vec::new(),
+                mcp_servers: Vec::new(),
+                skill_names: Vec::new(),
+                path: "/tmp/zeta".to_string(),
+                installable: true,
+                installed: false,
+                enabled: false,
+            },
+            MarketplaceItemDto {
+                id: "market-bravo".to_string(),
+                source_id: "source".to_string(),
+                source_name: "Source".to_string(),
+                kind: "plugin".to_string(),
+                name: "bravo".to_string(),
+                version: "1.0.0".to_string(),
+                summary: "summary".to_string(),
+                description: "description".to_string(),
+                publisher: "publisher".to_string(),
+                tags: Vec::new(),
+                hooks: Vec::new(),
+                command_names: Vec::new(),
+                mcp_servers: Vec::new(),
+                skill_names: Vec::new(),
+                path: "/tmp/bravo".to_string(),
+                installable: true,
+                installed: true,
+                enabled: false,
+            },
+            MarketplaceItemDto {
+                id: "market-alpha".to_string(),
+                source_id: "source".to_string(),
+                source_name: "Source".to_string(),
+                kind: "plugin".to_string(),
+                name: "Alpha".to_string(),
+                version: "1.0.0".to_string(),
+                summary: "summary".to_string(),
+                description: "description".to_string(),
+                publisher: "publisher".to_string(),
+                tags: Vec::new(),
+                hooks: Vec::new(),
+                command_names: Vec::new(),
+                mcp_servers: Vec::new(),
+                skill_names: Vec::new(),
+                path: "/tmp/alpha".to_string(),
+                installable: true,
+                installed: true,
+                enabled: true,
+            },
+        ];
+
+        items.sort_by(compare_marketplace_items);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["market-alpha", "market-bravo", "market-zeta"]
+        );
+    }
 }

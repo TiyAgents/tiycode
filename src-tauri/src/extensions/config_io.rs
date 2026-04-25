@@ -242,3 +242,54 @@ pub(super) fn display_config_path(path: &Path) -> String {
 pub(super) fn config_diagnostic_id(path: &Path, area: &str, scope: ConfigScope) -> String {
     format!("{}:{}:{}", scope.as_str(), area, path.display())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn config_scope_parses_workspace_and_defaults_to_global() {
+        assert_eq!(ConfigScope::from_option(None), ConfigScope::Global);
+        assert_eq!(
+            ConfigScope::from_option(Some("workspace")),
+            ConfigScope::Workspace
+        );
+        assert_eq!(
+            ConfigScope::from_option(Some("unknown")),
+            ConfigScope::Global
+        );
+        assert_eq!(ConfigScope::from_str("workspace"), ConfigScope::Workspace);
+        assert_eq!(ConfigScope::from_str("global"), ConfigScope::Global);
+        assert_eq!(ConfigScope::Global.as_str(), "global");
+        assert_eq!(ConfigScope::Workspace.as_str(), "workspace");
+    }
+
+    #[tokio::test]
+    async fn invalid_config_json_returns_default_and_records_diagnostic() {
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("plugins.json");
+        fs::write(&path, "{ invalid json").expect("write invalid json");
+
+        let records = manager
+            .read_json_file_with_diagnostics::<Vec<InstalledPluginRecord>>(
+                &path,
+                "plugins",
+                ConfigScope::Global,
+            )
+            .expect("read config")
+            .value;
+
+        assert!(records.is_empty());
+        let diagnostics = manager.list_config_diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].area, "plugins");
+        assert_eq!(diagnostics[0].kind, ConfigDiagnosticKind::InvalidJson);
+        assert!(diagnostics[0].file_path.contains("plugins.json"));
+    }
+}

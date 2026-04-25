@@ -9,28 +9,6 @@ pub(super) struct McpConfigFile {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub(super) struct MarketplaceSourceStore {
-    #[serde(default)]
-    pub(super) sources: Vec<MarketplaceSourceRecord>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub(super) struct MarketplaceSourceRecord {
-    pub(super) id: String,
-    pub(super) name: String,
-    pub(super) url: String,
-    pub(super) kind: String,
-    pub(super) last_synced_at: Option<String>,
-    pub(super) last_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub(super) struct MarketplaceSourceManifest {
-    pub(super) name: Option<String>,
-    pub(super) description: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub(super) struct McpRuntimeStore {
     #[serde(default)]
     pub(super) items: HashMap<String, McpRuntimeRecord>,
@@ -2076,4 +2054,926 @@ pub(super) fn append_mcp_stderr(mut error: AppError, stderr_output: &str) -> App
     }
     error.user_message = format!("{} ({trimmed})", error.user_message);
     error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    fn mcp_config(transport: &str) -> McpServerConfigInput {
+        McpServerConfigInput {
+            id: "server".to_string(),
+            label: "Server".to_string(),
+            transport: transport.to_string(),
+            enabled: true,
+            auto_start: true,
+            command: Some("node".to_string()),
+            args: Some(vec!["server.js".to_string()]),
+            env: Some(HashMap::from([(
+                "TOKEN".to_string(),
+                "super-secret".to_string(),
+            )])),
+            cwd: Some("/tmp/server".to_string()),
+            url: Some("https://example.com/mcp?token=secret".to_string()),
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer test-token".to_string(),
+            )])),
+            timeout_ms: Some(5_000),
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_mcp_input_accepts_supported_transports_and_rejects_invalid_configs() {
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+
+        assert!(manager.validate_mcp_input(&mcp_config("stdio")).is_ok());
+        assert!(manager
+            .validate_mcp_input(&mcp_config("http-streamable"))
+            .is_ok());
+
+        let mut missing_identity = mcp_config("stdio");
+        missing_identity.id = "  ".to_string();
+        assert_eq!(
+            manager
+                .validate_mcp_input(&missing_identity)
+                .unwrap_err()
+                .user_message,
+            "MCP id and label are required"
+        );
+
+        let mut missing_command = mcp_config("stdio");
+        missing_command.command = Some("  ".to_string());
+        assert_eq!(
+            manager
+                .validate_mcp_input(&missing_command)
+                .unwrap_err()
+                .user_message,
+            "stdio MCP servers require a command"
+        );
+
+        let mut missing_url = mcp_config("streamable-http");
+        missing_url.url = None;
+        assert_eq!(
+            manager
+                .validate_mcp_input(&missing_url)
+                .unwrap_err()
+                .user_message,
+            "streamable-http MCP servers require a URL"
+        );
+
+        let unsupported = mcp_config("sse");
+        assert_eq!(
+            manager
+                .validate_mcp_input(&unsupported)
+                .unwrap_err()
+                .user_message,
+            "Unsupported MCP transport"
+        );
+    }
+
+    #[tokio::test]
+    async fn mask_mcp_config_redacts_sensitive_values_and_preserves_shape() {
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+        let masked = manager.mask_mcp_config(&mcp_config("streamable-http"));
+
+        assert_eq!(masked.id, "server");
+        assert_eq!(masked.label, "Server");
+        assert_eq!(masked.transport, "streamable-http");
+        assert!(masked.enabled);
+        assert_eq!(masked.command.as_deref(), Some("node"));
+        assert_eq!(masked.args, vec!["server.js".to_string()]);
+        assert_eq!(masked.cwd.as_deref(), Some("/tmp/server"));
+        assert_eq!(masked.timeout_ms, Some(5_000));
+        assert_ne!(
+            masked.env.get("TOKEN").map(String::as_str),
+            Some("super-secret")
+        );
+        assert_ne!(
+            masked.headers.get("Authorization").map(String::as_str),
+            Some("Bearer test-token")
+        );
+        assert_ne!(
+            masked.url.as_deref(),
+            Some("https://example.com/mcp?token=secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_mcp_state_maps_disabled_invalid_not_started_connected_and_degraded() {
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+
+        let mut disabled = mcp_config("stdio");
+        disabled.enabled = false;
+        let state = manager.build_mcp_state(&disabled, None, ConfigScope::Workspace.as_str());
+        assert_eq!(state.status, "disconnected");
+        assert_eq!(state.phase, "shutdown");
+        assert_eq!(state.scope, "workspace");
+
+        let mut invalid = mcp_config("stdio");
+        invalid.command = None;
+        let state = manager.build_mcp_state(&invalid, None, ConfigScope::Global.as_str());
+        assert_eq!(state.status, "config_error");
+        assert_eq!(state.phase, "config_load");
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some("stdio MCP servers require a command")
+        );
+
+        let state = manager.build_mcp_state(&mcp_config("stdio"), None, "global");
+        assert_eq!(state.status, "disconnected");
+        assert_eq!(state.phase, "not_started");
+
+        let connected_runtime = McpRuntimeRecord {
+            tools: vec![McpToolSummaryDto {
+                name: "lookup".to_string(),
+                qualified_name: "__mcp_server_lookup".to_string(),
+                description: Some("Lookup docs".to_string()),
+                input_schema: Some(serde_json::json!({ "type": "object" })),
+            }],
+            resources: vec![McpResourceSummaryDto {
+                uri: "file:///docs/readme.md".to_string(),
+                name: "README".to_string(),
+                description: None,
+                mime_type: Some("text/markdown".to_string()),
+            }],
+            stale_snapshot: false,
+            last_error: None,
+            status: Some("connected".to_string()),
+            phase: Some("ready".to_string()),
+            updated_at: Some("2026-04-25T00:00:00Z".to_string()),
+        };
+        let state =
+            manager.build_mcp_state(&mcp_config("stdio"), Some(&connected_runtime), "global");
+        assert_eq!(state.status, "connected");
+        assert_eq!(state.phase, "ready");
+        assert_eq!(state.tools.len(), 1);
+        assert_eq!(state.resources.len(), 1);
+        assert_eq!(state.updated_at, "2026-04-25T00:00:00Z");
+
+        let degraded_runtime = McpRuntimeRecord {
+            stale_snapshot: true,
+            last_error: Some("probe failed".to_string()),
+            status: Some("error".to_string()),
+            phase: Some("runtime_probe".to_string()),
+            ..connected_runtime
+        };
+        let state =
+            manager.build_mcp_state(&mcp_config("stdio"), Some(&degraded_runtime), "global");
+        assert_eq!(state.status, "degraded");
+        assert_eq!(state.phase, "runtime_probe");
+        assert!(state.stale_snapshot);
+        assert_eq!(state.last_error.as_deref(), Some("probe failed"));
+    }
+
+    #[test]
+    fn mcp_runtime_parsers_sort_and_sanitize_tool_and_resource_names() {
+        let result = serde_json::json!({
+            "tools": [
+                { "name": "z tool", "description": "Zed", "inputSchema": { "type": "object" } },
+                { "name": "alpha", "description": "Alpha" },
+                { "name": "  " },
+                { "description": "missing name" }
+            ],
+            "resources": [
+                { "uri": "file:///z", "name": "Zed", "mimeType": "text/plain" },
+                { "uri": "file:///a", "description": "No name" },
+                { "uri": "  " }
+            ]
+        });
+
+        let tools = parse_mcp_tools(&result, "plugin::server one");
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "z tool"]
+        );
+        assert_eq!(tools[1].qualified_name, "__mcp_server_one_z_tool");
+        assert!(mcp_tool_name_is_provider_safe(&tools[0].qualified_name));
+        assert!(!mcp_tool_name_is_provider_safe("bad name"));
+        assert_eq!(sanitize_mcp_runtime_name_segment(" !! "), "tool");
+
+        let resources = parse_mcp_resources(&result);
+        assert_eq!(
+            resources
+                .iter()
+                .map(|resource| resource.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["file:///a", "Zed"]
+        );
+        assert_eq!(resources[0].description.as_deref(), Some("No name"));
+        assert_eq!(resources[1].mime_type.as_deref(), Some("text/plain"));
+    }
+
+    #[test]
+    fn streamable_http_response_helpers_parse_arrays_sse_and_errors() {
+        let array_payload = serde_json::json!([
+            { "jsonrpc": "2.0", "id": 1, "result": { "ok": false } },
+            { "jsonrpc": "2.0", "id": 2, "result": { "ok": true } }
+        ]);
+        assert_eq!(
+            extract_streamable_http_jsonrpc_result(&array_payload, 2, "tools/list").unwrap(),
+            serde_json::json!({ "ok": true })
+        );
+
+        let wrong_id = serde_json::json!({ "jsonrpc": "2.0", "id": 3, "result": {} });
+        assert_eq!(
+            extract_streamable_http_jsonrpc_result(&wrong_id, 2, "tools/list")
+                .unwrap_err()
+                .error_code,
+            "extensions.mcp.read_failed"
+        );
+
+        let rpc_error = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "error": { "code": -32601, "message": "missing" }
+        });
+        let error =
+            extract_streamable_http_jsonrpc_result(&rpc_error, 2, "tools/list").unwrap_err();
+        assert_eq!(error.error_code, "extensions.mcp.rpc_error");
+        assert!(error.user_message.contains("missing"));
+
+        let sse = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"a\":1}}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"b\":2}}\n\n";
+        let parsed = parse_streamable_http_sse_payload(sse).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+        assert_eq!(
+            parse_streamable_http_sse_payload("event: ping\n\n")
+                .unwrap_err()
+                .error_code,
+            "extensions.mcp.read_failed"
+        );
+    }
+
+    #[derive(Debug, Clone)]
+    struct ObservedHttpRequest {
+        method: String,
+        headers: HashMap<String, String>,
+        body: String,
+    }
+
+    async fn read_http_request(
+        stream: &mut TcpStream,
+    ) -> (String, HashMap<String, String>, serde_json::Value) {
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 2048];
+        let header_end = loop {
+            let read = stream.read(&mut chunk).await.expect("read request");
+            assert!(read > 0, "request closed before headers");
+            buffer.extend_from_slice(&chunk[..read]);
+            if let Some(index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+
+        let header_text = String::from_utf8(buffer[..header_end].to_vec()).expect("headers utf8");
+        let mut lines = header_text.split("\r\n");
+        let request_line = lines.next().expect("request line");
+        let method = request_line
+            .split_whitespace()
+            .next()
+            .expect("request method")
+            .to_string();
+        let headers = lines
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                Some((name.trim().to_ascii_lowercase(), value.trim().to_string()))
+            })
+            .collect::<HashMap<_, _>>();
+        let content_length = headers
+            .get("content-length")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body = buffer[header_end..].to_vec();
+        while body.len() < content_length {
+            let read = stream.read(&mut chunk).await.expect("read body");
+            assert!(read > 0, "request closed before body");
+            body.extend_from_slice(&chunk[..read]);
+        }
+        body.truncate(content_length);
+        let json = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&body).expect("json body")
+        };
+        (method, headers, json)
+    }
+
+    async fn write_http_response(
+        stream: &mut TcpStream,
+        status: &str,
+        headers: &[(&str, String)],
+        body: &str,
+    ) {
+        let mut response = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n", body.len());
+        for (name, value) in headers {
+            response.push_str(&format!("{name}: {value}\r\n"));
+        }
+        response.push_str("\r\n");
+        response.push_str(body);
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    }
+
+    async fn spawn_fake_streamable_http_server() -> (
+        String,
+        Arc<Mutex<Vec<ObservedHttpRequest>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake server");
+        let address = listener.local_addr().expect("local addr");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let requests_clone = Arc::clone(&requests);
+        let handle = tokio::spawn(async move {
+            for _ in 0..9 {
+                let (mut stream, _) = listener.accept().await.expect("accept connection");
+                let (method, headers, body) = read_http_request(&mut stream).await;
+                requests_clone
+                    .lock()
+                    .expect("requests lock")
+                    .push(ObservedHttpRequest {
+                        method: method.clone(),
+                        headers: headers.clone(),
+                        body: body.to_string(),
+                    });
+                match method.as_str() {
+                    "POST" => {
+                        let rpc_method = body
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .expect("rpc method");
+                        match rpc_method {
+                            "initialize" => {
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    &[
+                                        ("Content-Type", "application/json".to_string()),
+                                        (MCP_HEADER_SESSION_ID, "session-123".to_string()),
+                                    ],
+                                    &serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": body.get("id").and_then(serde_json::Value::as_u64).expect("init id"),
+                                        "result": {
+                                            "protocolVersion": MCP_PROTOCOL_VERSION,
+                                            "capabilities": { "tools": {}, "resources": {} },
+                                            "serverInfo": { "name": "Fake HTTP MCP", "version": "1.0.0" }
+                                        }
+                                    })
+                                    .to_string(),
+                                )
+                                .await;
+                            }
+                            "notifications/initialized" => {
+                                assert_eq!(
+                                    headers.get("mcp-session-id").map(String::as_str),
+                                    Some("session-123")
+                                );
+                                write_http_response(&mut stream, "202 Accepted", &[], "").await;
+                            }
+                            "tools/list" => {
+                                assert_eq!(
+                                    headers.get("authorization").map(String::as_str),
+                                    Some("Bearer test-token")
+                                );
+                                let body = concat!(
+                                    "event: message\r\n",
+                                    "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\"}}\r\n\r\n",
+                                    "data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"lookup\",\"description\":\"Look things up\",\"inputSchema\":{\"type\":\"object\"}}]}}\r\n\r\n"
+                                );
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    &[("Content-Type", "text/event-stream".to_string())],
+                                    body,
+                                )
+                                .await;
+                            }
+                            "resources/list" => {
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    &[("Content-Type", "application/json".to_string())],
+                                    &serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": body.get("id").and_then(serde_json::Value::as_u64).expect("resources id"),
+                                        "result": {
+                                            "resources": [
+                                                {
+                                                    "uri": "file:///docs/readme.md",
+                                                    "name": "README",
+                                                    "description": "Repo readme",
+                                                    "mimeType": "text/markdown"
+                                                }
+                                            ]
+                                        }
+                                    })
+                                    .to_string(),
+                                )
+                                .await;
+                            }
+                            "tools/call" => {
+                                let body = concat!(
+                                    "data: {\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],\"isError\":false}}\r\n\r\n"
+                                );
+                                write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    &[("Content-Type", "text/event-stream".to_string())],
+                                    body,
+                                )
+                                .await;
+                            }
+                            other => panic!("unexpected rpc method: {other}"),
+                        }
+                    }
+                    "DELETE" => {
+                        assert_eq!(
+                            headers.get("mcp-session-id").map(String::as_str),
+                            Some("session-123")
+                        );
+                        write_http_response(&mut stream, "204 No Content", &[], "").await;
+                    }
+                    other => panic!("unexpected HTTP method: {other}"),
+                }
+            }
+        });
+
+        (format!("http://{address}/mcp"), requests, handle)
+    }
+
+    #[test]
+    fn compare_mcp_server_states_sorts_enabled_then_name() {
+        let mut items = vec![
+            McpServerStateDto {
+                id: "server-zeta".to_string(),
+                label: "Zeta".to_string(),
+                scope: "global".to_string(),
+                status: "ready".to_string(),
+                phase: "idle".to_string(),
+                tools: Vec::new(),
+                resources: Vec::new(),
+                stale_snapshot: false,
+                last_error: None,
+                updated_at: "2026-04-15T00:00:00Z".to_string(),
+                config: McpServerConfigDto {
+                    id: "server-zeta".to_string(),
+                    label: "Zeta".to_string(),
+                    transport: "stdio".to_string(),
+                    enabled: false,
+                    auto_start: false,
+                    command: None,
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                    url: None,
+                    headers: HashMap::new(),
+                    timeout_ms: None,
+                },
+            },
+            McpServerStateDto {
+                id: "server-alpha".to_string(),
+                label: "Alpha".to_string(),
+                scope: "global".to_string(),
+                status: "ready".to_string(),
+                phase: "idle".to_string(),
+                tools: Vec::new(),
+                resources: Vec::new(),
+                stale_snapshot: false,
+                last_error: None,
+                updated_at: "2026-04-15T00:00:00Z".to_string(),
+                config: McpServerConfigDto {
+                    id: "server-alpha".to_string(),
+                    label: "Alpha".to_string(),
+                    transport: "stdio".to_string(),
+                    enabled: true,
+                    auto_start: true,
+                    command: None,
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                    url: None,
+                    headers: HashMap::new(),
+                    timeout_ms: None,
+                },
+            },
+            McpServerStateDto {
+                id: "server-bravo".to_string(),
+                label: "bravo".to_string(),
+                scope: "global".to_string(),
+                status: "ready".to_string(),
+                phase: "idle".to_string(),
+                tools: Vec::new(),
+                resources: Vec::new(),
+                stale_snapshot: false,
+                last_error: None,
+                updated_at: "2026-04-15T00:00:00Z".to_string(),
+                config: McpServerConfigDto {
+                    id: "server-bravo".to_string(),
+                    label: "bravo".to_string(),
+                    transport: "stdio".to_string(),
+                    enabled: true,
+                    auto_start: true,
+                    command: None,
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                    url: None,
+                    headers: HashMap::new(),
+                    timeout_ms: None,
+                },
+            },
+        ];
+
+        items.sort_by(compare_mcp_server_states);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["server-alpha", "server-bravo", "server-zeta"]
+        );
+    }
+
+    #[test]
+    fn merge_mcp_sensitive_fields_preserves_masked_values_on_edit() {
+        let existing = McpServerConfigInput {
+            id: "server".to_string(),
+            label: "Server".to_string(),
+            transport: "streamable-http".to_string(),
+            enabled: true,
+            auto_start: true,
+            command: None,
+            args: None,
+            env: Some(HashMap::from([(
+                "TOKEN".to_string(),
+                "super-secret".to_string(),
+            )])),
+            cwd: None,
+            url: Some("https://example.com/mcp?token=secret".to_string()),
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer test-token".to_string(),
+            )])),
+            timeout_ms: Some(30_000),
+        };
+
+        let incoming = McpServerConfigInput {
+            id: existing.id.clone(),
+            label: existing.label.clone(),
+            transport: "http-streamable".to_string(),
+            enabled: true,
+            auto_start: true,
+            command: None,
+            args: None,
+            env: Some(HashMap::from([(
+                "TOKEN".to_string(),
+                mask_sensitive_value("super-secret"),
+            )])),
+            cwd: None,
+            url: Some(mask_url("https://example.com/mcp?token=secret".to_string())),
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                mask_sensitive_value("Bearer test-token"),
+            )])),
+            timeout_ms: Some(30_000),
+        };
+
+        let merged = merge_mcp_sensitive_fields(&existing, canonicalize_mcp_config(incoming));
+
+        assert_eq!(merged.transport, "streamable-http");
+        assert_eq!(
+            merged.url.as_deref(),
+            Some("https://example.com/mcp?token=secret")
+        );
+        assert_eq!(
+            merged
+                .headers
+                .as_ref()
+                .and_then(|headers| headers.get("Authorization"))
+                .map(String::as_str),
+            Some("Bearer test-token")
+        );
+        assert_eq!(
+            merged
+                .env
+                .as_ref()
+                .and_then(|env| env.get("TOKEN"))
+                .map(String::as_str),
+            Some("super-secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_stdio_mcp_runtime_discovers_tools_and_executes_calls() {
+        let server_dir = tempdir().expect("tempdir");
+        let server_path = server_dir.path().join("fake-mcp.js");
+        fs::write(
+            &server_path,
+            r#"const readline = require("readline");
+    const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+    function send(message) {
+      process.stdout.write(JSON.stringify(message) + "\n");
+    }
+    rl.on("line", (line) => {
+      const message = JSON.parse(line);
+      if (message.method === "initialize") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: "2025-06-18",
+        capabilities: { tools: {}, resources: {} },
+        serverInfo: { name: "Fake MCP", version: "1.0.0" }
+      }
+    });
+    return;
+      }
+      if (message.method === "notifications/initialized") {
+    return;
+      }
+      if (message.method === "tools/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        tools: [
+          {
+            name: "lookup",
+            description: "Look things up",
+            inputSchema: { type: "object" }
+          }
+        ]
+      }
+    });
+    return;
+      }
+      if (message.method === "resources/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        resources: [
+          {
+            uri: "file:///docs/readme.md",
+            name: "README",
+            description: "Repo readme",
+            mimeType: "text/markdown"
+          }
+        ]
+      }
+    });
+    return;
+      }
+      if (message.method === "tools/call") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        content: [{ type: "text", text: "ok" }],
+        isError: false
+      }
+    });
+      }
+    });"#,
+        )
+        .expect("write fake mcp server");
+
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+        let config = McpServerConfigInput {
+            id: "fake::server".to_string(),
+            label: "Fake MCP".to_string(),
+            transport: "stdio".to_string(),
+            enabled: true,
+            auto_start: true,
+            command: Some("node".to_string()),
+            args: Some(vec![server_path.to_string_lossy().to_string()]),
+            env: None,
+            cwd: None,
+            url: None,
+            headers: None,
+            timeout_ms: Some(5_000),
+        };
+
+        let runtime = manager
+            .probe_stdio_mcp_runtime(&config)
+            .await
+            .expect("probe runtime");
+        assert_eq!(runtime.tools.len(), 1);
+        assert_eq!(runtime.tools[0].name, "lookup");
+        assert_eq!(runtime.tools[0].qualified_name, "__mcp_server_lookup");
+        assert_eq!(runtime.resources.len(), 1);
+        assert_eq!(runtime.resources[0].name, "README");
+
+        let result = manager
+            .call_mcp_tool_once(
+                &config,
+                "lookup",
+                &serde_json::json!({ "query": "docs" }),
+                None,
+            )
+            .await
+            .expect("call mcp tool");
+        assert_eq!(
+            result
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|content| content.first())
+                .and_then(|item| item.get("text"))
+                .and_then(serde_json::Value::as_str),
+            Some("ok")
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_streamable_http_runtime_discovers_tools_and_executes_calls() {
+        let (url, requests, server_task) = spawn_fake_streamable_http_server().await;
+        let manager = ExtensionsManager::new(
+            SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("sqlite pool"),
+        );
+        let config = McpServerConfigInput {
+            id: "fake::http".to_string(),
+            label: "Fake HTTP MCP".to_string(),
+            transport: "streamable-http".to_string(),
+            enabled: true,
+            auto_start: true,
+            command: None,
+            args: None,
+            env: None,
+            cwd: None,
+            url: Some(url),
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer test-token".to_string(),
+            )])),
+            timeout_ms: Some(5_000),
+        };
+
+        let runtime = manager
+            .probe_streamable_http_mcp_runtime(&config)
+            .await
+            .expect("probe runtime");
+        assert_eq!(runtime.tools.len(), 1);
+        assert_eq!(runtime.tools[0].name, "lookup");
+        assert_eq!(runtime.tools[0].qualified_name, "__mcp_http_lookup");
+        assert_eq!(runtime.resources.len(), 1);
+        assert_eq!(runtime.resources[0].name, "README");
+
+        let result = manager
+            .call_streamable_http_mcp_tool_once(
+                &config,
+                "lookup",
+                &serde_json::json!({ "query": "docs" }),
+            )
+            .await
+            .expect("call mcp tool");
+        assert_eq!(
+            result
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|content| content.first())
+                .and_then(|item| item.get("text"))
+                .and_then(serde_json::Value::as_str),
+            Some("ok")
+        );
+
+        server_task.await.expect("server task");
+        let requests = requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 9);
+        assert!(requests.iter().any(|request| request.method == "DELETE"));
+        assert!(requests.iter().any(|request| {
+            request
+                .headers
+                .get("mcp-protocol-version")
+                .map(String::as_str)
+                == Some(MCP_PROTOCOL_VERSION)
+        }));
+        assert!(requests
+            .iter()
+            .any(|request| request.body.contains("\"tools/call\"")));
+    }
+
+    #[test]
+    fn build_mcp_runtime_tool_name_uses_provider_safe_format() {
+        assert_eq!(
+            build_mcp_runtime_tool_name("plugin::context7::context7", "resolve-library-id"),
+            "__mcp_context7_resolve-library-id"
+        );
+        assert_eq!(
+            build_mcp_runtime_tool_name("workspace/http server", "query docs"),
+            "__mcp_workspace_http_server_query_docs"
+        );
+    }
+
+    #[test]
+    fn legacy_mcp_runtime_records_trigger_refresh() {
+        let legacy = McpRuntimeRecord {
+            tools: vec![McpToolSummaryDto {
+                name: "query-docs".to_string(),
+                qualified_name: "plugin::context7::context7::query-docs".to_string(),
+                description: None,
+                input_schema: None,
+            }],
+            ..McpRuntimeRecord::default()
+        };
+
+        assert!(mcp_runtime_record_needs_refresh(
+            "plugin::context7::context7",
+            &legacy
+        ));
+
+        let current = McpRuntimeRecord {
+            tools: vec![McpToolSummaryDto {
+                name: "query-docs".to_string(),
+                qualified_name: "__mcp_context7_query-docs".to_string(),
+                description: None,
+                input_schema: None,
+            }],
+            ..McpRuntimeRecord::default()
+        };
+
+        assert!(!mcp_runtime_record_needs_refresh(
+            "plugin::context7::context7",
+            &current
+        ));
+    }
+
+    #[test]
+    fn expand_env_vars_braced_syntax() {
+        // SAFETY: test-only, unique var names avoid races with other tests
+        unsafe { std::env::set_var("_TEST_EXPAND_TOKEN", "my_secret_123") };
+        let result = expand_env_vars("Bearer ${_TEST_EXPAND_TOKEN}");
+        assert_eq!(result, "Bearer my_secret_123");
+        unsafe { std::env::remove_var("_TEST_EXPAND_TOKEN") };
+    }
+
+    #[test]
+    fn expand_env_vars_unbraced_syntax() {
+        unsafe { std::env::set_var("_TEST_EXPAND_PLAIN", "value_abc") };
+        let result = expand_env_vars("prefix-$_TEST_EXPAND_PLAIN-suffix");
+        assert_eq!(result, "prefix-value_abc-suffix");
+        unsafe { std::env::remove_var("_TEST_EXPAND_PLAIN") };
+    }
+
+    #[test]
+    fn expand_env_vars_missing_variable_preserved() {
+        let result = expand_env_vars("Bearer ${_NONEXISTENT_VAR_12345}");
+        assert_eq!(result, "Bearer ${_NONEXISTENT_VAR_12345}");
+    }
+
+    #[test]
+    fn expand_env_vars_no_variables() {
+        assert_eq!(expand_env_vars("plain text"), "plain text");
+    }
+
+    #[test]
+    fn expand_env_vars_dollar_sign_alone() {
+        assert_eq!(expand_env_vars("price is $"), "price is $");
+    }
+
+    #[test]
+    fn expand_env_vars_multiple_vars() {
+        unsafe { std::env::set_var("_TEST_A", "hello") };
+        unsafe { std::env::set_var("_TEST_B", "world") };
+        let result = expand_env_vars("${_TEST_A} $_TEST_B!");
+        assert_eq!(result, "hello world!");
+        unsafe { std::env::remove_var("_TEST_A") };
+        unsafe { std::env::remove_var("_TEST_B") };
+    }
+
+    #[test]
+    fn expand_env_vars_empty_braced_preserved() {
+        // `${}` should be preserved as-is, not lose the closing `}`
+        assert_eq!(expand_env_vars("before ${}after"), "before ${}after");
+    }
 }
