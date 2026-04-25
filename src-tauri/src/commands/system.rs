@@ -37,9 +37,13 @@ pub struct WorkspaceOpenApp {
 
 #[tauri::command]
 pub fn get_system_metadata() -> SystemMetadata {
+    let version = match option_env!("BUILD_COMMIT_HASH") {
+        Some(hash) => format!("{}-dev.{}", env!("CARGO_PKG_VERSION"), hash),
+        None => env!("CARGO_PKG_VERSION").to_string(),
+    };
     SystemMetadata {
         app_name: "TiyCode".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
+        version,
         platform: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),
         runtime: "Tauri 2".into(),
