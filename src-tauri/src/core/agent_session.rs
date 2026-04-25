@@ -4725,6 +4725,52 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn message_end_empty_content_no_tool_calls_skips_message_completed() {
+        // When a provider error interrupts the stream before any text is
+        // generated, MessageEnd arrives with empty text_content() and no
+        // tool calls.  The handler must NOT emit MessageCompleted —
+        // otherwise an empty plain_message record poisons the DB and
+        // causes DeepSeek 400 errors on the next run.
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let last_completed_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
+        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let reasoning_buffer = StdMutex::new(String::new());
+
+        // Empty assistant: no content blocks, no tool calls.
+        let empty_assistant = sample_partial_assistant_message();
+
+        handle_agent_event(
+            "run-empty",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &AgentEvent::MessageEnd {
+                message: AgentMessage::Assistant(empty_assistant),
+            },
+        );
+
+        let events: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+        // No MessageCompleted should have been emitted.
+        let has_message_completed = events
+            .iter()
+            .any(|e| matches!(e, ThreadStreamEvent::MessageCompleted { .. }));
+        assert!(
+            !has_message_completed,
+            "MessageCompleted should NOT be emitted for empty assistant without tool calls, got: {:?}",
+            events
+        );
+    }
+
+    #[test]
     fn message_discarded_reuses_last_completed_assistant_message_id() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let current_message_id = StdMutex::new(None::<String>);
