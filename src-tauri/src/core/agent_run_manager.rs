@@ -1302,7 +1302,12 @@ impl AgentRunManager {
             | ThreadStreamEvent::ToolFailed { .. }
             | ThreadStreamEvent::SubagentCompleted { .. }
             | ThreadStreamEvent::SubagentFailed { .. } => {
-                run_repo::update_status(&self.pool, run_id, "running").await?;
+                // When the run is already being cancelled, do not revert the
+                // status back to "running" — keep it at "cancelling" so the
+                // terminal RunCancelled event sees a consistent state.
+                if !self.was_cancel_requested(run_id).await {
+                    run_repo::update_status(&self.pool, run_id, "running").await?;
+                }
             }
             ThreadStreamEvent::ThreadUsageUpdated { usage, .. } => {
                 let usage = tiycore::types::Usage {
