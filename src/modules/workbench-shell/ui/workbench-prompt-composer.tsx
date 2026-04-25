@@ -13,7 +13,7 @@ import {
   UserStar,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import {
   ModelSelector,
   ModelSelectorContent,
@@ -130,8 +130,27 @@ function getFileExtension(name: string): string {
   return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
 
+/**
+ * Text length above which slash-command parsing and mention scanning are
+ * short-circuited. No realistic slash command or mention query reaches this
+ * size, so skipping avoids expensive O(n) string copies on large pastes.
+ */
+const LARGE_TEXT_THRESHOLD = 10_240;
+
 function isSlashCommandActive(value: string) {
-  return value.trimStart().startsWith("/");
+  if (value.length > LARGE_TEXT_THRESHOLD) {
+    return false;
+  }
+  // Find the first non-whitespace character without allocating a trimmed copy.
+  for (let i = 0; i < value.length; i++) {
+    const ch = value.charCodeAt(i);
+    // space, tab, newline, carriage-return
+    if (ch === 32 || ch === 9 || ch === 10 || ch === 13) {
+      continue;
+    }
+    return ch === 47; // '/'
+  }
+  return false;
 }
 
 function buildSubmissionFromPromptInput(
@@ -300,21 +319,34 @@ function getSelectedCommandFromFiltered(
   return getDefaultSelectedCommand(filteredCommands);
 }
 
+/**
+ * Maximum number of characters before the cursor to scan for mention triggers.
+ * Limits string operations to a small window instead of the full value, which
+ * avoids O(n) scans when large text (hundreds of KB) is pasted.
+ */
+const MENTION_SCAN_WINDOW = 500;
+
 function getActiveMentionMatch(value: string, cursorPosition: number | null): MentionMatch | null {
   if (cursorPosition == null) {
     return null;
   }
 
   const safeCursor = Math.max(0, Math.min(cursorPosition, value.length));
+  const scanStart = Math.max(0, safeCursor - MENTION_SCAN_WINDOW);
+  const window = value.slice(scanStart, safeCursor);
+
   const triggers: Array<"@" | "$"> = ["@", "$"];
   let tokenStart = -1;
   let token: "@" | "$" | null = null;
 
   for (const candidate of triggers) {
-    const index = value.lastIndexOf(candidate, safeCursor - 1);
-    if (index > tokenStart) {
-      tokenStart = index;
-      token = candidate;
+    const windowIndex = window.lastIndexOf(candidate);
+    if (windowIndex >= 0) {
+      const originalIndex = scanStart + windowIndex;
+      if (originalIndex > tokenStart) {
+        tokenStart = originalIndex;
+        token = candidate;
+      }
     }
   }
 
@@ -394,6 +426,9 @@ function removeUnmentionedReferencedFiles(
   current: ReadonlyArray<ComposerReferencedFile>,
   value: string,
 ) {
+  if (current.length === 0) {
+    return current;
+  }
   return current.filter((file) => value.includes(`@${file.path}`));
 }
 
@@ -780,6 +815,20 @@ function ComposerAttachmentTrigger() {
   );
 }
 
+/**
+ * O(1) fast-path check for whether a string contains any non-whitespace
+ * character. Falls back to a full scan only when both the first and last
+ * characters are whitespace (extremely rare for real user input).
+ */
+function hasNonWhitespace(s: string): boolean {
+  if (s.length === 0) return false;
+  if (s.charCodeAt(0) > 32 || s.charCodeAt(s.length - 1) > 32) return true;
+  for (let i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) > 32) return true;
+  }
+  return false;
+}
+
 function PromptInputSubmitButton({
   activeProfile,
   allowAttachmentsOnly,
@@ -796,7 +845,7 @@ function PromptInputSubmitButton({
   status: ChatStatus;
 }) {
   const attachments = usePromptInputAttachments();
-  const hasText = Boolean(composerValue.trim());
+  const hasText = hasNonWhitespace(composerValue);
   const hasAttachments = attachments.files.length > 0;
   const isStopping = status === "submitted" || status === "streaming";
   const canSubmit = Boolean(activeProfile) && !hasMissingActiveProfile && (hasText || (allowAttachmentsOnly && hasAttachments));
@@ -1112,10 +1161,13 @@ export function WorkbenchPromptComposer({
     () => buildComposerCommandRegistry(commands),
     [commands],
   );
-  const slashActive = shouldShowCommandPicker(value);
+  // Defer value for derived computations so the textarea stays responsive
+  // while mention/command/referenced-files logic catches up asynchronously.
+  const deferredValue = useDeferredValue(value);
+  const slashActive = shouldShowCommandPicker(deferredValue);
   const mentionMatch = useMemo(
-    () => getActiveMentionMatch(value, cursorPosition),
-    [cursorPosition, value],
+    () => getActiveMentionMatch(deferredValue, cursorPosition),
+    [cursorPosition, deferredValue],
   );
   const mentionActive = !slashActive && Boolean(mentionMatch);
   const mentionQuery = mentionMatch?.query.trim() ?? "";
@@ -1129,8 +1181,8 @@ export function WorkbenchPromptComposer({
     ? filteredSkills[selectedSkillIndex] ?? null
     : null;
   const filteredCommands = useMemo(
-    () => getFilteredCommands(commandRegistry, value),
-    [commandRegistry, value],
+    () => getFilteredCommands(commandRegistry, deferredValue),
+    [commandRegistry, deferredValue],
   );
   const selectedCommand = useMemo(() => {
     const keyedSelection = selectedCommandKey
@@ -1169,8 +1221,8 @@ export function WorkbenchPromptComposer({
   }, [selectedCommandKey, slashActive]);
 
   useEffect(() => {
-    setReferencedFiles((current) => removeUnmentionedReferencedFiles(current, value));
-  }, [value]);
+    setReferencedFiles((current) => removeUnmentionedReferencedFiles(current, deferredValue));
+  }, [deferredValue]);
 
   useEffect(() => {
     referencedSourceBridgeRef.current?.syncFiles(referencedFiles);
@@ -1462,6 +1514,7 @@ export function WorkbenchPromptComposer({
               <PromptInputTextarea
                 className={cn(
                   "block min-h-[88px] w-full self-stretch bg-transparent px-3 py-3 text-left align-top text-app-foreground caret-app-foreground selection:bg-app-info/20",
+                  value.length > LARGE_TEXT_THRESHOLD && "overflow-y-auto",
                   textareaClassName,
                 )}
                 onChange={(event) => {
@@ -1479,6 +1532,7 @@ export function WorkbenchPromptComposer({
                   setCursorPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
                 }}
                 placeholder={placeholder}
+                style={value.length > LARGE_TEXT_THRESHOLD ? { fieldSizing: "fixed" } as React.CSSProperties : undefined}
                 value={value}
               />
             </div>
