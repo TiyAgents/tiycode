@@ -13,6 +13,11 @@ The desktop UI lives in `src/` with React + TypeScript. Use `src/app/` for boots
 - `cargo test --manifest-path src-tauri/Cargo.toml` — run Rust integration tests.
 - `cargo fmt --manifest-path src-tauri/Cargo.toml` — format Rust code before committing.
 
+## Test Coverage
+
+- **Frontend** — run `npm run test:unit -- --coverage` to generate a Vitest + `@vitest/coverage-v8` report. The summary is printed to the terminal; detailed HTML reports are written to `coverage/`.
+- **Backend** — run `cargo llvm-cov --manifest-path src-tauri/Cargo.toml` (requires [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov)) to generate line/branch coverage for Rust integration tests. Add `--html` to open a detailed report, or `--text` for a terminal summary.
+
 ## Coding Style & Naming Conventions
 Use 2-space indentation in TypeScript/TSX. Prefer functional React components with named exports. File names should be kebab-case, for example `workbench-top-bar.tsx`; components use PascalCase; hooks use `use...`. Prefer the `@/` alias over deep relative imports. Keep code close to the feature unless it is clearly reusable. Reuse design tokens from `src/app/styles/globals.css` and align UI work with `docs/design-spec.md`. In Rust, preserve the existing `commands/`, `core/`, `model/`, and `persistence/` separation.
 
