@@ -186,6 +186,7 @@ pub async fn build_session_spec(
         &history_messages,
         &history_tool_calls,
         &resolved_plan.primary,
+        &system_prompt,
     );
 
     Ok(AgentSessionSpec {
@@ -295,6 +296,7 @@ fn build_initial_context_token_calibration(
     history_messages: &[MessageRecord],
     history_tool_calls: &[ToolCallDto],
     primary_model: &ResolvedModelRole,
+    system_prompt: &str,
 ) -> ContextTokenCalibration {
     let Some(latest_historical_run) = latest_historical_run else {
         return ContextTokenCalibration::default();
@@ -312,7 +314,10 @@ fn build_initial_context_token_calibration(
 
     let history =
         convert_history_messages(history_messages, history_tool_calls, &primary_model.model);
-    let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history);
+    let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history)
+        .saturating_add(crate::core::context_compression::estimate_tokens(
+            system_prompt,
+        ));
 
     ContextTokenCalibration::from_observation(estimated_tokens, historical_prompt_tokens)
         .unwrap_or_default()
@@ -1213,6 +1218,13 @@ fn configure_agent(
     let compression_run_id = spec.run_id.clone();
     let compression_response_language = spec.model_plan.raw.response_language.clone();
     let compression_state = Arc::clone(&context_compression_state);
+    // Pre-compute the system prompt's estimated token count so the
+    // compression check includes fixed overhead that the provider counts
+    // against the context window but `estimate_total_tokens(messages)`
+    // does not see.  This narrows the gap the calibration ratio has to
+    // cover, making the trigger point more predictable.
+    let system_prompt_estimated_tokens =
+        crate::core::context_compression::estimate_tokens(&spec.system_prompt);
     agent.set_transform_context(move |messages| {
         // Cheap pass-through check first: only clone the heavy captured state
         // (ResolvedModelRole, String ids, Weak) when compression will actually
@@ -1220,7 +1232,8 @@ fn configure_agent(
         // allocations when the thread is still well under budget.
         let settings = compression_settings.clone();
         let raw_estimated_tokens =
-            crate::core::context_compression::estimate_total_tokens(&messages);
+            crate::core::context_compression::estimate_total_tokens(&messages)
+                .saturating_add(system_prompt_estimated_tokens);
         let calibration = current_context_token_calibration(&compression_state);
         let calibrated_total_tokens = crate::core::context_compression::calibrate_total_tokens(
             raw_estimated_tokens,
@@ -1278,7 +1291,8 @@ fn configure_agent(
                 .await
             };
             let sent_estimated_tokens =
-                crate::core::context_compression::estimate_total_tokens(&transformed_messages);
+                crate::core::context_compression::estimate_total_tokens(&transformed_messages)
+                    .saturating_add(system_prompt_estimated_tokens);
             record_pending_prompt_estimate(&compression_state, sent_estimated_tokens);
             transformed_messages
         }
@@ -1430,7 +1444,23 @@ fn handle_agent_event(
         tiycore::agent::AgentEvent::MessageEnd { message } => {
             if let AgentMessage::Assistant(assistant) = message {
                 let content = assistant.text_content();
-                if content.is_empty() && assistant.has_tool_calls() {
+
+                // Skip emitting MessageCompleted when the assistant produced
+                // no usable text content.  Two sub-cases:
+                //
+                // a) Empty content WITH tool calls — the tool-call-only path.
+                //    Tool calls are persisted separately; no plain_message needed.
+                //
+                // b) Empty content WITHOUT tool calls — typically a provider
+                //    error (transport error, 500, 403, etc.) that interrupted
+                //    the stream before any text was generated.  Persisting an
+                //    empty plain_message would poison the history: on the next
+                //    run, convert_history_messages creates an AssistantMessage
+                //    with only a Text("") block; tiycore serialises it with
+                //    `content: null` (the empty text is filtered) while
+                //    reasoning_content may be present, causing DeepSeek to
+                //    reject the request with 400.
+                if content.is_empty() {
                     emit_usage_update_if_changed(
                         run_id,
                         event_tx,
@@ -2175,6 +2205,15 @@ pub(crate) fn convert_history_messages(
                     ));
                 }
                 "assistant" => {
+                    // Skip empty assistant plain_messages — these are left
+                    // behind when a provider error interrupts the stream
+                    // before any text is generated.  An empty Text("") block
+                    // serialises to `content: null` in tiycore, which causes
+                    // DeepSeek to reject the request (content or tool_calls
+                    // must be set).
+                    if message.content_markdown.trim().is_empty() {
+                        continue;
+                    }
                     let blocks = vec![ContentBlock::Text(TextContent::new(
                         &message.content_markdown,
                     ))];
@@ -3293,7 +3332,13 @@ pub(crate) async fn run_auto_compression(
             thread_id = %thread_id,
             "Auto compression skipped: cancellation already requested"
         );
-        return crate::core::context_compression::compress_context_fallback(messages, &settings);
+        let fallback =
+            crate::core::context_compression::compress_context_fallback(messages, &settings);
+        // Write back so subsequent turns start from the compressed base.
+        if let Some(session) = weak.upgrade() {
+            session.agent.replace_messages(fallback.clone());
+        }
+        return fallback;
     }
 
     // Phase 3: decide cut point
@@ -3320,7 +3365,13 @@ pub(crate) async fn run_auto_compression(
             thread_id = %thread_id,
             "Auto compression cut_point == 0 (tool-call boundary prevented compression); using truncation fallback"
         );
-        return crate::core::context_compression::compress_context_fallback(messages, &settings);
+        let fallback =
+            crate::core::context_compression::compress_context_fallback(messages, &settings);
+        // Write back so subsequent turns start from the compressed base.
+        if let Some(session) = weak.upgrade() {
+            session.agent.replace_messages(fallback.clone());
+        }
+        return fallback;
     }
 
     // Phase 4: if the old region already begins with a prior <context_summary>
@@ -3422,6 +3473,13 @@ pub(crate) async fn run_auto_compression(
                 recent_messages,
             );
 
+            // Phase 6.5: write back compressed messages to Agent internal state
+            // so subsequent turns in the same run start from the compressed base
+            // instead of re-compressing the full history every turn.
+            if let Some(session) = weak.upgrade() {
+                session.agent.replace_messages(result.clone());
+            }
+
             tracing::info!(
                 thread_id = %thread_id,
                 discarded = cut_point,
@@ -3504,6 +3562,12 @@ pub(crate) async fn run_auto_compression(
                 &heuristic_summary,
                 recent_messages,
             );
+
+            // Write back fallback-compressed messages to Agent internal state
+            // so subsequent turns start from the compressed base.
+            if let Some(session) = weak.upgrade() {
+                session.agent.replace_messages(result.clone());
+            }
 
             tracing::info!(
                 thread_id = %thread_id,
@@ -3712,6 +3776,7 @@ mod tests {
     use tiycore::thinking::ThinkingLevel;
     use tiycore::types::{
         Api, AssistantMessage, AssistantMessageEvent, ContentBlock, Provider, StopReason,
+        TextContent,
     };
     use tokio::sync::mpsc;
 
@@ -4548,6 +4613,7 @@ Used for prompt assembly coverage.
             &history_messages,
             &[],
             &primary_model,
+            "",
         );
 
         assert_eq!(calibration.ratio_basis_points(), 20_000);
@@ -4577,6 +4643,7 @@ Used for prompt assembly coverage.
             &history_messages,
             &[],
             &primary_model,
+            "",
         );
 
         assert_eq!(calibration.ratio_basis_points(), 20_000);
@@ -4601,12 +4668,14 @@ Used for prompt assembly coverage.
             &history_messages,
             &[],
             &primary_model,
+            "",
         );
         let zero_usage = build_initial_context_token_calibration(
             Some(&make_run_summary("primary-model", 0)),
             &history_messages,
             &[],
             &primary_model,
+            "",
         );
 
         assert_eq!(mismatched.ratio_basis_points(), 10_000);
@@ -4656,6 +4725,52 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn message_end_empty_content_no_tool_calls_skips_message_completed() {
+        // When a provider error interrupts the stream before any text is
+        // generated, MessageEnd arrives with empty text_content() and no
+        // tool calls.  The handler must NOT emit MessageCompleted —
+        // otherwise an empty plain_message record poisons the DB and
+        // causes DeepSeek 400 errors on the next run.
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let last_completed_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
+        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let reasoning_buffer = StdMutex::new(String::new());
+
+        // Empty assistant: no content blocks, no tool calls.
+        let empty_assistant = sample_partial_assistant_message();
+
+        handle_agent_event(
+            "run-empty",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &AgentEvent::MessageEnd {
+                message: AgentMessage::Assistant(empty_assistant),
+            },
+        );
+
+        let events: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+        // No MessageCompleted should have been emitted.
+        let has_message_completed = events
+            .iter()
+            .any(|e| matches!(e, ThreadStreamEvent::MessageCompleted { .. }));
+        assert!(
+            !has_message_completed,
+            "MessageCompleted should NOT be emitted for empty assistant without tool calls, got: {:?}",
+            events
+        );
+    }
+
+    #[test]
     fn message_discarded_reuses_last_completed_assistant_message_id() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let current_message_id = StdMutex::new(None::<String>);
@@ -4664,7 +4779,17 @@ Used for prompt assembly coverage.
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
-        let assistant = sample_partial_assistant_message();
+        // Build an assistant message with actual text content so that
+        // MessageEnd emits MessageCompleted (empty content is now skipped).
+        let assistant = AssistantMessage::builder()
+            .content(vec![ContentBlock::Text(TextContent::new(
+                "Here is the answer.",
+            ))])
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .model("gpt-test")
+            .build()
+            .expect("partial assistant message with content");
 
         handle_agent_event(
             "run-discard",
@@ -6079,6 +6204,129 @@ Used for prompt assembly coverage.
             }
             other => panic!("expected text2 assistant, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn convert_history_messages_skips_empty_assistant_plain_message() {
+        // Scenario: a provider error left an empty assistant plain_message
+        // in the DB.  The reasoning before it should be treated as orphan
+        // and dropped; the empty assistant should be skipped entirely.
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Do something".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            // Reasoning from a run that later failed
+            MessageRecord {
+                id: "msg-reasoning".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Thinking about the task.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            // Empty assistant plain_message left by the failed run
+            MessageRecord {
+                id: "msg-empty".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: String::new(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:02.000Z".to_string(),
+            },
+            // Next user message (new run)
+            MessageRecord {
+                id: "msg-user-2".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Continue".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:03.000Z".to_string(),
+            },
+        ];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &[], model);
+
+        // Empty assistant is skipped; reasoning before it becomes orphan
+        // (no following assistant to attach to before the next user message)
+        // and is also dropped.  Result: User, User.
+        assert_eq!(
+            history.len(),
+            2,
+            "expected 2 messages (both users), got {}: {:?}",
+            history.len(),
+            history
+                .iter()
+                .map(|m| match m {
+                    AgentMessage::User(_) => "User",
+                    AgentMessage::Assistant(_) => "Assistant",
+                    AgentMessage::ToolResult(_) => "ToolResult",
+                    _ => "Other",
+                })
+                .collect::<Vec<_>>()
+        );
+        assert!(matches!(&history[0], AgentMessage::User(_)));
+        assert!(matches!(&history[1], AgentMessage::User(_)));
+    }
+
+    #[test]
+    fn convert_history_messages_skips_whitespace_only_assistant_plain_message() {
+        // Same as above but with whitespace-only content (trimmed to empty).
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Hello".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-ws".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "   \n  ".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+        ];
+
+        let model = &sample_resolved_model_role("primary").model;
+        let history = convert_history_messages(&messages, &[], model);
+
+        assert_eq!(history.len(), 1);
+        assert!(matches!(&history[0], AgentMessage::User(_)));
     }
 
     // -----------------------------------------------------------------------

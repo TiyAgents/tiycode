@@ -126,7 +126,7 @@ impl ContextTokenCalibration {
 /// `cjk_chars + non_cjk_bytes / 4`, and take the max with the plain chars/4
 /// heuristic. The max keeps ASCII behaviour identical to the original (so
 /// existing tests remain valid) while raising the floor for CJK input.
-fn estimate_tokens(text: &str) -> u32 {
+pub(crate) fn estimate_tokens(text: &str) -> u32 {
     let base = (text.len() as u32).saturating_add(3) / 4;
 
     // Fast path: pure-ASCII strings need no CJK accounting.
