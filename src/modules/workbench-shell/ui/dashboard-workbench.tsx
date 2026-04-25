@@ -31,16 +31,31 @@ import {
 } from "@/modules/settings-center/model/use-settings-controller";
 import { useAppUpdater } from "@/modules/workbench-shell/hooks/use-app-updater";
 import {
+  DEFAULT_TERMINAL_COLLAPSED,
+  SIDEBAR_AUTO_REFRESH_GRACE_MS,
+  SIDEBAR_AUTO_REFRESH_INTERVAL_MS,
+  SIDEBAR_SYNC_MIN_GAP_MS,
+  UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY,
+  WORKSPACE_THREAD_PAGE_SIZE,
+  buildInitialWorkspaceThreadDisplayCounts,
+  buildInitialWorkspaceThreadHasMore,
+  buildProjectOptionFromWorkspace,
+  buildThreadContextBadgeData,
+  formatCompactTokenCount,
+  findWorkspaceForThread,
+  getNewThreadTerminalBindingKey,
+  mapRunFinishedStatusToThreadStatus,
+  mapRunStateToWorkbenchThreadStatus,
+  mergeLocalFallbackThreads,
   resolveActiveThreadWorkbenchProfileId,
   resolveThreadProfileId,
+  type PendingThreadRun,
 } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
 import { isOnboardingCompleted } from "@/modules/onboarding/model/use-onboarding";
 import type {
   GitSnapshotDto,
-  MessageAttachmentDto,
   RunMode,
   ThreadSummaryDto,
-  WorkspaceDto,
 } from "@/shared/types/api";
 import {
   threadCreate,
@@ -127,218 +142,6 @@ import { waitForBackendReady } from "@/shared/lib/backend-ready";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import { terminalStore } from "@/features/terminal/model/terminal-store";
 
-const NEW_THREAD_TERMINAL_KEY_SUFFIX = "__new_thread__";
-const UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY = "__new_thread_pending__";
-const DEFAULT_TERMINAL_COLLAPSED = true;
-const WORKSPACE_THREAD_PAGE_SIZE = 10;
-const SIDEBAR_AUTO_REFRESH_INTERVAL_MS = 2_000;
-const SIDEBAR_AUTO_REFRESH_GRACE_MS = 20_000;
-// Minimum gap between two fully independent `syncWorkspaceSidebar` executions.
-// If a caller invokes it again within this window of the previous run finishing,
-// the call is coalesced onto a single trailing run. Without this, any feedback
-// loop elsewhere in the component (effect dependency on state that sync itself
-// mutates) will saturate the IPC queue and block thread list rendering.
-const SIDEBAR_SYNC_MIN_GAP_MS = 300;
-
-function buildInitialWorkspaceThreadDisplayCounts() {
-  return Object.fromEntries(
-    WORKSPACE_ITEMS.map((workspace) => [
-      workspace.id,
-      Math.min(WORKSPACE_THREAD_PAGE_SIZE, workspace.threads.length),
-    ]),
-  );
-}
-
-function buildInitialWorkspaceThreadHasMore() {
-  return Object.fromEntries(
-    WORKSPACE_ITEMS.map((workspace) => [
-      workspace.id,
-      workspace.threads.length > WORKSPACE_THREAD_PAGE_SIZE,
-    ]),
-  );
-}
-
-function getNewThreadTerminalBindingKey(workspaceId: string) {
-  return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
-}
-
-function buildProjectOptionFromWorkspace(workspace: WorkspaceDto, language: LanguagePreference = "en"): ProjectOption | null {
-  const project = buildProjectOptionFromPath(
-    workspace.canonicalPath || workspace.path,
-    language,
-  );
-  if (!project) {
-    return null;
-  }
-
-  return {
-    ...project,
-    id: workspace.id,
-    name: workspace.name,
-    kind: workspace.kind,
-    parentWorkspaceId: workspace.parentWorkspaceId ?? null,
-    worktreeHash: workspace.worktreeName
-      ? workspace.worktreeName.slice(0, 6)
-      : null,
-    branch: workspace.branch ?? null,
-  };
-}
-
-function findWorkspaceForThread(
-  workspaces: ReadonlyArray<WorkspaceItem>,
-  threadId: string | null,
-) {
-  if (!threadId) {
-    return null;
-  }
-
-  return (
-    workspaces.find((workspace) =>
-      workspace.threads.some((thread) => thread.id === threadId),
-    ) ?? null
-  );
-}
-
-function mergeLocalFallbackThreads(options: {
-  currentWorkspaces: ReadonlyArray<WorkspaceItem>;
-  syncedWorkspaces: ReadonlyArray<WorkspaceItem>;
-}) {
-  return options.syncedWorkspaces.map((workspace) => {
-    const currentWorkspace =
-      options.currentWorkspaces.find(
-        (candidate) => candidate.id === workspace.id,
-      ) ?? null;
-
-    if (!currentWorkspace) {
-      return workspace;
-    }
-
-    const syncedThreadIds = new Set(workspace.threads.map((thread) => thread.id));
-    const fallbackThreads = currentWorkspace.threads.filter((thread) => {
-      if (syncedThreadIds.has(thread.id)) {
-        return false;
-      }
-
-      return true;
-    });
-
-    if (fallbackThreads.length === 0) {
-      return workspace;
-    }
-
-    return {
-      ...workspace,
-      threads: [...workspace.threads, ...fallbackThreads],
-    };
-  });
-}
-
-function mapRunStateToWorkbenchThreadStatus(
-  state: RunState | "idle",
-): WorkbenchThreadStatus {
-  switch (state) {
-    case "running":
-      return "running";
-    case "waiting_approval":
-    case "limit_reached":
-      return "needs-reply";
-    case "interrupted":
-      return "interrupted";
-    case "failed":
-      return "failed";
-    default:
-      return "completed";
-  }
-}
-
-function mapRunFinishedStatusToThreadStatus(
-  status: string,
-): WorkbenchThreadStatus {
-  switch (status) {
-    case "failed":
-      return "failed";
-    case "interrupted":
-      return "interrupted";
-    case "cancelled":
-      return "interrupted";
-    case "limit_reached":
-      return "needs-reply";
-    default:
-      return "completed";
-  }
-}
-
-function parseTokenCount(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  const normalized = value.replace(/[^\d]/g, "");
-  if (!normalized) {
-    return null;
-  }
-
-  const parsed = Number.parseInt(normalized, 10);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function formatCompactTokenCount(value: number) {
-  return new Intl.NumberFormat("en", {
-    maximumFractionDigits: 1,
-    notation: "compact",
-  }).format(value);
-}
-
-function buildThreadContextBadgeData(options: {
-  fallbackContextWindow: string | null;
-  fallbackModelDisplayName: string | null;
-  runtimeUsage: ThreadContextUsage | null;
-}) {
-  const contextWindow =
-    parseTokenCount(options.runtimeUsage?.contextWindow) ??
-    parseTokenCount(options.fallbackContextWindow);
-  const totalTokens = options.runtimeUsage?.totalTokens ?? 0;
-  const inputTokens = options.runtimeUsage?.inputTokens ?? 0;
-  const outputTokens = options.runtimeUsage?.outputTokens ?? 0;
-  const cacheReadTokens = options.runtimeUsage?.cacheReadTokens ?? 0;
-  const cacheWriteTokens = options.runtimeUsage?.cacheWriteTokens ?? 0;
-  const usageRatio =
-    contextWindow && contextWindow > 0
-      ? Math.min(totalTokens / contextWindow, 1)
-      : 0;
-  const usedPercent =
-    contextWindow && contextWindow > 0
-      ? Math.min(Math.round((totalTokens / contextWindow) * 100), 100)
-      : 0;
-  const leftPercent = Math.max(0, 100 - usedPercent);
-
-  return {
-    contextWindow,
-    inputTokens,
-    outputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-    leftPercent,
-    modelDisplayName:
-      options.runtimeUsage?.modelDisplayName ??
-      options.fallbackModelDisplayName,
-    totalTokens,
-    usageRatio,
-    usedLabel: formatCompactTokenCount(totalTokens),
-    totalLabel: contextWindow ? formatCompactTokenCount(contextWindow) : "N/A",
-    usedPercent,
-  };
-}
-
-type PendingThreadRun = {
-  id: string;
-  displayText: string;
-  effectivePrompt: string;
-  attachments: MessageAttachmentDto[];
-  metadata: Record<string, unknown> | null;
-  runMode: RunMode;
-  threadId: string;
-};
 
 export function DashboardWorkbench() {
   const { data } = useSystemMetadata();
