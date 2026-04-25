@@ -186,6 +186,7 @@ pub async fn build_session_spec(
         &history_messages,
         &history_tool_calls,
         &resolved_plan.primary,
+        &system_prompt,
     );
 
     Ok(AgentSessionSpec {
@@ -295,6 +296,7 @@ fn build_initial_context_token_calibration(
     history_messages: &[MessageRecord],
     history_tool_calls: &[ToolCallDto],
     primary_model: &ResolvedModelRole,
+    system_prompt: &str,
 ) -> ContextTokenCalibration {
     let Some(latest_historical_run) = latest_historical_run else {
         return ContextTokenCalibration::default();
@@ -312,7 +314,10 @@ fn build_initial_context_token_calibration(
 
     let history =
         convert_history_messages(history_messages, history_tool_calls, &primary_model.model);
-    let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history);
+    let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history)
+        .saturating_add(crate::core::context_compression::estimate_tokens(
+            system_prompt,
+        ));
 
     ContextTokenCalibration::from_observation(estimated_tokens, historical_prompt_tokens)
         .unwrap_or_default()
@@ -1213,6 +1218,13 @@ fn configure_agent(
     let compression_run_id = spec.run_id.clone();
     let compression_response_language = spec.model_plan.raw.response_language.clone();
     let compression_state = Arc::clone(&context_compression_state);
+    // Pre-compute the system prompt's estimated token count so the
+    // compression check includes fixed overhead that the provider counts
+    // against the context window but `estimate_total_tokens(messages)`
+    // does not see.  This narrows the gap the calibration ratio has to
+    // cover, making the trigger point more predictable.
+    let system_prompt_estimated_tokens =
+        crate::core::context_compression::estimate_tokens(&spec.system_prompt);
     agent.set_transform_context(move |messages| {
         // Cheap pass-through check first: only clone the heavy captured state
         // (ResolvedModelRole, String ids, Weak) when compression will actually
@@ -1220,7 +1232,8 @@ fn configure_agent(
         // allocations when the thread is still well under budget.
         let settings = compression_settings.clone();
         let raw_estimated_tokens =
-            crate::core::context_compression::estimate_total_tokens(&messages);
+            crate::core::context_compression::estimate_total_tokens(&messages)
+                .saturating_add(system_prompt_estimated_tokens);
         let calibration = current_context_token_calibration(&compression_state);
         let calibrated_total_tokens = crate::core::context_compression::calibrate_total_tokens(
             raw_estimated_tokens,
@@ -1278,7 +1291,8 @@ fn configure_agent(
                 .await
             };
             let sent_estimated_tokens =
-                crate::core::context_compression::estimate_total_tokens(&transformed_messages);
+                crate::core::context_compression::estimate_total_tokens(&transformed_messages)
+                    .saturating_add(system_prompt_estimated_tokens);
             record_pending_prompt_estimate(&compression_state, sent_estimated_tokens);
             transformed_messages
         }
@@ -4573,6 +4587,7 @@ Used for prompt assembly coverage.
             &history_messages,
             &[],
             &primary_model,
+            "",
         );
 
         assert_eq!(calibration.ratio_basis_points(), 20_000);
@@ -4602,6 +4617,7 @@ Used for prompt assembly coverage.
             &history_messages,
             &[],
             &primary_model,
+            "",
         );
 
         assert_eq!(calibration.ratio_basis_points(), 20_000);
@@ -4626,12 +4642,14 @@ Used for prompt assembly coverage.
             &history_messages,
             &[],
             &primary_model,
+            "",
         );
         let zero_usage = build_initial_context_token_calibration(
             Some(&make_run_summary("primary-model", 0)),
             &history_messages,
             &[],
             &primary_model,
+            "",
         );
 
         assert_eq!(mismatched.ratio_basis_points(), 10_000);
