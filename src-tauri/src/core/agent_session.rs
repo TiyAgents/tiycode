@@ -3785,9 +3785,10 @@ mod tests {
         response_style_system_instruction, runtime_security_config, runtime_tools_for_profile,
         runtime_tools_for_profile_with_extensions, standard_tool_timeout,
         trim_history_to_current_context, ContextCompressionRuntimeState, ProfileResponseStyle,
-        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, DEFAULT_FULL_TOOL_PROFILE,
-        MAIN_AGENT_TOOL_TIMEOUT_SECS, PLAN_MODE_MISSING_CHECKPOINT_ERROR,
-        PLAN_READ_ONLY_TOOL_PROFILE, STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
+        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, SortKey,
+        DEFAULT_FULL_TOOL_PROFILE, MAIN_AGENT_TOOL_TIMEOUT_SECS,
+        PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
+        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
     use std::sync::Mutex as StdMutex;
@@ -6016,6 +6017,42 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn sortkey_ordering() {
+        // Same position: before (sub=0) < positional (sub=2) < after (sub=3)
+        let before = SortKey::before_position(5, 1);
+        let positional = SortKey::positional(5);
+        let after = SortKey::after_position(5, 2);
+        assert!(
+            before < positional,
+            "before_position should sort before positional"
+        );
+        assert!(
+            positional < after,
+            "positional should sort before after_position"
+        );
+        assert!(
+            before < after,
+            "before_position should sort before after_position"
+        );
+
+        // Seq tiebreaker for same (position, sub)
+        let a = SortKey::before_position(5, 10);
+        let b = SortKey::before_position(5, 20);
+        assert!(
+            a < b,
+            "lower seq should sort before higher seq at same (position, sub)"
+        );
+
+        // Different positions should still respect sub ordering when positions differ
+        let later_pos_before = SortKey::before_position(10, 0);
+        let earlier_pos_after = SortKey::after_position(5, 0);
+        assert!(
+            earlier_pos_after < later_pos_before,
+            "position should be primary sort key"
+        );
+    }
+
+    #[test]
     fn convert_history_messages_multiple_reasoning_tool_call_cycles() {
         // Scenario: user → R1 → text1 → R2 → TC2 → R3 → text2
         // TC1 merges into text1 (no intervening reasoning).
@@ -6217,20 +6254,16 @@ Used for prompt assembly coverage.
         match &history[3] {
             AgentMessage::Assistant(a) => {
                 // R2 and R3 both accumulated as PendingThinking before TC2
-                assert!(
-                    a.content.len() >= 2,
-                    "TC2 should have Thinking(s) + ToolCall"
+                assert_eq!(
+                    a.content.len(),
+                    3,
+                    "TC2 should have Thinking(R2) + Thinking(R3) + ToolCall"
                 );
                 assert!(a.content[0].is_thinking());
                 assert_eq!(a.content[0].as_thinking().unwrap().thinking, "R2 thinking");
-                // R3 may also be present
-                if a.content.len() == 3 {
-                    assert!(a.content[1].is_thinking());
-                    assert_eq!(a.content[1].as_thinking().unwrap().thinking, "R3 thinking");
-                    assert!(a.content[2].is_tool_call());
-                } else {
-                    assert!(a.content[1].is_tool_call());
-                }
+                assert!(a.content[1].is_thinking());
+                assert_eq!(a.content[1].as_thinking().unwrap().thinking, "R3 thinking");
+                assert!(a.content[2].is_tool_call());
             }
             other => panic!("expected TC2 standalone assistant, got {:?}", other),
         }
@@ -6238,14 +6271,16 @@ Used for prompt assembly coverage.
         // 5. TC2 result
         assert!(matches!(&history[4], AgentMessage::ToolResult(_)));
 
-        // 6. text2 — remaining thinking (if any) or just text
+        // 6. text2 — no pending thinking, just text
         match &history[5] {
             AgentMessage::Assistant(a) => {
-                assert!(a.content.iter().any(|b| b.is_text()));
                 assert_eq!(
-                    a.content.iter().find_map(|b| b.as_text()).unwrap().text,
-                    "Text 2"
+                    a.content.len(),
+                    1,
+                    "text2 should have only Text, no thinking"
                 );
+                assert!(a.content[0].is_text());
+                assert_eq!(a.content[0].as_text().unwrap().text, "Text 2");
             }
             other => panic!("expected text2 assistant, got {:?}", other),
         }
