@@ -123,3 +123,160 @@ pub async fn mark_all_active_exited(pool: &SqlitePool) -> Result<u64, AppError> 
 
     Ok(result.rows_affected())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::Row;
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-1', 'ws', '/tmp', '/tmp', '/tmp', 0, 0, 0, 'ready',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed workspace");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, created_at, updated_at, last_active_at)
+             VALUES ('t1', 'ws-1', 't', 'idle',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed thread");
+
+        pool
+    }
+
+    fn make_session(id: &str, status: TerminalSessionStatus) -> TerminalSessionRecord {
+        TerminalSessionRecord {
+            id: id.into(),
+            thread_id: "t1".into(),
+            workspace_id: "ws-1".into(),
+            shell_path: Some("/bin/zsh".into()),
+            cwd: Some("/tmp".into()),
+            status,
+            pid: None,
+            exit_code: None,
+            created_at: Utc::now().to_rfc3339(),
+            exited_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_and_find_active_session() {
+        let pool = setup_test_pool().await;
+        insert(&pool, &make_session("s-1", TerminalSessionStatus::Starting))
+            .await
+            .unwrap();
+
+        let found = find_active_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.id, "s-1");
+    }
+
+    #[tokio::test]
+    async fn find_active_skips_exited() {
+        let pool = setup_test_pool().await;
+        insert(&pool, &make_session("s-1", TerminalSessionStatus::Exited))
+            .await
+            .unwrap();
+
+        let result = find_active_by_thread(&pool, "t1").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_running_clears_exit_fields() {
+        let pool = setup_test_pool().await;
+        let mut s = make_session("s-1", TerminalSessionStatus::Exited);
+        s.exit_code = Some(1);
+        s.exited_at = Some("yesterday".into());
+        insert(&pool, &s).await.unwrap();
+
+        update_running(&pool, "s-1", Some(12345)).await.unwrap();
+
+        let found = find_active_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should be active");
+        assert_eq!(found.status, TerminalSessionStatus::Running);
+        assert_eq!(found.pid, Some(12345));
+        assert_eq!(found.exit_code, None);
+        assert_eq!(found.exited_at, None);
+    }
+
+    #[tokio::test]
+    async fn update_exited_sets_timestamp() {
+        let pool = setup_test_pool().await;
+        insert(&pool, &make_session("s-1", TerminalSessionStatus::Running))
+            .await
+            .unwrap();
+
+        update_exited(&pool, "s-1", Some(0)).await.unwrap();
+
+        // Session should no longer be active
+        let found = find_active_by_thread(&pool, "t1").await.unwrap();
+        assert!(found.is_none());
+
+        // Verify exit_code and exited_at are actually persisted
+        let row =
+            sqlx::query("SELECT exit_code, exited_at FROM terminal_sessions WHERE id = 's-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let exit_code: Option<i32> = row.get(0);
+        let exited_at: Option<String> = row.get(1);
+        assert_eq!(
+            exit_code,
+            Some(0),
+            "exit_code should be set to the provided value"
+        );
+        assert!(
+            exited_at.is_some(),
+            "exited_at should be set to a non-null timestamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_all_active_exited_batch() {
+        let pool = setup_test_pool().await;
+        insert(&pool, &make_session("s-1", TerminalSessionStatus::Starting))
+            .await
+            .unwrap();
+        insert(&pool, &make_session("s-2", TerminalSessionStatus::Running))
+            .await
+            .unwrap();
+        insert(&pool, &make_session("s-3", TerminalSessionStatus::Exited))
+            .await
+            .unwrap();
+
+        let affected = mark_all_active_exited(&pool).await.unwrap();
+        assert_eq!(affected, 2); // Only Starting and Running
+    }
+}
