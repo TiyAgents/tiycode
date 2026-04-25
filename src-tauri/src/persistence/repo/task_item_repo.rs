@@ -108,8 +108,7 @@ pub async fn list_dtos_by_task_boards(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::task_board::TaskBoardRecord;
-    use crate::model::task_board::TaskBoardStatus;
+
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 

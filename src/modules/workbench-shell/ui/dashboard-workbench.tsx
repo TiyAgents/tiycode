@@ -19,7 +19,6 @@ import {
   MessageSquarePlus,
   MoreHorizontal,
   Shuffle,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import {
@@ -40,8 +39,6 @@ import {
   type SettingsCategory,
 } from "@/modules/settings-center/model/use-settings-controller";
 import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
-import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
-import { TerminalSettingsContext } from "@/features/terminal/model/terminal-settings-context";
 import { useAppUpdater } from "@/modules/workbench-shell/hooks/use-app-updater";
 import { UpdateAvailableDialog } from "@/modules/workbench-shell/ui/update-available-dialog";
 import {
@@ -54,7 +51,6 @@ import type {
   GitSnapshotDto,
   MessageAttachmentDto,
   RunMode,
-  RunModelPlanDto,
   ThreadSummaryDto,
   WorkspaceDto,
 } from "@/shared/types/api";
@@ -64,7 +60,6 @@ import {
   threadList,
   threadUpdateProfile,
   threadUpdateTitle,
-  threadRegenerateTitle,
   workspaceAdd,
   workspaceEnsureDefault,
   workspaceList,
@@ -140,6 +135,8 @@ import {
   type GitDiffSelection,
 } from "@/modules/workbench-shell/ui/source-control-panels";
 import { ThreadStatusIndicator } from "@/modules/workbench-shell/ui/thread-status-indicator";
+import { DashboardTerminalOrchestrator } from "@/modules/workbench-shell/ui/dashboard-terminal-orchestrator";
+import { ThreadRenameInput } from "@/modules/workbench-shell/ui/thread-rename-input";
 import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 import { WorkbenchTopBar } from "@/modules/workbench-shell/ui/workbench-top-bar";
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
@@ -362,137 +359,6 @@ type PendingThreadRun = {
   runMode: RunMode;
   threadId: string;
 };
-
-// ---------------------------------------------------------------------------
-// ThreadRenameInput — isolated component for inline thread title editing.
-// Keeps per-keystroke state local to avoid re-rendering the entire dashboard.
-// ---------------------------------------------------------------------------
-
-function ThreadRenameInput({
-  threadId,
-  initialName,
-  isActive,
-  status,
-  modelPlan,
-  onDone,
-}: {
-  threadId: string;
-  initialName: string;
-  isActive: boolean;
-  status: import("@/modules/workbench-shell/model/types").ThreadStatus;
-  modelPlan: RunModelPlanDto | null;
-  onDone: (newTitle: string | null) => void;
-}) {
-  const t = useT();
-  const [value, setValue] = useState(initialName);
-  const [isRegenerating, setRegenerating] = useState(false);
-  const [regenError, setRegenError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  // After regeneration completes, re-focus the input so the user
-  // is not left in a stuck editing state without a focused input.
-  const refocusAfterRegenerate = useCallback(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const save = useCallback(() => {
-    const trimmed = value.trim();
-    onDone(trimmed || null);
-  }, [value, onDone]);
-
-  const cancel = useCallback(() => {
-    onDone(null);
-  }, [onDone]);
-
-  const handleRegenerate = useCallback(() => {
-    if (!modelPlan || isRegenerating) return;
-    setRegenerating(true);
-    setRegenError(null);
-    void threadRegenerateTitle(threadId, modelPlan)
-      .then((title) => {
-        setValue(title);
-      })
-      .catch((error) => {
-        const message = getInvokeErrorMessage(error, "Failed to regenerate title");
-        console.warn("[thread] failed to regenerate title:", message);
-        setRegenError(t("sidebar.regenerateTitleFailed"));
-      })
-      .finally(() => {
-        setRegenerating(false);
-        refocusAfterRegenerate();
-      });
-  }, [threadId, modelPlan, isRegenerating, refocusAfterRegenerate]);
-
-  return (
-    <div
-      className={cn(
-        `${DRAWER_LIST_ROW_CLASS} border pr-1.5`,
-        isActive
-          ? "border-app-border-strong bg-app-surface-active text-app-foreground"
-          : "border-transparent bg-transparent text-app-muted",
-      )}
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-1">
-        <ThreadStatusIndicator
-          status={status}
-          emphasis={isActive ? "default" : "subtle"}
-        />
-        <input
-          ref={inputRef}
-          autoFocus
-          aria-label={t("sidebar.renameThread")}
-          className="min-w-0 flex-1 truncate border-none bg-transparent text-[13px] leading-tight text-app-foreground outline-none placeholder:text-app-muted"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              if (!isRegenerating) save();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              cancel();
-            }
-          }}
-          onBlur={(e) => {
-            // Ignore blur when clicking the regenerate button
-            // or while regeneration is in progress.
-            if (isRegenerating) return;
-            const related = e.relatedTarget as HTMLElement | null;
-            if (related?.dataset.threadRegenerateBtn === "true") return;
-            save();
-          }}
-          onFocus={(e) => e.target.select()}
-        />
-        <button
-          type="button"
-          data-thread-regenerate-btn="true"
-          title={
-            regenError
-              ? regenError
-              : modelPlan
-                ? t("sidebar.regenerateTitle")
-                : t("sidebar.noLiteModel")
-          }
-          disabled={!modelPlan || isRegenerating}
-          className="flex size-6 shrink-0 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            e.stopPropagation();
-            handleRegenerate();
-          }}
-        >
-          <Sparkles
-            className={cn(
-              "size-3.5",
-              regenError && "text-red-500",
-              isRegenerating && "animate-spin",
-            )}
-          />
-        </button>
-      </div>
-    </div>
-  );
-}
 
 export function DashboardWorkbench() {
   const { data } = useSystemMetadata();
@@ -3701,46 +3567,18 @@ export function DashboardWorkbench() {
               </aside>
             </div>
 
-            <section
-              className={cn(
-                "relative shrink-0 overflow-hidden bg-app-terminal transition-[height,opacity,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                isTerminalCollapsed
-                  ? "border-t border-transparent opacity-0 pointer-events-none"
-                  : "border-t border-app-border opacity-100",
-              )}
-              style={{ height: isTerminalCollapsed ? 0 : terminalHeight }}
-            >
-              <div
-                className={cn(
-                  "group absolute inset-x-0 top-0 z-10 flex h-4 -translate-y-1/2 items-start justify-center transition-opacity duration-200",
-                  isTerminalCollapsed
-                    ? "opacity-0"
-                    : "cursor-row-resize opacity-100",
-                )}
-                role="presentation"
-                onMouseDown={handleTerminalResizeStart}
-              >
-                <div className="mt-1.5 h-[2px] w-9 rounded-full bg-app-border opacity-50 transition-all duration-200 ease-out group-hover:w-14 group-hover:bg-app-border-strong group-hover:opacity-100" />
-              </div>
-              <div
-                className={cn(
-                  "flex h-full min-h-0 flex-col transition-opacity duration-200",
-                  isTerminalCollapsed ? "opacity-0" : "opacity-100 delay-75",
-                )}
-              >
-                <TerminalSettingsContext.Provider value={terminal}>
-                <ThreadTerminalPanel
-                  threadId={resolvedTerminalThreadId}
-                  threadTitle={activeThread?.name ?? t("dashboard.newThread")}
-                  active={!isTerminalCollapsed}
-                  bootstrapError={terminalBootstrapError}
-                  isPendingThread={isNewThreadMode}
-                  idleMessage={newThreadTerminalIdleMessage}
-                  onCollapse={() => setTerminalCollapsed(true)}
-                />
-                </TerminalSettingsContext.Provider>
-              </div>
-            </section>
+            <DashboardTerminalOrchestrator
+              active={!isTerminalCollapsed}
+              bootstrapError={terminalBootstrapError}
+              height={terminalHeight}
+              idleMessage={newThreadTerminalIdleMessage}
+              isPendingThread={isNewThreadMode}
+              onCollapse={() => setTerminalCollapsed(true)}
+              onResizeStart={handleTerminalResizeStart}
+              terminal={terminal}
+              threadId={resolvedTerminalThreadId}
+              threadTitle={activeThread?.name ?? t("dashboard.newThread")}
+            />
           </div>
         </section>
       </div>
