@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getLongMessagePreview,
   shouldUseLongMessagePreview,
-} from "./runtime-thread-surface";
+} from "./runtime-thread-surface-logic";
 
 // ── getLongMessagePreview ────────────────────────────────────
 

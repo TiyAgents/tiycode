@@ -44,6 +44,10 @@ import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-pane
 import { TerminalSettingsContext } from "@/features/terminal/model/terminal-settings-context";
 import { useAppUpdater } from "@/modules/workbench-shell/hooks/use-app-updater";
 import { UpdateAvailableDialog } from "@/modules/workbench-shell/ui/update-available-dialog";
+import {
+  resolveActiveThreadWorkbenchProfileId,
+  resolveThreadProfileId,
+} from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
 import { isOnboardingCompleted } from "@/modules/onboarding/model/use-onboarding";
 import { OnboardingWizard } from "@/modules/onboarding/ui/onboarding-wizard";
 import type {
@@ -158,27 +162,6 @@ const SIDEBAR_AUTO_REFRESH_GRACE_MS = 20_000;
 // loop elsewhere in the component (effect dependency on state that sync itself
 // mutates) will saturate the IPC queue and block thread list rendering.
 const SIDEBAR_SYNC_MIN_GAP_MS = 300;
-
-/**
- * Resolve which profile the workbench should use for a given thread context.
- *
- * New thread mode uses the global current profile. Existing threads use their
- * persisted thread-level profile_id; deleted profile ids are preserved so the
- * UI can render a missing-profile state instead of silently falling back.
- */
-export function resolveThreadProfileId(
-  threadProfileId: string | null,
-  globalActiveProfileId: string,
-): string {
-  return threadProfileId || globalActiveProfileId;
-}
-
-export function resolveActiveThreadWorkbenchProfileId(
-  threadProfileId: string | null,
-  globalActiveProfileId: string,
-): string {
-  return threadProfileId || globalActiveProfileId;
-}
 
 function buildInitialWorkspaceThreadDisplayCounts() {
   return Object.fromEntries(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveThreadProfileId, resolveActiveThreadWorkbenchProfileId } from "./dashboard-workbench";
+import { resolveThreadProfileId, resolveActiveThreadWorkbenchProfileId } from "./dashboard-workbench-logic";
 
 describe("resolveThreadProfileId", () => {
   const globalActive = "p-global";

@@ -63,6 +63,15 @@ import {
   buildSnapshotHelperToolSummary as buildSnapshotHelperToolSummaryFromHelpers,
   isHelperOwnedTool,
 } from "@/modules/workbench-shell/model/helpers";
+import {
+  getDefaultToolOpenState,
+  getLongMessagePreview,
+  isCompletedToolState,
+  isTaskBoardTool,
+  mapSnapshotToRunState,
+  shouldUseLongMessagePreview,
+  type RuntimeSurfaceToolState,
+} from "@/modules/workbench-shell/ui/runtime-thread-surface-logic";
 import { TaskBoardCard } from "@/modules/workbench-shell/ui/task-board-card";
 import { TaskHistoryTimeline } from "@/modules/workbench-shell/ui/task-stage-history-card";
 
@@ -78,15 +87,7 @@ type SurfaceMessage = {
   status: "streaming" | "completed" | "failed" | "discarded";
 };
 
-type SurfaceToolState =
-  | "approval-requested"
-  | "approval-responded"
-  | "clarify-requested"
-  | "input-streaming"
-  | "input-available"
-  | "output-available"
-  | "output-denied"
-  | "output-error";
+type SurfaceToolState = RuntimeSurfaceToolState;
 
 type SurfaceApproval =
   | {
@@ -728,50 +729,6 @@ function mapSnapshotHelper(
   };
 }
 
-export function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
-  if (snapshot.activeRun) {
-    switch (snapshot.activeRun.status) {
-      case "waiting_approval":
-        return "waiting_approval";
-      case "needs_reply":
-        return "needs_reply";
-      case "created":
-      case "dispatching":
-      case "running":
-      case "waiting_tool_result":
-        return "running";
-      case "cancelling":
-        return "cancelled";
-      case "failed":
-      case "denied":
-        return "failed";
-      case "cancelled":
-        return "cancelled";
-      case "limit_reached":
-        return "limit_reached";
-      case "interrupted":
-        return "interrupted";
-      default:
-        return "completed";
-    }
-  }
-
-  switch (snapshot.thread.status) {
-    case "running":
-      return "running";
-    case "waiting_approval":
-      return "waiting_approval";
-    case "needs_reply":
-      return snapshot.latestRun?.status === "limit_reached" ? "limit_reached" : "needs_reply";
-    case "failed":
-      return "failed";
-    case "interrupted":
-      return "interrupted";
-    default:
-      return "completed";
-  }
-}
-
 function getLatestContextResetMarker(snapshot: ThreadSnapshotDto) {
   for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
     const message = snapshot.messages[index];
@@ -822,49 +779,6 @@ function getLatestVisibleRun(snapshot: ThreadSnapshotDto) {
   )
     ? snapshot.latestRun
     : null;
-}
-
-const LONG_MESSAGE_PREVIEW_CHAR_LIMIT = 12_000;
-const LONG_MESSAGE_PREVIEW_LINE_LIMIT = 120;
-
-export function getLongMessagePreview(content: string) {
-  const normalized = content.trimEnd();
-  const lines = normalized.split("\n");
-  const exceedsCharLimit = normalized.length > LONG_MESSAGE_PREVIEW_CHAR_LIMIT;
-  const exceedsLineLimit = lines.length > LONG_MESSAGE_PREVIEW_LINE_LIMIT;
-  const isLong = exceedsCharLimit || exceedsLineLimit;
-
-  if (!isLong) {
-    return {
-      hiddenLineCount: 0,
-      isLong: false,
-      previewText: normalized,
-    };
-  }
-
-  const limitedByLines = lines.slice(0, LONG_MESSAGE_PREVIEW_LINE_LIMIT).join("\n");
-  const previewText = exceedsCharLimit
-    ? limitedByLines.slice(0, LONG_MESSAGE_PREVIEW_CHAR_LIMIT)
-    : limitedByLines;
-  const previewLineCount = previewText.length === 0 ? 0 : previewText.split("\n").length;
-
-  return {
-    hiddenLineCount: Math.max(lines.length - previewLineCount, 0),
-    isLong: true,
-    previewText: previewText.trimEnd(),
-  };
-}
-
-export function shouldUseLongMessagePreview(message: Pick<SurfaceMessage, "content" | "messageType" | "status">) {
-  if (message.status !== "completed" && message.status !== "failed") {
-    return false;
-  }
-
-  if (message.messageType !== "plain_message") {
-    return false;
-  }
-
-  return true;
 }
 
 function mapRunSummaryToContextUsage(run: RunSummaryDto | null): ThreadContextUsage | null {
@@ -1083,14 +997,6 @@ function getToolStatusClass(state: SurfaceToolState) {
     default:
       return "text-app-subtle";
   }
-}
-
-function isCompletedToolState(state: SurfaceToolState) {
-  return (
-    state === "output-available"
-    || state === "output-denied"
-    || state === "output-error"
-  );
 }
 
 /**
@@ -1978,34 +1884,6 @@ function isRuntimeOrchestrationTool(toolName: string) {
     toolName === "agent_explore"
     || toolName === "agent_review"
   );
-}
-
-/** Whether this tool name is a task-board management tool that should be collapsed by default. */
-export function isTaskBoardTool(toolName: string) {
-  return (
-    toolName === "create_task"
-    || toolName === "update_task"
-    || toolName === "query_task"
-  );
-}
-
-/**
- * Determine the default open state for a tool's collapsible detail block.
- * Task board tools default to collapsed; other tools default to expanded
- * (and stay force-expanded while still running).
- */
-export function getDefaultToolOpenState(
-  toolName: string,
-  toolState: SurfaceToolState,
-  explicitOpen: boolean | undefined,
-): boolean {
-  if (isTaskBoardTool(toolName)) {
-    return explicitOpen ?? false;
-  }
-  if (!isCompletedToolState(toolState)) {
-    return true;
-  }
-  return explicitOpen ?? true;
 }
 
 function isVisibleTimelineTool(
