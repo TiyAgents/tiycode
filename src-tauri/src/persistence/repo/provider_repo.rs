@@ -308,3 +308,180 @@ pub async fn delete_model(pool: &SqlitePool, id: &str) -> Result<bool, AppError>
         .await?;
     Ok(result.rows_affected() > 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        pool
+    }
+
+    fn make_provider(id: &str, key: &str, name: &str) -> ProviderRecord {
+        ProviderRecord {
+            id: id.into(),
+            provider_kind: ProviderKind::Builtin,
+            provider_key: key.into(),
+            provider_type: "openai".into(),
+            display_name: name.into(),
+            base_url: "https://api.openai.com/v1".into(),
+            api_key_encrypted: None,
+            enabled: true,
+            mapping_locked: false,
+            custom_headers_json: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn make_model(id: &str, provider_id: &str, name: &str) -> ProviderModelRecord {
+        ProviderModelRecord {
+            id: id.into(),
+            provider_id: provider_id.into(),
+            model_name: name.into(),
+            sort_index: 0,
+            display_name: Some(name.into()),
+            enabled: true,
+            context_window: Some("128000".into()),
+            max_output_tokens: Some("4096".into()),
+            capabilities_json: None,
+            provider_options_json: None,
+            is_manual: false,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_and_find_provider_by_id() {
+        let pool = setup_test_pool().await;
+        insert(&pool, &make_provider("p-1", "openai-key", "OpenAI"))
+            .await
+            .unwrap();
+
+        let found = find_by_id(&pool, "p-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.display_name, "OpenAI");
+    }
+
+    #[tokio::test]
+    async fn find_by_key_returns_none_for_missing() {
+        let pool = setup_test_pool().await;
+        assert!(find_by_key(&pool, "nobody").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn find_all_by_key_returns_single_match() {
+        let pool = setup_test_pool().await;
+        // find_all_by_key uses exact match on provider_key, which has a UNIQUE constraint,
+        // so it can only return at most one result per key.
+        insert(&pool, &make_provider("p-1", "openai-key", "Test"))
+            .await
+            .unwrap();
+
+        let list = find_all_by_key(&pool, "openai-key").await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].display_name, "Test");
+    }
+
+    #[tokio::test]
+    async fn delete_provider_returns_bool() {
+        let pool = setup_test_pool().await;
+        insert(&pool, &make_provider("p-1", "k", "Test"))
+            .await
+            .unwrap();
+        assert!(delete(&pool, "p-1").await.unwrap());
+        assert!(!delete(&pool, "p-1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn delete_all_clears_table() {
+        let pool = setup_test_pool().await;
+        insert(&pool, &make_provider("p-1", "k1", "A"))
+            .await
+            .unwrap();
+        insert(&pool, &make_provider("p-2", "k2", "B"))
+            .await
+            .unwrap();
+        delete_all(&pool).await.unwrap();
+
+        let list = list_all(&pool).await.unwrap();
+        assert!(list.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_models_returns_models_for_provider() {
+        let pool = setup_test_pool().await;
+        insert(&pool, &make_provider("p-1", "k", "Test"))
+            .await
+            .unwrap();
+        upsert_model(&pool, &make_model("m-1", "p-1", "gpt-4"))
+            .await
+            .unwrap();
+        upsert_model(&pool, &make_model("m-2", "p-1", "gpt-3.5"))
+            .await
+            .unwrap();
+
+        let models = list_models(&pool, "p-1").await.unwrap();
+        assert_eq!(models.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn upsert_model_inserts_then_updates() {
+        let pool = setup_test_pool().await;
+        insert(&pool, &make_provider("p-1", "k", "Test"))
+            .await
+            .unwrap();
+
+        upsert_model(&pool, &make_model("m-1", "p-1", "gpt-4-mini"))
+            .await
+            .unwrap();
+        let found = find_model_by_id(&pool, "m-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.display_name, Some("gpt-4-mini".into()));
+
+        // Update: change name then upsert again
+        let mut updated = make_model("m-1", "p-1", "GPT-4 Mini");
+        updated.display_name = Some("GPT-4 Mini".into());
+        upsert_model(&pool, &updated).await.unwrap();
+
+        let found = find_model_by_id(&pool, "m-1")
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.display_name, Some("GPT-4 Mini".into()));
+    }
+
+    #[tokio::test]
+    async fn delete_model_returns_bool() {
+        let pool = setup_test_pool().await;
+        insert(&pool, &make_provider("p-1", "k", "Test"))
+            .await
+            .unwrap();
+        upsert_model(&pool, &make_model("m-1", "p-1", "gpt-4"))
+            .await
+            .unwrap();
+
+        assert!(delete_model(&pool, "m-1").await.unwrap());
+        assert!(!delete_model(&pool, "m-1").await.unwrap());
+    }
+}

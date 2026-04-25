@@ -198,3 +198,314 @@ pub async fn list_by_run_ids(
 
     Ok(rows.into_iter().map(RunHelperRow::into_dto).collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::Row;
+    use std::str::FromStr;
+    use tiycore::types::Usage;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        // Seed parent records for FK constraints
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-1', 'ws', '/tmp', '/tmp', '/tmp', 0, 0, 0, 'ready',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed workspace");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, created_at, updated_at, last_active_at)
+             VALUES ('t1', 'ws-1', 't', 'idle',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed thread");
+
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at)
+             VALUES ('run-1', 't1', 'default', 'running',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed run");
+
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at)
+             VALUES ('run-2', 't1', 'default', 'running',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed run-2");
+
+        pool
+    }
+
+    fn default_usage() -> Usage {
+        Usage {
+            input: 100,
+            output: 200,
+            cache_read: 50,
+            cache_write: 30,
+            total_tokens: 380,
+            cost: tiycore::types::UsageCost::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_run_helper_returns_started_at() {
+        let pool = setup_test_pool().await;
+        let helper = RunHelperInsert {
+            id: "h-1".into(),
+            run_id: "run-1".into(),
+            thread_id: "t1".into(),
+            helper_kind: "review".into(),
+            parent_tool_call_id: None,
+            status: "running".into(),
+            model_role: "auxiliary".into(),
+            provider_id: None,
+            model_id: None,
+            input_summary: Some("Reviewing PR".into()),
+        };
+        let started_at = insert(&pool, &helper).await.unwrap();
+        assert!(!started_at.is_empty());
+
+        let row = sqlx::query("SELECT status, helper_kind FROM run_helpers WHERE id = 'h-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let status: String = row.get(0);
+        let kind: String = row.get(1);
+        assert_eq!(status, "running");
+        assert_eq!(kind, "review");
+    }
+
+    #[tokio::test]
+    async fn mark_completed_updates_status_and_usage() {
+        let pool = setup_test_pool().await;
+        let helper = RunHelperInsert {
+            id: "h-1".into(),
+            run_id: "run-1".into(),
+            thread_id: "t1".into(),
+            helper_kind: "explore".into(),
+            parent_tool_call_id: None,
+            status: "running".into(),
+            model_role: "auxiliary".into(),
+            provider_id: None,
+            model_id: None,
+            input_summary: None,
+        };
+        insert(&pool, &helper).await.unwrap();
+
+        let usage = default_usage();
+        mark_completed(&pool, "h-1", "All good", &usage)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT status, output_summary, input_tokens, output_tokens, total_tokens, finished_at
+             FROM run_helpers WHERE id = 'h-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let status: String = row.get(0);
+        let summary: String = row.get(1);
+        let in_tok: i64 = row.get(2);
+        let out_tok: i64 = row.get(3);
+        let total: i64 = row.get(4);
+        let finished: Option<String> = row.get(5);
+
+        assert_eq!(status, "completed");
+        assert_eq!(summary, "All good");
+        assert_eq!(in_tok, 100);
+        assert_eq!(out_tok, 200);
+        assert_eq!(total, 380);
+        assert!(finished.is_some());
+    }
+
+    #[tokio::test]
+    async fn mark_failed_with_interrupted_false_sets_status_failed() {
+        let pool = setup_test_pool().await;
+        let helper = RunHelperInsert {
+            id: "h-1".into(),
+            run_id: "run-1".into(),
+            thread_id: "t1".into(),
+            helper_kind: "review".into(),
+            parent_tool_call_id: None,
+            status: "running".into(),
+            model_role: "auxiliary".into(),
+            provider_id: None,
+            model_id: None,
+            input_summary: None,
+        };
+        insert(&pool, &helper).await.unwrap();
+
+        let usage = default_usage();
+        mark_failed(&pool, "h-1", "Something broke", false, &usage)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT status, error_summary, finished_at FROM run_helpers WHERE id = 'h-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let status: String = row.get(0);
+        let error: String = row.get(1);
+        let finished: Option<String> = row.get(2);
+
+        assert_eq!(status, "failed");
+        assert_eq!(error, "Something broke");
+        assert!(finished.is_some());
+    }
+
+    #[tokio::test]
+    async fn mark_failed_with_interrupted_true_sets_status_interrupted() {
+        let pool = setup_test_pool().await;
+        let helper = RunHelperInsert {
+            id: "h-1".into(),
+            run_id: "run-1".into(),
+            thread_id: "t1".into(),
+            helper_kind: "explore".into(),
+            parent_tool_call_id: None,
+            status: "running".into(),
+            model_role: "auxiliary".into(),
+            provider_id: None,
+            model_id: None,
+            input_summary: None,
+        };
+        insert(&pool, &helper).await.unwrap();
+
+        let usage = default_usage();
+        mark_failed(&pool, "h-1", "App closed", true, &usage)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT status FROM run_helpers WHERE id = 'h-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let status: String = row.get(0);
+        assert_eq!(status, "interrupted");
+    }
+
+    #[tokio::test]
+    async fn interrupt_active_helpers_only_affects_non_terminal() {
+        let pool = setup_test_pool().await;
+
+        // Insert helpers in various states
+        for (id, status) in &[
+            ("h-running", "running"),
+            ("h-completed", "completed"),
+            ("h-failed", "failed"),
+            ("h-interrupted", "interrupted"),
+            ("h-cancelled", "cancelled"),
+        ] {
+            let helper = RunHelperInsert {
+                id: id.to_string(),
+                run_id: "run-1".into(),
+                thread_id: "t1".into(),
+                helper_kind: "review".into(),
+                parent_tool_call_id: None,
+                status: status.to_string(),
+                model_role: "auxiliary".into(),
+                provider_id: None,
+                model_id: None,
+                input_summary: None,
+            };
+            insert(&pool, &helper).await.unwrap();
+        }
+
+        let affected = interrupt_active_helpers(&pool).await.unwrap();
+        // Only "running" should be interrupted (1 row)
+        assert_eq!(affected, 1);
+
+        let status: String = sqlx::query("SELECT status FROM run_helpers WHERE id = 'h-running'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(status, "interrupted");
+
+        // Completed/failed/interrupted/cancelled should be untouched
+        for (id, expected) in [
+            ("h-completed", "completed"),
+            ("h-failed", "failed"),
+            ("h-interrupted", "interrupted"),
+            ("h-cancelled", "cancelled"),
+        ] {
+            let status: String =
+                sqlx::query(&format!("SELECT status FROM run_helpers WHERE id = '{id}'"))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+                    .get(0);
+            assert_eq!(status, expected, "{id} status should remain '{expected}'");
+        }
+    }
+
+    #[tokio::test]
+    async fn list_by_run_ids_returns_helpers_for_given_runs() {
+        let pool = setup_test_pool().await;
+
+        for (id, run_id, kind) in &[
+            ("h-1", "run-1", "review"),
+            ("h-2", "run-1", "explore"),
+            ("h-3", "run-2", "review"),
+        ] {
+            let helper = RunHelperInsert {
+                id: id.to_string(),
+                run_id: run_id.to_string(),
+                thread_id: "t1".into(),
+                helper_kind: kind.to_string(),
+                parent_tool_call_id: None,
+                status: "completed".into(),
+                model_role: "auxiliary".into(),
+                provider_id: None,
+                model_id: None,
+                input_summary: None,
+            };
+            insert(&pool, &helper).await.unwrap();
+        }
+
+        let result = list_by_run_ids(&pool, &["run-1".into()]).await.unwrap();
+        assert_eq!(result.len(), 2);
+        let kinds: Vec<String> = result.iter().map(|h| h.helper_kind.clone()).collect();
+        assert!(kinds.contains(&"review".into()));
+        assert!(kinds.contains(&"explore".into()));
+    }
+
+    #[tokio::test]
+    async fn list_by_run_ids_returns_empty_for_empty_input() {
+        let pool = setup_test_pool().await;
+        let result = list_by_run_ids(&pool, &[]).await.unwrap();
+        assert!(result.is_empty());
+    }
+}
