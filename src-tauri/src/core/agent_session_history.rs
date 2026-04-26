@@ -58,6 +58,12 @@ pub(crate) fn convert_history_messages(
         let key = SortKey::positional(pos);
         match message.message_type.as_str() {
             "reasoning" if message.role == "assistant" => {
+                // Skip empty reasoning records — these can be left behind by
+                // stream interruptions.  An empty thinking block causes
+                // serialisation issues with providers like DeepSeek.
+                if message.content_markdown.trim().is_empty() {
+                    continue;
+                }
                 let signature = message
                     .metadata_json
                     .as_deref()
@@ -334,6 +340,13 @@ pub(crate) fn convert_history_messages(
             TimelineEntry::Msg(msg @ AgentMessage::User(_)) => {
                 // Discard any pending thinking that precedes a user message
                 // (should not happen in normal flow, but be defensive).
+                pending_thinking.clear();
+                result.push(msg);
+            }
+            TimelineEntry::Msg(msg @ AgentMessage::ToolResult(_)) => {
+                // Clear pending thinking at tool-result boundaries to prevent
+                // orphan reasoning from a previous run leaking into the next
+                // assistant message after a tool-result sequence.
                 pending_thinking.clear();
                 result.push(msg);
             }

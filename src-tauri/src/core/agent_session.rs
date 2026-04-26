@@ -477,10 +477,32 @@ fn configure_agent(
     // Inject default TiyCode identification headers for all LLM API requests.
     agent.set_custom_headers(crate::core::tiycode_default_headers());
 
-    if let Some(provider_options) = spec.model_plan.primary.provider_options.clone() {
+    // Always set the payload hook so the DeepSeek thinking normalizer runs
+    // even when there are no provider_options to merge.
+    {
+        let provider_options = spec.model_plan.primary.provider_options.clone();
+        let provider_type = spec.model_plan.primary.provider_type.clone();
+        let base_url = spec
+            .model_plan
+            .primary
+            .model
+            .base_url
+            .clone()
+            .unwrap_or_default();
+        let thinking_enabled = spec.model_plan.thinking_level != ThinkingLevel::Off;
         agent.set_on_payload(move |payload, _model| {
             let provider_options = provider_options.clone();
-            Box::pin(async move { Some(merge_payload(payload, &provider_options)) })
+            let provider_type = provider_type.clone();
+            let base_url = base_url.clone();
+            Box::pin(async move {
+                let mut p = payload;
+                if let Some(ref opts) = provider_options {
+                    p = merge_payload(p, opts);
+                }
+                let is_ds = is_deepseek_provider(&provider_type, &base_url);
+                p = normalize_deepseek_thinking_payload(p, is_ds, thinking_enabled);
+                Some(p)
+            })
         });
     }
 
@@ -651,7 +673,10 @@ pub(crate) fn standard_tool_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(STANDARD_TOOL_TIMEOUT_SECS)
 }
 
-fn merge_payload(mut base: serde_json::Value, patch: &serde_json::Value) -> serde_json::Value {
+pub(crate) fn merge_payload(
+    mut base: serde_json::Value,
+    patch: &serde_json::Value,
+) -> serde_json::Value {
     merge_json_value(&mut base, patch);
     base
 }
@@ -671,6 +696,93 @@ fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
             *base_value = patch_value.clone();
         }
     }
+}
+
+/// Returns `true` when the provider should be treated as a DeepSeek endpoint.
+pub(crate) fn is_deepseek_provider(provider_type: &str, base_url: &str) -> bool {
+    provider_type.eq_ignore_ascii_case("deepseek") || base_url.contains("api.deepseek.com")
+}
+
+/// Final-gate normalizer that sanitizes a DeepSeek-bound JSON payload so that
+/// every assistant message satisfies the API's `reasoning_content` constraints.
+///
+/// * **thinking-enabled**: carries forward the most-recent non-empty
+///   `reasoning_content` to any assistant message that contains `tool_calls`
+///   but is missing `reasoning_content`.  Also ensures every assistant message
+///   has a `content` field that is at least an empty string (DeepSeek rejects
+///   `content: null`).
+/// * **thinking-disabled**: strips `reasoning_content` from all assistant
+///   messages so the API does not receive it when the session has thinking off.
+///
+/// When `is_deepseek` is `false` the payload is returned unmodified.
+pub(crate) fn normalize_deepseek_thinking_payload(
+    mut payload: serde_json::Value,
+    is_deepseek: bool,
+    thinking_enabled: bool,
+) -> serde_json::Value {
+    if !is_deepseek {
+        return payload;
+    }
+
+    let messages = match payload.get_mut("messages").and_then(|v| v.as_array_mut()) {
+        Some(arr) => arr,
+        None => return payload,
+    };
+
+    if thinking_enabled {
+        let mut last_reasoning: Option<String> = None;
+
+        for msg in messages.iter_mut() {
+            if msg.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+                continue;
+            }
+
+            // Track the latest non-empty reasoning_content.
+            if let Some(rc) = msg.get("reasoning_content").and_then(|v| v.as_str()) {
+                if !rc.is_empty() {
+                    last_reasoning = Some(rc.to_string());
+                }
+            }
+
+            // Ensure `content` is at least an empty string (never null).
+            match msg.get("content") {
+                None | Some(serde_json::Value::Null) => {
+                    msg.as_object_mut()
+                        .map(|o| o.insert("content".to_string(), serde_json::json!("")));
+                }
+                _ => {}
+            }
+
+            // If the message has tool_calls but lacks reasoning_content, fill
+            // it from the most-recent reasoning we saw.
+            let has_tool_calls = msg
+                .get("tool_calls")
+                .and_then(|v| v.as_array())
+                .map_or(false, |a| !a.is_empty());
+            let missing_reasoning = msg.get("reasoning_content").map_or(true, |v| {
+                v.is_null() || v.as_str().map_or(false, str::is_empty)
+            });
+
+            if has_tool_calls && missing_reasoning {
+                if let Some(ref rc) = last_reasoning {
+                    msg.as_object_mut()
+                        .map(|o| o.insert("reasoning_content".to_string(), serde_json::json!(rc)));
+                }
+            }
+        }
+    } else {
+        // Thinking disabled: strip reasoning_content from all assistant messages.
+        for msg in messages.iter_mut() {
+            if msg.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+                continue;
+            }
+            if let Some(obj) = msg.as_object_mut() {
+                obj.remove("reasoning_content");
+            }
+        }
+    }
+
+    payload
 }
 
 #[cfg(test)]

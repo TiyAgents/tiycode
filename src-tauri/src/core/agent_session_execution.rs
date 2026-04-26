@@ -376,6 +376,7 @@ impl AgentSession {
                 run_mode: self.spec.run_mode.clone(),
                 event_tx: self.event_tx.clone(),
                 session_abort_signal: self.abort_signal.clone(),
+                thinking_level: self.spec.model_plan.thinking_level,
             })
             .await;
 

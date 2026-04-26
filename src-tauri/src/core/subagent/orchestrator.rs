@@ -5,10 +5,13 @@ use std::sync::Mutex as StdMutex;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tiycore::agent::{Agent, AgentEvent, AgentMessage, AgentToolResult, ToolExecutionMode};
+use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{ContentBlock, TextContent, Usage};
 use tokio::sync::Mutex;
 
-use crate::core::agent_session::ResolvedModelRole;
+use crate::core::agent_session::{
+    is_deepseek_provider, merge_payload, normalize_deepseek_thinking_payload, ResolvedModelRole,
+};
 use crate::core::executors::ToolOutput;
 use crate::core::subagent::review_contract::{extract_review_report, render_parent_summary};
 use crate::core::subagent::runtime_orchestration::{RuntimeOrchestrationTool, SubagentProfile};
@@ -37,6 +40,10 @@ pub struct HelperRunRequest {
     /// passed to each subagent tool call so that session cancellation cascades
     /// into in-flight tool executions.
     pub session_abort_signal: tiycore::agent::AbortSignal,
+    /// Thinking level inherited from the parent session's model plan so that
+    /// DeepSeek thinking-enabled payloads are normalised correctly in the
+    /// subagent payload hook.
+    pub thinking_level: ThinkingLevel,
 }
 
 pub struct HelperRunResult {
@@ -145,6 +152,13 @@ impl HelperAgentOrchestrator {
         agent.set_tools(helper_profile.helper_tools());
         agent.set_tool_execution(ToolExecutionMode::Sequential);
 
+        // Propagate thinking level from the parent session so that the helper
+        // agent sends the correct reasoning parameters to the API.  Only
+        // enable thinking when the model actually supports it (reasoning flag).
+        if request.thinking_level != ThinkingLevel::Off && request.model_role.model.reasoning {
+            agent.set_thinking_level(request.thinking_level);
+        }
+
         if let Some(api_key) = request.model_role.api_key.clone() {
             agent.set_api_key(api_key);
         }
@@ -157,10 +171,31 @@ impl HelperAgentOrchestrator {
         // when connecting to internal HTTP-only endpoints.
         agent.set_security_config(crate::core::agent_session::runtime_security_config());
 
-        if let Some(provider_options) = request.model_role.provider_options.clone() {
+        // Always set the payload hook so the DeepSeek thinking normalizer runs
+        // even when there are no provider_options to merge.
+        {
+            let provider_options = request.model_role.provider_options.clone();
+            let provider_type = request.model_role.provider_type.clone();
+            let base_url = request
+                .model_role
+                .model
+                .base_url
+                .clone()
+                .unwrap_or_default();
+            let thinking_enabled = request.thinking_level != ThinkingLevel::Off;
             agent.set_on_payload(move |payload, _model| {
                 let provider_options = provider_options.clone();
-                Box::pin(async move { Some(merge_payload(payload, &provider_options)) })
+                let provider_type = provider_type.clone();
+                let base_url = base_url.clone();
+                Box::pin(async move {
+                    let mut p = payload;
+                    if let Some(ref opts) = provider_options {
+                        p = merge_payload(p, opts);
+                    }
+                    let is_ds = is_deepseek_provider(&provider_type, &base_url);
+                    p = normalize_deepseek_thinking_payload(p, is_ds, thinking_enabled);
+                    Some(p)
+                })
             });
         }
 
@@ -897,28 +932,6 @@ fn collect_prompt_sections(prompt: &str) -> Vec<(&str, String)> {
         .into_iter()
         .filter(|(_, body)| !body.trim().is_empty())
         .collect()
-}
-
-fn merge_payload(mut base: serde_json::Value, patch: &serde_json::Value) -> serde_json::Value {
-    merge_json_value(&mut base, patch);
-    base
-}
-
-fn merge_json_value(base: &mut serde_json::Value, patch: &serde_json::Value) {
-    match (base, patch) {
-        (serde_json::Value::Object(base_map), serde_json::Value::Object(patch_map)) => {
-            for (key, patch_value) in patch_map {
-                if let Some(base_value) = base_map.get_mut(key) {
-                    merge_json_value(base_value, patch_value);
-                } else {
-                    base_map.insert(key.clone(), patch_value.clone());
-                }
-            }
-        }
-        (base_value, patch_value) => {
-            *base_value = patch_value.clone();
-        }
-    }
 }
 
 fn take_escalation_summary(summary: &Arc<StdMutex<Option<String>>>) -> Option<String> {

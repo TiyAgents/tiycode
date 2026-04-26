@@ -3,7 +3,8 @@ pub(super) mod tests {
     use super::super::{
         build_initial_context_token_calibration, build_profile_response_prompt_parts,
         build_system_prompt, convert_history_messages, current_context_token_calibration,
-        handle_agent_event, main_agent_security_config, normalize_profile_response_language,
+        handle_agent_event, is_deepseek_provider, main_agent_security_config,
+        normalize_deepseek_thinking_payload, normalize_profile_response_language,
         normalize_profile_response_style, plan_mode_missing_checkpoint_error,
         record_pending_prompt_estimate, resolve_helper_model_role, resolve_helper_profile,
         response_style_system_instruction, runtime_security_config, runtime_tools_for_profile,
@@ -2791,5 +2792,289 @@ Used for prompt assembly coverage.
             }
             other => panic!("expected text Assistant at index 3, got {:?}", other),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // DeepSeek provider detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_deepseek_provider_matches_type_case_insensitive() {
+        assert!(is_deepseek_provider("deepseek", "https://other.com/v1"));
+        assert!(is_deepseek_provider("DeepSeek", "https://other.com/v1"));
+        assert!(is_deepseek_provider("DEEPSEEK", "https://other.com/v1"));
+    }
+
+    #[test]
+    fn is_deepseek_provider_matches_base_url() {
+        assert!(is_deepseek_provider(
+            "openai",
+            "https://api.deepseek.com/v1"
+        ));
+        assert!(is_deepseek_provider(
+            "openai_compatible",
+            "https://api.deepseek.com"
+        ));
+    }
+
+    #[test]
+    fn is_deepseek_provider_rejects_non_deepseek() {
+        assert!(!is_deepseek_provider("openai", "https://api.openai.com/v1"));
+        assert!(!is_deepseek_provider(
+            "anthropic",
+            "https://api.anthropic.com"
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // DeepSeek payload normalizer — thinking enabled
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn normalize_deepseek_thinking_enabled_fills_missing_reasoning_content() {
+        let payload = serde_json::json!({
+            "model": "deepseek-reasoner",
+            "messages": [
+                { "role": "user", "content": "hello" },
+                { "role": "assistant", "content": "thinking done", "reasoning_content": "step 1" },
+                { "role": "user", "content": "use tool" },
+                { "role": "assistant", "content": null, "tool_calls": [{ "id": "tc1", "type": "function", "function": { "name": "read", "arguments": "{}" } }] }
+            ]
+        });
+
+        let result = normalize_deepseek_thinking_payload(payload, true, true);
+        let messages = result["messages"].as_array().unwrap();
+
+        // The tool-call assistant should have reasoning_content filled from the previous one.
+        assert_eq!(messages[3]["reasoning_content"], "step 1");
+        // And content should be an empty string instead of null.
+        assert_eq!(messages[3]["content"], "");
+    }
+
+    #[test]
+    fn normalize_deepseek_thinking_enabled_preserves_existing_reasoning() {
+        let payload = serde_json::json!({
+            "model": "deepseek-reasoner",
+            "messages": [
+                { "role": "assistant", "content": "hi", "reasoning_content": "reason A" },
+                { "role": "assistant", "content": "", "reasoning_content": "reason B", "tool_calls": [{ "id": "tc1", "type": "function", "function": { "name": "read", "arguments": "{}" } }] }
+            ]
+        });
+
+        let result = normalize_deepseek_thinking_payload(payload, true, true);
+        let messages = result["messages"].as_array().unwrap();
+
+        // Should keep original reasoning_content, not overwrite with "reason A".
+        assert_eq!(messages[1]["reasoning_content"], "reason B");
+    }
+
+    #[test]
+    fn normalize_deepseek_thinking_enabled_ensures_content_not_null() {
+        let payload = serde_json::json!({
+            "model": "deepseek-reasoner",
+            "messages": [
+                { "role": "assistant", "reasoning_content": "think" }
+            ]
+        });
+
+        let result = normalize_deepseek_thinking_payload(payload, true, true);
+        let messages = result["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["content"], "");
+    }
+
+    // -----------------------------------------------------------------------
+    // DeepSeek payload normalizer — thinking disabled
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn normalize_deepseek_thinking_disabled_strips_reasoning_content() {
+        let payload = serde_json::json!({
+            "model": "deepseek-chat",
+            "messages": [
+                { "role": "user", "content": "hello" },
+                { "role": "assistant", "content": "reply", "reasoning_content": "should be removed" },
+                { "role": "assistant", "content": "", "reasoning_content": "also removed", "tool_calls": [] }
+            ]
+        });
+
+        let result = normalize_deepseek_thinking_payload(payload, true, false);
+        let messages = result["messages"].as_array().unwrap();
+
+        assert!(messages[1].get("reasoning_content").is_none());
+        assert!(messages[2].get("reasoning_content").is_none());
+        // Non-assistant messages are untouched.
+        assert_eq!(messages[0]["content"], "hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // DeepSeek payload normalizer — non-DeepSeek passthrough
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn normalize_deepseek_non_deepseek_returns_unmodified() {
+        let payload = serde_json::json!({
+            "model": "gpt-4",
+            "messages": [
+                { "role": "assistant", "content": null, "tool_calls": [{ "id": "tc1" }] }
+            ]
+        });
+
+        let result = normalize_deepseek_thinking_payload(payload.clone(), false, true);
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn normalize_deepseek_no_messages_key_returns_unmodified() {
+        let payload = serde_json::json!({ "model": "deepseek-reasoner" });
+        let result = normalize_deepseek_thinking_payload(payload.clone(), true, true);
+        assert_eq!(result, payload);
+    }
+
+    // -----------------------------------------------------------------------
+    // convert_history_messages boundary regression tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn convert_history_messages_empty_reasoning_skipped() {
+        let model = sample_resolved_model_role("gpt-test").model;
+        let messages = vec![
+            MessageRecord {
+                id: "msg-reasoning-empty".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "  ".to_string(), // empty/whitespace-only
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-assistant".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Hello".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:02.000Z".to_string(),
+            },
+        ];
+
+        let history = convert_history_messages(&messages, &[], &model);
+
+        // The empty reasoning should be skipped, so only the assistant text remains.
+        assert_eq!(history.len(), 1);
+        match &history[0] {
+            AgentMessage::Assistant(assistant) => {
+                assert_eq!(assistant.content.len(), 1);
+                assert!(assistant.content[0].is_text());
+            }
+            other => panic!("expected Assistant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn convert_history_messages_tool_result_clears_pending_thinking() {
+        // Scenario: user → reasoning → [tool_call → tool_result] → final
+        // assistant.  The reasoning should attach to the tool-call assistant,
+        // the ToolResult should clear any remaining pending thinking, and the
+        // final assistant should have NO thinking blocks.
+        let model = sample_resolved_model_role("gpt-test").model;
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "user".to_string(),
+                content_markdown: "Start".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-reasoning".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Orphan thinking".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:02.000Z".to_string(),
+            },
+            // The assistant text that follows the tool result must NOT carry
+            // the orphan reasoning from before the tool call.
+            MessageRecord {
+                id: "msg-assistant-after".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Final answer".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:05.000Z".to_string(),
+            },
+        ];
+        // Use started_at matching the reasoning's created_at so the tool call
+        // is placed at the reasoning's position in the timeline (before the
+        // final assistant).
+        let tool_calls = vec![ToolCallDto {
+            id: "tc-1".to_string(),
+            storage_id: "tc-storage-1".to_string(),
+            run_id: "run-1".to_string(),
+            thread_id: "thread-1".to_string(),
+            helper_id: None,
+            tool_name: "read".to_string(),
+            tool_input: serde_json::json!({"path": "foo.rs"}),
+            tool_output: Some(serde_json::json!("file content")),
+            status: "completed".to_string(),
+            approval_status: None,
+            started_at: "2026-01-01T00:00:02.000Z".to_string(),
+            finished_at: Some("2026-01-01T00:00:04.000Z".to_string()),
+        }];
+
+        let history = convert_history_messages(&messages, &tool_calls, &model);
+
+        // Verify there is a ToolResult in the history.
+        let tool_result_idx = history
+            .iter()
+            .position(|m| matches!(m, AgentMessage::ToolResult(_)));
+        assert!(
+            tool_result_idx.is_some(),
+            "should have a ToolResult in history"
+        );
+
+        // The "Final answer" assistant message comes after the ToolResult.
+        // It must NOT contain any thinking blocks from the orphan reasoning.
+        let final_assistant =
+            history
+                .iter()
+                .skip(tool_result_idx.unwrap() + 1)
+                .find_map(|m| match m {
+                    AgentMessage::Assistant(a) => Some(a),
+                    _ => None,
+                });
+        assert!(
+            final_assistant.is_some(),
+            "should have an assistant after ToolResult"
+        );
+        let final_assistant = final_assistant.unwrap();
+        for block in &final_assistant.content {
+            assert!(
+                !block.is_thinking(),
+                "orphan thinking leaked past tool result boundary into final assistant"
+            );
+        }
+        assert_eq!(final_assistant.content.len(), 1);
+        assert!(final_assistant.content[0].is_text());
     }
 }
