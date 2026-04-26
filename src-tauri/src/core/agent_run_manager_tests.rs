@@ -271,6 +271,7 @@ pub(super) mod tests {
                 run_id: "run-1".to_string(),
                 message_id: "message-1".to_string(),
                 content: "hello".to_string(),
+                turn_index: None,
             },
             ThreadStreamEvent::ToolRequested {
                 run_id: "run-1".to_string(),
@@ -304,6 +305,7 @@ pub(super) mod tests {
                 message_id: "reasoning-1".to_string(),
                 reasoning: "thinking".to_string(),
                 thinking_signature: Some("sig".to_string()),
+                turn_index: None,
             },
             ThreadStreamEvent::ThreadUsageUpdated {
                 run_id: "run-1".to_string(),
@@ -777,6 +779,7 @@ pub(super) mod tests {
                 message_id: "reasoning-1".into(),
                 reasoning: "Inspecting".into(),
                 thinking_signature: None,
+                turn_index: None,
             }
         ));
         assert!(should_complete_reasoning_for_event(

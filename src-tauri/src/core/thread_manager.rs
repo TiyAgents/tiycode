@@ -240,11 +240,13 @@ impl ThreadManager {
         let count = run_repo::interrupt_active_runs(&self.pool).await?;
         let tc_count = tool_call_repo::interrupt_active_tool_calls(&self.pool).await?;
         let helper_count = run_helper_repo::interrupt_active_helpers(&self.pool).await?;
-        if count > 0 || tc_count > 0 || helper_count > 0 {
+        let reasoning_count = message_repo::discard_dangling_reasoning(&self.pool).await?;
+        if count > 0 || tc_count > 0 || helper_count > 0 || reasoning_count > 0 {
             tracing::warn!(
                 runs = count,
                 tool_calls = tc_count,
                 helpers = helper_count,
+                reasoning = reasoning_count,
                 "interrupted dangling runs/tool_calls/helpers on startup"
             );
         }

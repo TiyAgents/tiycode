@@ -19,6 +19,7 @@ pub(crate) fn handle_agent_event(
     last_usage: &StdMutex<Option<Usage>>,
     context_compression_state: &StdMutex<ContextCompressionRuntimeState>,
     reasoning_buffer: &StdMutex<String>,
+    current_turn_index: &StdMutex<Option<usize>>,
     context_window: &str,
     model_display_name: &str,
     event: &tiycore::agent::AgentEvent,
@@ -39,8 +40,14 @@ pub(crate) fn handle_agent_event(
             });
         }
         tiycore::agent::AgentEvent::MessageUpdate {
-            assistant_event, ..
+            assistant_event,
+            turn_index,
+            ..
         } => {
+            // Track the current turn_index for response boundary grouping
+            if let Ok(mut guard) = current_turn_index.lock() {
+                *guard = Some(*turn_index);
+            }
             match assistant_event.as_ref() {
                 AssistantMessageEvent::TextDelta { delta, .. } => {
                     let message_id = ensure_message_id(current_message_id);
@@ -57,11 +64,13 @@ pub(crate) fn handle_agent_event(
                     if let Ok(mut buffer) = reasoning_buffer.lock() {
                         buffer.push_str(delta);
                         let message_id = ensure_message_id(current_reasoning_message_id);
+                        let ti = current_turn_index.lock().ok().and_then(|g| *g);
                         let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
                             run_id: run_id.to_string(),
                             message_id,
                             reasoning: buffer.clone(),
                             thinking_signature: None,
+                            turn_index: ti,
                         });
                     }
                 }
@@ -93,11 +102,13 @@ pub(crate) fn handle_agent_event(
                         .and_then(|t| t.thinking_signature.clone());
 
                     let message_id = ensure_message_id(current_reasoning_message_id);
+                    let ti = current_turn_index.lock().ok().and_then(|g| *g);
                     let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
                         run_id: run_id.to_string(),
                         message_id,
                         reasoning,
                         thinking_signature,
+                        turn_index: ti,
                     });
                     reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
                 }
@@ -116,7 +127,7 @@ pub(crate) fn handle_agent_event(
                 );
             }
         }
-        tiycore::agent::AgentEvent::MessageEnd { message } => {
+        tiycore::agent::AgentEvent::MessageEnd { message, .. } => {
             if let AgentMessage::Assistant(assistant) = message {
                 let content = assistant.text_content();
 
@@ -161,10 +172,12 @@ pub(crate) fn handle_agent_event(
                 );
                 let message_id = take_or_create_message_id(current_message_id);
                 set_last_completed_message_id(last_completed_message_id, Some(message_id.clone()));
+                let ti = current_turn_index.lock().ok().and_then(|g| *g);
                 let _ = event_tx.send(ThreadStreamEvent::MessageCompleted {
                     run_id: run_id.to_string(),
                     message_id,
                     content,
+                    turn_index: ti,
                 });
             }
 

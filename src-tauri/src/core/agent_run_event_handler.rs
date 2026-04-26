@@ -136,6 +136,7 @@ impl AgentRunManager {
             ThreadStreamEvent::MessageCompleted {
                 message_id,
                 content,
+                turn_index,
                 ..
             } => {
                 let persisted_id = self.ensure_streaming_message(run_id, message_id).await?;
@@ -147,6 +148,11 @@ impl AgentRunManager {
                 // it with an empty string.
                 if !content.is_empty() {
                     message_repo::replace_content(&self.pool, &persisted_id, content).await?;
+                }
+                // Persist turn_index into metadata for response boundary tracking
+                if let Some(ti) = turn_index {
+                    let meta = serde_json::json!({"turnIndex": ti}).to_string();
+                    message_repo::update_metadata(&self.pool, &persisted_id, Some(&meta)).await?;
                 }
                 message_repo::update_status(&self.pool, &persisted_id, "completed").await?;
 
@@ -162,15 +168,29 @@ impl AgentRunManager {
                 message_id,
                 reasoning,
                 thinking_signature,
+                turn_index,
                 ..
             } => {
                 let persisted_id = self.ensure_reasoning_message(run_id, message_id).await?;
                 message_repo::replace_content(&self.pool, &persisted_id, reasoning).await?;
-                if let Some(sig) = thinking_signature {
+                // Merge thinking_signature and turn_index into metadata_json
+                let has_sig = thinking_signature.is_some();
+                let has_ti = turn_index.is_some();
+                if has_sig || has_ti {
+                    let mut meta = serde_json::Map::new();
+                    if let Some(sig) = thinking_signature {
+                        meta.insert(
+                            "thinking_signature".to_string(),
+                            serde_json::Value::String(sig.clone()),
+                        );
+                    }
+                    if let Some(ti) = turn_index {
+                        meta.insert("turnIndex".to_string(), serde_json::json!(ti));
+                    }
                     message_repo::update_metadata(
                         &self.pool,
                         &persisted_id,
-                        Some(&serde_json::json!({"thinking_signature": sig}).to_string()),
+                        Some(&serde_json::Value::Object(meta).to_string()),
                     )
                     .await?;
                 }
@@ -477,8 +497,33 @@ impl AgentRunManager {
         if let Some(message_id) = streaming_message_id {
             message_repo::update_status(&self.pool, &message_id, finalized_message_status).await?;
         }
+        // Reasoning termination: classify by content/signature validity
         if let Some(message_id) = reasoning_message_id {
-            message_repo::update_status(&self.pool, &message_id, finalized_message_status).await?;
+            let should_discard = if status != "completed" {
+                // Non-normal termination: check if reasoning has valid content + signature
+                match message_repo::find_by_id(&self.pool, &message_id).await? {
+                    Some(msg) => {
+                        let is_empty = msg.content_markdown.trim().is_empty();
+                        let has_signature = msg
+                            .metadata_json
+                            .as_deref()
+                            .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+                            .and_then(|v| v.get("thinking_signature")?.as_str().map(|_| ()))
+                            .is_some();
+                        is_empty || !has_signature
+                    }
+                    None => true,
+                }
+            } else {
+                false
+            };
+
+            let effective_status = if should_discard {
+                "discarded"
+            } else {
+                finalized_message_status
+            };
+            message_repo::update_status(&self.pool, &message_id, effective_status).await?;
         }
 
         // Reconcile task board state, then always push latest state to frontend.

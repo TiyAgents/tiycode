@@ -224,6 +224,7 @@ pub(super) mod tests {
         event: &AgentEvent,
     ) {
         let last_completed_message_id = StdMutex::new(None::<String>);
+        let current_turn_index = StdMutex::new(None::<usize>);
         handle_agent_event(
             run_id,
             event_tx,
@@ -233,6 +234,7 @@ pub(super) mod tests {
             last_usage,
             context_compression_state,
             reasoning_buffer,
+            &current_turn_index,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             event,
@@ -532,6 +534,7 @@ Used for prompt assembly coverage.
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
         let partial = sample_partial_assistant_message();
 
         handle_test_agent_event(
@@ -542,6 +545,7 @@ Used for prompt assembly coverage.
             &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
+                turn_index: 0,
                 message: AgentMessage::Assistant(partial.clone()),
                 assistant_event: Box::new(AssistantMessageEvent::ThinkingStart {
                     content_index: 0,
@@ -557,6 +561,7 @@ Used for prompt assembly coverage.
             &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
+                turn_index: 0,
                 message: AgentMessage::Assistant(partial.clone()),
                 assistant_event: Box::new(AssistantMessageEvent::ThinkingDelta {
                     content_index: 0,
@@ -573,6 +578,7 @@ Used for prompt assembly coverage.
             &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
+                turn_index: 0,
                 message: AgentMessage::Assistant(partial.clone()),
                 assistant_event: Box::new(AssistantMessageEvent::ThinkingEnd {
                     content_index: 0,
@@ -589,6 +595,7 @@ Used for prompt assembly coverage.
             &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
+                turn_index: 0,
                 message: AgentMessage::Assistant(partial.clone()),
                 assistant_event: Box::new(AssistantMessageEvent::ThinkingStart {
                     content_index: 1,
@@ -604,6 +611,7 @@ Used for prompt assembly coverage.
             &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
+                turn_index: 0,
                 message: AgentMessage::Assistant(partial.clone()),
                 assistant_event: Box::new(AssistantMessageEvent::ThinkingDelta {
                     content_index: 1,
@@ -641,6 +649,7 @@ Used for prompt assembly coverage.
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
         let partial = sample_partial_assistant_message();
 
         handle_test_agent_event(
@@ -651,6 +660,7 @@ Used for prompt assembly coverage.
             &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
+                turn_index: 0,
                 message: AgentMessage::Assistant(partial.clone()),
                 assistant_event: Box::new(AssistantMessageEvent::ThinkingStart {
                     content_index: 0,
@@ -666,6 +676,7 @@ Used for prompt assembly coverage.
             &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageUpdate {
+                turn_index: 0,
                 message: AgentMessage::Assistant(partial),
                 assistant_event: Box::new(AssistantMessageEvent::ThinkingEnd {
                     content_index: 0,
@@ -689,6 +700,7 @@ Used for prompt assembly coverage.
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
         let assistant = AssistantMessage::builder()
             .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
@@ -705,6 +717,8 @@ Used for prompt assembly coverage.
             &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageEnd {
+                turn_index: 0,
+                response_id: None,
                 message: AgentMessage::Assistant(assistant.clone()),
             },
         );
@@ -716,6 +730,8 @@ Used for prompt assembly coverage.
             &last_usage,
             &reasoning_buffer,
             &AgentEvent::MessageEnd {
+                turn_index: 0,
+                response_id: None,
                 message: AgentMessage::Assistant(assistant),
             },
         );
@@ -741,6 +757,7 @@ Used for prompt assembly coverage.
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
         let assistant = AssistantMessage::builder()
             .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
@@ -759,6 +776,8 @@ Used for prompt assembly coverage.
             &context_compression_state,
             &reasoning_buffer,
             &AgentEvent::MessageEnd {
+                turn_index: 0,
+                response_id: None,
                 message: AgentMessage::Assistant(assistant.clone()),
             },
         );
@@ -771,6 +790,8 @@ Used for prompt assembly coverage.
             &context_compression_state,
             &reasoning_buffer,
             &AgentEvent::MessageEnd {
+                turn_index: 0,
+                response_id: None,
                 message: AgentMessage::Assistant(assistant),
             },
         );
@@ -798,6 +819,7 @@ Used for prompt assembly coverage.
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
         let assistant = AssistantMessage::builder()
             .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
@@ -823,9 +845,12 @@ Used for prompt assembly coverage.
             &last_usage,
             &context_compression_state,
             &reasoning_buffer,
+            &current_turn_index,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::MessageEnd {
+                turn_index: 0,
+                response_id: None,
                 message: AgentMessage::Assistant(assistant),
             },
         );
@@ -938,6 +963,7 @@ Used for prompt assembly coverage.
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
 
         handle_agent_event(
             "run-retry",
@@ -948,6 +974,7 @@ Used for prompt assembly coverage.
             &last_usage,
             &context_compression_state,
             &reasoning_buffer,
+            &current_turn_index,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::TurnRetrying {
@@ -985,6 +1012,7 @@ Used for prompt assembly coverage.
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
 
         // Empty assistant: no content blocks, no tool calls.
         let empty_assistant = sample_partial_assistant_message();
@@ -998,9 +1026,12 @@ Used for prompt assembly coverage.
             &last_usage,
             &context_compression_state,
             &reasoning_buffer,
+            &current_turn_index,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::MessageEnd {
+                turn_index: 0,
+                response_id: None,
                 message: AgentMessage::Assistant(empty_assistant),
             },
         );
@@ -1026,6 +1057,7 @@ Used for prompt assembly coverage.
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
         // Build an assistant message with actual text content so that
         // MessageEnd emits MessageCompleted (empty content is now skipped).
         let assistant = AssistantMessage::builder()
@@ -1047,9 +1079,12 @@ Used for prompt assembly coverage.
             &last_usage,
             &context_compression_state,
             &reasoning_buffer,
+            &current_turn_index,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::MessageEnd {
+                turn_index: 0,
+                response_id: None,
                 message: AgentMessage::Assistant(assistant.clone()),
             },
         );
@@ -1062,9 +1097,11 @@ Used for prompt assembly coverage.
             &last_usage,
             &context_compression_state,
             &reasoning_buffer,
+            &current_turn_index,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::MessageDiscarded {
+                turn_index: 0,
                 message: AgentMessage::Assistant(assistant),
                 reason: "Incomplete anthropic stream: missing message_stop".to_string(),
             },
@@ -2931,6 +2968,65 @@ Used for prompt assembly coverage.
     }
 
     // -----------------------------------------------------------------------
+    // DeepSeek payload normalizer — text-only assistant backfill
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn normalize_deepseek_thinking_enabled_fills_text_only_assistant() {
+        // Scenario: an earlier assistant has reasoning_content, a later
+        // text-only assistant does not (Phase 4 mis-allocation).  The
+        // normalizer must backfill reasoning_content for the text-only
+        // assistant to prevent DeepSeek 400.
+        let payload = serde_json::json!({
+            "model": "deepseek-reasoner",
+            "messages": [
+                { "role": "user", "content": "hello" },
+                { "role": "assistant", "content": "thinking done", "reasoning_content": "step 1" },
+                { "role": "user", "content": "continue" },
+                { "role": "assistant", "content": "final answer" }
+            ]
+        });
+
+        let result = normalize_deepseek_thinking_payload(payload, true, true);
+        let messages = result["messages"].as_array().unwrap();
+
+        // The text-only assistant at index 3 must have reasoning_content
+        // backfilled from the previous assistant.
+        assert_eq!(messages[3]["reasoning_content"], "step 1");
+        // Original reasoning_content must remain untouched.
+        assert_eq!(messages[1]["reasoning_content"], "step 1");
+    }
+
+    #[test]
+    fn normalize_deepseek_thinking_enabled_fills_text_after_tool_call_assistant() {
+        // Scenario matching the actual bug: assistant with reasoning +
+        // tool_calls, then tool result, then user, then text-only assistant
+        // that lost its thinking block.
+        let payload = serde_json::json!({
+            "model": "deepseek-reasoner",
+            "messages": [
+                { "role": "user", "content": "search for X" },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "let me search",
+                    "tool_calls": [{ "id": "tc1", "type": "function", "function": { "name": "search", "arguments": "{}" } }]
+                },
+                { "role": "tool", "content": "result data", "tool_call_id": "tc1" },
+                { "role": "assistant", "content": "Here is the answer based on search results." }
+            ]
+        });
+
+        let result = normalize_deepseek_thinking_payload(payload, true, true);
+        let messages = result["messages"].as_array().unwrap();
+
+        // Text-only assistant at index 3 gets reasoning backfilled.
+        assert_eq!(messages[3]["reasoning_content"], "let me search");
+        // Tool-call assistant at index 1 keeps its own reasoning.
+        assert_eq!(messages[1]["reasoning_content"], "let me search");
+    }
+
+    // -----------------------------------------------------------------------
     // convert_history_messages boundary regression tests
     // -----------------------------------------------------------------------
 
@@ -3076,5 +3172,157 @@ Used for prompt assembly coverage.
         }
         assert_eq!(final_assistant.content.len(), 1);
         assert!(final_assistant.content[0].is_text());
+    }
+
+    /// Regression test documenting the Phase 4 known limitation that caused
+    /// DeepSeek 400 errors.  When a tool call's `insert_pos` coincides with
+    /// a reasoning message's position, Phase 4 attaches that reasoning to
+    /// the standalone tool-call assistant instead of the subsequent text
+    /// assistant.  The `normalize_deepseek_thinking_payload` safety net
+    /// backfills `reasoning_content` on the final JSON to prevent the 400.
+    #[test]
+    fn convert_history_messages_final_text_loses_thinking_when_tool_at_same_pos() {
+        // Timeline that mirrors the real bug:
+        //   pos 0: user message
+        //   pos 1: reasoning-A  (thinking for tool-call iteration)
+        //   pos 2: reasoning-B  (thinking for final text — but tc insert_pos = 2)
+        //   pos 3: text assistant ("Final answer")
+        //
+        // Tool call started_at lands between reasoning-A and reasoning-B,
+        // so insert_pos = index of reasoning-B = 2.
+        //
+        // Phase 4 after sort:
+        //   (0,2) User
+        //   (1,2) PendingThinking(A)
+        //   (2,2) PendingThinking(B)        ← enters buffer
+        //   (2,3) Standalone[tc]            ← drains buffer: gets A + B
+        //   (2,3) ToolResult                ← clears buffer
+        //   (3,2) Assistant["Final answer"] ← buffer empty, no thinking
+        let model = sample_resolved_model_role("gpt-test").model;
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Analyze the code".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            },
+            MessageRecord {
+                id: "msg-reasoning-a".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Let me search for it.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:01.000Z".to_string(),
+            },
+            // reasoning-B: thinking for final text, but tc.started_at < this
+            MessageRecord {
+                id: "msg-reasoning-b".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Now I can write the final answer.".to_string(),
+                message_type: "reasoning".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({"thinking_signature": "reasoning_content"}).to_string(),
+                ),
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:05.000Z".to_string(),
+            },
+            // Final text response
+            MessageRecord {
+                id: "msg-final-text".to_string(),
+                thread_id: "t1".to_string(),
+                run_id: Some("run-1".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Here is my complete analysis.".to_string(),
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: "2026-01-01T00:00:10.000Z".to_string(),
+            },
+        ];
+
+        // Tool call started between reasoning-A and reasoning-B
+        let tool_calls = vec![ToolCallDto {
+            id: "tc-search".to_string(),
+            storage_id: "st-search".to_string(),
+            run_id: "run-1".to_string(),
+            thread_id: "t1".to_string(),
+            helper_id: None,
+            tool_name: "search".to_string(),
+            tool_input: serde_json::json!({"query": "analysis"}),
+            tool_output: Some(serde_json::json!("search results")),
+            status: "completed".to_string(),
+            approval_status: None,
+            started_at: "2026-01-01T00:00:03.000Z".to_string(),
+            finished_at: Some("2026-01-01T00:00:04.000Z".to_string()),
+        }];
+
+        let history = convert_history_messages(&messages, &tool_calls, &model);
+
+        // Expected structure: User → Assistant[Thinking+ToolCall] → ToolResult → Assistant[Text]
+        assert_eq!(
+            history.len(),
+            4,
+            "should be User + TC-Assistant + ToolResult + Text-Assistant, got {:?}",
+            history
+                .iter()
+                .map(|m| match m {
+                    AgentMessage::User(_) => "User",
+                    AgentMessage::Assistant(_) => "Assistant",
+                    AgentMessage::ToolResult(_) => "ToolResult",
+                    _ => "Other",
+                })
+                .collect::<Vec<_>>()
+        );
+
+        // The standalone tool-call assistant got reasoning-A + reasoning-B.
+        match &history[1] {
+            AgentMessage::Assistant(a) => {
+                let thinking_count = a.content.iter().filter(|b| b.is_thinking()).count();
+                assert!(
+                    thinking_count >= 1,
+                    "standalone should have at least one Thinking block"
+                );
+                assert!(
+                    a.content.last().unwrap().is_tool_call(),
+                    "last block should be ToolCall"
+                );
+            }
+            other => panic!("expected Assistant at index 1, got {:?}", other),
+        }
+
+        // KEY ASSERTION: The final text assistant has NO thinking blocks.
+        // This documents the Phase 4 known limitation — the normalizer
+        // safety net in normalize_deepseek_thinking_payload is required to
+        // backfill reasoning_content on the serialized JSON before sending.
+        match &history[3] {
+            AgentMessage::Assistant(a) => {
+                let has_thinking = a.content.iter().any(|b| b.is_thinking());
+                assert!(
+                    !has_thinking,
+                    "Phase 4 known limitation: final text assistant should NOT have thinking \
+                     (it was consumed by the standalone at same insert_pos); \
+                     normalize_deepseek_thinking_payload provides the safety net"
+                );
+                assert_eq!(a.content.len(), 1);
+                assert!(a.content[0].is_text());
+            }
+            other => panic!("expected text Assistant at index 3, got {:?}", other),
+        }
     }
 }

@@ -205,6 +205,8 @@ impl AgentSession {
         let last_usage_ref = Arc::clone(&last_usage);
         let reasoning_ref = Arc::clone(&reasoning_buffer);
         let context_compression_state_ref = Arc::clone(&self.context_compression_state);
+        let current_turn_index: Arc<StdMutex<Option<usize>>> = Arc::new(StdMutex::new(None));
+        let turn_index_ref = Arc::clone(&current_turn_index);
         let unsubscribe = self.agent.subscribe(move |event| {
             handle_agent_event(
                 &run_id,
@@ -215,6 +217,7 @@ impl AgentSession {
                 &last_usage_ref,
                 &context_compression_state_ref,
                 &reasoning_ref,
+                &turn_index_ref,
                 &context_window,
                 &model_display_name,
                 event,
@@ -707,10 +710,12 @@ pub(crate) fn is_deepseek_provider(provider_type: &str, base_url: &str) -> bool 
 /// every assistant message satisfies the API's `reasoning_content` constraints.
 ///
 /// * **thinking-enabled**: carries forward the most-recent non-empty
-///   `reasoning_content` to any assistant message that contains `tool_calls`
-///   but is missing `reasoning_content`.  Also ensures every assistant message
-///   has a `content` field that is at least an empty string (DeepSeek rejects
-///   `content: null`).
+///   `reasoning_content` to any assistant message that is missing
+///   `reasoning_content` — regardless of whether it contains `tool_calls` or
+///   is a text-only reply.  DeepSeek requires the field on every assistant
+///   message when thinking mode is active.  Also ensures every assistant
+///   message has a `content` field that is at least an empty string (DeepSeek
+///   rejects `content: null`).
 /// * **thinking-disabled**: strips `reasoning_content` from all assistant
 ///   messages so the API does not receive it when the session has thinking off.
 ///
@@ -753,17 +758,26 @@ pub(crate) fn normalize_deepseek_thinking_payload(
                 _ => {}
             }
 
-            // If the message has tool_calls but lacks reasoning_content, fill
-            // it from the most-recent reasoning we saw.
-            let has_tool_calls = msg
-                .get("tool_calls")
-                .and_then(|v| v.as_array())
-                .map_or(false, |a| !a.is_empty());
+            // If the message lacks reasoning_content, fill it from the
+            // most-recent reasoning we saw.  This covers both tool-call-only
+            // and text-only assistant messages that lost their thinking block
+            // during history reconstruction (Phase 4 mis-allocation).
+            //
+            // KNOWN-LIMITATION: `last_reasoning` is not reset at user message
+            // boundaries — it carries forward across turns.  Per DeepSeek spec,
+            // reasoning_content from previous turns is ignored by the API when
+            // passed back, so this is functionally harmless but not precise.
+            //
+            // KNOWN-LIMITATION: If the very first assistant message in the
+            // conversation has no reasoning (last_reasoning is None), it will
+            // not receive a backfilled reasoning_content.  In thinking mode the
+            // first API response always includes reasoning, so this edge case
+            // does not occur in practice.
             let missing_reasoning = msg.get("reasoning_content").map_or(true, |v| {
-                v.is_null() || v.as_str().map_or(false, str::is_empty)
+                v.is_null() || !v.is_string() || v.as_str().map_or(true, str::is_empty)
             });
 
-            if has_tool_calls && missing_reasoning {
+            if missing_reasoning {
                 if let Some(ref rc) = last_reasoning {
                     msg.as_object_mut()
                         .map(|o| o.insert("reasoning_content".to_string(), serde_json::json!(rc)));
