@@ -182,7 +182,8 @@ impl HelperAgentOrchestrator {
                 .base_url
                 .clone()
                 .unwrap_or_default();
-            let thinking_enabled = request.thinking_level != ThinkingLevel::Off;
+            let thinking_enabled =
+                request.thinking_level != ThinkingLevel::Off && request.model_role.model.reasoning;
             agent.set_on_payload(move |payload, _model| {
                 let provider_options = provider_options.clone();
                 let provider_type = provider_type.clone();
