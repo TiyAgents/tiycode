@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use sqlx::SqlitePool;
 use tiycore::agent::AgentMessage;
 use tokio::sync::broadcast;
 
@@ -17,6 +18,68 @@ use crate::persistence::repo::{
 
 use super::agent_run_manager::{ActiveRun, AgentRunManager, FRONTEND_EVENT_BUFFER_SIZE};
 
+pub(crate) async fn persist_clear_context_reset_to_pool(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<(), AppError> {
+    let command_metadata = serde_json::json!({
+        "composer": {
+            "kind": "command",
+            "displayText": "/clear",
+            "effectivePrompt": "Clear conversation history and free up context.",
+            "command": {
+                "source": "builtin",
+                "name": "clear",
+                "path": "/clear",
+                "description": "Clear conversation history and free up context.",
+                "argumentHint": "(no arguments)",
+                "argumentsText": "",
+                "prompt": "Clear conversation history and free up context.",
+                "behavior": "clear"
+            }
+        }
+    });
+    let reset_metadata = serde_json::json!({
+        "kind": "context_reset",
+        "source": "clear",
+        "label": "Context is now reset",
+    });
+
+    let messages = vec![
+        MessageRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            thread_id: thread_id.to_string(),
+            run_id: None,
+            role: "user".to_string(),
+            content_markdown: "/clear".to_string(),
+            message_type: "plain_message".to_string(),
+            status: "completed".to_string(),
+            metadata_json: Some(command_metadata.to_string()),
+            attachments_json: None,
+            created_at: String::new(),
+        },
+        MessageRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            thread_id: thread_id.to_string(),
+            run_id: None,
+            role: "system".to_string(),
+            content_markdown: "Context is now reset".to_string(),
+            message_type: "summary_marker".to_string(),
+            status: "completed".to_string(),
+            metadata_json: Some(reset_metadata.to_string()),
+            attachments_json: None,
+            created_at: String::new(),
+        },
+    ];
+
+    for message in &messages {
+        message_repo::insert(pool, message).await?;
+    }
+    thread_repo::touch_active(pool, thread_id).await?;
+    thread_repo::update_status(pool, thread_id, &ThreadStatus::Idle).await?;
+    Ok(())
+}
+
 impl AgentRunManager {
     pub async fn clear_thread_context(&self, thread_id: &str) -> Result<(), AppError> {
         if self.cancel_run_if_active(thread_id).await? {
@@ -27,59 +90,7 @@ impl AgentRunManager {
             .await?
             .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
 
-        let command_metadata = serde_json::json!({
-            "composer": {
-                "kind": "command",
-                "displayText": "/clear",
-                "effectivePrompt": "Clear conversation history and free up context.",
-                "command": {
-                    "source": "builtin",
-                    "name": "clear",
-                    "path": "/clear",
-                    "description": "Clear conversation history and free up context.",
-                    "argumentHint": "(no arguments)",
-                    "argumentsText": "",
-                    "prompt": "Clear conversation history and free up context.",
-                    "behavior": "clear"
-                }
-            }
-        });
-        let reset_metadata = serde_json::json!({
-            "kind": "context_reset",
-            "source": "clear",
-            "label": "Context is now reset",
-        });
-
-        let messages = vec![
-            MessageRecord {
-                id: uuid::Uuid::now_v7().to_string(),
-                thread_id: thread_id.to_string(),
-                run_id: None,
-                role: "user".to_string(),
-                content_markdown: "/clear".to_string(),
-                message_type: "plain_message".to_string(),
-                status: "completed".to_string(),
-                metadata_json: Some(command_metadata.to_string()),
-                attachments_json: None,
-                created_at: String::new(),
-            },
-            MessageRecord {
-                id: uuid::Uuid::now_v7().to_string(),
-                thread_id: thread_id.to_string(),
-                run_id: None,
-                role: "system".to_string(),
-                content_markdown: "Context is now reset".to_string(),
-                message_type: "summary_marker".to_string(),
-                status: "completed".to_string(),
-                metadata_json: Some(reset_metadata.to_string()),
-                attachments_json: None,
-                created_at: String::new(),
-            },
-        ];
-        self.persist_messages(&messages).await?;
-        thread_repo::touch_active(&self.pool, thread_id).await?;
-        thread_repo::update_status(&self.pool, &thread.id, &ThreadStatus::Idle).await?;
-        Ok(())
+        persist_clear_context_reset_to_pool(&self.pool, &thread.id).await
     }
 
     /// Run a manual `/compact` against the given thread.
@@ -449,5 +460,123 @@ impl AgentRunManager {
 
         let _ = frontend_tx.send(final_event);
         self.remove_active_run(&run_id).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::persist_clear_context_reset_to_pool;
+    use crate::model::thread::{ThreadRecord, ThreadStatus};
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::Row;
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> sqlx::SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("migrations failed");
+        pool
+    }
+
+    async fn seed_workspace_and_thread(pool: &sqlx::SqlitePool) {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('workspace-clear', 'Workspace', '/tmp/workspace-clear', '/tmp/workspace-clear', '/tmp/workspace-clear',
+                    0, 0, 0, 'ready', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .expect("failed to seed workspace");
+
+        crate::persistence::repo::thread_repo::insert(
+            pool,
+            &ThreadRecord {
+                id: "thread-clear".to_string(),
+                workspace_id: "workspace-clear".to_string(),
+                profile_id: None,
+                title: "Clear Thread".to_string(),
+                status: ThreadStatus::Running,
+                summary: None,
+                last_active_at: now.clone(),
+                created_at: now.clone(),
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("failed to seed thread");
+    }
+
+    #[tokio::test]
+    async fn agent_run_compaction_persist_clear_context_reset_inserts_command_and_marker() {
+        let pool = setup_test_pool().await;
+        seed_workspace_and_thread(&pool).await;
+
+        persist_clear_context_reset_to_pool(&pool, "thread-clear")
+            .await
+            .expect("clear context reset should persist");
+
+        let rows = sqlx::query(
+            r#"SELECT id, role, content_markdown, message_type, status, metadata_json
+               FROM messages
+               WHERE thread_id = ?
+               ORDER BY id ASC"#,
+        )
+        .bind("thread-clear")
+        .fetch_all(&pool)
+        .await
+        .expect("failed to read messages");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get::<String, _>("role"), "user");
+        assert_eq!(rows[0].get::<String, _>("content_markdown"), "/clear");
+        assert_eq!(rows[0].get::<String, _>("message_type"), "plain_message");
+        assert_eq!(rows[0].get::<String, _>("status"), "completed");
+        let command_metadata: serde_json::Value = serde_json::from_str(
+            rows[0]
+                .get::<Option<String>, _>("metadata_json")
+                .as_deref()
+                .expect("command metadata should exist"),
+        )
+        .expect("command metadata should be valid json");
+        assert_eq!(command_metadata["composer"]["kind"], "command");
+        assert_eq!(command_metadata["composer"]["displayText"], "/clear");
+        assert_eq!(command_metadata["composer"]["command"]["behavior"], "clear");
+
+        assert_eq!(rows[1].get::<String, _>("role"), "system");
+        assert_eq!(
+            rows[1].get::<String, _>("content_markdown"),
+            "Context is now reset"
+        );
+        assert_eq!(rows[1].get::<String, _>("message_type"), "summary_marker");
+        assert_eq!(rows[1].get::<String, _>("status"), "completed");
+        let reset_metadata: serde_json::Value = serde_json::from_str(
+            rows[1]
+                .get::<Option<String>, _>("metadata_json")
+                .as_deref()
+                .expect("reset metadata should exist"),
+        )
+        .expect("reset metadata should be valid json");
+        assert_eq!(reset_metadata["kind"], "context_reset");
+        assert_eq!(reset_metadata["source"], "clear");
+        assert_eq!(reset_metadata["label"], "Context is now reset");
+
+        let thread = crate::persistence::repo::thread_repo::find_by_id(&pool, "thread-clear")
+            .await
+            .expect("thread lookup should succeed")
+            .expect("thread should exist");
+        assert_eq!(thread.status, ThreadStatus::Idle);
     }
 }

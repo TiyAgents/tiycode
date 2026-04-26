@@ -23,6 +23,41 @@ use crate::persistence::repo::{message_repo, tool_call_repo};
 
 use super::agent_session::{standard_tool_timeout, AgentSession, CLARIFY_TOOL_NAME};
 
+#[derive(Debug)]
+struct HelperToolTask {
+    task: String,
+    review_request: Option<ReviewRequest>,
+}
+
+fn resolve_helper_tool_task(
+    tool: RuntimeOrchestrationTool,
+    tool_input: &serde_json::Value,
+) -> Result<HelperToolTask, String> {
+    if tool == RuntimeOrchestrationTool::Review {
+        let request = ReviewRequest::from_tool_input(tool_input)?;
+        return Ok(HelperToolTask {
+            task: request.to_helper_prompt(),
+            review_request: Some(request),
+        });
+    }
+
+    let task = tool_input
+        .get("task")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if task.is_empty() {
+        return Err("missing helper task".to_string());
+    }
+
+    Ok(HelperToolTask {
+        task,
+        review_request: None,
+    })
+}
+
 impl AgentSession {
     pub(crate) async fn execute_tool_call(
         &self,
@@ -305,42 +340,23 @@ impl AgentSession {
         tool_call_storage_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
-        let (task, review_request) = if tool == RuntimeOrchestrationTool::Review {
-            match ReviewRequest::from_tool_input(tool_input) {
-                Ok(request) => (request.to_helper_prompt(), Some(request)),
-                Err(error) => {
-                    tool_call_repo::update_result(
-                        &self.pool,
-                        tool_call_storage_id,
-                        &serde_json::json!({ "error": error }).to_string(),
-                        "failed",
-                    )
-                    .await
-                    .ok();
-                    return agent_error_result(error);
-                }
+        let HelperToolTask {
+            task,
+            review_request,
+        } = match resolve_helper_tool_task(tool, tool_input) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_storage_id,
+                    &serde_json::json!({ "error": error }).to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+                return agent_error_result(error);
             }
-        } else {
-            let task = tool_input
-                .get("task")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            (task, None)
         };
-
-        if task.is_empty() {
-            tool_call_repo::update_result(
-                &self.pool,
-                tool_call_storage_id,
-                &serde_json::json!({ "error": "missing helper task" }).to_string(),
-                "failed",
-            )
-            .await
-            .ok();
-            return agent_error_result("missing helper task");
-        }
 
         let helper_role = resolve_helper_model_role(&self.spec.model_plan, tool);
         let helper_profile = resolve_helper_profile(tool);
@@ -643,5 +659,91 @@ impl AgentSession {
                 agent_error_result(error)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_helper_tool_task, RuntimeOrchestrationTool};
+    use crate::core::subagent::review_contract::{GlobalScanMode, ReviewScope, ReviewTarget};
+
+    #[test]
+    fn resolve_helper_tool_task_trims_explore_task() {
+        let resolved = resolve_helper_tool_task(
+            RuntimeOrchestrationTool::Explore,
+            &serde_json::json!({ "task": "  map the runtime files  " }),
+        )
+        .expect("explore task should resolve");
+
+        assert_eq!(resolved.task, "map the runtime files");
+        assert!(resolved.review_request.is_none());
+    }
+
+    #[test]
+    fn resolve_helper_tool_task_rejects_missing_or_blank_explore_task() {
+        let missing = resolve_helper_tool_task(
+            RuntimeOrchestrationTool::Explore,
+            &serde_json::json!({ "changedFiles": [] }),
+        )
+        .expect_err("missing task should be rejected");
+        assert_eq!(missing, "missing helper task");
+
+        let blank = resolve_helper_tool_task(
+            RuntimeOrchestrationTool::Explore,
+            &serde_json::json!({ "task": "   \n\t  " }),
+        )
+        .expect_err("blank task should be rejected");
+        assert_eq!(blank, "missing helper task");
+    }
+
+    #[test]
+    fn resolve_helper_tool_task_rejects_invalid_review_request() {
+        let error = resolve_helper_tool_task(
+            RuntimeOrchestrationTool::Review,
+            &serde_json::json!({
+                "task": "review the diff",
+                "target": "not-a-target",
+                "reviewScope": "local",
+                "globalScanMode": "off"
+            }),
+        )
+        .expect_err("invalid review target should be rejected");
+
+        assert!(error.contains("invalid review target"));
+    }
+
+    #[test]
+    fn resolve_helper_tool_task_builds_review_prompt_and_request() {
+        let resolved = resolve_helper_tool_task(
+            RuntimeOrchestrationTool::Review,
+            &serde_json::json!({
+                "task": "  review implemented tests  ",
+                "target": "code",
+                "reviewScope": "local",
+                "globalScanMode": "off",
+                "changedFiles": ["src-tauri/src/core/agent_session_execution.rs"],
+                "preferredChecks": ["cargo test --manifest-path src-tauri/Cargo.toml agent_session_execution"],
+                "riskHints": ["tests"],
+                "planFilePath": " /tmp/plan.md "
+            }),
+        )
+        .expect("review request should resolve");
+
+        assert!(resolved.task.contains("Review request:"));
+        assert!(resolved.task.contains("- task: review implemented tests"));
+        assert!(resolved.task.contains("- plan_file_path: /tmp/plan.md"));
+        let request = resolved
+            .review_request
+            .expect("review request metadata should be retained");
+        assert_eq!(request.task, "review implemented tests");
+        assert_eq!(request.target, ReviewTarget::Code);
+        assert_eq!(request.review_scope, ReviewScope::Local);
+        assert_eq!(request.global_scan_mode, GlobalScanMode::Off);
+        assert_eq!(
+            request.changed_files,
+            vec!["src-tauri/src/core/agent_session_execution.rs".to_string()]
+        );
+        assert_eq!(request.risk_hints, vec!["tests".to_string()]);
+        assert_eq!(request.plan_file_path.as_deref(), Some("/tmp/plan.md"));
     }
 }

@@ -123,6 +123,223 @@ pub(super) mod tests {
         assert_eq!(terminal_event_status(&cancelled, false), Some("cancelled"));
     }
 
+    #[test]
+    fn terminal_runtime_event_classifier_matches_run_terminal_variants_only() {
+        let terminal_events = vec![
+            ThreadStreamEvent::RunCheckpointed {
+                run_id: "run-1".to_string(),
+            },
+            ThreadStreamEvent::RunCompleted {
+                run_id: "run-1".to_string(),
+            },
+            ThreadStreamEvent::RunLimitReached {
+                run_id: "run-1".to_string(),
+                error: "turn limit".to_string(),
+                max_turns: 3,
+            },
+            ThreadStreamEvent::RunFailed {
+                run_id: "run-1".to_string(),
+                error: "boom".to_string(),
+            },
+            ThreadStreamEvent::RunCancelled {
+                run_id: "run-1".to_string(),
+            },
+            ThreadStreamEvent::RunInterrupted {
+                run_id: "run-1".to_string(),
+            },
+        ];
+
+        for event in terminal_events {
+            assert!(
+                is_terminal_runtime_event(&event),
+                "expected {event:?} to be terminal"
+            );
+        }
+
+        let non_terminal_events = vec![
+            ThreadStreamEvent::RunStarted {
+                run_id: "run-1".to_string(),
+                run_mode: "default".to_string(),
+            },
+            ThreadStreamEvent::MessageDelta {
+                run_id: "run-1".to_string(),
+                message_id: "message-1".to_string(),
+                delta: "hello".to_string(),
+            },
+            ThreadStreamEvent::ToolRequested {
+                run_id: "run-1".to_string(),
+                tool_call_id: "tool-1".to_string(),
+                tool_name: "read".to_string(),
+                tool_input: serde_json::json!({"path": "README.md"}),
+            },
+            ThreadStreamEvent::ThreadUsageUpdated {
+                run_id: "run-1".to_string(),
+                model_display_name: Some("model".to_string()),
+                context_window: Some("small".to_string()),
+                usage: Default::default(),
+            },
+        ];
+
+        for event in non_terminal_events {
+            assert!(
+                !is_terminal_runtime_event(&event),
+                "expected {event:?} to stay non-terminal"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_event_status_maps_all_terminal_outcomes() {
+        assert_eq!(
+            terminal_event_status(
+                &ThreadStreamEvent::RunCompleted {
+                    run_id: "run-1".to_string()
+                },
+                false,
+            ),
+            Some("completed")
+        );
+        assert_eq!(
+            terminal_event_status(
+                &ThreadStreamEvent::RunLimitReached {
+                    run_id: "run-1".to_string(),
+                    error: "turn limit".to_string(),
+                    max_turns: 3,
+                },
+                false,
+            ),
+            Some("limit_reached")
+        );
+        assert_eq!(
+            terminal_event_status(
+                &ThreadStreamEvent::RunFailed {
+                    run_id: "run-1".to_string(),
+                    error: "boom".to_string(),
+                },
+                false,
+            ),
+            Some("failed")
+        );
+        assert_eq!(
+            terminal_event_status(
+                &ThreadStreamEvent::RunCancelled {
+                    run_id: "run-1".to_string()
+                },
+                false,
+            ),
+            Some("cancelled")
+        );
+        assert_eq!(
+            terminal_event_status(
+                &ThreadStreamEvent::RunInterrupted {
+                    run_id: "run-1".to_string()
+                },
+                false,
+            ),
+            Some("interrupted")
+        );
+        assert_eq!(
+            terminal_event_status(
+                &ThreadStreamEvent::RunInterrupted {
+                    run_id: "run-1".to_string()
+                },
+                true,
+            ),
+            Some("cancelled")
+        );
+        assert_eq!(
+            terminal_event_status(
+                &ThreadStreamEvent::RunStarted {
+                    run_id: "run-1".to_string(),
+                    run_mode: "default".to_string(),
+                },
+                false,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn reasoning_completion_policy_ignores_progress_and_terminal_events_only() {
+        let completes_reasoning = vec![
+            ThreadStreamEvent::MessageDelta {
+                run_id: "run-1".to_string(),
+                message_id: "message-1".to_string(),
+                delta: "hello".to_string(),
+            },
+            ThreadStreamEvent::MessageCompleted {
+                run_id: "run-1".to_string(),
+                message_id: "message-1".to_string(),
+                content: "hello".to_string(),
+            },
+            ThreadStreamEvent::ToolRequested {
+                run_id: "run-1".to_string(),
+                tool_call_id: "tool-1".to_string(),
+                tool_name: "read".to_string(),
+                tool_input: serde_json::json!({"path": "README.md"}),
+            },
+            ThreadStreamEvent::ApprovalRequired {
+                run_id: "run-1".to_string(),
+                tool_call_id: "tool-1".to_string(),
+                tool_name: "shell".to_string(),
+                tool_input: serde_json::json!({"command": "echo hi"}),
+                reason: "needs approval".to_string(),
+            },
+        ];
+
+        for event in completes_reasoning {
+            assert!(
+                should_complete_reasoning_for_event(&event),
+                "expected {event:?} to complete active reasoning"
+            );
+        }
+
+        let keeps_reasoning_open = vec![
+            ThreadStreamEvent::RunStarted {
+                run_id: "run-1".to_string(),
+                run_mode: "default".to_string(),
+            },
+            ThreadStreamEvent::ReasoningUpdated {
+                run_id: "run-1".to_string(),
+                message_id: "reasoning-1".to_string(),
+                reasoning: "thinking".to_string(),
+                thinking_signature: Some("sig".to_string()),
+            },
+            ThreadStreamEvent::ThreadUsageUpdated {
+                run_id: "run-1".to_string(),
+                model_display_name: None,
+                context_window: None,
+                usage: Default::default(),
+            },
+            ThreadStreamEvent::RunCheckpointed {
+                run_id: "run-1".to_string(),
+            },
+            ThreadStreamEvent::ContextCompressing {
+                run_id: "run-1".to_string(),
+            },
+            ThreadStreamEvent::RunCompleted {
+                run_id: "run-1".to_string(),
+            },
+            ThreadStreamEvent::RunFailed {
+                run_id: "run-1".to_string(),
+                error: "boom".to_string(),
+            },
+            ThreadStreamEvent::RunCancelled {
+                run_id: "run-1".to_string(),
+            },
+            ThreadStreamEvent::RunInterrupted {
+                run_id: "run-1".to_string(),
+            },
+        ];
+
+        for event in keeps_reasoning_open {
+            assert!(
+                !should_complete_reasoning_for_event(&event),
+                "expected {event:?} not to complete active reasoning"
+            );
+        }
+    }
+
     /// Mirrors the check in `compact_thread_context` (and `start_run`): a
     /// second concurrent run on the same thread must be rejected so the
     /// thread can't accumulate overlapping ActiveRun entries.
