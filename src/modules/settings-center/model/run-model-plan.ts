@@ -1,3 +1,4 @@
+import { getEffectiveModelCapabilities } from "@/modules/settings-center/model/model-capabilities";
 import type { AgentProfile, ProviderEntry, ProviderModel } from "@/modules/settings-center/model/types";
 import type { RunModelPlanDto, RunModelPlanRoleDto } from "@/shared/types/api";
 
@@ -34,6 +35,7 @@ function findSelectedEnabledModel(
 
 function toRunModelPlanRole(selection: ProviderModelSelection): RunModelPlanRoleDto {
   const { model, provider } = selection;
+  const capabilities = getEffectiveModelCapabilities(model);
 
   return {
     providerId: provider.id,
@@ -48,7 +50,8 @@ function toRunModelPlanRole(selection: ProviderModelSelection): RunModelPlanRole
     baseUrl: provider.baseUrl,
     contextWindow: model.contextWindow ?? null,
     maxOutputTokens: model.maxOutputTokens ?? null,
-    supportsImageInput: model.capabilityOverrides.vision ?? null,
+    supportsImageInput: capabilities.vision,
+    supportsReasoning: capabilities.reasoning,
     customHeaders: isNonEmptyRecord(provider.customHeaders) ? provider.customHeaders : null,
     providerOptions: isNonEmptyRecord(model.providerOptions) ? model.providerOptions : null,
   };

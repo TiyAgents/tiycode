@@ -492,7 +492,8 @@ fn configure_agent(
             .base_url
             .clone()
             .unwrap_or_default();
-        let thinking_enabled = spec.model_plan.thinking_level != ThinkingLevel::Off;
+        let thinking_enabled = spec.model_plan.thinking_level != ThinkingLevel::Off
+            && spec.model_plan.primary.model.reasoning;
         agent.set_on_payload(move |payload, _model| {
             let provider_options = provider_options.clone();
             let provider_type = provider_type.clone();
@@ -541,11 +542,11 @@ async fn resolve_model_plan(
     })?;
 
     let mut primary = resolve_runtime_model_role(pool, primary).await?;
-    let auxiliary = match raw_plan.auxiliary.clone() {
+    let mut auxiliary = match raw_plan.auxiliary.clone() {
         Some(role) => Some(resolve_runtime_model_role(pool, role).await?),
         None => None,
     };
-    let lightweight = match raw_plan.lightweight.clone() {
+    let mut lightweight = match raw_plan.lightweight.clone() {
         Some(role) => Some(resolve_runtime_model_role(pool, role).await?),
         None => None,
     };
@@ -556,13 +557,12 @@ async fn resolve_model_plan(
         .map(ThinkingLevel::from)
         .unwrap_or(ThinkingLevel::Off);
 
-    // When the user has selected a thinking level, ensure the primary model
-    // has its `reasoning` flag enabled so that the protocol layer actually
-    // includes the reasoning parameters in the API request.  Without this
-    // the protocol guard (`if !model.reasoning { return None; }`) silently
-    // drops the thinking configuration.
-    if thinking_level != ThinkingLevel::Off && !primary.model.reasoning {
-        primary.model.reasoning = true;
+    apply_thinking_level_to_model_role(&mut primary, thinking_level);
+    if let Some(role) = auxiliary.as_mut() {
+        apply_thinking_level_to_model_role(role, thinking_level);
+    }
+    if let Some(role) = lightweight.as_mut() {
+        apply_thinking_level_to_model_role(role, thinking_level);
     }
 
     Ok(ResolvedRuntimeModelPlan {
@@ -573,6 +573,10 @@ async fn resolve_model_plan(
         auxiliary,
         lightweight,
     })
+}
+
+fn apply_thinking_level_to_model_role(role: &mut ResolvedModelRole, thinking_level: ThinkingLevel) {
+    role.model.reasoning = thinking_level != ThinkingLevel::Off && role.model.reasoning;
 }
 
 pub async fn resolve_runtime_model_role(
@@ -600,7 +604,7 @@ pub async fn resolve_runtime_model_role(
         .name(&model_name)
         .provider(Provider::from(role.provider_type.clone()))
         .base_url(&role.base_url)
-        .reasoning(false)
+        .reasoning(role.supports_reasoning.unwrap_or(false))
         .context_window(context_window)
         .max_tokens(max_output_tokens)
         .input({

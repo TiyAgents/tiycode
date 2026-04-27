@@ -90,6 +90,7 @@ describe("buildRunModelPlan", () => {
     expect(plan?.profileId).toBe("profile-1");
     expect(plan?.primary?.modelDisplayName).toBe("GPT 5");
     expect(plan?.primary?.supportsImageInput).toBe(true);
+    expect(plan?.primary?.supportsReasoning).toBe(true);
     expect(plan?.primary?.customHeaders).toEqual({ "x-test": "1" });
     expect(plan?.primary?.providerOptions).toEqual({ effort: "medium" });
     expect(plan?.auxiliary?.modelId).toBe("gpt-5-mini");
@@ -111,6 +112,60 @@ describe("buildRunModelPlan", () => {
       [provider()],
     );
     expect(primaryOnly?.lightweight?.modelId).toBe("gpt-5");
+  });
+  it("infers reasoning support when no manual capability override is stored", () => {
+    const plan = buildRunModelPlan(
+      profile({
+        primaryModelId: "model-deepseek-reasoner",
+        assistantModelId: "missing",
+        liteModelId: "missing",
+      }),
+      [
+        provider({
+          models: [
+            {
+              id: "model-deepseek-reasoner",
+              modelId: "deepseek-reasoner",
+              sortIndex: 0,
+              displayName: "DeepSeek Reasoner",
+              enabled: true,
+              capabilityOverrides: {},
+              providerOptions: {},
+            },
+          ],
+        }),
+      ],
+    );
+
+    expect(plan?.primary?.supportsReasoning).toBe(true);
+    expect(plan?.primary?.supportsImageInput).toBe(false);
+  });
+
+  it("allows manual reasoning capability overrides to disable inferred support", () => {
+    const plan = buildRunModelPlan(
+      profile({
+        primaryModelId: "model-gpt-5",
+        assistantModelId: "missing",
+        liteModelId: "missing",
+      }),
+      [
+        provider({
+          models: [
+            {
+              id: "model-gpt-5",
+              modelId: "gpt-5",
+              sortIndex: 0,
+              displayName: "GPT 5",
+              enabled: true,
+              capabilityOverrides: { reasoning: false },
+              providerOptions: {},
+            },
+          ],
+        }),
+      ],
+    );
+
+    expect(plan?.primary?.supportsReasoning).toBe(false);
   });
 });
 

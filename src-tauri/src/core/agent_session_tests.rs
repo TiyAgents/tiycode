@@ -7,7 +7,8 @@ pub(super) mod tests {
         normalize_deepseek_thinking_payload, normalize_profile_response_language,
         normalize_profile_response_style, plan_mode_missing_checkpoint_error,
         record_pending_prompt_estimate, resolve_helper_model_role, resolve_helper_profile,
-        response_style_system_instruction, runtime_security_config, runtime_tools_for_profile,
+        resolve_model_plan, resolve_runtime_model_role, response_style_system_instruction,
+        runtime_security_config, runtime_tools_for_profile,
         runtime_tools_for_profile_with_extensions, standard_tool_timeout,
         trim_history_to_current_context, ContextCompressionRuntimeState, ProfileResponseStyle,
         ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, SortKey,
@@ -35,9 +36,10 @@ pub(super) mod tests {
     };
     use crate::core::subagent::{RuntimeOrchestrationTool, SubagentProfile};
     use crate::ipc::frontend_channels::ThreadStreamEvent;
-    use crate::model::provider::AgentProfileRecord;
+    use crate::model::provider::{AgentProfileRecord, ProviderKind, ProviderRecord};
     use crate::model::thread::{MessageRecord, RunSummaryDto, RunUsageDto, ToolCallDto};
     use crate::persistence::init_database;
+    use crate::persistence::repo::provider_repo;
 
     const TEST_CONTEXT_WINDOW: &str = "128000";
     const TEST_MODEL_DISPLAY_NAME: &str = "GPT Test";
@@ -104,6 +106,49 @@ pub(super) mod tests {
 
     fn sample_resolved_model_role(model_id: &str) -> ResolvedModelRole {
         sample_resolved_model_role_with_inputs(model_id, vec![tiycore::types::InputType::Text])
+    }
+
+    fn sample_runtime_model_role(
+        provider_id: &str,
+        model_record_id: &str,
+        model_id: &str,
+        supports_reasoning: Option<bool>,
+    ) -> super::super::RuntimeModelRole {
+        super::super::RuntimeModelRole {
+            provider_id: provider_id.to_string(),
+            model_record_id: model_record_id.to_string(),
+            provider: None,
+            provider_key: Some("openai".to_string()),
+            provider_type: "openai".to_string(),
+            provider_name: Some("OpenAI".to_string()),
+            model: model_id.to_string(),
+            model_id: model_id.to_string(),
+            model_display_name: Some(model_id.to_string()),
+            base_url: "https://api.openai.com/v1".to_string(),
+            context_window: Some(TEST_CONTEXT_WINDOW.to_string()),
+            max_output_tokens: Some("32000".to_string()),
+            supports_image_input: Some(false),
+            supports_reasoning,
+            custom_headers: None,
+            provider_options: None,
+        }
+    }
+
+    fn sample_provider_record(provider_id: &str) -> ProviderRecord {
+        ProviderRecord {
+            id: provider_id.to_string(),
+            provider_kind: ProviderKind::Builtin,
+            provider_key: "openai".to_string(),
+            provider_type: "openai".to_string(),
+            display_name: "OpenAI".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key_encrypted: Some("sk-test".to_string()),
+            enabled: true,
+            mapping_locked: true,
+            custom_headers_json: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
     }
 
     fn sample_resolved_runtime_model_plan(
@@ -1301,6 +1346,193 @@ Used for prompt assembly coverage.
 
         assert_eq!(explore_role.model_id, "primary-model");
         assert_eq!(review_role.model_id, "primary-model");
+    }
+
+    #[tokio::test]
+    async fn runtime_model_role_uses_declared_reasoning_capability() {
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+        provider_repo::insert(&pool, &sample_provider_record("provider-reasoning"))
+            .await
+            .expect("provider insert");
+
+        let capable = resolve_runtime_model_role(
+            &pool,
+            sample_runtime_model_role(
+                "provider-reasoning",
+                "record-capable",
+                "capable",
+                Some(true),
+            ),
+        )
+        .await
+        .expect("capable role");
+        let incapable = resolve_runtime_model_role(
+            &pool,
+            sample_runtime_model_role(
+                "provider-reasoning",
+                "record-incapable",
+                "incapable",
+                Some(false),
+            ),
+        )
+        .await
+        .expect("incapable role");
+        let unspecified = resolve_runtime_model_role(
+            &pool,
+            sample_runtime_model_role(
+                "provider-reasoning",
+                "record-unspecified",
+                "unspecified",
+                None,
+            ),
+        )
+        .await
+        .expect("unspecified role");
+
+        assert!(capable.model.reasoning);
+        assert!(!incapable.model.reasoning);
+        assert!(!unspecified.model.reasoning);
+    }
+
+    #[tokio::test]
+    async fn model_plan_applies_thinking_level_to_all_reasoning_capable_roles_only() {
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+        provider_repo::insert(&pool, &sample_provider_record("provider-plan"))
+            .await
+            .expect("provider insert");
+
+        let plan = RuntimeModelPlan {
+            primary: Some(sample_runtime_model_role(
+                "provider-plan",
+                "record-primary",
+                "primary",
+                Some(true),
+            )),
+            auxiliary: Some(sample_runtime_model_role(
+                "provider-plan",
+                "record-auxiliary",
+                "auxiliary",
+                Some(true),
+            )),
+            lightweight: Some(sample_runtime_model_role(
+                "provider-plan",
+                "record-lightweight",
+                "lightweight",
+                Some(false),
+            )),
+            thinking_level: Some("medium".to_string()),
+            ..RuntimeModelPlan::default()
+        };
+
+        let resolved = resolve_model_plan(&pool, plan).await.expect("model plan");
+
+        assert!(resolved.primary.model.reasoning);
+        assert!(resolved.auxiliary.as_ref().unwrap().model.reasoning);
+        assert!(!resolved.lightweight.as_ref().unwrap().model.reasoning);
+    }
+
+    #[tokio::test]
+    async fn model_plan_keeps_reasoning_disabled_when_thinking_level_is_off() {
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+        provider_repo::insert(&pool, &sample_provider_record("provider-off"))
+            .await
+            .expect("provider insert");
+
+        let plan = RuntimeModelPlan {
+            primary: Some(sample_runtime_model_role(
+                "provider-off",
+                "record-primary",
+                "primary",
+                Some(true),
+            )),
+            auxiliary: Some(sample_runtime_model_role(
+                "provider-off",
+                "record-auxiliary",
+                "auxiliary",
+                Some(true),
+            )),
+            thinking_level: Some("off".to_string()),
+            ..RuntimeModelPlan::default()
+        };
+
+        let resolved = resolve_model_plan(&pool, plan).await.expect("model plan");
+
+        assert!(!resolved.primary.model.reasoning);
+        assert!(!resolved.auxiliary.as_ref().unwrap().model.reasoning);
+    }
+
+    #[tokio::test]
+    async fn deepseek_payload_uses_non_thinking_mode_when_primary_lacks_reasoning_support() {
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+        provider_repo::insert(
+            &pool,
+            &sample_provider_record("provider-deepseek-no-reasoning"),
+        )
+        .await
+        .expect("provider insert");
+
+        let mut primary = sample_runtime_model_role(
+            "provider-deepseek-no-reasoning",
+            "record-primary",
+            "deepseek-chat",
+            Some(false),
+        );
+        primary.provider_type = "deepseek".to_string();
+        primary.base_url = "https://api.deepseek.com/chat/completions".to_string();
+        let plan = RuntimeModelPlan {
+            primary: Some(primary),
+            thinking_level: Some("medium".to_string()),
+            ..RuntimeModelPlan::default()
+        };
+
+        let resolved = resolve_model_plan(&pool, plan).await.expect("model plan");
+        let thinking_enabled =
+            resolved.thinking_level != ThinkingLevel::Off && resolved.primary.model.reasoning;
+        let payload = serde_json::json!({
+            "messages": [
+                { "role": "assistant", "content": "reply", "reasoning_content": "must be stripped" }
+            ]
+        });
+
+        let result = normalize_deepseek_thinking_payload(payload, true, thinking_enabled);
+        let messages = result["messages"].as_array().unwrap();
+
+        assert!(!thinking_enabled);
+        assert!(messages[0].get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn helper_model_role_preserves_auxiliary_reasoning_capability() {
+        let mut auxiliary = sample_resolved_model_role("assistant-model");
+        auxiliary.model.reasoning = true;
+        let mut model_plan = sample_resolved_runtime_model_plan(Some(auxiliary));
+        model_plan.thinking_level = ThinkingLevel::Medium;
+
+        let helper_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Explore);
+
+        assert_eq!(helper_role.model_id, "assistant-model");
+        assert!(helper_role.model.reasoning);
+    }
+
+    #[test]
+    fn helper_model_role_keeps_non_reasoning_auxiliary_disabled() {
+        let mut auxiliary = sample_resolved_model_role("assistant-model");
+        auxiliary.model.reasoning = false;
+        let mut model_plan = sample_resolved_runtime_model_plan(Some(auxiliary));
+        model_plan.thinking_level = ThinkingLevel::Medium;
+
+        let helper_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Review);
+
+        assert_eq!(helper_role.model_id, "assistant-model");
+        assert!(!helper_role.model.reasoning);
     }
 
     #[test]

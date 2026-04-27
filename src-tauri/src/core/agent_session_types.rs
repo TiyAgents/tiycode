@@ -31,6 +31,7 @@ pub struct RuntimeModelRole {
     pub context_window: Option<String>,
     pub max_output_tokens: Option<String>,
     pub supports_image_input: Option<bool>,
+    pub supports_reasoning: Option<bool>,
     pub custom_headers: Option<HashMap<String, String>>,
     pub provider_options: Option<serde_json::Value>,
 }
