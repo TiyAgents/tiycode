@@ -9,9 +9,7 @@ use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{ContentBlock, TextContent, Usage};
 use tokio::sync::Mutex;
 
-use crate::core::agent_session::{
-    is_deepseek_provider, merge_payload, normalize_deepseek_thinking_payload, ResolvedModelRole,
-};
+use crate::core::agent_session::{merge_payload, ResolvedModelRole};
 use crate::core::executors::ToolOutput;
 use crate::core::subagent::review_contract::{extract_review_report, render_parent_summary};
 use crate::core::subagent::runtime_orchestration::{RuntimeOrchestrationTool, SubagentProfile};
@@ -171,33 +169,21 @@ impl HelperAgentOrchestrator {
         // when connecting to internal HTTP-only endpoints.
         agent.set_security_config(crate::core::agent_session::runtime_security_config());
 
-        // Always set the payload hook so the DeepSeek thinking normalizer runs
-        // even when there are no provider_options to merge.
+        // Merge per-model provider_options into every outgoing LLM request payload.
         {
             let provider_options = request.model_role.provider_options.clone();
-            let provider_type = request.model_role.provider_type.clone();
-            let base_url = request
-                .model_role
-                .model
-                .base_url
-                .clone()
-                .unwrap_or_default();
-            let thinking_enabled =
-                request.thinking_level != ThinkingLevel::Off && request.model_role.model.reasoning;
-            agent.set_on_payload(move |payload, _model| {
-                let provider_options = provider_options.clone();
-                let provider_type = provider_type.clone();
-                let base_url = base_url.clone();
-                Box::pin(async move {
-                    let mut p = payload;
-                    if let Some(ref opts) = provider_options {
-                        p = merge_payload(p, opts);
-                    }
-                    let is_ds = is_deepseek_provider(&provider_type, &base_url);
-                    p = normalize_deepseek_thinking_payload(p, is_ds, thinking_enabled);
-                    Some(p)
-                })
-            });
+            if provider_options.is_some() {
+                agent.set_on_payload(move |payload, _model| {
+                    let provider_options = provider_options.clone();
+                    Box::pin(async move {
+                        let mut p = payload;
+                        if let Some(ref opts) = provider_options {
+                            p = merge_payload(p, opts);
+                        }
+                        Some(p)
+                    })
+                });
+            }
         }
 
         let helper_pool = self.pool.clone();

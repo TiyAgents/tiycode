@@ -3,8 +3,7 @@ pub(super) mod tests {
     use super::super::{
         build_initial_context_token_calibration, build_profile_response_prompt_parts,
         build_system_prompt, convert_history_messages, current_context_token_calibration,
-        handle_agent_event, is_deepseek_provider, main_agent_security_config,
-        normalize_deepseek_thinking_payload, normalize_profile_response_language,
+        handle_agent_event, main_agent_security_config, normalize_profile_response_language,
         normalize_profile_response_style, plan_mode_missing_checkpoint_error,
         record_pending_prompt_estimate, resolve_helper_model_role, resolve_helper_profile,
         resolve_model_plan, resolve_runtime_model_role, response_style_system_instruction,
@@ -1465,48 +1464,6 @@ Used for prompt assembly coverage.
 
         assert!(!resolved.primary.model.reasoning);
         assert!(!resolved.auxiliary.as_ref().unwrap().model.reasoning);
-    }
-
-    #[tokio::test]
-    async fn deepseek_payload_uses_non_thinking_mode_when_primary_lacks_reasoning_support() {
-        let temp_dir = tempdir().expect("temp dir");
-        let db_path = temp_dir.path().join("test.db");
-        let pool = init_database(&db_path).await.expect("database");
-        provider_repo::insert(
-            &pool,
-            &sample_provider_record("provider-deepseek-no-reasoning"),
-        )
-        .await
-        .expect("provider insert");
-
-        let mut primary = sample_runtime_model_role(
-            "provider-deepseek-no-reasoning",
-            "record-primary",
-            "deepseek-chat",
-            Some(false),
-        );
-        primary.provider_type = "deepseek".to_string();
-        primary.base_url = "https://api.deepseek.com/chat/completions".to_string();
-        let plan = RuntimeModelPlan {
-            primary: Some(primary),
-            thinking_level: Some("medium".to_string()),
-            ..RuntimeModelPlan::default()
-        };
-
-        let resolved = resolve_model_plan(&pool, plan).await.expect("model plan");
-        let thinking_enabled =
-            resolved.thinking_level != ThinkingLevel::Off && resolved.primary.model.reasoning;
-        let payload = serde_json::json!({
-            "messages": [
-                { "role": "assistant", "content": "reply", "reasoning_content": "must be stripped" }
-            ]
-        });
-
-        let result = normalize_deepseek_thinking_payload(payload, true, thinking_enabled);
-        let messages = result["messages"].as_array().unwrap();
-
-        assert!(!thinking_enabled);
-        assert!(messages[0].get("reasoning_content").is_none());
     }
 
     #[test]
@@ -3064,201 +3021,6 @@ Used for prompt assembly coverage.
     }
 
     // -----------------------------------------------------------------------
-    // DeepSeek provider detection
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn is_deepseek_provider_matches_type_case_insensitive() {
-        assert!(is_deepseek_provider("deepseek", "https://other.com/v1"));
-        assert!(is_deepseek_provider("DeepSeek", "https://other.com/v1"));
-        assert!(is_deepseek_provider("DEEPSEEK", "https://other.com/v1"));
-    }
-
-    #[test]
-    fn is_deepseek_provider_matches_base_url() {
-        assert!(is_deepseek_provider(
-            "openai",
-            "https://api.deepseek.com/v1"
-        ));
-        assert!(is_deepseek_provider(
-            "openai_compatible",
-            "https://api.deepseek.com"
-        ));
-    }
-
-    #[test]
-    fn is_deepseek_provider_rejects_non_deepseek() {
-        assert!(!is_deepseek_provider("openai", "https://api.openai.com/v1"));
-        assert!(!is_deepseek_provider(
-            "anthropic",
-            "https://api.anthropic.com"
-        ));
-    }
-
-    // -----------------------------------------------------------------------
-    // DeepSeek payload normalizer — thinking enabled
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn normalize_deepseek_thinking_enabled_fills_missing_reasoning_content() {
-        let payload = serde_json::json!({
-            "model": "deepseek-reasoner",
-            "messages": [
-                { "role": "user", "content": "hello" },
-                { "role": "assistant", "content": "thinking done", "reasoning_content": "step 1" },
-                { "role": "user", "content": "use tool" },
-                { "role": "assistant", "content": null, "tool_calls": [{ "id": "tc1", "type": "function", "function": { "name": "read", "arguments": "{}" } }] }
-            ]
-        });
-
-        let result = normalize_deepseek_thinking_payload(payload, true, true);
-        let messages = result["messages"].as_array().unwrap();
-
-        // The tool-call assistant should have reasoning_content filled from the previous one.
-        assert_eq!(messages[3]["reasoning_content"], "step 1");
-        // And content should be an empty string instead of null.
-        assert_eq!(messages[3]["content"], "");
-    }
-
-    #[test]
-    fn normalize_deepseek_thinking_enabled_preserves_existing_reasoning() {
-        let payload = serde_json::json!({
-            "model": "deepseek-reasoner",
-            "messages": [
-                { "role": "assistant", "content": "hi", "reasoning_content": "reason A" },
-                { "role": "assistant", "content": "", "reasoning_content": "reason B", "tool_calls": [{ "id": "tc1", "type": "function", "function": { "name": "read", "arguments": "{}" } }] }
-            ]
-        });
-
-        let result = normalize_deepseek_thinking_payload(payload, true, true);
-        let messages = result["messages"].as_array().unwrap();
-
-        // Should keep original reasoning_content, not overwrite with "reason A".
-        assert_eq!(messages[1]["reasoning_content"], "reason B");
-    }
-
-    #[test]
-    fn normalize_deepseek_thinking_enabled_ensures_content_not_null() {
-        let payload = serde_json::json!({
-            "model": "deepseek-reasoner",
-            "messages": [
-                { "role": "assistant", "reasoning_content": "think" }
-            ]
-        });
-
-        let result = normalize_deepseek_thinking_payload(payload, true, true);
-        let messages = result["messages"].as_array().unwrap();
-        assert_eq!(messages[0]["content"], "");
-    }
-
-    // -----------------------------------------------------------------------
-    // DeepSeek payload normalizer — thinking disabled
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn normalize_deepseek_thinking_disabled_strips_reasoning_content() {
-        let payload = serde_json::json!({
-            "model": "deepseek-chat",
-            "messages": [
-                { "role": "user", "content": "hello" },
-                { "role": "assistant", "content": "reply", "reasoning_content": "should be removed" },
-                { "role": "assistant", "content": "", "reasoning_content": "also removed", "tool_calls": [] }
-            ]
-        });
-
-        let result = normalize_deepseek_thinking_payload(payload, true, false);
-        let messages = result["messages"].as_array().unwrap();
-
-        assert!(messages[1].get("reasoning_content").is_none());
-        assert!(messages[2].get("reasoning_content").is_none());
-        // Non-assistant messages are untouched.
-        assert_eq!(messages[0]["content"], "hello");
-    }
-
-    // -----------------------------------------------------------------------
-    // DeepSeek payload normalizer — non-DeepSeek passthrough
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn normalize_deepseek_non_deepseek_returns_unmodified() {
-        let payload = serde_json::json!({
-            "model": "gpt-4",
-            "messages": [
-                { "role": "assistant", "content": null, "tool_calls": [{ "id": "tc1" }] }
-            ]
-        });
-
-        let result = normalize_deepseek_thinking_payload(payload.clone(), false, true);
-        assert_eq!(result, payload);
-    }
-
-    #[test]
-    fn normalize_deepseek_no_messages_key_returns_unmodified() {
-        let payload = serde_json::json!({ "model": "deepseek-reasoner" });
-        let result = normalize_deepseek_thinking_payload(payload.clone(), true, true);
-        assert_eq!(result, payload);
-    }
-
-    // -----------------------------------------------------------------------
-    // DeepSeek payload normalizer — text-only assistant backfill
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn normalize_deepseek_thinking_enabled_fills_text_only_assistant() {
-        // Scenario: an earlier assistant has reasoning_content, a later
-        // text-only assistant does not (Phase 4 mis-allocation).  The
-        // normalizer must backfill reasoning_content for the text-only
-        // assistant to prevent DeepSeek 400.
-        let payload = serde_json::json!({
-            "model": "deepseek-reasoner",
-            "messages": [
-                { "role": "user", "content": "hello" },
-                { "role": "assistant", "content": "thinking done", "reasoning_content": "step 1" },
-                { "role": "user", "content": "continue" },
-                { "role": "assistant", "content": "final answer" }
-            ]
-        });
-
-        let result = normalize_deepseek_thinking_payload(payload, true, true);
-        let messages = result["messages"].as_array().unwrap();
-
-        // The text-only assistant at index 3 must have reasoning_content
-        // backfilled from the previous assistant.
-        assert_eq!(messages[3]["reasoning_content"], "step 1");
-        // Original reasoning_content must remain untouched.
-        assert_eq!(messages[1]["reasoning_content"], "step 1");
-    }
-
-    #[test]
-    fn normalize_deepseek_thinking_enabled_fills_text_after_tool_call_assistant() {
-        // Scenario matching the actual bug: assistant with reasoning +
-        // tool_calls, then tool result, then user, then text-only assistant
-        // that lost its thinking block.
-        let payload = serde_json::json!({
-            "model": "deepseek-reasoner",
-            "messages": [
-                { "role": "user", "content": "search for X" },
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "reasoning_content": "let me search",
-                    "tool_calls": [{ "id": "tc1", "type": "function", "function": { "name": "search", "arguments": "{}" } }]
-                },
-                { "role": "tool", "content": "result data", "tool_call_id": "tc1" },
-                { "role": "assistant", "content": "Here is the answer based on search results." }
-            ]
-        });
-
-        let result = normalize_deepseek_thinking_payload(payload, true, true);
-        let messages = result["messages"].as_array().unwrap();
-
-        // Text-only assistant at index 3 gets reasoning backfilled.
-        assert_eq!(messages[3]["reasoning_content"], "let me search");
-        // Tool-call assistant at index 1 keeps its own reasoning.
-        assert_eq!(messages[1]["reasoning_content"], "let me search");
-    }
-
-    // -----------------------------------------------------------------------
     // convert_history_messages boundary regression tests
     // -----------------------------------------------------------------------
 
@@ -3410,7 +3172,7 @@ Used for prompt assembly coverage.
     /// DeepSeek 400 errors.  When a tool call's `insert_pos` coincides with
     /// a reasoning message's position, Phase 4 attaches that reasoning to
     /// the standalone tool-call assistant instead of the subsequent text
-    /// assistant.  The `normalize_deepseek_thinking_payload` safety net
+    /// assistant.  The `normalize_reasoning_content` safety net in tiycore
     /// backfills `reasoning_content` on the final JSON to prevent the 400.
     #[test]
     fn convert_history_messages_final_text_loses_thinking_when_tool_at_same_pos() {
@@ -3540,7 +3302,7 @@ Used for prompt assembly coverage.
 
         // KEY ASSERTION: The final text assistant has NO thinking blocks.
         // This documents the Phase 4 known limitation — the normalizer
-        // safety net in normalize_deepseek_thinking_payload is required to
+        // safety net in normalize_reasoning_content is required to
         // backfill reasoning_content on the serialized JSON before sending.
         match &history[3] {
             AgentMessage::Assistant(a) => {
@@ -3549,7 +3311,7 @@ Used for prompt assembly coverage.
                     !has_thinking,
                     "Phase 4 known limitation: final text assistant should NOT have thinking \
                      (it was consumed by the standalone at same insert_pos); \
-                     normalize_deepseek_thinking_payload provides the safety net"
+                     normalize_reasoning_content provides the safety net"
                 );
                 assert_eq!(a.content.len(), 1);
                 assert!(a.content[0].is_text());
