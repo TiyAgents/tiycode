@@ -170,8 +170,13 @@ export const TaskBoardCard = ({
       </div>
 
       {showSummary && (
-        <div className="mb-2 shrink-0 space-y-1 text-xs text-muted-foreground">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <div className="mb-2 flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
+          {activeTask && (
+            <div className="min-w-0 flex-1 truncate">
+              Current: <span className="text-foreground/80">{activeTask.description}</span>
+            </div>
+          )}
+          <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap tabular-nums">
             <span>{taskCountSummary}</span>
             {failedCount > 0 && (
               <span className="text-destructive">
@@ -179,11 +184,6 @@ export const TaskBoardCard = ({
               </span>
             )}
           </div>
-          {activeTask && (
-            <div className="truncate">
-              Current: <span className="text-foreground/80">{activeTask.description}</span>
-            </div>
-          )}
         </div>
       )}
 
