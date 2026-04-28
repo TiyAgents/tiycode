@@ -2794,10 +2794,11 @@ export function RuntimeThreadSurface({
         <div className="mx-auto flex w-full max-w-4xl flex-col gap-0">
           {taskBoards.activeBoard ? (
             <div
-              className="overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu/96 px-2 pb-0 pt-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl"
+              className="min-h-0 max-h-[min(36vh,320px)] overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu/96 px-2 pb-0 pt-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl"
             >
               <TaskBoardCard
                 board={taskBoards.activeBoard}
+                variant="composer"
                 className="rounded-[18px] rounded-b-none border-x-0 border-t-0 border-b border-app-border/55 bg-app-surface/52 px-4 pb-3 pt-3 shadow-none"
               />
             </div>
