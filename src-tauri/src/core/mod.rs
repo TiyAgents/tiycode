@@ -13,6 +13,7 @@ pub mod agent_session_tools;
 pub mod agent_session_types;
 pub mod app_state;
 pub mod built_in_agent_runtime;
+pub mod catalog_model_id_normalizer;
 pub mod context_compression;
 pub mod desktop_runtime;
 pub mod executors;

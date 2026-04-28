@@ -18,6 +18,7 @@ use tiycore::types::{
     UserMessage,
 };
 
+use crate::core::catalog_model_id_normalizer::NormalizingCatalogMetadataStore;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::{
     AgentProfileInput, AgentProfileRecord, CustomProviderCreateInput, ProviderCatalogEntryDto,
@@ -1017,7 +1018,7 @@ impl SettingsManager {
     async fn load_catalog_store_best_effort(
         &self,
         refresh: bool,
-    ) -> Option<FileCatalogMetadataStore> {
+    ) -> Option<NormalizingCatalogMetadataStore<FileCatalogMetadataStore>> {
         let snapshot_path = catalog_snapshot_path();
         let existing_store = match load_catalog_metadata_store(&snapshot_path) {
             Ok(store) => store,
@@ -1028,10 +1029,12 @@ impl SettingsManager {
         };
 
         if !refresh {
-            return existing_store;
+            return existing_store.map(NormalizingCatalogMetadataStore::new);
         }
 
-        match refresh_catalog_snapshot(&snapshot_path, &CatalogRemoteConfig::default()).await {
+        let store = match refresh_catalog_snapshot(&snapshot_path, &CatalogRemoteConfig::default())
+            .await
+        {
             Ok(_) => match load_catalog_metadata_store(&snapshot_path) {
                 Ok(store) => store.or(existing_store),
                 Err(error) => {
@@ -1043,7 +1046,9 @@ impl SettingsManager {
                 tracing::warn!(path = %snapshot_path.display(), error = %error, "catalog snapshot refresh failed");
                 existing_store
             }
-        }
+        };
+
+        store.map(NormalizingCatalogMetadataStore::new)
     }
 
     async fn merge_fetched_provider_models(
