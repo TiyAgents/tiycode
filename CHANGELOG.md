@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-04-28
+### :sparkles: New Features
+- [`3139692`](https://github.com/TiyAgents/tiycode/commit/31396928e0b528e6dc3c5de8a1657c07e5286ac6) - **catalog**: ✨ add NormalizingCatalogMetadataStore for provider model suffix normalization *(PR [#150](https://github.com/TiyAgents/tiycode/pull/150) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.3.8] - 2026-04-28
 ### :sparkles: New Features
 - [`42fec2a`](https://github.com/TiyAgents/tiycode/commit/42fec2a07c46ea709f8cdc50465035fa0f3d85d8) - **task-board**: ✨ add composer variant with compact summary and scrollable task list *(PR [#145](https://github.com/TiyAgents/tiycode/pull/145) by [@jorben](https://github.com/jorben))*
@@ -681,3 +686,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.6]: https://github.com/TiyAgents/tiycode/compare/0.3.5...0.3.6
 [0.3.7]: https://github.com/TiyAgents/tiycode/compare/0.3.6...0.3.7
 [0.3.8]: https://github.com/TiyAgents/tiycode/compare/0.3.7...0.3.8
+[0.3.9]: https://github.com/TiyAgents/tiycode/compare/0.3.8...0.3.9
