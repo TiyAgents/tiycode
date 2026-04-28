@@ -128,6 +128,7 @@ pub(super) mod tests {
             max_output_tokens: Some("32000".to_string()),
             supports_image_input: Some(false),
             supports_reasoning,
+            reasoning_content_constrained: None,
             custom_headers: None,
             provider_options: None,
         }

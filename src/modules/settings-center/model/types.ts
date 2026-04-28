@@ -56,6 +56,7 @@ export type ProviderModelCapabilities = {
   toolCalling: boolean;
   reasoning: boolean;
   embedding: boolean;
+  reasoningContentConstrained?: boolean;
 };
 
 export type ProviderModel = {

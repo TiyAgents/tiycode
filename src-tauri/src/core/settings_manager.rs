@@ -317,6 +317,13 @@ fn catalog_capability_overrides(model: &UnifiedModelInfo) -> Option<serde_json::
         overrides.insert("embedding".to_string(), serde_json::Value::Bool(true));
     }
 
+    if model.reasoning_content_constrained {
+        overrides.insert(
+            "reasoningContentConstrained".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+
     if overrides.is_empty() {
         None
     } else {
@@ -1638,6 +1645,7 @@ mod tests {
             pricing: None,
             match_confidence: Some(1.0),
             metadata_sources: vec!["openrouter".to_string()],
+            reasoning_content_constrained: false,
             raw: json!({}),
         };
 
@@ -1669,6 +1677,7 @@ mod tests {
             pricing: None,
             match_confidence: Some(1.0),
             metadata_sources: vec!["openrouter".to_string()],
+            reasoning_content_constrained: false,
             raw: json!({}),
         };
 
