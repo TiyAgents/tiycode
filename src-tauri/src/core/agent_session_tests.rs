@@ -128,6 +128,7 @@ pub(super) mod tests {
             max_output_tokens: Some("32000".to_string()),
             supports_image_input: Some(false),
             supports_reasoning,
+            reasoning_content_constrained: None,
             custom_headers: None,
             provider_options: None,
         }
@@ -1393,6 +1394,73 @@ Used for prompt assembly coverage.
         assert!(capable.model.reasoning);
         assert!(!incapable.model.reasoning);
         assert!(!unspecified.model.reasoning);
+    }
+
+    #[tokio::test]
+    async fn reasoning_content_constrained_sets_compat_flag() {
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+
+        let mut compat_provider = sample_provider_record("provider-compat");
+        compat_provider.provider_type = "openai-compatible".to_string();
+        provider_repo::insert(&pool, &compat_provider)
+            .await
+            .expect("provider insert");
+
+        let make_role = |record_id: &str, model_id: &str, constrained: Option<bool>| {
+            super::super::RuntimeModelRole {
+                provider_id: "provider-compat".to_string(),
+                model_record_id: record_id.to_string(),
+                provider: None,
+                provider_key: Some("openai-compatible".to_string()),
+                provider_type: "openai-compatible".to_string(),
+                provider_name: Some("Custom Gateway".to_string()),
+                model: model_id.to_string(),
+                model_id: model_id.to_string(),
+                model_display_name: Some(model_id.to_string()),
+                base_url: "https://api.example.com/v1".to_string(),
+                context_window: Some(TEST_CONTEXT_WINDOW.to_string()),
+                max_output_tokens: Some("32000".to_string()),
+                supports_image_input: Some(false),
+                supports_reasoning: Some(true),
+                reasoning_content_constrained: constrained,
+                custom_headers: None,
+                provider_options: None,
+            }
+        };
+
+        let constrained = resolve_runtime_model_role(
+            &pool,
+            make_role("rec-constrained", "constrained-model", Some(true)),
+        )
+        .await
+        .expect("constrained role");
+
+        let unconstrained = resolve_runtime_model_role(
+            &pool,
+            make_role("rec-unconstrained", "unconstrained-model", Some(false)),
+        )
+        .await
+        .expect("unconstrained role");
+
+        let unspecified = resolve_runtime_model_role(
+            &pool,
+            make_role("rec-unspecified", "unspecified-model", None),
+        )
+        .await
+        .expect("unspecified role");
+
+        // When reasoning_content_constrained is Some(true), the compat flag must be set.
+        let constrained_compat = constrained.model.compat.as_ref().expect("compat present");
+        assert!(constrained_compat.reasoning_content_constrained);
+
+        // When Some(false) or None, the compat flag must remain at its default (false).
+        let unconstrained_compat = unconstrained.model.compat.as_ref().expect("compat present");
+        assert!(!unconstrained_compat.reasoning_content_constrained);
+
+        let unspecified_compat = unspecified.model.compat.as_ref().expect("compat present");
+        assert!(!unspecified_compat.reasoning_content_constrained);
     }
 
     #[tokio::test]

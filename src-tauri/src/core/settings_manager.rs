@@ -317,6 +317,13 @@ fn catalog_capability_overrides(model: &UnifiedModelInfo) -> Option<serde_json::
         overrides.insert("embedding".to_string(), serde_json::Value::Bool(true));
     }
 
+    if model.reasoning_content_constrained {
+        overrides.insert(
+            "reasoningContentConstrained".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+
     if overrides.is_empty() {
         None
     } else {
@@ -1638,6 +1645,7 @@ mod tests {
             pricing: None,
             match_confidence: Some(1.0),
             metadata_sources: vec!["openrouter".to_string()],
+            reasoning_content_constrained: false,
             raw: json!({}),
         };
 
@@ -1669,6 +1677,7 @@ mod tests {
             pricing: None,
             match_confidence: Some(1.0),
             metadata_sources: vec!["openrouter".to_string()],
+            reasoning_content_constrained: false,
             raw: json!({}),
         };
 
@@ -1677,6 +1686,50 @@ mod tests {
         assert!(!record.enabled);
         assert!(!record.is_manual);
         assert_eq!(record.sort_index, 0);
+    }
+
+    #[test]
+    fn catalog_capability_overrides_includes_reasoning_content_constrained() {
+        let constrained_model = UnifiedModelInfo {
+            provider: TiyProvider::OpenAI,
+            raw_id: "deepseek-r1".to_string(),
+            canonical_model_key: Some("openai:deepseek-r1".to_string()),
+            display_name: Some("DeepSeek R1".to_string()),
+            description: None,
+            context_window: Some(128_000),
+            max_output_tokens: Some(8_192),
+            max_input_tokens: None,
+            created_at: None,
+            modalities: Some(vec!["text".to_string()]),
+            capabilities: Some(vec!["tools".to_string(), "reasoning".to_string()]),
+            pricing: None,
+            match_confidence: Some(1.0),
+            metadata_sources: vec!["openrouter".to_string()],
+            reasoning_content_constrained: true,
+            raw: json!({}),
+        };
+
+        let overrides =
+            catalog_capability_overrides(&constrained_model).expect("overrides should be present");
+        assert_eq!(
+            overrides.get("reasoningContentConstrained"),
+            Some(&serde_json::Value::Bool(true)),
+        );
+        assert_eq!(
+            overrides.get("reasoning"),
+            Some(&serde_json::Value::Bool(true)),
+        );
+
+        // When reasoning_content_constrained is false, the key must be absent.
+        let normal_model = UnifiedModelInfo {
+            reasoning_content_constrained: false,
+            ..constrained_model
+        };
+        let normal_overrides =
+            catalog_capability_overrides(&normal_model).expect("overrides should be present");
+        assert!(normal_overrides
+            .get("reasoningContentConstrained")
+            .is_none());
     }
 
     #[test]

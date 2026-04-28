@@ -404,6 +404,7 @@ mod tests {
             max_output_tokens: None,
             supports_image_input: None,
             supports_reasoning: None,
+            reasoning_content_constrained: None,
             custom_headers: None,
             provider_options: None,
         }

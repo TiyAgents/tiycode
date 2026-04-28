@@ -52,6 +52,7 @@ function toRunModelPlanRole(selection: ProviderModelSelection): RunModelPlanRole
     maxOutputTokens: model.maxOutputTokens ?? null,
     supportsImageInput: capabilities.vision,
     supportsReasoning: capabilities.reasoning,
+    reasoningContentConstrained: capabilities.reasoningContentConstrained ?? null,
     customHeaders: isNonEmptyRecord(provider.customHeaders) ? provider.customHeaders : null,
     providerOptions: isNonEmptyRecord(model.providerOptions) ? model.providerOptions : null,
   };

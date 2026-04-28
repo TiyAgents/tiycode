@@ -225,6 +225,7 @@ export interface RunModelPlanRoleDto {
   maxOutputTokens?: string | null;
   supportsImageInput?: boolean | null;
   supportsReasoning?: boolean | null;
+  reasoningContentConstrained?: boolean | null;
   customHeaders?: Record<string, string> | null;
   providerOptions?: Record<string, unknown> | null;
 }
