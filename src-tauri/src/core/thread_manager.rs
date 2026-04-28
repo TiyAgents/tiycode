@@ -247,7 +247,7 @@ impl ThreadManager {
                 tool_calls = tc_count,
                 helpers = helper_count,
                 reasoning = reasoning_count,
-                "interrupted dangling runs/tool_calls/helpers on startup"
+                "interrupted dangling runs/tool_calls/helpers/reasoning on startup"
             );
         }
 

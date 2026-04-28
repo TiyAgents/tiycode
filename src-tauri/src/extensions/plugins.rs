@@ -864,6 +864,37 @@ impl ExtensionsManager {
         payload: serde_json::Value,
     ) -> Result<HookOutput, AppError> {
         let command_path = plugin.path.join(handler);
+        // Prevent path traversal: ensure the resolved command stays within the plugin directory.
+        let command_path = std::fs::canonicalize(&command_path).map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Tool,
+                "extensions.plugin.hook_not_found",
+                format!(
+                    "Hook '{}' from plugin '{}' could not be resolved: {error}",
+                    handler, plugin.manifest.id
+                ),
+            )
+        })?;
+        let plugin_root = std::fs::canonicalize(&plugin.path).map_err(|error| {
+            AppError::recoverable(
+                ErrorSource::Tool,
+                "extensions.plugin.plugin_path_invalid",
+                format!(
+                    "Plugin '{}' path could not be resolved: {error}",
+                    plugin.manifest.id
+                ),
+            )
+        })?;
+        if !command_path.starts_with(&plugin_root) {
+            return Err(AppError::recoverable(
+                ErrorSource::Tool,
+                "extensions.plugin.hook_escape",
+                format!(
+                    "Hook '{}' from plugin '{}' resolved outside the plugin directory",
+                    handler, plugin.manifest.id
+                ),
+            ));
+        }
         let output = self
             .execute_command_json(
                 command_path.as_os_str(),

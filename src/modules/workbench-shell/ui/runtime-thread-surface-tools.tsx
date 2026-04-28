@@ -1,11 +1,12 @@
 import { CodeBlock } from "@/components/ai-elements/code-block";
+import type { SurfaceToolState } from "@/modules/workbench-shell/ui/runtime-thread-surface-state";
 
 export type RuntimeSurfaceToolEntry = {
   error?: string;
   input?: unknown;
   name: string;
   result?: unknown;
-  state: string;
+  state: SurfaceToolState;
 };
 
 function asToolDataRecord(value: unknown) {

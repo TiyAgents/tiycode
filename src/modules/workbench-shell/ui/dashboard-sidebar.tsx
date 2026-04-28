@@ -24,8 +24,7 @@ import type { WorkspaceItem } from "@/modules/workbench-shell/model/types";
 import { cn } from "@/shared/lib/utils";
 import { ThreadRenameInput } from "@/modules/workbench-shell/ui/thread-rename-input";
 import { ThreadStatusIndicator } from "@/modules/workbench-shell/ui/thread-status-indicator";
-
-const WORKSPACE_THREAD_PAGE_SIZE = 10;
+import { WORKSPACE_THREAD_PAGE_SIZE } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
 
 type WorkspaceAction = {
   workspaceId: string;
