@@ -344,6 +344,7 @@ function getShellToolPresentation(tool: RuntimeSurfaceToolEntry): CommandOutputT
     detailLabel: cwd ? `cwd · ${cwd}` : null,
     output,
     outputLanguage: "log",
+    showCommandBlock: false,
     summaryLabel: summarizeInlineText(command, "shell"),
   };
 }
