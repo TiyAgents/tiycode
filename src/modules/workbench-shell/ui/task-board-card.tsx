@@ -4,7 +4,7 @@ import { CheckCircle2Icon, ChevronRightIcon, CircleIcon, Loader2Icon, XCircleIco
 import { ComponentProps, useCallback, useState } from "react";
 import { cn } from "@/shared/lib/utils";
 import type { TaskBoardDto, TaskItemDto, TaskStage } from "@/shared/types/api";
-import { computeProgress, hasFailedTasks, isBoardCompleted } from "../model/task-board";
+import { computeProgress, getActiveTask, hasFailedTasks, isBoardCompleted } from "../model/task-board";
 
 // ---------------------------------------------------------------------------
 // Task Stage Indicator
@@ -64,17 +64,19 @@ export const TaskItemRow = ({
       <TaskStageIndicator stage={task.stage} />
       <span
         className={cn(
-          "flex-1",
+          "min-w-0 flex-1 break-words",
           task.stage === "completed" && "text-muted-foreground/60 line-through",
           task.stage === "failed" && "text-destructive",
           task.stage === "pending" && "text-muted-foreground"
         )}
       >
         {task.description}
+        {task.errorDetail && (
+          <span className="mt-0.5 block text-xs text-destructive/80">
+            {task.errorDetail}
+          </span>
+        )}
       </span>
-      {task.errorDetail && (
-        <span className="text-xs text-destructive/80">{task.errorDetail}</span>
-      )}
     </li>
   );
 };
@@ -87,12 +89,16 @@ export type TaskBoardCardProps = ComponentProps<"div"> & {
   board: TaskBoardDto;
   showTitle?: boolean;
   defaultCollapsed?: boolean;
+  variant?: "default" | "composer";
+  compactThreshold?: number;
 };
 
 export const TaskBoardCard = ({
   board,
   showTitle = true,
   defaultCollapsed = false,
+  variant = "default",
+  compactThreshold = 6,
   className,
   ...props
 }: TaskBoardCardProps) => {
@@ -100,6 +106,14 @@ export const TaskBoardCard = ({
   const progress = computeProgress(board);
   const completed = isBoardCompleted(board);
   const hasFailed = hasFailedTasks(board);
+  const isComposerVariant = variant === "composer";
+  const totalCount = board.tasks.length;
+  const completedCount = board.tasks.filter((task: TaskItemDto) => task.stage === "completed").length;
+  const failedCount = board.tasks.filter((task: TaskItemDto) => task.stage === "failed").length;
+  const activeTask = board.tasks.find((task: TaskItemDto) => task.id === board.activeTaskId) ?? getActiveTask(board);
+  const isLongList = totalCount > compactThreshold;
+  const showSummary = isComposerVariant || isLongList || collapsed;
+  const taskCountSummary = `${completedCount}/${totalCount} completed`;
 
   const toggleCollapse = useCallback(() => setCollapsed((c) => !c), []);
 
@@ -107,6 +121,7 @@ export const TaskBoardCard = ({
     <div
       className={cn(
         "rounded-xl border border-app-border/40 bg-app-surface/40 p-3",
+        isComposerVariant && "flex max-h-[min(32vh,280px)] min-h-0 flex-col",
         completed && "border-success/30 bg-success/5",
         hasFailed && "border-destructive/30 bg-destructive/5",
         className
@@ -117,7 +132,7 @@ export const TaskBoardCard = ({
         <button
           type="button"
           onClick={toggleCollapse}
-          className="mb-3 flex w-full items-center justify-between gap-2 text-left"
+          className="mb-3 flex w-full shrink-0 items-center justify-between gap-2 text-left"
         >
           <div className="flex min-w-0 items-center gap-2">
             <ChevronRightIcon
@@ -142,7 +157,7 @@ export const TaskBoardCard = ({
       )}
 
       {/* Progress bar */}
-      <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+      <div className="mb-3 h-1.5 w-full shrink-0 overflow-hidden rounded-full bg-muted">
         <div
           className={cn(
             "h-full rounded-full transition-all duration-300",
@@ -154,22 +169,47 @@ export const TaskBoardCard = ({
         />
       </div>
 
+      {showSummary && (
+        <div className="mb-2 shrink-0 space-y-1 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span>{taskCountSummary}</span>
+            {failedCount > 0 && (
+              <span className="text-destructive">
+                {failedCount} failed
+              </span>
+            )}
+          </div>
+          {activeTask && (
+            <div className="truncate">
+              Current: <span className="text-foreground/80">{activeTask.description}</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Task list */}
       {!collapsed && (
-        <ul className="space-y-0.5">
-          {board.tasks.map((task: TaskItemDto) => (
-            <TaskItemRow
-              key={task.id}
-              task={task}
-              isActive={task.id === board.activeTaskId}
-            />
-          ))}
-        </ul>
+        <div
+          className={cn(
+            "min-h-0",
+            isComposerVariant && "overflow-y-auto overscroll-contain pr-1"
+          )}
+        >
+          <ul className="space-y-0.5">
+            {board.tasks.map((task: TaskItemDto) => (
+              <TaskItemRow
+                key={task.id}
+                task={task}
+                isActive={task.id === board.activeTaskId}
+              />
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* Status badge */}
       {!collapsed && board.status !== "active" && (
-        <div className="mt-2 text-xs text-muted-foreground">
+        <div className="mt-2 shrink-0 text-xs text-muted-foreground">
           {board.status === "completed" ? "✓ Completed" : "⊘ Abandoned"}
         </div>
       )}
