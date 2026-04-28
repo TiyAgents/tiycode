@@ -167,6 +167,54 @@ describe("buildRunModelPlan", () => {
 
     expect(plan?.primary?.supportsReasoning).toBe(false);
   });
+
+  it("propagates reasoningContentConstrained from capability overrides", () => {
+    const plan = buildRunModelPlan(
+      profile({
+        primaryModelId: "model-constrained",
+        assistantModelId: "model-normal",
+        liteModelId: "missing",
+      }),
+      [
+        provider({
+          models: [
+            {
+              id: "model-constrained",
+              modelId: "deepseek-r1",
+              sortIndex: 0,
+              displayName: "DeepSeek R1",
+              enabled: true,
+              capabilityOverrides: { reasoning: true, reasoningContentConstrained: true },
+              providerOptions: {},
+            },
+            {
+              id: "model-normal",
+              modelId: "gpt-5",
+              sortIndex: 1,
+              displayName: "GPT 5",
+              enabled: true,
+              capabilityOverrides: { reasoning: true },
+              providerOptions: {},
+            },
+          ],
+        }),
+      ],
+    );
+
+    // Model with reasoningContentConstrained: true should propagate the flag.
+    expect(plan?.primary?.reasoningContentConstrained).toBe(true);
+    // Model without the override should default to null.
+    expect(plan?.auxiliary?.reasoningContentConstrained).toBeNull();
+  });
+
+  it("defaults reasoningContentConstrained to null when capability is undefined", () => {
+    const plan = buildRunModelPlan(
+      profile({ assistantModelId: "missing", liteModelId: "missing" }),
+      [provider()],
+    );
+
+    expect(plan?.primary?.reasoningContentConstrained).toBeNull();
+  });
 });
 
 describe("buildProfileModelPlan", () => {

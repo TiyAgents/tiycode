@@ -1312,6 +1312,7 @@ mod tests {
             max_output_tokens: Some("4096".to_string()),
             supports_image_input: Some(false),
             supports_reasoning: Some(false),
+            reasoning_content_constrained: None,
             custom_headers: None,
             provider_options: None,
         }
