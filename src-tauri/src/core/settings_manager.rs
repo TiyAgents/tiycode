@@ -1534,6 +1534,7 @@ mod tests {
             max_input_tokens: Some(1_000_000),
             modalities: Some(vec!["text".to_string(), "image".to_string()]),
             capabilities: Some(vec!["tools".to_string(), "reasoning".to_string()]),
+            reasoning_content_constrained: false,
             pricing: Some(json!({"input": "2.0", "output": "8.0"})),
             source: "openrouter".to_string(),
             raw: json!({}),

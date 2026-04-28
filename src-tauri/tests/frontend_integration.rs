@@ -76,6 +76,7 @@ fn test_thread_stream_event_message_completed_serialization() {
         run_id: "run-1".into(),
         message_id: "msg-1".into(),
         content: "Full response".into(),
+        turn_index: None,
     };
 
     let json = serde_json::to_value(&event).unwrap();
@@ -253,6 +254,7 @@ fn test_thread_stream_event_reasoning_updated_serialization() {
         message_id: "reasoning-1".into(),
         reasoning: "Inspecting the repository layout".into(),
         thinking_signature: None,
+        turn_index: None,
     };
 
     let json = serde_json::to_value(&event).unwrap();
@@ -362,6 +364,7 @@ fn test_all_events_have_type_field() {
             run_id: "r".into(),
             message_id: "m".into(),
             content: "c".into(),
+            turn_index: None,
         },
         ThreadStreamEvent::MessageDiscarded {
             run_id: "r".into(),
@@ -377,6 +380,7 @@ fn test_all_events_have_type_field() {
             message_id: "rm".into(),
             reasoning: "r".into(),
             thinking_signature: None,
+            turn_index: None,
         },
         ThreadStreamEvent::QueueUpdated {
             run_id: "r".into(),

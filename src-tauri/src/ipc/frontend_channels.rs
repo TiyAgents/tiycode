@@ -38,6 +38,8 @@ pub enum ThreadStreamEvent {
         run_id: String,
         message_id: String,
         content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn_index: Option<usize>,
     },
     MessageDiscarded {
         run_id: String,
@@ -54,6 +56,8 @@ pub enum ThreadStreamEvent {
         reasoning: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         thinking_signature: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn_index: Option<usize>,
     },
     QueueUpdated {
         run_id: String,

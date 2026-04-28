@@ -10,17 +10,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  Boxes,
-  Folder,
   FolderOpen,
-  FolderPlus,
   GitBranch,
-  LoaderCircle,
-  MessageSquarePlus,
-  MoreHorizontal,
-  Shuffle,
-  Sparkles,
-  Trash2,
 } from "lucide-react";
 import {
   useLanguage,
@@ -29,7 +20,6 @@ import {
 import { useTheme, type ThemePreference } from "@/app/providers/theme-provider";
 import { useT } from "@/i18n";
 import { useExtensionsController, type ExtensionScope } from "@/modules/extensions-center/model/use-extensions-controller";
-import { ExtensionsCenterOverlay } from "@/modules/extensions-center/ui/extensions-center-overlay";
 import {
   buildProfileModelPlan,
   buildRunModelPlanFromSelection,
@@ -39,24 +29,33 @@ import {
   useSettingsController,
   type SettingsCategory,
 } from "@/modules/settings-center/model/use-settings-controller";
-import { SettingsCenterOverlay } from "@/modules/settings-center/ui/settings-center-overlay";
-import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
-import { TerminalSettingsContext } from "@/features/terminal/model/terminal-settings-context";
 import { useAppUpdater } from "@/modules/workbench-shell/hooks/use-app-updater";
-import { UpdateAvailableDialog } from "@/modules/workbench-shell/ui/update-available-dialog";
 import {
+  DEFAULT_TERMINAL_COLLAPSED,
+  SIDEBAR_AUTO_REFRESH_GRACE_MS,
+  SIDEBAR_AUTO_REFRESH_INTERVAL_MS,
+  SIDEBAR_SYNC_MIN_GAP_MS,
+  UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY,
+  WORKSPACE_THREAD_PAGE_SIZE,
+  buildInitialWorkspaceThreadDisplayCounts,
+  buildInitialWorkspaceThreadHasMore,
+  buildProjectOptionFromWorkspace,
+  buildThreadContextBadgeData,
+  formatCompactTokenCount,
+  findWorkspaceForThread,
+  getNewThreadTerminalBindingKey,
+  mapRunFinishedStatusToThreadStatus,
+  mapRunStateToWorkbenchThreadStatus,
+  mergeLocalFallbackThreads,
   resolveActiveThreadWorkbenchProfileId,
   resolveThreadProfileId,
+  type PendingThreadRun,
 } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
 import { isOnboardingCompleted } from "@/modules/onboarding/model/use-onboarding";
-import { OnboardingWizard } from "@/modules/onboarding/ui/onboarding-wizard";
 import type {
   GitSnapshotDto,
-  MessageAttachmentDto,
   RunMode,
-  RunModelPlanDto,
   ThreadSummaryDto,
-  WorkspaceDto,
 } from "@/shared/types/api";
 import {
   threadCreate,
@@ -64,7 +63,6 @@ import {
   threadList,
   threadUpdateProfile,
   threadUpdateTitle,
-  threadRegenerateTitle,
   workspaceAdd,
   workspaceEnsureDefault,
   workspaceList,
@@ -75,9 +73,6 @@ import {
 import type { RunState } from "@/services/thread-stream";
 import {
   DEFAULT_TERMINAL_HEIGHT,
-  DRAWER_LIST_LABEL_CLASS,
-  DRAWER_LIST_ROW_CLASS,
-  DRAWER_LIST_STACK_CLASS,
   LANGUAGE_OPTIONS,
   MIN_TERMINAL_HEIGHT,
   MIN_WORKBENCH_HEIGHT,
@@ -87,7 +82,6 @@ import {
   TOPBAR_HEIGHT,
   UPDATE_STATUS_DURATION,
   WORKSPACE_ITEMS,
-  DRAWER_OVERFLOW_ACTION_CLASS,
 } from "@/modules/workbench-shell/model/fixtures";
 import {
   activateThread,
@@ -95,7 +89,6 @@ import {
   buildInitialWorkspaces,
   buildWorkspaceItemsFromDtos,
   buildThreadTitle,
-  sortWorkspacesWithWorktrees,
   clearActiveThreads,
   getActiveThread,
   isEditableSelectionTarget,
@@ -124,10 +117,7 @@ import type {
 } from "@/modules/workbench-shell/model/types";
 import type { ExtensionDetail, SkillPreview } from "@/shared/types/extensions";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
-import {
-  NewWorktreeDialog,
-  type NewWorktreeDialogContext,
-} from "@/modules/workbench-shell/ui/new-worktree-dialog";
+import type { NewWorktreeDialogContext } from "@/modules/workbench-shell/ui/new-worktree-dialog";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
 import { BranchSelector } from "@/modules/workbench-shell/ui/branch-selector";
 import {
@@ -135,11 +125,13 @@ import {
   type ThreadContextUsage,
 } from "@/modules/workbench-shell/ui/runtime-thread-surface";
 import {
-  GitDiffPreviewPanel,
   GitPanel,
   type GitDiffSelection,
 } from "@/modules/workbench-shell/ui/source-control-panels";
 import { ThreadStatusIndicator } from "@/modules/workbench-shell/ui/thread-status-indicator";
+import { DashboardTerminalOrchestrator } from "@/modules/workbench-shell/ui/dashboard-terminal-orchestrator";
+import { DashboardSidebar } from "@/modules/workbench-shell/ui/dashboard-sidebar";
+import { DashboardOverlays } from "@/modules/workbench-shell/ui/dashboard-overlays";
 import { WorkbenchPromptComposer } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 import { WorkbenchTopBar } from "@/modules/workbench-shell/ui/workbench-top-bar";
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
@@ -150,349 +142,6 @@ import { waitForBackendReady } from "@/shared/lib/backend-ready";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import { terminalStore } from "@/features/terminal/model/terminal-store";
 
-const NEW_THREAD_TERMINAL_KEY_SUFFIX = "__new_thread__";
-const UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY = "__new_thread_pending__";
-const DEFAULT_TERMINAL_COLLAPSED = true;
-const WORKSPACE_THREAD_PAGE_SIZE = 10;
-const SIDEBAR_AUTO_REFRESH_INTERVAL_MS = 2_000;
-const SIDEBAR_AUTO_REFRESH_GRACE_MS = 20_000;
-// Minimum gap between two fully independent `syncWorkspaceSidebar` executions.
-// If a caller invokes it again within this window of the previous run finishing,
-// the call is coalesced onto a single trailing run. Without this, any feedback
-// loop elsewhere in the component (effect dependency on state that sync itself
-// mutates) will saturate the IPC queue and block thread list rendering.
-const SIDEBAR_SYNC_MIN_GAP_MS = 300;
-
-function buildInitialWorkspaceThreadDisplayCounts() {
-  return Object.fromEntries(
-    WORKSPACE_ITEMS.map((workspace) => [
-      workspace.id,
-      Math.min(WORKSPACE_THREAD_PAGE_SIZE, workspace.threads.length),
-    ]),
-  );
-}
-
-function buildInitialWorkspaceThreadHasMore() {
-  return Object.fromEntries(
-    WORKSPACE_ITEMS.map((workspace) => [
-      workspace.id,
-      workspace.threads.length > WORKSPACE_THREAD_PAGE_SIZE,
-    ]),
-  );
-}
-
-function getNewThreadTerminalBindingKey(workspaceId: string) {
-  return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
-}
-
-function buildProjectOptionFromWorkspace(workspace: WorkspaceDto, language: LanguagePreference = "en"): ProjectOption | null {
-  const project = buildProjectOptionFromPath(
-    workspace.canonicalPath || workspace.path,
-    language,
-  );
-  if (!project) {
-    return null;
-  }
-
-  return {
-    ...project,
-    id: workspace.id,
-    name: workspace.name,
-    kind: workspace.kind,
-    parentWorkspaceId: workspace.parentWorkspaceId ?? null,
-    worktreeHash: workspace.worktreeName
-      ? workspace.worktreeName.slice(0, 6)
-      : null,
-    branch: workspace.branch ?? null,
-  };
-}
-
-function findWorkspaceForThread(
-  workspaces: ReadonlyArray<WorkspaceItem>,
-  threadId: string | null,
-) {
-  if (!threadId) {
-    return null;
-  }
-
-  return (
-    workspaces.find((workspace) =>
-      workspace.threads.some((thread) => thread.id === threadId),
-    ) ?? null
-  );
-}
-
-function mergeLocalFallbackThreads(options: {
-  currentWorkspaces: ReadonlyArray<WorkspaceItem>;
-  syncedWorkspaces: ReadonlyArray<WorkspaceItem>;
-}) {
-  return options.syncedWorkspaces.map((workspace) => {
-    const currentWorkspace =
-      options.currentWorkspaces.find(
-        (candidate) => candidate.id === workspace.id,
-      ) ?? null;
-
-    if (!currentWorkspace) {
-      return workspace;
-    }
-
-    const syncedThreadIds = new Set(workspace.threads.map((thread) => thread.id));
-    const fallbackThreads = currentWorkspace.threads.filter((thread) => {
-      if (syncedThreadIds.has(thread.id)) {
-        return false;
-      }
-
-      return true;
-    });
-
-    if (fallbackThreads.length === 0) {
-      return workspace;
-    }
-
-    return {
-      ...workspace,
-      threads: [...workspace.threads, ...fallbackThreads],
-    };
-  });
-}
-
-function mapRunStateToWorkbenchThreadStatus(
-  state: RunState | "idle",
-): WorkbenchThreadStatus {
-  switch (state) {
-    case "running":
-      return "running";
-    case "waiting_approval":
-    case "limit_reached":
-      return "needs-reply";
-    case "interrupted":
-      return "interrupted";
-    case "failed":
-      return "failed";
-    default:
-      return "completed";
-  }
-}
-
-function mapRunFinishedStatusToThreadStatus(
-  status: string,
-): WorkbenchThreadStatus {
-  switch (status) {
-    case "failed":
-      return "failed";
-    case "interrupted":
-      return "interrupted";
-    case "cancelled":
-      return "interrupted";
-    case "limit_reached":
-      return "needs-reply";
-    default:
-      return "completed";
-  }
-}
-
-function parseTokenCount(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  const normalized = value.replace(/[^\d]/g, "");
-  if (!normalized) {
-    return null;
-  }
-
-  const parsed = Number.parseInt(normalized, 10);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function formatCompactTokenCount(value: number) {
-  return new Intl.NumberFormat("en", {
-    maximumFractionDigits: 1,
-    notation: "compact",
-  }).format(value);
-}
-
-function buildThreadContextBadgeData(options: {
-  fallbackContextWindow: string | null;
-  fallbackModelDisplayName: string | null;
-  runtimeUsage: ThreadContextUsage | null;
-}) {
-  const contextWindow =
-    parseTokenCount(options.runtimeUsage?.contextWindow) ??
-    parseTokenCount(options.fallbackContextWindow);
-  const totalTokens = options.runtimeUsage?.totalTokens ?? 0;
-  const inputTokens = options.runtimeUsage?.inputTokens ?? 0;
-  const outputTokens = options.runtimeUsage?.outputTokens ?? 0;
-  const cacheReadTokens = options.runtimeUsage?.cacheReadTokens ?? 0;
-  const cacheWriteTokens = options.runtimeUsage?.cacheWriteTokens ?? 0;
-  const usageRatio =
-    contextWindow && contextWindow > 0
-      ? Math.min(totalTokens / contextWindow, 1)
-      : 0;
-  const usedPercent =
-    contextWindow && contextWindow > 0
-      ? Math.min(Math.round((totalTokens / contextWindow) * 100), 100)
-      : 0;
-  const leftPercent = Math.max(0, 100 - usedPercent);
-
-  return {
-    contextWindow,
-    inputTokens,
-    outputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-    leftPercent,
-    modelDisplayName:
-      options.runtimeUsage?.modelDisplayName ??
-      options.fallbackModelDisplayName,
-    totalTokens,
-    usageRatio,
-    usedLabel: formatCompactTokenCount(totalTokens),
-    totalLabel: contextWindow ? formatCompactTokenCount(contextWindow) : "N/A",
-    usedPercent,
-  };
-}
-
-type PendingThreadRun = {
-  id: string;
-  displayText: string;
-  effectivePrompt: string;
-  attachments: MessageAttachmentDto[];
-  metadata: Record<string, unknown> | null;
-  runMode: RunMode;
-  threadId: string;
-};
-
-// ---------------------------------------------------------------------------
-// ThreadRenameInput — isolated component for inline thread title editing.
-// Keeps per-keystroke state local to avoid re-rendering the entire dashboard.
-// ---------------------------------------------------------------------------
-
-function ThreadRenameInput({
-  threadId,
-  initialName,
-  isActive,
-  status,
-  modelPlan,
-  onDone,
-}: {
-  threadId: string;
-  initialName: string;
-  isActive: boolean;
-  status: import("@/modules/workbench-shell/model/types").ThreadStatus;
-  modelPlan: RunModelPlanDto | null;
-  onDone: (newTitle: string | null) => void;
-}) {
-  const t = useT();
-  const [value, setValue] = useState(initialName);
-  const [isRegenerating, setRegenerating] = useState(false);
-  const [regenError, setRegenError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  // After regeneration completes, re-focus the input so the user
-  // is not left in a stuck editing state without a focused input.
-  const refocusAfterRegenerate = useCallback(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const save = useCallback(() => {
-    const trimmed = value.trim();
-    onDone(trimmed || null);
-  }, [value, onDone]);
-
-  const cancel = useCallback(() => {
-    onDone(null);
-  }, [onDone]);
-
-  const handleRegenerate = useCallback(() => {
-    if (!modelPlan || isRegenerating) return;
-    setRegenerating(true);
-    setRegenError(null);
-    void threadRegenerateTitle(threadId, modelPlan)
-      .then((title) => {
-        setValue(title);
-      })
-      .catch((error) => {
-        const message = getInvokeErrorMessage(error, "Failed to regenerate title");
-        console.warn("[thread] failed to regenerate title:", message);
-        setRegenError(t("sidebar.regenerateTitleFailed"));
-      })
-      .finally(() => {
-        setRegenerating(false);
-        refocusAfterRegenerate();
-      });
-  }, [threadId, modelPlan, isRegenerating, refocusAfterRegenerate]);
-
-  return (
-    <div
-      className={cn(
-        `${DRAWER_LIST_ROW_CLASS} border pr-1.5`,
-        isActive
-          ? "border-app-border-strong bg-app-surface-active text-app-foreground"
-          : "border-transparent bg-transparent text-app-muted",
-      )}
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-1">
-        <ThreadStatusIndicator
-          status={status}
-          emphasis={isActive ? "default" : "subtle"}
-        />
-        <input
-          ref={inputRef}
-          autoFocus
-          aria-label={t("sidebar.renameThread")}
-          className="min-w-0 flex-1 truncate border-none bg-transparent text-[13px] leading-tight text-app-foreground outline-none placeholder:text-app-muted"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              if (!isRegenerating) save();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              cancel();
-            }
-          }}
-          onBlur={(e) => {
-            // Ignore blur when clicking the regenerate button
-            // or while regeneration is in progress.
-            if (isRegenerating) return;
-            const related = e.relatedTarget as HTMLElement | null;
-            if (related?.dataset.threadRegenerateBtn === "true") return;
-            save();
-          }}
-          onFocus={(e) => e.target.select()}
-        />
-        <button
-          type="button"
-          data-thread-regenerate-btn="true"
-          title={
-            regenError
-              ? regenError
-              : modelPlan
-                ? t("sidebar.regenerateTitle")
-                : t("sidebar.noLiteModel")
-          }
-          disabled={!modelPlan || isRegenerating}
-          className="flex size-6 shrink-0 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            e.stopPropagation();
-            handleRegenerate();
-          }}
-        >
-          <Sparkles
-            className={cn(
-              "size-3.5",
-              regenError && "text-red-500",
-              isRegenerating && "animate-spin",
-            )}
-          />
-        </button>
-      </div>
-    </div>
-  );
-}
 
 export function DashboardWorkbench() {
   const { data } = useSystemMetadata();
@@ -3037,415 +2686,44 @@ export function DashboardWorkbench() {
       />
 
       <div className="flex h-full min-h-0 pt-9">
-        <aside
-          className={cn(
-            "overflow-hidden bg-app-sidebar transition-[width,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-            isSidebarOpen
-              ? "w-[320px] border-r border-app-border opacity-100 translate-x-0"
-              : "w-0 border-r-0 opacity-0 -translate-x-2 pointer-events-none",
-          )}
-        >
-          <div className="flex h-full min-h-0 flex-col px-3 pb-3 pt-4">
-            <div className="space-y-1">
-              <button
-                type="button"
-                className={cn(
-                  "group flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-[transform,box-shadow,background-color,border-color,color] duration-200 active:scale-[0.99]",
-                  isNewThreadMode
-                    ? "border-app-border-strong bg-app-surface-active text-app-foreground shadow-[0_4px_14px_rgba(15,23,42,0.08)]"
-                    : "border-transparent bg-transparent text-app-muted hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)]",
-                )}
-                onClick={handleEnterNewThreadMode}
-              >
-                <MessageSquarePlus
-                  className={cn(
-                    "size-4 shrink-0 transition-colors duration-200",
-                    isNewThreadMode
-                      ? "text-app-foreground"
-                      : "text-app-subtle group-hover:text-app-foreground",
-                  )}
-                />
-                <span className="truncate text-sm font-medium">{t("sidebar.newThread")}</span>
-              </button>
-
-              <button
-                type="button"
-                className={cn(
-                  "group flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-[transform,box-shadow,background-color,border-color,color] duration-200 active:scale-[0.99]",
-                  isMarketplaceOpen
-                    ? "border-app-border-strong bg-app-surface-active text-app-foreground shadow-[0_4px_14px_rgba(15,23,42,0.08)]"
-                    : "border-transparent bg-transparent text-app-muted hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)]",
-                )}
-                onClick={handleOpenMarketplace}
-              >
-                <Boxes
-                  className={cn(
-                    "size-4 shrink-0 transition-colors duration-200",
-                    isMarketplaceOpen
-                      ? "text-app-foreground"
-                      : "text-app-subtle group-hover:text-app-foreground",
-                  )}
-                />
-                <span className="truncate text-sm font-medium">
-                  {t("sidebar.extensions")}
-                </span>
-              </button>
-            </div>
-
-            <div className="mt-6 flex items-center justify-between px-3">
-              <span className="text-xs uppercase tracking-[0.14em] text-app-subtle">
-                {t("sidebar.workspace")}
-              </span>
-              <button
-                type="button"
-                aria-label={t("sidebar.addWorkspace")}
-                title={t("sidebar.addWorkspace")}
-                className="inline-flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={handleChooseWorkspaceFolder}
-                disabled={isAddingWorkspace}
-              >
-                {isAddingWorkspace ? (
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                ) : (
-                  <FolderPlus className="size-3.5" />
-                )}
-              </button>
-            </div>
-
-            <div className="mx-1 mt-3 h-px shrink-0 bg-app-border" />
-
-            <div className="mt-3 min-h-0 flex-1 overflow-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <div className="space-y-1.5">
-                {!isSidebarReady ? (
-                  <div className="space-y-3 px-1">
-                    {/* Workspace skeleton */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 rounded-lg px-2 py-1.5">
-                        <div className="size-4 animate-pulse rounded bg-app-surface-hover" />
-                        <div className="h-3.5 w-28 animate-pulse rounded bg-app-surface-hover" />
-                      </div>
-                      {/* Thread skeletons */}
-                      {[1, 2, 3].map((i) => (
-                        <div key={i} className="flex items-center gap-2 rounded-lg px-2 py-1.5 pl-7">
-                          <div className="size-3.5 animate-pulse rounded bg-app-surface-hover" />
-                          <div
-                            className="h-3 animate-pulse rounded bg-app-surface-hover"
-                            style={{ width: `${60 + i * 12}%` }}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                sortWorkspacesWithWorktrees(workspaces).map((workspace) => {
-                  const isWorktreeRow = workspace.kind === "worktree";
-                  const isRepoRow = workspace.kind === "repo";
-                  const worktreeTag =
-                    workspace.worktreeHash && workspace.worktreeHash.length > 0
-                      ? workspace.worktreeHash
-                      : null;
-                  const isOpen =
-                    openWorkspaces[workspace.id] ?? workspace.defaultOpen;
-                  const FolderIcon = isWorktreeRow
-                    ? Shuffle
-                    : isOpen
-                      ? FolderOpen
-                      : Folder;
-                  const isWorkspaceMenuOpen =
-                    activeWorkspaceMenuId === workspace.id;
-                  const isOpeningWorkspace =
-                    workspaceAction?.workspaceId === workspace.id &&
-                    workspaceAction.kind === "open";
-                  const isRemovingWorkspace =
-                    workspaceAction?.workspaceId === workspace.id &&
-                    workspaceAction.kind === "remove";
-                  const visibleThreadCount =
-                    workspaceThreadDisplayCounts[workspace.id] ??
-                    WORKSPACE_THREAD_PAGE_SIZE;
-                  const visibleThreads = workspace.threads.slice(
-                    0,
-                    visibleThreadCount,
-                  );
-                  const hasMoreThreads =
-                    (workspaceThreadHasMore[workspace.id] ?? false) ||
-                    workspace.threads.length > visibleThreadCount;
-                  const isLoadingMoreThreads =
-                    workspaceThreadLoadMorePending[workspace.id] ?? false;
-
-                  return (
-                    <div key={workspace.id} className="space-y-1">
-                      <div className="group px-1">
-                        <div
-                          ref={
-                            isWorkspaceMenuOpen ? workspaceMenuRef : undefined
-                          }
-                          className="relative"
-                        >
-                          <button
-                            type="button"
-                            className={cn(
-                              "flex items-center gap-2 pr-10 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                              DRAWER_LIST_ROW_CLASS,
-                            )}
-                            onClick={() => handleWorkspaceToggle(workspace.id)}
-                          >
-                            <FolderIcon className="size-4 shrink-0 text-app-muted" />
-                            <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                              <span className="truncate text-[13px] leading-5">
-                                {workspace.name}
-                              </span>
-                              {worktreeTag ? (
-                                <span
-                                  title={t("worktree.tag.label")}
-                                  className="shrink-0 rounded bg-app-surface-hover px-1.5 py-0.5 font-mono text-[10px] text-app-subtle"
-                                >
-                                  {worktreeTag}
-                                </span>
-                              ) : null}
-                            </div>
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={t("dashboard.moreActions")}
-                            title={t("dashboard.moreActions")}
-                            aria-haspopup="menu"
-                            aria-expanded={isWorkspaceMenuOpen}
-                            className={cn(
-                              DRAWER_OVERFLOW_ACTION_CLASS,
-                              isWorkspaceMenuOpen &&
-                                "opacity-100 text-app-foreground",
-                            )}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleWorkspaceMenuToggle(workspace.id);
-                            }}
-                          >
-                            <MoreHorizontal className="size-4" />
-                          </button>
-
-                          {isWorkspaceMenuOpen ? (
-                            <div className="absolute right-0 top-[calc(100%+0.35rem)] z-20 min-w-[11rem] overflow-hidden rounded-xl border border-app-border bg-app-menu/98 p-1 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
-                              <button
-                                type="button"
-                                role="menuitem"
-                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-app-foreground transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:text-app-subtle"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleNewThreadForWorkspace(workspace);
-                                }}
-                                disabled={
-                                  !workspace.path ||
-                                  isOpeningWorkspace ||
-                                  isRemovingWorkspace
-                                }
-                              >
-                                <MessageSquarePlus className="size-4 shrink-0" />
-                                <span>{t("sidebar.newThreadForWorkspace")}</span>
-                              </button>
-                              {isRepoRow ? (
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-app-foreground transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:text-app-subtle"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setActiveWorkspaceMenuId(null);
-                                    if (workspace.path) {
-                                      setWorktreeDialogContext({
-                                        repo: {
-                                          id: workspace.id,
-                                          name: workspace.name,
-                                          canonicalPath: workspace.path,
-                                        },
-                                      });
-                                    }
-                                  }}
-                                  disabled={!workspace.path}
-                                >
-                                  <Shuffle className="size-4 shrink-0" />
-                                  <span>{t("worktree.menu.newWorktree")}</span>
-                                </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                role="menuitem"
-                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-app-foreground transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:text-app-subtle"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleOpenWorkspaceInSystem(workspace);
-                                }}
-                                disabled={
-                                  !canOpenWorkspaceInSystem ||
-                                  !workspace.path ||
-                                  isOpeningWorkspace ||
-                                  isRemovingWorkspace
-                                }
-                              >
-                                {isOpeningWorkspace ? (
-                                  <LoaderCircle className="size-4 shrink-0 animate-spin" />
-                                ) : (
-                                  <FolderOpen className="size-4 shrink-0" />
-                                )}
-                                <span>{workspaceOpenLabel}</span>
-                              </button>
-                              <button
-                                type="button"
-                                role="menuitem"
-                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-app-danger transition-colors hover:bg-app-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleWorkspaceRemove(workspace);
-                                }}
-                                disabled={
-                                  isOpeningWorkspace || isRemovingWorkspace
-                                }
-                              >
-                                {isRemovingWorkspace ? (
-                                  <LoaderCircle className="size-4 shrink-0 animate-spin" />
-                                ) : (
-                                  <Trash2 className="size-4 shrink-0" />
-                                )}
-                                <span>{t("sidebar.remove")}</span>
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      {isOpen && visibleThreads.length > 0 ? (
-                        <div className={cn(DRAWER_LIST_STACK_CLASS, "pl-2.5")}>
-                          {visibleThreads.map((thread) => {
-                            const isDeletePending =
-                              pendingDeleteThreadId === thread.id;
-                            const isDeleting = deletingThreadId === thread.id;
-                            const isEditing = editingThreadId === thread.id;
-
-                            return (
-                              <div key={thread.id} className="group relative">
-                                {isEditing ? (
-                                  <ThreadRenameInput
-                                    threadId={thread.id}
-                                    initialName={thread.name}
-                                    isActive={thread.active}
-                                    status={thread.status}
-                                    modelPlan={commitMessageModelPlan}
-                                    onDone={(newTitle) =>
-                                      handleThreadEditDone(
-                                        thread.id,
-                                        newTitle,
-                                        thread.name,
-                                      )
-                                    }
-                                  />
-                                ) : (
-                                <button
-                                  type="button"
-                                  className={cn(
-                                    `${DRAWER_LIST_ROW_CLASS} border pr-[4.5rem]`,
-                                    thread.active
-                                      ? "border-app-border-strong bg-app-surface-active text-app-foreground"
-                                      : "border-transparent bg-transparent text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                                  )}
-                                  onClick={() => handleThreadSelect(thread.id)}
-                                  onDoubleClick={(e) => {
-                                    e.stopPropagation();
-                                    handleThreadEditStart(thread.id);
-                                  }}
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <ThreadStatusIndicator
-                                      status={thread.status}
-                                      emphasis={
-                                        thread.active ? "default" : "subtle"
-                                      }
-                                    />
-                                    <p className={DRAWER_LIST_LABEL_CLASS}>
-                                      {thread.name}
-                                    </p>
-                                  </div>
-                                </button>
-                                )}
-                                {isEditing ? null : (
-                                <>
-                                <span
-                                  className={cn(
-                                    "pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-app-subtle transition-opacity duration-200",
-                                    isDeletePending || isDeleting
-                                      ? "opacity-0"
-                                      : "group-hover:opacity-0",
-                                  )}
-                                >
-                                  {thread.time}
-                                </span>
-                                {isDeletePending || isDeleting ? (
-                                  <button
-                                    type="button"
-                                    aria-label={
-                                      isDeleting
-                                        ? t("dashboard.deletingThread")
-                                        : t("dashboard.confirmDeleteThread")
-                                    }
-                                    title={isDeleting ? t("sidebar.deleting") : t("sidebar.delete")}
-                                    className="absolute right-1.5 top-1/2 inline-flex h-7 -translate-y-1/2 items-center justify-center rounded-md border border-app-danger/20 bg-app-danger/10 px-2 text-[11px] font-medium text-app-danger transition-colors hover:border-app-danger/30 hover:bg-app-danger/14 disabled:cursor-not-allowed disabled:opacity-80"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      handleThreadDeleteConfirm(thread.id);
-                                    }}
-                                    disabled={isDeleting}
-                                  >
-                                    {isDeleting ? (
-                                      <LoaderCircle className="size-3.5 animate-spin" />
-                                    ) : (
-                                      t("sidebar.delete")
-                                    )}
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    aria-label={t("dashboard.deleteThread")}
-                                    title="Delete thread"
-                                    className="absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-app-danger opacity-0 transition-all duration-200 hover:bg-app-danger/10 hover:text-app-danger group-hover:opacity-100"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      handleThreadDeleteRequest(thread.id);
-                                    }}
-                                  >
-                                    <Trash2 className="size-4" />
-                                  </button>
-                                )}
-                                </>
-                                )}
-                              </div>
-                            );
-                          })}
-                          {hasMoreThreads ? (
-                            <button
-                              type="button"
-                              className={cn(
-                                `${DRAWER_LIST_ROW_CLASS} flex items-center justify-end gap-2 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground`,
-                                isLoadingMoreThreads && "cursor-wait",
-                              )}
-                              onClick={() =>
-                                handleWorkspaceShowMore(workspace.id)
-                              }
-                              disabled={isLoadingMoreThreads}
-                            >
-                              <span>{t("sidebar.showMore")}</span>
-                              {isLoadingMoreThreads ? (
-                                <LoaderCircle className="size-3.5 animate-spin" />
-                              ) : null}
-                            </button>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })
-                )}
-              </div>
-            </div>
-          </div>
-        </aside>
+        <DashboardSidebar
+          isSidebarOpen={isSidebarOpen}
+          isNewThreadMode={isNewThreadMode}
+          isMarketplaceOpen={isMarketplaceOpen}
+          handleEnterNewThreadMode={handleEnterNewThreadMode}
+          handleOpenMarketplace={handleOpenMarketplace}
+          t={t}
+          handleChooseWorkspaceFolder={handleChooseWorkspaceFolder}
+          isAddingWorkspace={isAddingWorkspace}
+          isSidebarReady={isSidebarReady}
+          workspaces={workspaces}
+          openWorkspaces={openWorkspaces}
+          activeWorkspaceMenuId={activeWorkspaceMenuId}
+          workspaceAction={workspaceAction}
+          workspaceThreadDisplayCounts={workspaceThreadDisplayCounts}
+          workspaceThreadHasMore={workspaceThreadHasMore}
+          workspaceThreadLoadMorePending={workspaceThreadLoadMorePending}
+          workspaceMenuRef={workspaceMenuRef}
+          handleWorkspaceToggle={handleWorkspaceToggle}
+          handleWorkspaceMenuToggle={handleWorkspaceMenuToggle}
+          handleNewThreadForWorkspace={handleNewThreadForWorkspace}
+          setActiveWorkspaceMenuId={setActiveWorkspaceMenuId}
+          setWorktreeDialogContext={setWorktreeDialogContext}
+          handleOpenWorkspaceInSystem={handleOpenWorkspaceInSystem}
+          canOpenWorkspaceInSystem={canOpenWorkspaceInSystem}
+          workspaceOpenLabel={workspaceOpenLabel}
+          handleWorkspaceRemove={handleWorkspaceRemove}
+          pendingDeleteThreadId={pendingDeleteThreadId}
+          deletingThreadId={deletingThreadId}
+          editingThreadId={editingThreadId}
+          commitMessageModelPlan={commitMessageModelPlan}
+          handleThreadEditDone={handleThreadEditDone}
+          handleThreadSelect={handleThreadSelect}
+          handleThreadEditStart={handleThreadEditStart}
+          handleThreadDeleteConfirm={handleThreadDeleteConfirm}
+          handleThreadDeleteRequest={handleThreadDeleteRequest}
+          handleWorkspaceShowMore={handleWorkspaceShowMore}
+        />
 
         <section className="min-h-0 min-w-0 flex-1">
           <div className="flex h-full min-h-0 flex-col">
@@ -3701,198 +2979,120 @@ export function DashboardWorkbench() {
               </aside>
             </div>
 
-            <section
-              className={cn(
-                "relative shrink-0 overflow-hidden bg-app-terminal transition-[height,opacity,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                isTerminalCollapsed
-                  ? "border-t border-transparent opacity-0 pointer-events-none"
-                  : "border-t border-app-border opacity-100",
-              )}
-              style={{ height: isTerminalCollapsed ? 0 : terminalHeight }}
-            >
-              <div
-                className={cn(
-                  "group absolute inset-x-0 top-0 z-10 flex h-4 -translate-y-1/2 items-start justify-center transition-opacity duration-200",
-                  isTerminalCollapsed
-                    ? "opacity-0"
-                    : "cursor-row-resize opacity-100",
-                )}
-                role="presentation"
-                onMouseDown={handleTerminalResizeStart}
-              >
-                <div className="mt-1.5 h-[2px] w-9 rounded-full bg-app-border opacity-50 transition-all duration-200 ease-out group-hover:w-14 group-hover:bg-app-border-strong group-hover:opacity-100" />
-              </div>
-              <div
-                className={cn(
-                  "flex h-full min-h-0 flex-col transition-opacity duration-200",
-                  isTerminalCollapsed ? "opacity-0" : "opacity-100 delay-75",
-                )}
-              >
-                <TerminalSettingsContext.Provider value={terminal}>
-                <ThreadTerminalPanel
-                  threadId={resolvedTerminalThreadId}
-                  threadTitle={activeThread?.name ?? t("dashboard.newThread")}
-                  active={!isTerminalCollapsed}
-                  bootstrapError={terminalBootstrapError}
-                  isPendingThread={isNewThreadMode}
-                  idleMessage={newThreadTerminalIdleMessage}
-                  onCollapse={() => setTerminalCollapsed(true)}
-                />
-                </TerminalSettingsContext.Provider>
-              </div>
-            </section>
+            <DashboardTerminalOrchestrator
+              active={!isTerminalCollapsed}
+              bootstrapError={terminalBootstrapError}
+              height={terminalHeight}
+              idleMessage={newThreadTerminalIdleMessage}
+              isPendingThread={isNewThreadMode}
+              onCollapse={() => setTerminalCollapsed(true)}
+              onResizeStart={handleTerminalResizeStart}
+              terminal={terminal}
+              threadId={resolvedTerminalThreadId}
+              threadTitle={activeThread?.name ?? t("dashboard.newThread")}
+            />
           </div>
         </section>
       </div>
 
-      {selectedDiffSelection ? (
-        <GitDiffPreviewPanel
-          workspaceId={resolvedWorkspaceId}
-          selection={selectedDiffSelection}
-          onClose={() => setSelectedDiffSelection(null)}
-        />
-      ) : null}
-
-      {isSettingsOpen ? (
-        <SettingsCenterOverlay
-          activeCategory={activeSettingsCategory}
-          agentProfiles={agentProfiles}
-          activeAgentProfileId={activeAgentProfileId}
-          contentRef={overlayContentRef}
-          configDiagnostics={configDiagnostics}
-          generalPreferences={generalPreferences}
-          isCheckingUpdates={isCheckingUpdates}
-          language={language}
-          policy={policy}
-          terminal={terminal}
-          availableShells={availableShells}
-          commands={commands}
-          providerCatalog={providerCatalog}
-          providers={providers}
-          systemMetadata={data}
-          theme={theme}
-          updateStatus={updateStatus}
-          workspaces={settingsWorkspaces}
-          onAddAgentProfile={addAgentProfile}
-          onAddAllowEntry={addAllowEntry}
-          onAddCommand={addCommand}
-          onAddDenyEntry={addDenyEntry}
-          onAddProvider={addProvider}
-          onAddWorkspace={addWorkspace}
-          onAddWritableRoot={addWritableRoot}
-          onCheckUpdates={handleCheckUpdates}
-          onClose={() => setActiveOverlay(null)}
-          onDuplicateAgentProfile={duplicateAgentProfile}
-          onRemoveAgentProfile={removeAgentProfile}
-          onRemoveAllowEntry={removeAllowEntry}
-          onRemoveCommand={removeCommand}
-          onRemoveDenyEntry={removeDenyEntry}
-          onRemoveProvider={removeProvider}
-          onRemoveWorkspace={removeWorkspace}
-          onRemoveWritableRoot={removeWritableRoot}
-          onSelectCategory={setActiveSettingsCategory}
-          onSelectLanguage={handleLanguageSelect}
-          onSelectTheme={handleThemeSelect}
-          onSetActiveAgentProfile={setActiveAgentProfile}
-          onSetDefaultWorkspace={setDefaultWorkspace}
-          onUpdateAgentProfile={updateAgentProfile}
-          onUpdateAllowEntry={updateAllowEntry}
-          onUpdateCommand={updateCommand}
-          onUpdateDenyEntry={updateDenyEntry}
-          onUpdateGeneralPreference={updateGeneralPreference}
-          onUpdatePolicySetting={updatePolicySetting}
-          onUpdateProvider={updateProvider}
-          onUpdateTerminalSetting={updateTerminalSetting}
-          onFetchProviderModels={fetchProviderModels}
-          onTestProviderModelConnection={testProviderModelConnection}
-          onUpdateWritableRoot={updateWritableRoot}
-        />
-      ) : null}
-
-      {isMarketplaceOpen ? (
-        <ExtensionsCenterOverlay
-          contentRef={overlayContentRef}
-          detailById={extensionDetailById}
-          error={extensionsError}
-          extensions={extensions}
-          configDiagnostics={configDiagnostics}
-          isLoading={areExtensionsLoading}
-          marketplaceItems={marketplaceItems}
-          marketplaceSources={marketplaceSources}
-          mcpServers={mcpServers}
-          onClose={() => setActiveOverlay(null)}
-          onRefresh={() => void refreshExtensions(currentExtensionScope)}
-          onLoadDetail={(id) => loadExtensionDetail(id, resolveItemScope(id))}
-          onLoadSkillPreview={(id) => loadSkillPreview(id, resolveItemScope(id))}
-          onEnableExtension={(id) => enableExtension(id, resolveItemScope(id))}
-          onDisableExtension={(id) => disableExtension(id, resolveItemScope(id))}
-          onUninstallExtension={(id) => uninstallExtension(id, resolveItemScope(id))}
-          onAddMarketplaceSource={addMarketplaceSource}
-          onGetMarketplaceSourceRemovePlan={getMarketplaceSourceRemovePlan}
-          onRemoveMarketplaceSource={removeMarketplaceSource}
-          onRefreshMarketplaceSource={refreshMarketplaceSource}
-          onInstallMarketplaceItem={installMarketplaceItem}
-          onAddMcpServer={(input) => addMcpServer(input, "global")}
-          onUpdateMcpServer={(id, input) => updateMcpServer(id, input, resolveItemScope(id))}
-          onRemoveMcpServer={(id) => removeMcpServer(id, resolveItemScope(id))}
-          onRestartMcpServer={(id) => restartMcpServer(id, resolveItemScope(id))}
-          onRescanSkills={() => rescanSkills(currentExtensionScope)}
-          onEnableSkill={(id) => enableSkill(id, resolveItemScope(id))}
-          onDisableSkill={(id) => disableSkill(id, resolveItemScope(id))}
-          skillPreviewById={skillPreviewById}
-          skills={extensionSkills}
-        />
-      ) : null}
-
-      <UpdateAvailableDialog
-        phase={appUpdater.phase}
-        updateInfo={appUpdater.updateInfo}
-        downloadProgress={appUpdater.downloadProgress}
-        errorMessage={appUpdater.errorMessage}
-        onDownloadAndInstall={appUpdater.downloadAndInstall}
-        onRestart={appUpdater.restartApp}
-        onRetry={appUpdater.checkForUpdates}
-        onDismiss={appUpdater.dismiss}
-      />
-
-      {showOnboarding && settingsHydrated ? (
-        <OnboardingWizard
-          language={language}
-          theme={theme}
-          providerCatalog={providerCatalog}
-          providers={providers}
-          agentProfiles={agentProfiles}
-          activeAgentProfileId={activeAgentProfileId}
-          onSelectLanguage={setLanguage}
-          onSelectTheme={setTheme}
-          onAddProvider={addProvider}
-          onUpdateProvider={updateProvider}
-          onFetchProviderModels={fetchProviderModels}
-          onUpdateAgentProfile={updateAgentProfile}
-          onDismiss={() => setShowOnboarding(false)}
-        />
-      ) : null}
-
-      <NewWorktreeDialog
-        context={worktreeDialogContext}
-        onClose={() => setWorktreeDialogContext(null)}
-        onCreated={(workspace) => {
-          const nextProject =
-            buildProjectOptionFromWorkspace(workspace, language) ?? {
-              id: workspace.id,
-              name: workspace.name,
-              path: workspace.canonicalPath || workspace.path,
-              lastOpenedLabel: t("time.justNow"),
-              kind: workspace.kind,
-              parentWorkspaceId: workspace.parentWorkspaceId,
-              worktreeHash: workspace.worktreeName
-                ? workspace.worktreeName.slice(0, 6)
-                : null,
-              branch: workspace.branch,
-            };
-          activateWorkspaceAsNewThreadTarget(workspace.id, nextProject);
-          void syncWorkspaceSidebar().catch(() => {});
-        }}
+      <DashboardOverlays
+        selectedDiffSelection={selectedDiffSelection}
+        resolvedWorkspaceId={resolvedWorkspaceId}
+        setSelectedDiffSelection={setSelectedDiffSelection}
+        isSettingsOpen={isSettingsOpen}
+        activeSettingsCategory={activeSettingsCategory}
+        agentProfiles={agentProfiles}
+        activeAgentProfileId={activeAgentProfileId}
+        overlayContentRef={overlayContentRef}
+        configDiagnostics={configDiagnostics}
+        generalPreferences={generalPreferences}
+        isCheckingUpdates={isCheckingUpdates}
+        language={language}
+        policy={policy}
+        terminal={terminal}
+        availableShells={availableShells}
+        commands={commands}
+        providerCatalog={providerCatalog}
+        providers={providers}
+        data={data}
+        theme={theme}
+        updateStatus={updateStatus}
+        settingsWorkspaces={settingsWorkspaces}
+        addAgentProfile={addAgentProfile}
+        addAllowEntry={addAllowEntry}
+        addCommand={addCommand}
+        addDenyEntry={addDenyEntry}
+        addProvider={addProvider}
+        addWorkspace={addWorkspace}
+        addWritableRoot={addWritableRoot}
+        handleCheckUpdates={handleCheckUpdates}
+        setActiveOverlay={setActiveOverlay}
+        duplicateAgentProfile={duplicateAgentProfile}
+        removeAgentProfile={removeAgentProfile}
+        removeAllowEntry={removeAllowEntry}
+        removeCommand={removeCommand}
+        removeDenyEntry={removeDenyEntry}
+        removeProvider={removeProvider}
+        removeWorkspace={removeWorkspace}
+        removeWritableRoot={removeWritableRoot}
+        setActiveSettingsCategory={setActiveSettingsCategory}
+        handleLanguageSelect={handleLanguageSelect}
+        handleThemeSelect={handleThemeSelect}
+        setActiveAgentProfile={setActiveAgentProfile}
+        setDefaultWorkspace={setDefaultWorkspace}
+        updateAgentProfile={updateAgentProfile}
+        updateAllowEntry={updateAllowEntry}
+        updateCommand={updateCommand}
+        updateDenyEntry={updateDenyEntry}
+        updateGeneralPreference={updateGeneralPreference}
+        updatePolicySetting={updatePolicySetting}
+        updateProvider={updateProvider}
+        updateTerminalSetting={updateTerminalSetting}
+        fetchProviderModels={fetchProviderModels}
+        testProviderModelConnection={testProviderModelConnection}
+        updateWritableRoot={updateWritableRoot}
+        isMarketplaceOpen={isMarketplaceOpen}
+        extensionDetailById={extensionDetailById}
+        extensionsError={extensionsError}
+        extensions={extensions}
+        areExtensionsLoading={areExtensionsLoading}
+        marketplaceItems={marketplaceItems}
+        marketplaceSources={marketplaceSources}
+        mcpServers={mcpServers}
+        refreshExtensions={refreshExtensions}
+        currentExtensionScope={currentExtensionScope}
+        loadExtensionDetail={loadExtensionDetail}
+        resolveItemScope={resolveItemScope}
+        loadSkillPreview={loadSkillPreview}
+        enableExtension={enableExtension}
+        disableExtension={disableExtension}
+        uninstallExtension={uninstallExtension}
+        addMarketplaceSource={addMarketplaceSource}
+        getMarketplaceSourceRemovePlan={getMarketplaceSourceRemovePlan}
+        removeMarketplaceSource={removeMarketplaceSource}
+        refreshMarketplaceSource={refreshMarketplaceSource}
+        installMarketplaceItem={installMarketplaceItem}
+        addMcpServer={addMcpServer}
+        updateMcpServer={updateMcpServer}
+        removeMcpServer={removeMcpServer}
+        restartMcpServer={restartMcpServer}
+        rescanSkills={rescanSkills}
+        enableSkill={enableSkill}
+        disableSkill={disableSkill}
+        skillPreviewById={skillPreviewById}
+        extensionSkills={extensionSkills}
+        appUpdater={appUpdater}
+        showOnboarding={showOnboarding}
+        settingsHydrated={settingsHydrated}
+        setLanguage={setLanguage}
+        setTheme={setTheme}
+        setShowOnboarding={setShowOnboarding}
+        worktreeDialogContext={worktreeDialogContext}
+        setWorktreeDialogContext={setWorktreeDialogContext}
+        buildProjectOptionFromWorkspace={buildProjectOptionFromWorkspace}
+        activateWorkspaceAsNewThreadTarget={activateWorkspaceAsNewThreadTarget}
+        syncWorkspaceSidebar={syncWorkspaceSidebar}
+        t={t}
       />
     </main>
   );

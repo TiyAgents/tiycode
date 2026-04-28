@@ -1,6 +1,16 @@
+pub mod agent_run_compaction;
+pub mod agent_run_event_handler;
 pub mod agent_run_manager;
+pub mod agent_run_summary;
+pub mod agent_run_title;
 pub mod agent_runtime_limits;
 pub mod agent_session;
+pub mod agent_session_compression;
+pub mod agent_session_events;
+pub mod agent_session_execution;
+pub mod agent_session_history;
+pub mod agent_session_tools;
+pub mod agent_session_types;
 pub mod app_state;
 pub mod built_in_agent_runtime;
 pub mod context_compression;

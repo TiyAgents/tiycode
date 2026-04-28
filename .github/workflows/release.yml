@@ -438,12 +438,12 @@ jobs:
             version "__VERSION__"
 
             on_arm do
-              url "https://github.com/TiyAgents/tiycode/releases/download/v#{version}/TiyCode_#{version}_aarch64.dmg"
+              url "https://github.com/TiyAgents/tiycode/releases/download/#{version}/TiyCode_#{version}_aarch64.dmg"
               sha256 "__SHA256_ARM64__"
             end
 
             on_intel do
-              url "https://github.com/TiyAgents/tiycode/releases/download/v#{version}/TiyCode_#{version}_x64.dmg"
+              url "https://github.com/TiyAgents/tiycode/releases/download/#{version}/TiyCode_#{version}_x64.dmg"
               sha256 "__SHA256_X64__"
             end
 
@@ -464,8 +464,11 @@ jobs:
             zap trash: [
               "~/Library/Application Support/ai.tiy.tiycode",
               "~/Library/Caches/ai.tiy.tiycode",
+              "~/Library/HTTPStorages/ai.tiy.tiycode",
+              "~/Library/Logs/TiyAgents",
               "~/Library/Preferences/ai.tiy.tiycode.plist",
               "~/Library/Saved Application State/ai.tiy.tiycode.savedState",
+              "~/Library/WebKit/ai.tiy.tiycode",
             ]
           end
           CASK

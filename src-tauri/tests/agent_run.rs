@@ -664,7 +664,8 @@ async fn test_build_session_spec_enables_reasoning_when_thinking_level_is_set() 
             "model": "gpt-5",
             "modelId": "gpt-5",
             "modelDisplayName": "GPT-5",
-            "baseUrl": "https://api.openai.com/v1"
+            "baseUrl": "https://api.openai.com/v1",
+            "supportsReasoning": true
         }
     });
 
@@ -712,7 +713,8 @@ async fn test_build_session_spec_defaults_openai_compatible_to_system_role_compa
             "model": "gpt-5-compatible",
             "modelId": "gpt-5-compatible",
             "modelDisplayName": "GPT-5 Compatible",
-            "baseUrl": "https://gateway.example.com/v1"
+            "baseUrl": "https://gateway.example.com/v1",
+            "supportsReasoning": true
         }
     });
 

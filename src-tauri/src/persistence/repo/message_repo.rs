@@ -317,6 +317,18 @@ pub async fn update_metadata(
     Ok(())
 }
 
+/// Discard reasoning messages left in streaming state (from interrupted runs).
+/// Called during startup recovery to clean up orphaned reasoning.
+pub async fn discard_dangling_reasoning(pool: &SqlitePool) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "UPDATE messages SET status = 'discarded' \
+         WHERE status = 'streaming' AND message_type = 'reasoning'",
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Helper: Check if metadata contains the expected kind value.
 fn metadata_kind_matches(raw: Option<&str>, expected: &str) -> bool {
     if let Some(json_str) = raw {

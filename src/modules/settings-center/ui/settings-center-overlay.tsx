@@ -4,6 +4,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n/locales/zh-CN";
+import { getEffectiveModelCapabilities, inferModelCapabilities } from "@/modules/settings-center/model/model-capabilities";
 import {
   ArrowLeft,
   Brain,
@@ -2232,30 +2233,6 @@ function parseProviderOptionsInput(value: string): { error: string | null; provi
       error: "Invalid JSON. Example: {\"thinking\": {\"type\": \"disabled\"}}",
     };
   }
-}
-
-function inferModelCapabilities(modelId: string): ProviderModelCapabilities {
-  const normalized = modelId.toLowerCase();
-  const embedding = /\bembed|embedding\b/.test(normalized);
-  const imageOutput = /\b(image|images|gpt-image|flux|sdxl|seedream|dall-e)\b/.test(normalized);
-  const vision = /\b(vision|vl|gpt-4o|gpt-4\.1|claude|gemini|pixtral|llava)\b/.test(normalized);
-  const reasoning = /\b(gpt-5|o1|o3|o4|r1|reason|thinking|claude-3\.7|gemini-2\.5|step-3)\b/.test(normalized);
-  const toolCalling = !embedding && !imageOutput && /\b(gpt|claude|gemini|deepseek|moonshot|qwen|llama|mistral|step|openai|anthropic|doubao)\b/.test(normalized);
-
-  return {
-    vision,
-    imageOutput,
-    toolCalling,
-    reasoning,
-    embedding,
-  };
-}
-
-function getEffectiveModelCapabilities(model: ProviderModel): ProviderModelCapabilities {
-  return {
-    ...inferModelCapabilities(model.modelId),
-    ...model.capabilityOverrides,
-  };
 }
 
 function ProviderSettingsPanel({
