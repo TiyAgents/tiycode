@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-04-28
+### :boom: BREAKING CHANGES
+- due to [`dd55d5c`](https://github.com/TiyAgents/tiycode/commit/dd55d5c2ef5bb9b4f6cd31e0b706a020eb1649bf) - ♻️ Decompose agent runtime modules *(PR [#136](https://github.com/TiyAgents/tiycode/pull/136) by [@HayWolf](https://github.com/HayWolf))*:
+
+  model reasoning is no longer forced on when thinking level is enabled; it now depends on the model's declared capability  
+  * refactor(agent-session): ♻️ migrate DeepSeek reasoning normalization to tiycore  
+  Move DeepSeek reasoning_content normalization from application layer into tiycore,  
+  eliminating duplicate handling across agent_session and subagent orchestrator.  
+  - Remove is_deepseek_provider and normalize_deepseek_thinking_payload from agent_session  
+  - Remove redundant normalize_deepseek_thinking_payload tests from agent_session_tests  
+  - Update subagent orchestrator payload hook to rely on tiycore built-in handling  
+  - Add reasoning_content_constrained field in settings_manager tests  
+  - Update agent_run integration tests with supportsReasoning flag  
+  - Bump tiycore to 0.2.1-rc.26042720 and refresh Cargo.lock  
+  * fix(plugins): 🐛 prevent path traversal in plugin hook execution  
+  Add path traversal prevention by canonicalizing the hook path and  
+  checking it stays within the plugin directory. Previously, a malicious  
+  plugin could escape its directory via crafted hook paths.  
+  Additionally:  
+  - Update log message in thread_manager to include "reasoning" in  
+    startup dangling runs/tool_calls/helpers/reasoning count.  
+  - Import WORKSPACE_THREAD_PAGE_SIZE from shared logic instead of  
+    local constant in dashboard-sidebar.  
+  - Change state property type from string to SurfaceToolState in  
+    RuntimeSurfaceToolEntry for better type safety.  
+  * chore(ci): 🔧 fix release URL and clean up uninstall paths  
+  Update the Homebrew cask URL to remove duplicate 'v' prefix in  
+  version path.  
+  Add additional application data directories to the zap uninstall  
+  cleanup list (HTTPStorages, Logs, and WebKit) to ensure complete  
+  removal of local application data.  
+  ---------
+
+
+### :bug: Bug Fixes
+- [`04419e1`](https://github.com/TiyAgents/tiycode/commit/04419e124e2a6cc9e93a8dd0f3465699f93b1046) - **core**: 🐛 Fix context compression writeback and empty assistant message poisoning *(PR [#130](https://github.com/TiyAgents/tiycode/pull/130) by [@HayWolf](https://github.com/HayWolf))*
+- [`7abc176`](https://github.com/TiyAgents/tiycode/commit/7abc176a78df6497c37ad07c981a3d8d65c1336d) - **core**: 🐛 Correct SortKey ordering to attach reasoning to standalone tool calls *(PR [#132](https://github.com/TiyAgents/tiycode/pull/132) by [@HayWolf](https://github.com/HayWolf))*
+- [`a91c559`](https://github.com/TiyAgents/tiycode/commit/a91c559e078b712fb700fa8db2eb64b3486f1bfc) - **agent-session**: 🐛 Hierarchical cancellation for subagent tool calls *(PR [#135](https://github.com/TiyAgents/tiycode/pull/135) by [@HayWolf](https://github.com/HayWolf))*
+
+### :zap: Performance Improvements
+- [`27f8b4e`](https://github.com/TiyAgents/tiycode/commit/27f8b4e1c38b9d6be92c561ed3c813facbeaff81) - **composer**: ⚡️ Fix freeze when pasting large text *(PR [#134](https://github.com/TiyAgents/tiycode/pull/134) by [@HayWolf](https://github.com/HayWolf))*
+
+### :recycle: Refactors
+- [`dd55d5c`](https://github.com/TiyAgents/tiycode/commit/dd55d5c2ef5bb9b4f6cd31e0b706a020eb1649bf) - **core**: ♻️ Decompose agent runtime modules *(PR [#136](https://github.com/TiyAgents/tiycode/pull/136) by [@HayWolf](https://github.com/HayWolf))*
+
+### :white_check_mark: Tests
+- [`a374c56`](https://github.com/TiyAgents/tiycode/commit/a374c565839580ca3eff5ab26a70bb6878d9a0c2) - ✅ add comprehensive unit test coverage across frontend and backend *(PR [#131](https://github.com/TiyAgents/tiycode/pull/131) by [@HayWolf](https://github.com/HayWolf))*
+- [`40a944b`](https://github.com/TiyAgents/tiycode/commit/40a944bdb08b46a37506946e9c10465c2c634072) - ✅ add comprehensive unit tests and refactor crate structure *(PR [#133](https://github.com/TiyAgents/tiycode/pull/133) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.3.6] - 2026-04-24
 ### :sparkles: New Features
 - [`b4de51f`](https://github.com/TiyAgents/tiycode/commit/b4de51f021f5a9411a9e304e59c5c5c1d5a750d2) - **workbench-shell**: ✨ Default collapse task board tool details in timeline *(PR [#123](https://github.com/TiyAgents/tiycode/pull/123) by [@jorben](https://github.com/jorben))*
@@ -622,3 +672,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.4]: https://github.com/TiyAgents/tiycode/compare/0.3.3...0.3.4
 [0.3.5]: https://github.com/TiyAgents/tiycode/compare/0.3.4...0.3.5
 [0.3.6]: https://github.com/TiyAgents/tiycode/compare/0.3.5...0.3.6
+[0.3.7]: https://github.com/TiyAgents/tiycode/compare/0.3.6...0.3.7
