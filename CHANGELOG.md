@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-04-28
+### :sparkles: New Features
+- [`42fec2a`](https://github.com/TiyAgents/tiycode/commit/42fec2a07c46ea709f8cdc50465035fa0f3d85d8) - **task-board**: ✨ add composer variant with compact summary and scrollable task list *(PR [#145](https://github.com/TiyAgents/tiycode/pull/145) by [@jorben](https://github.com/jorben))*
+- [`761e317`](https://github.com/TiyAgents/tiycode/commit/761e317570330e0856a986bded1319242bb8b976) - **model**: ✨ Add reasoning content constrained capability *(PR [#146](https://github.com/TiyAgents/tiycode/pull/146) by [@jorben](https://github.com/jorben))*
+- [`1f5e966`](https://github.com/TiyAgents/tiycode/commit/1f5e9667ef0e41a76277e0ddf81b2046facbd038) - **workbench-shell**: ✨ add showCommandBlock flag to shell tool presentation *(PR [#148](https://github.com/TiyAgents/tiycode/pull/148) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.3.7] - 2026-04-28
 ### :boom: BREAKING CHANGES
 - due to [`dd55d5c`](https://github.com/TiyAgents/tiycode/commit/dd55d5c2ef5bb9b4f6cd31e0b706a020eb1649bf) - ♻️ Decompose agent runtime modules *(PR [#136](https://github.com/TiyAgents/tiycode/pull/136) by [@HayWolf](https://github.com/HayWolf))*:
@@ -673,3 +680,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.5]: https://github.com/TiyAgents/tiycode/compare/0.3.4...0.3.5
 [0.3.6]: https://github.com/TiyAgents/tiycode/compare/0.3.5...0.3.6
 [0.3.7]: https://github.com/TiyAgents/tiycode/compare/0.3.6...0.3.7
+[0.3.8]: https://github.com/TiyAgents/tiycode/compare/0.3.7...0.3.8
