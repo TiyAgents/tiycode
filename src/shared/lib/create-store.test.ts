@@ -62,25 +62,19 @@ describe("createStore", () => {
     const listener = vi.fn();
     store.subscribe(listener);
 
-    // Function updater that returns the same object — Object.is catches this.
+    // Function updater that returns the same object — no value changes, no notification.
     store.setState((prev) => prev);
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("always creates a new state reference via spread, triggering notification", () => {
+  it("skips notification when partial values match current state", () => {
     const store = makeStore({ count: 0, label: "" });
-    const before = store.getState();
     const listener = vi.fn();
     store.subscribe(listener);
 
+    // All partial values are already present — no notification.
     store.setState({ count: 0 });
-
-    // Spread creates a new object reference, so notification fires.
-    // Verify the state is a different object but logically equal.
-    const after = store.getState();
-    expect(after).not.toBe(before);
-    expect(after).toEqual(before);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("notifies subscribers when state actually changes", () => {
