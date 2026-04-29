@@ -1541,6 +1541,168 @@ async fn test_find_normalizes_double_star_pattern() {
 }
 
 // =========================================================================
+// T1.5.7 — Search zero-result diagnostics with filePattern / type
+// =========================================================================
+
+#[tokio::test]
+async fn test_search_repo_zero_result_diagnostic_with_file_pattern_only() {
+    use tiycode_lib::core::terminal_manager::TerminalManager;
+    use tiycode_lib::core::tool_gateway::{
+        ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
+    };
+
+    let pool = test_helpers::setup_test_pool().await;
+    let workspace_root =
+        std::env::temp_dir().join(format!("tiy-search-zr-pat-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::write(workspace_root.join("lib.rs"), "fn hello() {}\n").unwrap();
+    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+
+    test_helpers::seed_workspace(&pool, "ws-search-zr-pat", workspace_root.to_str().unwrap()).await;
+    test_helpers::seed_thread(&pool, "t-search-zr-pat", "ws-search-zr-pat", None).await;
+    test_helpers::seed_run(
+        &pool,
+        "r-search-zr-pat",
+        "t-search-zr-pat",
+        "running",
+        "default",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-search-zr-pat",
+        "r-search-zr-pat",
+        "t-search-zr-pat",
+        "search",
+        "requested",
+    )
+    .await;
+
+    let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+    let gateway = ToolGateway::new(pool, terminal_manager);
+
+    let outcome = gateway
+        .execute_tool_call(
+            ToolExecutionRequest {
+                run_id: "r-search-zr-pat".into(),
+                thread_id: "t-search-zr-pat".into(),
+                tool_call_id: "tc-search-zr-pat".into(),
+                tool_call_storage_id: "tc-search-zr-pat".into(),
+                tool_name: "search".into(),
+                tool_input: serde_json::json!({
+                    "query": "zzzz_no_match_zzzz",
+                    "filePattern": "*.rs",
+                }),
+                workspace_path: workspace_root.display().to_string(),
+                run_mode: "default".into(),
+            },
+            tiycore::agent::AbortSignal::new(),
+            ToolExecutionOptions::default(),
+            |_| {},
+            || {},
+        )
+        .await
+        .unwrap();
+
+    match outcome.result {
+        ToolGatewayResult::Executed { output, .. } => {
+            assert!(output.success, "zero-result search should succeed");
+            assert_eq!(output.result["count"].as_u64(), Some(0));
+            let notice = output.result["notice"].as_str().unwrap_or_default();
+            assert!(
+                notice.contains("No matches found"),
+                "expected zero-result diagnostic, got: {notice}"
+            );
+            assert!(
+                notice.contains("filePattern"),
+                "expected filePattern mention in zero-result notice, got: {notice}"
+            );
+        }
+        _ => panic!("expected Executed for zero-result search"),
+    }
+}
+
+#[tokio::test]
+async fn test_search_repo_zero_result_diagnostic_with_file_pattern_and_type() {
+    use tiycode_lib::core::terminal_manager::TerminalManager;
+    use tiycode_lib::core::tool_gateway::{
+        ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
+    };
+
+    let pool = test_helpers::setup_test_pool().await;
+    let workspace_root =
+        std::env::temp_dir().join(format!("tiy-search-zr-both-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::write(workspace_root.join("lib.rs"), "fn hello() {}\n").unwrap();
+    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+
+    test_helpers::seed_workspace(&pool, "ws-search-zr-both", workspace_root.to_str().unwrap())
+        .await;
+    test_helpers::seed_thread(&pool, "t-search-zr-both", "ws-search-zr-both", None).await;
+    test_helpers::seed_run(
+        &pool,
+        "r-search-zr-both",
+        "t-search-zr-both",
+        "running",
+        "default",
+    )
+    .await;
+    test_helpers::seed_tool_call(
+        &pool,
+        "tc-search-zr-both",
+        "r-search-zr-both",
+        "t-search-zr-both",
+        "search",
+        "requested",
+    )
+    .await;
+
+    let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+    let gateway = ToolGateway::new(pool, terminal_manager);
+
+    let outcome = gateway
+        .execute_tool_call(
+            ToolExecutionRequest {
+                run_id: "r-search-zr-both".into(),
+                thread_id: "t-search-zr-both".into(),
+                tool_call_id: "tc-search-zr-both".into(),
+                tool_call_storage_id: "tc-search-zr-both".into(),
+                tool_name: "search".into(),
+                tool_input: serde_json::json!({
+                    "query": "zzzz_no_match_zzzz",
+                    "filePattern": "*.rs",
+                    "type": "rust",
+                }),
+                workspace_path: workspace_root.display().to_string(),
+                run_mode: "default".into(),
+            },
+            tiycore::agent::AbortSignal::new(),
+            ToolExecutionOptions::default(),
+            |_| {},
+            || {},
+        )
+        .await
+        .unwrap();
+
+    match outcome.result {
+        ToolGatewayResult::Executed { output, .. } => {
+            assert!(output.success, "zero-result search should succeed");
+            assert_eq!(output.result["count"].as_u64(), Some(0));
+            let notice = output.result["notice"].as_str().unwrap_or_default();
+            assert!(
+                notice.contains("No matches found"),
+                "expected zero-result diagnostic, got: {notice}"
+            );
+            assert!(
+                notice.contains("AND logic"),
+                "expected AND logic mention in zero-result notice, got: {notice}"
+            );
+        }
+        _ => panic!("expected Executed for zero-result search"),
+    }
+}
+
+// =========================================================================
 // T1.6.x — Execution timeout fires for slow tool
 // =========================================================================
 

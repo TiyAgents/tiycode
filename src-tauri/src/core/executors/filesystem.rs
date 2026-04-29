@@ -562,18 +562,10 @@ pub async fn find_files(
 
             // Zero-result diagnostic for find.
             if total_count == 0 {
-                if pattern.contains('/') || pattern.contains('\\') || pattern.contains("**/") {
-                    notices.push(format!(
-                        "No files found. The original pattern '{}' contained path separators; \
-                         find matches basenames by default. Pattern was auto-normalized to '{}'.",
-                        pattern, effective_pattern
-                    ));
-                } else if pattern_notice.is_some() {
-                    notices.push(format!(
-                        "No files found for pattern '{}'.",
-                        effective_pattern
-                    ));
-                }
+                notices.push(format!(
+                    "No files found for pattern '{}'.",
+                    effective_pattern
+                ));
             }
 
             if result_limit_reached {
