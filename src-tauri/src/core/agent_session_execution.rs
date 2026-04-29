@@ -535,12 +535,31 @@ impl AgentSession {
                 helper_id: None,
                 tool_name: tool_name.to_string(),
                 tool_input_json: tool_input.to_string(),
-                status: "running".to_string(),
+                status: "requested".to_string(),
             },
         )
         .await
         {
             return agent_error_result(format!("failed to persist tool call: {error}"));
+        }
+
+        let _ = self.event_tx.send(ThreadStreamEvent::ToolRequested {
+            run_id: self.spec.run_id.clone(),
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            tool_input: tool_input.clone(),
+        });
+
+        if let Err(error) =
+            tool_call_repo::update_status(&self.pool, &tool_call_storage_id, "running").await
+        {
+            let message = format!("failed to mark task tool call as running: {error}");
+            let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                run_id: self.spec.run_id.clone(),
+                tool_call_id: tool_call_id.to_string(),
+                error: message.clone(),
+            });
+            return agent_error_result(message);
         }
 
         let _ = self.event_tx.send(ThreadStreamEvent::ToolRunning {

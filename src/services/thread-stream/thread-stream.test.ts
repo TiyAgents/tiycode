@@ -168,6 +168,57 @@ describe("ThreadStream event routing", () => {
     expect(onError).toHaveBeenCalledWith("too many turns", "run-1");
   });
 
+  it("preserves task tool name and input from requested events during live routing", async () => {
+    const stream = new ThreadStream();
+    const onToolEvent = vi.fn();
+    stream.onToolEvent = onToolEvent;
+
+    const taskInput = {
+      title: "Implementation",
+      steps: [{ description: "Patch task tool event flow" }],
+    };
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      {
+        type: "tool_requested",
+        runId: "run-1",
+        toolCallId: "task-tool-1",
+        toolName: "create_task",
+        toolInput: taskInput,
+      },
+      { type: "tool_running", runId: "run-1", toolCallId: "task-tool-1" },
+      {
+        type: "tool_completed",
+        runId: "run-1",
+        toolCallId: "task-tool-1",
+        result: { id: "board-1", title: "Implementation" },
+      },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "plan" });
+
+    expect(onToolEvent).toHaveBeenNthCalledWith(1, {
+      kind: "requested",
+      runId: "run-1",
+      toolCallId: "task-tool-1",
+      toolName: "create_task",
+      toolInput: taskInput,
+    });
+    expect(onToolEvent).toHaveBeenNthCalledWith(2, {
+      kind: "running",
+      runId: "run-1",
+      toolCallId: "task-tool-1",
+      toolName: "create_task",
+    });
+    expect(onToolEvent).toHaveBeenNthCalledWith(3, {
+      kind: "completed",
+      runId: "run-1",
+      toolCallId: "task-tool-1",
+      toolName: "create_task",
+      result: { id: "board-1", title: "Implementation" },
+    });
+  });
+
   it("hides runtime orchestration tool events", async () => {
     const stream = new ThreadStream();
     const onToolEvent = vi.fn();
