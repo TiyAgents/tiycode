@@ -75,7 +75,7 @@ pub(crate) fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                     },
                     "type": {
                         "type": "string",
-                        "description": "Optional file type filter such as 'rust', 'ts', 'js', 'py', 'go', or 'json'. More natural than filePattern for language-targeted searches."
+                        "description": "Optional file type filter such as 'rust', 'ts', 'js', 'py', 'go', or 'json'. Applied as AND with filePattern — do not combine with a filePattern whose extension differs from the type (e.g. type='rust' + filePattern='*.toml' will match nothing). Use one or the other."
                     },
                     "maxResults": {
                         "type": "integer",
@@ -128,7 +128,7 @@ pub(crate) fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Glob pattern to match files, e.g. '*.ts', '*.json', '*.spec.ts'"
+                        "description": "Glob pattern to match files by basename, e.g. '*.ts', 'Cargo.toml', '*.spec.ts'. Do NOT use path prefixes like '**/Cargo.toml' — find recurses automatically. For path-scoped searches, set the 'path' parameter instead."
                     },
                     "path": {
                         "type": "string",

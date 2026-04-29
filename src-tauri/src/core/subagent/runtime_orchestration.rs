@@ -245,7 +245,7 @@ Return format:\n\
                 serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "pattern": { "type": "string", "description": "Glob pattern, e.g. '*.ts', '*.json'" },
+                        "pattern": { "type": "string", "description": "Glob pattern to match files by basename, e.g. '*.ts', 'Cargo.toml'. Do NOT use '**/Cargo.toml' — find recurses automatically." },
                         "path": { "type": "string", "description": "Directory to search in (default: workspace root)" }
                     },
                     "required": ["pattern"]
@@ -272,7 +272,7 @@ Return format:\n\
                         },
                         "type": {
                             "type": "string",
-                            "description": "Optional file type filter such as 'rust', 'ts', 'js', 'py', 'go', or 'json'. More natural than filePattern for language-targeted searches."
+                            "description": "Optional file type filter such as 'rust', 'ts', 'js', 'py', 'go', or 'json'. Applied as AND with filePattern — do not combine with a filePattern whose extension differs from the type. Use one or the other."
                         },
                         "maxResults": {
                             "type": "integer",

@@ -866,6 +866,13 @@ fn supported_file_type(
     Some(value)
 }
 
+/// Return the file-extension list for a known type name (e.g. "rust" → ["rs"]).
+/// Returns `None` when the type name is not recognised.
+pub fn extensions_for_file_type(type_name: &str) -> Option<&'static [&'static str]> {
+    let normalized = type_name.trim().to_ascii_lowercase();
+    supported_file_type(&normalized).map(|(_canonical, extensions, _file_names)| extensions)
+}
+
 fn matches_file_type(matcher: Option<&CompiledFileType>, file_path: &Path) -> bool {
     let Some(matcher) = matcher else {
         return true;
@@ -1551,5 +1558,26 @@ mod tests {
 
         assert_eq!(outcome.results.len(), 1);
         assert_eq!(outcome.results[0].path, "a/z.rs");
+    }
+
+    #[test]
+    fn extensions_for_file_type_returns_known_types() {
+        use super::extensions_for_file_type;
+        let rust_exts = extensions_for_file_type("rust").unwrap();
+        assert!(rust_exts.contains(&"rs"));
+
+        let ts_exts = extensions_for_file_type("ts").unwrap();
+        assert!(ts_exts.contains(&"ts"));
+        assert!(ts_exts.contains(&"tsx"));
+
+        let toml_exts = extensions_for_file_type("toml").unwrap();
+        assert!(toml_exts.contains(&"toml"));
+    }
+
+    #[test]
+    fn extensions_for_file_type_returns_none_for_unknown() {
+        use super::extensions_for_file_type;
+        assert!(extensions_for_file_type("unknown_lang").is_none());
+        assert!(extensions_for_file_type("").is_none());
     }
 }
