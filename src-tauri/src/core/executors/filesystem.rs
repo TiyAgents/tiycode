@@ -416,28 +416,51 @@ pub async fn find_files(
         None => workspace_root.clone(),
     };
 
+    // Normalize the pattern for platform find commands.
+    let (effective_pattern, use_path_mode, pattern_notice) = normalize_find_pattern(pattern);
+
     // Build a platform-appropriate find command
     let result = {
         #[cfg(target_os = "windows")]
         {
-            // On Windows, use cmd.exe /C with `where` style or `dir /S /B` for file search.
-            // We use PowerShell for reliable glob + exclusion support.
+            // On Windows, use PowerShell for reliable glob + exclusion support.
+            // In path mode, drop -Filter and use Where-Object -like for path matching.
             let search_dir_str = search_dir.to_string_lossy().replace('\'', "''");
-            let ps_command = format!(
-                "Get-ChildItem -Path '{}' -Recurse -Filter '{}' -ErrorAction SilentlyContinue \
-                 | Where-Object {{ \
-                     $_.FullName -notmatch '[\\\\/]\\.git[\\\\/]' -and \
-                     $_.FullName -notmatch '[\\\\/]node_modules[\\\\/]' -and \
-                     $_.FullName -notmatch '[\\\\/]target[\\\\/]' -and \
-                     $_.FullName -notmatch '[\\\\/]__pycache__[\\\\/]' -and \
-                     $_.FullName -notmatch '[\\\\/]\\.next[\\\\/]' -and \
-                     $_.FullName -notmatch '[\\\\/]dist[\\\\/]' \
-                 }} \
-                 | Select-Object -First {} -ExpandProperty FullName",
-                search_dir_str,
-                pattern.replace('\'', "''"),
-                effective_limit.saturating_add(1),
-            );
+            let ps_command = if use_path_mode {
+                let like_pattern = format!("*\\{}", effective_pattern.replace('/', "\\"));
+                format!(
+                    "Get-ChildItem -Path '{}' -Recurse -File -ErrorAction SilentlyContinue \
+                     | Where-Object {{ \
+                         $_.FullName -like '{}' -and \
+                         $_.FullName -notmatch '[\\\\/]\\.git[\\\\/]' -and \
+                         $_.FullName -notmatch '[\\\\/]node_modules[\\\\/]' -and \
+                         $_.FullName -notmatch '[\\\\/]target[\\\\/]' -and \
+                         $_.FullName -notmatch '[\\\\/]__pycache__[\\\\/]' -and \
+                         $_.FullName -notmatch '[\\\\/]\\.next[\\\\/]' -and \
+                         $_.FullName -notmatch '[\\\\/]dist[\\\\/]' \
+                     }} \
+                     | Select-Object -First {} -ExpandProperty FullName",
+                    search_dir_str,
+                    like_pattern.replace('\'', "''"),
+                    effective_limit.saturating_add(1),
+                )
+            } else {
+                format!(
+                    "Get-ChildItem -Path '{}' -Recurse -Filter '{}' -ErrorAction SilentlyContinue \
+                     | Where-Object {{ \
+                         $_.FullName -notmatch '[\\\\/]\\.git[\\\\/]' -and \
+                         $_.FullName -notmatch '[\\\\/]node_modules[\\\\/]' -and \
+                         $_.FullName -notmatch '[\\\\/]target[\\\\/]' -and \
+                         $_.FullName -notmatch '[\\\\/]__pycache__[\\\\/]' -and \
+                         $_.FullName -notmatch '[\\\\/]\\.next[\\\\/]' -and \
+                         $_.FullName -notmatch '[\\\\/]dist[\\\\/]' \
+                     }} \
+                     | Select-Object -First {} -ExpandProperty FullName",
+                    search_dir_str,
+                    effective_pattern.replace('\'', "''"),
+                    effective_limit.saturating_add(1),
+                )
+            };
 
             let mut command = tokio::process::Command::new("powershell.exe");
             configure_background_tokio_command(&mut command);
@@ -453,11 +476,19 @@ pub async fn find_files(
         {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
             let quoted_dir = shell_quote(&search_dir.to_string_lossy());
-            let quoted_pattern = shell_quote(pattern);
 
-            // Build a find command that respects .gitignore-like patterns
+            // Build a find command that respects .gitignore-like patterns.
+            // When the pattern contains path separators, use `-path` with a
+            // leading `*/` wildcard so the match works against full relative
+            // paths; otherwise use `-name` for simple basename matching.
+            let (find_flag, find_pattern_for_cmd) = if use_path_mode {
+                ("-path", format!("*/{}", effective_pattern))
+            } else {
+                ("-name", effective_pattern.clone())
+            };
+            let quoted_pattern = shell_quote(&find_pattern_for_cmd);
             let find_command = format!(
-                "find {} -name {} \
+                "find {} {} {} \
                  -not -path '*/.git/*' \
                  -not -path '*/node_modules/*' \
                  -not -path '*/target/*' \
@@ -467,6 +498,7 @@ pub async fn find_files(
                  -not -path '*/.DS_Store' \
                  2>/dev/null | head -n {}",
                 quoted_dir,
+                find_flag,
                 quoted_pattern,
                 effective_limit.saturating_add(1),
             );
@@ -527,6 +559,23 @@ pub async fn find_files(
             });
 
             let mut notices = Vec::new();
+
+            // Zero-result diagnostic for find.
+            if total_count == 0 {
+                if pattern.contains('/') || pattern.contains('\\') || pattern.contains("**/") {
+                    notices.push(format!(
+                        "No files found. The original pattern '{}' contained path separators; \
+                         find matches basenames by default. Pattern was auto-normalized to '{}'.",
+                        pattern, effective_pattern
+                    ));
+                } else if pattern_notice.is_some() {
+                    notices.push(format!(
+                        "No files found for pattern '{}'.",
+                        effective_pattern
+                    ));
+                }
+            }
+
             if result_limit_reached {
                 let notice = if effective_limit < FIND_MAX_RESULTS {
                     format!(
@@ -548,6 +597,9 @@ pub async fn find_files(
                     "Output truncated to {}.",
                     format_size(truncation::READ_MAX_BYTES)
                 ));
+            }
+            if let Some(notice) = &pattern_notice {
+                notices.push(notice.clone());
             }
             if !notices.is_empty() {
                 result["notice"] = serde_json::json!(notices.join(" "));
@@ -573,6 +625,49 @@ pub async fn find_files(
             }),
         }),
     }
+}
+
+/// Normalize a glob pattern for the platform `find` command.
+///
+/// Returns `(effective_pattern, use_path_mode, optional_notice)`:
+/// - Strips redundant `**/` prefixes (find recurses automatically).
+/// - If the remaining pattern still contains `/`, switches to `-path` mode.
+fn normalize_find_pattern(raw: &str) -> (String, bool, Option<String>) {
+    let trimmed = raw.trim();
+
+    // Strip `**/` prefix — `find` recurses all depths naturally.
+    if let Some(rest) = trimmed
+        .strip_prefix("**/")
+        .or_else(|| trimmed.strip_prefix("**\\"))
+    {
+        if !rest.contains('/') && !rest.contains('\\') {
+            return (
+                rest.to_string(),
+                false,
+                Some(format!(
+                    "Normalized pattern '{}' to '{}' \
+                     (find recurses automatically; '**/' prefix is unnecessary).",
+                    trimmed, rest
+                )),
+            );
+        }
+    }
+
+    // Pattern contains path separators → switch to -path mode.
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return (
+            trimmed.to_string(),
+            true,
+            Some(format!(
+                "Pattern '{}' contains path separators; \
+                 using path-matching mode instead of basename-only.",
+                trimmed
+            )),
+        );
+    }
+
+    // No normalization needed.
+    (trimmed.to_string(), false, None)
 }
 
 fn resolve_required_path(
@@ -751,5 +846,90 @@ mod tests {
             .await
             .expect("written content");
         assert_eq!(written, "hello writable root");
+    }
+
+    #[test]
+    fn normalize_find_pattern_strips_double_star_prefix() {
+        use super::normalize_find_pattern;
+        let (pat, path_mode, notice) = normalize_find_pattern("**/Cargo.toml");
+        assert_eq!(pat, "Cargo.toml");
+        assert!(!path_mode);
+        assert!(notice.is_some());
+        assert!(notice.unwrap().contains("Normalized pattern"));
+    }
+
+    #[test]
+    fn normalize_find_pattern_enables_path_mode_for_slashed_pattern() {
+        use super::normalize_find_pattern;
+        let (pat, path_mode, notice) = normalize_find_pattern("src/*.rs");
+        assert_eq!(pat, "src/*.rs");
+        assert!(path_mode);
+        assert!(notice.is_some());
+        assert!(notice.unwrap().contains("path-matching mode"));
+    }
+
+    #[test]
+    fn normalize_find_pattern_leaves_simple_basename_unchanged() {
+        use super::normalize_find_pattern;
+        let (pat, path_mode, notice) = normalize_find_pattern("*.ts");
+        assert_eq!(pat, "*.ts");
+        assert!(!path_mode);
+        assert!(notice.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_path_mode_matches_slashed_pattern() {
+        let workspace = tempdir().expect("workspace");
+        std::fs::create_dir_all(workspace.path().join("src")).unwrap();
+        std::fs::write(workspace.path().join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(workspace.path().join("other.rs"), "fn other() {}").unwrap();
+
+        let output = find_files(
+            &serde_json::json!({ "pattern": "src/*.rs" }),
+            workspace.path().to_str().unwrap(),
+            &[],
+        )
+        .await
+        .expect("find files");
+
+        assert!(output.success);
+        assert_eq!(
+            output.result["count"].as_u64(),
+            Some(1),
+            "path mode should match only src/*.rs"
+        );
+        let results = output.result["results"].as_str().unwrap_or_default();
+        assert!(
+            results.contains("src/main.rs") || results.contains("src\\main.rs"),
+            "should find src/main.rs: {results}"
+        );
+        let notice = output.result["notice"].as_str().unwrap_or_default();
+        assert!(
+            notice.contains("path-matching mode"),
+            "should explain path mode: {notice}"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_double_star_pattern_auto_normalizes() {
+        let workspace = tempdir().expect("workspace");
+        std::fs::create_dir_all(workspace.path().join("sub")).unwrap();
+        std::fs::write(workspace.path().join("sub/hello.txt"), "data").unwrap();
+
+        let output = find_files(
+            &serde_json::json!({ "pattern": "**/hello.txt" }),
+            workspace.path().to_str().unwrap(),
+            &[],
+        )
+        .await
+        .expect("find files");
+
+        assert!(output.success);
+        assert_eq!(output.result["count"].as_u64(), Some(1));
+        let notice = output.result["notice"].as_str().unwrap_or_default();
+        assert!(
+            notice.contains("Normalized pattern"),
+            "should explain normalization: {notice}"
+        );
     }
 }
