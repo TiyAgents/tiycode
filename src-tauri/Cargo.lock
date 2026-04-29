@@ -6179,9 +6179,9 @@ dependencies = [
 
 [[package]]
 name = "tiycore"
-version = "0.2.2-rc.26042811"
+version = "0.2.3-rc.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "969256a421e482095afda42f23fa8c50fd0af7bb7b3236e93ebb553154b8e111"
+checksum = "ab973817db3e07182d9f5e6577c70e535bd12b6ad3ae37262b8fb0e38d3aa4ac"
 dependencies = [
  "anyhow",
  "arc-swap",
