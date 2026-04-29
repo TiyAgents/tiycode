@@ -579,7 +579,7 @@ Used for prompt assembly coverage.
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
-        let current_turn_index = StdMutex::new(None::<usize>);
+        let _current_turn_index = StdMutex::new(None::<usize>);
         let partial = sample_partial_assistant_message();
 
         handle_test_agent_event(
@@ -694,7 +694,7 @@ Used for prompt assembly coverage.
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
-        let current_turn_index = StdMutex::new(None::<usize>);
+        let _current_turn_index = StdMutex::new(None::<usize>);
         let partial = sample_partial_assistant_message();
 
         handle_test_agent_event(
@@ -745,7 +745,7 @@ Used for prompt assembly coverage.
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
-        let current_turn_index = StdMutex::new(None::<usize>);
+        let _current_turn_index = StdMutex::new(None::<usize>);
         let assistant = AssistantMessage::builder()
             .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
@@ -802,7 +802,7 @@ Used for prompt assembly coverage.
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
-        let current_turn_index = StdMutex::new(None::<usize>);
+        let _current_turn_index = StdMutex::new(None::<usize>);
         let assistant = AssistantMessage::builder()
             .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
