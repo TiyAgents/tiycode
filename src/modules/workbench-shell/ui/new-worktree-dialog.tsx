@@ -111,6 +111,18 @@ export function NewWorktreeDialog({
     [branches],
   );
 
+  // Remote branches that don't already have a local counterpart.
+  const remoteBranchesWithoutLocal = useMemo(() => {
+    const localNames = new Set(localBranches.map((b) => b.name));
+    return branches.filter((b) => {
+      if (!b.isRemote) return false;
+      // Strip the remote prefix (e.g. "origin/feature-x" → "feature-x")
+      const slashIdx = b.name.indexOf("/");
+      const localName = slashIdx >= 0 ? b.name.slice(slashIdx + 1) : b.name;
+      return !localNames.has(localName);
+    });
+  }, [branches, localBranches]);
+
   const canSubmit =
     mode === "newBranch"
       ? Boolean(context && branch.trim() && !submitting)
@@ -150,11 +162,34 @@ export function NewWorktreeDialog({
       setError(null);
       setSubmitting(true);
       try {
-        const input: WorktreeCreateInput = {
-          branch: selectedExistingBranch,
-          createBranch: false,
-          path: path.trim() || undefined,
-        };
+        // Check if the selected branch is a remote ref.
+        const isRemote = remoteBranchesWithoutLocal.some(
+          (b) => b.name === selectedExistingBranch,
+        );
+
+        let input: WorktreeCreateInput;
+        if (isRemote) {
+          // For remote branches, create a local tracking branch from the remote ref.
+          const slashIdx = selectedExistingBranch.indexOf("/");
+          const localName =
+            slashIdx >= 0
+              ? selectedExistingBranch.slice(slashIdx + 1)
+              : selectedExistingBranch;
+          input = {
+            branch: localName,
+            createBranch: true,
+            baseRef: selectedExistingBranch,
+            trackUpstream: true,
+            path: path.trim() || undefined,
+          };
+        } else {
+          input = {
+            branch: selectedExistingBranch,
+            createBranch: false,
+            path: path.trim() || undefined,
+          };
+        }
+
         const created = await workspaceCreateWorktree(context.repo.id, input);
         onCreated?.(created);
         onClose();
@@ -170,6 +205,7 @@ export function NewWorktreeDialog({
     branch,
     baseBranch,
     selectedExistingBranch,
+    remoteBranchesWithoutLocal,
     path,
     t,
     onCreated,
@@ -291,7 +327,7 @@ export function NewWorktreeDialog({
             </>
           ) : (
             <>
-              {/* Existing branch selector (local only) */}
+              {/* Existing branch selector (local + unchecked-out remote) */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium">{t("worktree.field.selectBranch")}</label>
                 <div className="flex max-h-48 flex-col gap-1 overflow-y-auto rounded border bg-muted/20 p-1">
@@ -300,32 +336,59 @@ export function NewWorktreeDialog({
                       <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
                       {t("worktree.loading.branches")}
                     </div>
-                  ) : localBranches.length === 0 ? (
+                  ) : localBranches.length === 0 &&
+                    remoteBranchesWithoutLocal.length === 0 ? (
                     <div className="px-2 py-4 text-sm text-muted-foreground">
                       {t("worktree.empty.branches")}
                     </div>
                   ) : (
-                    localBranches.map((b) => {
-                      const isActive = selectedExistingBranch === b.name;
-                      return (
-                        <button
-                          key={b.name}
-                          type="button"
-                          onClick={() => setSelectedExistingBranch(b.name)}
-                          className={cn(
-                            "flex items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-background",
-                            isActive && "bg-background font-medium",
-                          )}
-                        >
-                          <span className="truncate">{b.name}</span>
-                          {b.isHead && (
-                            <span className="ml-2 rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-                              HEAD
+                    <>
+                      {localBranches.map((b) => {
+                        const isActive = selectedExistingBranch === b.name;
+                        return (
+                          <button
+                            key={b.name}
+                            type="button"
+                            onClick={() => setSelectedExistingBranch(b.name)}
+                            className={cn(
+                              "flex items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-background",
+                              isActive && "bg-background font-medium",
+                            )}
+                          >
+                            <span className="truncate">{b.name}</span>
+                            <span className="ml-2 flex items-center gap-1">
+                              {b.isHead && (
+                                <span className="rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+                                  HEAD
+                                </span>
+                              )}
+                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                local
+                              </span>
                             </span>
-                          )}
-                        </button>
-                      );
-                    })
+                          </button>
+                        );
+                      })}
+                      {remoteBranchesWithoutLocal.map((b) => {
+                        const isActive = selectedExistingBranch === b.name;
+                        return (
+                          <button
+                            key={`remote:${b.name}`}
+                            type="button"
+                            onClick={() => setSelectedExistingBranch(b.name)}
+                            className={cn(
+                              "flex items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-background",
+                              isActive && "bg-background font-medium",
+                            )}
+                          >
+                            <span className="truncate">{b.name}</span>
+                            <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                              remote
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </>
                   )}
                 </div>
                 {selectedExistingBranch && (

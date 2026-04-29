@@ -47,6 +47,7 @@ export interface WorktreeCreateInput {
   branch: string;
   baseRef?: string | null;
   createBranch?: boolean;
+  trackUpstream?: boolean;
   path?: string | null;
 }
 
