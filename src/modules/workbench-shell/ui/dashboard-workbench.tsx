@@ -44,9 +44,7 @@ import {
   formatCompactTokenCount,
   findWorkspaceForThread,
   getNewThreadTerminalBindingKey,
-  
-  mapRunFinishedStatusToThreadRunStatus,
-  
+
   mergeLocalFallbackThreads,
   resolveActiveThreadWorkbenchProfileId,
   resolveThreadProfileId,
@@ -136,7 +134,6 @@ import { terminalStore } from "@/features/terminal/model/terminal-store";
 import {
   threadStore,
   useStore,
-  setThreadStatus,
   updateThreadTitle as setStoreThreadTitle,
   setDisplayCount as setStoreDisplayCount,
   setLoadMorePending as setStoreLoadMorePending,
@@ -144,6 +141,12 @@ import {
   setSidebarReady as setStoreSidebarReady,
   shallowEqual,
 } from "@/modules/workbench-shell/model/thread-store";
+import { createCoalescedAsyncRunner } from "@/modules/workbench-shell/model/sidebar-sync-runner";
+import type { DeletePhase } from "@/modules/workbench-shell/model/delete-confirm-types";
+import {
+  dispatchGlobalEvent,
+  dispatchRunFinishedEvent,
+} from "@/modules/workbench-shell/model/run-event-dispatcher";
 import {
   uiLayoutStore,
   openOverlay,
@@ -336,10 +339,7 @@ export function DashboardWorkbench() {
   const [terminalBootstrapError, setTerminalBootstrapError] = useState<
     string | null
   >(null);
-  const [pendingDeleteThreadId, setPendingDeleteThreadId] = useState<
-    string | null
-  >(null);
-  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
+  const [deletePhase, setDeletePhase] = useState<DeletePhase>({ kind: "idle" });
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [isAddingWorkspace, setAddingWorkspace] = useState(false);
   const [workspaceAction, setWorkspaceAction] = useState<{
@@ -370,20 +370,6 @@ export function DashboardWorkbench() {
   const syncVersionRef = useRef(0);
   const editingThreadIdRef = useRef<string | null>(null);
   const sidebarAutoRefreshUntilRef = useRef(0);
-  const sidebarSyncInFlightRef = useRef(false);
-  // Coalescing / throttling state for `syncWorkspaceSidebar`. `inFlightPromise`
-  // holds the currently-running sync (if any) so concurrent callers share it
-  // instead of stacking IPC requests. `lastFinishedAt` records when the last
-  // run completed, so the *next* call is delayed to honour the minimum gap.
-  // `pendingOptions` accumulates the options for a trailing call when one is
-  // queued, so overrides from any caller are merged correctly.
-  const sidebarSyncInFlightPromiseRef = useRef<Promise<void> | null>(null);
-  const sidebarSyncLastFinishedAtRef = useRef(0);
-  const sidebarSyncPendingPromiseRef = useRef<Promise<void> | null>(null);
-  const sidebarSyncPendingOptionsRef = useRef<{
-    preserveSelectedProjectIfMissing?: boolean;
-    threadDisplayCountOverrides: Record<string, number>;
-  } | null>(null);
   const newThreadCreationRef = useRef<Record<string, Promise<string>>>({});
   const terminalThreadBindingsRef = useRef(terminalThreadBindings);
   terminalThreadBindingsRef.current = terminalThreadBindings;
@@ -695,26 +681,16 @@ export function DashboardWorkbench() {
     getOrCreateNewThreadId,
   ]);
 
-  // The actual work of a sidebar sync. Held in a ref so that the public
-  // `syncWorkspaceSidebar` callback below can have stable identity (empty
-  // deps) — callbacks that depend on it (useEffect, useCallback) then stay
-  // stable too, which is critical because `syncWorkspaceSidebar` mutates
-  // state that several effects observe, and we don't want those effects to
-  // re-trigger sync.
-  const runSyncWorkspaceSidebarRef = useRef<
-    (options: {
-      preserveSelectedProjectIfMissing?: boolean;
-      threadDisplayCountOverrides: Record<string, number>;
-    }) => Promise<void>
-  >(async () => {});
-
-  runSyncWorkspaceSidebarRef.current = async ({
-    preserveSelectedProjectIfMissing = true,
-    threadDisplayCountOverrides = {},
-  }: {
-    preserveSelectedProjectIfMissing?: boolean;
-    threadDisplayCountOverrides: Record<string, number>;
-  }) => {
+  // Coalesced async runner for sidebar sync. Replaces the 6-ref pattern
+  // with single-flight, coalescing, and throttling built in.
+  const sidebarSyncRunner = useMemo(
+    () =>
+      createCoalescedAsyncRunner({
+        minGapMs: SIDEBAR_SYNC_MIN_GAP_MS,
+        executeFn: async (options: {
+          preserveSelectedProjectIfMissing?: boolean;
+          threadDisplayCountOverrides: Record<string, number>;
+        }) => {
       const syncStart = performance.now();
       const version = ++syncVersionRef.current;
 
@@ -726,7 +702,7 @@ export function DashboardWorkbench() {
       const nextDisplayCounts = Object.fromEntries(
         workspaceEntries.map((workspace) => [
           workspace.id,
-          threadDisplayCountOverrides[workspace.id] ??
+          options.threadDisplayCountOverrides[workspace.id] ??
             threadStore.getState().displayCounts[workspace.id] ??
             WORKSPACE_THREAD_PAGE_SIZE,
         ]),
@@ -852,7 +828,7 @@ export function DashboardWorkbench() {
             return matchingProject;
           }
 
-          if (preserveSelectedProjectIfMissing) {
+          if (options.preserveSelectedProjectIfMissing ?? true) {
             return current;
           }
 
@@ -921,12 +897,14 @@ export function DashboardWorkbench() {
         return { workspaces: nextWorkspaces, openWorkspaces: nextOpenWorkspaces };
       });
       console.log(`⏱ [sidebar-sync] total: ${(performance.now() - syncStart).toFixed(1)}ms`);
-    };
+        },
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [listVisibleWorkspaceThreads, language, resolvedTerminalThreadId],
+  );
 
-  // Public entry point. Coalesces concurrent callers and enforces a minimum
-  // gap between fully independent runs. Keeping the callback identity stable
-  // (empty deps) is important so hooks/effects that depend on it don't
-  // retrigger every time state changes.
+  // Public entry point. Delegates to the coalesced async runner which
+  // handles single-flight, coalescing, and throttling.
   const syncWorkspaceSidebar = useCallback(
     async (
       options: {
@@ -934,89 +912,12 @@ export function DashboardWorkbench() {
         threadDisplayCountOverrides?: Record<string, number>;
       } = {},
     ): Promise<void> => {
-      // Merge requested overrides into any pending options so a trailing run
-      // sees the union of what every caller asked for.
-      const existing = sidebarSyncPendingOptionsRef.current ?? {
-        preserveSelectedProjectIfMissing: undefined,
-        threadDisplayCountOverrides: {},
-      };
-      sidebarSyncPendingOptionsRef.current = {
-        preserveSelectedProjectIfMissing:
-          options.preserveSelectedProjectIfMissing
-            ?? existing.preserveSelectedProjectIfMissing,
-        threadDisplayCountOverrides: {
-          ...existing.threadDisplayCountOverrides,
-          ...(options.threadDisplayCountOverrides ?? {}),
-        },
-      };
-
-      // If a run is currently in flight, or a trailing run is already queued,
-      // join it instead of starting another one.
-      if (sidebarSyncPendingPromiseRef.current) {
-        return sidebarSyncPendingPromiseRef.current;
-      }
-      if (sidebarSyncInFlightPromiseRef.current) {
-        // Schedule a trailing run to start after the current one completes,
-        // once the minimum gap has elapsed.
-        const trailing = sidebarSyncInFlightPromiseRef.current.then(async () => {
-          const elapsed = Date.now() - sidebarSyncLastFinishedAtRef.current;
-          const wait = Math.max(0, SIDEBAR_SYNC_MIN_GAP_MS - elapsed);
-          if (wait > 0) {
-            await new Promise<void>((resolve) => setTimeout(resolve, wait));
-          }
-          const optionsToRun = sidebarSyncPendingOptionsRef.current ?? {
-            threadDisplayCountOverrides: {},
-          };
-          sidebarSyncPendingOptionsRef.current = null;
-          sidebarSyncPendingPromiseRef.current = null;
-          const run = runSyncWorkspaceSidebarRef.current({
-            preserveSelectedProjectIfMissing:
-              optionsToRun.preserveSelectedProjectIfMissing,
-            threadDisplayCountOverrides:
-              optionsToRun.threadDisplayCountOverrides,
-          });
-          sidebarSyncInFlightPromiseRef.current = run.finally(() => {
-            sidebarSyncLastFinishedAtRef.current = Date.now();
-            sidebarSyncInFlightPromiseRef.current = null;
-          });
-          return sidebarSyncInFlightPromiseRef.current;
-        });
-        sidebarSyncPendingPromiseRef.current = trailing;
-        return trailing;
-      }
-
-      // No run in flight: honour minimum gap before starting.
-      const elapsed = Date.now() - sidebarSyncLastFinishedAtRef.current;
-      const wait = Math.max(0, SIDEBAR_SYNC_MIN_GAP_MS - elapsed);
-      const start = async () => {
-        const optionsToRun = sidebarSyncPendingOptionsRef.current ?? {
-          threadDisplayCountOverrides: {},
-        };
-        sidebarSyncPendingOptionsRef.current = null;
-        const run = runSyncWorkspaceSidebarRef.current({
-          preserveSelectedProjectIfMissing:
-            optionsToRun.preserveSelectedProjectIfMissing,
-          threadDisplayCountOverrides:
-            optionsToRun.threadDisplayCountOverrides,
-        });
-        sidebarSyncInFlightPromiseRef.current = run.finally(() => {
-          sidebarSyncLastFinishedAtRef.current = Date.now();
-          sidebarSyncInFlightPromiseRef.current = null;
-        });
-        return sidebarSyncInFlightPromiseRef.current;
-      };
-      if (wait > 0) {
-        const delayed = new Promise<void>((resolve) =>
-          setTimeout(resolve, wait),
-        ).then(start);
-        sidebarSyncPendingPromiseRef.current = delayed.finally(() => {
-          sidebarSyncPendingPromiseRef.current = null;
-        });
-        return sidebarSyncPendingPromiseRef.current;
-      }
-      return start();
+      return sidebarSyncRunner.request({
+        preserveSelectedProjectIfMissing: options.preserveSelectedProjectIfMissing,
+        threadDisplayCountOverrides: options.threadDisplayCountOverrides ?? {},
+      });
     },
-    [],
+    [sidebarSyncRunner],
   );
 
   // ---------------------------------------------------------------------------
@@ -1035,10 +936,7 @@ export function DashboardWorkbench() {
         "thread-run-started",
         (event) => {
           const { threadId, runId } = event.payload;
-          setThreadStatus(threadId, "running", {
-            runId,
-            source: "tauri_event",
-          });
+          dispatchGlobalEvent(threadId, "RUN_STARTED", { runId });
 
           // Extend the sidebar auto-refresh grace period so the polling
           // keeps running while background threads are active.
@@ -1053,11 +951,7 @@ export function DashboardWorkbench() {
         "thread-run-finished",
         (event) => {
           const { threadId, runId, status } = event.payload;
-          setThreadStatus(
-            threadId,
-            mapRunFinishedStatusToThreadRunStatus(status),
-            { runId, source: "tauri_event" },
-          );
+          dispatchRunFinishedEvent(threadId, runId, status);
 
           // Perform a full sidebar sync to reconcile any missed state
           // (e.g. title generated shortly after, ordering changes).
@@ -1119,16 +1013,13 @@ export function DashboardWorkbench() {
         return;
       }
 
-      if (sidebarSyncInFlightRef.current) {
+      if (sidebarSyncRunner.isRunning()) {
         return;
       }
 
-      sidebarSyncInFlightRef.current = true;
       void syncWorkspaceSidebar().catch((error) => {
         const message = getInvokeErrorMessage(error, t("dashboard.error.refreshThreadList"));
         setTerminalBootstrapError(message);
-      }).finally(() => {
-        sidebarSyncInFlightRef.current = false;
       });
     }, SIDEBAR_AUTO_REFRESH_INTERVAL_MS);
 
@@ -1529,7 +1420,7 @@ export function DashboardWorkbench() {
     threadStore.setState({ isNewThreadMode: true });
     threadStore.setState((prev) => ({ workspaces: clearActiveThreads(prev.workspaces) }));
     setComposerError(null);
-    setPendingDeleteThreadId(null);
+    setDeletePhase({ kind: "idle" });
     setTerminalBootstrapError(null);
   };
 
@@ -1547,7 +1438,7 @@ export function DashboardWorkbench() {
     setActiveThreadProfileIdOverride(resolvedProfileId);
     threadStore.setState({ isNewThreadMode: false });
     setActiveWorkspaceMenuId(null);
-    setPendingDeleteThreadId(null);
+    setDeletePhase({ kind: "idle" });
     setTerminalBootstrapError(null);
     threadStore.setState((prev) => ({ workspaces: activateThread(prev.workspaces, threadId) }));
 
@@ -1596,7 +1487,7 @@ export function DashboardWorkbench() {
       threadStore.setState({ isNewThreadMode: true });
       threadStore.setState((prev) => ({ workspaces: clearActiveThreads(prev.workspaces) }));
       setComposerError(null);
-      setPendingDeleteThreadId(null);
+      setDeletePhase({ kind: "idle" });
       setTerminalBootstrapError(null);
       setActiveWorkspaceMenuId(null);
     },
@@ -1736,18 +1627,18 @@ export function DashboardWorkbench() {
   );
 
   const handleThreadDeleteRequest = useCallback((threadId: string) => {
-    setPendingDeleteThreadId(threadId);
+    setDeletePhase({ kind: "confirming", threadId });
     setTerminalBootstrapError(null);
   }, []);
 
   const handleThreadDeleteConfirm = useCallback(
     (threadId: string) => {
-      if (deletingThreadId) {
+      if (deletePhase.kind === "deleting") {
         return;
       }
 
       void (async () => {
-        setDeletingThreadId(threadId);
+        setDeletePhase({ kind: "deleting", threadId });
         setTerminalBootstrapError(null);
 
         try {
@@ -1811,17 +1702,14 @@ export function DashboardWorkbench() {
           const message = getInvokeErrorMessage(error, t("dashboard.error.deleteThread"));
           setTerminalBootstrapError(message);
         } finally {
-          setDeletingThreadId(null);
-          setPendingDeleteThreadId((current) =>
-            current === threadId ? null : current,
-          );
+          setDeletePhase({ kind: "idle" });
         }
       })();
     },
     [
       activeThread?.id,
       activeThreadProject,
-      deletingThreadId,
+      deletePhase,
       syncWorkspaceSidebar,
     ],
   );
@@ -2322,8 +2210,10 @@ export function DashboardWorkbench() {
             ),
           );
 
-          setPendingDeleteThreadId((current) =>
-            current && workspaceThreadIds.has(current) ? null : current,
+          setDeletePhase((current) =>
+            current.kind !== "idle" && workspaceThreadIds.has(current.threadId)
+              ? { kind: "idle" }
+              : current,
           );
           threadStore.setState((prev) => ({
             pendingRuns: Object.fromEntries(
@@ -2479,8 +2369,7 @@ export function DashboardWorkbench() {
           canOpenWorkspaceInSystem={canOpenWorkspaceInSystem}
           workspaceOpenLabel={workspaceOpenLabel}
           handleWorkspaceRemove={handleWorkspaceRemove}
-          pendingDeleteThreadId={pendingDeleteThreadId}
-          deletingThreadId={deletingThreadId}
+          deletePhase={deletePhase}
           editingThreadId={editingThreadId}
           commitMessageModelPlan={commitMessageModelPlan}
           handleThreadEditDone={handleThreadEditDone}

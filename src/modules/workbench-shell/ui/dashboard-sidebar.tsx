@@ -22,6 +22,7 @@ import {
 import { sortWorkspacesWithWorktrees } from "@/modules/workbench-shell/model/helpers";
 import type { WorkspaceItem } from "@/modules/workbench-shell/model/types";
 import { threadRunStatusToDisplayStatus } from "@/modules/workbench-shell/model/types";
+import type { DeletePhase } from "@/modules/workbench-shell/model/delete-confirm-types";
 import { cn } from "@/shared/lib/utils";
 import { ThreadRenameInput } from "@/modules/workbench-shell/ui/thread-rename-input";
 import { ThreadStatusIndicator } from "@/modules/workbench-shell/ui/thread-status-indicator";
@@ -58,8 +59,7 @@ type DashboardSidebarProps = {
   canOpenWorkspaceInSystem: boolean;
   workspaceOpenLabel: string;
   handleWorkspaceRemove: (workspace: WorkspaceItem) => void;
-  pendingDeleteThreadId: string | null;
-  deletingThreadId: string | null;
+  deletePhase: DeletePhase;
   editingThreadId: string | null;
   commitMessageModelPlan: RunModelPlanDto | null;
   handleThreadEditDone: (
@@ -111,8 +111,7 @@ export function DashboardSidebar(props: DashboardSidebarProps) {
     canOpenWorkspaceInSystem,
     workspaceOpenLabel,
     handleWorkspaceRemove,
-    pendingDeleteThreadId,
-    deletingThreadId,
+    deletePhase,
     editingThreadId,
     commitMessageModelPlan,
     handleThreadEditDone,
@@ -403,8 +402,9 @@ export function DashboardSidebar(props: DashboardSidebarProps) {
                             <div className={cn(DRAWER_LIST_STACK_CLASS, "pl-2.5")}>
                               {visibleThreads.map((thread) => {
                                 const isDeletePending =
-                                  pendingDeleteThreadId === thread.id;
-                                const isDeleting = deletingThreadId === thread.id;
+                                  deletePhase.kind === "confirming" && deletePhase.threadId === thread.id;
+                                const isDeleting =
+                                  deletePhase.kind === "deleting" && deletePhase.threadId === thread.id;
                                 const isEditing = editingThreadId === thread.id;
 
                                 return (

@@ -41,8 +41,18 @@ import { cn } from "@/shared/lib/utils";
 import {
   threadStore,
   useStore,
-  setThreadStatus as storeSetThreadStatus,
 } from "@/modules/workbench-shell/model/thread-store";
+import {
+  createRunLifecycleMachine,
+  mapStreamEventToMachineEvent,
+  type RunMachineContext,
+  type RunMachinePayload,
+  type RunMachineState,
+} from "@/modules/workbench-shell/model/run-lifecycle-machine";
+import {
+  registerRunMachine,
+  unregisterRunMachine,
+} from "@/modules/workbench-shell/model/run-event-dispatcher";
 import { composerStore, setDraft } from "@/modules/workbench-shell/model/composer-store";
 import { Button } from "@/shared/ui/button";
 import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
@@ -222,6 +232,13 @@ function renderPlanProseSection(title: string, content: string) {
 
 const BASE_CONVERSATION_BOTTOM_PADDING = 40;
 
+/** Idle context used when resetting the run-lifecycle machine. */
+const RESET_IDLE_CONTEXT: RunMachineContext = {
+  runId: null,
+  errorMessage: null,
+  retryCount: 0,
+};
+
 export function RuntimeThreadSurface({
   activeAgentProfileId,
   agentProfiles,
@@ -297,6 +314,13 @@ export function RuntimeThreadSurface({
   const pendingThreadRestoreScrollRef = useRef(false);
   const submittingRef = useRef(false);
   const subscribingRef = useRef(false);
+
+  // Per-thread run-lifecycle state machine — the authoritative source for
+  // this thread's run status. Every state change is auto-synced to threadStore.
+  const runMachine = useMemo(
+    () => createRunLifecycleMachine(threadId ?? ""),
+    [threadId],
+  );
   const handledInitialPromptRequestIdRef = useRef<string | null>(null);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
@@ -438,7 +462,7 @@ export function RuntimeThreadSurface({
       onContextUsageChange?.(null);
       setApprovingPlanMessageId(null);
       setRuntimeError(null);
-      if (threadId) storeSetThreadStatus(threadId, "idle", { source: "stream" });
+      if (threadId) runMachine.reset("idle", RESET_IDLE_CONTEXT);
       setSnapshotReady(true);
       setSnapshotThreadId(null);
       setThinkingPlaceholder(null);
@@ -543,7 +567,8 @@ export function RuntimeThreadSurface({
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
-      if (threadId) storeSetThreadStatus(threadId, nextState as RunState, { source: "snapshot" });
+      if (threadId) runMachine.reset(nextState as RunMachineState, {
+        runId: snapshot.activeRun?.id ?? null, errorMessage: null, retryCount: 0 });
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
       if (!shouldPreserveContextUsage) {
         onContextUsageChange?.(nextContextUsage);
@@ -651,7 +676,8 @@ export function RuntimeThreadSurface({
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
-      if (threadId) storeSetThreadStatus(threadId, nextState as RunState, { source: "snapshot" });
+      if (threadId) runMachine.reset(nextState as RunMachineState, {
+        runId: snapshot.activeRun?.id ?? null, errorMessage: null, retryCount: 0 });
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
 
       const latestVisibleRun = getLatestVisibleRun(snapshot);
@@ -683,7 +709,7 @@ export function RuntimeThreadSurface({
     setApprovingPlanMessageId(null);
     setQueueArtifact(null);
     setRuntimeError(null);
-    if (threadId) storeSetThreadStatus(threadId, "idle", { source: "stream" });
+    if (threadId) runMachine.reset("idle", RESET_IDLE_CONTEXT);
     setSnapshotReady(false);
     setSnapshotThreadId(null);
     lastOptimisticUserIdRef.current = null;
@@ -726,6 +752,23 @@ export function RuntimeThreadSurface({
     };
 
     stream.onRawEvent = withActiveStream((event) => {
+      // Route lifecycle events to the run-lifecycle machine for validated
+      // state transitions. The machine auto-syncs to threadStore.
+      const machineEvent = mapStreamEventToMachineEvent(event.type);
+      if (machineEvent && threadId) {
+        const payload: RunMachinePayload = {};
+        if ("runId" in event && typeof event.runId === "string") {
+          payload.runId = event.runId;
+        }
+        if ("error" in event && typeof event.error === "string") {
+          payload.message = event.error;
+        }
+        if (machineEvent === "RUN_RETRYING" && "runId" in event && typeof event.runId === "string") {
+          payload.newRunId = event.runId;
+        }
+        runMachine.send(machineEvent, payload);
+      }
+
       if (shouldCompleteThinkingPhase(event)) {
         completeThinkingPhase(event.runId);
       } else if (shouldFinalizeReasoningOnly(event)) {
@@ -1074,7 +1117,8 @@ export function RuntimeThreadSurface({
     });
 
     stream.onRunStateChange = withActiveStream((state, runId) => {
-      if (threadId) storeSetThreadStatus(threadId, state as RunState, { runId, source: "stream" });
+      // Machine already handles state transitions via onRawEvent.
+      // Perform side effects based on the new state.
 
       if (state === "running" || state === "waiting_approval" || state === "needs_reply") {
         setRuntimeError(null);
@@ -1134,7 +1178,11 @@ export function RuntimeThreadSurface({
     });
 
     streamRef.current = stream;
+    // Register this thread's machine to receive global Tauri events.
+    if (threadId) registerRunMachine(threadId, runMachine);
     return () => {
+      if (threadId) unregisterRunMachine(threadId);
+      runMachine.destroy();
       streamRef.current = null;
       subscribingRef.current = false;
       clearScheduledThinkingPhase();
@@ -1147,6 +1195,7 @@ export function RuntimeThreadSurface({
     onContextUsageChange,
     onThreadTitleChange,
     resyncCompletedMessage,
+    runMachine,
     scheduleThinkingPhase,
     threadId,
   ]);
@@ -2840,7 +2889,7 @@ export function RuntimeThreadSurface({
                 // accepted the cancel request but `RunCancelled` may arrive late
                 // if the agent loop is blocked on a long-running HTTP call.
                 completeThinkingPhase();
-                if (threadId) storeSetThreadStatus(threadId, "cancelled", { source: "stream" });
+                runMachine.send("RUN_CANCELLED");
 
                 // Safety net: if the backend event (`run_cancelled`) hasn't
                 // arrived within 5 seconds, force a snapshot reload to reconcile
