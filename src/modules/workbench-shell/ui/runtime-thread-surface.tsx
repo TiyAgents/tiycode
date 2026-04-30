@@ -43,6 +43,7 @@ import {
   useStore,
   setThreadStatus as storeSetThreadStatus,
 } from "@/modules/workbench-shell/model/thread-store";
+import { composerStore, setDraft } from "@/modules/workbench-shell/model/composer-store";
 import { Button } from "@/shared/ui/button";
 import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
 import type { SkillRecord } from "@/shared/types/extensions";
@@ -139,10 +140,8 @@ type RuntimeThreadSurfaceProps = {
   activeAgentProfileId: string;
   agentProfiles: ReadonlyArray<AgentProfile>;
   commands?: ReadonlyArray<CommandEntry>;
-  composerDraft?: string;
   enabledSkills?: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "scope" | "source" | "tags" | "triggers" | "contentPreview">>;
   initialPromptRequest?: InitialPromptRequest | null;
-  onComposerDraftChange?: (value: string) => void;
   onConsumeInitialPrompt?: (id: string) => void;
   onContextUsageChange?: (usage: ThreadContextUsage | null) => void;
   onOpenProfileSettings?: () => void;
@@ -227,10 +226,8 @@ export function RuntimeThreadSurface({
   activeAgentProfileId,
   agentProfiles,
   commands = [],
-  composerDraft = "",
   enabledSkills = [],
   initialPromptRequest = null,
-  onComposerDraftChange,
   onConsumeInitialPrompt,
   onContextUsageChange,
   onOpenProfileSettings,
@@ -248,9 +245,15 @@ export function RuntimeThreadSurface({
   }, [activeAgentProfileId, agentProfiles]);
   const hasMissingActiveProfile = Boolean(activeAgentProfileId) && activeProfile === null;
   const [composerError, setComposerError] = useState<string | null>(null);
-  const [localComposerValue, setLocalComposerValue] = useState("");
-  const composerValue = onComposerDraftChange ? composerDraft : localComposerValue;
-  const setComposerValue = onComposerDraftChange ? onComposerDraftChange : setLocalComposerValue;
+  const composerValue = useStore(composerStore, (s) => (threadId ? (s.drafts[threadId] ?? "") : ""));
+  const setComposerValue = useCallback(
+    (value: string) => {
+      if (threadId) {
+        setDraft(threadId, value);
+      }
+    },
+    [threadId],
+  );
   const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string | null>(null);
   const [helpers, setHelpers] = useState<Array<SurfaceHelperEntry>>([]);
   const [helperOpen, setHelperOpen] = useState<Record<string, boolean>>({});
@@ -671,9 +674,6 @@ export function RuntimeThreadSurface({
     subscribingRef.current = false;
     pendingThreadRestoreScrollRef.current = Boolean(threadId);
     setComposerError(null);
-    if (!onComposerDraftChange) {
-      setLocalComposerValue("");
-    }
     setHelpers([]);
     setHasMoreMessages(false);
     setHistoryLoadError(null);
@@ -691,7 +691,7 @@ export function RuntimeThreadSurface({
     setThinkingPlaceholder(null);
     setTools([]);
     void loadSnapshot();
-  }, [clearScheduledThinkingPhase, loadSnapshot, onComposerDraftChange, threadId]);
+  }, [clearScheduledThinkingPhase, loadSnapshot, threadId]);
 
   useEffect(() => {
     const isCurrentThreadSnapshotReady = snapshotReady && snapshotThreadId === threadId;

@@ -35,59 +35,57 @@ import {
   MENU_TRIGGER_LABEL_CLASS,
   THEME_OPTIONS,
 } from "@/modules/workbench-shell/model/fixtures";
+import {
+  uiLayoutStore,
+  toggleSidebar,
+  toggleDrawer,
+  toggleUserMenu,
+  setOpenSettingsSection,
+} from "@/modules/workbench-shell/model/ui-layout-store";
+import { useStore } from "@/shared/lib/create-store";
 
 export function WorkbenchTopBar({
   isMacOS,
   isWindows,
-  isSidebarOpen,
-  isDrawerOpen,
   isTerminalCollapsed,
-  isUserMenuOpen,
-  isOverlayOpen,
   isCheckingUpdates,
   updateStatus,
-  openSettingsSection,
   userMenuRef,
   selectedLanguageLabel,
   selectedThemeSummary,
   language,
   theme,
-  onToggleUserMenu,
   onCheckUpdates,
   onOpenSettings,
   onSelectLanguage,
   onSelectTheme,
-  onToggleSettingsSection,
-  onToggleSidebar,
-  onToggleDrawer,
   onToggleTerminal,
 }: {
   isMacOS: boolean;
   isWindows: boolean;
-  isSidebarOpen: boolean;
-  isDrawerOpen: boolean;
   isTerminalCollapsed: boolean;
-  isUserMenuOpen: boolean;
-  isOverlayOpen: boolean;
   isCheckingUpdates: boolean;
   updateStatus: string | null;
-  openSettingsSection: "theme" | "language" | null;
   userMenuRef: { current: HTMLDivElement | null };
   selectedLanguageLabel: string;
   selectedThemeSummary: string;
   language: LanguagePreference;
   theme: ThemePreference;
-  onToggleUserMenu: () => void;
   onCheckUpdates: () => void;
   onOpenSettings: () => void;
   onSelectLanguage: (language: LanguagePreference) => void;
   onSelectTheme: (theme: ThemePreference) => void;
-  onToggleSettingsSection: React.Dispatch<React.SetStateAction<"theme" | "language" | null>>;
-  onToggleSidebar: () => void;
-  onToggleDrawer: () => void;
   onToggleTerminal: () => void;
 }) {
   const t = useT();
+
+  // ── Phase 2: subscribe to uiLayoutStore for panel/menu/overlay state ──
+  const isSidebarOpen = useStore(uiLayoutStore, (s) => s.panelVisibility.isSidebarOpen);
+  const isDrawerOpen = useStore(uiLayoutStore, (s) => s.panelVisibility.isDrawerOpen);
+  const isUserMenuOpen = useStore(uiLayoutStore, (s) => s.isUserMenuOpen);
+  const activeOverlay = useStore(uiLayoutStore, (s) => s.activeOverlay);
+  const openSettingsSection = useStore(uiLayoutStore, (s) => s.openSettingsSection);
+  const isOverlayOpen = activeOverlay !== null;
   const [isMaximized, setIsMaximized] = useState(false);
   const canUseDesktopWindowControls = isWindows && isTauri();
 
@@ -167,7 +165,7 @@ export function WorkbenchTopBar({
               title={t("topBar.openMenu")}
               aria-expanded={isUserMenuOpen}
               aria-haspopup="menu"
-              onClick={onToggleUserMenu}
+              onClick={toggleUserMenu}
             >
               <Settings className="size-4" />
             </Button>
@@ -179,7 +177,10 @@ export function WorkbenchTopBar({
                   type="button"
                   className={cn(MENU_TRIGGER_CLASS, "text-app-foreground")}
                   aria-expanded={openSettingsSection === "theme"}
-                  onClick={() => onToggleSettingsSection((current) => (current === "theme" ? null : "theme"))}
+                  onClick={() => {
+                    const current = uiLayoutStore.getState().openSettingsSection;
+                    setOpenSettingsSection(current === "theme" ? null : "theme");
+                  }}
                 >
                   <Palette className={MENU_TRIGGER_ICON_CLASS} />
                   <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.theme")}</span>
@@ -219,7 +220,10 @@ export function WorkbenchTopBar({
                   type="button"
                   className={cn(MENU_TRIGGER_CLASS, "mt-1 text-app-foreground")}
                   aria-expanded={openSettingsSection === "language"}
-                  onClick={() => onToggleSettingsSection((current) => (current === "language" ? null : "language"))}
+                  onClick={() => {
+                    const current = uiLayoutStore.getState().openSettingsSection;
+                    setOpenSettingsSection(current === "language" ? null : "language");
+                  }}
                 >
                   <Globe className={MENU_TRIGGER_ICON_CLASS} />
                   <span className={MENU_TRIGGER_LABEL_CLASS}>{t("topBar.language")}</span>
@@ -290,7 +294,7 @@ export function WorkbenchTopBar({
             className={cn(panelToggleButtonClass, isSidebarOpen && "text-app-foreground", isOverlayOpen && "pointer-events-none invisible")}
             aria-label={isSidebarOpen ? t("topBar.collapseSidebar") : t("topBar.expandSidebar")}
             title={isSidebarOpen ? t("topBar.collapseSidebar") : t("topBar.expandSidebar")}
-            onClick={onToggleSidebar}
+            onClick={toggleSidebar}
           >
             <PanelLeft className="size-4" />
           </Button>
@@ -310,7 +314,7 @@ export function WorkbenchTopBar({
             className={cn(panelToggleButtonClass, isDrawerOpen && "text-app-foreground", isOverlayOpen && "pointer-events-none invisible")}
             aria-label={isDrawerOpen ? t("topBar.collapseDrawer") : t("topBar.expandDrawer")}
             title={isDrawerOpen ? t("topBar.collapseDrawer") : t("topBar.expandDrawer")}
-            onClick={onToggleDrawer}
+            onClick={toggleDrawer}
           >
             <PanelRight className="size-4" />
           </Button>

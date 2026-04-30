@@ -54,7 +54,6 @@ import {
 import { isOnboardingCompleted } from "@/modules/onboarding/model/use-onboarding";
 import type {
   GitSnapshotDto,
-  RunMode,
   ThreadSummaryDto,
 } from "@/shared/types/api";
 import {
@@ -75,7 +74,6 @@ import {
   LANGUAGE_OPTIONS,
   MIN_TERMINAL_HEIGHT,
   MIN_WORKBENCH_HEIGHT,
-  PANEL_VISIBILITY_STORAGE_KEY,
   RECENT_PROJECTS,
   THEME_OPTIONS,
   TOPBAR_HEIGHT,
@@ -93,7 +91,6 @@ import {
   isEditableSelectionTarget,
   isNodeInsideContainer,
   mergeRecentProjects,
-  readPanelVisibilityState,
   selectContainerContents,
 } from "@/modules/workbench-shell/model/helpers";
 import {
@@ -108,9 +105,7 @@ import {
 } from "@/modules/workbench-shell/model/workspace-path-bindings";
 import type {
   DrawerPanel,
-  PanelVisibilityState,
   ProjectOption,
-  WorkbenchOverlay,
   WorkspaceItem,
 } from "@/modules/workbench-shell/model/types";
 import type { ExtensionDetail, SkillPreview } from "@/shared/types/extensions";
@@ -124,7 +119,6 @@ import {
 } from "@/modules/workbench-shell/ui/runtime-thread-surface";
 import {
   GitPanel,
-  type GitDiffSelection,
 } from "@/modules/workbench-shell/ui/source-control-panels";
 import { ThreadStatusIndicator } from "@/modules/workbench-shell/ui/thread-status-indicator";
 import { DashboardTerminalOrchestrator } from "@/modules/workbench-shell/ui/dashboard-terminal-orchestrator";
@@ -150,6 +144,27 @@ import {
   setSidebarReady as setStoreSidebarReady,
   shallowEqual,
 } from "@/modules/workbench-shell/model/thread-store";
+import {
+  uiLayoutStore,
+  openOverlay,
+  setOpenSettingsSection,
+  setActiveDrawerPanel,
+  setSelectedDiffSelection,
+  setTerminalCollapsed,
+  setTerminalHeight,
+  setTerminalResize,
+  setUserMenuOpen,
+  setActiveWorkspaceMenuId,
+  setShowOnboarding,
+  removeTerminalCollapsedForThreads,
+} from "@/modules/workbench-shell/model/ui-layout-store";
+import {
+  composerStore,
+  setNewThreadValue,
+  setNewThreadRunMode,
+  setComposerError,
+  clearNewThreadComposer,
+} from "@/modules/workbench-shell/model/composer-store";
 
 
 export function DashboardWorkbench() {
@@ -284,33 +299,34 @@ export function DashboardWorkbench() {
   const isSidebarReady = useStore(threadStore, (s) => s.sidebarReady);
   const pendingThreadRuns = useStore(threadStore, (s) => s.pendingRuns, shallowEqual);
 
+  // ── Phase 2: uiLayoutStore + composerStore subscriptions (replaces 16 useState) ──
+  const activeOverlay = useStore(uiLayoutStore, (s) => s.activeOverlay);
+  const panelVisibilityState = useStore(uiLayoutStore, (s) => s.panelVisibility, shallowEqual);
+  const terminalCollapsedByThreadKey = useStore(uiLayoutStore, (s) => s.terminalCollapsedByThreadKey, shallowEqual);
+  const terminalHeight = useStore(uiLayoutStore, (s) => s.terminalHeight);
+  const terminalResize = useStore(uiLayoutStore, (s) => s.terminalResize);
+  const isUserMenuOpen = useStore(uiLayoutStore, (s) => s.isUserMenuOpen);
+  const activeWorkspaceMenuId = useStore(uiLayoutStore, (s) => s.activeWorkspaceMenuId);
+  const activeDrawerPanel = useStore(uiLayoutStore, (s) => s.activeDrawerPanel);
+
+  const composerValue = useStore(composerStore, (s) => s.newThreadValue);
+  const composerError = useStore(composerStore, (s) => s.error);
+  const newThreadRunMode = useStore(composerStore, (s) => s.newThreadRunMode);
+
+  // ── Init onboarding visibility (one-time, based on localStorage) ──
+  useEffect(() => {
+    if (!isOnboardingCompleted()) {
+      setShowOnboarding(true);
+    }
+  }, []);
+
   const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(
     () => (isTauri() ? [] : [...RECENT_PROJECTS]),
   );
-  const [activeOverlay, setActiveOverlay] = useState<WorkbenchOverlay>(null);
-  const [showOnboarding, setShowOnboarding] = useState(() => !isOnboardingCompleted());
-  const [activeSettingsCategory, setActiveSettingsCategory] =
-    useState<SettingsCategory>("general");
-  const [panelVisibilityState, setPanelVisibilityState] =
-    useState<PanelVisibilityState>(() => readPanelVisibilityState());
-  const [terminalCollapsedByThreadKey, setTerminalCollapsedByThreadKey] =
-    useState<Record<string, boolean>>({});
-  const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
-  const [terminalResize, setTerminalResize] = useState<{
-    startY: number;
-    startHeight: number;
-  } | null>(null);
   const [terminalThreadBindings, setTerminalThreadBindings] = useState<
     Record<string, string>
   >({});
   const [activeThreadProfileIdOverride, setActiveThreadProfileIdOverride] = useState<string | null>(null);
-  const [composerValue, setComposerValue] = useState("");
-  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
-  const [composerError, setComposerError] = useState<string | null>(null);
-  const [openSettingsSection, setOpenSettingsSection] = useState<
-    "theme" | "language" | null
-  >(null);
-  const [isUserMenuOpen, setUserMenuOpen] = useState(false);
   const appUpdater = useAppUpdater();
   const isCheckingUpdates = appUpdater.phase === "checking";
   const updateStatus =
@@ -326,16 +342,12 @@ export function DashboardWorkbench() {
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [isAddingWorkspace, setAddingWorkspace] = useState(false);
-  const [activeWorkspaceMenuId, setActiveWorkspaceMenuId] = useState<
-    string | null
-  >(null);
   const [workspaceAction, setWorkspaceAction] = useState<{
     workspaceId: string;
     kind: "open" | "remove";
   } | null>(null);
   const [worktreeDialogContext, setWorktreeDialogContext] =
     useState<NewWorktreeDialogContext | null>(null);
-  const [newThreadRunMode, setNewThreadRunMode] = useState<RunMode>("default");
   const composerCommands = useMemo(
     () => [...commands.commands, ...pluginCommandEntries],
     [commands.commands, pluginCommandEntries],
@@ -350,10 +362,6 @@ export function DashboardWorkbench() {
   // changes on every sync and would otherwise cause re-entrant effect firing).
   const terminalWorkspaceBindingsRef = useRef(terminalWorkspaceBindings);
   terminalWorkspaceBindingsRef.current = terminalWorkspaceBindings;
-  const [activeDrawerPanel, setActiveDrawerPanel] =
-    useState<DrawerPanel>("project");
-  const [selectedDiffSelection, setSelectedDiffSelection] =
-    useState<GitDiffSelection | null>(null);
   const [topBarGitSnapshot, setTopBarGitSnapshot] = useState<GitSnapshotDto | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
   const overlayContentRef = useRef<HTMLDivElement | null>(null);
@@ -429,7 +437,6 @@ export function DashboardWorkbench() {
       ? DEFAULT_TERMINAL_COLLAPSED
       : (terminalCollapsedByThreadKey[activeTerminalStateKey] ??
         DEFAULT_TERMINAL_COLLAPSED);
-  const isSettingsOpen = activeOverlay === "settings";
   const isMarketplaceOpen = activeOverlay === "marketplace";
   const isOverlayOpen = activeOverlay !== null;
   const isMacOS =
@@ -515,62 +522,6 @@ export function DashboardWorkbench() {
     topBarGitSnapshot?.untrackedFiles,
     topBarGitSnapshot?.conflictedFiles,
   ]);
-
-  const setSidebarOpen = (
-    nextState: boolean | ((current: boolean) => boolean),
-  ) => {
-    setPanelVisibilityState((current) => ({
-      ...current,
-      isSidebarOpen:
-        typeof nextState === "function"
-          ? nextState(current.isSidebarOpen)
-          : nextState,
-    }));
-  };
-
-  const setDrawerOpen = (
-    nextState: boolean | ((current: boolean) => boolean),
-  ) => {
-    setPanelVisibilityState((current) => ({
-      ...current,
-      isDrawerOpen:
-        typeof nextState === "function"
-          ? nextState(current.isDrawerOpen)
-          : nextState,
-    }));
-  };
-
-  const setTerminalCollapsed = (
-    nextState: boolean | ((current: boolean) => boolean),
-  ) => {
-    setTerminalCollapsedByThreadKey((current) => {
-      if (activeTerminalStateKey === null) {
-        return current;
-      }
-
-      const resolvedNextState =
-        typeof nextState === "function"
-          ? nextState(
-              current[activeTerminalStateKey] ?? DEFAULT_TERMINAL_COLLAPSED,
-            )
-          : nextState;
-
-      if (resolvedNextState === DEFAULT_TERMINAL_COLLAPSED) {
-        if (!(activeTerminalStateKey in current)) {
-          return current;
-        }
-
-        const next = { ...current };
-        delete next[activeTerminalStateKey];
-        return next;
-      }
-
-      return {
-        ...current,
-        [activeTerminalStateKey]: resolvedNextState,
-      };
-    });
-  };
 
   useEffect(() => {
     if (isNewThreadMode || !resolvedTerminalThreadId) {
@@ -1190,7 +1141,8 @@ export function DashboardWorkbench() {
     }
 
     const syncTerminalHeight = () => {
-      setTerminalHeight((current) => Math.min(current, getMaxTerminalHeight()));
+      const current = uiLayoutStore.getState().terminalHeight;
+      setTerminalHeight(Math.min(current, getMaxTerminalHeight()));
     };
 
     syncTerminalHeight();
@@ -1403,17 +1355,6 @@ export function DashboardWorkbench() {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    window.localStorage.setItem(
-      PANEL_VISIBILITY_STORAGE_KEY,
-      JSON.stringify(panelVisibilityState),
-    );
-  }, [panelVisibilityState]);
-
-  useEffect(() => {
     if (appUpdater.phase !== "upToDate" || typeof window === "undefined") {
       return;
     }
@@ -1424,21 +1365,6 @@ export function DashboardWorkbench() {
 
     return () => window.clearTimeout(timeout);
   }, [appUpdater.phase, appUpdater.dismiss]);
-
-  useEffect(() => {
-    if (!selectedDiffSelection || typeof window === "undefined") {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSelectedDiffSelection(null);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedDiffSelection]);
 
   // ── Git snapshot subscription for branch display in thread title bar ──
   useEffect(() => {
@@ -1486,33 +1412,6 @@ export function DashboardWorkbench() {
       }
     };
   }, [resolvedWorkspaceId]);
-
-  useEffect(() => {
-    if (!activeOverlay || typeof window === "undefined") {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) {
-        return;
-      }
-
-      if (event.key === "Escape") {
-        setActiveOverlay(null);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeOverlay]);
-
-  useEffect(() => {
-    if (!isOverlayOpen) {
-      return;
-    }
-
-    setActiveWorkspaceMenuId(null);
-  }, [isOverlayOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1765,29 +1664,6 @@ export function DashboardWorkbench() {
     [syncWorkspaceSidebar, t],
   );
 
-  const handleComposerDraftChange = useCallback(
-    (threadId: string, value: string) => {
-      setComposerDrafts((current) => ({
-        ...current,
-        [threadId]: value,
-      }));
-    },
-    [],
-  );
-
-  // Stable per-thread draft handler for <RuntimeThreadSurface />. Must not be
-  // a new arrow function on every render — the surface has a useEffect that
-  // depends on this prop and re-runs threadLoad() whenever its identity
-  // changes, which (when this component re-renders frequently due to sidebar
-  // sync) would keep the thread stuck in "Loading thread".
-  const handleRuntimeComposerDraftChange = useMemo(() => {
-    if (!resolvedTerminalThreadId) {
-      return undefined;
-    }
-    const threadId = resolvedTerminalThreadId;
-    return (value: string) => handleComposerDraftChange(threadId, value);
-  }, [resolvedTerminalThreadId, handleComposerDraftChange]);
-
   const handleRuntimeConsumeInitialPrompt = useCallback(
     (id: string) => {
       threadStore.setState((prev) => {
@@ -1901,14 +1777,13 @@ export function DashboardWorkbench() {
             delete next[threadId];
             return { pendingRuns: next };
           });
-          setTerminalCollapsedByThreadKey((current) => {
-            if (!(threadId in current)) {
-              return current;
+          uiLayoutStore.setState((prev) => {
+            if (!(threadId in prev.terminalCollapsedByThreadKey)) {
+              return {};
             }
-
-            const next = { ...current };
+            const next = { ...prev.terminalCollapsedByThreadKey };
             delete next[threadId];
-            return next;
+            return { terminalCollapsedByThreadKey: next };
           });
           setTerminalThreadBindings((current) => {
             const next = Object.fromEntries(
@@ -1962,8 +1837,7 @@ export function DashboardWorkbench() {
 
     if (isNewThreadMode) {
       if (commandBehavior === "clear" || commandBehavior === "compact") {
-        setComposerValue("");
-        setComposerError(null);
+        clearNewThreadComposer();
         return;
       }
 
@@ -2124,17 +1998,17 @@ export function DashboardWorkbench() {
         );
 
         if (activeTerminalStateKey) {
-          setTerminalCollapsedByThreadKey((current) => {
-            if (!(activeTerminalStateKey in current)) {
-              return current;
+          uiLayoutStore.setState((prev) => {
+            if (!(activeTerminalStateKey in prev.terminalCollapsedByThreadKey)) {
+              return {};
             }
 
             const next = {
-              ...current,
-              [nextThread.id]: current[activeTerminalStateKey],
+              ...prev.terminalCollapsedByThreadKey,
+              [nextThread.id]: prev.terminalCollapsedByThreadKey[activeTerminalStateKey],
             };
             delete next[activeTerminalStateKey];
-            return next;
+            return { terminalCollapsedByThreadKey: next };
           });
         }
 
@@ -2192,7 +2066,7 @@ export function DashboardWorkbench() {
 
         threadStore.setState({ isNewThreadMode: false });
         setNewThreadRunMode("default");
-        setComposerValue("");
+        setNewThreadValue("");
         setComposerError(null);
         if (nextWorkspaceId) {
           const bindingKey = getNewThreadTerminalBindingKey(nextWorkspaceId);
@@ -2210,7 +2084,7 @@ export function DashboardWorkbench() {
       return;
     }
 
-    setComposerValue("");
+    setNewThreadValue("");
     setComposerError(null);
   };
 
@@ -2261,16 +2135,11 @@ export function DashboardWorkbench() {
   );
 
   const handleOpenSettings = (category: SettingsCategory = "general") => {
-    setActiveSettingsCategory(category);
-    setActiveOverlay("settings");
-    setUserMenuOpen(false);
-    setOpenSettingsSection(null);
+    openOverlay("settings", category);
   };
 
   const handleOpenMarketplace = () => {
-    setActiveOverlay("marketplace");
-    setUserMenuOpen(false);
-    setOpenSettingsSection(null);
+    openOverlay("marketplace");
   };
 
   const handleChooseWorkspaceFolder = useCallback(() => {
@@ -2333,8 +2202,8 @@ export function DashboardWorkbench() {
   ]);
 
   const handleWorkspaceMenuToggle = (workspaceId: string) => {
-    setActiveWorkspaceMenuId((current) =>
-      current === workspaceId ? null : workspaceId,
+    setActiveWorkspaceMenuId(
+      activeWorkspaceMenuId === workspaceId ? null : workspaceId,
     );
   };
 
@@ -2479,13 +2348,7 @@ export function DashboardWorkbench() {
               ),
             ),
           );
-          setTerminalCollapsedByThreadKey((current) =>
-            Object.fromEntries(
-              Object.entries(current).filter(
-                ([threadId]) => !workspaceThreadIds.has(threadId),
-              ),
-            ),
-          );
+          removeTerminalCollapsedForThreads(workspaceThreadIds);
           threadStore.setState((prev) => {
             if (!(workspace.id in prev.openWorkspaces)) {
               return {};
@@ -2525,13 +2388,6 @@ export function DashboardWorkbench() {
     ],
   );
 
-  const handleUserMenuToggle = () => {
-    setUserMenuOpen((current) => {
-      const nextOpen = !current;
-      setOpenSettingsSection(null);
-      return nextOpen;
-    });
-  };
 
   const handleCheckUpdates = appUpdater.checkForUpdates;
 
@@ -2582,28 +2438,24 @@ export function DashboardWorkbench() {
       <WorkbenchTopBar
         isMacOS={isMacOS}
         isWindows={isWindows}
-        isSidebarOpen={isSidebarOpen}
-        isDrawerOpen={isDrawerOpen}
         isTerminalCollapsed={isTerminalCollapsed}
-        isUserMenuOpen={isUserMenuOpen}
-        isOverlayOpen={isOverlayOpen}
         isCheckingUpdates={isCheckingUpdates}
         updateStatus={updateStatus}
-        openSettingsSection={openSettingsSection}
         userMenuRef={userMenuRef}
         selectedLanguageLabel={selectedLanguageOption.label}
         selectedThemeSummary={selectedThemeSummary}
         language={language}
         theme={theme}
-        onToggleUserMenu={handleUserMenuToggle}
         onCheckUpdates={handleCheckUpdates}
         onOpenSettings={() => handleOpenSettings("general")}
         onSelectLanguage={handleLanguageSelect}
         onSelectTheme={handleThemeSelect}
-        onToggleSettingsSection={setOpenSettingsSection}
-        onToggleSidebar={() => setSidebarOpen((current) => !current)}
-        onToggleDrawer={() => setDrawerOpen((current) => !current)}
-        onToggleTerminal={() => setTerminalCollapsed((current) => !current)}
+        onToggleTerminal={() => {
+          if (activeTerminalStateKey) {
+            const cur = terminalCollapsedByThreadKey[activeTerminalStateKey] ?? DEFAULT_TERMINAL_COLLAPSED;
+            setTerminalCollapsed(activeTerminalStateKey, !cur);
+          }
+        }}
       />
 
       <div className="flex h-full min-h-0 pt-9">
@@ -2703,7 +2555,7 @@ export function DashboardWorkbench() {
                             status="ready"
                             value={composerValue}
                             workspaceId={selectedProjectWorkspaceId}
-                            onValueChange={setComposerValue}
+                            onValueChange={setNewThreadValue}
                           />
                         </div>
                       </div>
@@ -2798,18 +2650,12 @@ export function DashboardWorkbench() {
                         activeAgentProfileId={workbenchActiveProfileId}
                         agentProfiles={agentProfiles}
                         commands={composerCommands}
-                        composerDraft={
-                          resolvedTerminalThreadId
-                            ? (composerDrafts[resolvedTerminalThreadId] ?? "")
-                            : ""
-                        }
                         enabledSkills={enabledSkillEntries}
                         initialPromptRequest={
                           resolvedTerminalThreadId
                             ? (pendingThreadRuns[resolvedTerminalThreadId] ?? null)
                             : null
                         }
-                        onComposerDraftChange={handleRuntimeComposerDraftChange}
                         onConsumeInitialPrompt={handleRuntimeConsumeInitialPrompt}
                         onContextUsageChange={setRuntimeContextUsage}
                         onOpenProfileSettings={() => handleOpenSettings("general")}
@@ -2898,7 +2744,11 @@ export function DashboardWorkbench() {
               height={terminalHeight}
               idleMessage={newThreadTerminalIdleMessage}
               isPendingThread={isNewThreadMode}
-              onCollapse={() => setTerminalCollapsed(true)}
+              onCollapse={() => {
+                if (activeTerminalStateKey) {
+                  setTerminalCollapsed(activeTerminalStateKey, true);
+                }
+              }}
               onResizeStart={handleTerminalResizeStart}
               terminal={terminal}
               threadId={resolvedTerminalThreadId}
@@ -2909,11 +2759,7 @@ export function DashboardWorkbench() {
       </div>
 
       <DashboardOverlays
-        selectedDiffSelection={selectedDiffSelection}
         resolvedWorkspaceId={resolvedWorkspaceId}
-        setSelectedDiffSelection={setSelectedDiffSelection}
-        isSettingsOpen={isSettingsOpen}
-        activeSettingsCategory={activeSettingsCategory}
         agentProfiles={agentProfiles}
         activeAgentProfileId={activeAgentProfileId}
         overlayContentRef={overlayContentRef}
@@ -2939,7 +2785,6 @@ export function DashboardWorkbench() {
         addWorkspace={addWorkspace}
         addWritableRoot={addWritableRoot}
         handleCheckUpdates={handleCheckUpdates}
-        setActiveOverlay={setActiveOverlay}
         duplicateAgentProfile={duplicateAgentProfile}
         removeAgentProfile={removeAgentProfile}
         removeAllowEntry={removeAllowEntry}
@@ -2948,7 +2793,6 @@ export function DashboardWorkbench() {
         removeProvider={removeProvider}
         removeWorkspace={removeWorkspace}
         removeWritableRoot={removeWritableRoot}
-        setActiveSettingsCategory={setActiveSettingsCategory}
         handleLanguageSelect={handleLanguageSelect}
         handleThemeSelect={handleThemeSelect}
         setActiveAgentProfile={setActiveAgentProfile}
@@ -2964,7 +2808,6 @@ export function DashboardWorkbench() {
         fetchProviderModels={fetchProviderModels}
         testProviderModelConnection={testProviderModelConnection}
         updateWritableRoot={updateWritableRoot}
-        isMarketplaceOpen={isMarketplaceOpen}
         extensionDetailById={extensionDetailById}
         extensionsError={extensionsError}
         extensions={extensions}
@@ -2995,11 +2838,9 @@ export function DashboardWorkbench() {
         skillPreviewById={skillPreviewById}
         extensionSkills={extensionSkills}
         appUpdater={appUpdater}
-        showOnboarding={showOnboarding}
         settingsHydrated={settingsHydrated}
         setLanguage={setLanguage}
         setTheme={setTheme}
-        setShowOnboarding={setShowOnboarding}
         worktreeDialogContext={worktreeDialogContext}
         setWorktreeDialogContext={setWorktreeDialogContext}
         buildProjectOptionFromWorkspace={buildProjectOptionFromWorkspace}
