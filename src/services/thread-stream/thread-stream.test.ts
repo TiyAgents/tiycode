@@ -558,7 +558,7 @@ describe("ThreadStream extractErrorMessage (via error paths)", () => {
     threadStartRunMock.mockRejectedValueOnce(circular);
 
     await expect(stream.startRun("thread-1", { prompt: "hi" })).rejects.toBe(circular);
-    expect(onError).toHaveBeenCalledWith("[object Object]", "");
+    expect(onError).toHaveBeenCalledWith("Unknown error", "");
   });
 
   it("falls back to String() for empty objects", async () => {
@@ -568,7 +568,7 @@ describe("ThreadStream extractErrorMessage (via error paths)", () => {
     threadStartRunMock.mockRejectedValueOnce({});
 
     await expect(stream.startRun("thread-1", { prompt: "hi" })).rejects.toEqual({});
-    expect(onError).toHaveBeenCalledWith("{}", "");
+    expect(onError).toHaveBeenCalledWith("Unknown error", "");
   });
 
   it("falls back to String() for null rejection", async () => {
@@ -578,6 +578,6 @@ describe("ThreadStream extractErrorMessage (via error paths)", () => {
     threadStartRunMock.mockRejectedValueOnce(null);
 
     await expect(stream.startRun("thread-1", { prompt: "hi" })).rejects.toBeNull();
-    expect(onError).toHaveBeenCalledWith("null", "");
+    expect(onError).toHaveBeenCalledWith("Unknown error", "");
   });
 });

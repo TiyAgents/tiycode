@@ -4,6 +4,8 @@ import type {
   WorkspaceItem,
 } from "@/modules/workbench-shell/model/types";
 import type { PendingThreadRun } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
+import { syncToBackend } from "@/shared/lib/ipc-sync";
+import { threadDelete } from "@/services/bridge/thread-commands";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -213,6 +215,32 @@ export function removeThread(threadId: string): void {
       })),
       threadStatuses: nextStatuses,
     };
+  });
+}
+
+/**
+ * Delete a thread from the backend, then remove it from the store.
+ *
+ * Uses optimistic removal for immediate UI feedback with rollback on failure.
+ * Deduplicates by thread ID (`'first'` strategy) to prevent accidental
+ * double-deletes from rapid clicks.
+ */
+export function deleteThread(threadId: string): Promise<void> {
+  return syncToBackend(threadStore, () => threadDelete(threadId), {
+    optimistic: (s) => {
+      const nextStatuses = { ...s.threadStatuses };
+      delete nextStatuses[threadId];
+      const isActive = s.activeThreadId === threadId;
+      return {
+        threadStatuses: nextStatuses,
+        workspaces: s.workspaces.map((w) => ({
+          ...w,
+          threads: w.threads.filter((t) => t.id !== threadId),
+        })),
+        ...(isActive ? { activeThreadId: null, isNewThreadMode: true } : {}),
+      };
+    },
+    dedupe: { key: `thread-delete:${threadId}`, strategy: "first" },
   });
 }
 

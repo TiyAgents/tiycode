@@ -38,6 +38,7 @@ import {
   workspaceSetDefault,
 } from "@/services/bridge";
 import { settingsStore } from "./settings-store";
+import { syncToBackend, SyncError } from "@/shared/lib/ipc-sync";
 
 const ACTIVE_AGENT_PROFILE_SETTING_KEY = "active_profile_id";
 
@@ -339,7 +340,7 @@ export function removeAgentProfile(id: string) {
     });
 }
 
-export function updateAgentProfile(
+export async function updateAgentProfile(
   id: string,
   patch: Partial<Omit<AgentProfile, "id">>,
 ) {
@@ -349,85 +350,104 @@ export function updateAgentProfile(
   );
   if (!currentProfile) return;
 
-  // Optimistic update.
-  settingsStore.setState((prev) => ({
-    agentProfiles: prev.agentProfiles.map((p) =>
-      p.id === id ? { ...p, ...patch } : p,
-    ),
-  }));
-
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    settingsStore.setState((prev) => ({
+      agentProfiles: prev.agentProfiles.map((p) =>
+        p.id === id ? { ...p, ...patch } : p,
+      ),
+    }));
+    return;
+  }
 
   const nextProfile = { ...currentProfile, ...patch };
 
-  void profileUpdate(
-    id,
-    toProfileInput({
-      name: nextProfile.name,
-      customInstructions: nextProfile.customInstructions,
-      commitMessagePrompt: nextProfile.commitMessagePrompt,
-      responseStyle: nextProfile.responseStyle,
-      thinkingLevel: nextProfile.thinkingLevel,
-      responseLanguage: nextProfile.responseLanguage,
-      commitMessageLanguage: nextProfile.commitMessageLanguage,
-      primaryProviderId: nextProfile.primaryProviderId,
-      primaryModelId: nextProfile.primaryModelId,
-      assistantProviderId: nextProfile.assistantProviderId,
-      assistantModelId: nextProfile.assistantModelId,
-      liteProviderId: nextProfile.liteProviderId,
-      liteModelId: nextProfile.liteModelId,
-    }),
-  )
-    .then((profile) => {
-      const mapped = mapProfileDto(profile);
-      settingsStore.setState((prev) => ({
-        agentProfiles: prev.agentProfiles.map((entry) =>
-          entry.id === id ? mapped : entry,
+  try {
+    const updated = await syncToBackend(
+      settingsStore,
+      () =>
+        profileUpdate(
+          id,
+          toProfileInput({
+            name: nextProfile.name,
+            customInstructions: nextProfile.customInstructions,
+            commitMessagePrompt: nextProfile.commitMessagePrompt,
+            responseStyle: nextProfile.responseStyle,
+            thinkingLevel: nextProfile.thinkingLevel,
+            responseLanguage: nextProfile.responseLanguage,
+            commitMessageLanguage: nextProfile.commitMessageLanguage,
+            primaryProviderId: nextProfile.primaryProviderId,
+            primaryModelId: nextProfile.primaryModelId,
+            assistantProviderId: nextProfile.assistantProviderId,
+            assistantModelId: nextProfile.assistantModelId,
+            liteProviderId: nextProfile.liteProviderId,
+            liteModelId: nextProfile.liteModelId,
+          }),
         ),
-      }));
-    })
-    .catch(async (error) => {
-      // Ghost-profile upgrade: if the profile does not exist in DB yet,
-      // create it instead and replace the ghost entry.
-      if (!isTauriNotFoundError(error)) {
-        console.warn("Failed to update profile", error);
-        return;
-      }
-
-      try {
-        const createdProfile = await profileCreate(
-          toProfileInput(nextProfile, false),
-        );
-        const mapped = mapProfileDto(createdProfile);
-
-        await settingsSet(
-          ACTIVE_AGENT_PROFILE_SETTING_KEY,
-          JSON.stringify(mapped.id),
-        );
-
-        settingsStore.setState((prev) => {
-          const found = prev.agentProfiles.some((entry) => entry.id === id);
-          const nextProfiles = found
-            ? prev.agentProfiles.map((entry) =>
-                entry.id === id ? mapped : entry,
-              )
-            : [...prev.agentProfiles, mapped];
-
+      {
+        optimistic: (s) => ({
+          agentProfiles: s.agentProfiles.map((p) =>
+            p.id === id ? { ...p, ...patch } : p,
+          ),
+        }),
+        onSuccess: (_s, profile) => {
+          const mapped = mapProfileDto(profile);
           return {
-            agentProfiles: nextProfiles,
-            activeAgentProfileId:
-              prev.activeAgentProfileId === id
-                ? mapped.id
-                : prev.activeAgentProfileId,
+            agentProfiles: _s.agentProfiles.map((entry) =>
+              entry.id === id ? mapped : entry,
+            ),
           };
-        });
-      } catch (createError) {
-        console.warn(
-          "Failed to create missing profile during update",
-          createError,
-        );
-      }
-    });
+        },
+        dedupe: { key: `profile:${id}`, strategy: "last" },
+      },
+    );
+    return updated;
+  } catch (error) {
+    // Ghost-profile upgrade: if the profile does not exist in DB yet,
+    // create it instead and replace the ghost entry.
+    if (
+      !(error instanceof SyncError) ||
+      !isTauriNotFoundError(error.raw)
+    ) {
+      // For non-ghost errors, rollback already happened in syncToBackend
+      return;
+    }
+
+    try {
+      const createdProfile = await profileCreate(
+        toProfileInput(nextProfile, false),
+      );
+      const mapped = mapProfileDto(createdProfile);
+
+      await settingsSet(
+        ACTIVE_AGENT_PROFILE_SETTING_KEY,
+        JSON.stringify(mapped.id),
+      );
+
+      settingsStore.setState((prev) => {
+        const found = prev.agentProfiles.some((entry) => entry.id === id);
+        const nextProfiles = found
+          ? prev.agentProfiles.map((entry) =>
+              entry.id === id ? mapped : entry,
+            )
+          : [...prev.agentProfiles, mapped];
+
+        return {
+          agentProfiles: nextProfiles,
+          activeAgentProfileId:
+            prev.activeAgentProfileId === id
+              ? mapped.id
+              : prev.activeAgentProfileId,
+        };
+      });
+
+      return mapped;
+    } catch (createError) {
+      console.warn(
+        "Failed to create missing profile during update",
+        createError,
+      );
+    }
+  }
 }
 
 export function setActiveAgentProfile(id: string) {
@@ -750,15 +770,13 @@ export function addWorkspace(entry: Omit<WorkspaceEntry, "id">) {
     return;
   }
 
-  void workspaceAdd(entry.path, entry.name)
-    .then((workspace) => {
-      settingsStore.setState((prev) => ({
-        workspaces: prev.workspaces.concat(mapWorkspaceDto(workspace)),
-      }));
-    })
-    .catch((error) => {
-      console.warn("Failed to add workspace", error);
-    });
+  void syncToBackend(settingsStore, () => workspaceAdd(entry.path, entry.name), {
+    onSuccess: (_s, workspace) => ({
+      workspaces: [..._s.workspaces, mapWorkspaceDto(workspace)],
+    }),
+  }).catch((error) => {
+    console.warn("Failed to add workspace", error);
+  });
 }
 
 export function removeWorkspace(id: string) {
@@ -769,17 +787,13 @@ export function removeWorkspace(id: string) {
     return;
   }
 
-  void workspaceRemove(id)
-    .then(() => {
-      settingsStore.setState((prev) => ({
-        workspaces: prev.workspaces.filter(
-          (workspace) => workspace.id !== id,
-        ),
-      }));
-    })
-    .catch((error) => {
-      console.warn("Failed to remove workspace", error);
-    });
+  void syncToBackend(settingsStore, () => workspaceRemove(id), {
+    optimistic: (s) => ({
+      workspaces: s.workspaces.filter((w) => w.id !== id),
+    }),
+  }).catch((error) => {
+    console.warn("Failed to remove workspace", error);
+  });
 }
 
 export function setDefaultWorkspace(id: string) {
@@ -793,18 +807,16 @@ export function setDefaultWorkspace(id: string) {
     return;
   }
 
-  void workspaceSetDefault(id)
-    .then(() => {
-      settingsStore.setState((prev) => ({
-        workspaces: prev.workspaces.map((workspace) => ({
-          ...workspace,
-          isDefault: workspace.id === id,
-        })),
-      }));
-    })
-    .catch((error) => {
-      console.warn("Failed to set default workspace", error);
-    });
+  void syncToBackend(settingsStore, () => workspaceSetDefault(id), {
+    optimistic: (s) => ({
+      workspaces: s.workspaces.map((w) => ({
+        ...w,
+        isDefault: w.id === id,
+      })),
+    }),
+  }).catch((error) => {
+    console.warn("Failed to set default workspace", error);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -819,33 +831,36 @@ export function addProvider(entry: Omit<ProviderEntry, "id">) {
     return;
   }
 
-  void providerSettingsCreateCustom({
-    displayName: entry.displayName,
-    providerType: entry.providerType,
-    baseUrl: entry.baseUrl,
-    apiKey: entry.apiKey || undefined,
-    enabled: entry.enabled,
-    customHeaders: entry.customHeaders,
-    models: entry.models.map((model) => ({
-      id: model.id,
-      modelId: model.modelId,
-      displayName: model.displayName,
-      enabled: model.enabled,
-      contextWindow: model.contextWindow,
-      maxOutputTokens: model.maxOutputTokens,
-      capabilityOverrides: model.capabilityOverrides,
-      providerOptions: model.providerOptions,
-      isManual: model.isManual,
-    })),
-  })
-    .then((provider) => {
-      settingsStore.setState((prev) => ({
-        providers: [...prev.providers, mapProviderDto(provider)],
-      }));
-    })
-    .catch((error) => {
-      console.warn("Failed to create provider", error);
-    });
+  void syncToBackend(
+    settingsStore,
+    () =>
+      providerSettingsCreateCustom({
+        displayName: entry.displayName,
+        providerType: entry.providerType,
+        baseUrl: entry.baseUrl,
+        apiKey: entry.apiKey || undefined,
+        enabled: entry.enabled,
+        customHeaders: entry.customHeaders,
+        models: entry.models.map((model) => ({
+          id: model.id,
+          modelId: model.modelId,
+          displayName: model.displayName,
+          enabled: model.enabled,
+          contextWindow: model.contextWindow,
+          maxOutputTokens: model.maxOutputTokens,
+          capabilityOverrides: model.capabilityOverrides,
+          providerOptions: model.providerOptions,
+          isManual: model.isManual,
+        })),
+      }),
+    {
+      onSuccess: (_s, provider) => ({
+        providers: [..._s.providers, mapProviderDto(provider)],
+      }),
+    },
+  ).catch((error) => {
+    console.warn("Failed to create provider", error);
+  });
 }
 
 export function removeProvider(id: string) {
@@ -863,17 +878,13 @@ export function removeProvider(id: string) {
 
   if (target.kind !== "custom") return;
 
-  void providerSettingsDeleteCustom(id)
-    .then(() => {
-      settingsStore.setState((prev) => ({
-        providers: prev.providers.filter(
-          (provider) => provider.id !== id,
-        ),
-      }));
-    })
-    .catch((error) => {
-      console.warn("Failed to delete provider", error);
-    });
+  void syncToBackend(settingsStore, () => providerSettingsDeleteCustom(id), {
+    optimistic: (s) => ({
+      providers: s.providers.filter((p) => p.id !== id),
+    }),
+  }).catch((error) => {
+    console.warn("Failed to delete provider", error);
+  });
 }
 
 export function updateProvider(
@@ -885,38 +896,28 @@ export function updateProvider(
     .providers.find((provider) => provider.id === id);
   if (!currentProvider) return;
 
-  const nextProvider = { ...currentProvider, ...patch };
-
-  settingsStore.setState((prev) => ({
-    providers: prev.providers.map((provider) =>
-      provider.id === id ? nextProvider : provider,
-    ),
-  }));
-
-  if (!isTauri()) return;
-
   const input = {
     ...(Object.prototype.hasOwnProperty.call(patch, "displayName")
-      ? { displayName: nextProvider.displayName }
+      ? { displayName: patch.displayName ?? currentProvider.displayName }
       : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, "providerType")
-      ? { providerType: nextProvider.providerType }
+      ? { providerType: patch.providerType ?? currentProvider.providerType }
       : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, "baseUrl")
-      ? { baseUrl: nextProvider.baseUrl }
+      ? { baseUrl: patch.baseUrl ?? currentProvider.baseUrl }
       : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, "apiKey")
-      ? { apiKey: nextProvider.apiKey }
+      ? { apiKey: patch.apiKey ?? currentProvider.apiKey }
       : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, "enabled")
-      ? { enabled: nextProvider.enabled }
+      ? { enabled: patch.enabled ?? currentProvider.enabled }
       : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, "customHeaders")
-      ? { customHeaders: nextProvider.customHeaders }
+      ? { customHeaders: patch.customHeaders ?? currentProvider.customHeaders }
       : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, "models")
       ? {
-          models: nextProvider.models.map((model) => ({
+          models: (patch.models ?? currentProvider.models).map((model) => ({
             id: model.id,
             modelId: model.modelId,
             displayName: model.displayName,
@@ -931,22 +932,35 @@ export function updateProvider(
       : {}),
   };
 
-  const request =
-    currentProvider.kind === "builtin"
-      ? providerSettingsUpsertBuiltin(currentProvider.providerKey, input)
-      : providerSettingsUpdateCustom(id, input);
+  if (!isTauri()) {
+    settingsStore.setState((prev) => ({
+      providers: prev.providers.map((p) =>
+        p.id === id ? { ...p, ...patch } : p,
+      ),
+    }));
+    return;
+  }
 
-  void request
-    .then((provider) => {
-      settingsStore.setState((prev) => ({
-        providers: prev.providers.map((entry) =>
-          entry.id === id ? mapProviderDto(provider) : entry,
-        ),
-      }));
-    })
-    .catch((error) => {
-      console.warn("Failed to update provider", error);
-    });
+  const ipcCall =
+    currentProvider.kind === "builtin"
+      ? () => providerSettingsUpsertBuiltin(currentProvider.providerKey, input)
+      : () => providerSettingsUpdateCustom(id, input);
+
+  void syncToBackend(settingsStore, ipcCall, {
+    optimistic: (s) => ({
+      providers: s.providers.map((p) =>
+        p.id === id ? { ...p, ...patch } : p,
+      ),
+    }),
+    onSuccess: (s, provider) => ({
+      providers: s.providers.map((p) =>
+        p.id === id ? mapProviderDto(provider) : p,
+      ),
+    }),
+    dedupe: { key: `provider:${id}`, strategy: "last" },
+  }).catch((error) => {
+    console.warn("Failed to update provider", error);
+  });
 }
 
 export async function fetchProviderModels(id: string) {

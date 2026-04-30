@@ -33,6 +33,7 @@ import type {
   TaskBoardDto,
 } from "@/shared/types/api";
 import type { ThreadStreamEvent } from "./types";
+import { formatInvokeErrorMessage } from "@/shared/lib/invoke-error";
 
 // ---------------------------------------------------------------------------
 // Callback types for AI Elements mapping
@@ -208,7 +209,7 @@ export class ThreadStream {
       this.currentRunId = runId;
       return runId;
     } catch (error) {
-      const message = extractErrorMessage(error);
+      const message = formatInvokeErrorMessage(error) ?? "Unknown error";
       if (!this.disposed) {
         this.onError?.(message, "");
       }
@@ -236,7 +237,7 @@ export class ThreadStream {
       this.currentRunId = runId;
       return runId;
     } catch (error) {
-      const message = extractErrorMessage(error);
+      const message = formatInvokeErrorMessage(error) ?? "Unknown error";
       if (!this.disposed) {
         this.onError?.(message, "");
       }
@@ -251,7 +252,7 @@ export class ThreadStream {
     try {
       return await threadCancelRun(threadId);
     } catch (error) {
-      const message = extractErrorMessage(error);
+      const message = formatInvokeErrorMessage(error) ?? "Unknown error";
       this.onError?.(message, this.currentRunId ?? "");
       throw error;
     }
@@ -282,7 +283,7 @@ export class ThreadStream {
       this.currentRunId = runId;
       return runId;
     } catch (error) {
-      const message = extractErrorMessage(error);
+      const message = formatInvokeErrorMessage(error) ?? "Unknown error";
       if (!this.disposed) {
         this.onError?.(message, "");
       }
@@ -323,7 +324,7 @@ export class ThreadStream {
       this.currentRunId = runId;
       return runId;
     } catch (error) {
-      const message = extractErrorMessage(error);
+      const message = formatInvokeErrorMessage(error) ?? "Unknown error";
       if (!this.disposed) {
         this.onError?.(message, "");
       }
@@ -342,7 +343,7 @@ export class ThreadStream {
     try {
       await toolApprovalRespond(toolCallId, runId, approved);
     } catch (error) {
-      const message = extractErrorMessage(error);
+      const message = formatInvokeErrorMessage(error) ?? "Unknown error";
       this.onError?.(message, runId);
       throw error;
     }
@@ -355,7 +356,7 @@ export class ThreadStream {
     try {
       await toolClarifyRespond(toolCallId, response);
     } catch (error) {
-      const message = extractErrorMessage(error);
+      const message = formatInvokeErrorMessage(error) ?? "Unknown error";
       this.onError?.(message, this.currentRunId ?? "");
       throw error;
     }
@@ -680,39 +681,4 @@ function isRuntimeOrchestrationToolName(toolName: string) {
     toolName === "agent_explore"
     || toolName === "agent_review"
   );
-}
-
-/**
- * Extract a human-readable error message from an unknown thrown value.
- *
- * Tauri `invoke` rejections are often plain objects (not Error instances),
- * so `String(error)` would produce the unhelpful "[object Object]".
- * This helper covers the common shapes.
- */
-function extractErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  if (error && typeof error === "object") {
-    // Tauri serialized errors may carry `message`, `error`, or `description`
-    const obj = error as Record<string, unknown>;
-    if (typeof obj.message === "string" && obj.message) {
-      return obj.message;
-    }
-    if (typeof obj.error === "string" && obj.error) {
-      return obj.error;
-    }
-    if (typeof obj.description === "string" && obj.description) {
-      return obj.description;
-    }
-    try {
-      return JSON.stringify(error);
-    } catch {
-      // circular reference or other serialization failure
-    }
-  }
-  return String(error);
 }
