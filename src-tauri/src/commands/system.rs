@@ -175,7 +175,7 @@ struct WorkspaceOpenAppSpec {
 }
 
 #[cfg(target_os = "macos")]
-const WORKSPACE_OPEN_APP_SPECS: [WorkspaceOpenAppSpec; 12] = [
+const WORKSPACE_OPEN_APP_SPECS: [WorkspaceOpenAppSpec; 13] = [
     WorkspaceOpenAppSpec {
         id: "finder",
         name: "Finder",
@@ -250,6 +250,12 @@ const WORKSPACE_OPEN_APP_SPECS: [WorkspaceOpenAppSpec; 12] = [
         name: "Android Studio",
         bundle_names: &["Android Studio.app", "Android Studio Preview.app"],
         preferred_paths: &[],
+    },
+    WorkspaceOpenAppSpec {
+        id: "ghostty",
+        name: "Ghostty",
+        bundle_names: &["Ghostty.app"],
+        preferred_paths: &["/Applications/Ghostty.app"],
     },
 ];
 
@@ -346,7 +352,7 @@ fn tree_path_open_behavior_macos(app_id: &str, is_directory: bool) -> TreePathOp
 
     match app_id {
         "finder" => TreePathOpenBehavior::RevealTarget,
-        "terminal" | "iterm2" | "warp" => TreePathOpenBehavior::OpenContainingFolder,
+        "terminal" | "iterm2" | "warp" | "ghostty" => TreePathOpenBehavior::OpenContainingFolder,
         _ => TreePathOpenBehavior::OpenTarget,
     }
 }
