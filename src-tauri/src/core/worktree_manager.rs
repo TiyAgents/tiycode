@@ -163,6 +163,7 @@ impl WorktreeManager {
             .filter(|s| !s.is_empty())
             .map(str::to_string);
         let create_branch = input.create_branch;
+        let track_upstream = input.track_upstream;
 
         task::spawn_blocking(move || {
             run_git_worktree_add(
@@ -172,6 +173,7 @@ impl WorktreeManager {
                 &branch_name,
                 create_branch,
                 base_ref.as_deref(),
+                track_upstream,
             )
         })
         .await
@@ -548,6 +550,7 @@ fn run_git_worktree_add(
     branch: &str,
     create_branch: bool,
     base_ref: Option<&str>,
+    track_upstream: bool,
 ) -> Result<(), AppError> {
     // `git worktree add` uses the final path component as the worktree
     // registration name. We don't force it explicitly; the caller is expected
@@ -560,6 +563,13 @@ fn run_git_worktree_add(
     if create_branch {
         args.push("-b".to_string());
         args.push(branch.to_string());
+        // When track_upstream is false, prevent the new branch from tracking
+        // the base ref so that `git push` won't accidentally target the base
+        // branch's upstream. When track_upstream is true (e.g. checking out a
+        // remote branch locally), we let Git set up tracking normally.
+        if base_ref.is_some() && !track_upstream {
+            args.push("--no-track".to_string());
+        }
         args.push(target_path.to_string());
         if let Some(base) = base_ref {
             args.push(base.to_string());
