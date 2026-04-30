@@ -37,19 +37,19 @@ import {
   SIDEBAR_SYNC_MIN_GAP_MS,
   UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY,
   WORKSPACE_THREAD_PAGE_SIZE,
-  buildInitialWorkspaceThreadDisplayCounts,
-  buildInitialWorkspaceThreadHasMore,
+  
+  
   buildProjectOptionFromWorkspace,
   buildThreadContextBadgeData,
   formatCompactTokenCount,
   findWorkspaceForThread,
   getNewThreadTerminalBindingKey,
-  mapRunFinishedStatusToThreadStatus,
-  mapRunStateToWorkbenchThreadStatus,
+  
+  mapRunFinishedStatusToThreadRunStatus,
+  
   mergeLocalFallbackThreads,
   resolveActiveThreadWorkbenchProfileId,
   resolveThreadProfileId,
-  type PendingThreadRun,
 } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
 import { isOnboardingCompleted } from "@/modules/onboarding/model/use-onboarding";
 import type {
@@ -70,7 +70,6 @@ import {
   gitGetSnapshot,
   gitSubscribe,
 } from "@/services/bridge";
-import type { RunState } from "@/services/thread-stream";
 import {
   DEFAULT_TERMINAL_HEIGHT,
   LANGUAGE_OPTIONS,
@@ -81,12 +80,12 @@ import {
   THEME_OPTIONS,
   TOPBAR_HEIGHT,
   UPDATE_STATUS_DURATION,
-  WORKSPACE_ITEMS,
+  
 } from "@/modules/workbench-shell/model/fixtures";
 import {
   activateThread,
   buildProjectOptionFromPath,
-  buildInitialWorkspaces,
+  
   buildWorkspaceItemsFromDtos,
   buildThreadTitle,
   clearActiveThreads,
@@ -111,7 +110,6 @@ import type {
   DrawerPanel,
   PanelVisibilityState,
   ProjectOption,
-  ThreadStatus as WorkbenchThreadStatus,
   WorkbenchOverlay,
   WorkspaceItem,
 } from "@/modules/workbench-shell/model/types";
@@ -141,6 +139,17 @@ import { isSameWorkspacePath } from "@/shared/lib/workspace-path";
 import { waitForBackendReady } from "@/shared/lib/backend-ready";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
 import { terminalStore } from "@/features/terminal/model/terminal-store";
+import {
+  threadStore,
+  useStore,
+  setThreadStatus,
+  updateThreadTitle as setStoreThreadTitle,
+  setDisplayCount as setStoreDisplayCount,
+  setLoadMorePending as setStoreLoadMorePending,
+  setOpenWorkspace as setStoreOpenWorkspace,
+  setSidebarReady as setStoreSidebarReady,
+  shallowEqual,
+} from "@/modules/workbench-shell/model/thread-store";
 
 
 export function DashboardWorkbench() {
@@ -267,14 +276,37 @@ export function DashboardWorkbench() {
     updateCommand,
     updateTerminalSetting,
   } = useSettingsController();
-  const [workspaces, setWorkspaces] = useState<Array<WorkspaceItem>>(() =>
-    isTauri() ? [] : buildInitialWorkspaces(),
+
+  // ── Phase 1: threadStore subscriptions (replaces 9 useState + 3 useRef) ──
+  const workspaces = useStore(threadStore, (s) => s.workspaces, shallowEqual);
+  
+  const isNewThreadMode = useStore(threadStore, (s) => s.isNewThreadMode);
+  const isSidebarReady = useStore(threadStore, (s) => s.sidebarReady);
+  const pendingThreadRuns = useStore(threadStore, (s) => s.pendingRuns, shallowEqual);
+  const workspaceThreadDisplayCounts = useStore(
+    threadStore,
+    (s) => s.displayCounts,
+    shallowEqual,
   );
+  const workspaceThreadHasMore = useStore(
+    threadStore,
+    (s) => s.hasMore,
+    shallowEqual,
+  );
+  const workspaceThreadLoadMorePending = useStore(
+    threadStore,
+    (s) => s.loadMorePending,
+    shallowEqual,
+  );
+  const openWorkspaces = useStore(
+    threadStore,
+    (s) => s.openWorkspaces,
+    shallowEqual,
+  );
+
   const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(
     () => (isTauri() ? [] : [...RECENT_PROJECTS]),
   );
-  const [isNewThreadMode, setNewThreadMode] = useState(true);
-  const [isSidebarReady, setSidebarReady] = useState(() => !isTauri());
   const [activeOverlay, setActiveOverlay] = useState<WorkbenchOverlay>(null);
   const [showOnboarding, setShowOnboarding] = useState(() => !isOnboardingCompleted());
   const [activeSettingsCategory, setActiveSettingsCategory] =
@@ -323,9 +355,6 @@ export function DashboardWorkbench() {
   } | null>(null);
   const [worktreeDialogContext, setWorktreeDialogContext] =
     useState<NewWorktreeDialogContext | null>(null);
-  const [pendingThreadRuns, setPendingThreadRuns] = useState<
-    Record<string, PendingThreadRun>
-  >({});
   const [newThreadRunMode, setNewThreadRunMode] = useState<RunMode>("default");
   const composerCommands = useMemo(
     () => [...commands.commands, ...pluginCommandEntries],
@@ -341,29 +370,6 @@ export function DashboardWorkbench() {
   // changes on every sync and would otherwise cause re-entrant effect firing).
   const terminalWorkspaceBindingsRef = useRef(terminalWorkspaceBindings);
   terminalWorkspaceBindingsRef.current = terminalWorkspaceBindings;
-  const [_defaultWorkspaceId, setDefaultWorkspaceId] = useState<string | null>(
-    null,
-  );
-  const [workspaceThreadDisplayCounts, setWorkspaceThreadDisplayCounts] =
-    useState<Record<string, number>>(() =>
-      isTauri() ? {} : buildInitialWorkspaceThreadDisplayCounts(),
-    );
-  const [workspaceThreadHasMore, setWorkspaceThreadHasMore] = useState<
-    Record<string, boolean>
-  >(() => (isTauri() ? {} : buildInitialWorkspaceThreadHasMore()));
-  const [workspaceThreadLoadMorePending, setWorkspaceThreadLoadMorePending] =
-    useState<Record<string, boolean>>({});
-  const [openWorkspaces, setOpenWorkspaces] = useState<Record<string, boolean>>(
-    () =>
-      isTauri()
-        ? {}
-        : Object.fromEntries(
-            WORKSPACE_ITEMS.map((workspace) => [
-              workspace.id,
-              workspace.defaultOpen,
-            ]),
-          ),
-  );
   const [activeDrawerPanel, setActiveDrawerPanel] =
     useState<DrawerPanel>("project");
   const [selectedDiffSelection, setSelectedDiffSelection] =
@@ -390,9 +396,6 @@ export function DashboardWorkbench() {
     preserveSelectedProjectIfMissing?: boolean;
     threadDisplayCountOverrides: Record<string, number>;
   } | null>(null);
-  const workspaceThreadDisplayCountsRef = useRef<Record<string, number>>(
-    isTauri() ? {} : buildInitialWorkspaceThreadDisplayCounts(),
-  );
   const newThreadCreationRef = useRef<Record<string, Promise<string>>>({});
   const terminalThreadBindingsRef = useRef(terminalThreadBindings);
   terminalThreadBindingsRef.current = terminalThreadBindings;
@@ -532,10 +535,6 @@ export function DashboardWorkbench() {
     topBarGitSnapshot?.untrackedFiles,
     topBarGitSnapshot?.conflictedFiles,
   ]);
-
-  useEffect(() => {
-    workspaceThreadDisplayCountsRef.current = workspaceThreadDisplayCounts;
-  }, [workspaceThreadDisplayCounts]);
 
   const setSidebarOpen = (
     nextState: boolean | ((current: boolean) => boolean),
@@ -698,8 +697,8 @@ export function DashboardWorkbench() {
       const creationPromise = threadCreate(workspaceId, "", activeAgentProfileId)
         .then((thread) => {
           setActiveThreadProfileIdOverride(thread.profileId ?? activeAgentProfileId);
-          setWorkspaces((current) =>
-            current.map((workspace) => ({
+          threadStore.setState((prev) => ({
+            workspaces: prev.workspaces.map((workspace) => ({
               ...workspace,
               threads: workspace.threads.map((candidate) =>
                 candidate.id === thread.id
@@ -710,7 +709,7 @@ export function DashboardWorkbench() {
                   : candidate,
               ),
             })),
-          );
+          }));
           setTerminalThreadBindings((current) => {
             const bindingKey = getNewThreadTerminalBindingKey(workspaceId);
             if (current[bindingKey] === thread.id) {
@@ -797,7 +796,7 @@ export function DashboardWorkbench() {
         workspaceEntries.map((workspace) => [
           workspace.id,
           threadDisplayCountOverrides[workspace.id] ??
-            workspaceThreadDisplayCountsRef.current[workspace.id] ??
+            threadStore.getState().displayCounts[workspace.id] ??
             WORKSPACE_THREAD_PAGE_SIZE,
         ]),
       );
@@ -898,17 +897,17 @@ export function DashboardWorkbench() {
         return merged;
       });
       setRecentProjects(nextProjects);
-      setDefaultWorkspaceId(defaultWorkspace?.id ?? null);
-      setWorkspaceThreadDisplayCounts(nextDisplayCounts);
-      setWorkspaceThreadHasMore(nextHasMoreByWorkspaceId);
-      setWorkspaceThreadLoadMorePending((current) =>
-        Object.fromEntries(
+      threadStore.setState({ defaultWorkspaceId: defaultWorkspace?.id ?? null });
+      threadStore.setState({ displayCounts: nextDisplayCounts });
+      threadStore.setState({ hasMore: nextHasMoreByWorkspaceId });
+      threadStore.setState((prev) => ({
+        loadMorePending: Object.fromEntries(
           workspaceEntries.map((workspace) => [
             workspace.id,
-            current[workspace.id] ?? false,
+            prev.loadMorePending[workspace.id] ?? false,
           ]),
         ),
-      );
+      }));
       setSelectedProject((current) => {
         if (current) {
           const matchingProject =
@@ -931,8 +930,8 @@ export function DashboardWorkbench() {
 
         return defaultProject ?? nextProjects[0] ?? null;
       });
-      setWorkspaces((current) => {
-        const activeThreadId = getActiveThread(current)?.id ?? null;
+      threadStore.setState((prev) => {
+        const activeThreadId = getActiveThread(prev.workspaces)?.id ?? null;
         const syncedWorkspaces = buildWorkspaceItemsFromDtos(
           workspaceEntries,
           threadsByWorkspaceId,
@@ -940,13 +939,13 @@ export function DashboardWorkbench() {
           language,
         );
         const mergedWithFallbacks = mergeLocalFallbackThreads({
-          currentWorkspaces: current,
+          currentWorkspaces: prev.workspaces,
           syncedWorkspaces,
         });
 
-        return mergedWithFallbacks.map((workspace) => {
+        const nextWorkspaces = mergedWithFallbacks.map((workspace) => {
           const currentWorkspace =
-            current.find((candidate) => candidate.id === workspace.id) ?? null;
+            prev.workspaces.find((candidate) => candidate.id === workspace.id) ?? null;
 
           if (!currentWorkspace) {
             return workspace;
@@ -980,16 +979,16 @@ export function DashboardWorkbench() {
             }),
           };
         });
+
+        const nextOpenWorkspaces: Record<string, boolean> = {};
+        for (const workspace of workspaceEntries) {
+          nextOpenWorkspaces[workspace.id] =
+            prev.openWorkspaces[workspace.id] ??
+            (workspace.isDefault || workspaceEntries.length === 1);
+        }
+
+        return { workspaces: nextWorkspaces, openWorkspaces: nextOpenWorkspaces };
       });
-      setOpenWorkspaces((current) =>
-        Object.fromEntries(
-          workspaceEntries.map((workspace) => [
-            workspace.id,
-            current[workspace.id] ??
-              (workspace.isDefault || workspaceEntries.length === 1),
-          ]),
-        ),
-      );
       console.log(`⏱ [sidebar-sync] total: ${(performance.now() - syncStart).toFixed(1)}ms`);
     };
 
@@ -1104,18 +1103,11 @@ export function DashboardWorkbench() {
       listen<{ threadId: string; runId: string }>(
         "thread-run-started",
         (event) => {
-          const { threadId } = event.payload;
-
-          setWorkspaces((current) =>
-            current.map((workspace) => ({
-              ...workspace,
-              threads: workspace.threads.map((thread) =>
-                thread.id === threadId
-                  ? { ...thread, status: "running" as const }
-                  : thread,
-              ),
-            })),
-          );
+          const { threadId, runId } = event.payload;
+          setThreadStatus(threadId, "running", {
+            runId,
+            source: "tauri_event",
+          });
 
           // Extend the sidebar auto-refresh grace period so the polling
           // keeps running while background threads are active.
@@ -1129,18 +1121,11 @@ export function DashboardWorkbench() {
       listen<{ threadId: string; runId: string; status: string }>(
         "thread-run-finished",
         (event) => {
-          const { threadId, status } = event.payload;
-          const threadStatus = mapRunFinishedStatusToThreadStatus(status);
-
-          setWorkspaces((current) =>
-            current.map((workspace) => ({
-              ...workspace,
-              threads: workspace.threads.map((thread) =>
-                thread.id === threadId
-                  ? { ...thread, status: threadStatus }
-                  : thread,
-              ),
-            })),
+          const { threadId, runId, status } = event.payload;
+          setThreadStatus(
+            threadId,
+            mapRunFinishedStatusToThreadRunStatus(status),
+            { runId, source: "tauri_event" },
           );
 
           // Perform a full sidebar sync to reconcile any missed state
@@ -1166,16 +1151,7 @@ export function DashboardWorkbench() {
             return;
           }
 
-          setWorkspaces((current) =>
-            current.map((workspace) => ({
-              ...workspace,
-              threads: workspace.threads.map((thread) =>
-                thread.id === threadId
-                  ? { ...thread, name: trimmedTitle }
-                  : thread,
-              ),
-            })),
-          );
+          setStoreThreadTitle(threadId, trimmedTitle);
         },
       ),
     );
@@ -1261,7 +1237,7 @@ export function DashboardWorkbench() {
         if (cancelled) {
           return;
         }
-        setSidebarReady(true);
+        setStoreSidebarReady(true);
       })
       .catch((error) => {
         if (cancelled) {
@@ -1631,26 +1607,22 @@ export function DashboardWorkbench() {
   }, []);
 
   const handleWorkspaceToggle = (workspaceId: string) => {
-    setOpenWorkspaces((current) => ({
-      ...current,
-      [workspaceId]: !current[workspaceId],
+    threadStore.setState((prev) => ({
+      openWorkspaces: {
+        ...prev.openWorkspaces,
+        [workspaceId]: !prev.openWorkspaces[workspaceId],
+      },
     }));
   };
 
   const handleWorkspaceShowMore = useCallback(
     (workspaceId: string) => {
       const nextDisplayCount =
-        (workspaceThreadDisplayCountsRef.current[workspaceId] ??
+        (threadStore.getState().displayCounts[workspaceId] ??
           WORKSPACE_THREAD_PAGE_SIZE) + WORKSPACE_THREAD_PAGE_SIZE;
 
-      setWorkspaceThreadDisplayCounts((current) => ({
-        ...current,
-        [workspaceId]: nextDisplayCount,
-      }));
-      setWorkspaceThreadLoadMorePending((current) => ({
-        ...current,
-        [workspaceId]: true,
-      }));
+      setStoreDisplayCount(workspaceId, nextDisplayCount);
+      setStoreLoadMorePending(workspaceId, true);
       setTerminalBootstrapError(null);
 
       void syncWorkspaceSidebar({
@@ -1663,10 +1635,7 @@ export function DashboardWorkbench() {
           setTerminalBootstrapError(message);
         })
         .finally(() => {
-          setWorkspaceThreadLoadMorePending((current) => ({
-            ...current,
-            [workspaceId]: false,
-          }));
+          setStoreLoadMorePending(workspaceId, false);
         });
     },
     [syncWorkspaceSidebar],
@@ -1678,8 +1647,8 @@ export function DashboardWorkbench() {
     }
 
     setActiveThreadProfileIdOverride(null);
-    setNewThreadMode(true);
-    setWorkspaces((current) => clearActiveThreads(current));
+    threadStore.setState({ isNewThreadMode: true });
+    threadStore.setState((prev) => ({ workspaces: clearActiveThreads(prev.workspaces) }));
     setComposerError(null);
     setPendingDeleteThreadId(null);
     setTerminalBootstrapError(null);
@@ -1697,11 +1666,11 @@ export function DashboardWorkbench() {
       activeAgentProfileId,
     );
     setActiveThreadProfileIdOverride(resolvedProfileId);
-    setNewThreadMode(false);
+    threadStore.setState({ isNewThreadMode: false });
     setActiveWorkspaceMenuId(null);
     setPendingDeleteThreadId(null);
     setTerminalBootstrapError(null);
-    setWorkspaces((current) => activateThread(current, threadId));
+    threadStore.setState((prev) => ({ workspaces: activateThread(prev.workspaces, threadId) }));
 
     // Align the selected project with the workspace that owns this thread so
     // the new-thread empty state and path bindings stay consistent when the
@@ -1743,13 +1712,10 @@ export function DashboardWorkbench() {
       deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
       setSelectedProject(nextProject);
       setRecentProjects((current) => mergeRecentProjects(current, nextProject));
-      setOpenWorkspaces((current) => ({
-        ...current,
-        [workspaceId]: true,
-      }));
+      setStoreOpenWorkspace(workspaceId, true);
       setActiveThreadProfileIdOverride(null);
-      setNewThreadMode(true);
-      setWorkspaces((current) => clearActiveThreads(current));
+      threadStore.setState({ isNewThreadMode: true });
+      threadStore.setState((prev) => ({ workspaces: clearActiveThreads(prev.workspaces) }));
       setComposerError(null);
       setPendingDeleteThreadId(null);
       setTerminalBootstrapError(null);
@@ -1790,36 +1756,6 @@ export function DashboardWorkbench() {
     activateWorkspaceAsNewThreadTarget(workspace.id, nextProject);
   }, [activateWorkspaceAsNewThreadTarget, language, t]);
 
-  const updateActiveThreadStatus = useCallback(
-    (status: WorkbenchThreadStatus) => {
-      if (!activeThread?.id) {
-        return;
-      }
-
-      setWorkspaces((current) =>
-        current.map((workspace) => ({
-          ...workspace,
-          threads: workspace.threads.map((thread) =>
-            thread.id === activeThread.id
-              ? {
-                  ...thread,
-                  status,
-                }
-              : thread,
-          ),
-        })),
-      );
-    },
-    [activeThread?.id],
-  );
-
-  const handleRuntimeThreadRunStateChange = useCallback(
-    (state: RunState) => {
-      updateActiveThreadStatus(mapRunStateToWorkbenchThreadStatus(state));
-    },
-    [updateActiveThreadStatus],
-  );
-
   const handleRuntimeThreadTitleChange = useCallback(
     (threadId: string, title: string) => {
       const trimmedTitle = title.trim();
@@ -1827,8 +1763,8 @@ export function DashboardWorkbench() {
         return;
       }
 
-      setWorkspaces((current) =>
-        current.map((workspace) => ({
+      threadStore.setState((prev) => ({
+        workspaces: prev.workspaces.map((workspace) => ({
           ...workspace,
           threads: workspace.threads.map((thread) =>
             thread.id === threadId
@@ -1839,7 +1775,7 @@ export function DashboardWorkbench() {
               : thread,
           ),
         })),
-      );
+      }));
 
       void syncWorkspaceSidebar().catch((error) => {
         const message = getInvokeErrorMessage(error, t("dashboard.error.refreshThreadList"));
@@ -1874,15 +1810,16 @@ export function DashboardWorkbench() {
 
   const handleRuntimeConsumeInitialPrompt = useCallback(
     (id: string) => {
-      setPendingThreadRuns((current) => {
+      threadStore.setState((prev) => {
         const next = Object.fromEntries(
-          Object.entries(current).filter(
+          Object.entries(prev.pendingRuns).filter(
             ([, pendingRun]) => pendingRun.id !== id,
           ),
         );
-        return Object.keys(next).length === Object.keys(current).length
-          ? current
-          : next;
+        if (Object.keys(next).length === Object.keys(prev.pendingRuns).length) {
+          return {};
+        }
+        return { pendingRuns: next };
       });
     },
     [],
@@ -1905,8 +1842,8 @@ export function DashboardWorkbench() {
         return;
       }
 
-      setWorkspaces((current) =>
-        current.map((workspace) => ({
+      threadStore.setState((prev) => ({
+        workspaces: prev.workspaces.map((workspace) => ({
           ...workspace,
           threads: workspace.threads.map((thread) =>
             thread.id === threadId
@@ -1914,15 +1851,15 @@ export function DashboardWorkbench() {
               : thread,
           ),
         })),
-      );
+      }));
 
       if (isTauri()) {
         void threadUpdateTitle(threadId, newTitle)
           .catch((error) => {
             console.warn("[thread] failed to update title:", error);
             // Rollback: restore the original name on failure.
-            setWorkspaces((current) =>
-              current.map((workspace) => ({
+            threadStore.setState((prev) => ({
+              workspaces: prev.workspaces.map((workspace) => ({
                 ...workspace,
                 threads: workspace.threads.map((thread) =>
                   thread.id === threadId
@@ -1930,7 +1867,7 @@ export function DashboardWorkbench() {
                     : thread,
                 ),
               })),
-            );
+            }));
           })
           .finally(() => {
             editingThreadIdRef.current = null;
@@ -1965,24 +1902,24 @@ export function DashboardWorkbench() {
           const isDeletingActiveThread = activeThread?.id === threadId;
           terminalStore.removeSession(threadId);
 
-          setWorkspaces((current) => {
-            const next = current.map((workspace) => ({
+          threadStore.setState((prev) => {
+            const next = prev.workspaces.map((workspace) => ({
               ...workspace,
               threads: workspace.threads.filter(
                 (thread) => thread.id !== threadId,
               ),
             }));
 
-            return isDeletingActiveThread ? clearActiveThreads(next) : next;
+            return { workspaces: isDeletingActiveThread ? clearActiveThreads(next) : next };
           });
-          setPendingThreadRuns((current) => {
-            if (!(threadId in current)) {
-              return current;
+          threadStore.setState((prev) => {
+            if (!(threadId in prev.pendingRuns)) {
+              return {};
             }
 
-            const next = { ...current };
+            const next = { ...prev.pendingRuns };
             delete next[threadId];
-            return next;
+            return { pendingRuns: next };
           });
           setTerminalCollapsedByThreadKey((current) => {
             if (!(threadId in current)) {
@@ -2005,7 +1942,7 @@ export function DashboardWorkbench() {
           if (isDeletingActiveThread) {
             setSelectedProject((current) => activeThreadProject ?? current);
             setActiveThreadProfileIdOverride(null);
-            setNewThreadMode(true);
+            threadStore.setState({ isNewThreadMode: true });
             setComposerError(null);
           }
 
@@ -2168,11 +2105,11 @@ export function DashboardWorkbench() {
 
         setSelectedProject(project);
         setRecentProjects((current) => mergeRecentProjects(current, project));
-        setWorkspaces((current) => {
-          const cleared = clearActiveThreads(current);
+        threadStore.setState((prev) => {
+          const cleared = clearActiveThreads(prev.workspaces);
 
           if (existingWorkspace) {
-            return cleared.map((workspace) =>
+            return { workspaces: cleared.map((workspace) =>
               workspace.id === existingWorkspace.id
                 ? {
                     ...workspace,
@@ -2181,28 +2118,30 @@ export function DashboardWorkbench() {
                     threads: [nextThread, ...workspace.threads],
                   }
                 : workspace,
-            );
+            ) };
           }
 
-          return [
-            {
-              id: nextWorkspaceId ?? project.id,
-              name: project.name,
-              defaultOpen: true,
-              path: project.path,
-              kind: project.kind,
-              parentWorkspaceId: project.parentWorkspaceId,
-              worktreeHash: project.worktreeHash ?? null,
-              branch: project.branch ?? null,
-              threads: [nextThread],
-            },
-            ...cleared,
-          ];
+          return {
+            workspaces: [
+              {
+                id: nextWorkspaceId ?? project.id,
+                name: project.name,
+                defaultOpen: true,
+                path: project.path,
+                kind: project.kind,
+                parentWorkspaceId: project.parentWorkspaceId,
+                worktreeHash: project.worktreeHash ?? null,
+                branch: project.branch ?? null,
+                threads: [nextThread],
+              },
+              ...cleared,
+            ],
+          };
         });
-        setOpenWorkspaces((current) => ({
-          ...current,
-          [existingWorkspace?.id ?? nextWorkspaceId ?? project.id]: true,
-        }));
+        setStoreOpenWorkspace(
+          existingWorkspace?.id ?? nextWorkspaceId ?? project.id,
+          true,
+        );
 
         if (activeTerminalStateKey) {
           setTerminalCollapsedByThreadKey((current) => {
@@ -2237,9 +2176,10 @@ export function DashboardWorkbench() {
             };
           });
 
-          setPendingThreadRuns((current) => ({
-            ...current,
-            [persistedThreadId]: {
+          threadStore.setState((prev) => ({
+            pendingRuns: {
+              ...prev.pendingRuns,
+              [persistedThreadId]: {
               id: nextPendingRunId,
               displayText: submission.displayText,
               effectivePrompt,
@@ -2248,13 +2188,14 @@ export function DashboardWorkbench() {
               runMode: submission.runMode ?? newThreadRunMode,
               threadId: persistedThreadId,
             },
+          },
           }));
         }
 
         // Bind the current profile to the newly created thread.
         if (persistedThreadId) {
-          setWorkspaces((current) =>
-            current.map((workspace) => ({
+          threadStore.setState((prev) => ({
+            workspaces: prev.workspaces.map((workspace) => ({
               ...workspace,
               threads: workspace.threads.map((thread) =>
                 thread.id === persistedThreadId
@@ -2265,11 +2206,11 @@ export function DashboardWorkbench() {
                   : thread,
               ),
             })),
-          );
+          }));
           setActiveThreadProfileIdOverride(activeAgentProfileId);
         }
 
-        setNewThreadMode(false);
+        threadStore.setState({ isNewThreadMode: false });
         setNewThreadRunMode("default");
         setComposerValue("");
         setComposerError(null);
@@ -2321,8 +2262,8 @@ export function DashboardWorkbench() {
         return;
       }
 
-      setWorkspaces((current) =>
-        current.map((workspace) => ({
+      threadStore.setState((prev) => ({
+        workspaces: prev.workspaces.map((workspace) => ({
           ...workspace,
           threads: workspace.threads.map((thread) =>
             thread.id === activeThread.id
@@ -2333,7 +2274,7 @@ export function DashboardWorkbench() {
               : thread,
           ),
         })),
-      );
+      }));
       setActiveThreadProfileIdOverride(profileId);
     },
     [activeThread?.id, isNewThreadMode, setActiveAgentProfile],
@@ -2509,8 +2450,8 @@ export function DashboardWorkbench() {
           await workspaceRemove(workspace.id, true);
 
           if (isRemovingActiveWorkspace) {
-            setNewThreadMode(true);
-            setWorkspaces((current) => clearActiveThreads(current));
+            threadStore.setState({ isNewThreadMode: true });
+            threadStore.setState((prev) => ({ workspaces: clearActiveThreads(prev.workspaces) }));
             setComposerError(null);
             setSelectedDiffSelection(null);
           }
@@ -2535,13 +2476,13 @@ export function DashboardWorkbench() {
           setPendingDeleteThreadId((current) =>
             current && workspaceThreadIds.has(current) ? null : current,
           );
-          setPendingThreadRuns((current) =>
-            Object.fromEntries(
-              Object.entries(current).filter(
+          threadStore.setState((prev) => ({
+            pendingRuns: Object.fromEntries(
+              Object.entries(prev.pendingRuns).filter(
                 ([threadId]) => !workspaceThreadIds.has(threadId),
               ),
             ),
-          );
+          }));
           setTerminalThreadBindings((current) =>
             Object.fromEntries(
               Object.entries(current).filter(
@@ -2565,14 +2506,14 @@ export function DashboardWorkbench() {
               ),
             ),
           );
-          setOpenWorkspaces((current) => {
-            if (!(workspace.id in current)) {
-              return current;
+          threadStore.setState((prev) => {
+            if (!(workspace.id in prev.openWorkspaces)) {
+              return {};
             }
 
-            const next = { ...current };
+            const next = { ...prev.openWorkspaces };
             delete next[workspace.id];
-            return next;
+            return { openWorkspaces: next };
           });
           setActiveWorkspaceMenuId(null);
 
@@ -2898,7 +2839,6 @@ export function DashboardWorkbench() {
                         onComposerDraftChange={handleRuntimeComposerDraftChange}
                         onConsumeInitialPrompt={handleRuntimeConsumeInitialPrompt}
                         onContextUsageChange={setRuntimeContextUsage}
-                        onRunStateChange={handleRuntimeThreadRunStateChange}
                         onOpenProfileSettings={() => handleOpenSettings("general")}
                         onSelectAgentProfile={handleSelectAgentProfileForThread}
                         onThreadTitleChange={handleRuntimeThreadTitleChange}

@@ -38,6 +38,11 @@ import type {
   TaskBoardDto,
 } from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
+import {
+  threadStore,
+  useStore,
+  setThreadStatus as storeSetThreadStatus,
+} from "@/modules/workbench-shell/model/thread-store";
 import { Button } from "@/shared/ui/button";
 import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
 import type { SkillRecord } from "@/shared/types/extensions";
@@ -140,7 +145,6 @@ type RuntimeThreadSurfaceProps = {
   onComposerDraftChange?: (value: string) => void;
   onConsumeInitialPrompt?: (id: string) => void;
   onContextUsageChange?: (usage: ThreadContextUsage | null) => void;
-  onRunStateChange?: (state: RunState) => void;
   onOpenProfileSettings?: () => void;
   onSelectAgentProfile: (id: string) => void;
   onThreadTitleChange?: (threadId: string, title: string) => void;
@@ -229,7 +233,6 @@ export function RuntimeThreadSurface({
   onComposerDraftChange,
   onConsumeInitialPrompt,
   onContextUsageChange,
-  onRunStateChange,
   onOpenProfileSettings,
   onSelectAgentProfile,
   onThreadTitleChange,
@@ -259,7 +262,10 @@ export function RuntimeThreadSurface({
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
   const [queueArtifact, setQueueArtifact] = useState<unknown>(null);
   const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
-  const [runState, setRunState] = useState<RunState>("idle");
+  const runState = useStore(
+    threadStore,
+    (s) => (threadId ? s.threadStatuses[threadId]?.status ?? "idle" : "idle") as RunState,
+  );
   const [selectedRunMode, setSelectedRunMode] = useState<RunMode>("default");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [snapshotThreadId, setSnapshotThreadId] = useState<string | null>(null);
@@ -429,11 +435,11 @@ export function RuntimeThreadSurface({
       onContextUsageChange?.(null);
       setApprovingPlanMessageId(null);
       setRuntimeError(null);
-      setRunState("idle");
+      if (threadId) storeSetThreadStatus(threadId, "idle", { source: "stream" });
       setSnapshotReady(true);
       setSnapshotThreadId(null);
       setThinkingPlaceholder(null);
-      onRunStateChange?.("idle");
+      
       return;
     }
 
@@ -534,7 +540,7 @@ export function RuntimeThreadSurface({
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
-      setRunState(nextState);
+      if (threadId) storeSetThreadStatus(threadId, nextState as RunState, { source: "snapshot" });
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
       if (!shouldPreserveContextUsage) {
         onContextUsageChange?.(nextContextUsage);
@@ -565,7 +571,6 @@ export function RuntimeThreadSurface({
       if (snapshot.thread.title.trim()) {
         onThreadTitleChange?.(snapshot.thread.id, snapshot.thread.title.trim());
       }
-      onRunStateChange?.(nextState);
     } catch (error) {
       if (snapshotLoadRequestRef.current !== requestId) {
         return;
@@ -582,7 +587,7 @@ export function RuntimeThreadSurface({
         setLoading(false);
       }
     }
-  }, [clearScheduledThinkingPhase, onContextUsageChange, onRunStateChange, onThreadTitleChange, showThinkingPlaceholder, threadId]);
+  }, [clearScheduledThinkingPhase, onContextUsageChange, onThreadTitleChange, showThinkingPlaceholder, threadId]);
 
   const loadOlderMessages = useCallback(async () => {
     if (!threadId || isLoadingMoreMessages || messages.length === 0 || !hasMoreMessages) {
@@ -643,7 +648,7 @@ export function RuntimeThreadSurface({
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
-      setRunState(nextState);
+      if (threadId) storeSetThreadStatus(threadId, nextState as RunState, { source: "snapshot" });
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
 
       const latestVisibleRun = getLatestVisibleRun(snapshot);
@@ -657,11 +662,10 @@ export function RuntimeThreadSurface({
       if (snapshot.thread.title.trim()) {
         onThreadTitleChange?.(snapshot.thread.id, snapshot.thread.title.trim());
       }
-      onRunStateChange?.(nextState);
     } catch {
       // Keep the local completed fallback message if snapshot resync is not ready yet.
     }
-  }, [onContextUsageChange, onRunStateChange, onThreadTitleChange, threadId]);
+  }, [onContextUsageChange, onThreadTitleChange, threadId]);
 
   useEffect(() => {
     subscribingRef.current = false;
@@ -679,7 +683,7 @@ export function RuntimeThreadSurface({
     setApprovingPlanMessageId(null);
     setQueueArtifact(null);
     setRuntimeError(null);
-    setRunState("idle");
+    if (threadId) storeSetThreadStatus(threadId, "idle", { source: "stream" });
     setSnapshotReady(false);
     setSnapshotThreadId(null);
     lastOptimisticUserIdRef.current = null;
@@ -1070,8 +1074,7 @@ export function RuntimeThreadSurface({
     });
 
     stream.onRunStateChange = withActiveStream((state, runId) => {
-      setRunState(state);
-      onRunStateChange?.(state);
+      if (threadId) storeSetThreadStatus(threadId, state as RunState, { runId, source: "stream" });
 
       if (state === "running" || state === "waiting_approval" || state === "needs_reply") {
         setRuntimeError(null);
@@ -1141,7 +1144,6 @@ export function RuntimeThreadSurface({
     clearScheduledThinkingPhase,
     completeThinkingPhase,
     loadSnapshot,
-    onRunStateChange,
     onContextUsageChange,
     onThreadTitleChange,
     resyncCompletedMessage,
@@ -1168,13 +1170,11 @@ export function RuntimeThreadSurface({
 
         // Only reload if we still think the run is active — avoids
         // unnecessary snapshot loads when the stream already handled it.
-        setRunState((current) => {
-          if (current === "running" || current === "waiting_approval" || current === "needs_reply") {
-            void loadSnapshot();
-          }
-
-          return current;
-        });
+        const threadStatus = threadStore.getState().threadStatuses[threadId];
+        const currentStatus = threadStatus?.status ?? "idle";
+        if (currentStatus === "running" || currentStatus === "waiting_approval" || currentStatus === "needs_reply") {
+          void loadSnapshot();
+        }
       },
     );
 
@@ -2840,8 +2840,7 @@ export function RuntimeThreadSurface({
                 // accepted the cancel request but `RunCancelled` may arrive late
                 // if the agent loop is blocked on a long-running HTTP call.
                 completeThinkingPhase();
-                setRunState("cancelled");
-                onRunStateChange?.("cancelled");
+                if (threadId) storeSetThreadStatus(threadId, "cancelled", { source: "stream" });
 
                 // Safety net: if the backend event (`run_cancelled`) hasn't
                 // arrived within 5 seconds, force a snapshot reload to reconcile

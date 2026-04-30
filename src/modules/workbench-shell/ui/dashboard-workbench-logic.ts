@@ -6,6 +6,7 @@ import { buildProjectOptionFromPath } from "@/modules/workbench-shell/model/help
 import type {
   ProjectOption,
   ThreadStatus as WorkbenchThreadStatus,
+  ThreadRunStatus,
   WorkspaceItem,
 } from "@/modules/workbench-shell/model/types";
 import type { ThreadContextUsage } from "@/modules/workbench-shell/ui/runtime-thread-surface";
@@ -236,3 +237,39 @@ export type PendingThreadRun = {
   runMode: RunMode;
   threadId: string;
 };
+
+// ---------------------------------------------------------------------------
+// Phase 1: RunState → ThreadRunStatus mapping
+// ---------------------------------------------------------------------------
+
+/**
+ * Map a {@link RunState} (the legacy per-surface union) to the unified
+ * {@link ThreadRunStatus} type.  The two types are structurally identical
+ * at this point, but the explicit mapping guards against future divergence.
+ */
+export function mapRunStateToThreadRunStatus(
+  state: RunState | "idle",
+): ThreadRunStatus {
+  return state as ThreadRunStatus;
+}
+
+/**
+ * Map a run-finished status string (from the `thread-run-finished` Tauri
+ * event payload) to a {@link ThreadRunStatus} value.
+ */
+export function mapRunFinishedStatusToThreadRunStatus(
+  status: string,
+): ThreadRunStatus {
+  switch (status) {
+    case "failed":
+      return "failed";
+    case "interrupted":
+      return "interrupted";
+    case "cancelled":
+      return "cancelled";
+    case "limit_reached":
+      return "limit_reached";
+    default:
+      return "completed";
+  }
+}

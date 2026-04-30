@@ -1,5 +1,48 @@
 export type ThreadStatus = "running" | "completed" | "needs-reply" | "failed" | "interrupted";
 
+/**
+ * Unified thread run status — superset of {@link ThreadStatus} and {@link RunState}.
+ *
+ * Used as the authoritative status value in {@link threadStore.threadStatuses}.
+ * Sidebar consumers map this down to a display subset via
+ * {@link threadRunStatusToDisplayStatus}.
+ */
+export type ThreadRunStatus =
+  | "idle"
+  | "running"
+  | "waiting_approval"
+  | "needs_reply"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted"
+  | "limit_reached";
+
+/**
+ * Map a {@link ThreadRunStatus} value to the subset used for sidebar display
+ * (matching the legacy {@link ThreadStatus} union).
+ */
+export function threadRunStatusToDisplayStatus(
+  status: ThreadRunStatus,
+): ThreadStatus {
+  switch (status) {
+    case "idle":
+    case "completed":
+    case "cancelled":
+      return "completed";
+    case "waiting_approval":
+    case "needs_reply":
+    case "limit_reached":
+      return "needs-reply";
+    case "running":
+      return "running";
+    case "failed":
+      return "failed";
+    case "interrupted":
+      return "interrupted";
+  }
+}
+
 export type ThreadItem = {
   name: string;
   time: string;
