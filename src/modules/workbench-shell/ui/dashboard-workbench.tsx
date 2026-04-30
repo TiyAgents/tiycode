@@ -254,45 +254,12 @@ export function DashboardWorkbench() {
     );
   }, [skillPreviewByKey]);
   const {
-    general: generalPreferences,
-    workspaces: settingsWorkspaces,
-    providerCatalog,
     providers,
     commands,
     terminal,
-    availableShells,
-    policy,
-    backendHydrated: settingsHydrated,
-    updateGeneralPreference,
-    addWorkspace,
-    removeWorkspace,
-    setDefaultWorkspace,
-    addProvider,
-    removeProvider,
-    updateProvider,
-    fetchProviderModels,
-    testProviderModelConnection,
     agentProfiles,
     activeAgentProfileId,
-    addAgentProfile,
-    removeAgentProfile,
-    updateAgentProfile,
     setActiveAgentProfile,
-    duplicateAgentProfile,
-    updatePolicySetting,
-    addAllowEntry,
-    removeAllowEntry,
-    updateAllowEntry,
-    addDenyEntry,
-    removeDenyEntry,
-    updateDenyEntry,
-    addWritableRoot,
-    removeWritableRoot,
-    updateWritableRoot,
-    addCommand,
-    removeCommand,
-    updateCommand,
-    updateTerminalSetting,
   } = useSettingsController();
 
   // ── Phase 1: threadStore subscriptions (replaces 9 useState + 3 useRef) ──
@@ -2649,54 +2616,16 @@ export function DashboardWorkbench() {
 
       <DashboardOverlays
         resolvedWorkspaceId={resolvedWorkspaceId}
-        agentProfiles={agentProfiles}
-        activeAgentProfileId={activeAgentProfileId}
         overlayContentRef={overlayContentRef}
         configDiagnostics={configDiagnostics}
-        generalPreferences={generalPreferences}
         isCheckingUpdates={isCheckingUpdates}
         language={language}
-        policy={policy}
-        terminal={terminal}
-        availableShells={availableShells}
-        commands={commands}
-        providerCatalog={providerCatalog}
-        providers={providers}
         data={data}
         theme={theme}
         updateStatus={updateStatus}
-        settingsWorkspaces={settingsWorkspaces}
-        addAgentProfile={addAgentProfile}
-        addAllowEntry={addAllowEntry}
-        addCommand={addCommand}
-        addDenyEntry={addDenyEntry}
-        addProvider={addProvider}
-        addWorkspace={addWorkspace}
-        addWritableRoot={addWritableRoot}
         handleCheckUpdates={handleCheckUpdates}
-        duplicateAgentProfile={duplicateAgentProfile}
-        removeAgentProfile={removeAgentProfile}
-        removeAllowEntry={removeAllowEntry}
-        removeCommand={removeCommand}
-        removeDenyEntry={removeDenyEntry}
-        removeProvider={removeProvider}
-        removeWorkspace={removeWorkspace}
-        removeWritableRoot={removeWritableRoot}
         handleLanguageSelect={handleLanguageSelect}
         handleThemeSelect={handleThemeSelect}
-        setActiveAgentProfile={setActiveAgentProfile}
-        setDefaultWorkspace={setDefaultWorkspace}
-        updateAgentProfile={updateAgentProfile}
-        updateAllowEntry={updateAllowEntry}
-        updateCommand={updateCommand}
-        updateDenyEntry={updateDenyEntry}
-        updateGeneralPreference={updateGeneralPreference}
-        updatePolicySetting={updatePolicySetting}
-        updateProvider={updateProvider}
-        updateTerminalSetting={updateTerminalSetting}
-        fetchProviderModels={fetchProviderModels}
-        testProviderModelConnection={testProviderModelConnection}
-        updateWritableRoot={updateWritableRoot}
         extensionDetailById={extensionDetailById}
         extensionsError={extensionsError}
         extensions={extensions}
@@ -2727,7 +2656,6 @@ export function DashboardWorkbench() {
         skillPreviewById={skillPreviewById}
         extensionSkills={extensionSkills}
         appUpdater={appUpdater}
-        settingsHydrated={settingsHydrated}
         setLanguage={setLanguage}
         setTheme={setTheme}
         worktreeDialogContext={worktreeDialogContext}
