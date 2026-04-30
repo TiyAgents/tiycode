@@ -103,6 +103,7 @@ async fn worktree_create_registers_workspace_and_updates_parent_kind() {
                 branch: "feature/worktree-alpha".to_string(),
                 base_ref: None,
                 create_branch: true,
+                track_upstream: false,
                 path: None,
             },
         )
@@ -163,6 +164,7 @@ async fn worktree_create_rejects_non_repo_parent() {
                 branch: "feature/foo".to_string(),
                 base_ref: None,
                 create_branch: true,
+                track_upstream: false,
                 path: None,
             },
         )
@@ -203,6 +205,7 @@ async fn worktree_remove_cleans_up_admin_dir_and_db_row() {
                 branch: "feature/remove-me".to_string(),
                 base_ref: None,
                 create_branch: true,
+                track_upstream: false,
                 path: None,
             },
         )
@@ -268,6 +271,7 @@ async fn worktree_parent_remove_cascades_children() {
                 branch: "feature/child".to_string(),
                 base_ref: None,
                 create_branch: true,
+                track_upstream: false,
                 path: None,
             },
         )
@@ -337,6 +341,7 @@ async fn set_default_rejects_worktree_row() {
                 branch: "feature/no-default".to_string(),
                 base_ref: None,
                 create_branch: true,
+                track_upstream: false,
                 path: None,
             },
         )
