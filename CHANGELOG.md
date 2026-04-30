@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.11] - 2026-04-30
+### :sparkles: New Features
+- [`f52442d`](https://github.com/TiyAgents/tiycode/commit/f52442dae5ebdfb3a7945ccd6d1a00690bc60a75) - **terminal**: ✨ add Ghostty terminal support *(PR [#161](https://github.com/TiyAgents/tiycode/pull/161) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`8247ce2`](https://github.com/TiyAgents/tiycode/commit/8247ce25d190b3a07e68302e197e41a493d5f674) - **agent-session**: 🐛 propagate reasoning_content_constrained to all provider types *(PR [#160](https://github.com/TiyAgents/tiycode/pull/160) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.3.10] - 2026-04-30
 ### :sparkles: New Features
 - [`5e10f91`](https://github.com/TiyAgents/tiycode/commit/5e10f91de2bbae36ee6284aed9026d38b43fb1a6) - **agent**: ✨ add ToolRequested event and 'requested' status *(PR [#153](https://github.com/TiyAgents/tiycode/pull/153) by [@jorben](https://github.com/jorben))*
@@ -701,3 +709,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.8]: https://github.com/TiyAgents/tiycode/compare/0.3.7...0.3.8
 [0.3.9]: https://github.com/TiyAgents/tiycode/compare/0.3.8...0.3.9
 [0.3.10]: https://github.com/TiyAgents/tiycode/compare/0.3.9...0.3.10
+[0.3.11]: https://github.com/TiyAgents/tiycode/compare/0.3.10...0.3.11
