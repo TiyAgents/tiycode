@@ -283,26 +283,6 @@ export function DashboardWorkbench() {
   const isNewThreadMode = useStore(threadStore, (s) => s.isNewThreadMode);
   const isSidebarReady = useStore(threadStore, (s) => s.sidebarReady);
   const pendingThreadRuns = useStore(threadStore, (s) => s.pendingRuns, shallowEqual);
-  const workspaceThreadDisplayCounts = useStore(
-    threadStore,
-    (s) => s.displayCounts,
-    shallowEqual,
-  );
-  const workspaceThreadHasMore = useStore(
-    threadStore,
-    (s) => s.hasMore,
-    shallowEqual,
-  );
-  const workspaceThreadLoadMorePending = useStore(
-    threadStore,
-    (s) => s.loadMorePending,
-    shallowEqual,
-  );
-  const openWorkspaces = useStore(
-    threadStore,
-    (s) => s.openWorkspaces,
-    shallowEqual,
-  );
 
   const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(
     () => (isTauri() ? [] : [...RECENT_PROJECTS]),
@@ -2629,21 +2609,14 @@ export function DashboardWorkbench() {
       <div className="flex h-full min-h-0 pt-9">
         <DashboardSidebar
           isSidebarOpen={isSidebarOpen}
-          isNewThreadMode={isNewThreadMode}
           isMarketplaceOpen={isMarketplaceOpen}
           handleEnterNewThreadMode={handleEnterNewThreadMode}
           handleOpenMarketplace={handleOpenMarketplace}
           t={t}
           handleChooseWorkspaceFolder={handleChooseWorkspaceFolder}
           isAddingWorkspace={isAddingWorkspace}
-          isSidebarReady={isSidebarReady}
-          workspaces={workspaces}
-          openWorkspaces={openWorkspaces}
           activeWorkspaceMenuId={activeWorkspaceMenuId}
           workspaceAction={workspaceAction}
-          workspaceThreadDisplayCounts={workspaceThreadDisplayCounts}
-          workspaceThreadHasMore={workspaceThreadHasMore}
-          workspaceThreadLoadMorePending={workspaceThreadLoadMorePending}
           workspaceMenuRef={workspaceMenuRef}
           handleWorkspaceToggle={handleWorkspaceToggle}
           handleWorkspaceMenuToggle={handleWorkspaceMenuToggle}

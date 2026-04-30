@@ -21,10 +21,15 @@ import {
 } from "@/modules/workbench-shell/model/fixtures";
 import { sortWorkspacesWithWorktrees } from "@/modules/workbench-shell/model/helpers";
 import type { WorkspaceItem } from "@/modules/workbench-shell/model/types";
+import { threadRunStatusToDisplayStatus } from "@/modules/workbench-shell/model/types";
 import { cn } from "@/shared/lib/utils";
 import { ThreadRenameInput } from "@/modules/workbench-shell/ui/thread-rename-input";
 import { ThreadStatusIndicator } from "@/modules/workbench-shell/ui/thread-status-indicator";
 import { WORKSPACE_THREAD_PAGE_SIZE } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
+import {
+  threadStore,
+  useStore,
+} from "@/modules/workbench-shell/model/thread-store";
 
 type WorkspaceAction = {
   workspaceId: string;
@@ -33,21 +38,14 @@ type WorkspaceAction = {
 
 type DashboardSidebarProps = {
   isSidebarOpen: boolean;
-  isNewThreadMode: boolean;
   isMarketplaceOpen: boolean;
   handleEnterNewThreadMode: () => void;
   handleOpenMarketplace: () => void;
   t: (key: TranslationKey) => string;
   handleChooseWorkspaceFolder: () => void;
   isAddingWorkspace: boolean;
-  isSidebarReady: boolean;
-  workspaces: WorkspaceItem[];
-  openWorkspaces: Record<string, boolean>;
   activeWorkspaceMenuId: string | null;
   workspaceAction: WorkspaceAction;
-  workspaceThreadDisplayCounts: Record<string, number>;
-  workspaceThreadHasMore: Record<string, boolean>;
-  workspaceThreadLoadMorePending: Record<string, boolean>;
   workspaceMenuRef: RefObject<HTMLDivElement | null>;
   handleWorkspaceToggle: (workspaceId: string) => void;
   handleWorkspaceMenuToggle: (workspaceId: string) => void;
@@ -77,23 +75,32 @@ type DashboardSidebarProps = {
 };
 
 export function DashboardSidebar(props: DashboardSidebarProps) {
+  // Phase 1: subscribe to threadStore for data previously passed via props
+  const isNewThreadMode = useStore(threadStore, (s) => s.isNewThreadMode);
+  const isSidebarReady = useStore(threadStore, (s) => s.sidebarReady);
+  const workspaces = useStore(threadStore, (s) => s.workspaces);
+  const openWorkspaces = useStore(threadStore, (s) => s.openWorkspaces);
+  const workspaceThreadDisplayCounts = useStore(
+    threadStore,
+    (s) => s.displayCounts,
+  );
+  const workspaceThreadHasMore = useStore(threadStore, (s) => s.hasMore);
+  const workspaceThreadLoadMorePending = useStore(
+    threadStore,
+    (s) => s.loadMorePending,
+  );
+  const threadStatuses = useStore(threadStore, (s) => s.threadStatuses);
+
   const {
     isSidebarOpen,
-    isNewThreadMode,
     isMarketplaceOpen,
     handleEnterNewThreadMode,
     handleOpenMarketplace,
     t,
     handleChooseWorkspaceFolder,
     isAddingWorkspace,
-    isSidebarReady,
-    workspaces,
-    openWorkspaces,
     activeWorkspaceMenuId,
     workspaceAction,
-    workspaceThreadDisplayCounts,
-    workspaceThreadHasMore,
-    workspaceThreadLoadMorePending,
     workspaceMenuRef,
     handleWorkspaceToggle,
     handleWorkspaceMenuToggle,
@@ -407,7 +414,11 @@ export function DashboardSidebar(props: DashboardSidebarProps) {
                                         threadId={thread.id}
                                         initialName={thread.name}
                                         isActive={thread.active}
-                                        status={thread.status}
+                                        status={
+                                          threadRunStatusToDisplayStatus(
+                                            threadStatuses[thread.id]?.status ?? "idle",
+                                          )
+                                        }
                                         modelPlan={commitMessageModelPlan}
                                         onDone={(newTitle) =>
                                           handleThreadEditDone(
@@ -434,7 +445,11 @@ export function DashboardSidebar(props: DashboardSidebarProps) {
                                     >
                                       <div className="flex items-center gap-2">
                                         <ThreadStatusIndicator
-                                          status={thread.status}
+                                          status={
+                                            threadRunStatusToDisplayStatus(
+                                              threadStatuses[thread.id]?.status ?? "idle",
+                                            )
+                                          }
                                           emphasis={
                                             thread.active ? "default" : "subtle"
                                           }
