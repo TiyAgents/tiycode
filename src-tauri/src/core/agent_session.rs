@@ -611,8 +611,12 @@ pub async fn resolve_runtime_model_role(
         builder = builder.headers(headers);
     }
 
-    if let Some(mut compat) = default_openai_compatible_compat(&role.provider_type) {
-        if let Some(true) = role.reasoning_content_constrained {
+    let base_compat = default_openai_compatible_compat(&role.provider_type);
+    let needs_reasoning_constrained = matches!(role.reasoning_content_constrained, Some(true));
+
+    if base_compat.is_some() || needs_reasoning_constrained {
+        let mut compat = base_compat.unwrap_or_default();
+        if needs_reasoning_constrained {
             compat.reasoning_content_constrained = true;
         }
         builder = builder.compat(compat);

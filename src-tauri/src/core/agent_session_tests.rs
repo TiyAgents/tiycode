@@ -1460,6 +1460,80 @@ Used for prompt assembly coverage.
     }
 
     #[tokio::test]
+    async fn reasoning_content_constrained_sets_compat_flag_for_non_openai_compatible_providers() {
+        // Regression: Zenmux (provider_type != "openai-compatible") must still
+        // propagate reasoning_content_constrained so that tiycore's
+        // normalize_reasoning_content safety net activates for DeepSeek models
+        // routed through Zenmux.
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+
+        let mut zenmux_provider = sample_provider_record("provider-zenmux");
+        zenmux_provider.provider_type = "zenmux".to_string();
+        provider_repo::insert(&pool, &zenmux_provider)
+            .await
+            .expect("provider insert");
+
+        let make_role =
+            |record_id: &str, constrained: Option<bool>| super::super::RuntimeModelRole {
+                provider_id: "provider-zenmux".to_string(),
+                model_record_id: record_id.to_string(),
+                provider: None,
+                provider_key: Some("zenmux".to_string()),
+                provider_type: "zenmux".to_string(),
+                provider_name: Some("ZenMux".to_string()),
+                model: "deepseek/deepseek-v4-pro:deepseek".to_string(),
+                model_id: "deepseek/deepseek-v4-pro:deepseek".to_string(),
+                model_display_name: Some("DeepSeek V4 Pro".to_string()),
+                base_url: "https://zenmux.ai/api/v1".to_string(),
+                context_window: Some(TEST_CONTEXT_WINDOW.to_string()),
+                max_output_tokens: Some("32000".to_string()),
+                supports_image_input: Some(false),
+                supports_reasoning: Some(true),
+                reasoning_content_constrained: constrained,
+                custom_headers: None,
+                provider_options: None,
+            };
+
+        let constrained =
+            resolve_runtime_model_role(&pool, make_role("rec-zenmux-constrained", Some(true)))
+                .await
+                .expect("constrained role");
+
+        let unconstrained =
+            resolve_runtime_model_role(&pool, make_role("rec-zenmux-unconstrained", Some(false)))
+                .await
+                .expect("unconstrained role");
+
+        let unspecified =
+            resolve_runtime_model_role(&pool, make_role("rec-zenmux-unspecified", None))
+                .await
+                .expect("unspecified role");
+
+        // Zenmux + reasoning_content_constrained=true must produce a compat with the flag set.
+        let constrained_compat = constrained
+            .model
+            .compat
+            .as_ref()
+            .expect("compat must be set");
+        assert!(
+            constrained_compat.reasoning_content_constrained,
+            "reasoning_content_constrained must be true for Zenmux+DeepSeek"
+        );
+
+        // When false or None, compat should be None (no override needed).
+        assert!(
+            unconstrained.model.compat.is_none(),
+            "compat should be None when reasoning_content_constrained is false"
+        );
+        assert!(
+            unspecified.model.compat.is_none(),
+            "compat should be None when reasoning_content_constrained is unspecified"
+        );
+    }
+
+    #[tokio::test]
     async fn model_plan_applies_thinking_level_to_all_reasoning_capable_roles_only() {
         let temp_dir = tempdir().expect("temp dir");
         let db_path = temp_dir.path().join("test.db");
