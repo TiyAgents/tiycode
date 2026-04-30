@@ -7,6 +7,7 @@ mod persistence;
 
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -105,8 +106,12 @@ fn init_logging() {
         .build(&log_path)
         .expect("failed to create log appender");
 
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn"));
+    let env_filter = match std::env::var("RUST_LOG") {
+        Ok(val) if !val.is_empty() => {
+            EnvFilter::from_str(&val).unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn"))
+        }
+        _ => EnvFilter::new("info,sqlx=warn"),
+    };
 
     tracing_subscriber::registry()
         .with(env_filter)
