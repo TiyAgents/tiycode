@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.10] - 2026-04-30
+### :sparkles: New Features
+- [`5e10f91`](https://github.com/TiyAgents/tiycode/commit/5e10f91de2bbae36ee6284aed9026d38b43fb1a6) - **agent**: ✨ add ToolRequested event and 'requested' status *(PR [#153](https://github.com/TiyAgents/tiycode/pull/153) by [@jorben](https://github.com/jorben))*
+- [`3c2d9a2`](https://github.com/TiyAgents/tiycode/commit/3c2d9a28ae5e5106ebdc260e192efa0e63c68631) - **worktree**: ✨ Fix branch tracking and support remote branch checkout *(PR [#157](https://github.com/TiyAgents/tiycode/pull/157) by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`d68c486`](https://github.com/TiyAgents/tiycode/commit/d68c486d8bb3c131215e7c79c26385adcff0a055) - **tools**: 🐛 Auto-resolve search/find parameter conflicts and add diagnostics *(PR [#155](https://github.com/TiyAgents/tiycode/pull/155) by [@jorben](https://github.com/jorben))*
+- [`5c30377`](https://github.com/TiyAgents/tiycode/commit/5c303771de8f020d1834c2a211b13314d2b22b1e) - **logging**: 🐛 improve RUST_LOG environment variable parsing *(PR [#158](https://github.com/TiyAgents/tiycode/pull/158) by [@HayWolf](https://github.com/HayWolf))*
+
+### :recycle: Refactors
+- [`8ac8edb`](https://github.com/TiyAgents/tiycode/commit/8ac8edbe0e82b2130926e6664327d0769a3039ae) - **task-board-card**: ♻️ restructure task summary and active task layout *(PR [#152](https://github.com/TiyAgents/tiycode/pull/152) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.3.9] - 2026-04-28
 ### :sparkles: New Features
 - [`3139692`](https://github.com/TiyAgents/tiycode/commit/31396928e0b528e6dc3c5de8a1657c07e5286ac6) - **catalog**: ✨ add NormalizingCatalogMetadataStore for provider model suffix normalization *(PR [#150](https://github.com/TiyAgents/tiycode/pull/150) by [@jorben](https://github.com/jorben))*
@@ -687,3 +700,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.7]: https://github.com/TiyAgents/tiycode/compare/0.3.6...0.3.7
 [0.3.8]: https://github.com/TiyAgents/tiycode/compare/0.3.7...0.3.8
 [0.3.9]: https://github.com/TiyAgents/tiycode/compare/0.3.8...0.3.9
+[0.3.10]: https://github.com/TiyAgents/tiycode/compare/0.3.9...0.3.10
