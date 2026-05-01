@@ -208,6 +208,7 @@ export function createRunLifecycleMachine(
 
   // Auto-sync every state or context change to the threadStore.
   machine.subscribe(() => {
+    if (!threadId) return;
     const currentState = machine.getState();
     const runId = machine.getContext().runId;
     setThreadStatus(threadId, currentState as ThreadRunStatus, {

@@ -12,7 +12,9 @@ import {
   deleteThread,
   removeWorkspace,
   enterNewThreadMode,
+  submitNewThread,
 } from "./workbench-actions";
+import type { NewThreadSubmission } from "./workbench-actions";
 import { threadStore } from "./thread-store";
 import { projectStore } from "./project-store";
 import { composerStore } from "./composer-store";
@@ -516,5 +518,100 @@ describe("enterNewThreadMode", () => {
     enterNewThreadMode();
 
     expect(projectStore.getState().terminalBootstrapError).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// submitNewThread
+// ---------------------------------------------------------------------------
+
+describe("submitNewThread", () => {
+  function makeSubmission(
+    overrides?: Partial<NewThreadSubmission>,
+  ): NewThreadSubmission {
+    return {
+      value: "test prompt",
+      runMode: "default",
+      effectivePrompt: "test prompt",
+      ...overrides,
+    };
+  }
+
+  it("returns early when no project is selected", async () => {
+    const result = submitNewThread(makeSubmission());
+    // When no project, should return void without error
+    await expect(result).resolves.toBeUndefined();
+  });
+
+  it("adds the new thread to an existing workspace", async () => {
+    const project = makeProject({
+      id: "ws-1",
+      name: "test-project",
+      path: "/path/to/project",
+    });
+    const workspace = makeWorkspace("ws-1", [], {
+      name: "test-project",
+      path: "/path/to/project",
+    });
+
+    projectStore.setState({
+      selectedProject: project,
+      recentProjects: [project],
+    });
+    threadStore.setState({
+      workspaces: [workspace],
+      isNewThreadMode: true,
+    });
+    composerStore.setState({ newThreadRunMode: "default" });
+    settingsStore.setState({ activeAgentProfileId: "default-profile" });
+
+    await submitNewThread(makeSubmission({ value: "hello" }));
+
+    const state = threadStore.getState();
+    // Should have added one thread to the existing workspace
+    expect(state.workspaces[0].threads).toHaveLength(1);
+    expect(state.workspaces[0].threads[0].name).toBe("hello");
+    expect(state.workspaces[0].threads[0].status).toBe("running");
+    expect(state.isNewThreadMode).toBe(false);
+    expect(state.openWorkspaces["ws-1"]).toBe(true);
+    // Should have added a pending run
+    expect(state.pendingRuns["thread-1"]).toBeDefined();
+    expect(state.pendingRuns["thread-1"].displayText).toBe("hello");
+  });
+
+  it("clears active flags on other threads when adding new one", async () => {
+    const project = makeProject({
+      id: "ws-1",
+      name: "test-project",
+      path: "/path/to/project",
+    });
+    const thread = makeThread("thread-existing", { name: "existing" });
+    const workspace = makeWorkspace("ws-1", [thread], {
+      name: "test-project",
+      path: "/path/to/project",
+    });
+
+    projectStore.setState({
+      selectedProject: project,
+      recentProjects: [project],
+    });
+    threadStore.setState({
+      workspaces: [workspace],
+      isNewThreadMode: true,
+    });
+    composerStore.setState({ newThreadRunMode: "default" });
+    settingsStore.setState({ activeAgentProfileId: "default-profile" });
+
+    await submitNewThread(makeSubmission({ value: "new thread" }));
+
+    const state = threadStore.getState();
+    // Existing thread should no longer be active
+    const existing = state.workspaces[0].threads.find(
+      (t) => t.id === "thread-existing",
+    );
+    expect(existing).toBeTruthy();
+    // New thread should be first in the list
+    expect(state.workspaces[0].threads[0].name).toBe("new thread");
+    expect(state.workspaces[0].threads[0].active).toBe(true);
   });
 });

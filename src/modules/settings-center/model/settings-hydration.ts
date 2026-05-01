@@ -260,6 +260,11 @@ export function hydrateSettingsOnce(): Promise<void> {
     return Promise.resolve();
   }
 
+  // Single-flight guard: if a batch is already in-flight, return it.
+  // This must be checked before hydrationPhase to prevent two concurrent
+  // callers from both entering while the phase is still 'uninitialized'.
+  if (hydratePromise) return hydratePromise;
+
   const phase = settingsStore.getState().hydrationPhase;
   if (
     phase === "hydrated" ||

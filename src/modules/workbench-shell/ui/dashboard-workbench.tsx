@@ -1026,8 +1026,8 @@ export function DashboardWorkbench() {
   ]);
 
   const handleWorkspaceMenuToggle = (workspaceId: string) => {
-    setActiveWorkspaceMenuId(
-      activeWorkspaceMenuId === workspaceId ? null : workspaceId,
+    setActiveWorkspaceMenuId((current: string | null) =>
+      current === workspaceId ? null : workspaceId,
     );
   };
 

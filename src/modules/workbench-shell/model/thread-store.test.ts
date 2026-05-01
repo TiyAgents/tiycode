@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import {
   threadStore,
@@ -8,6 +8,7 @@ import {
   removeWorkspace,
   setActiveThread,
   removeThread,
+  deleteThread,
   updateThreadTitle,
   addPendingRun,
   removePendingRun,
@@ -18,6 +19,15 @@ import {
   setSidebarReady,
 } from "./thread-store";
 import type { PendingThreadRun } from "../ui/dashboard-workbench-logic";
+import { threadDelete } from "@/services/bridge/thread-commands";
+
+// ---------------------------------------------------------------------------
+// Mock IPC
+// ---------------------------------------------------------------------------
+
+vi.mock("@/services/bridge/thread-commands", () => ({
+  threadDelete: vi.fn().mockResolvedValue(undefined),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -302,5 +312,108 @@ describe("sidebar pagination actions", () => {
     threadStore.reset();
     setSidebarReady(true);
     expect(threadStore.getState().sidebarReady).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteThread (async, optimistic + rollback + dedupe)
+// ---------------------------------------------------------------------------
+
+describe("deleteThread", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    threadStore.reset();
+  });
+
+  it("optimistically removes the thread from workspaces and statuses", async () => {
+    setupWorkspaceState();
+
+    const p = deleteThread("thread-1");
+
+    // Optimistic update is synchronous (executed before IPC resolves).
+    const state = threadStore.getState();
+    expect(state.workspaces[0].threads).toHaveLength(1);
+    expect(state.workspaces[0].threads[0].id).toBe("thread-2");
+    expect(state.threadStatuses["thread-1"]).toBeUndefined();
+
+    await p;
+    expect(vi.mocked(threadDelete)).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("resets activeThreadId when deleting the active thread", async () => {
+    setupWorkspaceState();
+    setActiveThread("thread-1", false);
+
+    const p = deleteThread("thread-1");
+
+    const state = threadStore.getState();
+    expect(state.activeThreadId).toBeNull();
+    expect(state.isNewThreadMode).toBe(true);
+
+    await p;
+  });
+
+  it("resets activeThreadId when deleting the active thread (different thread ID)", async () => {
+    setupWorkspaceState();
+    setActiveThread("thread-2", false);
+
+    const p = deleteThread("thread-2");
+    // thread-2 was the active thread, so activeThreadId should be cleared
+    const state = threadStore.getState();
+    expect(state.activeThreadId).toBeNull();
+    expect(state.workspaces[0].threads).toHaveLength(1);
+
+    await p;
+  });
+
+  it("preserves activeThreadId when deleting a non-active thread", async () => {
+    setupWorkspaceState();
+    // Set thread-1 as active, delete thread-2 (non-active)
+    setActiveThread("thread-1", false);
+
+    const p = deleteThread("thread-2");
+    // thread-1 should remain active
+    const state = threadStore.getState();
+    expect(state.activeThreadId).toBe("thread-1");
+    expect(state.workspaces[0].threads).toHaveLength(1);
+    // Only thread-1 should remain
+    expect(state.workspaces[0].threads[0].id).toBe("thread-1");
+
+    await p;
+  });
+
+  it("rolls back on IPC failure", async () => {
+    // Make the IPC call reject
+    vi.mocked(threadDelete).mockRejectedValueOnce(new Error("IPC failure"));
+
+    setupWorkspaceState();
+    const snapshot = threadStore.getState();
+
+    const p = deleteThread("thread-1");
+    // Expect rejection
+    await expect(p).rejects.toThrow("IPC failure");
+
+    // After rollback, the thread should be restored.
+    const state = threadStore.getState();
+    expect(state.workspaces[0].threads).toHaveLength(2);
+    expect(
+      state.workspaces[0].threads.find((t) => t.id === "thread-1"),
+    ).toBeTruthy();
+    // Active state should also be restored
+    expect(state.activeThreadId).toBe(snapshot.activeThreadId);
+  });
+
+  it("deduplicates concurrent deleteThread calls for the same thread (first strategy)", async () => {
+    vi.mocked(threadDelete).mockResolvedValue(undefined);
+
+    setupWorkspaceState();
+
+    // First call starts but doesn't resolve yet
+    const p1 = deleteThread("thread-1");
+    // Second call should reject with SyncError (first strategy)
+    const p2 = deleteThread("thread-1");
+
+    await expect(p2).rejects.toThrow("Request superseded");
+    await p1;
   });
 });

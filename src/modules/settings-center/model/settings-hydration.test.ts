@@ -139,20 +139,18 @@ describe("hydrateSettingsOnce", () => {
   // -----------------------------------------------------------------------
 
   describe("single-flight", () => {
-    it("concurrent calls both enter hydration (known limitation)", async () => {
-      // NOTE: hydrateSettingsOnce doesn't gate on hydratePromise before
-      // entering the hydration block — it only checks hydrationPhase.
-      // Two concurrent callers at `uninitialized` both enter.
-      // useSettingsController wraps this safely by only calling once.
+    it("concurrent calls are deduplicated via single-flight guard", async () => {
+      // hydrateSettingsOnce now checks hydratePromise before entering
+      // the hydration block, preventing two concurrent callers from
+      // both entering while the phase is still 'uninitialized'.
       const p1 = hydrateSettingsOnce();
       const p2 = hydrateSettingsOnce();
 
       await vi.runAllTimersAsync();
       await Promise.all([p1, p2]);
 
-      // Both callers entered — this is the current behavior until source is
-      // patched to check hydratePromise before creating a new batch.
-      expect(mockProviderSettingsGetAll).toHaveBeenCalledTimes(2);
+      // Only one hydration batch should be created.
+      expect(mockProviderSettingsGetAll).toHaveBeenCalledTimes(1);
     });
 
     it("subsequent call after hydration reuses resolved promise", async () => {

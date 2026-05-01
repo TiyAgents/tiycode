@@ -210,8 +210,16 @@ export function toggleUserMenu(): void {
   }));
 }
 
-export function setActiveWorkspaceMenuId(id: string | null): void {
-  uiLayoutStore.setState({ activeWorkspaceMenuId: id });
+export function setActiveWorkspaceMenuId(
+  idOrUpdater: string | null | ((prev: string | null) => string | null),
+): void {
+  if (typeof idOrUpdater === "function") {
+    uiLayoutStore.setState((prev) => ({
+      activeWorkspaceMenuId: idOrUpdater(prev.activeWorkspaceMenuId),
+    }));
+  } else {
+    uiLayoutStore.setState({ activeWorkspaceMenuId: idOrUpdater });
+  }
 }
 
 // ---------------------------------------------------------------------------
