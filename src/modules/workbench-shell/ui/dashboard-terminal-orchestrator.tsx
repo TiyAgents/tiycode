@@ -1,17 +1,17 @@
-import type { MouseEvent as ReactMouseEvent } from "react";
+import { useStore } from "@/shared/lib/create-store";
 import { ThreadTerminalPanel } from "@/features/terminal/ui/thread-terminal-panel";
 import { TerminalSettingsContext } from "@/features/terminal/model/terminal-settings-context";
 import type { TerminalSettings } from "@/modules/settings-center/model/types";
+import { projectStore } from "@/modules/workbench-shell/model/project-store";
+import { uiLayoutStore } from "@/modules/workbench-shell/model/ui-layout-store";
+import { useTerminalResize } from "@/modules/workbench-shell/hooks/use-terminal-resize";
 import { cn } from "@/shared/lib/utils";
 
 type DashboardTerminalOrchestratorProps = {
   active: boolean;
-  bootstrapError: string | null;
-  height: number;
   idleMessage?: string;
   isPendingThread: boolean;
   onCollapse: () => void;
-  onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void;
   terminal: TerminalSettings;
   threadId: string | null;
   threadTitle: string;
@@ -19,16 +19,16 @@ type DashboardTerminalOrchestratorProps = {
 
 export function DashboardTerminalOrchestrator({
   active,
-  bootstrapError,
-  height,
   idleMessage,
   isPendingThread,
   onCollapse,
-  onResizeStart,
   terminal,
   threadId,
   threadTitle,
 }: DashboardTerminalOrchestratorProps) {
+  const bootstrapError = useStore(projectStore, (s) => s.terminalBootstrapError);
+  const height = useStore(uiLayoutStore, (s) => s.terminalHeight);
+  const { handleTerminalResizeStart: onResizeStart } = useTerminalResize();
   return (
     <section
       className={cn(

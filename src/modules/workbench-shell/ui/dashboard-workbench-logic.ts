@@ -5,7 +5,7 @@ import type {
   ProjectOption,
   WorkspaceItem,
 } from "@/modules/workbench-shell/model/types";
-import type { ThreadContextUsage } from "@/modules/workbench-shell/ui/runtime-thread-surface";
+import type { ThreadContextUsage } from "@/modules/workbench-shell/model/thread-store";
 
 export function resolveThreadProfileId(
   threadProfileId: string | null,

@@ -4,7 +4,7 @@ import { useSyncExternalStore, useRef, useCallback } from "react";
 // Types
 // ---------------------------------------------------------------------------
 
-export interface Store<S extends Record<string, unknown>> {
+export interface Store<S extends object> {
   /** Snapshot of the current state. */
   getState: () => S;
   /**
@@ -36,7 +36,7 @@ export interface Store<S extends Record<string, unknown>> {
  * counterStore.setState((prev) => ({ count: prev.count + 1 }));
  * ```
  */
-export function createStore<S extends Record<string, unknown>>(
+export function createStore<S extends object>(
   initialState: S,
 ): Store<S> {
   let state: S = initialState;
@@ -60,7 +60,7 @@ export function createStore<S extends Record<string, unknown>>(
     // Skip if no key actually changed (Object.is equality).
     let changed = false;
     for (const key of Object.keys(partial)) {
-      if (!Object.is((state as Record<string, unknown>)[key], partial[key])) {
+      if (!Object.is((state as Record<string, unknown>)[key], (partial as Record<string, unknown>)[key])) {
         changed = true;
         break;
       }
@@ -108,7 +108,7 @@ export function createStore<S extends Record<string, unknown>>(
  * @important The store's `setState` uses shallow merge (spread). Nested
  * objects are replaced entirely, not deep-merged.
  */
-export function useStore<S extends Record<string, unknown>, T>(
+export function useStore<S extends object, T>(
   store: Store<S>,
   selector: (s: S) => T,
   isEqual: (a: T, b: T) => boolean = Object.is,

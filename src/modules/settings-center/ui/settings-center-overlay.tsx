@@ -76,7 +76,7 @@ import type {
   TerminalSettings,
   WorkspaceEntry,
   WritableRootEntry,
-} from "@/modules/settings-center/model/use-settings-controller";
+} from "@/modules/settings-center/model/types";
 
 function validatePolicyPatternInput(
   value: string,

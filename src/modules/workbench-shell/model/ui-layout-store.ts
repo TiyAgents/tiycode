@@ -3,7 +3,8 @@ import type { DrawerPanel, PanelVisibilityState, WorkbenchOverlay } from "@/modu
 import type { GitDiffSelection } from "@/modules/workbench-shell/ui/source-control-panels";
 import { DEFAULT_TERMINAL_HEIGHT, PANEL_VISIBILITY_STORAGE_KEY } from "@/modules/workbench-shell/model/fixtures";
 import { readPanelVisibilityState } from "@/modules/workbench-shell/model/helpers";
-import type { SettingsCategory } from "@/modules/settings-center/model/use-settings-controller";
+import type { SettingsCategory } from "@/modules/settings-center/model/types";
+import type { NewWorktreeDialogContext } from "@/modules/workbench-shell/ui/new-worktree-dialog";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,6 +38,9 @@ export interface UILayoutStoreState {
 
   // Onboarding
   showOnboarding: boolean;
+
+  // Worktree dialog
+  worktreeDialogContext: NewWorktreeDialogContext | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,6 +61,7 @@ function getInitialState(): UILayoutStoreState {
     isUserMenuOpen: false,
     activeWorkspaceMenuId: null,
     showOnboarding: false,
+    worktreeDialogContext: null,
   };
 }
 
@@ -215,6 +220,14 @@ export function setActiveWorkspaceMenuId(id: string | null): void {
 
 export function setShowOnboarding(show: boolean): void {
   uiLayoutStore.setState({ showOnboarding: show });
+}
+
+// ---------------------------------------------------------------------------
+// Actions — Worktree dialog
+// ---------------------------------------------------------------------------
+
+export function setWorktreeDialogContext(context: NewWorktreeDialogContext | null): void {
+  uiLayoutStore.setState({ worktreeDialogContext: context });
 }
 
 // ---------------------------------------------------------------------------

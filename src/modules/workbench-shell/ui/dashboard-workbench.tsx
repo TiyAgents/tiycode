@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -25,10 +24,10 @@ import {
   buildRunModelPlanFromSelection,
 } from "@/modules/settings-center/model/run-model-plan";
 import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
-import {
-  useSettingsController,
-  type SettingsCategory,
-} from "@/modules/settings-center/model/use-settings-controller";
+import { useSettingsInit } from "@/modules/settings-center/model/use-settings-init";
+import { settingsStore } from "@/modules/settings-center/model/settings-store";
+import type { SettingsCategory } from "@/modules/settings-center/model/types";
+import { setActiveAgentProfile } from "@/modules/settings-center/model/settings-ipc-actions";
 import { useAppUpdater } from "@/modules/workbench-shell/hooks/use-app-updater";
 import {
   DEFAULT_TERMINAL_COLLAPSED,
@@ -45,60 +44,32 @@ import {
   findWorkspaceForThread,
   getNewThreadTerminalBindingKey,
 
-  mergeLocalFallbackThreads,
   resolveActiveThreadWorkbenchProfileId,
-  resolveThreadProfileId,
 } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
 import { isOnboardingCompleted } from "@/modules/onboarding/model/use-onboarding";
-import type {
-  GitSnapshotDto,
-  ThreadSummaryDto,
-} from "@/shared/types/api";
 import {
-  threadCreate,
-  threadDelete,
-  threadList,
   threadUpdateProfile,
   threadUpdateTitle,
   workspaceAdd,
-  workspaceEnsureDefault,
   workspaceList,
-  workspaceRemove,
-  gitGetSnapshot,
-  gitSubscribe,
 } from "@/services/bridge";
 import {
-  DEFAULT_TERMINAL_HEIGHT,
   LANGUAGE_OPTIONS,
-  MIN_TERMINAL_HEIGHT,
-  MIN_WORKBENCH_HEIGHT,
   RECENT_PROJECTS,
   THEME_OPTIONS,
-  TOPBAR_HEIGHT,
   UPDATE_STATUS_DURATION,
   
 } from "@/modules/workbench-shell/model/fixtures";
 import {
-  activateThread,
   buildProjectOptionFromPath,
   
-  buildWorkspaceItemsFromDtos,
-  buildThreadTitle,
-  clearActiveThreads,
   getActiveThread,
-  isEditableSelectionTarget,
-  isNodeInsideContainer,
-  mergeRecentProjects,
-  selectContainerContents,
 } from "@/modules/workbench-shell/model/helpers";
 import {
   addRemovedWorkspacePath,
-  buildWorkspaceBindings,
-  buildWorkspaceBindingsForEntry,
   deleteRemovedWorkspacePath,
   findWorkspaceByPath,
   getWorkspaceBindingId,
-  hasRemovedWorkspacePath,
   resolveProjectForWorkspace,
 } from "@/modules/workbench-shell/model/workspace-path-bindings";
 import type {
@@ -108,12 +79,10 @@ import type {
 } from "@/modules/workbench-shell/model/types";
 import type { ExtensionDetail, SkillPreview } from "@/shared/types/extensions";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
-import type { NewWorktreeDialogContext } from "@/modules/workbench-shell/ui/new-worktree-dialog";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
 import { BranchSelector } from "@/modules/workbench-shell/ui/branch-selector";
 import {
   RuntimeThreadSurface,
-  type ThreadContextUsage,
 } from "@/modules/workbench-shell/ui/runtime-thread-surface";
 import {
   GitPanel,
@@ -127,17 +96,14 @@ import { WorkbenchTopBar } from "@/modules/workbench-shell/ui/workbench-top-bar"
 import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 import { cn } from "@/shared/lib/utils";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
-import { isSameWorkspacePath } from "@/shared/lib/workspace-path";
 import { waitForBackendReady } from "@/shared/lib/backend-ready";
 import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-control";
-import { terminalStore } from "@/features/terminal/model/terminal-store";
 import {
   threadStore,
   useStore,
   updateThreadTitle as setStoreThreadTitle,
   setDisplayCount as setStoreDisplayCount,
   setLoadMorePending as setStoreLoadMorePending,
-  setOpenWorkspace as setStoreOpenWorkspace,
   setSidebarReady as setStoreSidebarReady,
   shallowEqual,
 } from "@/modules/workbench-shell/model/thread-store";
@@ -154,12 +120,10 @@ import {
   setActiveDrawerPanel,
   setSelectedDiffSelection,
   setTerminalCollapsed,
-  setTerminalHeight,
-  setTerminalResize,
   setUserMenuOpen,
   setActiveWorkspaceMenuId,
   setShowOnboarding,
-  removeTerminalCollapsedForThreads,
+  setWorktreeDialogContext,
 } from "@/modules/workbench-shell/model/ui-layout-store";
 import {
   composerStore,
@@ -168,6 +132,22 @@ import {
   setComposerError,
   clearNewThreadComposer,
 } from "@/modules/workbench-shell/model/composer-store";
+import { projectStore } from "@/modules/workbench-shell/model/project-store";
+import {
+  selectThread,
+  selectProject as selectProjectAction,
+  activateWorkspace,
+  deleteThread,
+  removeWorkspace,
+  submitNewThread,
+  enterNewThreadMode,
+  performSidebarSync,
+} from "@/modules/workbench-shell/model/workbench-actions";
+import { useTerminalPreWarm } from "@/modules/workbench-shell/hooks/use-terminal-pre-warm";
+import { useTerminalResize } from "@/modules/workbench-shell/hooks/use-terminal-resize";
+import { useWorkspaceDiscovery } from "@/modules/workbench-shell/hooks/use-workspace-discovery";
+import { useGitSnapshot } from "@/modules/workbench-shell/hooks/use-git-snapshot";
+import { useGlobalKeyboardShortcuts } from "@/modules/workbench-shell/hooks/use-global-keyboard-shortcuts";
 
 
 export function DashboardWorkbench() {
@@ -175,9 +155,13 @@ export function DashboardWorkbench() {
   const { theme, setTheme } = useTheme();
   const { language, setLanguage } = useLanguage();
   const t = useT();
-  const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(
-    () => (isTauri() ? null : (RECENT_PROJECTS[0] ?? null)),
-  );
+
+  // ── Phase 6: projectStore subscriptions (replaces 5 useState) ──
+  const selectedProject = useStore(projectStore, (s) => s.selectedProject);
+  const recentProjects = useStore(projectStore, (s) => s.recentProjects, shallowEqual);
+  const terminalThreadBindings = useStore(projectStore, (s) => s.terminalThreadBindings, shallowEqual);
+  const terminalWorkspaceBindings = useStore(projectStore, (s) => s.terminalWorkspaceBindings, shallowEqual);
+
   const {
     addMarketplaceSource,
     addMcpServer,
@@ -253,31 +237,35 @@ export function DashboardWorkbench() {
       Object.entries(skillPreviewByKey).map(([, value]) => [value.record.id, value]),
     );
   }, [skillPreviewByKey]);
-  const {
-    providers,
-    commands,
-    terminal,
-    agentProfiles,
-    activeAgentProfileId,
-    setActiveAgentProfile,
-  } = useSettingsController();
+  // ── Phase 4: settings init (hydration + persistence + backend sync) ──
+  useSettingsInit();
+
+  // ── Settings store subscriptions (direct, replaces useSettingsController) ──
+  const providers = useStore(settingsStore, (s) => s.providers, shallowEqual);
+  const commandEntries = useStore(settingsStore, (s) => s.commands, shallowEqual);
+  const terminal = useStore(settingsStore, (s) => s.terminal, shallowEqual);
+  const agentProfiles = useStore(settingsStore, (s) => s.agentProfiles, shallowEqual);
+  const activeAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
 
   // ── Phase 1: threadStore subscriptions (replaces 9 useState + 3 useRef) ──
   const workspaces = useStore(threadStore, (s) => s.workspaces, shallowEqual);
-  
   const isNewThreadMode = useStore(threadStore, (s) => s.isNewThreadMode);
   const isSidebarReady = useStore(threadStore, (s) => s.sidebarReady);
-  const pendingThreadRuns = useStore(threadStore, (s) => s.pendingRuns, shallowEqual);
+  // Phase 6: threadStore additions (replaces 3 useState)
+  const activeThreadProfileIdOverride = useStore(threadStore, (s) => s.activeThreadProfileIdOverride);
+  const runtimeContextUsage = useStore(threadStore, (s) => s.runtimeContextUsage);
+  const editingThreadId = useStore(threadStore, (s) => s.editingThreadId);
 
   // ── Phase 2: uiLayoutStore + composerStore subscriptions (replaces 16 useState) ──
   const activeOverlay = useStore(uiLayoutStore, (s) => s.activeOverlay);
   const panelVisibilityState = useStore(uiLayoutStore, (s) => s.panelVisibility, shallowEqual);
   const terminalCollapsedByThreadKey = useStore(uiLayoutStore, (s) => s.terminalCollapsedByThreadKey, shallowEqual);
   const terminalHeight = useStore(uiLayoutStore, (s) => s.terminalHeight);
-  const terminalResize = useStore(uiLayoutStore, (s) => s.terminalResize);
   const isUserMenuOpen = useStore(uiLayoutStore, (s) => s.isUserMenuOpen);
   const activeWorkspaceMenuId = useStore(uiLayoutStore, (s) => s.activeWorkspaceMenuId);
   const activeDrawerPanel = useStore(uiLayoutStore, (s) => s.activeDrawerPanel);
+  // Phase 6: uiLayoutStore addition (replaces 1 useState)
+  const worktreeDialogContext = useStore(uiLayoutStore, (s) => s.worktreeDialogContext);
 
   const composerValue = useStore(composerStore, (s) => s.newThreadValue);
   const composerError = useStore(composerStore, (s) => s.error);
@@ -290,56 +278,46 @@ export function DashboardWorkbench() {
     }
   }, []);
 
-  const [recentProjects, setRecentProjects] = useState<Array<ProjectOption>>(
-    () => (isTauri() ? [] : [...RECENT_PROJECTS]),
-  );
-  const [terminalThreadBindings, setTerminalThreadBindings] = useState<
-    Record<string, string>
-  >({});
-  const [activeThreadProfileIdOverride, setActiveThreadProfileIdOverride] = useState<string | null>(null);
+  // ── Phase 6: Initialize projectStore defaults (non-Tauri fallback) ──
+  useEffect(() => {
+    if (!isTauri() && projectStore.getState().recentProjects.length === 0) {
+      projectStore.setState({
+        recentProjects: [...RECENT_PROJECTS],
+        selectedProject: RECENT_PROJECTS[0] ?? null,
+      });
+    }
+  }, []);
+
   const appUpdater = useAppUpdater();
   const isCheckingUpdates = appUpdater.phase === "checking";
   const updateStatus =
     appUpdater.phase === "upToDate"
       ? t("dashboard.upToDate", { version: data?.version ?? "0.1.0" })
       : null;
-  const [terminalBootstrapError, setTerminalBootstrapError] = useState<
-    string | null
-  >(null);
+
+  // ── Local-only state (not cross-domain) ──
   const [deletePhase, setDeletePhase] = useState<DeletePhase>({ kind: "idle" });
-  const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [isAddingWorkspace, setAddingWorkspace] = useState(false);
   const [workspaceAction, setWorkspaceAction] = useState<{
     workspaceId: string;
     kind: "open" | "remove";
   } | null>(null);
-  const [worktreeDialogContext, setWorktreeDialogContext] =
-    useState<NewWorktreeDialogContext | null>(null);
+
+  // ── Store-derived state (no more compat wrappers — actions use stores directly) ──
+  const terminalBootstrapError = useStore(projectStore, (s) => s.terminalBootstrapError);
+
+
   const composerCommands = useMemo(
-    () => [...commands.commands, ...pluginCommandEntries],
-    [commands.commands, pluginCommandEntries],
+    () => [...commandEntries, ...pluginCommandEntries],
+    [commandEntries, pluginCommandEntries],
   );
-  const [runtimeContextUsage, setRuntimeContextUsage] =
-    useState<ThreadContextUsage | null>(null);
-  const [terminalWorkspaceBindings, setTerminalWorkspaceBindings] = useState<
-    Record<string, string>
-  >({});
-  // Ref mirror of `terminalWorkspaceBindings` — used by effects that need to
-  // read the latest bindings without depending on the object identity (which
-  // changes on every sync and would otherwise cause re-entrant effect firing).
-  const terminalWorkspaceBindingsRef = useRef(terminalWorkspaceBindings);
-  terminalWorkspaceBindingsRef.current = terminalWorkspaceBindings;
-  const [topBarGitSnapshot, setTopBarGitSnapshot] = useState<GitSnapshotDto | null>(null);
+
+  // ── DOM refs (4 UI-only refs) ──
   const mainContentRef = useRef<HTMLElement | null>(null);
   const overlayContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
-  const syncVersionRef = useRef(0);
-  const editingThreadIdRef = useRef<string | null>(null);
   const sidebarAutoRefreshUntilRef = useRef(0);
-  const newThreadCreationRef = useRef<Record<string, Promise<string>>>({});
-  const terminalThreadBindingsRef = useRef(terminalThreadBindings);
-  terminalThreadBindingsRef.current = terminalThreadBindings;
   const removedWorkspacePathsRef = useRef<Set<string>>(new Set());
 
   const activeThread = getActiveThread(workspaces);
@@ -457,6 +435,22 @@ export function DashboardWorkbench() {
     [workspaces],
   );
 
+  // ── Phase 6: Dedicated hooks (extract effects from component body) ──
+  // NOTE: Must come after resolvedWorkspaceId derivation and before any
+  // code that reads topBarGitSnapshot (branchSnapshot, etc.).
+  useTerminalPreWarm();
+  useTerminalResize();
+  useWorkspaceDiscovery();
+  const { snapshot: topBarGitSnapshot } = useGitSnapshot(resolvedWorkspaceId);
+  const handleOpenSettingsShortcut = useCallback(() => {
+    openOverlay("settings");
+  }, []);
+
+  useGlobalKeyboardShortcuts(
+    { mainContent: mainContentRef, overlay: overlayContentRef },
+    { isMacOS: (data?.platform === "macos") || false, onOpenSettings: handleOpenSettingsShortcut },
+  );
+
   const branchSnapshot = useMemo(() => {
     if (!topBarGitSnapshot) return null;
     return {
@@ -475,181 +469,9 @@ export function DashboardWorkbench() {
     topBarGitSnapshot?.untrackedFiles,
     topBarGitSnapshot?.conflictedFiles,
   ]);
-
-  useEffect(() => {
-    if (isNewThreadMode || !resolvedTerminalThreadId) {
-      setRuntimeContextUsage(null);
-    }
-  }, [isNewThreadMode, resolvedTerminalThreadId]);
-
-  const getMaxTerminalHeight = () => {
-    if (typeof window === "undefined") {
-      return DEFAULT_TERMINAL_HEIGHT;
-    }
-
-    return Math.max(
-      MIN_TERMINAL_HEIGHT,
-      window.innerHeight - TOPBAR_HEIGHT - MIN_WORKBENCH_HEIGHT,
-    );
-  };
-
-  const listVisibleWorkspaceThreads = useCallback(
-    async (
-      workspaceId: string,
-      visibleLimit: number,
-    ): Promise<{ hasMore: boolean; threads: Array<ThreadSummaryDto> }> => {
-      const desiredVisibleCount = visibleLimit + 1;
-      const pendingTerminalThreadIds = new Set(
-        Object.values(terminalThreadBindingsRef.current),
-      );
-      const visibleThreads: Array<ThreadSummaryDto> = [];
-      let offset = 0;
-      let hasMoreRawThreads = true;
-
-      while (visibleThreads.length < desiredVisibleCount && hasMoreRawThreads) {
-        const rawLimit = Math.max(
-          WORKSPACE_THREAD_PAGE_SIZE + 1,
-          desiredVisibleCount - visibleThreads.length,
-        );
-        const batch = await threadList(workspaceId, rawLimit, offset);
-
-        offset += batch.length;
-        hasMoreRawThreads = batch.length === rawLimit;
-
-        for (const thread of batch) {
-          if (pendingTerminalThreadIds.has(thread.id)) {
-            continue;
-          }
-          visibleThreads.push(thread);
-
-          if (visibleThreads.length >= desiredVisibleCount) {
-            break;
-          }
-        }
-
-        if (batch.length === 0) {
-          break;
-        }
-      }
-
-      return {
-        hasMore: visibleThreads.length > visibleLimit,
-        threads: visibleThreads.slice(0, visibleLimit),
-      };
-    },
-    [],
-  );
-
-  const clearNewThreadBindingForWorkspace = useCallback((workspaceId: string) => {
-    const bindingKey = getNewThreadTerminalBindingKey(workspaceId);
-    const pendingThreadId = terminalThreadBindingsRef.current[bindingKey] ?? null;
-    newThreadCreationRef.current = Object.fromEntries(
-      Object.entries(newThreadCreationRef.current).filter(
-        ([candidateWorkspaceId]) => candidateWorkspaceId !== workspaceId,
-      ),
-    );
-    setTerminalThreadBindings((current) => {
-      if (!(bindingKey in current)) {
-        return current;
-      }
-
-      const next = { ...current };
-      delete next[bindingKey];
-      return next;
-    });
-    if (pendingThreadId && isTauri()) {
-      terminalStore.removeSession(pendingThreadId);
-      void threadDelete(pendingThreadId).catch((error) => {
-        console.warn("[terminal] failed to delete pending thread:", pendingThreadId, error);
-      });
-    }
-  }, []);
-
-  const getOrCreateNewThreadId = useCallback(
-    async (workspaceId: string) => {
-      const existingBinding =
-        terminalThreadBindings[getNewThreadTerminalBindingKey(workspaceId)] ?? null;
-      if (existingBinding) {
-        return existingBinding;
-      }
-
-      const inFlight = newThreadCreationRef.current[workspaceId];
-      if (inFlight) {
-        return inFlight;
-      }
-
-      const creationPromise = threadCreate(workspaceId, "", activeAgentProfileId)
-        .then((thread) => {
-          setActiveThreadProfileIdOverride(thread.profileId ?? activeAgentProfileId);
-          threadStore.setState((prev) => ({
-            workspaces: prev.workspaces.map((workspace) => ({
-              ...workspace,
-              threads: workspace.threads.map((candidate) =>
-                candidate.id === thread.id
-                  ? {
-                      ...candidate,
-                      profileId: thread.profileId,
-                    }
-                  : candidate,
-              ),
-            })),
-          }));
-          setTerminalThreadBindings((current) => {
-            const bindingKey = getNewThreadTerminalBindingKey(workspaceId);
-            if (current[bindingKey] === thread.id) {
-              return current;
-            }
-
-            return {
-              ...current,
-              [bindingKey]: thread.id,
-            };
-          });
-          return thread.id;
-        })
-        .finally(() => {
-          newThreadCreationRef.current = Object.fromEntries(
-            Object.entries(newThreadCreationRef.current).filter(
-              ([candidateWorkspaceId]) => candidateWorkspaceId !== workspaceId,
-            ),
-          );
-        });
-
-      newThreadCreationRef.current = {
-        ...newThreadCreationRef.current,
-        [workspaceId]: creationPromise,
-      };
-
-      return creationPromise;
-    },
-    [activeAgentProfileId, terminalThreadBindings],
-  );
-
-  useEffect(() => {
-    if (
-      !isNewThreadMode ||
-      isTerminalCollapsed ||
-      !selectedProjectWorkspaceId ||
-      resolvedTerminalThreadId
-    ) {
-      return;
-    }
-
-    getOrCreateNewThreadId(selectedProjectWorkspaceId).catch((error) => {
-      setTerminalBootstrapError(
-        getInvokeErrorMessage(error, "Failed to prepare terminal"),
-      );
-    });
-  }, [
-    isNewThreadMode,
-    isTerminalCollapsed,
-    selectedProjectWorkspaceId,
-    resolvedTerminalThreadId,
-    getOrCreateNewThreadId,
-  ]);
-
-  // Coalesced async runner for sidebar sync. Replaces the 6-ref pattern
-  // with single-flight, coalescing, and throttling built in.
+  // Coalesced async runner for sidebar sync. Delegates core sync logic to
+  // performSidebarSync in workbench-actions.ts while keeping single-flight,
+  // coalescing, and throttling.
   const sidebarSyncRunner = useMemo(
     () =>
       createCoalescedAsyncRunner({
@@ -658,216 +480,14 @@ export function DashboardWorkbench() {
           preserveSelectedProjectIfMissing?: boolean;
           threadDisplayCountOverrides: Record<string, number>;
         }) => {
-      const syncStart = performance.now();
-      const version = ++syncVersionRef.current;
-
-      const t0 = performance.now();
-      console.log(`⏱ [sidebar-sync] firing workspaceList() at ${t0.toFixed(1)}ms since page load`);
-      const workspaceEntries = await workspaceList();
-      console.log(`⏱ [sidebar-sync] workspaceList: ${(performance.now() - t0).toFixed(1)}ms (${workspaceEntries.length} workspaces)`);
-
-      const nextDisplayCounts = Object.fromEntries(
-        workspaceEntries.map((workspace) => [
-          workspace.id,
-          options.threadDisplayCountOverrides[workspace.id] ??
-            threadStore.getState().displayCounts[workspace.id] ??
-            WORKSPACE_THREAD_PAGE_SIZE,
-        ]),
-      );
-      const t1 = performance.now();
-      const threadEntries = await Promise.all(
-        workspaceEntries.map(
-          async (workspace) =>
-            [
-              workspace.id,
-              await listVisibleWorkspaceThreads(
-                workspace.id,
-                nextDisplayCounts[workspace.id] ?? WORKSPACE_THREAD_PAGE_SIZE,
-              ),
-            ] as const,
-        ),
-      );
-      console.log(`⏱ [sidebar-sync] threadList for ${workspaceEntries.length} workspace(s): ${(performance.now() - t1).toFixed(1)}ms`);
-
-      // Discard stale sync results — a newer sync has been initiated while we were fetching.
-      if (syncVersionRef.current !== version) {
-        return;
-      }
-
-      const threadsByWorkspaceId = Object.fromEntries(
-        threadEntries.map(([workspaceId, result]) => [
-          workspaceId,
-          result.threads,
-        ]),
-      );
-      const nextHasMoreByWorkspaceId = Object.fromEntries(
-        threadEntries.map(([workspaceId, result]) => [
-          workspaceId,
-          result.hasMore,
-        ]),
-      );
-      const nextProjects = workspaceEntries
-        .map((workspace) => buildProjectOptionFromWorkspace(workspace, language))
-        .filter((project): project is ProjectOption => project !== null);
-      const nextBindings = buildWorkspaceBindings(workspaceEntries);
-      const defaultWorkspace =
-        workspaceEntries.find((workspace) => workspace.isDefault) ?? null;
-      const defaultProject =
-        defaultWorkspace === null
-          ? null
-          : (nextProjects.find(
-              (project) =>
-                project.id === defaultWorkspace.id
-                || isSameWorkspacePath(project.path, defaultWorkspace.canonicalPath)
-                || isSameWorkspacePath(project.path, defaultWorkspace.path),
-            ) ?? null);
-
-      setTerminalWorkspaceBindings((current) => {
-        // Merge `nextBindings` with existing bindings instead of replacing
-        // outright. Other code paths (e.g. the effect at L1498 and the
-        // new-thread activation flow) can inject additional path aliases for
-        // a workspace — typically the user-facing path when it differs from
-        // `workspace.path` / `workspace.canonicalPath` after normalization
-        // (e.g. symlinks, macOS `/private` prefix, case differences on
-        // Windows). Blowing those aliases away every sync caused a feedback
-        // loop: effect re-injects the alias, next sync wipes it, effect fires
-        // again.
-        //
-        // Behaviour:
-        //   1. Keys pointing to a workspace that still exists in the latest
-        //      `workspaceEntries` are preserved (so user-injected aliases
-        //      survive), *unless* `nextBindings` itself rebinds that key.
-        //   2. Keys pointing to a workspace that has been removed are dropped.
-        //   3. `nextBindings` wins on conflict (authoritative path → id map).
-        const liveWorkspaceIds = new Set(
-          workspaceEntries.map((workspace) => workspace.id),
-        );
-        const preservedAliases: Record<string, string> = {};
-        for (const [pathKey, workspaceId] of Object.entries(current)) {
-          if (liveWorkspaceIds.has(workspaceId)) {
-            preservedAliases[pathKey] = workspaceId;
-          }
-        }
-        const merged = { ...preservedAliases, ...nextBindings };
-
-        // Avoid producing a new object reference if nothing actually changed.
-        // This is critical for any effect that still compares bindings by
-        // reference, and lets downstream memos stay stable.
-        const currentKeys = Object.keys(current);
-        const mergedKeys = Object.keys(merged);
-        if (currentKeys.length === mergedKeys.length) {
-          let identical = true;
-          for (const key of mergedKeys) {
-            if (current[key] !== merged[key]) {
-              identical = false;
-              break;
-            }
-          }
-          if (identical) {
-            return current;
-          }
-        }
-
-        return merged;
-      });
-      setRecentProjects(nextProjects);
-      threadStore.setState({ defaultWorkspaceId: defaultWorkspace?.id ?? null });
-      threadStore.setState({ displayCounts: nextDisplayCounts });
-      threadStore.setState({ hasMore: nextHasMoreByWorkspaceId });
-      threadStore.setState((prev) => ({
-        loadMorePending: Object.fromEntries(
-          workspaceEntries.map((workspace) => [
-            workspace.id,
-            prev.loadMorePending[workspace.id] ?? false,
-          ]),
-        ),
-      }));
-      setSelectedProject((current) => {
-        if (current) {
-          const matchingProject =
-            nextProjects.find(
-              (project) =>
-                project.id === current.id
-                || isSameWorkspacePath(project.path, current.path),
-            ) ?? null;
-
-          if (matchingProject) {
-            return matchingProject;
-          }
-
-          if (options.preserveSelectedProjectIfMissing ?? true) {
-            return current;
-          }
-
-          return defaultProject ?? nextProjects[0] ?? null;
-        }
-
-        return defaultProject ?? nextProjects[0] ?? null;
-      });
-      threadStore.setState((prev) => {
-        const activeThreadId = getActiveThread(prev.workspaces)?.id ?? null;
-        const syncedWorkspaces = buildWorkspaceItemsFromDtos(
-          workspaceEntries,
-          threadsByWorkspaceId,
-          activeThreadId,
-          language,
-        );
-        const mergedWithFallbacks = mergeLocalFallbackThreads({
-          currentWorkspaces: prev.workspaces,
-          syncedWorkspaces,
-        });
-
-        const nextWorkspaces = mergedWithFallbacks.map((workspace) => {
-          const currentWorkspace =
-            prev.workspaces.find((candidate) => candidate.id === workspace.id) ?? null;
-
-          if (!currentWorkspace) {
-            return workspace;
-          }
-
-          return {
-            ...workspace,
-            threads: workspace.threads.map((thread) => {
-              const currentThread = currentWorkspace.threads.find(
-                (candidate) => candidate.id === thread.id,
-              );
-
-              if (!currentThread) {
-                return thread;
-              }
-
-              const currentTitle = currentThread.name.trim();
-              const syncedTitle = thread.name.trim();
-              if (
-                currentTitle
-                && currentTitle !== t("dashboard.newThread")
-                && syncedTitle === t("dashboard.newThread")
-              ) {
-                return {
-                  ...thread,
-                  name: currentThread.name,
-                };
-              }
-
-              return thread;
-            }),
-          };
-        });
-
-        const nextOpenWorkspaces: Record<string, boolean> = {};
-        for (const workspace of workspaceEntries) {
-          nextOpenWorkspaces[workspace.id] =
-            prev.openWorkspaces[workspace.id] ??
-            (workspace.isDefault || workspaceEntries.length === 1);
-        }
-
-        return { workspaces: nextWorkspaces, openWorkspaces: nextOpenWorkspaces };
-      });
-      console.log(`⏱ [sidebar-sync] total: ${(performance.now() - syncStart).toFixed(1)}ms`);
+          await performSidebarSync({
+            language,
+            preserveSelectedProjectIfMissing: options.preserveSelectedProjectIfMissing,
+            threadDisplayCountOverrides: options.threadDisplayCountOverrides,
+          });
         },
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [listVisibleWorkspaceThreads, language, resolvedTerminalThreadId],
+    [language],
   );
 
   // Public entry point. Delegates to the coalesced async runner which
@@ -939,7 +559,7 @@ export function DashboardWorkbench() {
           }
 
           // Skip update for the thread currently being edited inline.
-          if (editingThreadIdRef.current === threadId) {
+          if (threadStore.getState().editingThreadId === threadId) {
             return;
           }
 
@@ -986,28 +606,12 @@ export function DashboardWorkbench() {
 
       void syncWorkspaceSidebar().catch((error) => {
         const message = getInvokeErrorMessage(error, t("dashboard.error.refreshThreadList"));
-        setTerminalBootstrapError(message);
+        projectStore.setState({ terminalBootstrapError: message });
       });
     }, SIDEBAR_AUTO_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(interval);
   }, [hasSidebarLiveThreads, syncWorkspaceSidebar]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const syncTerminalHeight = () => {
-      const current = uiLayoutStore.getState().terminalHeight;
-      setTerminalHeight(Math.min(current, getMaxTerminalHeight()));
-    };
-
-    syncTerminalHeight();
-    window.addEventListener("resize", syncTerminalHeight);
-
-    return () => window.removeEventListener("resize", syncTerminalHeight);
-  }, []);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -1035,135 +639,13 @@ export function DashboardWorkbench() {
         }
 
         const message = getInvokeErrorMessage(error, t("dashboard.error.workspaceInit"));
-        setTerminalBootstrapError(message);
+        projectStore.setState({ terminalBootstrapError: message });
       });
 
     return () => {
       cancelled = true;
     };
   }, [syncWorkspaceSidebar]);
-
-  useEffect(() => {
-    if (!terminalResize || typeof window === "undefined") {
-      return;
-    }
-
-    const handleMouseMove = (event: MouseEvent) => {
-      const deltaY = terminalResize.startY - event.clientY;
-      const nextHeight = terminalResize.startHeight + deltaY;
-      const clampedHeight = Math.min(
-        getMaxTerminalHeight(),
-        Math.max(MIN_TERMINAL_HEIGHT, nextHeight),
-      );
-
-      setTerminalHeight(clampedHeight);
-    };
-
-    const handleMouseUp = () => {
-      setTerminalResize(null);
-    };
-
-    const originalCursor = document.body.style.cursor;
-    const originalUserSelect = document.body.style.userSelect;
-
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      document.body.style.cursor = originalCursor;
-      document.body.style.userSelect = originalUserSelect;
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [terminalResize]);
-
-  useEffect(() => {
-    if (!isTauri() || !currentProject) {
-      return;
-    }
-
-    if (hasRemovedWorkspacePath(removedWorkspacePathsRef.current, currentProject.path)) {
-      return;
-    }
-
-    // Read latest bindings via ref so that `setTerminalWorkspaceBindings`
-    // elsewhere (including from `syncWorkspaceSidebar` itself) does not
-    // retrigger this effect — that was the source of a ~40ms infinite loop
-    // where sync overwrote freshly-injected aliases and the effect kept
-    // re-injecting them.
-    if (getWorkspaceBindingId(terminalWorkspaceBindingsRef.current, currentProject.path)) {
-      return;
-    }
-
-    let cancelled = false;
-    setTerminalBootstrapError(null);
-
-    void workspaceList()
-      .then(async (workspaces) => {
-        const existing = findWorkspaceByPath(workspaces, currentProject.path);
-        if (existing) {
-          return existing;
-        }
-
-        return workspaceAdd(currentProject.path, currentProject.name);
-      })
-      .then((workspace) => {
-        if (cancelled) {
-          return;
-        }
-
-        setTerminalWorkspaceBindings((current) => {
-          if (
-            getWorkspaceBindingId(current, currentProject.path)
-            && getWorkspaceBindingId(current, workspace.canonicalPath)
-          ) {
-            return current;
-          }
-
-          return {
-            ...current,
-            ...buildWorkspaceBindingsForEntry(workspace, currentProject.path),
-          };
-        });
-        void syncWorkspaceSidebar().catch((refreshError) => {
-          if (cancelled) {
-            return;
-          }
-
-          const message = getInvokeErrorMessage(
-            refreshError,
-            t("dashboard.error.refreshWorkspaceList"),
-          );
-          setTerminalBootstrapError(message);
-        });
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-
-        const message = getInvokeErrorMessage(error, t("dashboard.error.addWorkspace"));
-        setTerminalBootstrapError(message);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentProject, syncWorkspaceSidebar]);
-
-  const handleTerminalResizeStart = (
-    event: ReactMouseEvent<HTMLDivElement>,
-  ) => {
-    if (event.button !== 0) {
-      return;
-    }
-
-    event.preventDefault();
-    setTerminalResize({ startY: event.clientY, startHeight: terminalHeight });
-  };
 
   useEffect(() => {
     if (!isUserMenuOpen || typeof window === "undefined") {
@@ -1224,125 +706,6 @@ export function DashboardWorkbench() {
     return () => window.clearTimeout(timeout);
   }, [appUpdater.phase, appUpdater.dismiss]);
 
-  // ── Git snapshot subscription for branch display in thread title bar ──
-  useEffect(() => {
-    if (!isTauri() || !resolvedWorkspaceId) {
-      setTopBarGitSnapshot(null);
-      return;
-    }
-
-    // Clear stale snapshot immediately so the UI doesn't flash the previous
-    // workspace's branch while the new subscription/fetch is in flight.
-    setTopBarGitSnapshot(null);
-
-    let cancelled = false;
-    let unsubscribe: (() => Promise<void>) | null = null;
-
-    // Subscribe first so we don't miss events during the initial fetch
-    void gitSubscribe(resolvedWorkspaceId, (event) => {
-      if (cancelled) return;
-      if (event.type === "snapshot_updated") {
-        setTopBarGitSnapshot(event.snapshot);
-      }
-    })
-      .then((nextUnsubscribe) => {
-        if (cancelled) {
-          void nextUnsubscribe().catch(() => {});
-          return;
-        }
-        unsubscribe = nextUnsubscribe;
-      })
-      .catch(() => {});
-
-    // Then fetch the initial snapshot to fill the gap before subscription delivers
-    void gitGetSnapshot(resolvedWorkspaceId)
-      .then((snapshot) => {
-        if (!cancelled && snapshot) {
-          setTopBarGitSnapshot(snapshot);
-        }
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-      if (unsubscribe) {
-        void unsubscribe().catch(() => {});
-      }
-    };
-  }, [resolvedWorkspaceId]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        !(event.metaKey || event.ctrlKey) ||
-        event.altKey ||
-        event.key.toLowerCase() !== "a"
-      ) {
-        return;
-      }
-
-      if (isEditableSelectionTarget(event.target)) {
-        return;
-      }
-
-      const selection = window.getSelection();
-      const selectionInsideOverlayContent =
-        isNodeInsideContainer(
-          overlayContentRef.current,
-          selection?.anchorNode ?? null,
-        ) ||
-        isNodeInsideContainer(
-          overlayContentRef.current,
-          selection?.focusNode ?? null,
-        );
-      const targetInsideOverlayContent = isNodeInsideContainer(
-        overlayContentRef.current,
-        event.target instanceof Node ? event.target : null,
-      );
-      const selectionInsideMainContent =
-        isNodeInsideContainer(
-          mainContentRef.current,
-          selection?.anchorNode ?? null,
-        ) ||
-        isNodeInsideContainer(
-          mainContentRef.current,
-          selection?.focusNode ?? null,
-        );
-      const targetInsideMainContent = isNodeInsideContainer(
-        mainContentRef.current,
-        event.target instanceof Node ? event.target : null,
-      );
-
-      if (
-        overlayContentRef.current &&
-        (targetInsideOverlayContent || selectionInsideOverlayContent)
-      ) {
-        event.preventDefault();
-        selectContainerContents(overlayContentRef.current);
-        return;
-      }
-
-      if (
-        mainContentRef.current &&
-        (targetInsideMainContent || selectionInsideMainContent)
-      ) {
-        event.preventDefault();
-        selectContainerContents(mainContentRef.current);
-        return;
-      }
-
-      event.preventDefault();
-      selection?.removeAllRanges();
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
   const handleWorkspaceToggle = (workspaceId: string) => {
     threadStore.setState((prev) => ({
       openWorkspaces: {
@@ -1360,7 +723,7 @@ export function DashboardWorkbench() {
 
       setStoreDisplayCount(workspaceId, nextDisplayCount);
       setStoreLoadMorePending(workspaceId, true);
-      setTerminalBootstrapError(null);
+      projectStore.setState({ terminalBootstrapError: null });
 
       void syncWorkspaceSidebar({
         threadDisplayCountOverrides: {
@@ -1369,7 +732,7 @@ export function DashboardWorkbench() {
       })
         .catch((error) => {
           const message = getInvokeErrorMessage(error, t("dashboard.error.loadMoreThreads"));
-          setTerminalBootstrapError(message);
+          projectStore.setState({ terminalBootstrapError: message });
         })
         .finally(() => {
           setStoreLoadMorePending(workspaceId, false);
@@ -1379,86 +742,27 @@ export function DashboardWorkbench() {
   );
 
   const handleEnterNewThreadMode = () => {
-    if (selectedProjectWorkspaceId) {
-      clearNewThreadBindingForWorkspace(selectedProjectWorkspaceId);
-    }
-
-    setActiveThreadProfileIdOverride(null);
-    threadStore.setState({ isNewThreadMode: true });
-    threadStore.setState((prev) => ({ workspaces: clearActiveThreads(prev.workspaces) }));
-    setComposerError(null);
+    enterNewThreadMode();
     setDeletePhase({ kind: "idle" });
-    setTerminalBootstrapError(null);
   };
 
   const handleThreadSelect = (threadId: string) => {
-    if (isNewThreadMode && selectedProjectWorkspaceId) {
-      clearNewThreadBindingForWorkspace(selectedProjectWorkspaceId);
-    }
-    const nextActiveThread = workspaces
-      .flatMap((workspace) => workspace.threads)
-      .find((thread) => thread.id === threadId) ?? null;
-    const resolvedProfileId = resolveThreadProfileId(
-      nextActiveThread?.profileId ?? null,
-      activeAgentProfileId,
-    );
-    setActiveThreadProfileIdOverride(resolvedProfileId);
-    threadStore.setState({ isNewThreadMode: false });
-    setActiveWorkspaceMenuId(null);
+    selectThread(threadId);
     setDeletePhase({ kind: "idle" });
-    setTerminalBootstrapError(null);
-    threadStore.setState((prev) => ({ workspaces: activateThread(prev.workspaces, threadId) }));
-
-    // Align the selected project with the workspace that owns this thread so
-    // the new-thread empty state and path bindings stay consistent when the
-    // user toggles back to New Thread mode. Without this, selectedProject can
-    // drift (e.g. it stays on a worktree after the user jumped back to a
-    // thread belonging to the parent repo).
-    const nextWorkspace = workspaces.find((workspace) =>
-      workspace.threads.some((thread) => thread.id === threadId),
-    );
-    if (nextWorkspace && nextWorkspace.id !== selectedProject?.id) {
-      const projectForWorkspace = recentProjects.find(
-        (project) => project.id === nextWorkspace.id,
-      );
-      if (projectForWorkspace) {
-        setSelectedProject({
-          ...projectForWorkspace,
-          lastOpenedLabel: t("time.justNow"),
-        });
-      }
-    }
-
-    // Thread selection should not overwrite the global default profile.
   };
 
   const handleProjectSelect = (project: ProjectOption) => {
-    const nextProject = {
-      ...project,
-      lastOpenedLabel: t("time.justNow"),
-    };
-
-    deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
-    setSelectedProject(nextProject);
-    setRecentProjects((current) => mergeRecentProjects(current, nextProject));
+    deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, project.path);
+    selectProjectAction(project);
   };
 
   const activateWorkspaceAsNewThreadTarget = useCallback(
     (workspaceId: string, nextProject: ProjectOption) => {
-      clearNewThreadBindingForWorkspace(workspaceId);
       deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
-      setSelectedProject(nextProject);
-      setRecentProjects((current) => mergeRecentProjects(current, nextProject));
-      setStoreOpenWorkspace(workspaceId, true);
-      setActiveThreadProfileIdOverride(null);
-      threadStore.setState({ isNewThreadMode: true });
-      threadStore.setState((prev) => ({ workspaces: clearActiveThreads(prev.workspaces) }));
-      setComposerError(null);
+      activateWorkspace(workspaceId, nextProject);
       setDeletePhase({ kind: "idle" });
-      setTerminalBootstrapError(null);
-      setActiveWorkspaceMenuId(null);
     },
-    [clearNewThreadBindingForWorkspace],
+    [],
   );
 
   const handleNewThreadForWorkspace = useCallback((workspace: WorkspaceItem) => {
@@ -1493,66 +797,20 @@ export function DashboardWorkbench() {
     activateWorkspaceAsNewThreadTarget(workspace.id, nextProject);
   }, [activateWorkspaceAsNewThreadTarget, language, t]);
 
-  const handleRuntimeThreadTitleChange = useCallback(
-    (threadId: string, title: string) => {
-      const trimmedTitle = title.trim();
-      if (!trimmedTitle) {
-        return;
-      }
 
-      threadStore.setState((prev) => ({
-        workspaces: prev.workspaces.map((workspace) => ({
-          ...workspace,
-          threads: workspace.threads.map((thread) =>
-            thread.id === threadId
-              ? {
-                  ...thread,
-                  name: trimmedTitle,
-                }
-              : thread,
-          ),
-        })),
-      }));
-
-      void syncWorkspaceSidebar().catch((error) => {
-        const message = getInvokeErrorMessage(error, t("dashboard.error.refreshThreadList"));
-        setTerminalBootstrapError(message);
-      });
-    },
-    [syncWorkspaceSidebar, t],
-  );
-
-  const handleRuntimeConsumeInitialPrompt = useCallback(
-    (id: string) => {
-      threadStore.setState((prev) => {
-        const next = Object.fromEntries(
-          Object.entries(prev.pendingRuns).filter(
-            ([, pendingRun]) => pendingRun.id !== id,
-          ),
-        );
-        if (Object.keys(next).length === Object.keys(prev.pendingRuns).length) {
-          return {};
-        }
-        return { pendingRuns: next };
-      });
-    },
-    [],
-  );
 
   const handleThreadEditStart = useCallback(
     (threadId: string) => {
-      setEditingThreadId(threadId);
-      editingThreadIdRef.current = threadId;
+      threadStore.setState({ editingThreadId: threadId });
     },
     [],
   );
 
   const handleThreadEditDone = useCallback(
     (threadId: string, newTitle: string | null, originalName: string) => {
-      setEditingThreadId(null);
+      threadStore.setState({ editingThreadId: null });
 
       if (!newTitle || newTitle === originalName) {
-        editingThreadIdRef.current = null;
         return;
       }
 
@@ -1584,10 +842,10 @@ export function DashboardWorkbench() {
             }));
           })
           .finally(() => {
-            editingThreadIdRef.current = null;
+            // editingThreadId already set to null via threadStore.setState({ editingThreadId: null }) above
           });
       } else {
-        editingThreadIdRef.current = null;
+        // Non-Tauri: editingThreadId already set to null via threadStore.setState({ editingThreadId: null })
       }
     },
     [],
@@ -1595,90 +853,30 @@ export function DashboardWorkbench() {
 
   const handleThreadDeleteRequest = useCallback((threadId: string) => {
     setDeletePhase({ kind: "confirming", threadId });
-    setTerminalBootstrapError(null);
+    projectStore.setState({ terminalBootstrapError: null });
   }, []);
 
   const handleThreadDeleteConfirm = useCallback(
-    (threadId: string) => {
-      if (deletePhase.kind === "deleting") {
-        return;
-      }
-
-      void (async () => {
-        setDeletePhase({ kind: "deleting", threadId });
-        setTerminalBootstrapError(null);
-
-        try {
-          if (isTauri()) {
-            await threadDelete(threadId);
-          }
-
-          const isDeletingActiveThread = activeThread?.id === threadId;
-          terminalStore.removeSession(threadId);
-
-          threadStore.setState((prev) => {
-            const next = prev.workspaces.map((workspace) => ({
-              ...workspace,
-              threads: workspace.threads.filter(
-                (thread) => thread.id !== threadId,
-              ),
-            }));
-
-            return { workspaces: isDeletingActiveThread ? clearActiveThreads(next) : next };
+    async (threadId: string) => {
+      if (deletePhase.kind === "deleting") return;
+      setDeletePhase({ kind: "deleting", threadId });
+      projectStore.setState({ terminalBootstrapError: null });
+      try {
+        await deleteThread(threadId);
+        if (isTauri()) {
+          void syncWorkspaceSidebar().catch((error) => {
+            const message = getInvokeErrorMessage(error, t("dashboard.error.refreshThreadList"));
+            projectStore.setState({ terminalBootstrapError: message });
           });
-          threadStore.setState((prev) => {
-            if (!(threadId in prev.pendingRuns)) {
-              return {};
-            }
-
-            const next = { ...prev.pendingRuns };
-            delete next[threadId];
-            return { pendingRuns: next };
-          });
-          uiLayoutStore.setState((prev) => {
-            if (!(threadId in prev.terminalCollapsedByThreadKey)) {
-              return {};
-            }
-            const next = { ...prev.terminalCollapsedByThreadKey };
-            delete next[threadId];
-            return { terminalCollapsedByThreadKey: next };
-          });
-          setTerminalThreadBindings((current) => {
-            const next = Object.fromEntries(
-              Object.entries(current).filter(
-                ([, boundThreadId]) => boundThreadId !== threadId,
-              ),
-            );
-            return next;
-          });
-
-          if (isDeletingActiveThread) {
-            setSelectedProject((current) => activeThreadProject ?? current);
-            setActiveThreadProfileIdOverride(null);
-            threadStore.setState({ isNewThreadMode: true });
-            setComposerError(null);
-          }
-
-          if (isTauri()) {
-            void syncWorkspaceSidebar().catch((error) => {
-              const message = getInvokeErrorMessage(error, t("dashboard.error.refreshThreadList"));
-              setTerminalBootstrapError(message);
-            });
-          }
-        } catch (error) {
-          const message = getInvokeErrorMessage(error, t("dashboard.error.deleteThread"));
-          setTerminalBootstrapError(message);
-        } finally {
-          setDeletePhase({ kind: "idle" });
         }
-      })();
+      } catch (error) {
+        const message = getInvokeErrorMessage(error, t("dashboard.error.deleteThread"));
+        projectStore.setState({ terminalBootstrapError: message });
+      } finally {
+        setDeletePhase({ kind: "idle" });
+      }
     },
-    [
-      activeThread?.id,
-      activeThreadProject,
-      deletePhase,
-      syncWorkspaceSidebar,
-    ],
+    [deletePhase, syncWorkspaceSidebar, t],
   );
 
   const handleComposerSubmit = (submission: ComposerSubmission) => {
@@ -1690,257 +888,28 @@ export function DashboardWorkbench() {
       return;
     }
 
-    if (isNewThreadMode) {
-      if (commandBehavior === "clear" || commandBehavior === "compact") {
-        clearNewThreadComposer();
-        return;
-      }
-
-      void (async () => {
-        let nextProject = selectedProject;
-        let nextWorkspaceId = resolvedWorkspaceId;
-
-        if (isTauri() && !nextWorkspaceId) {
-          try {
-            const projectToEnsure = nextProject;
-            const ensuredWorkspace = projectToEnsure
-              ? await workspaceList().then((workspaceEntries) => {
-                  const existingWorkspace = findWorkspaceByPath(
-                    workspaceEntries,
-                    projectToEnsure.path,
-                  );
-
-                  return (
-                    existingWorkspace ??
-                    workspaceAdd(projectToEnsure.path, projectToEnsure.name)
-                  );
-                })
-              : await workspaceEnsureDefault();
-            const ensuredProject =
-              buildProjectOptionFromWorkspace(ensuredWorkspace, language) ?? {
-                id: ensuredWorkspace.id,
-                name: ensuredWorkspace.name,
-                path: ensuredWorkspace.canonicalPath || ensuredWorkspace.path,
-                lastOpenedLabel: t("time.justNow"),
-              };
-
-            nextProject = ensuredProject;
-            nextWorkspaceId = ensuredWorkspace.id;
-
-            setSelectedProject(ensuredProject);
-            setRecentProjects((current) =>
-              mergeRecentProjects(current, {
-                ...ensuredProject,
-                lastOpenedLabel: t("time.justNow"),
-              }),
-            );
-            setTerminalWorkspaceBindings((current) => ({
-              ...current,
-              ...buildWorkspaceBindingsForEntry(
-                ensuredWorkspace,
-                projectToEnsure?.path,
-              ),
-            }));
-          } catch (error) {
-            const message = getInvokeErrorMessage(
-              error,
-              t("dashboard.error.workspaceInit"),
-            );
-            setComposerError(message);
-            return;
-          }
-        }
-
-        if (!nextProject) {
-          return;
-        }
-
-        deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
-        const project = {
-          ...nextProject,
-          lastOpenedLabel: t("time.justNow"),
-        };
-        // Two-pass lookup: prefer an exact ID match so a worktree is never
-        // shadowed by its parent repo when they share the same name.
-        const existingWorkspace =
-          workspaces.find(
-            (workspace) =>
-              workspace.id === nextWorkspaceId
-              || workspace.id === project.id,
-          )
-          ?? workspaces.find(
-            (workspace) =>
-              workspace.name === project.name
-              || isSameWorkspacePath(workspace.path, project.path),
-          )
-          ?? null;
-        const nextPendingRunId =
-          typeof crypto !== "undefined" && "randomUUID" in crypto
-            ? crypto.randomUUID()
-            : `${Date.now()}`;
-
-        let persistedThreadId =
-          nextWorkspaceId === null
-            ? null
-            : (terminalThreadBindings[
-                getNewThreadTerminalBindingKey(nextWorkspaceId)
-              ] ?? null);
-        // Intentional: new-thread mode always uses the global active profile as the
-        // default for the new conversation; switching to an existing thread reads
-        // its own persisted profile_id via resolveThreadProfileId instead.
-        let persistedThreadProfileId = activeAgentProfileId;
-        const nextThreadName = buildThreadTitle(trimmedValue || effectivePrompt);
-
-        try {
-          if (isTauri() && nextWorkspaceId) {
-            if (!persistedThreadId) {
-              persistedThreadId = await getOrCreateNewThreadId(nextWorkspaceId);
-            }
-          }
-        } catch (error) {
-          const message = getInvokeErrorMessage(error, t("dashboard.error.createThread"));
-          setComposerError(message);
-          return;
-        }
-
-        const nextThread = {
-          id: persistedThreadId ?? `${project.id}-thread-${Date.now()}`,
-          profileId: persistedThreadProfileId,
-          name: nextThreadName,
-          time: t("time.justNow"),
-          active: true,
-          status: "running" as const,
-        };
-
-        setSelectedProject(project);
-        setRecentProjects((current) => mergeRecentProjects(current, project));
-        threadStore.setState((prev) => {
-          const cleared = clearActiveThreads(prev.workspaces);
-
-          if (existingWorkspace) {
-            return { workspaces: cleared.map((workspace) =>
-              workspace.id === existingWorkspace.id
-                ? {
-                    ...workspace,
-                    name: project.name,
-                    path: project.path,
-                    threads: [nextThread, ...workspace.threads],
-                  }
-                : workspace,
-            ) };
-          }
-
-          return {
-            workspaces: [
-              {
-                id: nextWorkspaceId ?? project.id,
-                name: project.name,
-                defaultOpen: true,
-                path: project.path,
-                kind: project.kind,
-                parentWorkspaceId: project.parentWorkspaceId,
-                worktreeHash: project.worktreeHash ?? null,
-                branch: project.branch ?? null,
-                threads: [nextThread],
-              },
-              ...cleared,
-            ],
-          };
-        });
-        setStoreOpenWorkspace(
-          existingWorkspace?.id ?? nextWorkspaceId ?? project.id,
-          true,
-        );
-
-        if (activeTerminalStateKey) {
-          uiLayoutStore.setState((prev) => {
-            if (!(activeTerminalStateKey in prev.terminalCollapsedByThreadKey)) {
-              return {};
-            }
-
-            const next = {
-              ...prev.terminalCollapsedByThreadKey,
-              [nextThread.id]: prev.terminalCollapsedByThreadKey[activeTerminalStateKey],
-            };
-            delete next[activeTerminalStateKey];
-            return { terminalCollapsedByThreadKey: next };
-          });
-        }
-
-        if (persistedThreadId) {
-          setTerminalThreadBindings((current) => {
-            if (!nextWorkspaceId || !persistedThreadId) {
-              return current;
-            }
-
-            const bindingKey = getNewThreadTerminalBindingKey(nextWorkspaceId);
-
-            if (current[bindingKey] === persistedThreadId) {
-              return current;
-            }
-
-            return {
-              ...current,
-              [bindingKey]: persistedThreadId,
-            };
-          });
-
-          threadStore.setState((prev) => ({
-            pendingRuns: {
-              ...prev.pendingRuns,
-              [persistedThreadId]: {
-              id: nextPendingRunId,
-              displayText: submission.displayText,
-              effectivePrompt,
-              attachments: submission.attachments,
-              metadata: submission.metadata ?? null,
-              runMode: submission.runMode ?? newThreadRunMode,
-              threadId: persistedThreadId,
-            },
-          },
-          }));
-        }
-
-        // Bind the current profile to the newly created thread.
-        if (persistedThreadId) {
-          threadStore.setState((prev) => ({
-            workspaces: prev.workspaces.map((workspace) => ({
-              ...workspace,
-              threads: workspace.threads.map((thread) =>
-                thread.id === persistedThreadId
-                  ? {
-                      ...thread,
-                      profileId: activeAgentProfileId,
-                    }
-                  : thread,
-              ),
-            })),
-          }));
-          setActiveThreadProfileIdOverride(activeAgentProfileId);
-        }
-
-        threadStore.setState({ isNewThreadMode: false });
-        setNewThreadRunMode("default");
-        setNewThreadValue("");
-        setComposerError(null);
-        if (nextWorkspaceId) {
-          const bindingKey = getNewThreadTerminalBindingKey(nextWorkspaceId);
-          setTerminalThreadBindings((current) => {
-            if (!(bindingKey in current)) {
-              return current;
-            }
-
-            const next = { ...current };
-            delete next[bindingKey];
-            return next;
-          });
-        }
-      })();
+    if (!isNewThreadMode) {
+      // Non-new-thread submissions are handled by RuntimeThreadSurface directly.
       return;
     }
 
-    setNewThreadValue("");
-    setComposerError(null);
+    if (commandBehavior === "clear" || commandBehavior === "compact") {
+      clearNewThreadComposer();
+      return;
+    }
+
+    void submitNewThread({
+      value: trimmedValue,
+      runMode: newThreadRunMode,
+      displayText: submission.displayText,
+      effectivePrompt,
+      attachments: submission.attachments,
+      metadata: submission.metadata ?? null,
+      commandBehavior: commandBehavior ?? "none",
+    }).catch((error) => {
+      const message = getInvokeErrorMessage(error, t("dashboard.error.createThread"));
+      composerStore.setState({ error: message });
+    });
   };
 
   const handleThemeSelect = (nextTheme: ThemePreference) => {
@@ -1967,7 +936,7 @@ export function DashboardWorkbench() {
         await threadUpdateProfile(activeThread.id, profileId);
       } catch (error) {
         const message = getInvokeErrorMessage(error, t("dashboard.error.switchProfile"));
-        setComposerError(message);
+        composerStore.setState({ error: message });
         return;
       }
 
@@ -1984,7 +953,7 @@ export function DashboardWorkbench() {
           ),
         })),
       }));
-      setActiveThreadProfileIdOverride(profileId);
+      threadStore.setState({ activeThreadProfileIdOverride: profileId });
     },
     [activeThread?.id, isNewThreadMode, setActiveAgentProfile],
   );
@@ -2004,7 +973,7 @@ export function DashboardWorkbench() {
 
     void (async () => {
       setAddingWorkspace(true);
-      setTerminalBootstrapError(null);
+      projectStore.setState({ terminalBootstrapError: null });
 
       try {
         const selectedPath = await open({
@@ -2044,7 +1013,7 @@ export function DashboardWorkbench() {
         await syncWorkspaceSidebar();
       } catch (error) {
         const message = getInvokeErrorMessage(error, "Failed to add workspace");
-        setTerminalBootstrapError(message);
+        projectStore.setState({ terminalBootstrapError: message });
       } finally {
         setAddingWorkspace(false);
       }
@@ -2075,7 +1044,7 @@ export function DashboardWorkbench() {
           workspaceId: workspace.id,
           kind: "open",
         });
-        setTerminalBootstrapError(null);
+        projectStore.setState({ terminalBootstrapError: null });
 
         try {
           await invoke("open_workspace_in_app", {
@@ -2089,7 +1058,7 @@ export function DashboardWorkbench() {
             error,
             `Couldn't open ${workspace.name}`,
           );
-          setTerminalBootstrapError(message);
+          projectStore.setState({ terminalBootstrapError: message });
         } finally {
           setWorkspaceAction(null);
         }
@@ -2099,150 +1068,42 @@ export function DashboardWorkbench() {
   );
 
   const handleWorkspaceRemove = useCallback(
-    (workspace: WorkspaceItem) => {
-      if (!isTauri() || workspaceAction) {
+    async (workspace: WorkspaceItem) => {
+      if (!isTauri() || workspaceAction) return;
+      if (
+        workspace.kind === "worktree"
+        && typeof window !== "undefined"
+        && !window.confirm(t("worktree.removeConfirm"))
+      ) {
         return;
       }
 
-      if (workspace.kind === "worktree") {
-        if (
-          typeof window !== "undefined" &&
-          !window.confirm(t("worktree.removeConfirm"))
-        ) {
-          return;
+      setWorkspaceAction({ workspaceId: workspace.id, kind: "remove" });
+      projectStore.setState({ terminalBootstrapError: null });
+
+      try {
+        if (workspace.path) {
+          addRemovedWorkspacePath(removedWorkspacePathsRef.current, workspace.path);
         }
+        await removeWorkspace(workspace);
+        setSelectedDiffSelection(null);
+        setDeletePhase((current) =>
+          current.kind !== "idle" && workspace.threads.some((t) => t.id === current.threadId)
+            ? { kind: "idle" }
+            : current,
+        );
+        await syncWorkspaceSidebar();
+      } catch (error) {
+        if (workspace.path) {
+          deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, workspace.path);
+        }
+        const message = getInvokeErrorMessage(error, `Failed to remove ${workspace.name}`);
+        projectStore.setState({ terminalBootstrapError: message });
+      } finally {
+        setWorkspaceAction(null);
       }
-
-      void (async () => {
-        const workspaceThreadIds = new Set(
-          workspace.threads.map((thread) => thread.id),
-        );
-        const nextThreadBindingKey = getNewThreadTerminalBindingKey(
-          workspace.id,
-        );
-        const isRemovingSelectedProject =
-          selectedProject?.id === workspace.id
-          || isSameWorkspacePath(selectedProject?.path, workspace.path);
-        const fallbackSelectedProject = isRemovingSelectedProject
-          ? (recentProjects.find(
-              (project) =>
-                project.id !== workspace.id
-                && !isSameWorkspacePath(project.path, workspace.path),
-            ) ?? null)
-          : selectedProject;
-        newThreadCreationRef.current = Object.fromEntries(
-          Object.entries(newThreadCreationRef.current).filter(
-            ([candidateWorkspaceId]) => candidateWorkspaceId !== workspace.id,
-          ),
-        );
-        const isRemovingActiveWorkspace =
-          activeThreadWorkspace?.id === workspace.id;
-        const shouldPreserveSelectedProject =
-          selectedProject?.id !== workspace.id
-          && !isSameWorkspacePath(selectedProject?.path, workspace.path);
-
-        setWorkspaceAction({
-          workspaceId: workspace.id,
-          kind: "remove",
-        });
-        setTerminalBootstrapError(null);
-
-        try {
-          if (workspace.path) {
-            addRemovedWorkspacePath(removedWorkspacePathsRef.current, workspace.path);
-          }
-          await workspaceRemove(workspace.id, true);
-
-          if (isRemovingActiveWorkspace) {
-            threadStore.setState({ isNewThreadMode: true });
-            threadStore.setState((prev) => ({ workspaces: clearActiveThreads(prev.workspaces) }));
-            setComposerError(null);
-            setSelectedDiffSelection(null);
-          }
-
-          if (isRemovingSelectedProject) {
-            if (fallbackSelectedProject?.path) {
-              deleteRemovedWorkspacePath(
-                removedWorkspacePathsRef.current,
-                fallbackSelectedProject.path,
-              );
-            }
-            setSelectedProject(fallbackSelectedProject);
-          }
-          setRecentProjects((current) =>
-            current.filter(
-              (project) =>
-                project.id !== workspace.id
-                && !isSameWorkspacePath(project.path, workspace.path),
-            ),
-          );
-
-          setDeletePhase((current) =>
-            current.kind !== "idle" && workspaceThreadIds.has(current.threadId)
-              ? { kind: "idle" }
-              : current,
-          );
-          threadStore.setState((prev) => ({
-            pendingRuns: Object.fromEntries(
-              Object.entries(prev.pendingRuns).filter(
-                ([threadId]) => !workspaceThreadIds.has(threadId),
-              ),
-            ),
-          }));
-          setTerminalThreadBindings((current) =>
-            Object.fromEntries(
-              Object.entries(current).filter(
-                ([bindingKey, threadId]) =>
-                  bindingKey !== nextThreadBindingKey &&
-                  !workspaceThreadIds.has(threadId),
-              ),
-            ),
-          );
-          setTerminalWorkspaceBindings((current) =>
-            Object.fromEntries(
-              Object.entries(current).filter(
-                ([, workspaceId]) => workspaceId !== workspace.id,
-              ),
-            ),
-          );
-          removeTerminalCollapsedForThreads(workspaceThreadIds);
-          threadStore.setState((prev) => {
-            if (!(workspace.id in prev.openWorkspaces)) {
-              return {};
-            }
-
-            const next = { ...prev.openWorkspaces };
-            delete next[workspace.id];
-            return { openWorkspaces: next };
-          });
-          setActiveWorkspaceMenuId(null);
-
-          await syncWorkspaceSidebar({
-            preserveSelectedProjectIfMissing: shouldPreserveSelectedProject,
-          });
-        } catch (error) {
-          if (workspace.path) {
-            deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, workspace.path);
-          }
-          const message = getInvokeErrorMessage(
-            error,
-            `Failed to remove ${workspace.name}`,
-          );
-          setTerminalBootstrapError(message);
-        } finally {
-          setWorkspaceAction(null);
-        }
-      })();
     },
-    [
-      activeThreadWorkspace?.id,
-      recentProjects,
-      selectedProject?.id,
-      selectedProject?.path,
-      syncWorkspaceSidebar,
-      t,
-      workspaceAction,
-    ],
+    [syncWorkspaceSidebar, t, workspaceAction],
   );
 
 
@@ -2261,34 +1122,6 @@ export function DashboardWorkbench() {
     : !resolvedTerminalThreadId && !terminalBootstrapError
       ? "Preparing terminal…"
       : undefined;
-
-  useEffect(() => {
-    if (!isMacOS || typeof window === "undefined") {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.defaultPrevented ||
-        !event.metaKey ||
-        event.ctrlKey ||
-        event.altKey ||
-        event.shiftKey
-      ) {
-        return;
-      }
-
-      if (event.key !== ",") {
-        return;
-      }
-
-      event.preventDefault();
-      handleOpenSettings("general");
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isMacOS]);
 
   return (
     <main className="h-screen overflow-hidden select-none bg-app-canvas text-app-foreground">
@@ -2367,13 +1200,13 @@ export function DashboardWorkbench() {
                             isLoading={!isSidebarReady}
                             onSelectProject={handleProjectSelect}
                             onRequestNewWorktree={(project) => {
-                              setWorktreeDialogContext({
+                              uiLayoutStore.setState({ worktreeDialogContext: {
                                 repo: {
                                   id: project.id,
                                   name: project.name,
                                   canonicalPath: project.path,
                                 },
-                              });
+                              } });
                             }}
                             branchSlot={
                               resolvedWorkspaceId &&
@@ -2503,26 +1336,9 @@ export function DashboardWorkbench() {
                       </div>
 
                       <RuntimeThreadSurface
-                        activeAgentProfileId={workbenchActiveProfileId}
-                        agentProfiles={agentProfiles}
                         commands={composerCommands}
                         enabledSkills={enabledSkillEntries}
-                        initialPromptRequest={
-                          resolvedTerminalThreadId
-                            ? (pendingThreadRuns[resolvedTerminalThreadId] ?? null)
-                            : null
-                        }
-                        onConsumeInitialPrompt={handleRuntimeConsumeInitialPrompt}
-                        onContextUsageChange={setRuntimeContextUsage}
-                        onOpenProfileSettings={() => handleOpenSettings("general")}
-                        onSelectAgentProfile={handleSelectAgentProfileForThread}
-                        onThreadTitleChange={handleRuntimeThreadTitleChange}
-                        providers={providers}
                         threadId={resolvedTerminalThreadId}
-                        threadTitle={
-                          activeThread?.name ?? t("dashboard.newThread")
-                        }
-                        workspaceId={resolvedWorkspaceId}
                       />
                     </>
                   )}
@@ -2596,8 +1412,6 @@ export function DashboardWorkbench() {
 
             <DashboardTerminalOrchestrator
               active={!isTerminalCollapsed}
-              bootstrapError={terminalBootstrapError}
-              height={terminalHeight}
               idleMessage={newThreadTerminalIdleMessage}
               isPendingThread={isNewThreadMode}
               onCollapse={() => {
@@ -2605,7 +1419,6 @@ export function DashboardWorkbench() {
                   setTerminalCollapsed(activeTerminalStateKey, true);
                 }
               }}
-              onResizeStart={handleTerminalResizeStart}
               terminal={terminal}
               threadId={resolvedTerminalThreadId}
               threadTitle={activeThread?.name ?? t("dashboard.newThread")}

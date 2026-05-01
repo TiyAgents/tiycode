@@ -23,7 +23,7 @@ export class SyncError extends Error {
   }
 }
 
-export interface SyncOptions<S extends Record<string, unknown>, R> {
+export interface SyncOptions<S extends object, R> {
   /** Optimistic patch applied to the store before the IPC call. */
   optimistic?: (state: S) => Partial<S>;
   /** Store correction applied on success (receives the latest state + IPC result). */
@@ -107,7 +107,7 @@ function normalizeIpcError(raw: unknown): SyncError {
  * @throws  {SyncError} on failure.
  */
 export async function syncToBackend<
-  S extends Record<string, unknown>,
+  S extends object,
   R,
 >(
   store: Store<S>,

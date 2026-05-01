@@ -13,6 +13,19 @@ import { threadDelete } from "@/services/bridge/thread-commands";
 
 export type ThreadStatusSource = "stream" | "tauri_event" | "snapshot" | "optimistic";
 
+/** Real-time token usage reported by RuntimeThreadSurface (consumed by TopBar). */
+export type ThreadContextUsage = {
+  contextWindow: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  modelDisplayName: string | null;
+  runId: string;
+};
+
+
 export interface ThreadStatusRecord {
   status: ThreadRunStatus;
   runId: string | null;
@@ -21,7 +34,6 @@ export interface ThreadStatusRecord {
 }
 
 export interface ThreadStoreState {
-  [key: string]: unknown;
   /** Workspace list with nested thread items. */
   workspaces: WorkspaceItem[];
   /** ID of the default workspace. */
@@ -45,6 +57,13 @@ export interface ThreadStoreState {
   openWorkspaces: Record<string, boolean>;
   /** Whether the initial sidebar sync has completed. */
   sidebarReady: boolean;
+  /** Profile ID override for the active thread (set when selecting a thread
+   *  with a specific profile, or when creating a new thread). */
+  activeThreadProfileIdOverride: string | null;
+  /** Real-time token usage reported by RuntimeThreadSurface (consumed by TopBar). */
+  runtimeContextUsage: ThreadContextUsage | null;
+  /** Thread ID currently being inline-renamed in the sidebar. */
+  editingThreadId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +82,9 @@ export const threadStore = createStore<ThreadStoreState>({
   loadMorePending: {},
   openWorkspaces: {},
   sidebarReady: false,
+  activeThreadProfileIdOverride: null,
+  runtimeContextUsage: null,
+  editingThreadId: null,
 });
 
 // ---------------------------------------------------------------------------
@@ -201,6 +223,7 @@ export function setActiveThread(
   threadStore.setState({
     activeThreadId: threadId,
     isNewThreadMode: isNewThread ?? (threadId === null),
+    runtimeContextUsage: null, // Reset token usage when switching threads
   });
 }
 
