@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import type { RunMode } from "@/shared/types/api";
 import {
+  buildCommandEffectivePrompt,
   buildComposerCommandRegistry,
   buildComposerSubmission,
   parseSlashCommandInput,
@@ -142,5 +143,51 @@ describe("parseSlashCommandInput", () => {
     const result = parseSlashCommandInput("/", registry);
     expect(result).not.toBeNull();
     expect(result?.query).toBe("");
+  });
+});
+
+describe("buildCommandEffectivePrompt", () => {
+  const makeCommand = (prompt: string, name = "test-cmd") => ({
+    name,
+    prompt,
+    source: "settings" as const,
+    path: `/prompts:${name}`,
+    description: "Test command",
+    argumentHint: "",
+    behavior: "prompt" as const,
+    smartSend: "always" as const,
+  });
+
+  it("appends arguments when template has no {{arguments}} placeholder", () => {
+    const cmd = makeCommand("Do something useful for the user.");
+    const result = buildCommandEffectivePrompt(cmd, "--style=full");
+    expect(result).toBe("Do something useful for the user.\n\nCommand arguments: --style=full");
+  });
+
+  it("uses placeholder substitution when {{arguments}} exists", () => {
+    const cmd = makeCommand("Run with args: {{arguments}} now.");
+    const result = buildCommandEffectivePrompt(cmd, "--draft");
+    expect(result).toBe("Run with args: --draft now.");
+    expect(result).not.toContain("Command arguments:");
+  });
+
+  it("does not append when argumentsText is empty", () => {
+    const cmd = makeCommand("Do something.");
+    const result = buildCommandEffectivePrompt(cmd, "");
+    expect(result).toBe("Do something.");
+    expect(result).not.toContain("Command arguments:");
+  });
+
+  it("does not append when argumentsText is whitespace only", () => {
+    const cmd = makeCommand("Do something.");
+    const result = buildCommandEffectivePrompt(cmd, "   \t  ");
+    expect(result).toBe("Do something.");
+    expect(result).not.toContain("Command arguments:");
+  });
+
+  it("replaces {{command}} placeholder with command name", () => {
+    const cmd = makeCommand("Running {{command}} command.", "my-cmd");
+    const result = buildCommandEffectivePrompt(cmd, "");
+    expect(result).toBe("Running my-cmd command.");
   });
 });
