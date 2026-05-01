@@ -156,7 +156,7 @@ type RuntimeThreadSurfaceProps = {
 
 // re-exported from thread-store for backward compat — prefer importing from thread-store directly
 export type { ThreadContextUsage } from "@/modules/workbench-shell/model/thread-store";
-import { findWorkspaceForThread } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
+import { findWorkspaceForThread, resolveActiveThreadWorkbenchProfileId } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
 import { uiLayoutStore } from "@/modules/workbench-shell/model/ui-layout-store";
 
 function renderPlanListSection(
@@ -230,11 +230,19 @@ export function RuntimeThreadSurface({
   threadId,
 }: RuntimeThreadSurfaceProps) {
   const t = useT();
-  const activeAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
+  const globalAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
   const agentProfiles = useStore(settingsStore, (s) => s.agentProfiles);
   const providers = useStore(settingsStore, (s) => s.providers);
   const isNewThreadMode = useStore(threadStore, (s) => s.isNewThreadMode);
+  const activeThreadProfileIdOverride = useStore(threadStore, (s) => s.activeThreadProfileIdOverride);
   const pendingRuns = useStore(threadStore, (s) => s.pendingRuns);
+  const activeAgentProfileId = useMemo(
+    () => resolveActiveThreadWorkbenchProfileId(
+      isNewThreadMode ? null : activeThreadProfileIdOverride,
+      globalAgentProfileId,
+    ),
+    [isNewThreadMode, activeThreadProfileIdOverride, globalAgentProfileId],
+  );
   const activeProfile = useMemo(() => {
     const matchedProfile = agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? null;
     return matchedProfile;
