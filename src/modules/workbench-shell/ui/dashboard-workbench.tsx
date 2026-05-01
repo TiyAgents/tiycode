@@ -75,8 +75,10 @@ import {
 import type {
   DrawerPanel,
   ProjectOption,
+  ThreadRunStatus,
   WorkspaceItem,
 } from "@/modules/workbench-shell/model/types";
+import { threadRunStatusToDisplayStatus } from "@/modules/workbench-shell/model/types";
 import type { ExtensionDetail, SkillPreview } from "@/shared/types/extensions";
 import { NewThreadEmptyState } from "@/modules/workbench-shell/ui/new-thread-empty-state";
 import { ProjectPanel } from "@/modules/workbench-shell/ui/project-panel";
@@ -321,6 +323,13 @@ export function DashboardWorkbench() {
   const removedWorkspacePathsRef = useRef<Set<string>>(new Set());
 
   const activeThread = getActiveThread(workspaces);
+  const activeThreadLiveStatus = useStore(
+    threadStore,
+    (s) => activeThread?.id ? s.threadStatuses[activeThread.id]?.status as ThreadRunStatus | undefined : undefined,
+  );
+  const activeThreadDisplayStatus = activeThreadLiveStatus
+    ? threadRunStatusToDisplayStatus(activeThreadLiveStatus)
+    : activeThread?.status ?? "completed";
   const selectedProjectWorkspaceId = getWorkspaceBindingId(
     terminalWorkspaceBindings,
     selectedProject?.path ?? null,
@@ -1256,7 +1265,7 @@ export function DashboardWorkbench() {
                           <div className="flex min-w-0 items-center gap-2">
                             {activeThread ? (
                               <ThreadStatusIndicator
-                                status={activeThread.status}
+                                status={activeThreadDisplayStatus}
                               />
                             ) : null}
                             <p className="truncate text-sm font-semibold text-app-foreground">

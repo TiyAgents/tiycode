@@ -97,25 +97,41 @@ describe("setThreadStatus", () => {
     );
   });
 
-  it("ignores stale writes from an older runId", () => {
+  it("ignores stale writes within the same runId", () => {
     threadStore.reset();
 
-    // Write a newer run with a later timestamp
     const now = Date.now();
     setThreadStatus("thread-1", "running", {
-      runId: "run-2",
+      runId: "run-1",
       source: "stream",
       updatedAt: now + 1000,
     });
 
-    // Try to overwrite with an older runId and older timestamp
+    // Try to overwrite with same runId but older timestamp — should be rejected
     setThreadStatus("thread-1", "failed", {
       runId: "run-1",
       source: "tauri_event",
       updatedAt: now,
     });
 
-    // Should still show "running" from the newer run
+    expect(threadStore.getState().threadStatuses["thread-1"].status).toBe(
+      "running",
+    );
+    expect(threadStore.getState().threadStatuses["thread-1"].runId).toBe(
+      "run-1",
+    );
+  });
+
+  it("accepts writes from a different runId (new run started)", () => {
+    threadStore.reset();
+
+    // First run completes
+    setThreadStatus("thread-1", "running", { runId: "run-1" });
+    setThreadStatus("thread-1", "completed", { runId: "run-1" });
+
+    // Second run starts — must NOT be blocked by the guard
+    setThreadStatus("thread-1", "running", { runId: "run-2" });
+
     expect(threadStore.getState().threadStatuses["thread-1"].status).toBe(
       "running",
     );

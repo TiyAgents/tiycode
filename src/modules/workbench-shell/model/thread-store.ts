@@ -119,14 +119,17 @@ export function setThreadStatus(
   threadStore.setState((prev) => {
     const existing = prev.threadStatuses[threadId];
 
-    // Minimal out-of-order guard: ignore stale runId writes.
+    // Minimal out-of-order guard: ignore stale writes within the same run.
+    // When runId changes it means a legitimate new run started — always accept.
+    // Only apply when the caller explicitly provides updatedAt so we can compare.
     if (
       existing &&
       existing.runId !== null &&
       meta.runId !== undefined &&
       meta.runId !== null &&
-      existing.runId !== meta.runId &&
-      existing.updatedAt > (meta.updatedAt ?? 0)
+      existing.runId === meta.runId &&
+      meta.updatedAt !== undefined &&
+      existing.updatedAt > meta.updatedAt
     ) {
       return {}; // no update
     }
