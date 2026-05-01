@@ -2346,7 +2346,7 @@ export function RuntimeThreadSurface({
 
                 if (message.messageType === "reasoning") {
                   const reasoningIsStreaming = message.status === "streaming";
-                  const reasoningIsOpen = reasoningOpen[message.id] ?? (reasoningIsStreaming || runState === "running");
+                  const reasoningIsOpen = reasoningOpen[message.id] ?? true;
                   return (
                     <div
                       className={spacingClass}
