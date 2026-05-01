@@ -1460,6 +1460,88 @@ Used for prompt assembly coverage.
     }
 
     #[tokio::test]
+    async fn reasoning_content_constrained_on_non_openai_compatible() {
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+
+        // Use a provider type that is NOT "openai-compatible" — this is the
+        // path that the PR fixes (e.g. DeepSeek V4 Pro accessed via ZenMux).
+        let mut non_compat_provider = sample_provider_record("provider-non-compat");
+        non_compat_provider.provider_type = "custom-delegation".to_string();
+        provider_repo::insert(&pool, &non_compat_provider)
+            .await
+            .expect("provider insert");
+
+        let make_role = |record_id: &str, model_id: &str, constrained: Option<bool>| {
+            super::super::RuntimeModelRole {
+                provider_id: "provider-non-compat".to_string(),
+                model_record_id: record_id.to_string(),
+                provider: None,
+                provider_key: Some("custom-delegation".to_string()),
+                provider_type: "custom-delegation".to_string(),
+                provider_name: Some("Custom Delegation".to_string()),
+                model: model_id.to_string(),
+                model_id: model_id.to_string(),
+                model_display_name: Some(model_id.to_string()),
+                base_url: "https://api.custom.example.com/v1".to_string(),
+                context_window: Some(TEST_CONTEXT_WINDOW.to_string()),
+                max_output_tokens: Some("32000".to_string()),
+                supports_image_input: Some(false),
+                supports_reasoning: Some(true),
+                reasoning_content_constrained: constrained,
+                custom_headers: None,
+                provider_options: None,
+            }
+        };
+
+        let constrained = resolve_runtime_model_role(
+            &pool,
+            make_role("rec-noncompat-constrained", "constrained-model", Some(true)),
+        )
+        .await
+        .expect("constrained role");
+
+        let unconstrained = resolve_runtime_model_role(
+            &pool,
+            make_role(
+                "rec-noncompat-unconstrained",
+                "unconstrained-model",
+                Some(false),
+            ),
+        )
+        .await
+        .expect("unconstrained role");
+
+        let unspecified = resolve_runtime_model_role(
+            &pool,
+            make_role("rec-noncompat-unspecified", "unspecified-model", None),
+        )
+        .await
+        .expect("unspecified role");
+
+        // For non-openai-compatible providers with reasoning_content_constrained = true,
+        // a default compat must be created and the flag set.
+        let constrained_compat = constrained
+            .model
+            .compat
+            .as_ref()
+            .expect("compat created for constrained");
+        assert!(constrained_compat.reasoning_content_constrained);
+
+        // For Some(false) or None, no compat should be applied at all
+        // (unlike openai-compatible providers that always get compat).
+        assert!(
+            unconstrained.model.compat.is_none(),
+            "non-openai-compatible with constrained=false should not get compat"
+        );
+        assert!(
+            unspecified.model.compat.is_none(),
+            "non-openai-compatible with constrained unset should not get compat"
+        );
+    }
+
+    #[tokio::test]
     async fn model_plan_applies_thinking_level_to_all_reasoning_capable_roles_only() {
         let temp_dir = tempdir().expect("temp dir");
         let db_path = temp_dir.path().join("test.db");

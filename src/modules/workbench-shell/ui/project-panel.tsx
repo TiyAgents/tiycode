@@ -58,6 +58,7 @@ const APP_ICON_FALLBACKS: Record<
   terminal: { label: "T", className: "bg-linear-to-br from-slate-700 to-slate-950 text-white" },
   iterm2: { label: "IT", className: "bg-linear-to-br from-slate-600 to-slate-900 text-white" },
   warp: { label: "WP", className: "bg-linear-to-br from-lime-300 to-emerald-500 text-slate-950" },
+  ghostty: { label: "G", className: "bg-linear-to-br from-blue-400 to-indigo-600 text-white" },
   powershell: { label: "PS", className: "bg-linear-to-br from-sky-500 to-indigo-700 text-white" },
   "git-bash": { label: "GB", className: "bg-linear-to-br from-emerald-400 to-teal-600 text-white" },
   vscode: { label: "VS", className: "bg-linear-to-br from-sky-500 to-blue-700 text-white" },

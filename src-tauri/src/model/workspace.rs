@@ -160,6 +160,12 @@ pub struct WorktreeCreateInput {
     /// When true, a new local branch is created and checked out in the worktree.
     #[serde(default)]
     pub create_branch: bool,
+    /// When true AND `create_branch` is true with a `base_ref`, the new branch
+    /// will track the base ref as its upstream (useful when checking out an
+    /// existing remote branch locally). Defaults to false so that brand-new
+    /// feature branches do not accidentally track the base.
+    #[serde(default)]
+    pub track_upstream: bool,
     /// Optional custom path for the new worktree directory. When None the
     /// manager derives `<repo parent>/<repo name>-<branch-slug>`.
     #[serde(default)]

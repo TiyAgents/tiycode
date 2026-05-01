@@ -611,10 +611,18 @@ pub async fn resolve_runtime_model_role(
         builder = builder.headers(headers);
     }
 
-    if let Some(mut compat) = default_openai_compatible_compat(&role.provider_type) {
-        if let Some(true) = role.reasoning_content_constrained {
-            compat.reasoning_content_constrained = true;
-        }
+    let maybe_compat = default_openai_compatible_compat(&role.provider_type);
+
+    // reasoning_content_constrained must propagate to all provider types,
+    // not only "openai-compatible".  Some providers (e.g. DeepSeek V4 Pro
+    // accessed via ZenMux) require every assistant message to carry
+    // reasoning_content when thinking is enabled, and the API rejects
+    // requests that omit it with HTTP 400.
+    if let Some(true) = role.reasoning_content_constrained {
+        let mut compat = maybe_compat.unwrap_or_default();
+        compat.reasoning_content_constrained = true;
+        builder = builder.compat(compat);
+    } else if let Some(compat) = maybe_compat {
         builder = builder.compat(compat);
     }
 
