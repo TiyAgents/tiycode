@@ -43,6 +43,14 @@ vi.mock("@/services/bridge/workspace-commands", () => ({
     canonicalPath: "/path/to/project",
   }),
   workspaceList: vi.fn().mockResolvedValue([]),
+  workspaceEnsureDefault: vi.fn().mockResolvedValue({
+    id: "default-ws-1",
+    name: "Default",
+    path: "/home/user/.tiy/workspace/Default",
+    canonicalPath: "/home/user/.tiy/workspace/Default",
+    isDefault: true,
+    kind: "standalone",
+  }),
 }));
 
 // Mock isTauri to always return true (simulate Tauri env)
@@ -537,10 +545,22 @@ describe("submitNewThread", () => {
     };
   }
 
-  it("returns early when no project is selected", async () => {
-    const result = submitNewThread(makeSubmission());
-    // When no project, should return void without error
-    await expect(result).resolves.toBeUndefined();
+  it("creates thread using default workspace when no project is selected", async () => {
+    threadStore.setState({
+      workspaces: [],
+      isNewThreadMode: true,
+    });
+    composerStore.setState({ newThreadRunMode: "default" });
+    settingsStore.setState({ activeAgentProfileId: "default-profile" });
+
+    await submitNewThread(makeSubmission({ value: "hello" }));
+
+    const state = threadStore.getState();
+    expect(state.workspaces).toHaveLength(1);
+    // workspaceAdd mock returns ws-1; the default workspace fallback ensures
+    // a thread is created even when selectedProject is null
+    expect(state.workspaces[0].threads).toHaveLength(1);
+    expect(state.isNewThreadMode).toBe(false);
   });
 
   it("adds the new thread to an existing workspace", async () => {

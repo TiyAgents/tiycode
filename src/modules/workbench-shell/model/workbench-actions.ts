@@ -14,7 +14,7 @@
  */
 import { isTauri } from "@tauri-apps/api/core";
 import { threadCreate, threadDelete, threadList } from "@/services/bridge/thread-commands";
-import { workspaceRemove, workspaceAdd, workspaceList } from "@/services/bridge/workspace-commands";
+import { workspaceRemove, workspaceAdd, workspaceList, workspaceEnsureDefault } from "@/services/bridge/workspace-commands";
 import { threadStore } from "./thread-store";
 import { projectStore } from "./project-store";
 import { composerStore } from "./composer-store";
@@ -472,8 +472,17 @@ export async function removeWorkspace(workspace: WorkspaceItem): Promise<void> {
  * 5. Transitions out of new-thread mode
  */
 export async function submitNewThread(submission: NewThreadSubmission): Promise<void> {
-  const { selectedProject } = projectStore.getState();
-  if (!selectedProject) return;
+  let { selectedProject } = projectStore.getState();
+  if (!selectedProject) {
+    if (!isTauri()) return;
+    const defaultWorkspace = await workspaceEnsureDefault();
+    selectedProject = {
+      id: defaultWorkspace.id,
+      name: defaultWorkspace.name,
+      path: defaultWorkspace.canonicalPath || defaultWorkspace.path,
+      lastOpenedLabel: "Just now",
+    };
+  }
 
   const { activeAgentProfileId } = settingsStore.getState();
 
