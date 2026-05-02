@@ -66,6 +66,18 @@ describe("run-lifecycle-machine", () => {
       expect(m.getState()).toBe("running");
     });
 
+    it("transitions waiting_approval → running on RUN_STARTED (new run after plan approval)", () => {
+      const m = makeMachine();
+      m.send("RUN_STARTED", { runId: "run-1" });
+      m.send("APPROVAL_REQUIRED");
+      // New implementation run starts after plan approval
+      m.send("RUN_STARTED", { runId: "run-2" });
+      expect(m.getState()).toBe("running");
+      expect(m.getContext().runId).toBe("run-2");
+      expect(m.getContext().retryCount).toBe(0);
+      expect(m.getContext().errorMessage).toBeNull();
+    });
+
     it("allows cancellation from waiting_approval", () => {
       const m = makeMachine();
       m.send("RUN_STARTED");
@@ -89,6 +101,18 @@ describe("run-lifecycle-machine", () => {
       m.send("CLARIFY_REQUIRED");
       m.send("CLARIFY_RESOLVED");
       expect(m.getState()).toBe("running");
+    });
+
+    it("transitions needs_reply → running on RUN_STARTED (new run after clarify)", () => {
+      const m = makeMachine();
+      m.send("RUN_STARTED", { runId: "run-1" });
+      m.send("CLARIFY_REQUIRED");
+      // New run starts after clarify resolution
+      m.send("RUN_STARTED", { runId: "run-2" });
+      expect(m.getState()).toBe("running");
+      expect(m.getContext().runId).toBe("run-2");
+      expect(m.getContext().retryCount).toBe(0);
+      expect(m.getContext().errorMessage).toBeNull();
     });
   });
 

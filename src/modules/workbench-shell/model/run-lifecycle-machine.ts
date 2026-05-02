@@ -118,6 +118,13 @@ export function createRunLifecycleMachine(
       },
       waiting_approval: {
         on: {
+          RUN_STARTED: {
+            target: "running",
+            action: (ctx, payload) => {
+              const p = payload as RunMachinePayload | undefined;
+              return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
+            },
+          },
           APPROVAL_RESOLVED: "running",
           RUN_COMPLETED: "completed",
           RUN_FAILED: {
@@ -134,6 +141,13 @@ export function createRunLifecycleMachine(
       },
       needs_reply: {
         on: {
+          RUN_STARTED: {
+            target: "running",
+            action: (ctx, payload) => {
+              const p = payload as RunMachinePayload | undefined;
+              return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
+            },
+          },
           CLARIFY_RESOLVED: "running",
           RUN_COMPLETED: "completed",
           RUN_FAILED: {
