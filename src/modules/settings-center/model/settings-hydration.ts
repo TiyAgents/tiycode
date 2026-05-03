@@ -289,8 +289,6 @@ async function hydrateSettings(): Promise<void> {
   // Wait for backend to signal readiness before firing IPC calls.
   await waitForBackendReady();
 
-  const hydrateStart = performance.now();
-
   // Seed general / terminal from localStorage before any IPC so the UI
   // preferences are available as early as possible.
   const localUi = readStoredLocalUiSettings();
@@ -308,11 +306,6 @@ async function hydrateSettings(): Promise<void> {
   let activeProfileSetting: { value: string } | null = null;
 
   try {
-    const t0 = performance.now();
-    console.log(
-      `⏱ [settings-hydration] phase-1 (3 invokes) at ${t0.toFixed(1)}ms since page load`,
-    );
-
     const [providers, workspaceEntries, profileSetting] =
       await Promise.all([
         providerSettingsGetAll(),
@@ -322,10 +315,6 @@ async function hydrateSettings(): Promise<void> {
 
     activeProfileSetting =
       profileSetting?.value != null ? { value: String(profileSetting.value) } : null;
-
-    console.log(
-      `⏱ [settings-hydration] phase-1 done: ${(performance.now() - t0).toFixed(1)}ms`,
-    );
 
     const mappedProviders = providers.map(mapProviderDto);
 
@@ -359,10 +348,6 @@ async function hydrateSettings(): Promise<void> {
       activeAgentProfileId: phase1ActiveId,
       hydrationPhase: "phase1_ready",
     });
-
-    console.log(
-      `⏱ [settings-hydration] phase-1 total: ${(performance.now() - hydrateStart).toFixed(1)}ms`,
-    );
   } catch (error) {
     console.error("Settings phase 1 failed:", error);
     settingsStore.setState({ hydrationPhase: "error" });
@@ -380,11 +365,6 @@ async function hydrateSettings(): Promise<void> {
   scheduleDeferred(() => {
     void (async () => {
       try {
-        const t2 = performance.now();
-        console.log(
-          `⏱ [settings-hydration] phase-2 (4 invokes) at ${t2.toFixed(1)}ms since page load`,
-        );
-
         settingsStore.setState({ hydrationPhase: "loading_phase2" });
 
         const [catalog, policies, profiles, promptCommands] =
@@ -394,10 +374,6 @@ async function hydrateSettings(): Promise<void> {
             profileList(),
             promptCommandList(),
           ]);
-
-        console.log(
-          `⏱ [settings-hydration] phase-2 invokes done: ${(performance.now() - t2).toFixed(1)}ms`,
-        );
 
         const mappedCatalog = catalog.map((entry) => ({
           providerKey:
@@ -416,13 +392,9 @@ async function hydrateSettings(): Promise<void> {
         // Available shells (non-critical, best-effort).
         let shells: Array<{ path: string; name: string }> = [];
         try {
-          const t3 = performance.now();
           shells = await invoke<
             Array<{ path: string; name: string }>
           >("terminal_list_available_shells");
-          console.log(
-            `⏱ [settings-hydration] terminal_list_available_shells: ${(performance.now() - t3).toFixed(1)}ms`,
-          );
         } catch (shellError) {
           console.warn("Failed to list available shells", shellError);
         }
@@ -505,18 +477,10 @@ async function hydrateSettings(): Promise<void> {
           availableShells: shells,
           hydrationPhase: "hydrated",
         });
-
-        console.log(
-          `⏱ [settings-hydration] phase-2 total: ${(performance.now() - t2).toFixed(1)}ms`,
-        );
       } catch (error) {
         console.warn("Failed to hydrate phase-2 settings", error);
         // Phase 2 is non-critical — mark hydrated even on failure (downgrade).
         settingsStore.setState({ hydrationPhase: "hydrated" });
-      } finally {
-        console.log(
-          `⏱ [settings-hydration] total: ${(performance.now() - hydrateStart).toFixed(1)}ms`,
-        );
       }
     })();
   });

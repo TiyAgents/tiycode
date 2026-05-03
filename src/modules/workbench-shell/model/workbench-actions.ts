@@ -729,15 +729,11 @@ export interface SidebarSyncOptions {
 }
 
 export async function performSidebarSync(options: SidebarSyncOptions): Promise<void> {
-  const syncStart = performance.now();
   const version = ++sidebarSyncVersion;
 
   const WORKSPACE_THREAD_PAGE_SIZE = 10;
 
-  const t0 = performance.now();
-  console.log(`⏱ [sidebar-sync] firing workspaceList() at ${t0.toFixed(1)}ms since page load`);
   const workspaceEntries = await workspaceList();
-  console.log(`⏱ [sidebar-sync] workspaceList: ${(performance.now() - t0).toFixed(1)}ms (${workspaceEntries.length} workspaces)`);
 
   const nextDisplayCounts = Object.fromEntries(
     workspaceEntries.map((workspace) => [
@@ -784,7 +780,6 @@ export async function performSidebarSync(options: SidebarSyncOptions): Promise<v
     };
   };
 
-  const t1 = performance.now();
   const threadEntries = await Promise.all(
     workspaceEntries.map(
       async (workspace) =>
@@ -797,7 +792,6 @@ export async function performSidebarSync(options: SidebarSyncOptions): Promise<v
         ] as const,
     ),
   );
-  console.log(`⏱ [sidebar-sync] threadList for ${workspaceEntries.length} workspace(s): ${(performance.now() - t1).toFixed(1)}ms`);
 
   // Discard stale sync results
   if (sidebarSyncVersion !== version) return;
@@ -925,8 +919,6 @@ export async function performSidebarSync(options: SidebarSyncOptions): Promise<v
 
     return { workspaces: nextWorkspaces, openWorkspaces: nextOpenWorkspaces };
   });
-
-  console.log(`⏱ [sidebar-sync] total: ${(performance.now() - syncStart).toFixed(1)}ms`);
 }
 
 // ---------------------------------------------------------------------------

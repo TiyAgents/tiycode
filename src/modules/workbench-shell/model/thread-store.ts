@@ -163,7 +163,7 @@ export function batchSetThreadStatuses(
         existing.runId !== null &&
         upd.runId !== undefined &&
         upd.runId !== null &&
-        existing.runId !== upd.runId &&
+        existing.runId === upd.runId &&
         existing.updatedAt > (upd.updatedAt ?? 0)
       ) {
         continue;
