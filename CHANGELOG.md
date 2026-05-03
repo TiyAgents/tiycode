@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.12] - 2026-05-03
+### :sparkles: New Features
+- [`05bac14`](https://github.com/TiyAgents/tiycode/commit/05bac147b321f2f4a63318718c6fdb4ceb572bb3) - **composer-commands**: ✨ add flexible argument interpolation to command prompt builder *(PR [#164](https://github.com/TiyAgents/tiycode/pull/164) by [@HayWolf](https://github.com/HayWolf))*
+
+### :recycle: Refactors
+- [`31e267b`](https://github.com/TiyAgents/tiycode/commit/31e267be30d9f32af8af270144ecbf88291fb444) - **workbench-shell**: ♻️ overhaul frontend state architecture with stores, machines, and IPC sync *(PR [#163](https://github.com/TiyAgents/tiycode/pull/163) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.3.11] - 2026-04-30
 ### :sparkles: New Features
 - [`f52442d`](https://github.com/TiyAgents/tiycode/commit/f52442dae5ebdfb3a7945ccd6d1a00690bc60a75) - **terminal**: ✨ add Ghostty terminal support *(PR [#161](https://github.com/TiyAgents/tiycode/pull/161) by [@HayWolf](https://github.com/HayWolf))*
@@ -710,3 +718,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.9]: https://github.com/TiyAgents/tiycode/compare/0.3.8...0.3.9
 [0.3.10]: https://github.com/TiyAgents/tiycode/compare/0.3.9...0.3.10
 [0.3.11]: https://github.com/TiyAgents/tiycode/compare/0.3.10...0.3.11
+[0.3.12]: https://github.com/TiyAgents/tiycode/compare/0.3.11...0.3.12
