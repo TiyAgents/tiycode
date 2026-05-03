@@ -123,6 +123,12 @@ const BUILTIN_PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         display_name: "OpenCode Go",
         default_base_url: "https://opencode.ai/zen/go/v1",
     },
+    ProviderCatalogEntry {
+        provider_key: "bai",
+        provider_type: "bai",
+        display_name: "BAI",
+        default_base_url: "https://api.baichuan-ai.com/v1",
+    },
 ];
 
 const CUSTOM_PROVIDER_TYPE_CATALOG: &[ProviderCatalogEntry] = &[
