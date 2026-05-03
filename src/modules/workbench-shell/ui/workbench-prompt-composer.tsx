@@ -42,6 +42,7 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
 import {
+  buildCommandEffectivePrompt,
   buildComposerCommandRegistry,
   filterComposerCommands,
   parseSlashCommandInput,
@@ -204,10 +205,7 @@ function buildSubmissionFromPromptInput(
     };
   }
 
-  const effectivePrompt = parsedCommand.command.prompt
-    .replace(/{{\s*arguments\s*}}/g, parsedCommand.argumentsText)
-    .replace(/{{\s*command\s*}}/g, parsedCommand.command.name)
-    .trim();
+  const effectivePrompt = buildCommandEffectivePrompt(parsedCommand.command, parsedCommand.argumentsText);
 
   return {
     kind: "command",

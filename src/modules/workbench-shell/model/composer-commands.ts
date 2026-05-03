@@ -345,10 +345,16 @@ export function buildCommandEffectivePrompt(
   command: ComposerCommandDescriptor,
   argumentsText: string,
 ) {
-  return replaceTemplateVariables(command.prompt, {
-    arguments: argumentsText.trim(),
+  const trimmedArgs = argumentsText.trim();
+  const hasPlaceholder = /\{\{\s*arguments\s*\}\}/.test(command.prompt);
+  let result = replaceTemplateVariables(command.prompt, {
+    arguments: trimmedArgs,
     command: command.name,
   }).trim();
+  if (trimmedArgs && !hasPlaceholder) {
+    result += `\n\nCommand arguments: ${trimmedArgs}`;
+  }
+  return result;
 }
 
 export function buildComposerSubmission(
