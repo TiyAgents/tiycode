@@ -262,7 +262,6 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                         "type": "array",
                         "items": { "type": "string" }
                     },
-                    "needsContextResetOption": { "type": "boolean" },
                     "plan": {
                         "type": "object",
                         "description": "Optional nested plan payload. If provided, the runtime reads planning fields from this object.",
@@ -301,8 +300,7 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                             "assumptions": {
                                 "type": "array",
                                 "items": { "type": "string" }
-                            },
-                            "needsContextResetOption": { "type": "boolean" }
+                            }
                         }
                     }
                 }
@@ -601,7 +599,8 @@ pub(crate) fn effective_api_for_model(model: &Model) -> tiycore::types::Api {
         | Provider::OpenCode
         | Provider::OpenCodeGo
         | Provider::DeepSeek
-        | Provider::Zenmux => tiycore::types::Api::OpenAICompletions,
+        | Provider::Zenmux
+        | Provider::Bai => tiycore::types::Api::OpenAICompletions,
         Provider::AmazonBedrock => tiycore::types::Api::BedrockConverseStream,
         Provider::Custom(name) => tiycore::types::Api::Custom(name.clone()),
     }

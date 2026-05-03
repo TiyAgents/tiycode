@@ -20,7 +20,6 @@ export type PlanMessageMetadata = {
   generatedFromRunId?: string;
   kind?: string;
   keyImplementation?: string;
-  needsContextResetOption?: boolean;
   planRevision?: number;
   risks?: string[];
   runModeAtCreation?: string;
@@ -130,8 +129,6 @@ export function parsePlanMessageMetadata(value: unknown): PlanMessageMetadata | 
     generatedFromRunId: readStringField(record, "generatedFromRunId") ?? undefined,
     kind: readStringField(record, "kind") ?? undefined,
     keyImplementation: readStringField(record, "keyImplementation") ?? undefined,
-    needsContextResetOption:
-      typeof record.needsContextResetOption === "boolean" ? record.needsContextResetOption : undefined,
     planRevision: readNumberField(record, "planRevision") ?? undefined,
     risks: readStringArrayField(record, "risks"),
     runModeAtCreation: readStringField(record, "runModeAtCreation") ?? undefined,

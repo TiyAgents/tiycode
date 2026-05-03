@@ -1,14 +1,11 @@
 import type { LanguagePreference } from "@/app/providers/language-provider";
-import type { RunState } from "@/services/thread-stream";
 import type { MessageAttachmentDto, RunMode, WorkspaceDto } from "@/shared/types/api";
-import { WORKSPACE_ITEMS } from "@/modules/workbench-shell/model/fixtures";
 import { buildProjectOptionFromPath } from "@/modules/workbench-shell/model/helpers";
 import type {
   ProjectOption,
-  ThreadStatus as WorkbenchThreadStatus,
   WorkspaceItem,
 } from "@/modules/workbench-shell/model/types";
-import type { ThreadContextUsage } from "@/modules/workbench-shell/ui/runtime-thread-surface";
+import type { ThreadContextUsage } from "@/modules/workbench-shell/model/thread-store";
 
 export function resolveThreadProfileId(
   threadProfileId: string | null,
@@ -36,24 +33,6 @@ export const SIDEBAR_AUTO_REFRESH_GRACE_MS = 20_000;
 // loop elsewhere in the component (effect dependency on state that sync itself
 // mutates) will saturate the IPC queue and block thread list rendering.
 export const SIDEBAR_SYNC_MIN_GAP_MS = 300;
-
-export function buildInitialWorkspaceThreadDisplayCounts() {
-  return Object.fromEntries(
-    WORKSPACE_ITEMS.map((workspace) => [
-      workspace.id,
-      Math.min(WORKSPACE_THREAD_PAGE_SIZE, workspace.threads.length),
-    ]),
-  );
-}
-
-export function buildInitialWorkspaceThreadHasMore() {
-  return Object.fromEntries(
-    WORKSPACE_ITEMS.map((workspace) => [
-      workspace.id,
-      workspace.threads.length > WORKSPACE_THREAD_PAGE_SIZE,
-    ]),
-  );
-}
 
 export function getNewThreadTerminalBindingKey(workspaceId: string) {
   return `${workspaceId}:${NEW_THREAD_TERMINAL_KEY_SUFFIX}`;
@@ -128,41 +107,6 @@ export function mergeLocalFallbackThreads(options: {
       threads: [...workspace.threads, ...fallbackThreads],
     };
   });
-}
-
-export function mapRunStateToWorkbenchThreadStatus(
-  state: RunState | "idle",
-): WorkbenchThreadStatus {
-  switch (state) {
-    case "running":
-      return "running";
-    case "waiting_approval":
-    case "limit_reached":
-      return "needs-reply";
-    case "interrupted":
-      return "interrupted";
-    case "failed":
-      return "failed";
-    default:
-      return "completed";
-  }
-}
-
-export function mapRunFinishedStatusToThreadStatus(
-  status: string,
-): WorkbenchThreadStatus {
-  switch (status) {
-    case "failed":
-      return "failed";
-    case "interrupted":
-      return "interrupted";
-    case "cancelled":
-      return "interrupted";
-    case "limit_reached":
-      return "needs-reply";
-    default:
-      return "completed";
-  }
 }
 
 function parseTokenCount(value: string | null | undefined) {

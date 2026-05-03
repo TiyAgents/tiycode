@@ -63,6 +63,7 @@ import { sortAgentProfilesByName } from "@/modules/settings-center/model/profile
 import type { SkillRecord } from "@/shared/types/extensions";
 import type { RunMode } from "@/shared/types/api";
 import { indexFilterFiles, type FileFilterMatch } from "@/services/bridge";
+import type { SerializableAttachment } from "@/modules/workbench-shell/model/composer-store";
 import { useT } from "@/i18n";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
@@ -124,6 +125,16 @@ type WorkbenchPromptComposerProps = {
   value: string;
   workspaceId?: string | null;
   onValueChange: (value: string) => void;
+  /** Pre-populate @file references on mount (restored from draft). */
+  initialReferencedFiles?: ReadonlyArray<ComposerReferencedFile>;
+  /** Pre-populate attachments on mount (restored from serialized draft). */
+  initialAttachmentData?: ReadonlyArray<SerializableAttachment>;
+  /** Increment to clear all local composer state (attachments, referenced files, etc.). */
+  clearSignal?: number;
+  /** Callback to persist referenced files back to the draft store. */
+  onReferencedFilesChange?: (files: ReadonlyArray<ComposerReferencedFile>) => void;
+  /** Callback to persist serialized attachment data back to the draft store. */
+  onAttachmentDataChange?: (data: ReadonlyArray<SerializableAttachment>) => void;
 };
 
 function getFileExtension(name: string): string {
@@ -704,6 +715,141 @@ function ComposerAttachmentStateSyncInner({
   return null;
 }
 
+/**
+ * Convert a base64 data URL back into a File object for re-attaching.
+ */
+function dataUrlToFile(dataUrl: string, name: string, mediaType: string): File {
+  const parts = dataUrl.split(",");
+  const mime = parts[0]?.match(/:(.*?);/)?.[1] ?? mediaType;
+  const bstr = atob(parts[1] ?? "");
+  const n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    u8arr[i] = bstr.charCodeAt(i);
+  }
+  return new File([u8arr], name, { type: mime });
+}
+
+/**
+ * Restores initial attachment data on mount by converting data URLs
+ * into File objects and calling the PromptInput add() API.
+ */
+function ComposerInitialStateRestorer({
+  initialAttachmentData,
+}: {
+  initialAttachmentData: ReadonlyArray<SerializableAttachment> | undefined;
+}) {
+  const attachments = usePromptInputAttachments();
+  const hasRestoredRef = useRef(false);
+
+  useEffect(() => {
+    if (hasRestoredRef.current) {
+      return;
+    }
+    if (!initialAttachmentData || initialAttachmentData.length === 0) {
+      return;
+    }
+
+    const files: File[] = [];
+    for (const entry of initialAttachmentData) {
+      try {
+        files.push(dataUrlToFile(entry.dataUrl, entry.name, entry.mediaType));
+      } catch {
+        // Silently skip corrupted attachment data.
+      }
+    }
+
+    if (files.length > 0) {
+      hasRestoredRef.current = true;
+      attachments.add(files);
+    }
+  }, [attachments, initialAttachmentData]);
+
+  return null;
+}
+
+/**
+ * Clears PromptInput attachments when `signal` changes (non-zero initial value).
+ */
+function ComposerClearSignalHandler({
+  signal,
+}: {
+  signal: number;
+}) {
+  const attachments = usePromptInputAttachments();
+  const prevSignalRef = useRef(signal);
+
+  useEffect(() => {
+    if (prevSignalRef.current !== signal && prevSignalRef.current !== 0) {
+      attachments.clear();
+    }
+    prevSignalRef.current = signal;
+  }, [attachments, signal]);
+
+  return null;
+}
+
+/**
+ * Serializes PromptInput attachments to serializable data URLs and
+ * reports them via `onChange` for draft persistence.
+ */
+function ComposerAttachmentDraftSync({
+  onChange,
+}: {
+  onChange: (data: ReadonlyArray<SerializableAttachment>) => void;
+}) {
+  const attachments = usePromptInputAttachments();
+  const syncedRef = useRef<string>("");
+
+  useEffect(() => {
+    // We use a snapshot-based approach: only sync when the files array
+    // reference changes, not on every render.
+    const { files } = attachments;
+    const key = files.map((f) => f.id).join(",");
+    if (key === syncedRef.current) {
+      return;
+    }
+    syncedRef.current = key;
+
+    if (files.length === 0) {
+      onChange([]);
+      return;
+    }
+
+    // Serialize each attachment to a data URL.
+    void (async () => {
+      const serialized: SerializableAttachment[] = [];
+      for (const file of files) {
+        try {
+          let dataUrl = file.url;
+          // If the URL is a blob:, fetch and convert to data URL.
+          if (dataUrl.startsWith("blob:")) {
+            const response = await fetch(dataUrl);
+            const blob = await response.blob();
+            dataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+          }
+          serialized.push({
+            id: file.id,
+            name: file.filename ?? "attachment",
+            mediaType: file.mediaType ?? "application/octet-stream",
+            dataUrl,
+          });
+        } catch {
+          // Silently skip files that can't be serialized.
+        }
+      }
+      onChange(serialized);
+    })();
+  }, [attachments, onChange]);
+
+  return null;
+}
+
 function ComposerReferencedSourcesBridge({
   clearSignal,
   onBridgeReady,
@@ -1121,6 +1267,11 @@ export function WorkbenchPromptComposer({
   value,
   workspaceId,
   onValueChange,
+  initialReferencedFiles,
+  initialAttachmentData,
+  clearSignal,
+  onReferencedFilesChange,
+  onAttachmentDataChange,
 }: WorkbenchPromptComposerProps) {
   const t = useT();
   const [isProfileSelectorOpen, setProfileSelectorOpen] = useState(false);
@@ -1319,6 +1470,47 @@ export function WorkbenchPromptComposer({
     return () => cancelAnimationFrame(frame);
   }, [filteredSkills, selectedSkillIndex, skillMentionActive]);
 
+  // ── Restore initial state on mount ──
+  const mountRestoredRef = useRef(false);
+  useEffect(() => {
+    if (mountRestoredRef.current) {
+      return;
+    }
+    mountRestoredRef.current = true;
+    if (initialReferencedFiles && initialReferencedFiles.length > 0) {
+      setReferencedFiles(initialReferencedFiles);
+    }
+  }, [initialReferencedFiles]);
+
+  // ── Clear local state when clearSignal changes ──
+  useEffect(() => {
+    if (clearSignal === undefined || clearSignal === 0) {
+      return;
+    }
+    setReferencedFiles([]);
+    setClearReferencedSourcesSignal((current) => current + 1);
+    setSelectedCommandKey(null);
+    setSelectedFileIndex(0);
+    setSelectedSkillIndex(0);
+    setFileSearchResults([]);
+    setFileSearchLoading(false);
+    setFileSearchError(null);
+  }, [clearSignal]);
+
+  // ── Sync referenced files to parent (draft persistence) ──
+  const syncedRefFilesRef = useRef<string>("");
+  useEffect(() => {
+    const key = JSON.stringify(referencedFiles);
+    if (key !== syncedRefFilesRef.current) {
+      syncedRefFilesRef.current = key;
+      onReferencedFilesChange?.(referencedFiles);
+    }
+  }, [referencedFiles, onReferencedFilesChange]);
+
+  // ── Serialize attachments to parent (draft persistence) ──
+  // We use a child component for this because usePromptInputAttachments()
+  // must be called inside a PromptInput descendant.
+
   const handlePromptSubmit = (message: PromptInputMessage) => {
     const submission = buildSubmissionFromPromptInput(message, commandRegistry, runMode, referencedFiles);
     onSubmit(submission);
@@ -1498,6 +1690,15 @@ export function WorkbenchPromptComposer({
                   onErrorMessageChange?.(null);
                 }
               }}
+            />
+            <ComposerInitialStateRestorer
+              initialAttachmentData={initialAttachmentData}
+            />
+            <ComposerClearSignalHandler
+              signal={clearSignal ?? 0}
+            />
+            <ComposerAttachmentDraftSync
+              onChange={(data) => onAttachmentDataChange?.(data)}
             />
             <ComposerAttachmentHeader />
             <ComposerReferencedFilesHeader

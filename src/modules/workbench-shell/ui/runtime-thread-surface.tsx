@@ -22,7 +22,7 @@ import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "@/components/ai-elements/confirmation";
 import { useViewportAutoCollapse, type ViewportAutoCollapseEntry } from "@/shared/hooks/use-viewport-auto-collapse";
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
-import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
+import type { CommandEntry } from "@/modules/settings-center/model/types";
 import { threadClearContext, threadLoad } from "@/services/bridge";
 import {
   ThreadStream,
@@ -38,8 +38,27 @@ import type {
   TaskBoardDto,
 } from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
+import {
+  threadStore,
+  useStore,
+} from "@/modules/workbench-shell/model/thread-store";
+import {
+  createRunLifecycleMachine,
+  mapStreamEventToMachineEvent,
+  type RunMachineContext,
+  type RunMachinePayload,
+  type RunMachineState,
+} from "@/modules/workbench-shell/model/run-lifecycle-machine";
+import {
+  registerRunMachine,
+  unregisterRunMachine,
+} from "@/modules/workbench-shell/model/run-event-dispatcher";
+import { composerStore, setDraft, getDraft } from "@/modules/workbench-shell/model/composer-store";
+import { settingsStore } from "@/modules/settings-center/model/settings-store";
+import { threadUpdateProfile } from "@/services/bridge";
+import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { Button } from "@/shared/ui/button";
-import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
+import type { ComposerSubmission, ComposerReferencedFile } from "@/modules/workbench-shell/model/composer-commands";
 import type { SkillRecord } from "@/shared/types/extensions";
 import {
   getFileMutationPresentation,
@@ -110,7 +129,6 @@ import {
   stringifyToolValue,
   updateHelper,
   updateTool,
-  type InitialPromptRequest,
   type SurfaceHelperEntry,
   type SurfaceMessage,
   type SurfaceRuntimeError,
@@ -131,35 +149,15 @@ import {
 } from "@/modules/workbench-shell/ui/runtime-thread-surface-metadata";
 
 type RuntimeThreadSurfaceProps = {
-  activeAgentProfileId: string;
-  agentProfiles: ReadonlyArray<AgentProfile>;
   commands?: ReadonlyArray<CommandEntry>;
-  composerDraft?: string;
   enabledSkills?: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "scope" | "source" | "tags" | "triggers" | "contentPreview">>;
-  initialPromptRequest?: InitialPromptRequest | null;
-  onComposerDraftChange?: (value: string) => void;
-  onConsumeInitialPrompt?: (id: string) => void;
-  onContextUsageChange?: (usage: ThreadContextUsage | null) => void;
-  onRunStateChange?: (state: RunState) => void;
-  onOpenProfileSettings?: () => void;
-  onSelectAgentProfile: (id: string) => void;
-  onThreadTitleChange?: (threadId: string, title: string) => void;
-  providers: ReadonlyArray<ProviderEntry>;
   threadId: string | null;
-  threadTitle: string;
-  workspaceId?: string | null;
 };
 
-export type ThreadContextUsage = {
-  contextWindow: string | null;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  totalTokens: number;
-  modelDisplayName: string | null;
-  runId: string;
-};
+// re-exported from thread-store for backward compat — prefer importing from thread-store directly
+export type { ThreadContextUsage } from "@/modules/workbench-shell/model/thread-store";
+import { findWorkspaceForThread, resolveActiveThreadWorkbenchProfileId } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
+import { uiLayoutStore } from "@/modules/workbench-shell/model/ui-layout-store";
 
 function renderPlanListSection(
   messageId: string,
@@ -219,35 +217,49 @@ function renderPlanProseSection(title: string, content: string) {
 
 const BASE_CONVERSATION_BOTTOM_PADDING = 40;
 
+/** Idle context used when resetting the run-lifecycle machine. */
+const RESET_IDLE_CONTEXT: RunMachineContext = {
+  runId: null,
+  errorMessage: null,
+  retryCount: 0,
+};
+
 export function RuntimeThreadSurface({
-  activeAgentProfileId,
-  agentProfiles,
   commands = [],
-  composerDraft = "",
   enabledSkills = [],
-  initialPromptRequest = null,
-  onComposerDraftChange,
-  onConsumeInitialPrompt,
-  onContextUsageChange,
-  onRunStateChange,
-  onOpenProfileSettings,
-  onSelectAgentProfile,
-  onThreadTitleChange,
-  providers,
   threadId,
-  threadTitle,
-  workspaceId,
 }: RuntimeThreadSurfaceProps) {
   const t = useT();
+  const globalAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
+  const agentProfiles = useStore(settingsStore, (s) => s.agentProfiles);
+  const providers = useStore(settingsStore, (s) => s.providers);
+  const isNewThreadMode = useStore(threadStore, (s) => s.isNewThreadMode);
+  const activeThreadProfileIdOverride = useStore(threadStore, (s) => s.activeThreadProfileIdOverride);
+  const pendingRuns = useStore(threadStore, (s) => s.pendingRuns);
+  const activeAgentProfileId = useMemo(
+    () => resolveActiveThreadWorkbenchProfileId(
+      isNewThreadMode ? null : activeThreadProfileIdOverride,
+      globalAgentProfileId,
+    ),
+    [isNewThreadMode, activeThreadProfileIdOverride, globalAgentProfileId],
+  );
   const activeProfile = useMemo(() => {
     const matchedProfile = agentProfiles.find((profile) => profile.id === activeAgentProfileId) ?? null;
     return matchedProfile;
   }, [activeAgentProfileId, agentProfiles]);
   const hasMissingActiveProfile = Boolean(activeAgentProfileId) && activeProfile === null;
   const [composerError, setComposerError] = useState<string | null>(null);
-  const [localComposerValue, setLocalComposerValue] = useState("");
-  const composerValue = onComposerDraftChange ? composerDraft : localComposerValue;
-  const setComposerValue = onComposerDraftChange ? onComposerDraftChange : setLocalComposerValue;
+  const [composerClearSignal, setComposerClearSignal] = useState(0);
+  const composerValue = useStore(composerStore, () => (threadId ? getDraft(threadId).text : ""));
+  const setComposerValue = useCallback(
+    (value: string) => {
+      if (threadId) {
+        const existing = getDraft(threadId);
+        setDraft(threadId, { ...existing, text: value });
+      }
+    },
+    [threadId],
+  );
   const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string | null>(null);
   const [helpers, setHelpers] = useState<Array<SurfaceHelperEntry>>([]);
   const [helperOpen, setHelperOpen] = useState<Record<string, boolean>>({});
@@ -259,7 +271,10 @@ export function RuntimeThreadSurface({
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
   const [queueArtifact, setQueueArtifact] = useState<unknown>(null);
   const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
-  const [runState, setRunState] = useState<RunState>("idle");
+  const runState = useStore(
+    threadStore,
+    (s) => (threadId ? s.threadStatuses[threadId]?.status ?? "idle" : "idle") as RunState,
+  );
   const [selectedRunMode, setSelectedRunMode] = useState<RunMode>("default");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [snapshotThreadId, setSnapshotThreadId] = useState<string | null>(null);
@@ -288,6 +303,13 @@ export function RuntimeThreadSurface({
   const pendingThreadRestoreScrollRef = useRef(false);
   const submittingRef = useRef(false);
   const subscribingRef = useRef(false);
+
+  // Per-thread run-lifecycle state machine — the authoritative source for
+  // this thread's run status. Every state change is auto-synced to threadStore.
+  const runMachine = useMemo(
+    () => createRunLifecycleMachine(threadId ?? ""),
+    [threadId],
+  );
   const handledInitialPromptRequestIdRef = useRef<string | null>(null);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
@@ -426,14 +448,14 @@ export function RuntimeThreadSurface({
       setLoadError(null);
       setLoading(false);
       setIsLoadingMoreMessages(false);
-      onContextUsageChange?.(null);
+      threadStore.setState({ runtimeContextUsage: null });
       setApprovingPlanMessageId(null);
       setRuntimeError(null);
-      setRunState("idle");
+      if (threadId) runMachine.reset("idle", RESET_IDLE_CONTEXT);
       setSnapshotReady(true);
       setSnapshotThreadId(null);
       setThinkingPlaceholder(null);
-      onRunStateChange?.("idle");
+      
       return;
     }
 
@@ -534,10 +556,11 @@ export function RuntimeThreadSurface({
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
-      setRunState(nextState);
+      if (threadId) runMachine.reset(nextState as RunMachineState, {
+        runId: snapshot.activeRun?.id ?? null, errorMessage: null, retryCount: 0 });
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
       if (!shouldPreserveContextUsage) {
-        onContextUsageChange?.(nextContextUsage);
+        threadStore.setState({ runtimeContextUsage: nextContextUsage });
       }
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
@@ -563,9 +586,8 @@ export function RuntimeThreadSurface({
           });
       }
       if (snapshot.thread.title.trim()) {
-        onThreadTitleChange?.(snapshot.thread.id, snapshot.thread.title.trim());
+        threadStore.setState((prev) => ({ workspaces: prev.workspaces.map((w) => ({ ...w, threads: w.threads.map((t) => t.id === snapshot.thread.id ? { ...t, name: snapshot.thread.title.trim() } : t) })) }));
       }
-      onRunStateChange?.(nextState);
     } catch (error) {
       if (snapshotLoadRequestRef.current !== requestId) {
         return;
@@ -574,7 +596,7 @@ export function RuntimeThreadSurface({
       preserveContextUsageOnNextEmptySnapshotRef.current = false;
       const message = error instanceof Error ? error.message : String(error);
       setLoadError(message);
-      onContextUsageChange?.(null);
+      threadStore.setState({ runtimeContextUsage: null });
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
     } finally {
@@ -582,7 +604,7 @@ export function RuntimeThreadSurface({
         setLoading(false);
       }
     }
-  }, [clearScheduledThinkingPhase, onContextUsageChange, onRunStateChange, onThreadTitleChange, showThinkingPlaceholder, threadId]);
+  }, [clearScheduledThinkingPhase, showThinkingPlaceholder, threadId]);
 
   const loadOlderMessages = useCallback(async () => {
     if (!threadId || isLoadingMoreMessages || messages.length === 0 || !hasMoreMessages) {
@@ -643,33 +665,31 @@ export function RuntimeThreadSurface({
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
-      setRunState(nextState);
+      if (threadId) runMachine.reset(nextState as RunMachineState, {
+        runId: snapshot.activeRun?.id ?? null, errorMessage: null, retryCount: 0 });
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
 
       const latestVisibleRun = getLatestVisibleRun(snapshot);
       if (latestVisibleRun?.id === runId) {
         const nextContextUsage = mapRunSummaryToContextUsage(latestVisibleRun);
         if (nextContextUsage) {
-          onContextUsageChange?.(nextContextUsage);
+          threadStore.setState({ runtimeContextUsage: nextContextUsage });
         }
       }
 
       if (snapshot.thread.title.trim()) {
-        onThreadTitleChange?.(snapshot.thread.id, snapshot.thread.title.trim());
+        threadStore.setState((prev) => ({ workspaces: prev.workspaces.map((w) => ({ ...w, threads: w.threads.map((t) => t.id === snapshot.thread.id ? { ...t, name: snapshot.thread.title.trim() } : t) })) }));
       }
-      onRunStateChange?.(nextState);
     } catch {
       // Keep the local completed fallback message if snapshot resync is not ready yet.
     }
-  }, [onContextUsageChange, onRunStateChange, onThreadTitleChange, threadId]);
+  }, [threadId]);
 
   useEffect(() => {
     subscribingRef.current = false;
     pendingThreadRestoreScrollRef.current = Boolean(threadId);
     setComposerError(null);
-    if (!onComposerDraftChange) {
-      setLocalComposerValue("");
-    }
+    setComposerClearSignal((prev) => prev + 1);
     setHelpers([]);
     setHasMoreMessages(false);
     setHistoryLoadError(null);
@@ -679,7 +699,7 @@ export function RuntimeThreadSurface({
     setApprovingPlanMessageId(null);
     setQueueArtifact(null);
     setRuntimeError(null);
-    setRunState("idle");
+    if (threadId) runMachine.reset("idle", RESET_IDLE_CONTEXT);
     setSnapshotReady(false);
     setSnapshotThreadId(null);
     lastOptimisticUserIdRef.current = null;
@@ -687,7 +707,7 @@ export function RuntimeThreadSurface({
     setThinkingPlaceholder(null);
     setTools([]);
     void loadSnapshot();
-  }, [clearScheduledThinkingPhase, loadSnapshot, onComposerDraftChange, threadId]);
+  }, [clearScheduledThinkingPhase, loadSnapshot, threadId]);
 
   useEffect(() => {
     const isCurrentThreadSnapshotReady = snapshotReady && snapshotThreadId === threadId;
@@ -722,6 +742,23 @@ export function RuntimeThreadSurface({
     };
 
     stream.onRawEvent = withActiveStream((event) => {
+      // Route lifecycle events to the run-lifecycle machine for validated
+      // state transitions. The machine auto-syncs to threadStore.
+      const machineEvent = mapStreamEventToMachineEvent(event.type);
+      if (machineEvent && threadId) {
+        const payload: RunMachinePayload = {};
+        if ("runId" in event && typeof event.runId === "string") {
+          payload.runId = event.runId;
+        }
+        if ("error" in event && typeof event.error === "string") {
+          payload.message = event.error;
+        }
+        if (machineEvent === "RUN_RETRYING" && "runId" in event && typeof event.runId === "string") {
+          payload.newRunId = event.runId;
+        }
+        runMachine.send(machineEvent, payload);
+      }
+
       if (shouldCompleteThinkingPhase(event)) {
         completeThinkingPhase(event.runId);
       } else if (shouldFinalizeReasoningOnly(event)) {
@@ -840,19 +877,21 @@ export function RuntimeThreadSurface({
     });
 
     stream.onThreadTitle = withActiveStream((event: ThreadTitleEvent) => {
-      onThreadTitleChange?.(event.threadId, event.title);
+      threadStore.setState((prev) => ({ workspaces: prev.workspaces.map((w) => ({ ...w, threads: w.threads.map((t) => t.id === event.threadId ? { ...t, name: event.title } : t) })) }));
     });
 
     stream.onUsage = withActiveStream((event: UsageEvent) => {
-      onContextUsageChange?.({
-        contextWindow: event.contextWindow,
-        inputTokens: event.usage.inputTokens,
-        outputTokens: event.usage.outputTokens,
-        cacheReadTokens: event.usage.cacheReadTokens,
-        cacheWriteTokens: event.usage.cacheWriteTokens,
-        totalTokens: event.usage.totalTokens,
-        modelDisplayName: event.modelDisplayName,
-        runId: event.runId,
+      threadStore.setState({
+        runtimeContextUsage: {
+          contextWindow: event.contextWindow,
+          inputTokens: event.usage.inputTokens,
+          outputTokens: event.usage.outputTokens,
+          cacheReadTokens: event.usage.cacheReadTokens,
+          cacheWriteTokens: event.usage.cacheWriteTokens,
+          totalTokens: event.usage.totalTokens,
+          modelDisplayName: event.modelDisplayName,
+          runId: event.runId,
+        },
       });
     });
 
@@ -1070,8 +1109,8 @@ export function RuntimeThreadSurface({
     });
 
     stream.onRunStateChange = withActiveStream((state, runId) => {
-      setRunState(state);
-      onRunStateChange?.(state);
+      // Machine already handles state transitions via onRawEvent.
+      // Perform side effects based on the new state.
 
       if (state === "running" || state === "waiting_approval" || state === "needs_reply") {
         setRuntimeError(null);
@@ -1131,7 +1170,11 @@ export function RuntimeThreadSurface({
     });
 
     streamRef.current = stream;
+    // Register this thread's machine to receive global Tauri events.
+    if (threadId) registerRunMachine(threadId, runMachine);
     return () => {
+      if (threadId) unregisterRunMachine(threadId);
+      runMachine.destroy();
       streamRef.current = null;
       subscribingRef.current = false;
       clearScheduledThinkingPhase();
@@ -1141,10 +1184,8 @@ export function RuntimeThreadSurface({
     clearScheduledThinkingPhase,
     completeThinkingPhase,
     loadSnapshot,
-    onRunStateChange,
-    onContextUsageChange,
-    onThreadTitleChange,
     resyncCompletedMessage,
+    runMachine,
     scheduleThinkingPhase,
     threadId,
   ]);
@@ -1168,13 +1209,11 @@ export function RuntimeThreadSurface({
 
         // Only reload if we still think the run is active — avoids
         // unnecessary snapshot loads when the stream already handled it.
-        setRunState((current) => {
-          if (current === "running" || current === "waiting_approval" || current === "needs_reply") {
-            void loadSnapshot();
-          }
-
-          return current;
-        });
+        const threadStatus = threadStore.getState().threadStatuses[threadId];
+        const currentStatus = threadStatus?.status ?? "idle";
+        if (currentStatus === "running" || currentStatus === "waiting_approval" || currentStatus === "needs_reply") {
+          void loadSnapshot();
+        }
       },
     );
 
@@ -1263,7 +1302,7 @@ export function RuntimeThreadSurface({
       conversationContextRef.current?.scrollToBottom("instant");
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
-        onContextUsageChange?.(null);
+        threadStore.setState({ runtimeContextUsage: null });
         await threadClearContext(threadId);
         await loadSnapshot();
       } finally {
@@ -1277,7 +1316,7 @@ export function RuntimeThreadSurface({
       conversationContextRef.current?.scrollToBottom("instant");
       try {
         preserveContextUsageOnNextEmptySnapshotRef.current = false;
-        onContextUsageChange?.(null);
+        threadStore.setState({ runtimeContextUsage: null });
         // Route through the ThreadStream so the frontend receives the
         // RunStarted + ContextCompressing events that drive the thinking
         // placeholder and the "running" thread state during the LLM call.
@@ -1326,7 +1365,7 @@ export function RuntimeThreadSurface({
     } finally {
       submittingRef.current = false;
     }
-  }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, loadSnapshot, onContextUsageChange, providers, runState, selectedRunMode, threadId]);
+  }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, loadSnapshot, providers, runState, selectedRunMode, threadId]);
 
   const respondToClarify = useCallback(async (
     tool: SurfaceToolEntry,
@@ -1353,6 +1392,7 @@ export function RuntimeThreadSurface({
   useEffect(() => {
     const isCurrentThreadSnapshotReady =
       snapshotReady && snapshotThreadId === threadId;
+    const initialPromptRequest = threadId ? (pendingRuns[threadId] ?? null) : null;
     const initialPromptRequestId = initialPromptRequest?.id ?? null;
     const hasBlockingRun =
       runState === "running"
@@ -1384,9 +1424,14 @@ export function RuntimeThreadSurface({
       runMode: initialPromptRequest.runMode,
     }, initialPromptRequest.runMode)
       .finally(() => {
-        onConsumeInitialPrompt?.(initialPromptRequest.id);
+        threadStore.setState((prev) => {
+          const next = Object.fromEntries(
+            Object.entries(prev.pendingRuns).filter(([, r]) => r.id !== initialPromptRequest.id)
+          );
+          return Object.keys(next).length === Object.keys(prev.pendingRuns).length ? {} : { pendingRuns: next };
+        });
       });
-  }, [initialPromptRequest, onConsumeInitialPrompt, runState, snapshotReady, snapshotThreadId, submitPrompt, threadId]);
+  }, [pendingRuns, runState, snapshotReady, snapshotThreadId, submitPrompt, threadId]);
 
   const hasLiveRun =
     runState === "running"
@@ -1696,7 +1741,7 @@ export function RuntimeThreadSurface({
 
     preserveContextUsageOnNextEmptySnapshotRef.current = action === "apply_plan";
     if (action === "apply_plan_with_context_reset") {
-      onContextUsageChange?.(null);
+      threadStore.setState({ runtimeContextUsage: null });
     }
     setApprovingPlanMessageId(messageId);
     setComposerError(null);
@@ -2252,7 +2297,7 @@ export function RuntimeThreadSurface({
               <ConversationEmptyState
                 description="Ask Tiy to inspect the workspace, run tools, or plan the next task."
                 icon={<BotIcon className="size-5" />}
-                title={threadTitle || "No messages yet"}
+                title={"No messages yet"}
               />
             ) : null}
 
@@ -2304,7 +2349,7 @@ export function RuntimeThreadSurface({
 
                 if (message.messageType === "reasoning") {
                   const reasoningIsStreaming = message.status === "streaming";
-                  const reasoningIsOpen = reasoningOpen[message.id] ?? (reasoningIsStreaming || runState === "running");
+                  const reasoningIsOpen = reasoningOpen[message.id] ?? reasoningIsStreaming;
                   return (
                     <div
                       className={spacingClass}
@@ -2818,8 +2863,32 @@ export function RuntimeThreadSurface({
             error={composerError}
             onErrorMessageChange={setComposerError}
             onRunModeChange={setSelectedRunMode}
-            onOpenProfileSettings={onOpenProfileSettings}
-            onSelectAgentProfile={onSelectAgentProfile}
+            onOpenProfileSettings={() => {
+              uiLayoutStore.setState({ activeOverlay: "settings" });
+            }}
+            onSelectAgentProfile={async (profileId: string) => {
+              // In new-thread mode, just update the global active profile.
+              if (isNewThreadMode || !threadId) {
+                settingsStore.setState({ activeAgentProfileId: profileId });
+                return;
+              }
+              try {
+                await threadUpdateProfile(threadId, profileId);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : getInvokeErrorMessage(error, "Failed to switch profile");
+                composerStore.setState({ error: message });
+                return;
+              }
+              threadStore.setState((prev) => ({
+                workspaces: prev.workspaces.map((w) => ({
+                  ...w,
+                  threads: w.threads.map((t) =>
+                    t.id === threadId ? { ...t, profileId } : t
+                  ),
+                })),
+                activeThreadProfileIdOverride: profileId,
+              }));
+            }}
             onStop={() => {
               if (!threadId) {
                 return;
@@ -2840,8 +2909,7 @@ export function RuntimeThreadSurface({
                 // accepted the cancel request but `RunCancelled` may arrive late
                 // if the agent loop is blocked on a long-running HTTP call.
                 completeThinkingPhase();
-                setRunState("cancelled");
-                onRunStateChange?.("cancelled");
+                runMachine.send("RUN_CANCELLED");
 
                 // Safety net: if the backend event (`run_cancelled`) hasn't
                 // arrived within 5 seconds, force a snapshot reload to reconcile
@@ -2869,8 +2937,23 @@ export function RuntimeThreadSurface({
             showRunModeToggle
             status={composerStatus}
             value={composerValue}
-            workspaceId={workspaceId}
+            workspaceId={
+              threadId
+                ? findWorkspaceForThread(
+                    threadStore.getState().workspaces,
+                    threadId,
+                  )?.id ?? undefined
+                : undefined
+            }
             onValueChange={setComposerValue}
+            initialReferencedFiles={threadId ? getDraft(threadId).referencedFiles : []}
+            clearSignal={composerClearSignal}
+            onReferencedFilesChange={(files) => {
+              if (threadId) {
+                const existing = getDraft(threadId);
+                setDraft(threadId, { ...existing, referencedFiles: files as ComposerReferencedFile[] });
+              }
+            }}
           />
         </div>
       </div>

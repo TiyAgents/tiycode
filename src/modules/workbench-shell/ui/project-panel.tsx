@@ -365,6 +365,57 @@ function mergeRevealedChildren(
   return sortTreeNodes(Array.from(merged.values()));
 }
 
+type RestoredExpandedTree = {
+  tree: FileTreeNode;
+  expandedPaths: Set<string>;
+  error: unknown | null;
+};
+
+function pathDepth(path: string): number {
+  return path.split("/").filter(Boolean).length;
+}
+
+async function restoreExpandedTreeChildren(
+  workspaceId: string,
+  sourceTree: FileTreeNode,
+  expandedPaths: ReadonlySet<string>,
+): Promise<RestoredExpandedTree> {
+  let nextTree = sourceTree;
+  const restoredExpandedPaths = new Set<string>();
+  const candidates = Array.from(expandedPaths)
+    .filter((path) => path.length > 0)
+    .sort((left, right) => pathDepth(left) - pathDepth(right) || left.localeCompare(right));
+
+  for (const path of candidates) {
+    const node = findNodeByPath(nextTree, path);
+    if (!node || !node.isDir || !node.isExpandable) {
+      continue;
+    }
+
+    try {
+      const response = await indexGetChildren(workspaceId, path, 0, 200);
+      nextTree = replaceNodeChildren(nextTree, path, response, "replace");
+
+      const updatedNode = findNodeByPath(nextTree, path);
+      if (updatedNode?.isDir && updatedNode.isExpandable) {
+        restoredExpandedPaths.add(path);
+      }
+    } catch (error) {
+      return {
+        tree: nextTree,
+        expandedPaths: restoredExpandedPaths,
+        error,
+      };
+    }
+  }
+
+  return {
+    tree: nextTree,
+    expandedPaths: restoredExpandedPaths,
+    error: null,
+  };
+}
+
 function applyRevealSegment(
   node: FileTreeNode,
   targetPath: string,
@@ -475,6 +526,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
   const treeRowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const isRefreshingTreeRef = useRef(false);
+  const expandedPathsRef = useRef<Set<string>>(new Set());
+  const latestGitOverlayRef = useRef<IndexGitOverlayReadyPayload | null>(null);
   const { data: openApps, error: openAppsError, isLoading: isLoadingOpenApps } = useWorkspaceOpenApps();
   const normalizedFilter = deferredFilterValue.trim().toLowerCase();
   const projectName = currentProject?.name ?? "Project";
@@ -484,6 +537,14 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   useEffect(() => {
     isRefreshingTreeRef.current = isRefreshingTree;
   }, [isRefreshingTree]);
+
+  useEffect(() => {
+    expandedPathsRef.current = expandedPaths;
+  }, [expandedPaths]);
+
+  useEffect(() => {
+    latestGitOverlayRef.current = null;
+  }, [workspaceId, projectPath]);
 
   useEffect(() => {
     if (
@@ -653,17 +714,55 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
       error: null,
       isLoading: true,
     }));
+    setGitOverlayResolved(false);
+    latestGitOverlayRef.current = null;
 
     void indexGetTree(workspaceId)
-      .then((response) => {
+      .then(async (response) => {
         if (cancelled) {
           return;
         }
 
         setGitOverlayResolved(false);
+        const fresh = response ?? buildMockTreeResponse();
+        const expandedSnapshot = new Set(expandedPathsRef.current);
+        const restored = await restoreExpandedTreeChildren(
+          workspaceId,
+          fresh.tree,
+          expandedSnapshot,
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        const latestOverlay = latestGitOverlayRef.current;
+        const restoredTree = restored.tree;
+        const hasLatestOverlay = latestOverlay?.workspaceId === workspaceId;
+        if (hasLatestOverlay) {
+          applyGitOverlayToNode(restoredTree, latestOverlay.states);
+        }
+
+        const currentExpandedPaths = expandedPathsRef.current;
+        const expandedPathsChangedDuringRefresh =
+          currentExpandedPaths.size !== expandedSnapshot.size
+          || Array.from(currentExpandedPaths).some((path) => !expandedSnapshot.has(path));
+
+        if (!expandedPathsChangedDuringRefresh) {
+          setExpandedPaths(restored.expandedPaths);
+        }
+
         setTreeState({
-          data: response ?? buildMockTreeResponse(),
-          error: null,
+          data: {
+            ...fresh,
+            repoAvailable: hasLatestOverlay
+              ? latestOverlay.repoAvailable
+              : fresh.repoAvailable,
+            tree: restoredTree,
+          },
+          error: restored.error
+            ? getInvokeErrorMessage(restored.error, t("projectPanel.error.readDirectory"))
+            : null,
           isLoading: false,
         });
       })
@@ -706,6 +805,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
         return;
       }
 
+      latestGitOverlayRef.current = event.payload;
       setGitOverlayResolved(true);
       setTreeState((current) => {
         if (!current.data) {
@@ -820,7 +920,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     }
 
     setRefreshingTree(true);
-    setExpandedPaths(new Set());
     setLoadingPaths(new Set());
     setPendingRevealPath(null);
     setRevealedPath(null);
@@ -950,7 +1049,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   };
 
   const handleTreeToggle = async (node: FileTreeNode) => {
-    if (!node.isDir || !node.isExpandable) {
+    if (treeState.isLoading || !node.isDir || !node.isExpandable) {
       return;
     }
 
@@ -994,7 +1093,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   };
 
   const handleLoadMore = async (parentPath: string) => {
-    if (!treeState.data || loadingPaths.has(parentPath)) {
+    if (treeState.isLoading || !treeState.data || loadingPaths.has(parentPath)) {
       return;
     }
 
@@ -1312,7 +1411,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                       <button
                         key={`load-more:${row.parentPath}`}
                         type="button"
-                        className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                        disabled={treeState.isLoading}
+                        className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-wait disabled:opacity-60"
                         style={{ paddingLeft: `${10 + row.depth * 14}px` }}
                         onClick={() => void handleLoadMore(row.parentPath)}
                       >
@@ -1351,7 +1451,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                         ref={(element) => setTreeRowRef(node.path, element)}
                         data-tree-path={node.path}
                         type="button"
-                        className="min-w-0 flex flex-1 items-center gap-2 text-left"
+                        disabled={treeState.isLoading}
+                        className="min-w-0 flex flex-1 items-center gap-2 text-left disabled:cursor-wait"
                         onClick={() => void handleTreeToggle(node)}
                         onDoubleClick={() => {
                           if (!node.isDir) {
