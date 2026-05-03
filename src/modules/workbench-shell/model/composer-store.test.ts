@@ -3,6 +3,8 @@ import {
   composerStore,
   setNewThreadValue,
   setNewThreadRunMode,
+  setNewThreadReferencedFiles,
+  setNewThreadAttachmentData,
   setDraft,
   getDraft,
   removeDraft,
@@ -31,26 +33,29 @@ describe("composerStore", () => {
 
     it("should clear new thread composer", () => {
       setNewThreadValue("some value");
+      setNewThreadReferencedFiles([{ name: "test.ts", path: "/test.ts", parentPath: "/" }]);
+      setNewThreadAttachmentData([{ id: "1", name: "test.png", mediaType: "image/png", dataUrl: "data:image/png;base64," }]);
       setComposerError("an error");
       clearNewThreadComposer();
       const state = composerStore.getState();
       expect(state.newThreadValue).toBe("");
+      expect(state.newThreadReferencedFiles).toEqual([]);
+      expect(state.newThreadAttachmentData).toEqual([]);
       expect(state.error).toBeNull();
-      // Run mode should NOT be cleared (it's not part of clearNewThreadComposer)
     });
   });
 
   describe("drafts", () => {
     it("should set and get drafts", () => {
-      setDraft("thread-1", "draft content");
-      expect(getDraft("thread-1")).toBe("draft content");
-      expect(getDraft("thread-2")).toBe(""); // non-existent → empty string
+      setDraft("thread-1", { text: "draft content", referencedFiles: [] });
+      expect(getDraft("thread-1").text).toBe("draft content");
+      expect(getDraft("thread-2").text).toBe(""); // non-existent → empty
     });
 
     it("should remove drafts", () => {
-      setDraft("thread-1", "content");
+      setDraft("thread-1", { text: "content", referencedFiles: [] });
       removeDraft("thread-1");
-      expect(getDraft("thread-1")).toBe("");
+      expect(getDraft("thread-1").text).toBe("");
     });
 
     it("should handle removing non-existent draft silently", () => {
@@ -59,16 +64,46 @@ describe("composerStore", () => {
     });
 
     it("should support multiple thread drafts", () => {
-      setDraft("t1", "a");
-      setDraft("t2", "b");
-      expect(getDraft("t1")).toBe("a");
-      expect(getDraft("t2")).toBe("b");
+      setDraft("t1", { text: "a", referencedFiles: [] });
+      setDraft("t2", { text: "b", referencedFiles: [] });
+      expect(getDraft("t1").text).toBe("a");
+      expect(getDraft("t2").text).toBe("b");
     });
 
     it("setDraft should update existing draft", () => {
-      setDraft("t1", "first");
-      setDraft("t1", "second");
-      expect(getDraft("t1")).toBe("second");
+      setDraft("t1", { text: "first", referencedFiles: [] });
+      setDraft("t1", { text: "second", referencedFiles: [] });
+      expect(getDraft("t1").text).toBe("second");
+    });
+
+    it("should store and retrieve referencedFiles", () => {
+      const files = [{ name: "app.ts", path: "src/app.ts", parentPath: "src" }];
+      setDraft("t1", { text: "hello", referencedFiles: files });
+      expect(getDraft("t1").referencedFiles).toEqual(files);
+    });
+
+    it("getDraft should handle legacy string drafts", () => {
+      // Simulate a legacy string stored in drafts (force-set via store API)
+      composerStore.setState({ drafts: { legacy: "old text" as any } });
+      const draft = getDraft("legacy");
+      expect(draft.text).toBe("old text");
+      expect(draft.referencedFiles).toEqual([]);
+    });
+  });
+
+  describe("new thread referenced files", () => {
+    it("should set and retrieve new thread referenced files", () => {
+      const files = [{ name: "app.ts", path: "src/app.ts", parentPath: "src" }];
+      setNewThreadReferencedFiles(files);
+      expect(composerStore.getState().newThreadReferencedFiles).toEqual(files);
+    });
+  });
+
+  describe("new thread attachment data", () => {
+    it("should set and retrieve new thread attachment data", () => {
+      const data = [{ id: "1", name: "test.png", mediaType: "image/png", dataUrl: "data:image/png;base64," }];
+      setNewThreadAttachmentData(data);
+      expect(composerStore.getState().newThreadAttachmentData).toEqual(data);
     });
   });
 

@@ -53,12 +53,12 @@ import {
   registerRunMachine,
   unregisterRunMachine,
 } from "@/modules/workbench-shell/model/run-event-dispatcher";
-import { composerStore, setDraft } from "@/modules/workbench-shell/model/composer-store";
+import { composerStore, setDraft, getDraft } from "@/modules/workbench-shell/model/composer-store";
 import { settingsStore } from "@/modules/settings-center/model/settings-store";
 import { threadUpdateProfile } from "@/services/bridge";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { Button } from "@/shared/ui/button";
-import type { ComposerSubmission } from "@/modules/workbench-shell/model/composer-commands";
+import type { ComposerSubmission, ComposerReferencedFile } from "@/modules/workbench-shell/model/composer-commands";
 import type { SkillRecord } from "@/shared/types/extensions";
 import {
   getFileMutationPresentation,
@@ -249,11 +249,13 @@ export function RuntimeThreadSurface({
   }, [activeAgentProfileId, agentProfiles]);
   const hasMissingActiveProfile = Boolean(activeAgentProfileId) && activeProfile === null;
   const [composerError, setComposerError] = useState<string | null>(null);
-  const composerValue = useStore(composerStore, (s) => (threadId ? (s.drafts[threadId] ?? "") : ""));
+  const [composerClearSignal, setComposerClearSignal] = useState(0);
+  const composerValue = useStore(composerStore, () => (threadId ? getDraft(threadId).text : ""));
   const setComposerValue = useCallback(
     (value: string) => {
       if (threadId) {
-        setDraft(threadId, value);
+        const existing = getDraft(threadId);
+        setDraft(threadId, { ...existing, text: value });
       }
     },
     [threadId],
@@ -687,6 +689,7 @@ export function RuntimeThreadSurface({
     subscribingRef.current = false;
     pendingThreadRestoreScrollRef.current = Boolean(threadId);
     setComposerError(null);
+    setComposerClearSignal((prev) => prev + 1);
     setHelpers([]);
     setHasMoreMessages(false);
     setHistoryLoadError(null);
@@ -2943,6 +2946,14 @@ export function RuntimeThreadSurface({
                 : undefined
             }
             onValueChange={setComposerValue}
+            initialReferencedFiles={threadId ? getDraft(threadId).referencedFiles : []}
+            clearSignal={composerClearSignal}
+            onReferencedFilesChange={(files) => {
+              if (threadId) {
+                const existing = getDraft(threadId);
+                setDraft(threadId, { ...existing, referencedFiles: files as ComposerReferencedFile[] });
+              }
+            }}
           />
         </div>
       </div>

@@ -131,6 +131,8 @@ import {
   composerStore,
   setNewThreadValue,
   setNewThreadRunMode,
+  setNewThreadReferencedFiles,
+  setNewThreadAttachmentData,
   setComposerError,
   clearNewThreadComposer,
 } from "@/modules/workbench-shell/model/composer-store";
@@ -272,6 +274,8 @@ export function DashboardWorkbench() {
   const composerValue = useStore(composerStore, (s) => s.newThreadValue);
   const composerError = useStore(composerStore, (s) => s.error);
   const newThreadRunMode = useStore(composerStore, (s) => s.newThreadRunMode);
+  const newThreadReferencedFiles = useStore(composerStore, (s) => s.newThreadReferencedFiles);
+  const newThreadAttachmentData = useStore(composerStore, (s) => s.newThreadAttachmentData);
 
   // ── Init onboarding visibility (one-time, based on localStorage) ──
   useEffect(() => {
@@ -1254,6 +1258,10 @@ export function DashboardWorkbench() {
                             value={composerValue}
                             workspaceId={selectedProjectWorkspaceId}
                             onValueChange={setNewThreadValue}
+                            initialReferencedFiles={newThreadReferencedFiles}
+                            initialAttachmentData={newThreadAttachmentData}
+                            onReferencedFilesChange={setNewThreadReferencedFiles}
+                            onAttachmentDataChange={setNewThreadAttachmentData}
                           />
                         </div>
                       </div>
