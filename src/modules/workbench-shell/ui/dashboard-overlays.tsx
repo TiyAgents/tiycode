@@ -1,8 +1,10 @@
 import type { ComponentProps } from "react";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { LanguagePreference } from "@/app/providers/language-provider";
+import { useLanguage } from "@/app/providers/language-provider";
 import type { ThemePreference } from "@/app/providers/theme-provider";
-import type { TranslationKey } from "@/i18n";
+import { useTheme } from "@/app/providers/theme-provider";
+import { useT } from "@/i18n";
 import type { ExtensionScope } from "@/modules/extensions-center/model/use-extensions-controller";
 import { ExtensionsCenterOverlay } from "@/modules/extensions-center/ui/extensions-center-overlay";
 import { OnboardingWizard } from "@/modules/onboarding/ui/onboarding-wizard";
@@ -14,24 +16,20 @@ import {
 } from "@/modules/workbench-shell/ui/source-control-panels";
 import {
   NewWorktreeDialog,
-  type NewWorktreeDialogContext,
 } from "@/modules/workbench-shell/ui/new-worktree-dialog";
-import type { ProjectOption } from "@/modules/workbench-shell/model/types";
-import type { WorkspaceDto } from "@/shared/types/api";
-import type {
-  MarketplaceRemoveSourcePlan,
-  MarketplaceSourceInput,
-  McpServerConfigInput,
-} from "@/shared/types/extensions";
+import type { MarketplaceRemoveSourcePlan, MarketplaceSourceInput, McpServerConfigInput } from "@/shared/types/extensions";
+import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
 import {
   uiLayoutStore,
   closeOverlay,
   setActiveSettingsCategory,
+  setOpenSettingsSection,
   setSelectedDiffSelection,
   setShowOnboarding,
 } from "@/modules/workbench-shell/model/ui-layout-store";
 import { useStore, shallowEqual } from "@/shared/lib/create-store";
 import { settingsStore } from "@/modules/settings-center/model/settings-store";
+import { projectStore } from "@/modules/workbench-shell/model/project-store";
 import {
   addAgentProfile,
   addAllowEntry,
@@ -62,23 +60,28 @@ import {
   testProviderModelConnection,
   updateWritableRoot,
 } from "@/modules/settings-center/model/settings-ipc-actions";
+import {
+  buildProjectOptionFromWorkspace,
+} from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
+import {
+  activateWorkspace,
+} from "@/modules/workbench-shell/model/workbench-actions";
+import {
+  getWorkspaceBindingId,
+} from "@/modules/workbench-shell/model/workspace-path-bindings";
 
 type SettingsOverlayProps = ComponentProps<typeof SettingsCenterOverlay>;
 type ExtensionsOverlayProps = ComponentProps<typeof ExtensionsCenterOverlay>;
-type OnboardingWizardProps = ComponentProps<typeof OnboardingWizard>;
 
+/**
+ * Props that still need to flow through from DashboardWorkbench because they
+ * originate from hooks / controllers that must be instantiated at the top
+ * level (useExtensionsController, useAppUpdater).
+ */
 type DashboardOverlaysProps = {
-  resolvedWorkspaceId: string | null;
+  /** DOM ref for overlay content selection (Cmd+A). */
   overlayContentRef: SettingsOverlayProps["contentRef"];
-  configDiagnostics: SettingsOverlayProps["configDiagnostics"];
-  isCheckingUpdates: boolean;
-  language: LanguagePreference;
-  data: SettingsOverlayProps["systemMetadata"];
-  theme: ThemePreference;
-  updateStatus: string | null;
-  handleCheckUpdates: SettingsOverlayProps["onCheckUpdates"];
-  handleLanguageSelect: SettingsOverlayProps["onSelectLanguage"];
-  handleThemeSelect: SettingsOverlayProps["onSelectTheme"];
+  /** Extension/marketplace data from useExtensionsController. */
   extensionDetailById: ExtensionsOverlayProps["detailById"];
   extensionsError: ExtensionsOverlayProps["error"];
   extensions: ExtensionsOverlayProps["extensions"];
@@ -86,6 +89,7 @@ type DashboardOverlaysProps = {
   marketplaceItems: ExtensionsOverlayProps["marketplaceItems"];
   marketplaceSources: ExtensionsOverlayProps["marketplaceSources"];
   mcpServers: ExtensionsOverlayProps["mcpServers"];
+  configDiagnostics: SettingsOverlayProps["configDiagnostics"];
   refreshExtensions: (scope: ExtensionScope) => Promise<void>;
   currentExtensionScope: ExtensionScope;
   loadExtensionDetail: (id: string, scope: ExtensionScope) => ReturnType<ExtensionsOverlayProps["onLoadDetail"]>;
@@ -108,30 +112,15 @@ type DashboardOverlaysProps = {
   disableSkill: (id: string, scope: ExtensionScope) => Promise<void>;
   skillPreviewById: ExtensionsOverlayProps["skillPreviewById"];
   extensionSkills: ExtensionsOverlayProps["skills"];
+  /** App updater instance (must be a singleton from useAppUpdater). */
   appUpdater: AppUpdater;
-  setLanguage: OnboardingWizardProps["onSelectLanguage"];
-  setTheme: OnboardingWizardProps["onSelectTheme"];
-  worktreeDialogContext: NewWorktreeDialogContext | null;
-  setWorktreeDialogContext: (context: NewWorktreeDialogContext | null) => void;
-  buildProjectOptionFromWorkspace: (workspace: WorkspaceDto, language: LanguagePreference) => ProjectOption | null;
-  activateWorkspaceAsNewThreadTarget: (workspaceId: string, project: ProjectOption) => void;
+  /** Coalesced sidebar sync (ref-stable from DashboardWorkbench). */
   syncWorkspaceSidebar: () => Promise<void>;
-  t: (key: TranslationKey) => string;
 };
 
 export function DashboardOverlays(props: DashboardOverlaysProps) {
   const {
-    resolvedWorkspaceId,
     overlayContentRef,
-    configDiagnostics,
-    isCheckingUpdates,
-    language,
-    data,
-    theme,
-    updateStatus,
-    handleCheckUpdates,
-    handleLanguageSelect,
-    handleThemeSelect,
     extensionDetailById,
     extensionsError,
     extensions,
@@ -139,6 +128,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
     marketplaceItems,
     marketplaceSources,
     mcpServers,
+    configDiagnostics,
     refreshExtensions,
     currentExtensionScope,
     loadExtensionDetail,
@@ -162,21 +152,36 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
     skillPreviewById,
     extensionSkills,
     appUpdater,
-    setLanguage,
-    setTheme,
-    worktreeDialogContext,
-    setWorktreeDialogContext,
-    buildProjectOptionFromWorkspace,
-    activateWorkspaceAsNewThreadTarget,
     syncWorkspaceSidebar,
-    t,
   } = props;
+
+  // ── Global hooks (replaces language/theme/systemMetadata/t props) ──
+  const { language, setLanguage } = useLanguage();
+  const { theme, setTheme } = useTheme();
+  const { data } = useSystemMetadata();
+  const t = useT();
+
+  // ── Derived from appUpdater (replaces isCheckingUpdates + updateStatus props) ──
+  const isCheckingUpdates = appUpdater.phase === "checking";
+  const updateStatus = useMemo(() => {
+    if (appUpdater.phase !== "upToDate") return null;
+    return t("dashboard.upToDate", { version: data?.version ?? "0.1.0" });
+  }, [appUpdater.phase, data?.version, t]);
+
+  // ── Derived workspace ID (replaces resolvedWorkspaceId prop) ──
+  const selectedProject = useStore(projectStore, (s) => s.selectedProject);
+  const terminalWorkspaceBindings = useStore(projectStore, (s) => s.terminalWorkspaceBindings, shallowEqual);
+  const resolvedWorkspaceId = getWorkspaceBindingId(
+    terminalWorkspaceBindings,
+    selectedProject?.path ?? null,
+  );
 
   // ── Subscribe to uiLayoutStore ──────────────────────────────────
   const activeOverlay = useStore(uiLayoutStore, (s) => s.activeOverlay);
   const activeSettingsCategory = useStore(uiLayoutStore, (s) => s.activeSettingsCategory);
   const selectedDiffSelection = useStore(uiLayoutStore, (s) => s.selectedDiffSelection);
   const showOnboarding = useStore(uiLayoutStore, (s) => s.showOnboarding);
+  const worktreeDialogContext = useStore(uiLayoutStore, (s) => s.worktreeDialogContext);
 
   // ── Subscribe to settingsStore (replaces ~30 props) ─────────────
   const agentProfiles = useStore(settingsStore, (s) => s.agentProfiles, shallowEqual);
@@ -195,6 +200,17 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
 
   const isSettingsOpen = activeOverlay === "settings";
   const isMarketplaceOpen = activeOverlay === "marketplace";
+
+  // ── Handlers that were previously props ─────────────────────────
+  const handleCheckUpdates = appUpdater.checkForUpdates;
+  const handleLanguageSelect = (nextLanguage: LanguagePreference) => {
+    setLanguage(nextLanguage);
+    setOpenSettingsSection("language");
+  };
+  const handleThemeSelect = (nextTheme: ThemePreference) => {
+    setTheme(nextTheme);
+    setOpenSettingsSection("theme");
+  };
 
   // ── Escape key: close overlay or diff selection ────────────────
   useEffect(() => {
@@ -348,7 +364,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
 
       <NewWorktreeDialog
         context={worktreeDialogContext}
-        onClose={() => setWorktreeDialogContext(null)}
+        onClose={() => uiLayoutStore.setState({ worktreeDialogContext: null })}
         onCreated={(workspace) => {
           const nextProject =
             buildProjectOptionFromWorkspace(workspace, language) ?? {
@@ -363,7 +379,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
                 : null,
               branch: workspace.branch,
             };
-          activateWorkspaceAsNewThreadTarget(workspace.id, nextProject);
+          activateWorkspace(workspace.id, nextProject);
           void syncWorkspaceSidebar().catch(() => {});
         }}
       />

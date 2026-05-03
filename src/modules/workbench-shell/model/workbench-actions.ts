@@ -13,7 +13,9 @@
  *   sequences are atomic, but `await` yields the microtask queue).
  */
 import { isTauri } from "@tauri-apps/api/core";
-import { threadCreate, threadDelete, threadList } from "@/services/bridge/thread-commands";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { threadCreate, threadDelete, threadList, threadUpdateTitle } from "@/services/bridge/thread-commands";
 import { workspaceRemove, workspaceAdd, workspaceList, workspaceEnsureDefault } from "@/services/bridge/workspace-commands";
 import { threadStore } from "./thread-store";
 import { projectStore } from "./project-store";
@@ -26,6 +28,7 @@ import {
   activateThread,
   clearActiveThreads,
   buildThreadTitle,
+  buildProjectOptionFromPath,
   mergeRecentProjects,
   buildWorkspaceItemsFromDtos,
   getActiveThread,
@@ -924,4 +927,139 @@ export async function performSidebarSync(options: SidebarSyncOptions): Promise<v
   });
 
   console.log(`⏱ [sidebar-sync] total: ${(performance.now() - syncStart).toFixed(1)}ms`);
+}
+
+// ---------------------------------------------------------------------------
+// editThreadTitle
+// ---------------------------------------------------------------------------
+
+/**
+ * Optimistically update a thread's title in the store, then persist via IPC.
+ * Rolls back to the original name on IPC failure.
+ */
+export async function editThreadTitle(
+  threadId: string,
+  newTitle: string | null,
+  originalName: string,
+): Promise<void> {
+  if (!newTitle || newTitle === originalName) {
+    return;
+  }
+
+  // Optimistic update
+  threadStore.setState((prev) => ({
+    workspaces: prev.workspaces.map((workspace) => ({
+      ...workspace,
+      threads: workspace.threads.map((thread) =>
+        thread.id === threadId
+          ? { ...thread, name: newTitle }
+          : thread,
+      ),
+    })),
+  }));
+
+  if (isTauri()) {
+    try {
+      await threadUpdateTitle(threadId, newTitle);
+    } catch (error) {
+      console.warn("[thread] failed to update title:", error);
+      // Rollback: restore the original name on failure.
+      threadStore.setState((prev) => ({
+        workspaces: prev.workspaces.map((workspace) => ({
+          ...workspace,
+          threads: workspace.threads.map((thread) =>
+            thread.id === threadId
+              ? { ...thread, name: originalName }
+              : thread,
+          ),
+        })),
+      }));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// openWorkspaceInSystem
+// ---------------------------------------------------------------------------
+
+/**
+ * Open a workspace path in the system file manager (Finder on macOS,
+ * Explorer on Windows).
+ */
+export async function openWorkspaceInSystem(
+  workspace: WorkspaceItem,
+  isWindows: boolean,
+): Promise<void> {
+  if (!isTauri() || !workspace.path) {
+    return;
+  }
+
+  const appId = isWindows ? "explorer" : "finder";
+
+  try {
+    await invoke("open_workspace_in_app", {
+      targetPath: workspace.path,
+      appId,
+      appPath: null,
+    });
+  } catch (error) {
+    throw new Error(
+      getInvokeErrorMessage(error, `Couldn't open ${workspace.name}`),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// chooseWorkspaceFolder
+// ---------------------------------------------------------------------------
+
+export interface ChooseWorkspaceFolderOptions {
+  language: LanguagePreference;
+  /** Callback to activate the chosen workspace (sets project + new-thread mode). */
+  onActivateWorkspace: (workspaceId: string, project: ProjectOption) => void;
+  /** Callback to trigger a sidebar sync after workspace changes. */
+  onSyncWorkspaceSidebar: () => Promise<void>;
+}
+
+/**
+ * Open a native folder picker, ensure the selected path exists as a backend
+ * workspace, and then activate it as the new-thread target.
+ */
+export async function chooseWorkspaceFolder(
+  options: ChooseWorkspaceFolderOptions,
+): Promise<void> {
+  const { language, onActivateWorkspace, onSyncWorkspaceSidebar } = options;
+
+  const selectedPath = await open({
+    directory: true,
+    multiple: false,
+    title: "Choose workspace folder",
+  });
+
+  if (typeof selectedPath !== "string") {
+    return;
+  }
+
+  const nextProject = buildProjectOptionFromPath(selectedPath, language);
+  if (!nextProject) {
+    return;
+  }
+
+  const workspaceEntries = await workspaceList();
+  const existingWorkspace = findWorkspaceByPath(
+    workspaceEntries,
+    selectedPath,
+  );
+  const workspace =
+    existingWorkspace ?? (await workspaceAdd(selectedPath, nextProject.name));
+  const workspaceProject =
+    buildProjectOptionFromWorkspace(workspace, language) ?? {
+      ...nextProject,
+      id: workspace.id,
+      name: workspace.name,
+      path: workspace.canonicalPath || workspace.path,
+    };
+
+  onActivateWorkspace(workspace.id, workspaceProject);
+  await onSyncWorkspaceSidebar();
 }

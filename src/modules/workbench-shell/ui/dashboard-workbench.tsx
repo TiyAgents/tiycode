@@ -5,9 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { isTauri } from "@tauri-apps/api/core";
 import {
   FolderOpen,
   GitBranch,
@@ -31,14 +29,11 @@ import { setActiveAgentProfile } from "@/modules/settings-center/model/settings-
 import { useAppUpdater } from "@/modules/workbench-shell/hooks/use-app-updater";
 import {
   DEFAULT_TERMINAL_COLLAPSED,
-  SIDEBAR_AUTO_REFRESH_GRACE_MS,
-  SIDEBAR_AUTO_REFRESH_INTERVAL_MS,
   SIDEBAR_SYNC_MIN_GAP_MS,
   UNBOUND_NEW_THREAD_TERMINAL_STATE_KEY,
   WORKSPACE_THREAD_PAGE_SIZE,
   
   
-  buildProjectOptionFromWorkspace,
   buildThreadContextBadgeData,
   formatCompactTokenCount,
   findWorkspaceForThread,
@@ -49,9 +44,6 @@ import {
 import { isOnboardingCompleted } from "@/modules/onboarding/model/use-onboarding";
 import {
   threadUpdateProfile,
-  threadUpdateTitle,
-  workspaceAdd,
-  workspaceList,
 } from "@/services/bridge";
 import {
   LANGUAGE_OPTIONS,
@@ -68,7 +60,6 @@ import {
 import {
   addRemovedWorkspacePath,
   deleteRemovedWorkspacePath,
-  findWorkspaceByPath,
   getWorkspaceBindingId,
   resolveProjectForWorkspace,
 } from "@/modules/workbench-shell/model/workspace-path-bindings";
@@ -103,7 +94,6 @@ import { WorkbenchSegmentedControl } from "@/shared/ui/workbench-segmented-contr
 import {
   threadStore,
   useStore,
-  updateThreadTitle as setStoreThreadTitle,
   setDisplayCount as setStoreDisplayCount,
   setLoadMorePending as setStoreLoadMorePending,
   setSidebarReady as setStoreSidebarReady,
@@ -112,17 +102,12 @@ import {
 import { createCoalescedAsyncRunner } from "@/modules/workbench-shell/model/sidebar-sync-runner";
 import type { DeletePhase } from "@/modules/workbench-shell/model/delete-confirm-types";
 import {
-  dispatchGlobalEvent,
-  dispatchRunFinishedEvent,
-} from "@/modules/workbench-shell/model/run-event-dispatcher";
-import {
   uiLayoutStore,
   openOverlay,
   setOpenSettingsSection,
   setActiveDrawerPanel,
   setSelectedDiffSelection,
   setTerminalCollapsed,
-  setUserMenuOpen,
   setActiveWorkspaceMenuId,
   setShowOnboarding,
   setWorktreeDialogContext,
@@ -146,12 +131,18 @@ import {
   submitNewThread,
   enterNewThreadMode,
   performSidebarSync,
+  editThreadTitle,
+  chooseWorkspaceFolder,
+  openWorkspaceInSystem,
 } from "@/modules/workbench-shell/model/workbench-actions";
 import { useTerminalPreWarm } from "@/modules/workbench-shell/hooks/use-terminal-pre-warm";
 import { useTerminalResize } from "@/modules/workbench-shell/hooks/use-terminal-resize";
 import { useWorkspaceDiscovery } from "@/modules/workbench-shell/hooks/use-workspace-discovery";
 import { useGitSnapshot } from "@/modules/workbench-shell/hooks/use-git-snapshot";
 import { useGlobalKeyboardShortcuts } from "@/modules/workbench-shell/hooks/use-global-keyboard-shortcuts";
+import { useGlobalThreadEvents } from "@/modules/workbench-shell/hooks/use-global-thread-events";
+import { useSidebarAutoPoll } from "@/modules/workbench-shell/hooks/use-sidebar-auto-poll";
+import { useMenuOutOfClick } from "@/modules/workbench-shell/hooks/use-menu-out-of-click";
 
 
 export function DashboardWorkbench() {
@@ -265,11 +256,8 @@ export function DashboardWorkbench() {
   const panelVisibilityState = useStore(uiLayoutStore, (s) => s.panelVisibility, shallowEqual);
   const terminalCollapsedByThreadKey = useStore(uiLayoutStore, (s) => s.terminalCollapsedByThreadKey, shallowEqual);
   const terminalHeight = useStore(uiLayoutStore, (s) => s.terminalHeight);
-  const isUserMenuOpen = useStore(uiLayoutStore, (s) => s.isUserMenuOpen);
   const activeWorkspaceMenuId = useStore(uiLayoutStore, (s) => s.activeWorkspaceMenuId);
   const activeDrawerPanel = useStore(uiLayoutStore, (s) => s.activeDrawerPanel);
-  // Phase 6: uiLayoutStore addition (replaces 1 useState)
-  const worktreeDialogContext = useStore(uiLayoutStore, (s) => s.worktreeDialogContext);
 
   const composerValue = useStore(composerStore, (s) => s.newThreadValue);
   const composerError = useStore(composerStore, (s) => s.error);
@@ -323,7 +311,6 @@ export function DashboardWorkbench() {
   const overlayContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
-  const sidebarAutoRefreshUntilRef = useRef(0);
   const removedWorkspacePathsRef = useRef<Set<string>>(new Set());
 
   const activeThread = getActiveThread(workspaces);
@@ -437,16 +424,6 @@ export function DashboardWorkbench() {
       }),
     [runtimeContextUsage, selectedRunModelPlan],
   );
-  const hasSidebarLiveThreads = useMemo(
-    () =>
-      workspaces.some((workspace) =>
-        workspace.threads.some(
-          (thread) =>
-            thread.status === "running" || thread.status === "needs-reply",
-        ),
-      ),
-    [workspaces],
-  );
 
   // ── Phase 6: Dedicated hooks (extract effects from component body) ──
   // NOTE: Must come after resolvedWorkspaceId derivation and before any
@@ -520,137 +497,40 @@ export function DashboardWorkbench() {
     [sidebarSyncRunner],
   );
 
-  // ---------------------------------------------------------------------------
-  // Global Tauri event listeners — react to background thread lifecycle changes
-  // without needing a per-thread stream subscription.
-  // ---------------------------------------------------------------------------
+  // Phase 6: extracted side-effect hooks (must come after syncWorkspaceSidebar)
+  const { sidebarAutoRefreshUntilRef } = useGlobalThreadEvents({
+    syncWorkspaceSidebar,
+  });
+  useSidebarAutoPoll({
+    syncWorkspaceSidebar,
+    sidebarAutoRefreshUntilRef,
+    isSyncRunning: () => sidebarSyncRunner.isRunning(),
+  });
+  useMenuOutOfClick({
+    userMenu: userMenuRef,
+    workspaceMenu: workspaceMenuRef,
+  });
+
+  // ── Misc effects (keep) ──
+  // Initial workspace sync — bootstraps data on mount
   useEffect(() => {
     if (!isTauri()) {
       return;
     }
 
-    const unlistenPromises: Array<Promise<UnlistenFn>> = [];
-
-    unlistenPromises.push(
-      listen<{ threadId: string; runId: string }>(
-        "thread-run-started",
-        (event) => {
-          const { threadId, runId } = event.payload;
-          dispatchGlobalEvent(threadId, "RUN_STARTED", { runId });
-
-          // Extend the sidebar auto-refresh grace period so the polling
-          // keeps running while background threads are active.
-          sidebarAutoRefreshUntilRef.current =
-            Date.now() + SIDEBAR_AUTO_REFRESH_GRACE_MS;
-        },
-      ),
-    );
-
-    unlistenPromises.push(
-      listen<{ threadId: string; runId: string; status: string }>(
-        "thread-run-finished",
-        (event) => {
-          const { threadId, runId, status } = event.payload;
-          dispatchRunFinishedEvent(threadId, runId, status);
-
-          // Perform a full sidebar sync to reconcile any missed state
-          // (e.g. title generated shortly after, ordering changes).
-          void syncWorkspaceSidebar().catch(() => {});
-        },
-      ),
-    );
-
-    unlistenPromises.push(
-      listen<{ threadId: string; title: string }>(
-        "thread-title-updated",
-        (event) => {
-          const { threadId, title } = event.payload;
-          const trimmedTitle = title.trim();
-
-          if (!trimmedTitle) {
-            return;
-          }
-
-          // Skip update for the thread currently being edited inline.
-          if (threadStore.getState().editingThreadId === threadId) {
-            return;
-          }
-
-          setStoreThreadTitle(threadId, trimmedTitle);
-        },
-      ),
-    );
-
-    return () => {
-      for (const promise of unlistenPromises) {
-        void promise.then((unlisten) => unlisten());
-      }
-    };
-  }, [syncWorkspaceSidebar]);
-
-  useEffect(() => {
-    if (!isTauri() || typeof window === "undefined") {
-      return;
-    }
-
-    if (hasSidebarLiveThreads) {
-      sidebarAutoRefreshUntilRef.current =
-        Date.now() + SIDEBAR_AUTO_REFRESH_GRACE_MS;
-    }
-
-    const shouldPoll =
-      hasSidebarLiveThreads ||
-      Date.now() < sidebarAutoRefreshUntilRef.current;
-
-    if (!shouldPoll) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      const withinGrace = Date.now() < sidebarAutoRefreshUntilRef.current;
-      if (!hasSidebarLiveThreads && !withinGrace) {
-        window.clearInterval(interval);
-        return;
-      }
-
-      if (sidebarSyncRunner.isRunning()) {
-        return;
-      }
-
-      void syncWorkspaceSidebar().catch((error) => {
-        const message = getInvokeErrorMessage(error, t("dashboard.error.refreshThreadList"));
-        projectStore.setState({ terminalBootstrapError: message });
-      });
-    }, SIDEBAR_AUTO_REFRESH_INTERVAL_MS);
-
-    return () => window.clearInterval(interval);
-  }, [hasSidebarLiveThreads, syncWorkspaceSidebar]);
-
-  useEffect(() => {
-    if (!isTauri()) {
-      return;
-    }
-
-    console.log("⏱ [startup] syncWorkspaceSidebar initial useEffect fired");
     let cancelled = false;
 
     void (async () => {
       await waitForBackendReady();
       if (cancelled) return;
-
       await syncWorkspaceSidebar();
     })()
       .then(() => {
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
         setStoreSidebarReady(true);
       })
       .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-
+        if (cancelled) return;
         const message = getInvokeErrorMessage(error, t("dashboard.error.workspaceInit"));
         projectStore.setState({ terminalBootstrapError: message });
       });
@@ -659,45 +539,6 @@ export function DashboardWorkbench() {
       cancelled = true;
     };
   }, [syncWorkspaceSidebar]);
-
-  useEffect(() => {
-    if (!isUserMenuOpen || typeof window === "undefined") {
-      return;
-    }
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-
-      if (target && userMenuRef.current?.contains(target)) {
-        return;
-      }
-
-      setUserMenuOpen(false);
-      setOpenSettingsSection(null);
-    };
-
-    window.addEventListener("mousedown", handlePointerDown);
-    return () => window.removeEventListener("mousedown", handlePointerDown);
-  }, [isUserMenuOpen]);
-
-  useEffect(() => {
-    if (!activeWorkspaceMenuId || typeof window === "undefined") {
-      return;
-    }
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-
-      if (target && workspaceMenuRef.current?.contains(target)) {
-        return;
-      }
-
-      setActiveWorkspaceMenuId(null);
-    };
-
-    window.addEventListener("mousedown", handlePointerDown);
-    return () => window.removeEventListener("mousedown", handlePointerDown);
-  }, [activeWorkspaceMenuId]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -822,44 +663,10 @@ export function DashboardWorkbench() {
   const handleThreadEditDone = useCallback(
     (threadId: string, newTitle: string | null, originalName: string) => {
       threadStore.setState({ editingThreadId: null });
-
       if (!newTitle || newTitle === originalName) {
         return;
       }
-
-      threadStore.setState((prev) => ({
-        workspaces: prev.workspaces.map((workspace) => ({
-          ...workspace,
-          threads: workspace.threads.map((thread) =>
-            thread.id === threadId
-              ? { ...thread, name: newTitle }
-              : thread,
-          ),
-        })),
-      }));
-
-      if (isTauri()) {
-        void threadUpdateTitle(threadId, newTitle)
-          .catch((error) => {
-            console.warn("[thread] failed to update title:", error);
-            // Rollback: restore the original name on failure.
-            threadStore.setState((prev) => ({
-              workspaces: prev.workspaces.map((workspace) => ({
-                ...workspace,
-                threads: workspace.threads.map((thread) =>
-                  thread.id === threadId
-                    ? { ...thread, name: originalName }
-                    : thread,
-                ),
-              })),
-            }));
-          })
-          .finally(() => {
-            // editingThreadId already set to null via threadStore.setState({ editingThreadId: null }) above
-          });
-      } else {
-        // Non-Tauri: editingThreadId already set to null via threadStore.setState({ editingThreadId: null })
-      }
+      void editThreadTitle(threadId, newTitle, originalName);
     },
     [],
   );
@@ -984,59 +791,26 @@ export function DashboardWorkbench() {
       return;
     }
 
-    void (async () => {
-      setAddingWorkspace(true);
-      projectStore.setState({ terminalBootstrapError: null });
+    setAddingWorkspace(true);
+    projectStore.setState({ terminalBootstrapError: null });
 
-      try {
-        const selectedPath = await open({
-          directory: true,
-          multiple: false,
-          title: "Choose workspace folder",
-        });
-
-        if (typeof selectedPath !== "string") {
-          return;
-        }
-
-        const nextProject = buildProjectOptionFromPath(selectedPath, language);
-
-        if (!nextProject) {
-          return;
-        }
-
-        deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, nextProject.path);
-        const workspaceEntries = await workspaceList();
-        const existingWorkspace = findWorkspaceByPath(
-          workspaceEntries,
-          selectedPath,
-        );
-        const workspace =
-          existingWorkspace ??
-          (await workspaceAdd(selectedPath, nextProject.name));
-        const workspaceProject =
-          buildProjectOptionFromWorkspace(workspace, language) ?? {
-            ...nextProject,
-            id: workspace.id,
-            name: workspace.name,
-            path: workspace.canonicalPath || workspace.path,
-          };
-
-        activateWorkspaceAsNewThreadTarget(workspace.id, workspaceProject);
-        await syncWorkspaceSidebar();
-      } catch (error) {
+    chooseWorkspaceFolder({
+      language,
+      onActivateWorkspace: (workspaceId, project) => {
+        deleteRemovedWorkspacePath(removedWorkspacePathsRef.current, project.path);
+        activateWorkspace(workspaceId, project);
+        setDeletePhase({ kind: "idle" });
+      },
+      onSyncWorkspaceSidebar: syncWorkspaceSidebar,
+    })
+      .catch((error) => {
         const message = getInvokeErrorMessage(error, "Failed to add workspace");
         projectStore.setState({ terminalBootstrapError: message });
-      } finally {
+      })
+      .finally(() => {
         setAddingWorkspace(false);
-      }
-    })();
-  }, [
-    activateWorkspaceAsNewThreadTarget,
-    isAddingWorkspace,
-    language,
-    syncWorkspaceSidebar,
-  ]);
+      });
+  }, [isAddingWorkspace, language, syncWorkspaceSidebar]);
 
   const handleWorkspaceMenuToggle = (workspaceId: string) => {
     setActiveWorkspaceMenuId((current: string | null) =>
@@ -1050,32 +824,26 @@ export function DashboardWorkbench() {
         return;
       }
 
-      const appId = isWindows ? "explorer" : "finder";
+      setWorkspaceAction({
+        workspaceId: workspace.id,
+        kind: "open",
+      });
+      projectStore.setState({ terminalBootstrapError: null });
 
-      void (async () => {
-        setWorkspaceAction({
-          workspaceId: workspace.id,
-          kind: "open",
-        });
-        projectStore.setState({ terminalBootstrapError: null });
-
-        try {
-          await invoke("open_workspace_in_app", {
-            targetPath: workspace.path,
-            appId,
-            appPath: null,
-          });
+      openWorkspaceInSystem(workspace, isWindows)
+        .then(() => {
           setActiveWorkspaceMenuId(null);
-        } catch (error) {
+        })
+        .catch((error) => {
           const message = getInvokeErrorMessage(
             error,
             `Couldn't open ${workspace.name}`,
           );
           projectStore.setState({ terminalBootstrapError: message });
-        } finally {
+        })
+        .finally(() => {
           setWorkspaceAction(null);
-        }
-      })();
+        });
     },
     [isWindows, workspaceAction],
   );
@@ -1445,17 +1213,8 @@ export function DashboardWorkbench() {
       </div>
 
       <DashboardOverlays
-        resolvedWorkspaceId={resolvedWorkspaceId}
         overlayContentRef={overlayContentRef}
         configDiagnostics={configDiagnostics}
-        isCheckingUpdates={isCheckingUpdates}
-        language={language}
-        data={data}
-        theme={theme}
-        updateStatus={updateStatus}
-        handleCheckUpdates={handleCheckUpdates}
-        handleLanguageSelect={handleLanguageSelect}
-        handleThemeSelect={handleThemeSelect}
         extensionDetailById={extensionDetailById}
         extensionsError={extensionsError}
         extensions={extensions}
@@ -1486,14 +1245,7 @@ export function DashboardWorkbench() {
         skillPreviewById={skillPreviewById}
         extensionSkills={extensionSkills}
         appUpdater={appUpdater}
-        setLanguage={setLanguage}
-        setTheme={setTheme}
-        worktreeDialogContext={worktreeDialogContext}
-        setWorktreeDialogContext={setWorktreeDialogContext}
-        buildProjectOptionFromWorkspace={buildProjectOptionFromWorkspace}
-        activateWorkspaceAsNewThreadTarget={activateWorkspaceAsNewThreadTarget}
         syncWorkspaceSidebar={syncWorkspaceSidebar}
-        t={t}
       />
     </main>
   );
