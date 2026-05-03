@@ -46,7 +46,6 @@ const BRAND_RULES: ReadonlyArray<BrandRule> = [
   { slug: "aws", providerPatterns: ["aws", "amazon web services"], modelPatterns: ["aws", "bedrock"] },
   { slug: "baiducloud", providerPatterns: ["baidu cloud", "baiducloud"], modelPatterns: ["baidu cloud", "baiducloud"] },
   { slug: "baidu", providerPatterns: ["baidu"], modelPatterns: ["baidu"] },
-  { slug: "bai", providerPatterns: ["bai"], modelPatterns: ["bai"] },
   { slug: "bilibili", providerPatterns: ["bilibili"], modelPatterns: ["bilibili"] },
   { slug: "bytedance", providerPatterns: ["bytedance", "byte dance"], modelPatterns: ["bytedance", "byte dance"] },
   { slug: "cloudflare", providerPatterns: ["cloudflare"], modelPatterns: ["cloudflare", "workers ai", "workersai"] },

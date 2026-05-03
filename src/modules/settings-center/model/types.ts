@@ -32,8 +32,7 @@ export type ProviderType =
   | "kimi-coding"
   | "zai"
   | "deepseek"
-  | "zenmux"
-  | "bai";
+  | "zenmux";
 
 export type CustomProviderType =
   | "openai-compatible"
