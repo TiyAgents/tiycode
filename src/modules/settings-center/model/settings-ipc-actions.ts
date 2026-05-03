@@ -238,7 +238,7 @@ function isTauriNotFoundError(error: unknown): boolean {
     typeof error === "object" &&
     "errorCode" in error &&
     typeof (error as Record<string, unknown>).errorCode === "string" &&
-    ((error as Record<string, unknown>).errorCode as string).includes(
+    ((error as Record<string, unknown>).errorCode as string).endsWith(
       ".not_found",
     )
   );
