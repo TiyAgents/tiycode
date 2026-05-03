@@ -249,8 +249,9 @@ export function activateWorkspace(workspaceId: string, project: ProjectOption): 
     recentProjects: mergeRecentProjects(prev.recentProjects, project),
   }));
 
-  // Expand workspace in sidebar
+  // Expand workspace in sidebar and clear active threads
   threadStore.setState((prev) => ({
+    workspaces: clearActiveThreads(prev.workspaces),
     openWorkspaces: { ...prev.openWorkspaces, [workspaceId]: true },
   }));
 
