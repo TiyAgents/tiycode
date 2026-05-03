@@ -1,6 +1,5 @@
-import type { TranslationKey } from "@/i18n";
-import type { RunModelPlanDto } from "@/shared/types/api";
 import type { RefObject } from "react";
+import { useMemo } from "react";
 import {
   Boxes,
   Folder,
@@ -12,7 +11,9 @@ import {
   Shuffle,
   Trash2,
 } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
 
+import { useT } from "@/i18n";
 import {
   DRAWER_LIST_LABEL_CLASS,
   DRAWER_LIST_ROW_CLASS,
@@ -20,6 +21,7 @@ import {
   DRAWER_OVERFLOW_ACTION_CLASS,
 } from "@/modules/workbench-shell/model/fixtures";
 import { sortWorkspacesWithWorktrees } from "@/modules/workbench-shell/model/helpers";
+import { buildProfileModelPlan } from "@/modules/settings-center/model/run-model-plan";
 import type { WorkspaceItem } from "@/modules/workbench-shell/model/types";
 import { threadRunStatusToDisplayStatus } from "@/modules/workbench-shell/model/types";
 import type { DeletePhase } from "@/modules/workbench-shell/model/delete-confirm-types";
@@ -31,6 +33,16 @@ import {
   threadStore,
   useStore,
 } from "@/modules/workbench-shell/model/thread-store";
+import {
+  uiLayoutStore,
+  setActiveWorkspaceMenuId,
+  setWorktreeDialogContext,
+} from "@/modules/workbench-shell/model/ui-layout-store";
+import {
+  settingsStore,
+} from "@/modules/settings-center/model/settings-store";
+import { useSystemMetadata } from "@/features/system-info/model/use-system-metadata";
+import { resolveActiveThreadWorkbenchProfileId } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
 
 type WorkspaceAction = {
   workspaceId: string;
@@ -38,37 +50,22 @@ type WorkspaceAction = {
 } | null;
 
 type DashboardSidebarProps = {
-  isSidebarOpen: boolean;
-  isMarketplaceOpen: boolean;
   handleEnterNewThreadMode: () => void;
   handleOpenMarketplace: () => void;
-  t: (key: TranslationKey) => string;
   handleChooseWorkspaceFolder: () => void;
   isAddingWorkspace: boolean;
-  activeWorkspaceMenuId: string | null;
   workspaceAction: WorkspaceAction;
   workspaceMenuRef: RefObject<HTMLDivElement | null>;
-  handleWorkspaceToggle: (workspaceId: string) => void;
-  handleWorkspaceMenuToggle: (workspaceId: string) => void;
   handleNewThreadForWorkspace: (workspace: WorkspaceItem) => void;
-  setActiveWorkspaceMenuId: (workspaceId: string | null) => void;
-  setWorktreeDialogContext: (context: {
-    repo: { id: string; name: string; canonicalPath: string };
-  } | null) => void;
   handleOpenWorkspaceInSystem: (workspace: WorkspaceItem) => void;
-  canOpenWorkspaceInSystem: boolean;
-  workspaceOpenLabel: string;
   handleWorkspaceRemove: (workspace: WorkspaceItem) => void;
   deletePhase: DeletePhase;
-  editingThreadId: string | null;
-  commitMessageModelPlan: RunModelPlanDto | null;
   handleThreadEditDone: (
     threadId: string,
     newTitle: string | null,
     previousTitle: string,
   ) => void;
   handleThreadSelect: (threadId: string) => void;
-  handleThreadEditStart: (threadId: string) => void;
   handleThreadDeleteConfirm: (threadId: string) => void;
   handleThreadDeleteRequest: (threadId: string) => void;
   handleWorkspaceShowMore: (workspaceId: string) => void;
@@ -91,32 +88,51 @@ export function DashboardSidebar(props: DashboardSidebarProps) {
   );
   const threadStatuses = useStore(threadStore, (s) => s.threadStatuses);
 
+  // Phase 6: read from stores instead of props (eliminates 8 props)
+  const t = useT();
+  const isSidebarOpen = useStore(uiLayoutStore, (s) => s.panelVisibility.isSidebarOpen);
+  const isMarketplaceOpen = useStore(uiLayoutStore, (s) => s.activeOverlay === "marketplace");
+  const activeWorkspaceMenuId = useStore(uiLayoutStore, (s) => s.activeWorkspaceMenuId);
+  const editingThreadId = useStore(threadStore, (s) => s.editingThreadId);
+  const { data } = useSystemMetadata();
+  const isMacOS = data?.platform === "macos" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Mac"));
+  const isWindows = data?.platform === "windows" || (typeof navigator !== "undefined" && navigator.userAgent.includes("Windows"));
+  const canOpenWorkspaceInSystem = isTauri() && (isMacOS || isWindows);
+  const workspaceOpenLabel = t("sidebar.openInFileManager");
+
+  // Phase 6: compute commitMessageModelPlan from stores (eliminates 1 prop)
+  const activeAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
+  const activeThreadProfileIdOverride = useStore(threadStore, (s) => s.activeThreadProfileIdOverride);
+  const agentProfiles = useStore(settingsStore, (s) => s.agentProfiles);
+  const providers = useStore(settingsStore, (s) => s.providers);
+  const workbenchActiveProfileId = useMemo(
+    () => resolveActiveThreadWorkbenchProfileId(
+      isNewThreadMode ? null : activeThreadProfileIdOverride,
+      activeAgentProfileId,
+    ),
+    [activeAgentProfileId, activeThreadProfileIdOverride, isNewThreadMode],
+  );
+  const commitMessageModelPlan = useMemo(
+    () => {
+      const profile = agentProfiles.find((p) => p.id === workbenchActiveProfileId) ?? null;
+      return profile ? buildProfileModelPlan(profile, providers) : null;
+    },
+    [workbenchActiveProfileId, agentProfiles, providers],
+  );
+
   const {
-    isSidebarOpen,
-    isMarketplaceOpen,
     handleEnterNewThreadMode,
     handleOpenMarketplace,
-    t,
     handleChooseWorkspaceFolder,
     isAddingWorkspace,
-    activeWorkspaceMenuId,
     workspaceAction,
     workspaceMenuRef,
-    handleWorkspaceToggle,
-    handleWorkspaceMenuToggle,
     handleNewThreadForWorkspace,
-    setActiveWorkspaceMenuId,
-    setWorktreeDialogContext,
     handleOpenWorkspaceInSystem,
-    canOpenWorkspaceInSystem,
-    workspaceOpenLabel,
     handleWorkspaceRemove,
     deletePhase,
-    editingThreadId,
-    commitMessageModelPlan,
     handleThreadEditDone,
     handleThreadSelect,
-    handleThreadEditStart,
     handleThreadDeleteConfirm,
     handleThreadDeleteRequest,
     handleWorkspaceShowMore,
@@ -273,7 +289,12 @@ export function DashboardSidebar(props: DashboardSidebarProps) {
                                   "flex items-center gap-2 pr-10 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                                   DRAWER_LIST_ROW_CLASS,
                                 )}
-                                onClick={() => handleWorkspaceToggle(workspace.id)}
+                                onClick={() => threadStore.setState((prev) => ({
+                                  openWorkspaces: {
+                                    ...prev.openWorkspaces,
+                                    [workspace.id]: !prev.openWorkspaces[workspace.id],
+                                  },
+                                }))}
                               >
                                 <FolderIcon className="size-4 shrink-0 text-app-muted" />
                                 <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -303,7 +324,11 @@ export function DashboardSidebar(props: DashboardSidebarProps) {
                                 )}
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  handleWorkspaceMenuToggle(workspace.id);
+                                  setActiveWorkspaceMenuId(
+                                    activeWorkspaceMenuId === workspace.id
+                                      ? null
+                                      : workspace.id,
+                                  );
                                 }}
                               >
                                 <MoreHorizontal className="size-4" />
@@ -440,7 +465,7 @@ export function DashboardSidebar(props: DashboardSidebarProps) {
                                       onClick={() => handleThreadSelect(thread.id)}
                                       onDoubleClick={(e) => {
                                         e.stopPropagation();
-                                        handleThreadEditStart(thread.id);
+                                        threadStore.setState({ editingThreadId: thread.id });
                                       }}
                                     >
                                       <div className="flex items-center gap-2">

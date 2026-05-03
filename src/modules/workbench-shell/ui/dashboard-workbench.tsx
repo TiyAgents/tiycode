@@ -110,7 +110,6 @@ import {
   setTerminalCollapsed,
   setActiveWorkspaceMenuId,
   setShowOnboarding,
-  setWorktreeDialogContext,
 } from "@/modules/workbench-shell/model/ui-layout-store";
 import {
   composerStore,
@@ -249,14 +248,12 @@ export function DashboardWorkbench() {
   // Phase 6: threadStore additions (replaces 3 useState)
   const activeThreadProfileIdOverride = useStore(threadStore, (s) => s.activeThreadProfileIdOverride);
   const runtimeContextUsage = useStore(threadStore, (s) => s.runtimeContextUsage);
-  const editingThreadId = useStore(threadStore, (s) => s.editingThreadId);
 
   // ── Phase 2: uiLayoutStore + composerStore subscriptions (replaces 16 useState) ──
   const activeOverlay = useStore(uiLayoutStore, (s) => s.activeOverlay);
   const panelVisibilityState = useStore(uiLayoutStore, (s) => s.panelVisibility, shallowEqual);
   const terminalCollapsedByThreadKey = useStore(uiLayoutStore, (s) => s.terminalCollapsedByThreadKey, shallowEqual);
   const terminalHeight = useStore(uiLayoutStore, (s) => s.terminalHeight);
-  const activeWorkspaceMenuId = useStore(uiLayoutStore, (s) => s.activeWorkspaceMenuId);
   const activeDrawerPanel = useStore(uiLayoutStore, (s) => s.activeDrawerPanel);
 
   const composerValue = useStore(composerStore, (s) => s.newThreadValue);
@@ -368,7 +365,6 @@ export function DashboardWorkbench() {
       ? DEFAULT_TERMINAL_COLLAPSED
       : (terminalCollapsedByThreadKey[activeTerminalStateKey] ??
         DEFAULT_TERMINAL_COLLAPSED);
-  const isMarketplaceOpen = activeOverlay === "marketplace";
   const isOverlayOpen = activeOverlay !== null;
   const isMacOS =
     data?.platform === "macos" ||
@@ -560,15 +556,6 @@ export function DashboardWorkbench() {
     return () => window.clearTimeout(timeout);
   }, [appUpdater.phase, appUpdater.dismiss]);
 
-  const handleWorkspaceToggle = (workspaceId: string) => {
-    threadStore.setState((prev) => ({
-      openWorkspaces: {
-        ...prev.openWorkspaces,
-        [workspaceId]: !prev.openWorkspaces[workspaceId],
-      },
-    }));
-  };
-
   const handleWorkspaceShowMore = useCallback(
     (workspaceId: string) => {
       const nextDisplayCount =
@@ -652,13 +639,6 @@ export function DashboardWorkbench() {
   }, [activateWorkspaceAsNewThreadTarget, language, t]);
 
 
-
-  const handleThreadEditStart = useCallback(
-    (threadId: string) => {
-      threadStore.setState({ editingThreadId: threadId });
-    },
-    [],
-  );
 
   const handleThreadEditDone = useCallback(
     (threadId: string, newTitle: string | null, originalName: string) => {
@@ -812,12 +792,6 @@ export function DashboardWorkbench() {
       });
   }, [isAddingWorkspace, language, syncWorkspaceSidebar]);
 
-  const handleWorkspaceMenuToggle = (workspaceId: string) => {
-    setActiveWorkspaceMenuId((current: string | null) =>
-      current === workspaceId ? null : workspaceId,
-    );
-  };
-
   const handleOpenWorkspaceInSystem = useCallback(
     (workspace: WorkspaceItem) => {
       if (!isTauri() || !workspace.path || workspaceAction) {
@@ -890,8 +864,6 @@ export function DashboardWorkbench() {
 
   const handleCheckUpdates = appUpdater.checkForUpdates;
 
-  const workspaceOpenLabel = t("sidebar.openInFileManager");
-  const canOpenWorkspaceInSystem = isTauri() && (isMacOS || isWindows);
   const selectedThemeOption =
     THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[0];
   const selectedThemeSummary = t(selectedThemeOption.labelKey);
@@ -931,31 +903,18 @@ export function DashboardWorkbench() {
 
       <div className="flex h-full min-h-0 pt-9">
         <DashboardSidebar
-          isSidebarOpen={isSidebarOpen}
-          isMarketplaceOpen={isMarketplaceOpen}
           handleEnterNewThreadMode={handleEnterNewThreadMode}
           handleOpenMarketplace={handleOpenMarketplace}
-          t={t}
           handleChooseWorkspaceFolder={handleChooseWorkspaceFolder}
           isAddingWorkspace={isAddingWorkspace}
-          activeWorkspaceMenuId={activeWorkspaceMenuId}
           workspaceAction={workspaceAction}
           workspaceMenuRef={workspaceMenuRef}
-          handleWorkspaceToggle={handleWorkspaceToggle}
-          handleWorkspaceMenuToggle={handleWorkspaceMenuToggle}
           handleNewThreadForWorkspace={handleNewThreadForWorkspace}
-          setActiveWorkspaceMenuId={setActiveWorkspaceMenuId}
-          setWorktreeDialogContext={setWorktreeDialogContext}
           handleOpenWorkspaceInSystem={handleOpenWorkspaceInSystem}
-          canOpenWorkspaceInSystem={canOpenWorkspaceInSystem}
-          workspaceOpenLabel={workspaceOpenLabel}
           handleWorkspaceRemove={handleWorkspaceRemove}
           deletePhase={deletePhase}
-          editingThreadId={editingThreadId}
-          commitMessageModelPlan={commitMessageModelPlan}
           handleThreadEditDone={handleThreadEditDone}
           handleThreadSelect={handleThreadSelect}
-          handleThreadEditStart={handleThreadEditStart}
           handleThreadDeleteConfirm={handleThreadDeleteConfirm}
           handleThreadDeleteRequest={handleThreadDeleteRequest}
           handleWorkspaceShowMore={handleWorkspaceShowMore}
