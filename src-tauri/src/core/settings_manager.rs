@@ -127,7 +127,7 @@ const BUILTIN_PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         provider_key: "bai",
         provider_type: "bai",
         display_name: "BAI",
-        default_base_url: "https://api.baichuan-ai.com/v1",
+        default_base_url: "https://api.b.ai/v1",
     },
 ];
 
