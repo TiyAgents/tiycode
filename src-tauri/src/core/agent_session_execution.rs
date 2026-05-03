@@ -433,6 +433,25 @@ impl AgentSession {
             Err(error) => return agent_error_result(error.to_string()),
         };
         let artifact = build_plan_artifact_from_tool_input(tool_input, plan_revision);
+
+        // Require title, context, and design to be non-empty so that the plan
+        // meets the quality contract enforced by the system prompt.
+        if artifact.title == "Implementation Plan" {
+            return agent_error_result(
+                "update_plan requires a non-empty title that describes the change (not the default placeholder).",
+            );
+        }
+        if artifact.context.trim().is_empty() {
+            return agent_error_result(
+                "update_plan requires a non-empty context section. Describe the current state of the relevant code with inspected file paths and confirmed facts.",
+            );
+        }
+        if artifact.design.trim().is_empty() {
+            return agent_error_result(
+                "update_plan requires a non-empty design section. Explain the recommended approach, architecture changes, data flow, and tradeoffs.",
+            );
+        }
+
         let plan_message_id = uuid::Uuid::now_v7().to_string();
         let approval_message_id = uuid::Uuid::now_v7().to_string();
         let plan_metadata =

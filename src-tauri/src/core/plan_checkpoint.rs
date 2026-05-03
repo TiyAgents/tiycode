@@ -51,7 +51,6 @@ pub struct PlanArtifact {
     #[serde(default)]
     pub assumptions: Vec<String>,
     pub plan_revision: u32,
-    pub needs_context_reset_option: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -234,10 +233,6 @@ pub fn build_plan_artifact_from_tool_input(
     let verification = read_prose_field(root.and_then(|value| value.get("verification")));
     let risks = read_string_list(root.and_then(|value| value.get("risks")));
     let assumptions = read_string_list(root.and_then(|value| value.get("assumptions")));
-    let needs_context_reset_option = root
-        .and_then(|value| value.get("needsContextResetOption"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
 
     PlanArtifact {
         kind: IMPLEMENTATION_PLAN_MESSAGE_KIND.to_string(),
@@ -251,7 +246,6 @@ pub fn build_plan_artifact_from_tool_input(
         risks,
         assumptions,
         plan_revision,
-        needs_context_reset_option,
     }
 }
 

@@ -262,7 +262,6 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                         "type": "array",
                         "items": { "type": "string" }
                     },
-                    "needsContextResetOption": { "type": "boolean" },
                     "plan": {
                         "type": "object",
                         "description": "Optional nested plan payload. If provided, the runtime reads planning fields from this object.",
@@ -301,8 +300,7 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                             "assumptions": {
                                 "type": "array",
                                 "items": { "type": "string" }
-                            },
-                            "needsContextResetOption": { "type": "boolean" }
+                            }
                         }
                     }
                 }
