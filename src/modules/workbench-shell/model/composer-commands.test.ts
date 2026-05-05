@@ -320,6 +320,18 @@ describe("parseCommandArguments", () => {
     const result = parseCommandArguments("  --pr=123  hello  ");
     expect(result.raw).toBe("--pr=123  hello");
   });
+
+  it("normalizes em-dash (—) to ASCII double-hyphen for flag detection", () => {
+    const result = parseCommandArguments("\u2014style=full \u2014language=chinese");
+    expect(result.named).toEqual({ style: "full", language: "chinese" });
+    expect(result.positional).toEqual([]);
+  });
+
+  it("normalizes en-dash (–) to ASCII hyphen for flag detection", () => {
+    // Two en-dashes (– –) each become single hyphen → "--pr=123"
+    const result = parseCommandArguments("\u2013\u2013pr=123");
+    expect(result.named).toEqual({ pr: "123" });
+  });
 });
 
 describe("extractArgumentNames", () => {

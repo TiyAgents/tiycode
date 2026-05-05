@@ -274,6 +274,22 @@ function tokenizeArguments(input: string): string[] {
 }
 
 /**
+ * Normalize common Unicode dashes to ASCII hyphens so that flag detection works
+ * regardless of whether the user typed em-dashes (—), en-dashes (–), or other variants.
+ * A single em-dash (—) is treated as equivalent to double-hyphen (--) since it visually
+ * represents the same intent when used as a flag prefix.
+ */
+function normalizeUnicodeDashes(input: string): string {
+  // U+2014 em-dash → "--" (users type — intending --)
+  // U+2015 horizontal bar → "--"
+  // U+2013 en-dash → "-"
+  // U+2012 figure-dash → "-"
+  return input
+    .replace(/[\u2014\u2015]/g, "--")
+    .replace(/[\u2012\u2013]/g, "-");
+}
+
+/**
  * Parse an arguments string into structured named (--key=value) and positional parts.
  *
  * Supported formats:
@@ -289,7 +305,8 @@ export function parseCommandArguments(argumentsText: string): ParsedArguments {
     return { named: {}, positional: [], raw: "" };
   }
 
-  const tokens = tokenizeArguments(raw);
+  const normalized = normalizeUnicodeDashes(raw);
+  const tokens = tokenizeArguments(normalized);
   const named: Record<string, string> = {};
   const positional: string[] = [];
 
