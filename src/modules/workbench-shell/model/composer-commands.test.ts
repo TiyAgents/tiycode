@@ -321,6 +321,18 @@ describe("parseCommandArguments", () => {
     expect(result.raw).toBe("--pr=123  hello");
   });
 
+  it("treats unclosed double quotes as literal characters without swallowing following flags", () => {
+    const result = parseCommandArguments("--msg \"hello --tag v1");
+    expect(result.named).toEqual({ msg: "\"hello", tag: "v1" });
+    expect(result.positional).toEqual([]);
+  });
+
+  it("treats unclosed single quotes as literal characters without swallowing following flags", () => {
+    const result = parseCommandArguments("--msg 'hello --tag v1");
+    expect(result.named).toEqual({ msg: "'hello", tag: "v1" });
+    expect(result.positional).toEqual([]);
+  });
+
   it("normalizes em-dash (—) to ASCII double-hyphen for flag detection", () => {
     const result = parseCommandArguments("\u2014style=full \u2014language=chinese");
     expect(result.named).toEqual({ style: "full", language: "chinese" });

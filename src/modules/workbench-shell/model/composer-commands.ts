@@ -240,7 +240,8 @@ export type ParsedArguments = {
 
 /**
  * Tokenize an arguments string respecting quoted values.
- * Supports double and single quotes. Unclosed quotes treat the remainder as a single token.
+ * Supports double and single quotes. Unclosed quotes are treated as literal
+ * characters so following flags remain parseable instead of being swallowed.
  */
 function tokenizeArguments(input: string): string[] {
   const tokens: string[] = [];
@@ -257,7 +258,11 @@ function tokenizeArguments(input: string): string[] {
         current += ch;
       }
     } else if (ch === "\"" || ch === "'") {
-      quoteChar = ch;
+      if (input.indexOf(ch, i + 1) === -1) {
+        current += ch;
+      } else {
+        quoteChar = ch;
+      }
     } else if (ch === " " || ch === "\t") {
       if (current) {
         tokens.push(current);
