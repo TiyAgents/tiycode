@@ -58,6 +58,13 @@ export const DEFAULT_COMMAND_SETTINGS: CommandSettings = {
         "Create well-formatted commits with conventional commit messages",
       prompt: `TiyCode Command: Commit
 
+## Active Configuration
+
+- Verify: {{verify}}
+- Style: {{style}}
+- Type: {{type}}
+- Language: {{language}}
+
 This command helps you create well-formatted commits following the Conventional Commits specification.
 
 ## Usage
@@ -315,6 +322,13 @@ Refs: RFC-6749, RFC-7636
       description:
         "Create pull requests with well-formatted PR title and description",
       prompt: `# TiyCode Command: Create PR
+
+## Active Configuration
+
+- Draft: {{draft}}
+- Base: {{base}}
+- Style: {{style}}
+- Language: {{language}}
 
 This command helps you create well-formatted pull requests using GitHub CLI, with automatic fallback to GitHub MCP tools.
 

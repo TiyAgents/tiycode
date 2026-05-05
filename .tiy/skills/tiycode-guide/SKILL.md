@@ -52,7 +52,7 @@ TiyCode is a native desktop application (macOS / Windows / Linux), not a browser
 | **Workspace-centered** | Threads are grounded in a local workspace with code review, Git, repository inspection, and terminal access. |
 | **Extensions** | Plugins, MCP servers, and Skills — managed through the Extensions Center. |
 | **Bilingual** | Full English and Simplified Chinese interface, switchable anytime. |
-| **Built-in commands** | `/commit` for generating conventional commit messages, `/create-pr` for GitHub pull requests, and custom slash commands. |
+| **Built-in commands** | `/commit` for generating conventional commit messages, `/create-pr` for GitHub pull requests, and custom slash commands. All commands support structured argument interpolation via `--key=value` flags, positional arguments, and `{{placeholder}}` template variables. |
 
 ---
 
@@ -212,7 +212,7 @@ TiyCode organizes settings into the following categories, all accessible from th
 | **Workspace** | Workspace list, default workspace, Git tracking, auto-worktree |
 | **Providers** | LLM provider connections (API keys, base URLs, models, capabilities) |
 | **Agent Profiles** | Active profile, model selection, response style, thinking level, custom instructions, language |
-| **Commands** | Built-in commands (`commit`, `create-pr`) and custom slash commands |
+| **Commands** | Built-in commands (`commit`, `create-pr`) and custom slash commands with structured argument support |
 | **Terminal** | Shell path/args, font, cursor style, scrollback, environment |
 | **Policy** | Approval policy, allow/deny pattern lists, writable roots |
 
@@ -697,7 +697,29 @@ git log --oneline -10         # Recent history
 
 TiyCode also has a built-in **Git drawer** in the UI that shows current branch, staged/unstaged files, commit history, and diff viewer.
 
-The `/commit` command triggers AI-powered commit message generation.
+The `/commit` command triggers AI-powered commit message generation with structured arguments (e.g. `/commit --style=full --language=chinese`).
+
+### Slash Command Argument System
+
+Slash commands support structured arguments that are parsed and injected into prompt templates:
+
+**Argument formats:**
+- `--key=value` — named flag with value (e.g. `--style=full`)
+- `--key value` — named flag with separate value token
+- `--flag` — boolean flag (resolves to `"true"`)
+- Positional — tokens without `--` prefix, mapped to declared names by order
+
+**Template placeholders:**
+- `{{key}}` — replaced with the named argument value (e.g. `{{style}}` → `full`)
+- `{{arguments}}` — replaced with the full raw argument string
+- `{{0}}`, `{{1}}` — replaced with positional arguments by index
+- `{{command}}` — replaced with the command name
+
+**Argument declaration:** The `argumentHint` field in command settings (e.g. `[--style=simple|full] [--language=english|chinese]`) declares available parameters. Names extracted from the hint also enable positional-to-named mapping — e.g. with hint `[pr] [branch]`, input `123 main` maps to `{{pr}}=123`, `{{branch}}=main`.
+
+**Fallback:** If no matching `{{placeholder}}` exists in the template, arguments are appended as `Command arguments: <raw text>` for backward compatibility.
+
+**Storage:** Commands are stored as Markdown files with YAML frontmatter under `~/.tiy/prompts/builtin/` and `~/.tiy/prompts/user/`.
 
 ---
 

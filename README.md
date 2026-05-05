@@ -24,9 +24,9 @@ Around that collaboration model, TiyCode brings together Agent Profiles, workspa
 - **Multi-provider support.** Connect to 13+ LLM providers out of the box — OpenAI, Anthropic, Google, Ollama, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi, and more — or add any OpenAI-compatible endpoint as a custom provider.
 - **Workspace-centered execution.** Threads stay grounded in the local workspace and connect naturally to code review, version control, repository inspection, Git worktrees, and terminal workflows.
 - **Task-aware execution.** Thread-scoped task boards, plan checkpoints, tool status events, and subagent progress make longer runs easier to follow and review.
-- **Rich composer inputs.** Prompt input supports text, file/photo attachments, screenshots, slash command argument interpolation, and large-paste handling.
+- **Rich composer inputs.** Prompt input supports text, file/photo attachments, screenshots, slash command structured argument interpolation (`--key=value`, positional args, `{{placeholder}}` templates), and large-paste handling.
 - **Real-time execution streaming.** A rich thread stream event system delivers live updates — message deltas, tool calls, requested/active statuses, reasoning steps, subagent progress, and plan updates — all rendered through purpose-built AI Elements components.
-- **Operator-friendly experience.** Slash commands, smart conversation titles, context compression controls, commit message generation, external terminal handoff including Ghostty, and compact workbench controls help the product feel fast and practical in day-to-day use.
+- **Operator-friendly experience.** Slash commands with structured argument parsing, smart conversation titles, context compression controls, commit message generation, external terminal handoff including Ghostty, and compact workbench controls help the product feel fast and practical in day-to-day use.
 - **Bilingual interface.** Full i18n coverage with English and Simplified Chinese, switchable at any time.
 - **Extensible by design.** Plugins, MCP servers, and Skills are treated as first-class building blocks through the `Extensions Center`.
 - **Built-in runtime path.** The main execution flow is `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`.

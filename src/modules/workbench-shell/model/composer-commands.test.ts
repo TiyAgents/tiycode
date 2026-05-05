@@ -5,6 +5,8 @@ import {
   buildCommandEffectivePrompt,
   buildComposerCommandRegistry,
   buildComposerSubmission,
+  extractArgumentNames,
+  parseCommandArguments,
   parseSlashCommandInput,
 } from "@/modules/workbench-shell/model/composer-commands";
 
@@ -189,5 +191,188 @@ describe("buildCommandEffectivePrompt", () => {
     const cmd = makeCommand("Running {{command}} command.", "my-cmd");
     const result = buildCommandEffectivePrompt(cmd, "");
     expect(result).toBe("Running my-cmd command.");
+  });
+
+  it("replaces named argument placeholders from --key=value", () => {
+    const cmd = makeCommand("Review PR #{{pr}} on branch {{branch}}.");
+    const result = buildCommandEffectivePrompt(cmd, "--pr=123 --branch=main");
+    expect(result).toBe("Review PR #123 on branch main.");
+  });
+
+  it("replaces named argument placeholders from --key value format", () => {
+    const cmd = makeCommand("Deploy {{env}} with tag {{tag}}.");
+    const result = buildCommandEffectivePrompt(cmd, "--env production --tag v1.0");
+    expect(result).toBe("Deploy production with tag v1.0.");
+  });
+
+  it("maps positional arguments to declared names via argumentHint", () => {
+    const cmd = makeCommand("Review PR #{{pr}} on {{branch}}.", "review");
+    cmd.argumentHint = "[pr] [branch]";
+    const result = buildCommandEffectivePrompt(cmd, "123 main");
+    expect(result).toBe("Review PR #123 on main.");
+  });
+
+  it("replaces indexed positional placeholders {{0}} {{1}}", () => {
+    const cmd = makeCommand("First: {{0}}, Second: {{1}}.");
+    const result = buildCommandEffectivePrompt(cmd, "alpha beta");
+    expect(result).toBe("First: alpha, Second: beta.");
+  });
+
+  it("does not append fallback when named placeholders were consumed", () => {
+    const cmd = makeCommand("PR: {{pr}}");
+    const result = buildCommandEffectivePrompt(cmd, "--pr=456");
+    expect(result).toBe("PR: 456");
+    expect(result).not.toContain("Command arguments:");
+  });
+
+  it("appends fallback when no placeholders match the provided arguments", () => {
+    const cmd = makeCommand("Do something useful.");
+    const result = buildCommandEffectivePrompt(cmd, "--pr=123");
+    expect(result).toBe("Do something useful.\n\nCommand arguments: --pr=123");
+  });
+
+  it("handles mixed named and positional with argumentHint mapping", () => {
+    const cmd = makeCommand("File: {{file}}, Style: {{style}}.", "test");
+    cmd.argumentHint = "[file] [--style=full]";
+    const result = buildCommandEffectivePrompt(cmd, "readme.md --style=compact");
+    expect(result).toBe("File: readme.md, Style: compact.");
+  });
+
+  it("named flags do not overwrite positional mapping when name already in named", () => {
+    const cmd = makeCommand("PR: {{pr}}.", "test");
+    cmd.argumentHint = "[pr]";
+    // --pr=999 takes precedence over positional "123" for the "pr" key
+    const result = buildCommandEffectivePrompt(cmd, "--pr=999 123");
+    expect(result).toBe("PR: 999.");
+  });
+
+  it("replaces unfilled named placeholders with empty string", () => {
+    const cmd = makeCommand("Value: [{{missing}}].");
+    const result = buildCommandEffectivePrompt(cmd, "--other=x");
+    // {{missing}} replaced with "" (no matching arg), fallback appends since {{other}} not in template
+    expect(result).toBe("Value: [].\n\nCommand arguments: --other=x");
+  });
+
+  it("does not append fallback when template uses a matching named placeholder", () => {
+    const cmd = makeCommand("Value: [{{other}}].");
+    const result = buildCommandEffectivePrompt(cmd, "--other=x");
+    expect(result).toBe("Value: [x].");
+    expect(result).not.toContain("Command arguments:");
+  });
+});
+
+describe("parseCommandArguments", () => {
+  it("returns empty result for empty string", () => {
+    const result = parseCommandArguments("");
+    expect(result).toEqual({ named: {}, positional: [], raw: "" });
+  });
+
+  it("returns empty result for whitespace only", () => {
+    const result = parseCommandArguments("   ");
+    expect(result).toEqual({ named: {}, positional: [], raw: "" });
+  });
+
+  it("parses --key=value flags", () => {
+    const result = parseCommandArguments("--pr=123 --branch=main");
+    expect(result.named).toEqual({ pr: "123", branch: "main" });
+    expect(result.positional).toEqual([]);
+  });
+
+  it("parses --key value flags", () => {
+    const result = parseCommandArguments("--env production --tag v1.0");
+    expect(result.named).toEqual({ env: "production", tag: "v1.0" });
+    expect(result.positional).toEqual([]);
+  });
+
+  it("parses positional arguments", () => {
+    const result = parseCommandArguments("123 main feature");
+    expect(result.named).toEqual({});
+    expect(result.positional).toEqual(["123", "main", "feature"]);
+  });
+
+  it("handles mixed named and positional", () => {
+    const result = parseCommandArguments("readme.md --style=full --verbose");
+    expect(result.named).toEqual({ style: "full", verbose: "true" });
+    expect(result.positional).toEqual(["readme.md"]);
+  });
+
+  it("handles quoted values with spaces in --key=value", () => {
+    const result = parseCommandArguments("--msg=\"hello world\" --tag=v1");
+    expect(result.named).toEqual({ msg: "hello world", tag: "v1" });
+  });
+
+  it("handles quoted values with spaces in --key value", () => {
+    const result = parseCommandArguments("--msg 'hello world' --count 5");
+    expect(result.named).toEqual({ msg: "hello world", count: "5" });
+  });
+
+  it("treats --flag at end as boolean true", () => {
+    const result = parseCommandArguments("--verbose --dry-run");
+    expect(result.named).toEqual({ verbose: "true", "dry-run": "true" });
+  });
+
+  it("treats --flag followed by another flag as boolean true", () => {
+    const result = parseCommandArguments("--verbose --name test");
+    expect(result.named).toEqual({ verbose: "true", name: "test" });
+  });
+
+  it("preserves raw text", () => {
+    const result = parseCommandArguments("  --pr=123  hello  ");
+    expect(result.raw).toBe("--pr=123  hello");
+  });
+
+  it("treats unclosed double quotes as literal characters without swallowing following flags", () => {
+    const result = parseCommandArguments("--msg \"hello --tag v1");
+    expect(result.named).toEqual({ msg: "\"hello", tag: "v1" });
+    expect(result.positional).toEqual([]);
+  });
+
+  it("treats unclosed single quotes as literal characters without swallowing following flags", () => {
+    const result = parseCommandArguments("--msg 'hello --tag v1");
+    expect(result.named).toEqual({ msg: "'hello", tag: "v1" });
+    expect(result.positional).toEqual([]);
+  });
+
+  it("normalizes em-dash (—) to ASCII double-hyphen for flag detection", () => {
+    const result = parseCommandArguments("\u2014style=full \u2014language=chinese");
+    expect(result.named).toEqual({ style: "full", language: "chinese" });
+    expect(result.positional).toEqual([]);
+  });
+
+  it("normalizes en-dash (–) to ASCII hyphen for flag detection", () => {
+    // Two en-dashes (– –) each become single hyphen → "--pr=123"
+    const result = parseCommandArguments("\u2013\u2013pr=123");
+    expect(result.named).toEqual({ pr: "123" });
+  });
+});
+
+describe("extractArgumentNames", () => {
+  it("returns empty array for empty string", () => {
+    expect(extractArgumentNames("")).toEqual([]);
+  });
+
+  it("extracts names from [--flag=options] format", () => {
+    expect(extractArgumentNames("[--verify=yes|no] [--style=simple|full]"))
+      .toEqual(["verify", "style"]);
+  });
+
+  it("extracts names from [name] format", () => {
+    expect(extractArgumentNames("[pr] [branch]"))
+      .toEqual(["pr", "branch"]);
+  });
+
+  it("extracts names from mixed formats", () => {
+    expect(extractArgumentNames("[file] [--style=full] [--verbose]"))
+      .toEqual(["file", "style", "verbose"]);
+  });
+
+  it("deduplicates names", () => {
+    expect(extractArgumentNames("[--name=x] [--name=y]"))
+      .toEqual(["name"]);
+  });
+
+  it("handles complex hint with types and defaults", () => {
+    expect(extractArgumentNames("[--type=feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert] [--language=english|chinese]"))
+      .toEqual(["type", "language"]);
   });
 });

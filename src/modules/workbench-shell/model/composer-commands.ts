@@ -228,6 +228,150 @@ function replaceTemplateVariables(template: string, values: Record<string, strin
   return template.replace(/{{\s*(\w+)\s*}}/g, (_, key: string) => values[key] ?? "");
 }
 
+// ---------------------------------------------------------------------------
+// Structured argument parsing
+// ---------------------------------------------------------------------------
+
+export type ParsedArguments = {
+  named: Record<string, string>;
+  positional: string[];
+  raw: string;
+};
+
+/**
+ * Tokenize an arguments string respecting quoted values.
+ * Supports double and single quotes. Unclosed quotes are treated as literal
+ * characters so following flags remain parseable instead of being swallowed.
+ */
+function tokenizeArguments(input: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quoteChar: string | null = null;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]!;
+
+    if (quoteChar) {
+      if (ch === quoteChar) {
+        quoteChar = null;
+      } else {
+        current += ch;
+      }
+    } else if (ch === "\"" || ch === "'") {
+      if (input.indexOf(ch, i + 1) === -1) {
+        current += ch;
+      } else {
+        quoteChar = ch;
+      }
+    } else if (ch === " " || ch === "\t") {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+/**
+ * Normalize common Unicode dashes to ASCII hyphens so that flag detection works
+ * regardless of whether the user typed em-dashes (—), en-dashes (–), or other variants.
+ * A single em-dash (—) is treated as equivalent to double-hyphen (--) since it visually
+ * represents the same intent when used as a flag prefix.
+ */
+function normalizeUnicodeDashes(input: string): string {
+  // U+2014 em-dash → "--" (users type — intending --)
+  // U+2015 horizontal bar → "--"
+  // U+2013 en-dash → "-"
+  // U+2012 figure-dash → "-"
+  return input
+    .replace(/[\u2014\u2015]/g, "--")
+    .replace(/[\u2012\u2013]/g, "-");
+}
+
+/**
+ * Parse an arguments string into structured named (--key=value) and positional parts.
+ *
+ * Supported formats:
+ * - `--key=value`        → named["key"] = "value"
+ * - `--key value`        → named["key"] = "value" (when next token is not a flag)
+ * - `--flag`             → named["flag"] = "true" (when followed by another flag or end)
+ * - positional tokens    → positional[0], positional[1], ...
+ * - Quoted values        → `--msg="hello world"` or `--msg 'hello world'`
+ */
+export function parseCommandArguments(argumentsText: string): ParsedArguments {
+  const raw = argumentsText.trim();
+  if (!raw) {
+    return { named: {}, positional: [], raw: "" };
+  }
+
+  const normalized = normalizeUnicodeDashes(raw);
+  const tokens = tokenizeArguments(normalized);
+  const named: Record<string, string> = {};
+  const positional: string[] = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+
+    if (token.startsWith("--")) {
+      const withoutDashes = token.slice(2);
+      const eqIndex = withoutDashes.indexOf("=");
+
+      if (eqIndex >= 0) {
+        // --key=value
+        const key = withoutDashes.slice(0, eqIndex);
+        const value = withoutDashes.slice(eqIndex + 1);
+        if (key) {
+          named[key] = value;
+        }
+      } else if (withoutDashes) {
+        // --key followed by value or another flag
+        const next = tokens[i + 1];
+        if (next !== undefined && !next.startsWith("--")) {
+          named[withoutDashes] = next;
+          i++; // consume the value token
+        } else {
+          named[withoutDashes] = "true";
+        }
+      }
+    } else {
+      positional.push(token);
+    }
+  }
+
+  return { named, positional, raw };
+}
+
+/**
+ * Extract declared argument names from an argumentHint string.
+ *
+ * Recognizes patterns like:
+ * - `[--verify=yes|no]` → "verify"
+ * - `[--style=simple|full]` → "style"
+ * - `[file]` → "file"
+ * - `[pr] [branch]` → ["pr", "branch"]
+ */
+export function extractArgumentNames(argumentHint: string): string[] {
+  if (!argumentHint) {
+    return [];
+  }
+  const names: string[] = [];
+  const pattern = /\[-{0,2}(\w+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(argumentHint)) !== null) {
+    const name = match[1];
+    if (name && !names.includes(name)) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
 function normalizeCommandPath(value: string) {
   const normalized = normalizeCommandName(value);
   return normalized ? `/${normalized}` : "";
@@ -346,12 +490,44 @@ export function buildCommandEffectivePrompt(
   argumentsText: string,
 ) {
   const trimmedArgs = argumentsText.trim();
-  const hasPlaceholder = /\{\{\s*arguments\s*\}\}/.test(command.prompt);
-  let result = replaceTemplateVariables(command.prompt, {
+  const hasArgumentsPlaceholder = /{{\s*arguments\s*}}/.test(command.prompt);
+
+  // Parse structured arguments and extract declared names from hint
+  const parsed = parseCommandArguments(trimmedArgs);
+  const declaredNames = extractArgumentNames(command.argumentHint);
+
+  // Map positional arguments to declared names (by order)
+  for (let i = 0; i < declaredNames.length && i < parsed.positional.length; i++) {
+    const name = declaredNames[i]!;
+    if (!(name in parsed.named)) {
+      parsed.named[name] = parsed.positional[i]!;
+    }
+  }
+
+  // Build the full values map for template substitution
+  const values: Record<string, string> = {
     arguments: trimmedArgs,
     command: command.name,
-  }).trim();
-  if (trimmedArgs && !hasPlaceholder) {
+    ...parsed.named,
+  };
+  // Add positional arguments as indexed keys ({{0}}, {{1}}, ...)
+  for (let i = 0; i < parsed.positional.length; i++) {
+    values[String(i)] = parsed.positional[i]!;
+  }
+
+  const originalPrompt = command.prompt;
+  let result = replaceTemplateVariables(originalPrompt, values).trim();
+
+  // Fallback: append raw arguments if no argument-related placeholder was consumed.
+  // A placeholder is "consumed" if the template contains {{key}} for any key in our
+  // parsed arguments (named keys or positional indices), or {{arguments}}.
+  const argumentKeys = [
+    ...Object.keys(parsed.named),
+    ...parsed.positional.map((_, i) => String(i)),
+  ];
+  const hasAnyArgPlaceholder = hasArgumentsPlaceholder
+    || argumentKeys.some((key) => new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`).test(originalPrompt));
+  if (trimmedArgs && !hasAnyArgPlaceholder) {
     result += `\n\nCommand arguments: ${trimmedArgs}`;
   }
   return result;
