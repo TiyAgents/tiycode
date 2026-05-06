@@ -1962,9 +1962,10 @@ Used for prompt assembly coverage.
                 thread_id: "thread-1".to_string(),
                 run_id: None,
                 role: "system".to_string(),
-                content_markdown: "<context_summary>\nCarry this forward.\n</context_summary>".to_string(),
+                content_markdown: "<context_summary>\nCarry this forward.\n</context_summary>"
+                    .to_string(),
                 parts_json: None,
-                
+
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -2024,9 +2025,10 @@ Used for prompt assembly coverage.
                 thread_id: "thread-1".to_string(),
                 run_id: None,
                 role: "system".to_string(),
-                content_markdown: "<context_summary>\nCarry this forward.\n</context_summary>".to_string(),
+                content_markdown: "<context_summary>\nCarry this forward.\n</context_summary>"
+                    .to_string(),
                 parts_json: None,
-                
+
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(

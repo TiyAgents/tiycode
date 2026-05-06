@@ -485,6 +485,36 @@ You may call this tool multiple times in a run to incrementally refine the plan.
         }),
     ));
 
+    // Chart artifact rendering tool (always available)
+    tools.push(AgentTool::new(
+        "render_chart",
+        "Render Chart",
+        "Render a structured chart artifact into the current thread message. The chart is displayed as an interactive Vega-Lite visualization in the conversation. Use this when the user asks for data visualization, statistical plots, comparisons, distributions, or any graphical explanation. The spec must be a valid Vega-Lite JSON specification. Multiple charts can be rendered in sequence within the same message for step-by-step visual explanations.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Short title displayed above the chart."
+                },
+                "caption": {
+                    "type": "string",
+                    "description": "Optional explanatory caption displayed below the title."
+                },
+                "library": {
+                    "type": "string",
+                    "enum": ["vega-lite"],
+                    "description": "Chart library to use. Currently only 'vega-lite' is supported."
+                },
+                "spec": {
+                    "type": "object",
+                    "description": "A complete Vega-Lite specification object. Must include at minimum '$schema', 'data', and 'mark' or 'layer'."
+                }
+            },
+            "required": ["spec"]
+        }),
+    ));
+
     tools
 }
 
