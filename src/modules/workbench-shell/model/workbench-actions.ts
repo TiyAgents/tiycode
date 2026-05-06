@@ -182,6 +182,7 @@ export function selectThread(threadId: string): void {
 
   threadStore.setState({
     isNewThreadMode: false,
+    activeThreadId: threadId,
     activeThreadProfileIdOverride: resolvedProfileId,
     editingThreadId: null,
   });
@@ -344,6 +345,7 @@ export async function deleteThread(threadId: string, options?: ThreadDeleteOptio
     });
     threadStore.setState({
       isNewThreadMode: true,
+      activeThreadId: null,
       activeThreadProfileIdOverride: null,
     });
     composerStore.setState({ error: null });
@@ -668,7 +670,7 @@ export async function submitNewThread(submission: NewThreadSubmission): Promise<
   threadStore.setState({ activeThreadProfileIdOverride: activeAgentProfileId });
 
   // Transition to thread mode
-  threadStore.setState({ isNewThreadMode: false });
+  threadStore.setState({ isNewThreadMode: false, activeThreadId: threadId });
 
   // Clear new-thread terminal binding
   const bindingKey = getNewThreadTerminalBindingKey(workspaceId);
@@ -707,6 +709,7 @@ export function enterNewThreadMode(): void {
 
   threadStore.setState({
     isNewThreadMode: true,
+    activeThreadId: null,
     activeThreadProfileIdOverride: null,
   });
   threadStore.setState((prev) => ({
