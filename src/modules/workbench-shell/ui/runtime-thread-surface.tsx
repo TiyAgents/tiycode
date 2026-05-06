@@ -129,6 +129,8 @@ import {
   stringifyToolValue,
   updateHelper,
   updateTool,
+  type SurfaceChartMessagePart,
+  type SurfaceMessagePart,
   type SurfaceHelperEntry,
   type SurfaceMessage,
   type SurfaceRuntimeError,
@@ -212,6 +214,51 @@ function renderPlanProseSection(title: string, content: string) {
       </div>
     </div>
   );
+}
+
+function mergeArtifactPartIntoMessage(
+  message: SurfaceMessage,
+  event: { artifactId: string; artifactType: string; payload?: unknown; error?: string; kind: "started" | "delta" | "completed" | "failed" },
+): SurfaceMessage {
+  if (event.artifactType !== "chart") {
+    return message;
+  }
+
+  const payload = event.payload && typeof event.payload === "object"
+    ? event.payload as Record<string, unknown>
+    : null;
+  const nextChartPart: SurfaceChartMessagePart = {
+    type: "chart",
+    artifactId: event.artifactId,
+    library: typeof payload?.library === "string" ? payload.library : "vega-lite",
+    spec: payload?.spec ?? {},
+    title: typeof payload?.title === "string" ? payload.title : null,
+    caption: typeof payload?.caption === "string" ? payload.caption : null,
+    status: event.kind === "failed" ? "error" : event.kind === "started" ? "loading" : "ready",
+    error: event.error ?? (typeof payload?.error === "string" ? payload.error : null),
+  };
+
+  const existingIndex = message.parts.findIndex(
+    (part) => part.type === "chart" && "artifactId" in part && part.artifactId === event.artifactId,
+  );
+
+  if (existingIndex === -1) {
+    return {
+      ...message,
+      parts: [...message.parts, nextChartPart],
+    };
+  }
+
+  const nextParts = message.parts.slice();
+  nextParts[existingIndex] = {
+    ...nextParts[existingIndex],
+    ...nextChartPart,
+  } as SurfaceMessagePart;
+
+  return {
+    ...message,
+    parts: nextParts,
+  };
 }
 
 
@@ -424,6 +471,7 @@ export function RuntimeThreadSurface({
           role: "user",
           runId: null,
           content,
+          parts: [{ type: "text", text: content }],
           status: "completed",
         },
       ];
@@ -803,6 +851,12 @@ export function RuntimeThreadSurface({
             content:
               current.find((entry) => entry.id === event.messageId)?.content.concat(event.delta ?? "")
               ?? (event.delta ?? ""),
+            parts: [{
+              type: "text",
+              text:
+                current.find((entry) => entry.id === event.messageId)?.content.concat(event.delta ?? "")
+                ?? (event.delta ?? ""),
+            }],
             status: "streaming",
           }),
         );
@@ -820,6 +874,7 @@ export function RuntimeThreadSurface({
           role: "assistant",
           runId: event.runId,
           content: event.content ?? "",
+          parts: [{ type: "text", text: event.content ?? "" }],
           status: "completed",
         }),
       );
@@ -862,10 +917,19 @@ export function RuntimeThreadSurface({
             role: "assistant",
             runId: event.runId,
             content: event.reasoning,
+            parts: [{ type: "text", text: event.reasoning }],
             status: "streaming",
           },
         ),
       );
+    });
+
+    stream.onArtifact = withActiveStream((event) => {
+      setMessages((current) => current.map((message) => (
+        message.id === event.messageId
+          ? mergeArtifactPartIntoMessage(message, event)
+          : message
+      )));
     });
 
     stream.onQueue = withActiveStream((event: QueueEvent) => {

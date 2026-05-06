@@ -618,6 +618,7 @@ fn test_message_dto_camel_case() {
         run_id: Some("r-1".into()),
         role: "assistant".into(),
         content_markdown: "Hello".into(),
+        parts: None,
         message_type: "plain_message".into(),
         status: "completed".into(),
         metadata: None,

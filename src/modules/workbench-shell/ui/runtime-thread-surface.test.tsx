@@ -1,7 +1,25 @@
 import { describe, expect, it } from "vitest";
 
 import { mapSnapshotToRunState, isTaskBoardTool, getDefaultToolOpenState } from "./runtime-thread-surface-logic";
-import type { RunStatus, ThreadSnapshotDto } from "@/shared/types/api";
+import { mapMessageParts, mapSnapshotMessage } from "./runtime-thread-surface-state";
+import type { MessageDto, RunStatus, ThreadSnapshotDto } from "@/shared/types/api";
+
+function makeMessage(overrides: Partial<MessageDto> = {}): MessageDto {
+  return {
+    attachments: [],
+    contentMarkdown: "legacy markdown body",
+    createdAt: "2026-05-06T00:00:00Z",
+    id: "message-1",
+    messageType: "plain_message",
+    metadata: null,
+    parts: null,
+    role: "assistant",
+    runId: "run-1",
+    status: "completed",
+    threadId: "thread-1",
+    ...overrides,
+  };
+}
 
 function makeSnapshot(activeStatus: RunStatus | null): ThreadSnapshotDto {
   return {
@@ -43,6 +61,40 @@ function makeSnapshot(activeStatus: RunStatus | null): ThreadSnapshotDto {
     activeTaskBoardId: null,
   };
 }
+
+describe("mapMessageParts", () => {
+  it("falls back to a single text part for legacy markdown-only messages", () => {
+    expect(mapMessageParts(null, "legacy markdown")).toEqual([{ type: "text", text: "legacy markdown" }]);
+  });
+
+  it("maps chart and text parts without losing order", () => {
+    const result = mapMessageParts([
+      { type: "text", text: "intro" },
+      { type: "chart", artifactId: "chart-1", library: "vega-lite", spec: { mark: "line" }, title: "Demo", caption: "Chart caption" },
+    ], "ignored");
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ type: "text", text: "intro" });
+    expect(result[1]).toMatchObject({ type: "chart", artifactId: "chart-1", library: "vega-lite", title: "Demo", caption: "Chart caption" });
+  });
+
+  it("preserves unknown parts as safe fallback values", () => {
+    const result = mapMessageParts([{ type: "artifact-x", foo: "bar" }], "ignored");
+    expect(result[0]).toEqual({ type: "artifact-x", value: { type: "artifact-x", foo: "bar" } });
+  });
+});
+
+describe("mapSnapshotMessage", () => {
+  it("prefers structured parts when both parts and legacy markdown are present", () => {
+    const message = mapSnapshotMessage(makeMessage({
+      contentMarkdown: "legacy body",
+      parts: [{ type: "text", text: "structured body" }],
+    }));
+
+    expect(message.content).toBe("legacy body");
+    expect(message.parts).toEqual([{ type: "text", text: "structured body" }]);
+  });
+});
 
 describe("mapSnapshotToRunState", () => {
   it("treats cancelling snapshots as cancelled instead of running", () => {
@@ -122,3 +174,4 @@ describe("getDefaultToolOpenState", () => {
     expect(getDefaultToolOpenState("edit", "output-available", true)).toBe(true);
   });
 });
+

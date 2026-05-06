@@ -200,6 +200,7 @@ impl AgentRunManager {
                     run_id: None,
                     role: "user".to_string(),
                     content_markdown: display_prompt.unwrap_or_else(|| prompt.to_string()),
+                    parts_json: None,
                     message_type: "plain_message".to_string(),
                     status: "completed".to_string(),
                     metadata_json: prompt_metadata.map(|value| value.to_string()),
@@ -515,6 +516,7 @@ impl AgentRunManager {
             run_id: None,
             role: "system".to_string(),
             content_markdown: "Context is now reset".to_string(),
+            parts_json: None,
             message_type: "summary_marker".to_string(),
             status: "completed".to_string(),
             metadata_json: Some(
@@ -534,6 +536,7 @@ impl AgentRunManager {
             run_id: None,
             role: "assistant".to_string(),
             content_markdown: crate::core::plan_checkpoint::plan_markdown(plan_metadata),
+            parts_json: None,
             message_type: "plan".to_string(),
             status: "completed".to_string(),
             metadata_json: serde_json::to_string(plan_metadata).ok(),

@@ -179,6 +179,17 @@ pub enum ThreadStreamEvent {
         run_id: String,
         task_board: TaskBoardDto,
     },
+    ArtifactUpdated {
+        run_id: String,
+        message_id: String,
+        artifact_id: String,
+        artifact_type: String,
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 /// Events sent to the frontend terminal layer for a specific thread terminal.

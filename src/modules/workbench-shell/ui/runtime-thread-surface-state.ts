@@ -1,8 +1,11 @@
 import type { TranslationKey } from "@/i18n";
 import { isHelperOwnedTool } from "@/modules/workbench-shell/model/helpers";
 import type {
+  ChartMessagePartDto,
+  DataMessagePartDto,
   MessageAttachmentDto,
   MessageDto,
+  MessagePartDto,
   RunMode,
   RunSummaryDto,
   ThreadSnapshotDto,
@@ -16,6 +19,39 @@ import {
   parseSummaryMarkerMetadata,
 } from "@/modules/workbench-shell/ui/runtime-thread-surface-metadata";
 
+export type SurfaceTextMessagePart = {
+  type: "text";
+  text: string;
+};
+
+export type SurfaceChartMessagePart = {
+  type: "chart";
+  artifactId: string;
+  library: string;
+  spec: unknown;
+  title: string | null;
+  caption: string | null;
+  status: "ready" | "loading" | "error";
+  error: string | null;
+};
+
+export type SurfaceDataMessagePart = {
+  type: `data-${string}`;
+  id?: string;
+  data: unknown;
+};
+
+export type SurfaceUnknownMessagePart = {
+  type: string;
+  value: Record<string, unknown>;
+};
+
+export type SurfaceMessagePart =
+  | SurfaceTextMessagePart
+  | SurfaceChartMessagePart
+  | SurfaceDataMessagePart
+  | SurfaceUnknownMessagePart;
+
 export type SurfaceMessage = {
   createdAt: string;
   id: string;
@@ -25,6 +61,7 @@ export type SurfaceMessage = {
   role: "user" | "assistant" | "system";
   runId: string | null;
   content: string;
+  parts: SurfaceMessagePart[];
   status: "streaming" | "completed" | "failed" | "discarded";
 };
 
@@ -102,6 +139,64 @@ export type ThinkingPlaceholder = {
   label?: string;
 };
 
+function mapChartPart(part: ChartMessagePartDto): SurfaceChartMessagePart {
+  return {
+    artifactId: part.artifactId,
+    caption: part.caption ?? null,
+    error: part.error ?? null,
+    library: part.library,
+    spec: part.spec,
+    status: part.status ?? "ready",
+    title: part.title ?? null,
+    type: "chart",
+  };
+}
+
+function mapDataPart(part: DataMessagePartDto): SurfaceDataMessagePart {
+  return {
+    data: part.data,
+    id: part.id,
+    type: part.type,
+  };
+}
+
+function mapUnknownPart(part: MessagePartDto): SurfaceUnknownMessagePart {
+  return {
+    type: part.type,
+    value: part as Record<string, unknown>,
+  };
+}
+
+export function mapMessageParts(parts: MessageDto["parts"], contentMarkdown: string): SurfaceMessagePart[] {
+  if (Array.isArray(parts) && parts.length > 0) {
+    return parts.map((part): SurfaceMessagePart => {
+      if (part.type === "text") {
+        return {
+          type: "text",
+          text: typeof part.text === "string" ? part.text : String(part.text ?? ""),
+        };
+      }
+
+      if (
+        part.type === "chart"
+        && "artifactId" in part
+        && "library" in part
+        && "spec" in part
+      ) {
+        return mapChartPart(part as ChartMessagePartDto);
+      }
+
+      if (part.type.startsWith("data-") && "data" in part) {
+        return mapDataPart(part as DataMessagePartDto);
+      }
+
+      return mapUnknownPart(part);
+    });
+  }
+
+  return [{ type: "text", text: contentMarkdown }];
+}
+
 export type TimelineRole = SurfaceMessage["role"];
 
 export function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
@@ -117,6 +212,7 @@ export function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
         : "assistant",
     runId: message.runId,
     content: message.contentMarkdown,
+    parts: mapMessageParts(message.parts, message.contentMarkdown),
     status: message.status,
   };
 }

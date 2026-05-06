@@ -218,6 +218,17 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         plan: readValue(rawEvent, "plan", "plan"),
       };
+    case "artifact_updated":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        messageId: readRequiredString(rawEvent, "messageId", "message_id"),
+        artifactId: readRequiredString(rawEvent, "artifactId", "artifact_id"),
+        artifactType: readRequiredString(rawEvent, "artifactType", "artifact_type"),
+        status: readRequiredString(rawEvent, "status", "status") as "started" | "delta" | "completed" | "failed",
+        payload: readValue(rawEvent, "payload", "payload"),
+        error: readOptionalString(rawEvent, "error", "error") ?? undefined,
+      };
     case "reasoning_updated":
       return {
         type: rawEvent.type,
