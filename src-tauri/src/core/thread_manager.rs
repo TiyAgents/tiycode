@@ -188,6 +188,7 @@ impl ThreadManager {
             run_id: None,
             role: input.role,
             content_markdown: input.content,
+            parts_json: None,
             message_type: input
                 .message_type
                 .unwrap_or_else(|| "plain_message".to_string()),

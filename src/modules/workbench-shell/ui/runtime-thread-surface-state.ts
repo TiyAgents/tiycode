@@ -1,8 +1,11 @@
 import type { TranslationKey } from "@/i18n";
 import { isHelperOwnedTool } from "@/modules/workbench-shell/model/helpers";
 import type {
+  ChartMessagePartDto,
+  DataMessagePartDto,
   MessageAttachmentDto,
   MessageDto,
+  MessagePartDto,
   RunMode,
   RunSummaryDto,
   ThreadSnapshotDto,
@@ -16,6 +19,40 @@ import {
   parseSummaryMarkerMetadata,
 } from "@/modules/workbench-shell/ui/runtime-thread-surface-metadata";
 
+export type SurfaceTextMessagePart = {
+  type: "text";
+  text: string;
+};
+
+export type SurfaceChartMessagePart = {
+  type: "chart";
+  artifactId: string;
+  library: string;
+  spec: unknown;
+  source: string | null;
+  title: string | null;
+  caption: string | null;
+  status: "ready" | "loading" | "error";
+  error: string | null;
+};
+
+export type SurfaceDataMessagePart = {
+  type: `data-${string}`;
+  id?: string;
+  data: unknown;
+};
+
+export type SurfaceUnknownMessagePart = {
+  type: string;
+  value: Record<string, unknown>;
+};
+
+export type SurfaceMessagePart =
+  | SurfaceTextMessagePart
+  | SurfaceChartMessagePart
+  | SurfaceDataMessagePart
+  | SurfaceUnknownMessagePart;
+
 export type SurfaceMessage = {
   createdAt: string;
   id: string;
@@ -25,6 +62,7 @@ export type SurfaceMessage = {
   role: "user" | "assistant" | "system";
   runId: string | null;
   content: string;
+  parts: SurfaceMessagePart[];
   status: "streaming" | "completed" | "failed" | "discarded";
 };
 
@@ -102,6 +140,65 @@ export type ThinkingPlaceholder = {
   label?: string;
 };
 
+function mapChartPart(part: ChartMessagePartDto): SurfaceChartMessagePart {
+  return {
+    artifactId: part.artifactId,
+    caption: part.caption ?? null,
+    error: part.error ?? null,
+    library: part.library,
+    source: (part as unknown as Record<string, unknown>).source as string ?? null,
+    spec: part.spec,
+    status: part.status ?? "ready",
+    title: part.title ?? null,
+    type: "chart",
+  };
+}
+
+function mapDataPart(part: DataMessagePartDto): SurfaceDataMessagePart {
+  return {
+    data: part.data,
+    id: part.id,
+    type: part.type,
+  };
+}
+
+function mapUnknownPart(part: MessagePartDto): SurfaceUnknownMessagePart {
+  return {
+    type: part.type,
+    value: part as Record<string, unknown>,
+  };
+}
+
+export function mapMessageParts(parts: MessageDto["parts"], contentMarkdown: string): SurfaceMessagePart[] {
+  if (Array.isArray(parts) && parts.length > 0) {
+    return parts.map((part): SurfaceMessagePart => {
+      if (part.type === "text") {
+        return {
+          type: "text",
+          text: typeof part.text === "string" ? part.text : String(part.text ?? ""),
+        };
+      }
+
+      if (
+        part.type === "chart"
+        && "artifactId" in part
+        && "library" in part
+        && ("spec" in part || "source" in part)
+      ) {
+        return mapChartPart(part as ChartMessagePartDto);
+      }
+
+      if (part.type.startsWith("data-") && "data" in part) {
+        return mapDataPart(part as DataMessagePartDto);
+      }
+
+      return mapUnknownPart(part);
+    });
+  }
+
+  return [{ type: "text", text: contentMarkdown }];
+}
+
 export type TimelineRole = SurfaceMessage["role"];
 
 export function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
@@ -117,6 +214,7 @@ export function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
         : "assistant",
     runId: message.runId,
     content: message.contentMarkdown,
+    parts: mapMessageParts(message.parts, message.contentMarkdown),
     status: message.status,
   };
 }
@@ -335,6 +433,66 @@ export function appendOrReplaceMessage(
   const nextMessages = [...messages];
   nextMessages[existingIndex] = nextMessage;
   return nextMessages;
+}
+
+export type ArtifactEvent = {
+  artifactId: string;
+  artifactType: string;
+  payload?: unknown;
+  error?: string;
+  kind: "started" | "delta" | "completed" | "failed";
+};
+
+/**
+ * Merge an artifact event into a message's parts array.
+ * - If the artifact type is not "chart", returns the message unchanged.
+ * - If an existing chart part with the same artifactId exists, it is updated in place.
+ * - Otherwise the new chart part is appended to the parts array.
+ */
+export function mergeArtifactPartIntoMessage(
+  message: SurfaceMessage,
+  event: ArtifactEvent,
+): SurfaceMessage {
+  if (event.artifactType !== "chart") {
+    return message;
+  }
+
+  const payload = event.payload && typeof event.payload === "object"
+    ? event.payload as Record<string, unknown>
+    : null;
+  const nextChartPart: SurfaceChartMessagePart = {
+    type: "chart",
+    artifactId: event.artifactId,
+    library: typeof payload?.library === "string" ? payload.library : "vega-lite",
+    spec: payload?.spec ?? {},
+    source: typeof payload?.source === "string" ? payload.source : null,
+    title: typeof payload?.title === "string" ? payload.title : null,
+    caption: typeof payload?.caption === "string" ? payload.caption : null,
+    status: event.kind === "failed" ? "error" : event.kind === "started" ? "loading" : "ready",
+    error: event.error ?? (typeof payload?.error === "string" ? payload.error : null),
+  };
+
+  const existingIndex = message.parts.findIndex(
+    (part) => part.type === "chart" && "artifactId" in part && part.artifactId === event.artifactId,
+  );
+
+  if (existingIndex === -1) {
+    return {
+      ...message,
+      parts: [...message.parts, nextChartPart],
+    };
+  }
+
+  const nextParts = message.parts.slice();
+  nextParts[existingIndex] = {
+    ...nextParts[existingIndex],
+    ...nextChartPart,
+  } as SurfaceMessagePart;
+
+  return {
+    ...message,
+    parts: nextParts,
+  };
 }
 
 export function prependOlderMessages(

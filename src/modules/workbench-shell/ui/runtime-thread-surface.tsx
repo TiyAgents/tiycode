@@ -72,8 +72,8 @@ import {
 } from "@/modules/workbench-shell/model/task-board";
 import {
   getDefaultToolOpenState,
+  isDefaultCollapsedTool,
   isCompletedToolState,
-  isTaskBoardTool,
   mapSnapshotToRunState,
 } from "@/modules/workbench-shell/ui/runtime-thread-surface-logic";
 import { LongMessageBody } from "@/modules/workbench-shell/ui/long-message-body";
@@ -122,6 +122,7 @@ import {
   mapRunSummaryToContextUsage,
   mapSnapshotMessage,
   mapSnapshotTool,
+  mergeArtifactPartIntoMessage,
   mergeSnapshotTools,
   prependOlderMessages,
   shouldCompleteThinkingPhase,
@@ -213,6 +214,7 @@ function renderPlanProseSection(title: string, content: string) {
     </div>
   );
 }
+
 
 
 const BASE_CONVERSATION_BOTTOM_PADDING = 40;
@@ -315,6 +317,10 @@ export function RuntimeThreadSurface({
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
   const lastOptimisticUserIdRef = useRef<string | null>(null);
+
+  // Buffer for artifact events that arrive before their target message exists
+  // in React state. Keyed by messageId → array of pending artifact events.
+  const pendingArtifactsRef = useRef<Map<string, Array<{ artifactId: string; artifactType: string; payload?: unknown; error?: string; kind: "started" | "delta" | "completed" | "failed" }>>>(new Map());
 
   // --- Viewport auto-collapse infrastructure ---
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLElement | null>(null);
@@ -424,6 +430,7 @@ export function RuntimeThreadSurface({
           role: "user",
           runId: null,
           content,
+          parts: [{ type: "text", text: content }],
           status: "completed",
         },
       ];
@@ -790,39 +797,66 @@ export function RuntimeThreadSurface({
 
     stream.onMessage = withActiveStream((event) => {
       if (event.kind === "delta") {
-        setMessages((current) =>
-          appendOrReplaceMessage(current, {
-            createdAt:
-              current.find((entry) => entry.id === event.messageId)?.createdAt
-              ?? new Date().toISOString(),
+        setMessages((current) => {
+          const existing = current.find((entry) => entry.id === event.messageId);
+          const accumulatedText = existing?.content.concat(event.delta ?? "") ?? (event.delta ?? "");
+          const nonTextParts = existing?.parts.filter((p) => p.type !== "text") ?? [];
+          let result = appendOrReplaceMessage(current, {
+            createdAt: existing?.createdAt ?? new Date().toISOString(),
             id: event.messageId,
             messageType: "plain_message",
             attachments: [],
             role: "assistant",
             runId: event.runId,
-            content:
-              current.find((entry) => entry.id === event.messageId)?.content.concat(event.delta ?? "")
-              ?? (event.delta ?? ""),
+            content: accumulatedText,
+            parts: [{ type: "text" as const, text: accumulatedText }, ...nonTextParts],
             status: "streaming",
-          }),
-        );
+          });
+          // Drain any buffered artifacts targeting this message
+          const pending = pendingArtifactsRef.current.get(event.messageId);
+          if (pending && pending.length > 0) {
+            pendingArtifactsRef.current.delete(event.messageId);
+            for (const artifact of pending) {
+              result = result.map((message) => (
+                message.id === event.messageId
+                  ? mergeArtifactPartIntoMessage(message, artifact)
+                  : message
+              ));
+            }
+          }
+          return result;
+        });
         return;
       }
 
-      setMessages((current) =>
-        appendOrReplaceMessage(current, {
-          createdAt:
-            current.find((entry) => entry.id === event.messageId)?.createdAt
-            ?? new Date().toISOString(),
+      setMessages((current) => {
+        const existing = current.find((entry) => entry.id === event.messageId);
+        const nonTextParts = existing?.parts.filter((p) => p.type !== "text") ?? [];
+        let result = appendOrReplaceMessage(current, {
+          createdAt: existing?.createdAt ?? new Date().toISOString(),
           id: event.messageId,
           messageType: "plain_message",
           attachments: [],
           role: "assistant",
           runId: event.runId,
           content: event.content ?? "",
+          parts: [{ type: "text" as const, text: event.content ?? "" }, ...nonTextParts],
           status: "completed",
-        }),
-      );
+        });
+        // Drain any buffered artifacts targeting this message
+        const pending = pendingArtifactsRef.current.get(event.messageId);
+        if (pending && pending.length > 0) {
+          pendingArtifactsRef.current.delete(event.messageId);
+          for (const artifact of pending) {
+            result = result.map((message) => (
+              message.id === event.messageId
+                ? mergeArtifactPartIntoMessage(message, artifact)
+                : message
+            ));
+          }
+        }
+        return result;
+      });
 
       void resyncCompletedMessage(event.messageId, event.runId);
       showThinkingPlaceholder(event.runId);
@@ -862,10 +896,33 @@ export function RuntimeThreadSurface({
             role: "assistant",
             runId: event.runId,
             content: event.reasoning,
+            parts: [{ type: "text", text: event.reasoning }],
             status: "streaming",
           },
         ),
       );
+    });
+
+    stream.onArtifact = withActiveStream((event) => {
+      setMessages((current) => {
+        const hasMatch = current.some((message) => message.id === event.messageId);
+        if (hasMatch) {
+          return current.map((message) => (
+            message.id === event.messageId
+              ? mergeArtifactPartIntoMessage(message, event)
+              : message
+          ));
+        }
+        // No matching message yet — buffer the artifact for later attachment
+        console.warn(
+          `[onArtifact] No message found for artifact ${event.artifactId} (messageId: ${event.messageId}). Buffering for later.`,
+        );
+        const pending = pendingArtifactsRef.current;
+        const existing = pending.get(event.messageId) ?? [];
+        existing.push(event);
+        pending.set(event.messageId, existing);
+        return current;
+      });
     });
 
     stream.onQueue = withActiveStream((event: QueueEvent) => {
@@ -1605,8 +1662,8 @@ export function RuntimeThreadSurface({
           // State changed — keep the block open (don't auto-collapse on
           // completion).  Only force open when transitioning *to* a
           // non-completed state so newly-started tools expand.
-          // Task board tools always default to collapsed regardless of state.
-          if (isTaskBoardTool(tool.name)) {
+          // Default-collapsed tools always stay collapsed regardless of state.
+          if (isDefaultCollapsedTool(tool.name)) {
             next[tool.id] = tool.id in current ? current[tool.id] : false;
           } else if (!isCompletedToolState(tool.state)) {
             next[tool.id] = true;
@@ -1622,7 +1679,7 @@ export function RuntimeThreadSurface({
           continue;
         }
 
-        next[tool.id] = isTaskBoardTool(tool.name) ? false : !isCompletedToolState(tool.state);
+        next[tool.id] = isDefaultCollapsedTool(tool.name) ? false : !isCompletedToolState(tool.state);
       }
 
       const currentKeys = Object.keys(current);

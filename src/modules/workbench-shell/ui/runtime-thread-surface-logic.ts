@@ -1,5 +1,5 @@
 import type { RunState } from "@/services/thread-stream";
-import type { MessageDto, ThreadSnapshotDto } from "@/shared/types/api";
+import type { MessageDto, MessagePartDto, ThreadSnapshotDto } from "@/shared/types/api";
 
 export type RuntimeSurfaceToolState =
   | "approval-requested"
@@ -16,6 +16,7 @@ export type RuntimeSurfaceMessagePreviewInput = Pick<
   "messageType"
 > & {
   content: string;
+  parts?: MessagePartDto[] | Array<{ type: string; [key: string]: unknown }>;
   status: "streaming" | "completed" | "failed" | "discarded";
 };
 
@@ -122,12 +123,16 @@ export function isTaskBoardTool(toolName: string) {
   );
 }
 
+export function isDefaultCollapsedTool(toolName: string) {
+  return isTaskBoardTool(toolName) || toolName === "render";
+}
+
 export function getDefaultToolOpenState(
   toolName: string,
   toolState: RuntimeSurfaceToolState,
   explicitOpen: boolean | undefined,
 ): boolean {
-  if (isTaskBoardTool(toolName)) {
+  if (isDefaultCollapsedTool(toolName)) {
     return explicitOpen ?? false;
   }
   if (!isCompletedToolState(toolState)) {

@@ -171,6 +171,7 @@ pub(super) mod tests {
             run_id: Some(run_id.to_string()),
             role: role.to_string(),
             content_markdown: content.to_string(),
+            parts_json: None,
             message_type: "plain_message".to_string(),
             status: "completed".to_string(),
             metadata_json: None,
@@ -1320,6 +1321,35 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn render_tool_is_available_in_both_runtime_profiles() {
+        for profile in [DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE] {
+            let tools = runtime_tools_for_profile(profile);
+            let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+
+            assert!(tool_names.contains(&"render"));
+        }
+    }
+
+    #[test]
+    fn render_tool_requires_library_field() {
+        let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
+        let render_tool = tools
+            .iter()
+            .find(|tool| tool.name == "render")
+            .expect("render tool should exist");
+
+        let schema = &render_tool.parameters;
+        let required = schema
+            .get("required")
+            .and_then(|r: &serde_json::Value| r.as_array())
+            .expect("render should have required fields");
+
+        assert!(required
+            .iter()
+            .any(|v: &serde_json::Value| v.as_str() == Some("library")));
+    }
+
+    #[test]
     fn explore_and_review_use_auxiliary_model_when_available() {
         let model_plan =
             sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
@@ -1725,6 +1755,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Please refine the plan.".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -1737,6 +1768,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-plan".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "stale plan body".to_string(),
+                parts_json: None,
                 message_type: "plan".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -1751,6 +1783,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-plan".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Review and approve the plan.".to_string(),
+                parts_json: None,
                 message_type: "approval_prompt".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -1778,6 +1811,7 @@ Used for prompt assembly coverage.
             run_id: None,
             role: "user".to_string(),
             content_markdown: "/init".to_string(),
+            parts_json: None,
             message_type: "plain_message".to_string(),
             status: "completed".to_string(),
             metadata_json: Some(
@@ -1812,6 +1846,7 @@ Used for prompt assembly coverage.
             run_id: None,
             role: "user".to_string(),
             content_markdown: "Please inspect these files.".to_string(),
+            parts_json: None,
             message_type: "plain_message".to_string(),
             status: "completed".to_string(),
             metadata_json: None,
@@ -1884,6 +1919,7 @@ Used for prompt assembly coverage.
             run_id: None,
             role: "user".to_string(),
             content_markdown: "Describe this image.".to_string(),
+            parts_json: None,
             message_type: "plain_message".to_string(),
             status: "completed".to_string(),
             metadata_json: None,
@@ -1925,6 +1961,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-before".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Old assistant reply".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -1937,6 +1974,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "system".to_string(),
                 content_markdown: "Context is now reset".to_string(),
+                parts_json: None,
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -1955,6 +1993,7 @@ Used for prompt assembly coverage.
                 role: "system".to_string(),
                 content_markdown: "<context_summary>\nCarry this forward.\n</context_summary>"
                     .to_string(),
+                parts_json: None,
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -1972,6 +2011,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "New request".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -1996,6 +2036,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "system".to_string(),
                 content_markdown: "Context is now reset".to_string(),
+                parts_json: None,
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -2014,6 +2055,8 @@ Used for prompt assembly coverage.
                 role: "system".to_string(),
                 content_markdown: "<context_summary>\nCarry this forward.\n</context_summary>"
                     .to_string(),
+                parts_json: None,
+
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -2046,6 +2089,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Hello".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2058,6 +2102,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Let me think about this.".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -2072,6 +2117,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Here is the answer.".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2120,6 +2166,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Thinking...".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None, // no signature (old data)
@@ -2132,6 +2179,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Result.".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2166,6 +2214,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Hello".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2178,6 +2227,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Orphan reasoning".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2209,6 +2259,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Run a command".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2224,6 +2275,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Let me think about the command.".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -2239,6 +2291,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Done.".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2334,6 +2387,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Run two commands".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2348,6 +2402,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "I need to run two independent commands.".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -2362,6 +2417,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Both commands finished.".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2465,6 +2521,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Do something".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2478,6 +2535,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Let me run a command.".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -2493,6 +2551,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Running the command now.".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2506,6 +2565,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "The command succeeded.".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -2521,6 +2581,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "All done!".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2662,6 +2723,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Go".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2675,6 +2737,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "R1 thinking".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(serde_json::json!({"thinking_signature": "sig"}).to_string()),
@@ -2688,6 +2751,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Text 1".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2701,6 +2765,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "R2 thinking".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(serde_json::json!({"thinking_signature": "sig"}).to_string()),
@@ -2714,6 +2779,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "R3 thinking".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(serde_json::json!({"thinking_signature": "sig"}).to_string()),
@@ -2727,6 +2793,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Text 2".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2895,6 +2962,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Do something".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2908,6 +2976,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Thinking about the task.".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -2923,6 +2992,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: String::new(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2936,6 +3006,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Continue".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2979,6 +3050,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Hello".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -2991,6 +3063,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "   \n  ".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -3024,6 +3097,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Do something".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -3036,6 +3110,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Let me plan this.".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -3051,6 +3126,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Checking output now.".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -3066,6 +3142,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "All done.".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -3180,6 +3257,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "  ".to_string(), // empty/whitespace-only
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -3192,6 +3270,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Hello".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -3227,6 +3306,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "user".to_string(),
                 content_markdown: "Start".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -3239,6 +3319,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Orphan thinking".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -3253,6 +3334,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Final answer".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -3346,6 +3428,7 @@ Used for prompt assembly coverage.
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: "Analyze the code".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,
@@ -3358,6 +3441,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Let me search for it.".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -3373,6 +3457,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Now I can write the final answer.".to_string(),
+                parts_json: None,
                 message_type: "reasoning".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(
@@ -3388,6 +3473,7 @@ Used for prompt assembly coverage.
                 run_id: Some("run-1".to_string()),
                 role: "assistant".to_string(),
                 content_markdown: "Here is my complete analysis.".to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,

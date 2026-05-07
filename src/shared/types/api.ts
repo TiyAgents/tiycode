@@ -303,12 +303,46 @@ export interface MessageAttachmentDto {
   url: string | null;
 }
 
+export interface TextMessagePartDto {
+  type: "text";
+  text: string;
+}
+
+export interface ChartMessagePartDto {
+  type: "chart";
+  artifactId: string;
+  library: string;
+  spec: unknown;
+  title?: string | null;
+  caption?: string | null;
+  status?: "ready" | "loading" | "error";
+  error?: string | null;
+}
+
+export interface DataMessagePartDto {
+  type: `data-${string}`;
+  id?: string;
+  data: unknown;
+}
+
+export interface UnknownMessagePartDto {
+  type: string;
+  [key: string]: unknown;
+}
+
+export type MessagePartDto =
+  | TextMessagePartDto
+  | ChartMessagePartDto
+  | DataMessagePartDto
+  | UnknownMessagePartDto;
+
 export interface MessageDto {
   id: string;
   threadId: string;
   runId: string | null;
   role: "user" | "assistant" | "system";
   contentMarkdown: string;
+  parts?: MessagePartDto[] | null;
   messageType: MessageType;
   status: MessageStatus;
   metadata: unknown | null;
@@ -441,6 +475,16 @@ export type ThreadStreamEvent =
       reason: string;
     }
   | { type: "message_delta"; runId: string; messageId: string; delta: string }
+  | {
+      type: "artifact_updated";
+      runId: string;
+      messageId: string;
+      artifactId: string;
+      artifactType: string;
+      status: "started" | "delta" | "completed" | "failed";
+      payload?: unknown;
+      error?: string;
+    }
   | {
       type: "message_completed";
       runId: string;

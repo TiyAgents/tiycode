@@ -17,7 +17,8 @@ use crate::core::subagent::{
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGatewayResult,
 };
-use crate::ipc::frontend_channels::ThreadStreamEvent;
+use crate::core::workspace_paths;
+use crate::ipc::frontend_channels::{ArtifactStatus, ThreadStreamEvent};
 use crate::model::thread::MessageRecord;
 use crate::persistence::repo::{message_repo, tool_call_repo};
 
@@ -73,6 +74,10 @@ impl AgentSession {
             return self
                 .execute_task_tool(tool_name, tool_call_id, tool_input)
                 .await;
+        }
+
+        if tool_name == "render" {
+            return self.execute_render(tool_call_id, tool_input).await;
         }
 
         if tool_name == CLARIFY_TOOL_NAME {
@@ -465,6 +470,7 @@ impl AgentSession {
             run_id: Some(self.spec.run_id.clone()),
             role: "assistant".to_string(),
             content_markdown: plan_markdown(&plan_metadata),
+            parts_json: None,
             message_type: "plan".to_string(),
             status: "completed".to_string(),
             metadata_json: serde_json::to_string(&plan_metadata).ok(),
@@ -477,6 +483,7 @@ impl AgentSession {
             run_id: Some(self.spec.run_id.clone()),
             role: "assistant".to_string(),
             content_markdown: approval_prompt_markdown(&artifact),
+            parts_json: None,
             message_type: "approval_prompt".to_string(),
             status: "completed".to_string(),
             metadata_json: serde_json::to_string(&approval_metadata).ok(),
@@ -531,6 +538,318 @@ impl AgentSession {
                 "plan": artifact,
             })),
         }
+    }
+
+    async fn execute_render(
+        &self,
+        tool_call_id: &str,
+        tool_input: &serde_json::Value,
+    ) -> AgentToolResult {
+        let tool_call_storage_id = uuid::Uuid::now_v7().to_string();
+        let artifact_id = uuid::Uuid::now_v7().to_string();
+
+        // Persist the tool call
+        if let Err(error) = tool_call_repo::insert(
+            &self.pool,
+            &tool_call_repo::ToolCallInsert {
+                id: tool_call_storage_id.clone(),
+                tool_call_id: tool_call_id.to_string(),
+                run_id: self.spec.run_id.clone(),
+                thread_id: self.spec.thread_id.clone(),
+                helper_id: None,
+                tool_name: "render".to_string(),
+                tool_input_json: tool_input.to_string(),
+                status: "requested".to_string(),
+            },
+        )
+        .await
+        {
+            return agent_error_result(format!("failed to persist tool call: {error}"));
+        }
+
+        let _ = self.event_tx.send(ThreadStreamEvent::ToolRequested {
+            run_id: self.spec.run_id.clone(),
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "render".to_string(),
+            tool_input: tool_input.clone(),
+        });
+
+        let title = tool_input
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .map(String::from);
+        let caption = tool_input
+            .get("caption")
+            .and_then(serde_json::Value::as_str)
+            .map(String::from);
+        let library = tool_input
+            .get("library")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("vega-lite")
+            .to_string();
+
+        // Validate input based on library type
+        let chart_payload = match library.as_str() {
+            "html" | "svg" => {
+                // Resolve source: from inline 'source' or from file 'path'
+                let source = if let Some(inline) = tool_input.get("source").and_then(|s| s.as_str())
+                {
+                    if inline.is_empty() {
+                        None
+                    } else {
+                        Some(inline.to_string())
+                    }
+                } else if let Some(raw_path) = tool_input.get("path").and_then(|s| s.as_str()) {
+                    // Read from workspace file
+                    let workspace_root = std::path::Path::new(&self.spec.workspace_path);
+                    let resolved = workspace_paths::resolve_path_within_roots(
+                        workspace_root,
+                        &[],
+                        raw_path,
+                        crate::model::errors::ErrorSource::Tool,
+                        "render.path.outside_workspace",
+                        "render path is outside the workspace boundary",
+                    );
+                    match resolved {
+                        Ok(path) => match tokio::fs::read_to_string(&path).await {
+                            Ok(content) if !content.is_empty() => Some(content),
+                            Ok(_) => None,
+                            Err(e) => {
+                                let error = format!("failed to read file '{}': {}", raw_path, e);
+                                let error_json = serde_json::json!({ "error": &error });
+                                tool_call_repo::update_result(
+                                    &self.pool,
+                                    &tool_call_storage_id,
+                                    &error_json.to_string(),
+                                    "failed",
+                                )
+                                .await
+                                .ok();
+                                let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                                    run_id: self.spec.run_id.clone(),
+                                    tool_call_id: tool_call_id.to_string(),
+                                    error: error.clone(),
+                                });
+                                return agent_error_result(error);
+                            }
+                        },
+                        Err(e) => {
+                            let error = format!("invalid path '{}': {}", raw_path, e);
+                            let error_json = serde_json::json!({ "error": &error });
+                            tool_call_repo::update_result(
+                                &self.pool,
+                                &tool_call_storage_id,
+                                &error_json.to_string(),
+                                "failed",
+                            )
+                            .await
+                            .ok();
+                            let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                                run_id: self.spec.run_id.clone(),
+                                tool_call_id: tool_call_id.to_string(),
+                                error: error.to_string(),
+                            });
+                            return agent_error_result(error);
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let source = match source {
+                    Some(s) => s,
+                    None => {
+                        let error = format!(
+                            "render with library '{}' requires a non-empty 'source' string or a valid 'path'",
+                            library
+                        );
+                        let error_json = serde_json::json!({ "error": &error });
+                        tool_call_repo::update_result(
+                            &self.pool,
+                            &tool_call_storage_id,
+                            &error_json.to_string(),
+                            "failed",
+                        )
+                        .await
+                        .ok();
+                        let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                            run_id: self.spec.run_id.clone(),
+                            tool_call_id: tool_call_id.to_string(),
+                            error: error.clone(),
+                        });
+                        return agent_error_result(error);
+                    }
+                };
+
+                // Enforce 1MB size limit
+                if source.len() > 1_048_576 {
+                    let error = "render source exceeds maximum size of 1MB".to_string();
+                    let error_json = serde_json::json!({ "error": &error });
+                    tool_call_repo::update_result(
+                        &self.pool,
+                        &tool_call_storage_id,
+                        &error_json.to_string(),
+                        "failed",
+                    )
+                    .await
+                    .ok();
+                    let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                        run_id: self.spec.run_id.clone(),
+                        tool_call_id: tool_call_id.to_string(),
+                        error: error.clone(),
+                    });
+                    return agent_error_result(error);
+                }
+                serde_json::json!({
+                    "library": library,
+                    "source": source,
+                    "title": title,
+                    "caption": caption,
+                    "status": "ready",
+                })
+            }
+            _ => {
+                // vega-lite (default): validate spec field
+                let spec = match tool_input.get("spec") {
+                    Some(s) if s.is_object() || s.is_array() => s.clone(),
+                    _ => {
+                        let error =
+                            "render with library 'vega-lite' requires a valid 'spec' object"
+                                .to_string();
+                        let error_json = serde_json::json!({ "error": &error });
+                        tool_call_repo::update_result(
+                            &self.pool,
+                            &tool_call_storage_id,
+                            &error_json.to_string(),
+                            "failed",
+                        )
+                        .await
+                        .ok();
+                        let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                            run_id: self.spec.run_id.clone(),
+                            tool_call_id: tool_call_id.to_string(),
+                            error: error.clone(),
+                        });
+                        return agent_error_result(error);
+                    }
+                };
+                serde_json::json!({
+                    "library": library,
+                    "spec": spec,
+                    "title": title,
+                    "caption": caption,
+                    "status": "ready",
+                })
+            }
+        };
+
+        // Resolve the message to attach the artifact to
+        let target_message_id = {
+            let runs = self.active_runs_message_id().await;
+            runs.unwrap_or_else(|| format!("chart-msg-{}", &artifact_id[..8]))
+        };
+
+        // Emit started event
+        let _ = self.event_tx.send(ThreadStreamEvent::ArtifactUpdated {
+            run_id: self.spec.run_id.clone(),
+            message_id: target_message_id.clone(),
+            artifact_id: artifact_id.clone(),
+            artifact_type: "chart".to_string(),
+            status: ArtifactStatus::Started,
+            payload: Some(chart_payload.clone()),
+            error: None,
+        });
+
+        // Persist chart artifact into message parts
+        if let Err(error) = message_repo::merge_chart_artifact_part(
+            &self.pool,
+            &target_message_id,
+            &artifact_id,
+            chart_payload.clone(),
+        )
+        .await
+        {
+            tracing::warn!(
+                artifact_id = %artifact_id,
+                error = %error,
+                "failed to persist chart artifact part"
+            );
+        }
+
+        // Emit completed event
+        let _ = self.event_tx.send(ThreadStreamEvent::ArtifactUpdated {
+            run_id: self.spec.run_id.clone(),
+            message_id: target_message_id.clone(),
+            artifact_id: artifact_id.clone(),
+            artifact_type: "chart".to_string(),
+            status: ArtifactStatus::Completed,
+            payload: Some(chart_payload.clone()),
+            error: None,
+        });
+
+        // Mark tool call as completed
+        let result_json = serde_json::json!({
+            "success": true,
+            "artifactId": artifact_id,
+            "messageId": target_message_id,
+            "library": library,
+            "title": title,
+            "caption": caption,
+        });
+        tool_call_repo::update_result(
+            &self.pool,
+            &tool_call_storage_id,
+            &result_json.to_string(),
+            "completed",
+        )
+        .await
+        .ok();
+
+        let _ = self.event_tx.send(ThreadStreamEvent::ToolCompleted {
+            run_id: self.spec.run_id.clone(),
+            tool_call_id: tool_call_id.to_string(),
+            result: result_json.clone(),
+        });
+
+        AgentToolResult {
+            content: vec![ContentBlock::Text(TextContent::new(
+                serde_json::to_string(&result_json)
+                    .unwrap_or_else(|_| "Artifact rendered successfully".to_string()),
+            ))],
+            details: Some(result_json),
+        }
+    }
+
+    /// Get the last streaming/completed message ID for the current run.
+    async fn active_runs_message_id(&self) -> Option<String> {
+        // First: check the in-memory streaming_message_id tracked by the run
+        // manager — this is authoritative and avoids the DB race where the
+        // message hasn't been persisted yet by the async event handler.
+        {
+            let runs = self.active_runs.lock().await;
+            if let Some(run) = runs.get(&self.spec.run_id) {
+                if let Some(ref id) = run.streaming_message_id {
+                    if !id.is_empty() {
+                        return Some(id.clone());
+                    }
+                }
+            }
+        }
+        // Fallback: query DB for the last assistant message in this run
+        let runs = self.active_runs_db_fallback().await;
+        runs.and_then(|id| if id.is_empty() { None } else { Some(id) })
+    }
+
+    /// DB fallback: look for the last completed message in this run from DB.
+    async fn active_runs_db_fallback(&self) -> Option<String> {
+        let messages = message_repo::list_since_last_reset(&self.pool, &self.spec.thread_id)
+            .await
+            .ok()?;
+        messages
+            .iter()
+            .rev()
+            .find(|m| m.run_id.as_deref() == Some(&self.spec.run_id) && m.role == "assistant")
+            .map(|m| m.id.clone())
     }
 
     async fn execute_task_tool(
