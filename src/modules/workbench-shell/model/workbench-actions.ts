@@ -17,7 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { threadCreate, threadDelete, threadList, threadUpdateTitle } from "@/services/bridge/thread-commands";
 import { workspaceRemove, workspaceAdd, workspaceList, workspaceEnsureDefault } from "@/services/bridge/workspace-commands";
-import { threadStore } from "./thread-store";
+import { threadStore, setThreadStatus } from "./thread-store";
 import { projectStore } from "./project-store";
 import { composerStore } from "./composer-store";
 import { uiLayoutStore } from "./ui-layout-store";
@@ -554,9 +554,7 @@ export async function submitNewThread(submission: NewThreadSubmission): Promise<
         || w.id === project.id,
     )
     ?? workspaces.find(
-      (w) =>
-        w.name === project.name
-        || isSameWorkspacePath(w.path, project.path),
+      (w) => isSameWorkspacePath(w.path, project.path),
     )
     ?? null;
 
@@ -668,6 +666,10 @@ export async function submitNewThread(submission: NewThreadSubmission): Promise<
     })),
   }));
   threadStore.setState({ activeThreadProfileIdOverride: activeAgentProfileId });
+
+  // Optimistic status: seed threadStatuses so UI immediately shows "running"
+  // before RuntimeThreadSurface mounts and the real stream events arrive.
+  setThreadStatus(threadId, "running", { runId: nextPendingRunId, source: "optimistic" });
 
   // Transition to thread mode
   threadStore.setState({ isNewThreadMode: false, activeThreadId: threadId });

@@ -134,6 +134,20 @@ export function setThreadStatus(
       return {}; // no update
     }
 
+    // Guard 2: reject idle/null downgrade of an active running state.
+    // When a stale snapshot triggers runMachine.reset("idle", { runId: null }),
+    // it must not overwrite a valid running status that arrived via stream or
+    // global event with a real runId.
+    if (
+      existing &&
+      existing.runId !== null &&
+      (existing.status === "running" || existing.status === "waiting_approval" || existing.status === "needs_reply") &&
+      status === "idle" &&
+      (meta.runId === undefined || meta.runId === null)
+    ) {
+      return {}; // reject — don't downgrade active state with a null-runId idle write
+    }
+
     return {
       threadStatuses: {
         ...prev.threadStatuses,
@@ -165,6 +179,16 @@ export function batchSetThreadStatuses(
         upd.runId !== null &&
         existing.runId === upd.runId &&
         existing.updatedAt > (upd.updatedAt ?? 0)
+      ) {
+        continue;
+      }
+      // Guard 2: reject idle/null downgrade of an active running state.
+      if (
+        existing &&
+        existing.runId !== null &&
+        (existing.status === "running" || existing.status === "waiting_approval" || existing.status === "needs_reply") &&
+        upd.status === "idle" &&
+        (upd.runId === undefined || upd.runId === null)
       ) {
         continue;
       }

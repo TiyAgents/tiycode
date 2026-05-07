@@ -14,6 +14,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   dispatchGlobalEvent,
   dispatchRunFinishedEvent,
+  dispatchRunStatusChangedEvent,
 } from "@/modules/workbench-shell/model/run-event-dispatcher";
 import {
   threadStore,
@@ -66,6 +67,22 @@ export function useGlobalThreadEvents(
           const { threadId, runId, status } = event.payload;
           dispatchRunFinishedEvent(threadId, runId, status);
           void syncWorkspaceSidebar().catch(() => {});
+        },
+      ),
+    );
+
+    unlistenPromises.push(
+      listen<{ threadId: string; runId: string; status: string }>(
+        "thread-run-status-changed",
+        (event) => {
+          const { threadId, runId, status } = event.payload;
+          dispatchRunStatusChangedEvent(threadId, runId, status);
+
+          // Extend the auto-refresh grace period so the sidebar poll stays
+          // active while background threads are transitioning through
+          // intermediate states (waiting_approval, needs_reply, etc.).
+          sidebarAutoRefreshUntilRef.current =
+            Date.now() + SIDEBAR_AUTO_REFRESH_GRACE_MS;
         },
       ),
     );

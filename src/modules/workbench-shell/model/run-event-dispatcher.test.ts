@@ -4,6 +4,7 @@ import type { RunMachineContext, RunMachineEvent, RunMachineState } from "./run-
 import {
   dispatchGlobalEvent,
   dispatchRunFinishedEvent,
+  dispatchRunStatusChangedEvent,
   registerRunMachine,
   unregisterRunMachine,
 } from "./run-event-dispatcher";
@@ -116,6 +117,85 @@ describe("run-event-dispatcher", () => {
 
       unregisterRunMachine("a");
       unregisterRunMachine("b");
+    });
+  });
+
+  describe("dispatchRunStatusChangedEvent", () => {
+    it("routes to machine with mapped event for registered thread", () => {
+      const machine = makeMockMachine();
+      registerRunMachine("thread-1", machine);
+
+      dispatchRunStatusChangedEvent("thread-1", "r1", "waiting_approval");
+      expect(machine.send).toHaveBeenCalledWith("APPROVAL_REQUIRED", {
+        runId: "r1",
+        message: undefined,
+      });
+    });
+
+    it("maps needs_reply to CLARIFY_REQUIRED for registered machine", () => {
+      const machine = makeMockMachine();
+      registerRunMachine("thread-1", machine);
+
+      dispatchRunStatusChangedEvent("thread-1", "r1", "needs_reply");
+      expect(machine.send).toHaveBeenCalledWith("CLARIFY_REQUIRED", {
+        runId: "r1",
+        message: undefined,
+      });
+    });
+
+    it("maps running to RUN_STARTED for registered machine", () => {
+      const machine = makeMockMachine();
+      registerRunMachine("thread-1", machine);
+
+      dispatchRunStatusChangedEvent("thread-1", "r1", "running");
+      expect(machine.send).toHaveBeenCalledWith("RUN_STARTED", {
+        runId: "r1",
+        message: undefined,
+      });
+    });
+
+    it("falls back to setThreadStatus for unregistered thread with waiting_approval", () => {
+      dispatchRunStatusChangedEvent("thread-unknown", "r2", "waiting_approval");
+      expect(setThreadStatus).toHaveBeenCalledWith(
+        "thread-unknown",
+        "waiting_approval",
+        expect.objectContaining({ runId: "r2", source: "tauri_event" }),
+      );
+    });
+
+    it("falls back to setThreadStatus for unregistered thread with needs_reply", () => {
+      dispatchRunStatusChangedEvent("thread-unknown", "r2", "needs_reply");
+      expect(setThreadStatus).toHaveBeenCalledWith(
+        "thread-unknown",
+        "needs_reply",
+        expect.objectContaining({ runId: "r2", source: "tauri_event" }),
+      );
+    });
+
+    it("falls back to setThreadStatus for unregistered thread with running", () => {
+      dispatchRunStatusChangedEvent("thread-unknown", "r3", "running");
+      expect(setThreadStatus).toHaveBeenCalledWith(
+        "thread-unknown",
+        "running",
+        expect.objectContaining({ runId: "r3", source: "tauri_event" }),
+      );
+    });
+
+    it("maps terminal statuses correctly for unregistered thread", () => {
+      dispatchRunStatusChangedEvent("thread-unknown", "r4", "limit_reached");
+      expect(setThreadStatus).toHaveBeenCalledWith(
+        "thread-unknown",
+        "limit_reached",
+        expect.objectContaining({ runId: "r4", source: "tauri_event" }),
+      );
+    });
+
+    it("skips unknown status without crashing for registered machine", () => {
+      const machine = makeMockMachine();
+      registerRunMachine("thread-1", machine);
+
+      dispatchRunStatusChangedEvent("thread-1", "r1", "some_unknown_status");
+      expect(machine.send).not.toHaveBeenCalled();
     });
   });
 });
