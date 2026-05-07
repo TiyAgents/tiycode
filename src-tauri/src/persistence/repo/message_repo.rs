@@ -349,6 +349,7 @@ pub async fn merge_chart_artifact_part(
         "artifactId": artifact_id,
         "library": chart_payload.get("library").cloned().unwrap_or_else(|| serde_json::json!("vega-lite")),
         "spec": chart_payload.get("spec").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "source": chart_payload.get("source").cloned().unwrap_or(serde_json::Value::Null),
         "title": chart_payload.get("title").cloned().unwrap_or(serde_json::Value::Null),
         "caption": chart_payload.get("caption").cloned().unwrap_or(serde_json::Value::Null),
         "status": chart_payload.get("status").cloned().unwrap_or_else(|| serde_json::json!("ready")),
