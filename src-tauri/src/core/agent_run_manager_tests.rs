@@ -9,8 +9,9 @@ pub(super) mod tests {
         extract_context_summary_block, extract_run_model_refs, extract_run_string,
         is_terminal_runtime_event, mark_thread_run_cancellation_requested, merge_json_value,
         normalize_compact_summary, normalize_generated_title, render_compact_summary_history,
-        should_complete_reasoning_for_event, summary_history_char_budget, terminal_event_status,
-        truncate_chars, truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
+        should_complete_reasoning_for_event, sidebar_status_for_runtime_event,
+        summary_history_char_budget, terminal_event_status, truncate_chars,
+        truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
         SUMMARY_HISTORY_MIN_CHARS, SUMMARY_TOOL_RESULT_MAX_CHARS,
     };
     use crate::core::agent_session::{ProfileResponseStyle, ResolvedModelRole};
@@ -1533,5 +1534,119 @@ pub(super) mod tests {
         assert_eq!(budget, expected);
         // And must be well above any previous artificial cap.
         assert!(budget > 400_000);
+    }
+
+    // -----------------------------------------------------------------------
+    // sidebar_status_for_runtime_event
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sidebar_status_maps_run_started_to_running() {
+        let event = ThreadStreamEvent::RunStarted {
+            run_id: "run-1".to_string(),
+            run_mode: "default".to_string(),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_maps_approval_required_to_waiting_approval() {
+        let event = ThreadStreamEvent::ApprovalRequired {
+            run_id: "run-1".to_string(),
+            tool_call_id: "tc-1".to_string(),
+            tool_name: "shell".to_string(),
+            tool_input: serde_json::json!({"command": "rm -rf /"}),
+            reason: "dangerous".to_string(),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("waiting_approval")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_maps_clarify_required_to_needs_reply() {
+        let event = ThreadStreamEvent::ClarifyRequired {
+            run_id: "run-1".to_string(),
+            tool_call_id: "tc-1".to_string(),
+            tool_name: "clarify".to_string(),
+            tool_input: serde_json::json!({"question": "Which option?"}),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("needs_reply")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_maps_approval_resolved_to_running() {
+        let event = ThreadStreamEvent::ApprovalResolved {
+            run_id: "run-1".to_string(),
+            tool_call_id: "tc-1".to_string(),
+            approved: true,
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_maps_run_interrupted_with_cancel_to_cancelled() {
+        let event = ThreadStreamEvent::RunInterrupted {
+            run_id: "run-1".to_string(),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, true),
+            Some("cancelled")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_maps_run_interrupted_without_cancel_to_interrupted() {
+        let event = ThreadStreamEvent::RunInterrupted {
+            run_id: "run-1".to_string(),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("interrupted")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_returns_none_for_message_delta() {
+        let event = ThreadStreamEvent::MessageDelta {
+            run_id: "run-1".to_string(),
+            message_id: "msg-1".to_string(),
+            delta: "hello".to_string(),
+        };
+        assert_eq!(sidebar_status_for_runtime_event(&event, false), None);
+    }
+
+    #[test]
+    fn sidebar_status_maps_run_checkpointed_to_waiting_approval() {
+        let event = ThreadStreamEvent::RunCheckpointed {
+            run_id: "run-1".to_string(),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("waiting_approval")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_maps_limit_reached_to_limit_reached() {
+        let event = ThreadStreamEvent::RunLimitReached {
+            run_id: "run-1".to_string(),
+            error: "token limit".to_string(),
+            max_turns: 100,
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("limit_reached")
+        );
     }
 }

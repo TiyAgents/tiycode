@@ -91,6 +91,36 @@ export function dispatchRunFinishedEvent(
   }
 }
 
+/**
+ * Dispatch a unified `thread-run-status-changed` event.
+ *
+ * This covers all sidebar-visible status transitions — including intermediate
+ * states like `waiting_approval` and `needs_reply` — so background threads
+ * without an active `RuntimeThreadSurface` can update their sidebar indicator.
+ *
+ * If the thread has an active machine, the status is mapped to a machine event
+ * and routed there; otherwise it writes directly to `threadStore`.
+ */
+export function dispatchRunStatusChangedEvent(
+  threadId: string,
+  runId: string,
+  backendStatus: string,
+): void {
+  const machine = activeMachines.get(threadId);
+  if (machine) {
+    const event = mapBackendStatusToMachineEvent(backendStatus);
+    if (event) {
+      machine.send(event, { runId, message: undefined });
+    }
+  } else {
+    setThreadStatus(
+      threadId,
+      backendStatusToThreadRunStatus(backendStatus),
+      { runId, source: "tauri_event" },
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -136,10 +166,45 @@ function mapBackendFinishedStatusToMachineEvent(
   }
 }
 
+/**
+ * Map any backend status string (including intermediate states) to a machine
+ * event. Returns `null` for unrecognized statuses so the caller can skip.
+ */
+function mapBackendStatusToMachineEvent(
+  status: string,
+): RunMachineEvent | null {
+  switch (status) {
+    case "running":
+      return "RUN_STARTED";
+    case "waiting_approval":
+      return "APPROVAL_REQUIRED";
+    case "needs_reply":
+      return "CLARIFY_REQUIRED";
+    case "completed":
+      return "RUN_COMPLETED";
+    case "failed":
+      return "RUN_FAILED";
+    case "cancelled":
+      return "RUN_CANCELLED";
+    case "interrupted":
+      return "RUN_INTERRUPTED";
+    case "limit_reached":
+      return "LIMIT_REACHED";
+    default:
+      return null;
+  }
+}
+
 function backendStatusToThreadRunStatus(
   status: string,
 ): ThreadRunStatus {
   switch (status) {
+    case "running":
+      return "running";
+    case "waiting_approval":
+      return "waiting_approval";
+    case "needs_reply":
+      return "needs_reply";
     case "failed":
       return "failed";
     case "interrupted":

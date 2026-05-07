@@ -26,7 +26,8 @@ use crate::persistence::repo::{message_repo, run_repo, thread_repo, workspace_re
 pub(crate) use crate::core::agent_run_event_handler::build_orphaned_run_terminal_event;
 #[cfg(test)]
 pub(crate) use crate::core::agent_run_event_handler::{
-    is_terminal_runtime_event, should_complete_reasoning_for_event, terminal_event_status,
+    is_terminal_runtime_event, should_complete_reasoning_for_event,
+    sidebar_status_for_runtime_event, terminal_event_status,
 };
 pub(crate) use crate::core::agent_run_summary::*;
 pub(crate) use crate::core::agent_run_title::*;

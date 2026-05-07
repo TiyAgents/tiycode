@@ -5,7 +5,9 @@ use crate::core::agent_run_title::{build_title_model_candidates, maybe_generate_
 use crate::core::agent_session::ResolvedModelRole;
 use crate::core::built_in_agent_runtime::RuntimeSessionFinishState;
 use crate::core::task_board_manager;
-use crate::ipc::app_events::{self, ThreadRunFinishedPayload, ThreadRunStartedPayload};
+use crate::ipc::app_events::{
+    self, ThreadRunFinishedPayload, ThreadRunStartedPayload, ThreadRunStatusChangedPayload,
+};
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{MessageRecord, ThreadStatus};
@@ -56,6 +58,44 @@ pub(crate) fn is_terminal_runtime_event(event: &ThreadStreamEvent) -> bool {
             | ThreadStreamEvent::RunCancelled { .. }
             | ThreadStreamEvent::RunInterrupted { .. }
     )
+}
+
+/// Map a runtime stream event to the sidebar-visible status string that should
+/// be broadcast globally. Returns `None` for events that do not change the
+/// thread's user-visible run status (e.g. message deltas, usage updates).
+///
+/// The returned string matches the `ThreadStatus` values used by the frontend
+/// sidebar indicator: `running`, `waiting_approval`, `needs_reply`, `completed`,
+/// `limit_reached`, `failed`, `cancelled`, `interrupted`.
+pub(crate) fn sidebar_status_for_runtime_event(
+    event: &ThreadStreamEvent,
+    cancellation_requested: bool,
+) -> Option<&'static str> {
+    match event {
+        ThreadStreamEvent::RunStarted { .. }
+        | ThreadStreamEvent::RunRetrying { .. }
+        | ThreadStreamEvent::ApprovalResolved { .. }
+        | ThreadStreamEvent::ClarifyResolved { .. } => Some("running"),
+
+        ThreadStreamEvent::ApprovalRequired { .. } | ThreadStreamEvent::RunCheckpointed { .. } => {
+            Some("waiting_approval")
+        }
+
+        ThreadStreamEvent::ClarifyRequired { .. } => Some("needs_reply"),
+
+        ThreadStreamEvent::RunCompleted { .. } => Some("completed"),
+        ThreadStreamEvent::RunLimitReached { .. } => Some("limit_reached"),
+        ThreadStreamEvent::RunFailed { .. } => Some("failed"),
+        ThreadStreamEvent::RunCancelled { .. } => Some("cancelled"),
+        ThreadStreamEvent::RunInterrupted { .. } => {
+            if cancellation_requested {
+                Some("cancelled")
+            } else {
+                Some("interrupted")
+            }
+        }
+        _ => None,
+    }
 }
 
 impl AgentRunManager {
@@ -308,6 +348,23 @@ impl AgentRunManager {
                 );
             }
             _ => {}
+        }
+
+        // Broadcast unified status-changed event so the frontend sidebar can
+        // track intermediate states (waiting_approval, needs_reply, etc.) for
+        // background threads that have no active per-thread stream.
+        if let Some(sidebar_status) =
+            sidebar_status_for_runtime_event(&event, self.was_cancel_requested(run_id).await)
+        {
+            let thread_id = self.get_thread_id(run_id).await;
+            let _ = self.app_handle.emit(
+                app_events::THREAD_RUN_STATUS_CHANGED,
+                ThreadRunStatusChangedPayload {
+                    thread_id,
+                    run_id: run_id.to_string(),
+                    status: sidebar_status.to_string(),
+                },
+            );
         }
 
         if is_terminal_runtime_event(&event) {

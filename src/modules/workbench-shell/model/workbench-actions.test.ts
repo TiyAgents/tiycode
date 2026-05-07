@@ -594,6 +594,11 @@ describe("submitNewThread", () => {
     expect(state.workspaces[0].threads[0].status).toBe("running");
     expect(state.isNewThreadMode).toBe(false);
     expect(state.openWorkspaces["ws-1"]).toBe(true);
+    // Should have seeded threadStatuses with optimistic running status
+    const threadId = state.workspaces[0].threads[0].id;
+    expect(state.threadStatuses[threadId]).toBeDefined();
+    expect(state.threadStatuses[threadId].status).toBe("running");
+    expect(state.threadStatuses[threadId].source).toBe("optimistic");
     // Should have added a pending run
     expect(state.pendingRuns["thread-1"]).toBeDefined();
     expect(state.pendingRuns["thread-1"].displayText).toBe("hello");
