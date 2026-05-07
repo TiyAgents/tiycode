@@ -124,7 +124,7 @@ export function isTaskBoardTool(toolName: string) {
 }
 
 function isDefaultCollapsedTool(toolName: string) {
-  return isTaskBoardTool(toolName) || toolName === "render_chart";
+  return isTaskBoardTool(toolName) || toolName === "render";
 }
 
 export function getDefaultToolOpenState(

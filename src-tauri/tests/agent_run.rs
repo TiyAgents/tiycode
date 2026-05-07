@@ -947,13 +947,13 @@ async fn test_run_helpers_table_persists_collapsed_helper_summary() {
 }
 
 // =========================================================================
-// T1.5.10 — render_chart tool execution integration test
+// T1.5.10 — render tool execution integration test
 // =========================================================================
 
-/// Validates the complete render_chart data flow: tool_call persistence,
+/// Validates the complete render data flow: tool_call persistence,
 /// chart artifact merge into message parts, and expected DB state.
 #[tokio::test]
-async fn test_render_chart_tool_persists_tool_call_and_chart_artifact() {
+async fn test_render_tool_persists_tool_call_and_chart_artifact() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-chart", "/tmp/chart").await;
     test_helpers::seed_thread(&pool, "t-chart", "ws-chart", None).await;
@@ -967,8 +967,8 @@ async fn test_render_chart_tool_persists_tool_call_and_chart_artifact() {
     )
     .await;
 
-    // Simulate the render_chart tool execution flow:
-    // Step 1: Insert tool call (matches execute_render_chart logic)
+    // Simulate the render tool execution flow:
+    // Step 1: Insert tool call (matches execute_render logic)
     let tool_call_id = "tc-chart-001";
     let tool_input = serde_json::json!({
         "spec": { "mark": "bar", "encoding": { "x": { "field": "category" }, "y": { "field": "value" } } },
@@ -985,7 +985,7 @@ async fn test_render_chart_tool_persists_tool_call_and_chart_artifact() {
             run_id: "r-chart".to_string(),
             thread_id: "t-chart".to_string(),
             helper_id: None,
-            tool_name: "render_chart".to_string(),
+            tool_name: "render".to_string(),
             tool_input_json: tool_input.to_string(),
             status: "requested".to_string(),
         },
@@ -1037,7 +1037,7 @@ async fn test_render_chart_tool_persists_tool_call_and_chart_artifact() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(tc_row.get::<String, _>("tool_name"), "render_chart");
+    assert_eq!(tc_row.get::<String, _>("tool_name"), "render");
     assert_eq!(tc_row.get::<String, _>("status"), "completed");
     let stored_result: serde_json::Value =
         serde_json::from_str(&tc_row.get::<String, _>("tool_output_json")).unwrap();
@@ -1069,10 +1069,10 @@ async fn test_render_chart_tool_persists_tool_call_and_chart_artifact() {
     assert_eq!(parts[1]["status"].as_str().unwrap(), "ready");
 }
 
-/// Validates that render_chart validation failure still persists the tool call
-/// with failed status, matching the execute_render_chart error path.
+/// Validates that render validation failure still persists the tool call
+/// with failed status, matching the execute_render error path.
 #[tokio::test]
-async fn test_render_chart_validation_failure_persists_failed_tool_call() {
+async fn test_render_validation_failure_persists_failed_tool_call() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-chart-fail", "/tmp/chart-fail").await;
     test_helpers::seed_thread(&pool, "t-chart-fail", "ws-chart-fail", None).await;
@@ -1091,7 +1091,7 @@ async fn test_render_chart_validation_failure_persists_failed_tool_call() {
             run_id: "r-chart-fail".to_string(),
             thread_id: "t-chart-fail".to_string(),
             helper_id: None,
-            tool_name: "render_chart".to_string(),
+            tool_name: "render".to_string(),
             tool_input_json: tool_input.to_string(),
             status: "requested".to_string(),
         },
@@ -1100,7 +1100,7 @@ async fn test_render_chart_validation_failure_persists_failed_tool_call() {
     .expect("tool_call insert should succeed");
 
     // Validation fails → update to failed status
-    let error = "render_chart requires a valid 'spec' object";
+    let error = "render with library 'vega-lite' requires a valid 'spec' object";
     let error_json = serde_json::json!({ "error": error });
     tiycode_lib::persistence::repo::tool_call_repo::update_result(
         &pool,

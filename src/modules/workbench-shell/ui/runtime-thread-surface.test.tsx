@@ -148,7 +148,7 @@ describe("getDefaultToolOpenState", () => {
     expect(getDefaultToolOpenState("create_task", "input-available", undefined)).toBe(false);
     expect(getDefaultToolOpenState("update_task", "output-available", undefined)).toBe(false);
     expect(getDefaultToolOpenState("query_task", "input-streaming", undefined)).toBe(false);
-    expect(getDefaultToolOpenState("render_chart", "output-available", undefined)).toBe(false);
+    expect(getDefaultToolOpenState("render", "output-available", undefined)).toBe(false);
   });
 
   it("respects explicit open state for task board tools", () => {

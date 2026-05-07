@@ -1321,32 +1321,32 @@ Used for prompt assembly coverage.
     }
 
     #[test]
-    fn render_chart_tool_is_available_in_both_runtime_profiles() {
+    fn render_tool_is_available_in_both_runtime_profiles() {
         for profile in [DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE] {
             let tools = runtime_tools_for_profile(profile);
             let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
-            assert!(tool_names.contains(&"render_chart"));
+            assert!(tool_names.contains(&"render"));
         }
     }
 
     #[test]
-    fn render_chart_tool_requires_spec_field() {
+    fn render_tool_requires_library_field() {
         let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
-        let render_chart = tools
+        let render_tool = tools
             .iter()
-            .find(|tool| tool.name == "render_chart")
-            .expect("render_chart tool should exist");
+            .find(|tool| tool.name == "render")
+            .expect("render tool should exist");
 
-        let schema = &render_chart.parameters;
+        let schema = &render_tool.parameters;
         let required = schema
             .get("required")
             .and_then(|r: &serde_json::Value| r.as_array())
-            .expect("render_chart should have required fields");
+            .expect("render should have required fields");
 
         assert!(required
             .iter()
-            .any(|v: &serde_json::Value| v.as_str() == Some("spec")));
+            .any(|v: &serde_json::Value| v.as_str() == Some("library")));
     }
 
     #[test]

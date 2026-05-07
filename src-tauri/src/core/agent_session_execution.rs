@@ -75,8 +75,8 @@ impl AgentSession {
                 .await;
         }
 
-        if tool_name == "render_chart" {
-            return self.execute_render_chart(tool_call_id, tool_input).await;
+        if tool_name == "render" {
+            return self.execute_render(tool_call_id, tool_input).await;
         }
 
         if tool_name == CLARIFY_TOOL_NAME {
@@ -539,7 +539,7 @@ impl AgentSession {
         }
     }
 
-    async fn execute_render_chart(
+    async fn execute_render(
         &self,
         tool_call_id: &str,
         tool_input: &serde_json::Value,
@@ -556,7 +556,7 @@ impl AgentSession {
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
                 helper_id: None,
-                tool_name: "render_chart".to_string(),
+                tool_name: "render".to_string(),
                 tool_input_json: tool_input.to_string(),
                 status: "requested".to_string(),
             },
@@ -569,32 +569,9 @@ impl AgentSession {
         let _ = self.event_tx.send(ThreadStreamEvent::ToolRequested {
             run_id: self.spec.run_id.clone(),
             tool_call_id: tool_call_id.to_string(),
-            tool_name: "render_chart".to_string(),
+            tool_name: "render".to_string(),
             tool_input: tool_input.clone(),
         });
-
-        // Validate spec field exists
-        let spec = match tool_input.get("spec") {
-            Some(s) if s.is_object() || s.is_array() => s.clone(),
-            _ => {
-                let error = "render_chart requires a valid 'spec' object".to_string();
-                let error_json = serde_json::json!({ "error": &error });
-                tool_call_repo::update_result(
-                    &self.pool,
-                    &tool_call_storage_id,
-                    &error_json.to_string(),
-                    "failed",
-                )
-                .await
-                .ok();
-                let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
-                    run_id: self.spec.run_id.clone(),
-                    tool_call_id: tool_call_id.to_string(),
-                    error: error.clone(),
-                });
-                return agent_error_result(error);
-            }
-        };
 
         let title = tool_input
             .get("title")
@@ -610,20 +587,101 @@ impl AgentSession {
             .unwrap_or("vega-lite")
             .to_string();
 
-        // Resolve the message to attach the chart to: use the last completed
-        // assistant message in this run, or create a reference if needed.
+        // Validate input based on library type
+        let chart_payload = match library.as_str() {
+            "html" | "svg" => {
+                // Validate source field exists and is a non-empty string
+                let source = match tool_input.get("source").and_then(|s| s.as_str()) {
+                    Some(s) if !s.is_empty() => s.to_string(),
+                    _ => {
+                        let error = format!(
+                            "render with library '{}' requires a non-empty 'source' string",
+                            library
+                        );
+                        let error_json = serde_json::json!({ "error": &error });
+                        tool_call_repo::update_result(
+                            &self.pool,
+                            &tool_call_storage_id,
+                            &error_json.to_string(),
+                            "failed",
+                        )
+                        .await
+                        .ok();
+                        let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                            run_id: self.spec.run_id.clone(),
+                            tool_call_id: tool_call_id.to_string(),
+                            error: error.clone(),
+                        });
+                        return agent_error_result(error);
+                    }
+                };
+                // Enforce 1MB size limit
+                if source.len() > 1_048_576 {
+                    let error = "render source exceeds maximum size of 1MB".to_string();
+                    let error_json = serde_json::json!({ "error": &error });
+                    tool_call_repo::update_result(
+                        &self.pool,
+                        &tool_call_storage_id,
+                        &error_json.to_string(),
+                        "failed",
+                    )
+                    .await
+                    .ok();
+                    let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                        run_id: self.spec.run_id.clone(),
+                        tool_call_id: tool_call_id.to_string(),
+                        error: error.clone(),
+                    });
+                    return agent_error_result(error);
+                }
+                serde_json::json!({
+                    "library": library,
+                    "source": source,
+                    "title": title,
+                    "caption": caption,
+                    "status": "ready",
+                })
+            }
+            _ => {
+                // vega-lite (default): validate spec field
+                let spec = match tool_input.get("spec") {
+                    Some(s) if s.is_object() || s.is_array() => s.clone(),
+                    _ => {
+                        let error =
+                            "render with library 'vega-lite' requires a valid 'spec' object"
+                                .to_string();
+                        let error_json = serde_json::json!({ "error": &error });
+                        tool_call_repo::update_result(
+                            &self.pool,
+                            &tool_call_storage_id,
+                            &error_json.to_string(),
+                            "failed",
+                        )
+                        .await
+                        .ok();
+                        let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                            run_id: self.spec.run_id.clone(),
+                            tool_call_id: tool_call_id.to_string(),
+                            error: error.clone(),
+                        });
+                        return agent_error_result(error);
+                    }
+                };
+                serde_json::json!({
+                    "library": library,
+                    "spec": spec,
+                    "title": title,
+                    "caption": caption,
+                    "status": "ready",
+                })
+            }
+        };
+
+        // Resolve the message to attach the artifact to
         let target_message_id = {
             let runs = self.active_runs_message_id().await;
             runs.unwrap_or_else(|| format!("chart-msg-{}", &artifact_id[..8]))
         };
-
-        let chart_payload = serde_json::json!({
-            "library": library,
-            "spec": spec,
-            "title": title,
-            "caption": caption,
-            "status": "ready",
-        });
 
         // Emit started event
         let _ = self.event_tx.send(ThreadStreamEvent::ArtifactUpdated {
@@ -690,7 +748,7 @@ impl AgentSession {
         AgentToolResult {
             content: vec![ContentBlock::Text(TextContent::new(
                 serde_json::to_string(&result_json)
-                    .unwrap_or_else(|_| "Chart rendered successfully".to_string()),
+                    .unwrap_or_else(|_| "Artifact rendered successfully".to_string()),
             ))],
             details: Some(result_json),
         }

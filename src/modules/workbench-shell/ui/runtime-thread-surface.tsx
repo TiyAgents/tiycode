@@ -232,6 +232,7 @@ function mergeArtifactPartIntoMessage(
     artifactId: event.artifactId,
     library: typeof payload?.library === "string" ? payload.library : "vega-lite",
     spec: payload?.spec ?? {},
+    source: typeof payload?.source === "string" ? payload.source : null,
     title: typeof payload?.title === "string" ? payload.title : null,
     caption: typeof payload?.caption === "string" ? payload.caption : null,
     status: event.kind === "failed" ? "error" : event.kind === "started" ? "loading" : "ready",

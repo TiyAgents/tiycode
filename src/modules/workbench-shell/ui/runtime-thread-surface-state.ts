@@ -29,6 +29,7 @@ export type SurfaceChartMessagePart = {
   artifactId: string;
   library: string;
   spec: unknown;
+  source: string | null;
   title: string | null;
   caption: string | null;
   status: "ready" | "loading" | "error";
@@ -145,6 +146,7 @@ function mapChartPart(part: ChartMessagePartDto): SurfaceChartMessagePart {
     caption: part.caption ?? null,
     error: part.error ?? null,
     library: part.library,
+    source: (part as unknown as Record<string, unknown>).source as string ?? null,
     spec: part.spec,
     status: part.status ?? "ready",
     title: part.title ?? null,
@@ -181,7 +183,7 @@ export function mapMessageParts(parts: MessageDto["parts"], contentMarkdown: str
         part.type === "chart"
         && "artifactId" in part
         && "library" in part
-        && "spec" in part
+        && ("spec" in part || "source" in part)
       ) {
         return mapChartPart(part as ChartMessagePartDto);
       }

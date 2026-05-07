@@ -485,17 +485,17 @@ You may call this tool multiple times in a run to incrementally refine the plan.
         }),
     ));
 
-    // Chart artifact rendering tool (always available)
+    // Render artifact tool (always available) — supports charts, HTML, and SVG
     tools.push(AgentTool::new(
-        "render_chart",
-        "Render Chart",
-        "Render a structured chart artifact into the current thread message. The chart is displayed as an interactive Vega-Lite visualization in the conversation. Use this when the user asks for data visualization, statistical plots, comparisons, distributions, or any graphical explanation. The spec must be a valid Vega-Lite JSON specification. Multiple charts can be rendered in sequence within the same message for step-by-step visual explanations.",
+        "render",
+        "Render",
+        "Render a visual artifact into the current thread message. Supports Vega-Lite charts, HTML pages, and SVG graphics. For charts, provide a valid Vega-Lite JSON spec. For HTML or SVG, provide the source code as a string. The artifact is displayed inline in the conversation. Multiple renders can be produced in sequence within the same message.",
         serde_json::json!({
             "type": "object",
             "properties": {
                 "title": {
                     "type": "string",
-                    "description": "Short title displayed above the chart."
+                    "description": "Short title displayed above the rendered artifact."
                 },
                 "caption": {
                     "type": "string",
@@ -503,15 +503,19 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                 },
                 "library": {
                     "type": "string",
-                    "enum": ["vega-lite"],
-                    "description": "Chart library to use. Currently only 'vega-lite' is supported."
+                    "enum": ["vega-lite", "html", "svg"],
+                    "description": "Render type. Use 'vega-lite' for data visualizations (requires 'spec'), 'html' for HTML pages, or 'svg' for SVG graphics (both require 'source')."
                 },
                 "spec": {
                     "type": "object",
-                    "description": "A complete Vega-Lite specification object. Must include at minimum '$schema', 'data', and 'mark' or 'layer'."
+                    "description": "A complete Vega-Lite specification object. Required when library is 'vega-lite'. Must include at minimum '$schema', 'data', and 'mark' or 'layer'."
+                },
+                "source": {
+                    "type": "string",
+                    "description": "HTML or SVG source code string. Required when library is 'html' or 'svg'."
                 }
             },
-            "required": ["spec"]
+            "required": ["library"]
         }),
     ));
 

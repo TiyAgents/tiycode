@@ -1,22 +1,30 @@
 import { Component, useEffect, useMemo, useRef, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import { AlertCircleIcon, BarChart3Icon, CodeIcon, EyeIcon } from "lucide-react";
+import { AlertCircleIcon, BarChart3Icon, CodeIcon, EyeIcon, ExternalLinkIcon } from "lucide-react";
 import { useTheme } from "@/app/providers/theme-provider";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { SurfaceChartMessagePart } from "@/modules/workbench-shell/ui/runtime-thread-surface-state";
 import { cn } from "@/shared/lib/utils";
 import { validateSpec } from "@/modules/workbench-shell/ui/chart-spec-validation";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
 
 type ThreadChartArtifactCardProps = {
   part: SurfaceChartMessagePart;
 };
 
-function getStatusLabel(status: SurfaceChartMessagePart["status"]) {
-  switch (status) {
-    case "loading":
-      return "Preparing chart";
-    case "error":
-      return "Chart unavailable";
+function getStatusLabel(status: SurfaceChartMessagePart["status"], library: string) {
+  if (status === "loading") return "Preparing…";
+  if (status === "error") return "Unavailable";
+  switch (library) {
+    case "html":
+      return "HTML artifact";
+    case "svg":
+      return "SVG artifact";
     default:
       return "Chart artifact";
   }
@@ -94,6 +102,54 @@ function VegaLiteRenderer({ spec }: { spec: unknown }) {
   return <div ref={containerRef} className="w-full overflow-x-auto [&_.vega-embed]:!w-full" />;
 }
 
+function HtmlSvgRenderer({ source, library }: { source: string; library: string }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const langHint = library === "svg" ? "svg" : "html";
+
+  return (
+    <>
+      <div className="space-y-3">
+        <div className="rounded-xl bg-app-surface/45 px-3 py-3 text-sm text-app-muted">
+          <MessageResponse>{`\`\`\`${langHint}\n${source}\n\`\`\``}</MessageResponse>
+        </div>
+        <button
+          type="button"
+          onClick={() => setPreviewOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-app-border/40 bg-app-surface/50 px-3 py-1.5 text-xs font-medium text-app-foreground transition-colors hover:bg-app-surface/80"
+        >
+          <ExternalLinkIcon className="size-3.5" />
+          Preview
+        </button>
+      </div>
+
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="max-w-4xl h-[80vh] flex flex-col p-0">
+          <DialogHeader className="shrink-0 border-b border-app-border/30 px-4 py-3">
+            <DialogTitle className="text-sm font-medium">
+              {library.toUpperCase()} Preview
+            </DialogTitle>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-auto p-0">
+            {library === "svg" ? (
+              <div
+                className="flex h-full w-full items-center justify-center p-4"
+                dangerouslySetInnerHTML={{ __html: source }}
+              />
+            ) : (
+              <iframe
+                srcDoc={source}
+                sandbox="allow-scripts"
+                className="h-full w-full border-0"
+                title="HTML Preview"
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 function ChartErrorFallback({ message }: { message: string }) {
   return (
     <div className="flex items-start gap-2 rounded-xl border border-app-danger/25 bg-app-danger/8 px-3 py-2 text-sm text-app-danger">
@@ -104,9 +160,10 @@ function ChartErrorFallback({ message }: { message: string }) {
 }
 
 export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) {
+  const isHtmlSvg = part.library === "html" || part.library === "svg";
   const [showSpec, setShowSpec] = useState(false);
   const specText = useMemo(() => JSON.stringify(part.spec, null, 2), [part.spec]);
-  const validationError = part.status !== "loading" ? validateSpec(part.spec) : null;
+  const validationError = !isHtmlSvg && part.status !== "loading" ? validateSpec(part.spec) : null;
 
   return (
     <div className="overflow-hidden rounded-2xl border border-app-border/30 bg-app-surface/18 shadow-sm">
@@ -114,7 +171,7 @@ export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) 
         <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-app-subtle">
             <BarChart3Icon className="size-3.5" />
-            <span>{getStatusLabel(part.status)}</span>
+            <span>{getStatusLabel(part.status, part.library)}</span>
             <span className="rounded-full border border-app-border/30 px-2 py-0.5 normal-case tracking-normal text-app-muted">
               {part.library}
             </span>
@@ -126,14 +183,16 @@ export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) 
             <p className="text-sm leading-6 text-app-muted">{part.caption}</p>
           ) : null}
         </div>
-        <button
-          className="shrink-0 rounded-lg p-1.5 text-app-subtle transition-colors hover:bg-app-surface/50 hover:text-app-foreground"
-          onClick={() => setShowSpec((v) => !v)}
-          title={showSpec ? "Show chart" : "Show spec"}
-          type="button"
-        >
-          {showSpec ? <EyeIcon className="size-4" /> : <CodeIcon className="size-4" />}
-        </button>
+        {!isHtmlSvg && (
+          <button
+            className="shrink-0 rounded-lg p-1.5 text-app-subtle transition-colors hover:bg-app-surface/50 hover:text-app-foreground"
+            onClick={() => setShowSpec((v) => !v)}
+            title={showSpec ? "Show chart" : "Show spec"}
+            type="button"
+          >
+            {showSpec ? <EyeIcon className="size-4" /> : <CodeIcon className="size-4" />}
+          </button>
+        )}
       </div>
 
       <div className="space-y-3 px-4 py-4">
@@ -147,8 +206,14 @@ export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) 
 
         {part.status === "loading" ? (
           <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-app-border/30 bg-app-surface/35">
-            <span className="text-sm text-app-subtle animate-pulse">Generating chart…</span>
+            <span className="text-sm text-app-subtle animate-pulse">Generating…</span>
           </div>
+        ) : isHtmlSvg ? (
+          part.source ? (
+            <HtmlSvgRenderer source={part.source} library={part.library} />
+          ) : (
+            <ChartErrorFallback message="No source content available" />
+          )
         ) : showSpec ? (
           <div className="rounded-xl bg-app-surface/45 px-3 py-3 text-sm text-app-muted">
             <div className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-app-subtle">
