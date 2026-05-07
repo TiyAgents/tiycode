@@ -123,7 +123,7 @@ export function isTaskBoardTool(toolName: string) {
   );
 }
 
-function isDefaultCollapsedTool(toolName: string) {
+export function isDefaultCollapsedTool(toolName: string) {
   return isTaskBoardTool(toolName) || toolName === "render";
 }
 

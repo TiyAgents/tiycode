@@ -72,6 +72,7 @@ import {
 } from "@/modules/workbench-shell/model/task-board";
 import {
   getDefaultToolOpenState,
+  isDefaultCollapsedTool,
   isCompletedToolState,
   isTaskBoardTool,
   mapSnapshotToRunState,
@@ -1664,8 +1665,8 @@ export function RuntimeThreadSurface({
           // State changed — keep the block open (don't auto-collapse on
           // completion).  Only force open when transitioning *to* a
           // non-completed state so newly-started tools expand.
-          // Task board tools always default to collapsed regardless of state.
-          if (isTaskBoardTool(tool.name)) {
+          // Default-collapsed tools always stay collapsed regardless of state.
+          if (isDefaultCollapsedTool(tool.name)) {
             next[tool.id] = tool.id in current ? current[tool.id] : false;
           } else if (!isCompletedToolState(tool.state)) {
             next[tool.id] = true;
@@ -1681,7 +1682,7 @@ export function RuntimeThreadSurface({
           continue;
         }
 
-        next[tool.id] = isTaskBoardTool(tool.name) ? false : !isCompletedToolState(tool.state);
+        next[tool.id] = isDefaultCollapsedTool(tool.name) ? false : !isCompletedToolState(tool.state);
       }
 
       const currentKeys = Object.keys(current);
