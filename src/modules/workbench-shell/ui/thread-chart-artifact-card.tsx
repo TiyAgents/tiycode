@@ -1,12 +1,13 @@
 import { Component, useEffect, useMemo, useRef, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import { AlertCircleIcon, BarChart3Icon, CircleXIcon, CodeIcon, EyeIcon } from "lucide-react";
+import { AlertCircleIcon, BarChart3Icon, CodeIcon, EyeIcon } from "lucide-react";
 import { useTheme } from "@/app/providers/theme-provider";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { SurfaceChartMessagePart } from "@/modules/workbench-shell/ui/runtime-thread-surface-state";
 import { cn } from "@/shared/lib/utils";
 import { validateSpec } from "@/modules/workbench-shell/ui/chart-spec-validation";
+import { FilePreviewSurface } from "@/modules/workbench-shell/ui/file-preview-surface";
 
 type ThreadChartArtifactCardProps = {
   part: SurfaceChartMessagePart;
@@ -213,42 +214,13 @@ export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) 
         </div>
       </div>
 
-      {isHtmlSvg && part.source && previewOpen ? (
-          <div className="fixed inset-0 z-[80] flex items-center justify-center bg-app-chrome/50 px-6 py-12 backdrop-blur-sm">
-            <div className="flex h-[min(82vh,860px)] w-full max-w-7xl flex-col overflow-hidden rounded-[24px] border border-app-border bg-app-surface shadow-[0_32px_96px_rgba(15,23,42,0.28)] dark:shadow-[0_32px_96px_rgba(0,0,0,0.56)]">
-              <div className="shrink-0 border-b border-app-border/30 px-5 py-4 text-left">
-                <div className="flex items-center justify-between gap-4">
-                  <h2 className="text-sm font-medium text-app-foreground">
-                    {part.library.toUpperCase()} Preview
-                  </h2>
-                  <button
-                    type="button"
-                    aria-label="Close preview"
-                    title="Close preview"
-                    className="flex size-8 shrink-0 items-center justify-center rounded-lg text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
-                    onClick={() => setPreviewOpen(false)}
-                  >
-                    <CircleXIcon className="size-4" />
-                  </button>
-                </div>
-              </div>
-              <div className="min-h-0 flex-1 overflow-auto bg-app-canvas/70 p-0">
-                {part.library === "svg" ? (
-                  <div
-                    className="flex min-h-full w-full items-center justify-center p-6"
-                    dangerouslySetInnerHTML={{ __html: part.source }}
-                  />
-                ) : (
-                  <iframe
-                    srcDoc={part.source}
-                    sandbox="allow-scripts"
-                    className="h-full min-h-full w-full border-0 bg-white"
-                    title="HTML Preview"
-                  />
-                )}
-              </div>
-            </div>
-          </div>
+      {isHtmlSvg && part.source ? (
+        <FilePreviewSurface
+          open={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+          source={part.source}
+          contentType={part.library as "html" | "svg"}
+        />
       ) : null}
     </>
   );
