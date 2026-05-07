@@ -1344,7 +1344,9 @@ Used for prompt assembly coverage.
             .and_then(|r: &serde_json::Value| r.as_array())
             .expect("render_chart should have required fields");
 
-        assert!(required.iter().any(|v: &serde_json::Value| v.as_str() == Some("spec")));
+        assert!(required
+            .iter()
+            .any(|v: &serde_json::Value| v.as_str() == Some("spec")));
     }
 
     #[test]
