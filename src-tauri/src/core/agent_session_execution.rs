@@ -18,7 +18,7 @@ use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGatewayResult,
 };
 use crate::core::workspace_paths;
-use crate::ipc::frontend_channels::ThreadStreamEvent;
+use crate::ipc::frontend_channels::{ArtifactStatus, ThreadStreamEvent};
 use crate::model::thread::MessageRecord;
 use crate::persistence::repo::{message_repo, tool_call_repo};
 
@@ -755,7 +755,7 @@ impl AgentSession {
             message_id: target_message_id.clone(),
             artifact_id: artifact_id.clone(),
             artifact_type: "chart".to_string(),
-            status: "started".to_string(),
+            status: ArtifactStatus::Started,
             payload: Some(chart_payload.clone()),
             error: None,
         });
@@ -782,7 +782,7 @@ impl AgentSession {
             message_id: target_message_id.clone(),
             artifact_id: artifact_id.clone(),
             artifact_type: "chart".to_string(),
-            status: "completed".to_string(),
+            status: ArtifactStatus::Completed,
             payload: Some(chart_payload.clone()),
             error: None,
         });

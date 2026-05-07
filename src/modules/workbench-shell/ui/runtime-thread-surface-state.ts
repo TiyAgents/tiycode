@@ -435,6 +435,66 @@ export function appendOrReplaceMessage(
   return nextMessages;
 }
 
+export type ArtifactEvent = {
+  artifactId: string;
+  artifactType: string;
+  payload?: unknown;
+  error?: string;
+  kind: "started" | "delta" | "completed" | "failed";
+};
+
+/**
+ * Merge an artifact event into a message's parts array.
+ * - If the artifact type is not "chart", returns the message unchanged.
+ * - If an existing chart part with the same artifactId exists, it is updated in place.
+ * - Otherwise the new chart part is appended to the parts array.
+ */
+export function mergeArtifactPartIntoMessage(
+  message: SurfaceMessage,
+  event: ArtifactEvent,
+): SurfaceMessage {
+  if (event.artifactType !== "chart") {
+    return message;
+  }
+
+  const payload = event.payload && typeof event.payload === "object"
+    ? event.payload as Record<string, unknown>
+    : null;
+  const nextChartPart: SurfaceChartMessagePart = {
+    type: "chart",
+    artifactId: event.artifactId,
+    library: typeof payload?.library === "string" ? payload.library : "vega-lite",
+    spec: payload?.spec ?? {},
+    source: typeof payload?.source === "string" ? payload.source : null,
+    title: typeof payload?.title === "string" ? payload.title : null,
+    caption: typeof payload?.caption === "string" ? payload.caption : null,
+    status: event.kind === "failed" ? "error" : event.kind === "started" ? "loading" : "ready",
+    error: event.error ?? (typeof payload?.error === "string" ? payload.error : null),
+  };
+
+  const existingIndex = message.parts.findIndex(
+    (part) => part.type === "chart" && "artifactId" in part && part.artifactId === event.artifactId,
+  );
+
+  if (existingIndex === -1) {
+    return {
+      ...message,
+      parts: [...message.parts, nextChartPart],
+    };
+  }
+
+  const nextParts = message.parts.slice();
+  nextParts[existingIndex] = {
+    ...nextParts[existingIndex],
+    ...nextChartPart,
+  } as SurfaceMessagePart;
+
+  return {
+    ...message,
+    parts: nextParts,
+  };
+}
+
 export function prependOlderMessages(
   currentMessages: Array<SurfaceMessage>,
   olderMessages: Array<SurfaceMessage>,

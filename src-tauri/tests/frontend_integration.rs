@@ -667,14 +667,14 @@ fn test_app_error_serialization_camel_case() {
 #[test]
 fn test_thread_stream_event_artifact_updated_with_payload() {
     use serde_json::json;
-    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::{ArtifactStatus, ThreadStreamEvent};
 
     let event = ThreadStreamEvent::ArtifactUpdated {
         run_id: "run-1".into(),
         message_id: "msg-1".into(),
         artifact_id: "artifact-1".into(),
         artifact_type: "chart".into(),
-        status: "started".into(),
+        status: ArtifactStatus::Started,
         payload: Some(json!({"library": "vega-lite", "spec": {"mark": "line"}})),
         error: None,
     };
@@ -692,14 +692,14 @@ fn test_thread_stream_event_artifact_updated_with_payload() {
 
 #[test]
 fn test_thread_stream_event_artifact_updated_with_error() {
-    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::{ArtifactStatus, ThreadStreamEvent};
 
     let event = ThreadStreamEvent::ArtifactUpdated {
         run_id: "run-1".into(),
         message_id: "msg-1".into(),
         artifact_id: "artifact-1".into(),
         artifact_type: "chart".into(),
-        status: "failed".into(),
+        status: ArtifactStatus::Failed,
         payload: None,
         error: Some("rendering failed".into()),
     };
@@ -714,14 +714,14 @@ fn test_thread_stream_event_artifact_updated_with_error() {
 #[test]
 fn test_thread_stream_event_artifact_updated_completed() {
     use serde_json::json;
-    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
+    use tiycode_lib::ipc::frontend_channels::{ArtifactStatus, ThreadStreamEvent};
 
     let event = ThreadStreamEvent::ArtifactUpdated {
         run_id: "run-1".into(),
         message_id: "msg-1".into(),
         artifact_id: "artifact-1".into(),
         artifact_type: "chart".into(),
-        status: "completed".into(),
+        status: ArtifactStatus::Completed,
         payload: Some(
             json!({"library": "vega-lite", "spec": {}, "title": "My Chart", "caption": null, "status": "ready"}),
         ),

@@ -9,6 +9,16 @@ use crate::model::task_board::TaskBoardDto;
 use crate::model::terminal::{TerminalSessionDto, TerminalSessionStatus};
 use crate::model::thread::RunUsageDto;
 
+/// Status of an artifact lifecycle event sent to the frontend.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactStatus {
+    Started,
+    Delta,
+    Completed,
+    Failed,
+}
+
 /// Events sent to the frontend for a specific thread.
 /// Consumed by the ThreadStream adapter which maps them to AI Elements.
 #[derive(Debug, Clone, Serialize)]
@@ -184,7 +194,7 @@ pub enum ThreadStreamEvent {
         message_id: String,
         artifact_id: String,
         artifact_type: String,
-        status: String,
+        status: ArtifactStatus,
         #[serde(skip_serializing_if = "Option::is_none")]
         payload: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
