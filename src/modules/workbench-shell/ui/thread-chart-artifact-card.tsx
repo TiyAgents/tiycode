@@ -1,6 +1,7 @@
 import { Component, useEffect, useMemo, useRef, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { AlertCircleIcon, BarChart3Icon, CodeIcon, EyeIcon } from "lucide-react";
+import { useTheme } from "@/app/providers/theme-provider";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { SurfaceChartMessagePart } from "@/modules/workbench-shell/ui/runtime-thread-surface-state";
 import { cn } from "@/shared/lib/utils";
@@ -48,6 +49,7 @@ const vegaEmbedPromise = import("vega-embed");
 function VegaLiteRenderer({ spec }: { spec: unknown }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const { resolvedTheme } = useTheme();
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +61,7 @@ function VegaLiteRenderer({ spec }: { spec: unknown }) {
         if (cancelled) return;
         const result = await vegaEmbed(containerRef.current, spec as object, {
           actions: { export: true, source: false, compiled: false, editor: false },
-          theme: "dark",
+          theme: resolvedTheme === "dark" ? "dark" : undefined,
           renderer: "svg",
           width: containerRef.current.clientWidth - 32,
           config: {
@@ -78,7 +80,7 @@ function VegaLiteRenderer({ spec }: { spec: unknown }) {
 
     void render();
     return () => { cancelled = true; };
-  }, [spec]);
+  }, [spec, resolvedTheme]);
 
   if (error) {
     return (
