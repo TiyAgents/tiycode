@@ -4,13 +4,11 @@ import { AlertCircleIcon, BarChart3Icon, CodeIcon, EyeIcon } from "lucide-react"
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { SurfaceChartMessagePart } from "@/modules/workbench-shell/ui/runtime-thread-surface-state";
 import { cn } from "@/shared/lib/utils";
+import { validateSpec } from "@/modules/workbench-shell/ui/chart-spec-validation";
 
 type ThreadChartArtifactCardProps = {
   part: SurfaceChartMessagePart;
 };
-
-const MAX_SPEC_SIZE_BYTES = 512_000;
-const MAX_DATA_POINTS = 50_000;
 
 function getStatusLabel(status: SurfaceChartMessagePart["status"]) {
   switch (status) {
@@ -21,31 +19,6 @@ function getStatusLabel(status: SurfaceChartMessagePart["status"]) {
     default:
       return "Chart artifact";
   }
-}
-
-function validateSpec(spec: unknown): string | null {
-  if (!spec || typeof spec !== "object") {
-    return "Spec must be a non-null object";
-  }
-
-  const specStr = JSON.stringify(spec);
-  if (specStr.length > MAX_SPEC_SIZE_BYTES) {
-    return `Spec exceeds maximum size (${Math.round(specStr.length / 1024)}KB > ${MAX_SPEC_SIZE_BYTES / 1024}KB)`;
-  }
-
-  const record = spec as Record<string, unknown>;
-  if (!record.mark && !record.layer && !record.concat && !record.hconcat && !record.vconcat && !record.facet && !record.repeat) {
-    return "Spec must include 'mark', 'layer', or a composition operator";
-  }
-
-  const data = record.data as Record<string, unknown> | undefined;
-  if (data && "values" in data && Array.isArray(data.values)) {
-    if (data.values.length > MAX_DATA_POINTS) {
-      return `Data exceeds maximum points (${data.values.length} > ${MAX_DATA_POINTS})`;
-    }
-  }
-
-  return null;
 }
 
 class ChartErrorBoundary extends Component<
@@ -70,6 +43,8 @@ class ChartErrorBoundary extends Component<
   }
 }
 
+const vegaEmbedPromise = import("vega-embed");
+
 function VegaLiteRenderer({ spec }: { spec: unknown }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,7 +55,7 @@ function VegaLiteRenderer({ spec }: { spec: unknown }) {
     async function render() {
       if (!containerRef.current) return;
       try {
-        const vegaEmbed = (await import("vega-embed")).default;
+        const vegaEmbed = (await vegaEmbedPromise).default;
         if (cancelled) return;
         const result = await vegaEmbed(containerRef.current, spec as object, {
           actions: { export: true, source: false, compiled: false, editor: false },

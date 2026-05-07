@@ -1321,6 +1321,33 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn render_chart_tool_is_available_in_both_runtime_profiles() {
+        for profile in [DEFAULT_FULL_TOOL_PROFILE, PLAN_READ_ONLY_TOOL_PROFILE] {
+            let tools = runtime_tools_for_profile(profile);
+            let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+
+            assert!(tool_names.contains(&"render_chart"));
+        }
+    }
+
+    #[test]
+    fn render_chart_tool_requires_spec_field() {
+        let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
+        let render_chart = tools
+            .iter()
+            .find(|tool| tool.name == "render_chart")
+            .expect("render_chart tool should exist");
+
+        let schema = &render_chart.parameters;
+        let required = schema
+            .get("required")
+            .and_then(|r: &serde_json::Value| r.as_array())
+            .expect("render_chart should have required fields");
+
+        assert!(required.iter().any(|v: &serde_json::Value| v.as_str() == Some("spec")));
+    }
+
+    #[test]
     fn explore_and_review_use_auxiliary_model_when_available() {
         let model_plan =
             sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
@@ -1965,7 +1992,6 @@ Used for prompt assembly coverage.
                 content_markdown: "<context_summary>\nCarry this forward.\n</context_summary>"
                     .to_string(),
                 parts_json: None,
-
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(

@@ -20,10 +20,20 @@ const requireTauri = (cmd: string) => {
   if (!isTauri()) throw new Error(`${cmd} requires Tauri runtime`);
 };
 
-type RawThreadStreamEvent = {
+export type RawThreadStreamEvent = {
   type: ThreadStreamEvent["type"];
   [key: string]: unknown;
 };
+
+const VALID_ARTIFACT_STATUSES = new Set(["started", "delta", "completed", "failed"]);
+
+function readArtifactStatus(rawStatus: string): "started" | "delta" | "completed" | "failed" {
+  if (VALID_ARTIFACT_STATUSES.has(rawStatus)) {
+    return rawStatus as "started" | "delta" | "completed" | "failed";
+  }
+  console.warn(`[agent-commands] Unknown artifact status "${rawStatus}", falling back to "completed"`);
+  return "completed";
+}
 
 function readRequiredString(
   event: RawThreadStreamEvent,
@@ -168,7 +178,7 @@ function readUsage(event: RawThreadStreamEvent): RunUsageDto {
   };
 }
 
-function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStreamEvent {
+export function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStreamEvent {
   switch (rawEvent.type) {
     case "run_started":
       return {
@@ -225,7 +235,7 @@ function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStrea
         messageId: readRequiredString(rawEvent, "messageId", "message_id"),
         artifactId: readRequiredString(rawEvent, "artifactId", "artifact_id"),
         artifactType: readRequiredString(rawEvent, "artifactType", "artifact_type"),
-        status: readRequiredString(rawEvent, "status", "status") as "started" | "delta" | "completed" | "failed",
+        status: readArtifactStatus(readRequiredString(rawEvent, "status", "status")),
         payload: readValue(rawEvent, "payload", "payload"),
         error: readOptionalString(rawEvent, "error", "error") ?? undefined,
       };

@@ -663,3 +663,73 @@ fn test_app_error_serialization_camel_case() {
         "Should NOT have snake_case"
     );
 }
+
+#[test]
+fn test_thread_stream_event_artifact_updated_with_payload() {
+    use serde_json::json;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
+
+    let event = ThreadStreamEvent::ArtifactUpdated {
+        run_id: "run-1".into(),
+        message_id: "msg-1".into(),
+        artifact_id: "artifact-1".into(),
+        artifact_type: "chart".into(),
+        status: "started".into(),
+        payload: Some(json!({"library": "vega-lite", "spec": {"mark": "line"}})),
+        error: None,
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "artifact_updated");
+    assert_eq!(json["run_id"].as_str().unwrap(), "run-1");
+    assert_eq!(json["message_id"].as_str().unwrap(), "msg-1");
+    assert_eq!(json["artifact_id"].as_str().unwrap(), "artifact-1");
+    assert_eq!(json["artifact_type"].as_str().unwrap(), "chart");
+    assert_eq!(json["status"].as_str().unwrap(), "started");
+    assert!(json["payload"].is_object());
+    assert!(json.get("error").is_none()); // None → absent per skip_serializing_if
+}
+
+#[test]
+fn test_thread_stream_event_artifact_updated_with_error() {
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
+
+    let event = ThreadStreamEvent::ArtifactUpdated {
+        run_id: "run-1".into(),
+        message_id: "msg-1".into(),
+        artifact_id: "artifact-1".into(),
+        artifact_type: "chart".into(),
+        status: "failed".into(),
+        payload: None,
+        error: Some("rendering failed".into()),
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "artifact_updated");
+    assert_eq!(json["status"].as_str().unwrap(), "failed");
+    assert_eq!(json["error"].as_str().unwrap(), "rendering failed");
+    assert!(json.get("payload").is_none()); // None → absent per skip_serializing_if
+}
+
+#[test]
+fn test_thread_stream_event_artifact_updated_completed() {
+    use serde_json::json;
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
+
+    let event = ThreadStreamEvent::ArtifactUpdated {
+        run_id: "run-1".into(),
+        message_id: "msg-1".into(),
+        artifact_id: "artifact-1".into(),
+        artifact_type: "chart".into(),
+        status: "completed".into(),
+        payload: Some(
+            json!({"library": "vega-lite", "spec": {}, "title": "My Chart", "caption": null, "status": "ready"}),
+        ),
+        error: None,
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "artifact_updated");
+    assert_eq!(json["status"].as_str().unwrap(), "completed");
+    assert!(json["payload"].is_object());
+}
