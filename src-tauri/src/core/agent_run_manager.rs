@@ -258,7 +258,10 @@ impl AgentRunManager {
             }
 
             let (runtime_tx, runtime_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
-            let runtime_finish_rx = self.runtime.start_session(spec, runtime_tx).await?;
+            let runtime_finish_rx = self
+                .runtime
+                .start_session(spec, runtime_tx, Arc::clone(&self.active_runs))
+                .await?;
             self.spawn_runtime_event_loop(run_id.clone(), runtime_rx);
             self.spawn_runtime_finish_watchdog(run_id.clone(), runtime_finish_rx);
 

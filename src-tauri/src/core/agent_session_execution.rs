@@ -822,14 +822,26 @@ impl AgentSession {
 
     /// Get the last streaming/completed message ID for the current run.
     async fn active_runs_message_id(&self) -> Option<String> {
-        // Check if there's a streaming message id tracked by the run manager
-        let runs = self.active_runs_lock().await;
+        // First: check the in-memory streaming_message_id tracked by the run
+        // manager — this is authoritative and avoids the DB race where the
+        // message hasn't been persisted yet by the async event handler.
+        {
+            let runs = self.active_runs.lock().await;
+            if let Some(run) = runs.get(&self.spec.run_id) {
+                if let Some(ref id) = run.streaming_message_id {
+                    if !id.is_empty() {
+                        return Some(id.clone());
+                    }
+                }
+            }
+        }
+        // Fallback: query DB for the last assistant message in this run
+        let runs = self.active_runs_db_fallback().await;
         runs.and_then(|id| if id.is_empty() { None } else { Some(id) })
     }
 
-    /// Try to get the current streaming message id from active runs state.
-    async fn active_runs_lock(&self) -> Option<String> {
-        // Fallback: look for the last completed message in this run from DB
+    /// DB fallback: look for the last completed message in this run from DB.
+    async fn active_runs_db_fallback(&self) -> Option<String> {
         let messages = message_repo::list_since_last_reset(&self.pool, &self.spec.thread_id)
             .await
             .ok()?;

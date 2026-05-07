@@ -364,6 +364,10 @@ export function RuntimeThreadSurface({
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
   const lastOptimisticUserIdRef = useRef<string | null>(null);
 
+  // Buffer for artifact events that arrive before their target message exists
+  // in React state. Keyed by messageId → array of pending artifact events.
+  const pendingArtifactsRef = useRef<Map<string, Array<{ artifactId: string; artifactType: string; payload?: unknown; error?: string; kind: "started" | "delta" | "completed" | "failed" }>>>(new Map());
+
   // --- Viewport auto-collapse infrastructure ---
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLElement | null>(null);
   const contentSentinelRef = useRef<HTMLDivElement | null>(null);
@@ -843,7 +847,7 @@ export function RuntimeThreadSurface({
           const existing = current.find((entry) => entry.id === event.messageId);
           const accumulatedText = existing?.content.concat(event.delta ?? "") ?? (event.delta ?? "");
           const nonTextParts = existing?.parts.filter((p) => p.type !== "text") ?? [];
-          return appendOrReplaceMessage(current, {
+          let result = appendOrReplaceMessage(current, {
             createdAt: existing?.createdAt ?? new Date().toISOString(),
             id: event.messageId,
             messageType: "plain_message",
@@ -854,6 +858,19 @@ export function RuntimeThreadSurface({
             parts: [{ type: "text" as const, text: accumulatedText }, ...nonTextParts],
             status: "streaming",
           });
+          // Drain any buffered artifacts targeting this message
+          const pending = pendingArtifactsRef.current.get(event.messageId);
+          if (pending && pending.length > 0) {
+            pendingArtifactsRef.current.delete(event.messageId);
+            for (const artifact of pending) {
+              result = result.map((message) => (
+                message.id === event.messageId
+                  ? mergeArtifactPartIntoMessage(message, artifact)
+                  : message
+              ));
+            }
+          }
+          return result;
         });
         return;
       }
@@ -861,7 +878,7 @@ export function RuntimeThreadSurface({
       setMessages((current) => {
         const existing = current.find((entry) => entry.id === event.messageId);
         const nonTextParts = existing?.parts.filter((p) => p.type !== "text") ?? [];
-        return appendOrReplaceMessage(current, {
+        let result = appendOrReplaceMessage(current, {
           createdAt: existing?.createdAt ?? new Date().toISOString(),
           id: event.messageId,
           messageType: "plain_message",
@@ -872,6 +889,19 @@ export function RuntimeThreadSurface({
           parts: [{ type: "text" as const, text: event.content ?? "" }, ...nonTextParts],
           status: "completed",
         });
+        // Drain any buffered artifacts targeting this message
+        const pending = pendingArtifactsRef.current.get(event.messageId);
+        if (pending && pending.length > 0) {
+          pendingArtifactsRef.current.delete(event.messageId);
+          for (const artifact of pending) {
+            result = result.map((message) => (
+              message.id === event.messageId
+                ? mergeArtifactPartIntoMessage(message, artifact)
+                : message
+            ));
+          }
+        }
+        return result;
       });
 
       void resyncCompletedMessage(event.messageId, event.runId);
@@ -920,11 +950,25 @@ export function RuntimeThreadSurface({
     });
 
     stream.onArtifact = withActiveStream((event) => {
-      setMessages((current) => current.map((message) => (
-        message.id === event.messageId
-          ? mergeArtifactPartIntoMessage(message, event)
-          : message
-      )));
+      setMessages((current) => {
+        const hasMatch = current.some((message) => message.id === event.messageId);
+        if (hasMatch) {
+          return current.map((message) => (
+            message.id === event.messageId
+              ? mergeArtifactPartIntoMessage(message, event)
+              : message
+          ));
+        }
+        // No matching message yet — buffer the artifact for later attachment
+        console.warn(
+          `[onArtifact] No message found for artifact ${event.artifactId} (messageId: ${event.messageId}). Buffering for later.`,
+        );
+        const pending = pendingArtifactsRef.current;
+        const existing = pending.get(event.messageId) ?? [];
+        existing.push(event);
+        pending.set(event.messageId, existing);
+        return current;
+      });
     });
 
     stream.onQueue = withActiveStream((event: QueueEvent) => {

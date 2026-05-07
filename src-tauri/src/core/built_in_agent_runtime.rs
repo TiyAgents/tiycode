@@ -54,6 +54,11 @@ impl BuiltInAgentRuntime {
         &self,
         spec: AgentSessionSpec,
         event_tx: mpsc::UnboundedSender<ThreadStreamEvent>,
+        active_runs: Arc<
+            tokio::sync::Mutex<
+                std::collections::HashMap<String, crate::core::agent_run_manager::ActiveRun>,
+            >,
+        >,
     ) -> Result<watch::Receiver<RuntimeSessionFinishState>, AppError> {
         let max_turns =
             crate::core::agent_runtime_limits::desktop_agent_max_turns(&self.pool).await;
@@ -64,6 +69,7 @@ impl BuiltInAgentRuntime {
             event_tx,
             spec.clone(),
             max_turns,
+            active_runs,
         );
         let run_task = Arc::clone(&session).start();
         let (finish_state_tx, finish_state_rx) = watch::channel(RuntimeSessionFinishState::Running);
