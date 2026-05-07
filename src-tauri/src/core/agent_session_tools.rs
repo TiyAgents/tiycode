@@ -512,7 +512,11 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                 },
                 "source": {
                     "type": "string",
-                    "description": "HTML or SVG source code string. Required when library is 'html' or 'svg'."
+                    "description": "HTML or SVG source code string. Required when library is 'html' or 'svg' and no 'path' is given."
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Path to a local file whose content will be used as the source. Use this instead of 'source' to avoid repeating file content that was already written. The path is resolved relative to the workspace root."
                 }
             },
             "required": ["library"]

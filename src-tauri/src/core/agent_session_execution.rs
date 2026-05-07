@@ -17,6 +17,7 @@ use crate::core::subagent::{
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGatewayResult,
 };
+use crate::core::workspace_paths;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::thread::MessageRecord;
 use crate::persistence::repo::{message_repo, tool_call_repo};
@@ -590,12 +591,76 @@ impl AgentSession {
         // Validate input based on library type
         let chart_payload = match library.as_str() {
             "html" | "svg" => {
-                // Validate source field exists and is a non-empty string
-                let source = match tool_input.get("source").and_then(|s| s.as_str()) {
-                    Some(s) if !s.is_empty() => s.to_string(),
-                    _ => {
+                // Resolve source: from inline 'source' or from file 'path'
+                let source = if let Some(inline) = tool_input.get("source").and_then(|s| s.as_str())
+                {
+                    if inline.is_empty() {
+                        None
+                    } else {
+                        Some(inline.to_string())
+                    }
+                } else if let Some(raw_path) = tool_input.get("path").and_then(|s| s.as_str()) {
+                    // Read from workspace file
+                    let workspace_root = std::path::Path::new(&self.spec.workspace_path);
+                    let resolved = workspace_paths::resolve_path_within_roots(
+                        workspace_root,
+                        &[],
+                        raw_path,
+                        crate::model::errors::ErrorSource::Tool,
+                        "render.path.outside_workspace",
+                        "render path is outside the workspace boundary",
+                    );
+                    match resolved {
+                        Ok(path) => match tokio::fs::read_to_string(&path).await {
+                            Ok(content) if !content.is_empty() => Some(content),
+                            Ok(_) => None,
+                            Err(e) => {
+                                let error = format!("failed to read file '{}': {}", raw_path, e);
+                                let error_json = serde_json::json!({ "error": &error });
+                                tool_call_repo::update_result(
+                                    &self.pool,
+                                    &tool_call_storage_id,
+                                    &error_json.to_string(),
+                                    "failed",
+                                )
+                                .await
+                                .ok();
+                                let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                                    run_id: self.spec.run_id.clone(),
+                                    tool_call_id: tool_call_id.to_string(),
+                                    error: error.clone(),
+                                });
+                                return agent_error_result(error);
+                            }
+                        },
+                        Err(e) => {
+                            let error = format!("invalid path '{}': {}", raw_path, e);
+                            let error_json = serde_json::json!({ "error": &error });
+                            tool_call_repo::update_result(
+                                &self.pool,
+                                &tool_call_storage_id,
+                                &error_json.to_string(),
+                                "failed",
+                            )
+                            .await
+                            .ok();
+                            let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                                run_id: self.spec.run_id.clone(),
+                                tool_call_id: tool_call_id.to_string(),
+                                error: error.to_string(),
+                            });
+                            return agent_error_result(error);
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let source = match source {
+                    Some(s) => s,
+                    None => {
                         let error = format!(
-                            "render with library '{}' requires a non-empty 'source' string",
+                            "render with library '{}' requires a non-empty 'source' string or a valid 'path'",
                             library
                         );
                         let error_json = serde_json::json!({ "error": &error });
@@ -615,6 +680,7 @@ impl AgentSession {
                         return agent_error_result(error);
                     }
                 };
+
                 // Enforce 1MB size limit
                 if source.len() > 1_048_576 {
                     let error = "render source exceeds maximum size of 1MB".to_string();

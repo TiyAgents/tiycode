@@ -839,46 +839,40 @@ export function RuntimeThreadSurface({
 
     stream.onMessage = withActiveStream((event) => {
       if (event.kind === "delta") {
-        setMessages((current) =>
-          appendOrReplaceMessage(current, {
-            createdAt:
-              current.find((entry) => entry.id === event.messageId)?.createdAt
-              ?? new Date().toISOString(),
+        setMessages((current) => {
+          const existing = current.find((entry) => entry.id === event.messageId);
+          const accumulatedText = existing?.content.concat(event.delta ?? "") ?? (event.delta ?? "");
+          const nonTextParts = existing?.parts.filter((p) => p.type !== "text") ?? [];
+          return appendOrReplaceMessage(current, {
+            createdAt: existing?.createdAt ?? new Date().toISOString(),
             id: event.messageId,
             messageType: "plain_message",
             attachments: [],
             role: "assistant",
             runId: event.runId,
-            content:
-              current.find((entry) => entry.id === event.messageId)?.content.concat(event.delta ?? "")
-              ?? (event.delta ?? ""),
-            parts: [{
-              type: "text",
-              text:
-                current.find((entry) => entry.id === event.messageId)?.content.concat(event.delta ?? "")
-                ?? (event.delta ?? ""),
-            }],
+            content: accumulatedText,
+            parts: [{ type: "text" as const, text: accumulatedText }, ...nonTextParts],
             status: "streaming",
-          }),
-        );
+          });
+        });
         return;
       }
 
-      setMessages((current) =>
-        appendOrReplaceMessage(current, {
-          createdAt:
-            current.find((entry) => entry.id === event.messageId)?.createdAt
-            ?? new Date().toISOString(),
+      setMessages((current) => {
+        const existing = current.find((entry) => entry.id === event.messageId);
+        const nonTextParts = existing?.parts.filter((p) => p.type !== "text") ?? [];
+        return appendOrReplaceMessage(current, {
+          createdAt: existing?.createdAt ?? new Date().toISOString(),
           id: event.messageId,
           messageType: "plain_message",
           attachments: [],
           role: "assistant",
           runId: event.runId,
           content: event.content ?? "",
-          parts: [{ type: "text", text: event.content ?? "" }],
+          parts: [{ type: "text" as const, text: event.content ?? "" }, ...nonTextParts],
           status: "completed",
-        }),
-      );
+        });
+      });
 
       void resyncCompletedMessage(event.messageId, event.runId);
       showThinkingPlaceholder(event.runId);
