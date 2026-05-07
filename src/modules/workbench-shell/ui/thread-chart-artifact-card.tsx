@@ -1,4 +1,4 @@
-import { Component, useEffect, useRef, useState } from "react";
+import { Component, useEffect, useMemo, useRef, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { AlertCircleIcon, BarChart3Icon, CodeIcon, EyeIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
@@ -103,7 +103,7 @@ function ChartErrorFallback({ message }: { message: string }) {
 
 export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) {
   const [showSpec, setShowSpec] = useState(false);
-  const specText = JSON.stringify(part.spec, null, 2);
+  const specText = useMemo(() => JSON.stringify(part.spec, null, 2), [part.spec]);
   const validationError = part.status !== "loading" ? validateSpec(part.spec) : null;
 
   return (

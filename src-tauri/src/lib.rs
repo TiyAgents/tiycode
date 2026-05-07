@@ -3,7 +3,7 @@ pub mod core;
 pub mod extensions;
 pub mod ipc;
 pub mod model;
-mod persistence;
+pub mod persistence;
 
 use std::fs;
 use std::path::PathBuf;

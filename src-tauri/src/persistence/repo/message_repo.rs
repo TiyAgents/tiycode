@@ -326,20 +326,22 @@ pub async fn merge_chart_artifact_part(
     chart_payload: serde_json::Value,
 ) -> Result<(), AppError> {
     let existing = find_by_id(pool, id).await?;
-    let mut parts = existing
-        .and_then(|message| message.parts_json)
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .unwrap_or_default();
-
-    if parts.is_empty() {
-        if let Some(message) = find_by_id(pool, id).await? {
-            if !message.content_markdown.trim().is_empty() {
-                parts.push(serde_json::json!({
-                    "type": "text",
-                    "text": message.content_markdown,
-                }));
-            }
+    let (mut parts, content_markdown) = match existing {
+        Some(message) => {
+            let parsed = message
+                .parts_json
+                .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
+                .unwrap_or_default();
+            (parsed, message.content_markdown)
         }
+        None => (Vec::new(), String::new()),
+    };
+
+    if parts.is_empty() && !content_markdown.trim().is_empty() {
+        parts.push(serde_json::json!({
+            "type": "text",
+            "text": content_markdown,
+        }));
     }
 
     let chart_part = serde_json::json!({
