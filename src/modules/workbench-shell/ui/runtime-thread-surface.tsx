@@ -74,7 +74,6 @@ import {
   getDefaultToolOpenState,
   isDefaultCollapsedTool,
   isCompletedToolState,
-  isTaskBoardTool,
   mapSnapshotToRunState,
 } from "@/modules/workbench-shell/ui/runtime-thread-surface-logic";
 import { LongMessageBody } from "@/modules/workbench-shell/ui/long-message-body";
