@@ -123,12 +123,16 @@ export function isTaskBoardTool(toolName: string) {
   );
 }
 
+function isDefaultCollapsedTool(toolName: string) {
+  return isTaskBoardTool(toolName) || toolName === "render_chart";
+}
+
 export function getDefaultToolOpenState(
   toolName: string,
   toolState: RuntimeSurfaceToolState,
   explicitOpen: boolean | undefined,
 ): boolean {
-  if (isTaskBoardTool(toolName)) {
+  if (isDefaultCollapsedTool(toolName)) {
     return explicitOpen ?? false;
   }
   if (!isCompletedToolState(toolState)) {
