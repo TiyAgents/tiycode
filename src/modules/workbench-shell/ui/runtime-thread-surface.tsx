@@ -831,6 +831,28 @@ export function RuntimeThreadSurface({
               ));
             }
           }
+          // Run-aware sweep: drain orphaned artifacts from the same run that
+          // were buffered under a synthetic/mismatched messageId (e.g. when
+          // the render tool executed before this assistant message existed).
+          if (event.runId && pendingArtifactsRef.current.size > 0) {
+            const keysToDelete: string[] = [];
+            for (const [key, entries] of pendingArtifactsRef.current.entries()) {
+              if (key === event.messageId) continue;
+              if (entries.length > 0 && entries[0].runId === event.runId) {
+                keysToDelete.push(key);
+                for (const artifact of entries) {
+                  result = result.map((message) => (
+                    message.id === event.messageId
+                      ? mergeArtifactPartIntoMessage(message, artifact)
+                      : message
+                  ));
+                }
+              }
+            }
+            for (const key of keysToDelete) {
+              pendingArtifactsRef.current.delete(key);
+            }
+          }
           return result;
         });
         return;
@@ -860,6 +882,26 @@ export function RuntimeThreadSurface({
                 ? mergeArtifactPartIntoMessage(message, artifact)
                 : message
             ));
+          }
+        }
+        // Run-aware sweep: drain orphaned artifacts from the same run
+        if (event.runId && pendingArtifactsRef.current.size > 0) {
+          const keysToDelete: string[] = [];
+          for (const [key, entries] of pendingArtifactsRef.current.entries()) {
+            if (key === event.messageId) continue;
+            if (entries.length > 0 && entries[0].runId === event.runId) {
+              keysToDelete.push(key);
+              for (const artifact of entries) {
+                result = result.map((message) => (
+                  message.id === event.messageId
+                    ? mergeArtifactPartIntoMessage(message, artifact)
+                    : message
+                ));
+              }
+            }
+          }
+          for (const key of keysToDelete) {
+            pendingArtifactsRef.current.delete(key);
           }
         }
         return result;

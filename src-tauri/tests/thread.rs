@@ -931,3 +931,35 @@ async fn test_merge_chart_artifact_part_skips_empty_content_migration() {
     assert_eq!(parts.len(), 1);
     assert_eq!(parts[0]["type"].as_str().unwrap(), "chart");
 }
+
+#[tokio::test]
+async fn test_merge_chart_artifact_part_skips_nonexistent_message() {
+    let pool = test_helpers::setup_test_pool().await;
+
+    let chart_payload = serde_json::json!({
+        "library": "html",
+        "spec": {},
+        "title": "Test",
+        "status": "ready",
+    });
+
+    // Calling with a message ID that does not exist should return Ok(())
+    // without panicking or writing anything to the database.
+    let result = tiycode_lib::persistence::repo::message_repo::merge_chart_artifact_part(
+        &pool,
+        "nonexistent-msg-id",
+        "art-orphan",
+        chart_payload,
+    )
+    .await;
+
+    assert!(result.is_ok(), "should return Ok for nonexistent message");
+
+    // Verify nothing was inserted
+    let row = sqlx::query("SELECT COUNT(*) as cnt FROM messages WHERE id = 'nonexistent-msg-id'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let count: i64 = row.get("cnt");
+    assert_eq!(count, 0, "no row should be created for nonexistent message");
+}

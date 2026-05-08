@@ -845,8 +845,24 @@ impl AgentSession {
             }
         }
         // Fallback: query DB for the last non-reasoning assistant message in this run
-        let runs = self.active_runs_db_fallback().await;
-        runs.and_then(|id| if id.is_empty() { None } else { Some(id) })
+        let strict = self.active_runs_db_fallback().await;
+        if let Some(ref id) = strict {
+            if !id.is_empty() {
+                return Some(id.clone());
+            }
+        }
+        // Relaxed fallback: accept any assistant message (including reasoning)
+        // so the artifact can at least persist to a real DB row. The frontend
+        // run-aware sweep will re-attach it to the correct plain_message later.
+        let messages = message_repo::list_since_last_reset(&self.pool, &self.spec.thread_id)
+            .await
+            .ok();
+        messages.and_then(|msgs| {
+            msgs.iter()
+                .rev()
+                .find(|m| m.run_id.as_deref() == Some(&self.spec.run_id) && m.role == "assistant")
+                .map(|m| m.id.clone())
+        })
     }
 
     /// DB fallback: look for the last completed plain_message in this run from DB.
