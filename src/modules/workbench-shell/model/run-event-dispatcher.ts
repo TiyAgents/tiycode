@@ -205,6 +205,8 @@ function backendStatusToThreadRunStatus(
       return "waiting_approval";
     case "needs_reply":
       return "needs_reply";
+    case "completed":
+      return "completed";
     case "failed":
       return "failed";
     case "interrupted":
