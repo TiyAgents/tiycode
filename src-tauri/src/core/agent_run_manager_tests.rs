@@ -1655,4 +1655,159 @@ pub(super) mod tests {
             Some("limit_reached")
         );
     }
+
+    #[test]
+    fn sidebar_status_maps_run_completed_to_completed() {
+        let event = ThreadStreamEvent::RunCompleted {
+            run_id: "run-1".to_string(),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("completed")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_maps_run_failed_to_failed() {
+        let event = ThreadStreamEvent::RunFailed {
+            run_id: "run-1".to_string(),
+            error: "model error".to_string(),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("failed")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_maps_run_cancelled_to_cancelled() {
+        let event = ThreadStreamEvent::RunCancelled {
+            run_id: "run-1".to_string(),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("cancelled")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_maps_run_retrying_to_running() {
+        let event = ThreadStreamEvent::RunRetrying {
+            run_id: "run-1".to_string(),
+            attempt: 2,
+            max_attempts: 3,
+            delay_ms: 1000,
+            reason: "rate limit".to_string(),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn sidebar_status_maps_clarify_resolved_to_running() {
+        let event = ThreadStreamEvent::ClarifyResolved {
+            run_id: "run-1".to_string(),
+            tool_call_id: "tc-1".to_string(),
+            response: serde_json::json!({"answer": "option A"}),
+        };
+        assert_eq!(
+            sidebar_status_for_runtime_event(&event, false),
+            Some("running")
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // sidebar_status_for_runtime_event — emission coverage (#4)
+    //
+    // Verify that all intermediate-state events produce a Some(status),
+    // ensuring handle_runtime_event would emit THREAD_RUN_STATUS_CHANGED.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sidebar_status_emits_for_all_intermediate_state_events() {
+        let intermediate_events = vec![
+            ThreadStreamEvent::RunStarted {
+                run_id: "r".to_string(),
+                run_mode: "default".to_string(),
+            },
+            ThreadStreamEvent::RunRetrying {
+                run_id: "r".to_string(),
+                attempt: 1,
+                max_attempts: 3,
+                delay_ms: 500,
+                reason: "retry".to_string(),
+            },
+            ThreadStreamEvent::ApprovalRequired {
+                run_id: "r".to_string(),
+                tool_call_id: "tc".to_string(),
+                tool_name: "shell".to_string(),
+                tool_input: serde_json::json!({}),
+                reason: "risky".to_string(),
+            },
+            ThreadStreamEvent::ApprovalResolved {
+                run_id: "r".to_string(),
+                tool_call_id: "tc".to_string(),
+                approved: true,
+            },
+            ThreadStreamEvent::ClarifyRequired {
+                run_id: "r".to_string(),
+                tool_call_id: "tc".to_string(),
+                tool_name: "clarify".to_string(),
+                tool_input: serde_json::json!({}),
+            },
+            ThreadStreamEvent::ClarifyResolved {
+                run_id: "r".to_string(),
+                tool_call_id: "tc".to_string(),
+                response: serde_json::json!({}),
+            },
+            ThreadStreamEvent::RunCheckpointed {
+                run_id: "r".to_string(),
+            },
+        ];
+
+        for event in &intermediate_events {
+            assert!(
+                sidebar_status_for_runtime_event(event, false).is_some(),
+                "Expected Some(status) for event: {:?}",
+                event
+            );
+        }
+    }
+
+    #[test]
+    fn sidebar_status_returns_none_for_non_status_events() {
+        let non_status_events = vec![
+            ThreadStreamEvent::MessageDelta {
+                run_id: "r".to_string(),
+                message_id: "m".to_string(),
+                delta: "text".to_string(),
+            },
+            ThreadStreamEvent::MessageCompleted {
+                run_id: "r".to_string(),
+                message_id: "m".to_string(),
+                content: "done".to_string(),
+                turn_index: None,
+            },
+            ThreadStreamEvent::ToolRunning {
+                run_id: "r".to_string(),
+                tool_call_id: "tc".to_string(),
+            },
+            ThreadStreamEvent::ToolCompleted {
+                run_id: "r".to_string(),
+                tool_call_id: "tc".to_string(),
+                result: serde_json::json!({}),
+            },
+        ];
+
+        for event in &non_status_events {
+            assert_eq!(
+                sidebar_status_for_runtime_event(event, false),
+                None,
+                "Expected None for event: {:?}",
+                event
+            );
+        }
+    }
 }
