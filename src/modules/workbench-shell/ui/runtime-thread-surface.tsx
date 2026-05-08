@@ -1284,10 +1284,10 @@ export function RuntimeThreadSurface({
   const submitPrompt = useCallback(async (
     submissionOrPrompt: ComposerSubmission | string,
     runModeOverride?: RunMode,
-  ) => {
+  ): Promise<boolean> => {
     if (!threadId) {
       setComposerError("This thread is still preparing. Try again in a moment.");
-      return;
+      return false;
     }
 
     const submission = typeof submissionOrPrompt === "string"
@@ -1306,7 +1306,7 @@ export function RuntimeThreadSurface({
 
     if (!trimmedPrompt) {
       setComposerError("Type a prompt before starting a run.");
-      return;
+      return false;
     }
 
     if (!activeProfile) {
@@ -1315,18 +1315,18 @@ export function RuntimeThreadSurface({
           ? t("composer.profileDeletedHint")
           : "Select an agent profile with an enabled model before starting a run.",
       );
-      return;
+      return false;
     }
 
     const activeRunId = streamRef.current?.runId ?? null;
     if (runState === "running" || (runState === "waiting_approval" && activeRunId)) {
       setComposerError("This thread already has an active run.");
-      return;
+      return false;
     }
 
     if (runState === "needs_reply" && activeRunId) {
       setComposerError("Reply to the pending question before starting a new run.");
-      return;
+      return false;
     }
 
     // Guard against concurrent invocations. The `initialPromptRequest` effect
@@ -1336,7 +1336,7 @@ export function RuntimeThreadSurface({
     // guard, a second `startRun` invoke reaches Rust where the first run is
     // already registered in `active_runs`, producing `thread.run.already_active`.
     if (submittingRef.current) {
-      return;
+      return false;
     }
     submittingRef.current = true;
 
@@ -1349,7 +1349,7 @@ export function RuntimeThreadSurface({
     if (!modelPlan) {
       submittingRef.current = false;
       setComposerError("Select an enabled primary model for the current profile before starting a run.");
-      return;
+      return false;
     }
 
     setComposerError(null);
@@ -1367,7 +1367,7 @@ export function RuntimeThreadSurface({
       } finally {
         submittingRef.current = false;
       }
-      return;
+      return true;
     }
 
     if (submission.kind === "command" && submission.command?.behavior === "compact") {
@@ -1393,7 +1393,7 @@ export function RuntimeThreadSurface({
       } finally {
         submittingRef.current = false;
       }
-      return;
+      return true;
     }
 
     appendOptimisticUserMessage(
@@ -1424,6 +1424,7 @@ export function RuntimeThreadSurface({
     } finally {
       submittingRef.current = false;
     }
+    return true;
   }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, loadSnapshot, providers, runState, selectedRunMode, threadId]);
 
   const respondToClarify = useCallback(async (
@@ -1760,8 +1761,8 @@ export function RuntimeThreadSurface({
       return;
     }
 
-    setComposerValue("");
     if (pendingClarifyTool) {
+      setComposerValue("");
       await respondToClarify(
         pendingClarifyTool,
         {
@@ -1773,7 +1774,14 @@ export function RuntimeThreadSurface({
       return;
     }
 
-    await submitPrompt(submission);
+    const accepted = await submitPrompt(submission);
+    if (!accepted) {
+      // Throw so that upstream layers (workbench-prompt-composer and
+      // prompt-input) detect the rejection and preserve composer state
+      // (referenced files, attachments, $skills, etc.).
+      throw new Error("submit_rejected");
+    }
+    setComposerValue("");
   }, [pendingClarifyTool, respondToClarify, submitPrompt]);
 
   const handleCompletedToolOpenChange = useCallback((toolId: string, open: boolean) => {
