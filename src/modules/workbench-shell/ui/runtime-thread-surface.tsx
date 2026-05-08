@@ -952,7 +952,11 @@ export function RuntimeThreadSurface({
 
     stream.onArtifact = withActiveStream((event) => {
       setMessages((current) => {
-        const hasMatch = current.some((message) => message.id === event.messageId);
+        // Only attach to non-reasoning messages directly; reasoning messages
+        // should not host chart artifacts since the UI won't render them there.
+        const hasMatch = current.some(
+          (message) => message.id === event.messageId && message.messageType !== "reasoning",
+        );
         if (hasMatch) {
           return current.map((message) => (
             message.id === event.messageId
@@ -960,9 +964,9 @@ export function RuntimeThreadSurface({
               : message
           ));
         }
-        // No matching message yet — buffer the artifact for later attachment
+        // No matching non-reasoning message yet — buffer the artifact for later attachment
         console.warn(
-          `[onArtifact] No message found for artifact ${event.artifactId} (messageId: ${event.messageId}). Buffering for later.`,
+          `[onArtifact] No non-reasoning message found for artifact ${event.artifactId} (messageId: ${event.messageId}). Buffering for later.`,
         );
         const pending = pendingArtifactsRef.current;
         const existing = pending.get(event.messageId) ?? [];
