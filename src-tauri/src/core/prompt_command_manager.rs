@@ -10,7 +10,7 @@ use crate::model::settings::{PromptCommandDto, PromptCommandInput};
 const PROMPTS_DIR_NAME: &str = "prompts";
 const BUILTIN_PROMPTS_DIR_NAME: &str = "builtin";
 const USER_PROMPTS_DIR_NAME: &str = "user";
-const DEFAULT_PROMPT_VERSION: u32 = 1;
+const DEFAULT_PROMPT_VERSION: u32 = 2;
 const FRONTMATTER_DELIMITER: &str = "---";
 
 const BUILTIN_PROMPT_COMMANDS: &[BuiltinPromptSeed<'_>] = &[
@@ -22,6 +22,13 @@ const BUILTIN_PROMPT_COMMANDS: &[BuiltinPromptSeed<'_>] = &[
             "[--verify=yes|no] [--style=simple|full] [--type=feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert] [--language=english|chinese]",
         description: "Create well-formatted commits with conventional commit messages",
         prompt: r#"TiyCode Command: Commit
+
+## Active Configuration
+
+- Verify: {{verify}}
+- Style: {{style}}
+- Type: {{type}}
+- Language: {{language}}
 
 This command helps you create well-formatted commits following the Conventional Commits specification.
 
@@ -279,6 +286,13 @@ Refs: RFC-6749, RFC-7636
             "[--draft] [--base=main|master] [--style=simple|full] [--language=english|chinese]",
         description: "Create pull requests with well-formatted PR title and description",
         prompt: r#"# TiyCode Command: Create PR
+
+## Active Configuration
+
+- Draft: {{draft}}
+- Base: {{base}}
+- Style: {{style}}
+- Language: {{language}}
 
 This command helps you create well-formatted pull requests using GitHub CLI, with automatic fallback to GitHub MCP tools.
 
@@ -780,11 +794,27 @@ impl PromptCommandManager {
         for input in inputs {
             let record = self.build_record_from_input(input.clone(), None)?;
             if record.file_path.exists() {
-                continue;
+                // Check version of existing file; overwrite if outdated.
+                // Files without a version field are treated as current (user-customized).
+                let existing_version = self
+                    .read_file_version(&record.file_path)
+                    .unwrap_or(record.version);
+                if existing_version >= record.version {
+                    continue;
+                }
             }
             self.write_record(&record)?;
         }
         Ok(())
+    }
+
+    /// Read only the `version` field from an existing prompt file's frontmatter.
+    /// Returns `None` if the file cannot be read or parsed.
+    fn read_file_version(&self, path: &Path) -> Option<u32> {
+        let raw = fs::read_to_string(path).ok()?;
+        let (frontmatter, _) = split_frontmatter(&raw)?;
+        let meta = frontmatter.and_then(|fm| parse_frontmatter_map(fm).ok())?;
+        meta.version
     }
 
     fn load_prompt_command_records(&self) -> Result<Vec<PromptCommandRecord>, AppError> {
