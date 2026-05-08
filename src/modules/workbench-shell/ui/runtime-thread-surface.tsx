@@ -251,6 +251,11 @@ export function RuntimeThreadSurface({
   }, [activeAgentProfileId, agentProfiles]);
   const hasMissingActiveProfile = Boolean(activeAgentProfileId) && activeProfile === null;
   const [composerError, setComposerError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!composerError) return;
+    const timer = setTimeout(() => setComposerError(null), 5000);
+    return () => clearTimeout(timer);
+  }, [composerError]);
   const [composerClearSignal, setComposerClearSignal] = useState(0);
   const composerValue = useStore(composerStore, () => (threadId ? getDraft(threadId).text : ""));
   const setComposerValue = useCallback(
@@ -320,7 +325,7 @@ export function RuntimeThreadSurface({
 
   // Buffer for artifact events that arrive before their target message exists
   // in React state. Keyed by messageId → array of pending artifact events.
-  const pendingArtifactsRef = useRef<Map<string, Array<{ artifactId: string; artifactType: string; payload?: unknown; error?: string; kind: "started" | "delta" | "completed" | "failed" }>>>(new Map());
+  const pendingArtifactsRef = useRef<Map<string, Array<{ artifactId: string; artifactType: string; payload?: unknown; error?: string; kind: "started" | "delta" | "completed" | "failed"; runId?: string }>>>(new Map());
 
   // --- Viewport auto-collapse infrastructure ---
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLElement | null>(null);
