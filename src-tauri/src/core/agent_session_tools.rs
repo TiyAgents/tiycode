@@ -638,7 +638,8 @@ pub(crate) fn effective_api_for_model(model: &Model) -> tiycore::types::Api {
         | Provider::OpenCodeGo
         | Provider::DeepSeek
         | Provider::XiaomiMIMO
-        | Provider::Zenmux => tiycore::types::Api::OpenAICompletions,
+        | Provider::Zenmux
+        | Provider::Bai => tiycore::types::Api::OpenAICompletions,
         Provider::AmazonBedrock => tiycore::types::Api::BedrockConverseStream,
         Provider::Custom(name) => tiycore::types::Api::Custom(name.clone()),
     }

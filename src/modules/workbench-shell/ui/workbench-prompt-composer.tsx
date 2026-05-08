@@ -113,7 +113,7 @@ type WorkbenchPromptComposerProps = {
   onRunModeChange?: (mode: RunMode) => void;
   onSelectAgentProfile: (id: string) => void;
   onStop: () => void;
-  onSubmit: (submission: ComposerSubmission) => void;
+  onSubmit: (submission: ComposerSubmission) => void | Promise<void>;
   placeholder: string;
   providers: ReadonlyArray<ProviderEntry>;
   runMode?: RunMode;
@@ -1511,9 +1511,12 @@ export function WorkbenchPromptComposer({
   // We use a child component for this because usePromptInputAttachments()
   // must be called inside a PromptInput descendant.
 
-  const handlePromptSubmit = (message: PromptInputMessage) => {
+  const handlePromptSubmit = async (message: PromptInputMessage) => {
     const submission = buildSubmissionFromPromptInput(message, commandRegistry, runMode, referencedFiles);
-    onSubmit(submission);
+    await onSubmit(submission);
+    // Only clear referenced files and sources after a successful submit.
+    // If onSubmit throws (e.g. thread has an active run), the composer
+    // retains all state so the user doesn't lose their composed content.
     setReferencedFiles([]);
     setClearReferencedSourcesSignal((current) => current + 1);
   };
@@ -1647,7 +1650,7 @@ export function WorkbenchPromptComposer({
       onValueChange(nextValue);
       setSelectedCommandKey(getCommandItemKey(selectedCommand));
       if (shouldAutoSubmitCommand(selectedCommand, nextValue)) {
-        handlePromptSubmit({ text: nextValue, files: [] });
+        void handlePromptSubmit({ text: nextValue, files: [] }).catch(() => { /* rejection handled via composerError */ });
         onValueChange("");
       }
     }
@@ -1923,7 +1926,7 @@ export function WorkbenchPromptComposer({
                                   onValueChange(nextValue);
                                   setSelectedCommandKey(commandKey);
                                   if (shouldAutoSubmitCommand(command, nextValue)) {
-                                    handlePromptSubmit({ text: nextValue, files: [] });
+                                    void handlePromptSubmit({ text: nextValue, files: [] }).catch(() => { /* rejection handled via composerError */ });
                                     onValueChange("");
                                   }
                                 }}

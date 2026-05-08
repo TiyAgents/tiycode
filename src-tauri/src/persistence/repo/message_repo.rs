@@ -334,7 +334,14 @@ pub async fn merge_chart_artifact_part(
                 .unwrap_or_default();
             (parsed, message.content_markdown)
         }
-        None => (Vec::new(), String::new()),
+        None => {
+            tracing::warn!(
+                message_id = %id,
+                artifact_id = %artifact_id,
+                "merge_chart_artifact_part: target message does not exist, skipping persist"
+            );
+            return Ok(());
+        }
     };
 
     if parts.is_empty() && !content_markdown.trim().is_empty() {

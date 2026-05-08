@@ -251,6 +251,11 @@ export function RuntimeThreadSurface({
   }, [activeAgentProfileId, agentProfiles]);
   const hasMissingActiveProfile = Boolean(activeAgentProfileId) && activeProfile === null;
   const [composerError, setComposerError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!composerError) return;
+    const timer = setTimeout(() => setComposerError(null), 5000);
+    return () => clearTimeout(timer);
+  }, [composerError]);
   const [composerClearSignal, setComposerClearSignal] = useState(0);
   const composerValue = useStore(composerStore, () => (threadId ? getDraft(threadId).text : ""));
   const setComposerValue = useCallback(
@@ -320,7 +325,41 @@ export function RuntimeThreadSurface({
 
   // Buffer for artifact events that arrive before their target message exists
   // in React state. Keyed by messageId → array of pending artifact events.
-  const pendingArtifactsRef = useRef<Map<string, Array<{ artifactId: string; artifactType: string; payload?: unknown; error?: string; kind: "started" | "delta" | "completed" | "failed" }>>>(new Map());
+  type PendingArtifactEntry = { artifactId: string; artifactType: string; payload?: unknown; error?: string; kind: "started" | "delta" | "completed" | "failed"; runId?: string };
+  const pendingArtifactsRef = useRef<Map<string, Array<PendingArtifactEntry>>>(new Map());
+
+  /**
+   * Drain orphaned artifacts from the same run that were buffered under a
+   * synthetic/mismatched messageId (e.g. when the render tool executed before
+   * the assistant message existed). Mutates pendingArtifactsRef in place and
+   * returns the updated messages array with artifacts merged in.
+   */
+  function drainOrphanedArtifacts(
+    messages: SurfaceMessage[],
+    runId: string | undefined,
+    targetMessageId: string,
+  ): SurfaceMessage[] {
+    if (!runId || pendingArtifactsRef.current.size === 0) return messages;
+    let result = messages;
+    const keysToDelete: string[] = [];
+    for (const [key, entries] of pendingArtifactsRef.current.entries()) {
+      if (key === targetMessageId) continue;
+      if (entries.length > 0 && entries[0].runId === runId) {
+        keysToDelete.push(key);
+        for (const artifact of entries) {
+          result = result.map((message) => (
+            message.id === targetMessageId
+              ? mergeArtifactPartIntoMessage(message, artifact)
+              : message
+          ));
+        }
+      }
+    }
+    for (const key of keysToDelete) {
+      pendingArtifactsRef.current.delete(key);
+    }
+    return result;
+  }
 
   // --- Viewport auto-collapse infrastructure ---
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLElement | null>(null);
@@ -826,6 +865,10 @@ export function RuntimeThreadSurface({
               ));
             }
           }
+          // Run-aware sweep: drain orphaned artifacts from the same run that
+          // were buffered under a synthetic/mismatched messageId (e.g. when
+          // the render tool executed before this assistant message existed).
+          result = drainOrphanedArtifacts(result, event.runId, event.messageId);
           return result;
         });
         return;
@@ -857,6 +900,8 @@ export function RuntimeThreadSurface({
             ));
           }
         }
+        // Run-aware sweep: drain orphaned artifacts from the same run
+        result = drainOrphanedArtifacts(result, event.runId, event.messageId);
         return result;
       });
 
@@ -907,7 +952,11 @@ export function RuntimeThreadSurface({
 
     stream.onArtifact = withActiveStream((event) => {
       setMessages((current) => {
-        const hasMatch = current.some((message) => message.id === event.messageId);
+        // Only attach to non-reasoning messages directly; reasoning messages
+        // should not host chart artifacts since the UI won't render them there.
+        const hasMatch = current.some(
+          (message) => message.id === event.messageId && message.messageType !== "reasoning",
+        );
         if (hasMatch) {
           return current.map((message) => (
             message.id === event.messageId
@@ -915,9 +964,9 @@ export function RuntimeThreadSurface({
               : message
           ));
         }
-        // No matching message yet — buffer the artifact for later attachment
+        // No matching non-reasoning message yet — buffer the artifact for later attachment
         console.warn(
-          `[onArtifact] No message found for artifact ${event.artifactId} (messageId: ${event.messageId}). Buffering for later.`,
+          `[onArtifact] No non-reasoning message found for artifact ${event.artifactId} (messageId: ${event.messageId}). Buffering for later.`,
         );
         const pending = pendingArtifactsRef.current;
         const existing = pending.get(event.messageId) ?? [];
@@ -1284,10 +1333,10 @@ export function RuntimeThreadSurface({
   const submitPrompt = useCallback(async (
     submissionOrPrompt: ComposerSubmission | string,
     runModeOverride?: RunMode,
-  ) => {
+  ): Promise<boolean> => {
     if (!threadId) {
       setComposerError("This thread is still preparing. Try again in a moment.");
-      return;
+      return false;
     }
 
     const submission = typeof submissionOrPrompt === "string"
@@ -1306,7 +1355,7 @@ export function RuntimeThreadSurface({
 
     if (!trimmedPrompt) {
       setComposerError("Type a prompt before starting a run.");
-      return;
+      return false;
     }
 
     if (!activeProfile) {
@@ -1315,18 +1364,18 @@ export function RuntimeThreadSurface({
           ? t("composer.profileDeletedHint")
           : "Select an agent profile with an enabled model before starting a run.",
       );
-      return;
+      return false;
     }
 
     const activeRunId = streamRef.current?.runId ?? null;
     if (runState === "running" || (runState === "waiting_approval" && activeRunId)) {
       setComposerError("This thread already has an active run.");
-      return;
+      return false;
     }
 
     if (runState === "needs_reply" && activeRunId) {
       setComposerError("Reply to the pending question before starting a new run.");
-      return;
+      return false;
     }
 
     // Guard against concurrent invocations. The `initialPromptRequest` effect
@@ -1336,7 +1385,7 @@ export function RuntimeThreadSurface({
     // guard, a second `startRun` invoke reaches Rust where the first run is
     // already registered in `active_runs`, producing `thread.run.already_active`.
     if (submittingRef.current) {
-      return;
+      return false;
     }
     submittingRef.current = true;
 
@@ -1349,7 +1398,7 @@ export function RuntimeThreadSurface({
     if (!modelPlan) {
       submittingRef.current = false;
       setComposerError("Select an enabled primary model for the current profile before starting a run.");
-      return;
+      return false;
     }
 
     setComposerError(null);
@@ -1367,7 +1416,7 @@ export function RuntimeThreadSurface({
       } finally {
         submittingRef.current = false;
       }
-      return;
+      return true;
     }
 
     if (submission.kind === "command" && submission.command?.behavior === "compact") {
@@ -1393,7 +1442,7 @@ export function RuntimeThreadSurface({
       } finally {
         submittingRef.current = false;
       }
-      return;
+      return true;
     }
 
     appendOptimisticUserMessage(
@@ -1424,6 +1473,7 @@ export function RuntimeThreadSurface({
     } finally {
       submittingRef.current = false;
     }
+    return true;
   }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, loadSnapshot, providers, runState, selectedRunMode, threadId]);
 
   const respondToClarify = useCallback(async (
@@ -1760,8 +1810,8 @@ export function RuntimeThreadSurface({
       return;
     }
 
-    setComposerValue("");
     if (pendingClarifyTool) {
+      setComposerValue("");
       await respondToClarify(
         pendingClarifyTool,
         {
@@ -1773,7 +1823,14 @@ export function RuntimeThreadSurface({
       return;
     }
 
-    await submitPrompt(submission);
+    const accepted = await submitPrompt(submission);
+    if (!accepted) {
+      // Throw so that upstream layers (workbench-prompt-composer and
+      // prompt-input) detect the rejection and preserve composer state
+      // (referenced files, attachments, $skills, etc.).
+      throw new Error("submit_rejected");
+    }
+    setComposerValue("");
   }, [pendingClarifyTool, respondToClarify, submitPrompt]);
 
   const handleCompletedToolOpenChange = useCallback((toolId: string, open: boolean) => {
