@@ -1650,7 +1650,7 @@ export function WorkbenchPromptComposer({
       onValueChange(nextValue);
       setSelectedCommandKey(getCommandItemKey(selectedCommand));
       if (shouldAutoSubmitCommand(selectedCommand, nextValue)) {
-        void handlePromptSubmit({ text: nextValue, files: [] });
+        void handlePromptSubmit({ text: nextValue, files: [] }).catch(() => { /* rejection handled via composerError */ });
         onValueChange("");
       }
     }
@@ -1926,7 +1926,7 @@ export function WorkbenchPromptComposer({
                                   onValueChange(nextValue);
                                   setSelectedCommandKey(commandKey);
                                   if (shouldAutoSubmitCommand(command, nextValue)) {
-                                    void handlePromptSubmit({ text: nextValue, files: [] });
+                                    void handlePromptSubmit({ text: nextValue, files: [] }).catch(() => { /* rejection handled via composerError */ });
                                     onValueChange("");
                                   }
                                 }}
