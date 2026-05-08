@@ -1,3 +1,4 @@
+import DOMPurify from "dompurify";
 import { WorkbenchPreviewOverlay } from "@/modules/workbench-shell/ui/workbench-preview-overlay";
 import { MessageResponse } from "@/components/ai-elements/message";
 
@@ -64,7 +65,7 @@ function PreviewContent({ source, contentType }: { source: string; contentType: 
       return (
         <div
           className="flex min-h-full w-full items-center justify-center p-6"
-          dangerouslySetInnerHTML={{ __html: source }}
+          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(source, { USE_PROFILES: { svg: true } }) }}
         />
       );
     case "html":

@@ -462,6 +462,7 @@ export function RuntimeThreadSurface({
       setSnapshotReady(true);
       setSnapshotThreadId(null);
       setThinkingPlaceholder(null);
+      pendingArtifactsRef.current.clear();
       
       return;
     }
@@ -713,6 +714,7 @@ export function RuntimeThreadSurface({
     clearScheduledThinkingPhase();
     setThinkingPlaceholder(null);
     setTools([]);
+    pendingArtifactsRef.current.clear();
     void loadSnapshot();
   }, [clearScheduledThinkingPhase, loadSnapshot, threadId]);
 

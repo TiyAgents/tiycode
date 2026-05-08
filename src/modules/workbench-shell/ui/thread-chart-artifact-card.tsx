@@ -52,6 +52,7 @@ const vegaEmbedPromise = import("vega-embed");
 
 function VegaLiteRenderer({ spec }: { spec: unknown }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const resultRef = useRef<{ finalize: () => void } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { resolvedTheme } = useTheme();
 
@@ -74,6 +75,8 @@ function VegaLiteRenderer({ spec }: { spec: unknown }) {
         });
         if (cancelled) {
           result.finalize();
+        } else {
+          resultRef.current = result;
         }
       } catch (err) {
         if (!cancelled) {
@@ -83,7 +86,11 @@ function VegaLiteRenderer({ spec }: { spec: unknown }) {
     }
 
     void render();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      resultRef.current?.finalize();
+      resultRef.current = null;
+    };
   }, [spec, resolvedTheme]);
 
   if (error) {

@@ -30,6 +30,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "dompurify": "^3.4.2",
     "lucide-react": "^0.542.0",
     "motion": "^12.36.0",
     "nanoid": "^5.1.6",
@@ -50,6 +51,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.12",
     "@tauri-apps/cli": "^2",
+    "@types/dompurify": "^3.0.5",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
