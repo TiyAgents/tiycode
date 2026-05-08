@@ -821,26 +821,35 @@ impl AgentSession {
     }
 
     /// Get the last streaming/completed message ID for the current run.
+    /// Skips reasoning messages since they cannot host artifact parts.
     async fn active_runs_message_id(&self) -> Option<String> {
         // First: check the in-memory streaming_message_id tracked by the run
         // manager — this is authoritative and avoids the DB race where the
         // message hasn't been persisted yet by the async event handler.
+        // However, skip it if it points to a reasoning message.
         {
             let runs = self.active_runs.lock().await;
             if let Some(run) = runs.get(&self.spec.run_id) {
                 if let Some(ref id) = run.streaming_message_id {
                     if !id.is_empty() {
-                        return Some(id.clone());
+                        // If the streaming message is a reasoning message, skip it
+                        let is_reasoning = run
+                            .reasoning_message_id
+                            .as_ref()
+                            .map_or(false, |rid| rid == id);
+                        if !is_reasoning {
+                            return Some(id.clone());
+                        }
                     }
                 }
             }
         }
-        // Fallback: query DB for the last assistant message in this run
+        // Fallback: query DB for the last non-reasoning assistant message in this run
         let runs = self.active_runs_db_fallback().await;
         runs.and_then(|id| if id.is_empty() { None } else { Some(id) })
     }
 
-    /// DB fallback: look for the last completed message in this run from DB.
+    /// DB fallback: look for the last completed plain_message in this run from DB.
     async fn active_runs_db_fallback(&self) -> Option<String> {
         let messages = message_repo::list_since_last_reset(&self.pool, &self.spec.thread_id)
             .await
@@ -848,7 +857,11 @@ impl AgentSession {
         messages
             .iter()
             .rev()
-            .find(|m| m.run_id.as_deref() == Some(&self.spec.run_id) && m.role == "assistant")
+            .find(|m| {
+                m.run_id.as_deref() == Some(&self.spec.run_id)
+                    && m.role == "assistant"
+                    && m.message_type != "reasoning"
+            })
             .map(|m| m.id.clone())
     }
 
