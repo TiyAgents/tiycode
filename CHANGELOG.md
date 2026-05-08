@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.13] - 2026-05-08
+### :sparkles: New Features
+- [`9220052`](https://github.com/TiyAgents/tiycode/commit/922005284f3778fae6f06c2d8142a20fb896636f) - **composer**: ✨ 为 Slash Command 引入结构化参数解析与模板变量替换 *(PR [#167](https://github.com/TiyAgents/tiycode/pull/167) by [@HayWolf](https://github.com/HayWolf))*
+- [`f4fcb41`](https://github.com/TiyAgents/tiycode/commit/f4fcb41235bec059c0c5eabbeaa13e77ad9ae361) - **workbench-shell**: ✨ Add dynamic chart artifact rendering to thread messages *(PR [#169](https://github.com/TiyAgents/tiycode/pull/169) by [@jorben](https://github.com/jorben))*
+- [`c265d4f`](https://github.com/TiyAgents/tiycode/commit/c265d4ff3beb44ad8f305ad3e1073549feba1cf8) - **prompts**: ✨ add prompt versioning and display active config *(PR [#171](https://github.com/TiyAgents/tiycode/pull/171) by [@jorben](https://github.com/jorben))*
+- [`829a716`](https://github.com/TiyAgents/tiycode/commit/829a71641414cce8035a369540f4f5116faf2cbd) - **thread-status**: ✨ Sync background thread statuses *(PR [#170](https://github.com/TiyAgents/tiycode/pull/170) by [@jorben](https://github.com/jorben))*
+- [`605838c`](https://github.com/TiyAgents/tiycode/commit/605838c92079ccf089d557c5a956443b38242379) - **providers**: ✨ add Xiaomi MIMO provider support *(PR [#173](https://github.com/TiyAgents/tiycode/pull/173) by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`4caed7c`](https://github.com/TiyAgents/tiycode/commit/4caed7c4df90227adcd99cd0b51583b42b9664cb) - **workbench-shell**: 🐛 properly manage activeThreadId state during thread operations *(PR [#168](https://github.com/TiyAgents/tiycode/pull/168) by [@jorben](https://github.com/jorben))*
+- [`287856f`](https://github.com/TiyAgents/tiycode/commit/287856f0bee2b2dc7b8c97e26fd75742feeb5a66) - **composer**: 🐛 Retain composer state when submission is rejected *(PR [#172](https://github.com/TiyAgents/tiycode/pull/172) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.3.12] - 2026-05-03
 ### :sparkles: New Features
 - [`05bac14`](https://github.com/TiyAgents/tiycode/commit/05bac147b321f2f4a63318718c6fdb4ceb572bb3) - **composer-commands**: ✨ add flexible argument interpolation to command prompt builder *(PR [#164](https://github.com/TiyAgents/tiycode/pull/164) by [@HayWolf](https://github.com/HayWolf))*
@@ -719,3 +732,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.10]: https://github.com/TiyAgents/tiycode/compare/0.3.9...0.3.10
 [0.3.11]: https://github.com/TiyAgents/tiycode/compare/0.3.10...0.3.11
 [0.3.12]: https://github.com/TiyAgents/tiycode/compare/0.3.11...0.3.12
+[0.3.13]: https://github.com/TiyAgents/tiycode/compare/0.3.12...0.3.13
