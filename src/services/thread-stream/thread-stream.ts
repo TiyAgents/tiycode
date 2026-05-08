@@ -90,6 +90,16 @@ export type PlanEvent = {
   plan: unknown;
 };
 
+export type ArtifactEvent = {
+  kind: "started" | "delta" | "completed" | "failed";
+  runId: string;
+  messageId: string;
+  artifactId: string;
+  artifactType: string;
+  payload?: unknown;
+  error?: string;
+};
+
 export type ReasoningEvent = {
   runId: string;
   messageId: string;
@@ -164,6 +174,7 @@ export class ThreadStream {
   onRunStateChange: ((state: RunState, runId: string) => void) | null = null;
   onContextCompressing: ((runId: string) => void) | null = null;
   onPlan: ((event: PlanEvent) => void) | null = null;
+  onArtifact: ((event: ArtifactEvent) => void) | null = null;
   onReasoning: ((event: ReasoningEvent) => void) | null = null;
   onQueue: ((event: QueueEvent) => void) | null = null;
   onTaskBoard: ((event: { taskBoard: TaskBoardDto }) => void) | null = null;
@@ -383,6 +394,7 @@ export class ThreadStream {
     this.onRunStateChange = null;
     this.onContextCompressing = null;
     this.onPlan = null;
+    this.onArtifact = null;
     this.onReasoning = null;
     this.onQueue = null;
     this.onHelperEvent = null;
@@ -441,6 +453,18 @@ export class ThreadStream {
 
       case "plan_updated":
         this.onPlan?.({ runId: event.runId, plan: event.plan });
+        break;
+
+      case "artifact_updated":
+        this.onArtifact?.({
+          artifactId: event.artifactId,
+          artifactType: event.artifactType,
+          error: event.error,
+          kind: event.status,
+          messageId: event.messageId,
+          payload: event.payload,
+          runId: event.runId,
+        });
         break;
 
       case "reasoning_updated":

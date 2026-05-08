@@ -733,3 +733,201 @@ async fn test_message_with_metadata() {
     assert_eq!(meta["model"].as_str().unwrap(), "gpt-4");
     assert_eq!(meta["tokens"].as_u64().unwrap(), 150);
 }
+
+// =========================================================================
+// T1.4.8 — replace_parts persistence
+// =========================================================================
+
+#[tokio::test]
+async fn test_replace_parts_stores_json() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-parts", "/tmp/parts").await;
+    test_helpers::seed_thread(&pool, "t-parts", "ws-parts", None).await;
+    test_helpers::seed_message(&pool, "m-parts-1", "t-parts", "assistant", "Hello").await;
+
+    let parts_json = serde_json::json!([
+        { "type": "text", "text": "Hello" },
+        { "type": "chart", "artifactId": "a-1", "library": "vega-lite", "spec": {} }
+    ]);
+
+    tiycode_lib::persistence::repo::message_repo::replace_parts(
+        &pool,
+        "m-parts-1",
+        Some(&parts_json.to_string()),
+    )
+    .await
+    .expect("replace_parts should succeed");
+
+    let row = sqlx::query("SELECT parts_json FROM messages WHERE id = 'm-parts-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let stored: serde_json::Value =
+        serde_json::from_str(&row.get::<String, _>("parts_json")).unwrap();
+    assert_eq!(stored[0]["type"].as_str().unwrap(), "text");
+    assert_eq!(stored[1]["type"].as_str().unwrap(), "chart");
+    assert_eq!(stored[1]["artifactId"].as_str().unwrap(), "a-1");
+}
+
+#[tokio::test]
+async fn test_replace_parts_nullifies_column() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-null", "/tmp/null").await;
+    test_helpers::seed_thread(&pool, "t-null", "ws-null", None).await;
+    test_helpers::seed_message(&pool, "m-null-1", "t-null", "assistant", "text").await;
+
+    // Set parts first
+    tiycode_lib::persistence::repo::message_repo::replace_parts(
+        &pool,
+        "m-null-1",
+        Some(r#"[{"type":"text","text":"hi"}]"#),
+    )
+    .await
+    .unwrap();
+
+    // Nullify
+    tiycode_lib::persistence::repo::message_repo::replace_parts(&pool, "m-null-1", None)
+        .await
+        .unwrap();
+
+    let row = sqlx::query("SELECT parts_json FROM messages WHERE id = 'm-null-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let val: Option<String> = row.get("parts_json");
+    assert!(val.is_none());
+}
+
+// =========================================================================
+// T1.4.9 — merge_chart_artifact_part
+// =========================================================================
+
+#[tokio::test]
+async fn test_merge_chart_artifact_part_creates_parts_from_empty() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-merge", "/tmp/merge").await;
+    test_helpers::seed_thread(&pool, "t-merge", "ws-merge", None).await;
+    test_helpers::seed_message(&pool, "m-merge-1", "t-merge", "assistant", "Analysis:").await;
+
+    let chart_payload = serde_json::json!({
+        "library": "vega-lite",
+        "spec": { "mark": "bar", "encoding": {} },
+        "title": "Sales",
+        "caption": null,
+        "status": "ready",
+    });
+
+    tiycode_lib::persistence::repo::message_repo::merge_chart_artifact_part(
+        &pool,
+        "m-merge-1",
+        "art-001",
+        chart_payload,
+    )
+    .await
+    .expect("merge should succeed");
+
+    let row = sqlx::query("SELECT parts_json FROM messages WHERE id = 'm-merge-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let parts: Vec<serde_json::Value> =
+        serde_json::from_str(&row.get::<String, _>("parts_json")).unwrap();
+
+    // Should contain migrated text part + new chart part
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["type"].as_str().unwrap(), "text");
+    assert_eq!(parts[0]["text"].as_str().unwrap(), "Analysis:");
+    assert_eq!(parts[1]["type"].as_str().unwrap(), "chart");
+    assert_eq!(parts[1]["artifactId"].as_str().unwrap(), "art-001");
+    assert_eq!(parts[1]["library"].as_str().unwrap(), "vega-lite");
+    assert_eq!(parts[1]["title"].as_str().unwrap(), "Sales");
+}
+
+#[tokio::test]
+async fn test_merge_chart_artifact_part_updates_existing_chart() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-upd", "/tmp/upd").await;
+    test_helpers::seed_thread(&pool, "t-upd", "ws-upd", None).await;
+    test_helpers::seed_message(&pool, "m-upd-1", "t-upd", "assistant", "").await;
+
+    // First insert
+    let payload_v1 = serde_json::json!({
+        "library": "vega-lite",
+        "spec": { "mark": "line" },
+        "title": "V1",
+        "status": "ready",
+    });
+    tiycode_lib::persistence::repo::message_repo::merge_chart_artifact_part(
+        &pool, "m-upd-1", "art-002", payload_v1,
+    )
+    .await
+    .unwrap();
+
+    // Update same artifact
+    let payload_v2 = serde_json::json!({
+        "library": "vega-lite",
+        "spec": { "mark": "area" },
+        "title": "V2",
+        "status": "ready",
+    });
+    tiycode_lib::persistence::repo::message_repo::merge_chart_artifact_part(
+        &pool, "m-upd-1", "art-002", payload_v2,
+    )
+    .await
+    .unwrap();
+
+    let row = sqlx::query("SELECT parts_json FROM messages WHERE id = 'm-upd-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let parts: Vec<serde_json::Value> =
+        serde_json::from_str(&row.get::<String, _>("parts_json")).unwrap();
+
+    // Should still be only 1 chart part (upsert, not duplicate)
+    let chart_parts: Vec<_> = parts
+        .iter()
+        .filter(|p| p["type"].as_str() == Some("chart"))
+        .collect();
+    assert_eq!(chart_parts.len(), 1);
+    assert_eq!(chart_parts[0]["title"].as_str().unwrap(), "V2");
+    assert_eq!(chart_parts[0]["spec"]["mark"].as_str().unwrap(), "area");
+}
+
+#[tokio::test]
+async fn test_merge_chart_artifact_part_skips_empty_content_migration() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-empty", "/tmp/empty").await;
+    test_helpers::seed_thread(&pool, "t-empty", "ws-empty", None).await;
+    // Message with empty content — should NOT create a text part
+    test_helpers::seed_message(&pool, "m-empty-1", "t-empty", "assistant", "").await;
+
+    let chart_payload = serde_json::json!({
+        "library": "vega-lite",
+        "spec": { "mark": "point" },
+        "status": "ready",
+    });
+
+    tiycode_lib::persistence::repo::message_repo::merge_chart_artifact_part(
+        &pool,
+        "m-empty-1",
+        "art-003",
+        chart_payload,
+    )
+    .await
+    .unwrap();
+
+    let row = sqlx::query("SELECT parts_json FROM messages WHERE id = 'm-empty-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let parts: Vec<serde_json::Value> =
+        serde_json::from_str(&row.get::<String, _>("parts_json")).unwrap();
+
+    // Only chart part, no text part from empty content
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0]["type"].as_str().unwrap(), "chart");
+}

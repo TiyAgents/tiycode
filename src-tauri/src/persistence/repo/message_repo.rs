@@ -10,6 +10,7 @@ struct MessageRow {
     run_id: Option<String>,
     role: String,
     content_markdown: String,
+    parts_json: Option<String>,
     message_type: String,
     status: String,
     metadata_json: Option<String>,
@@ -25,6 +26,7 @@ impl MessageRow {
             run_id: self.run_id,
             role: self.role,
             content_markdown: self.content_markdown,
+            parts_json: self.parts_json,
             message_type: self.message_type,
             status: self.status,
             metadata_json: self.metadata_json,
@@ -36,7 +38,7 @@ impl MessageRow {
 
 pub async fn find_by_id(pool: &SqlitePool, id: &str) -> Result<Option<MessageRecord>, AppError> {
     let row = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, thread_id, run_id, role, content_markdown, message_type,
+        "SELECT id, thread_id, run_id, role, content_markdown, parts_json, message_type,
                 status, metadata_json, attachments_json, created_at
          FROM messages
          WHERE id = ?
@@ -59,7 +61,7 @@ pub async fn list_recent(
 ) -> Result<Vec<MessageRecord>, AppError> {
     let rows = if let Some(cursor) = before_id {
         sqlx::query_as::<_, MessageRow>(
-            "SELECT id, thread_id, run_id, role, content_markdown, message_type,
+            "SELECT id, thread_id, run_id, role, content_markdown, parts_json, message_type,
                     status, metadata_json, attachments_json, created_at
              FROM messages
              WHERE thread_id = ? AND id < ?
@@ -73,7 +75,7 @@ pub async fn list_recent(
         .await?
     } else {
         sqlx::query_as::<_, MessageRow>(
-            "SELECT id, thread_id, run_id, role, content_markdown, message_type,
+            "SELECT id, thread_id, run_id, role, content_markdown, parts_json, message_type,
                     status, metadata_json, attachments_json, created_at
              FROM messages
              WHERE thread_id = ?
@@ -117,16 +119,17 @@ pub async fn list_since_last_reset(
 
     let reset = find_last_context_reset(pool, thread_id).await?;
 
-    let mut rows = match reset.as_ref() {
-        Some(marker) => {
-            // Prefer boundaryMessageId if present (auto-compression case);
-            // else use the reset marker's own id (legacy /clear, /compact).
-            let cursor = marker
-                .boundary_message_id
-                .clone()
-                .unwrap_or_else(|| marker.id.clone());
-            sqlx::query_as::<_, MessageRow>(
-                "SELECT id, thread_id, run_id, role, content_markdown, message_type,
+    let mut rows =
+        match reset.as_ref() {
+            Some(marker) => {
+                // Prefer boundaryMessageId if present (auto-compression case);
+                // else use the reset marker's own id (legacy /clear, /compact).
+                let cursor = marker
+                    .boundary_message_id
+                    .clone()
+                    .unwrap_or_else(|| marker.id.clone());
+                sqlx::query_as::<_, MessageRow>(
+                "SELECT id, thread_id, run_id, role, content_markdown, parts_json, message_type,
                         status, metadata_json, attachments_json, created_at
                  FROM messages
                  WHERE thread_id = ? AND id >= ? AND status != 'discarded'
@@ -138,10 +141,9 @@ pub async fn list_since_last_reset(
             .bind(SAFETY_LIMIT)
             .fetch_all(pool)
             .await?
-        }
-        None => {
-            sqlx::query_as::<_, MessageRow>(
-                "SELECT id, thread_id, run_id, role, content_markdown, message_type,
+            }
+            None => sqlx::query_as::<_, MessageRow>(
+                "SELECT id, thread_id, run_id, role, content_markdown, parts_json, message_type,
                         status, metadata_json, attachments_json, created_at
                  FROM messages
                  WHERE thread_id = ? AND status != 'discarded'
@@ -151,9 +153,8 @@ pub async fn list_since_last_reset(
             .bind(thread_id)
             .bind(SAFETY_LIMIT)
             .fetch_all(pool)
-            .await?
-        }
-    };
+            .await?,
+        };
 
     // Reverse to restore chronological (ASC) order after the DESC fetch.
     rows.reverse();
@@ -256,14 +257,15 @@ fn extract_boundary_message_id(raw: Option<&str>) -> Option<String> {
 pub async fn insert(pool: &SqlitePool, record: &MessageRecord) -> Result<(), AppError> {
     sqlx::query(
         "INSERT INTO messages (id, thread_id, run_id, role, content_markdown,
-                message_type, status, metadata_json, attachments_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                parts_json, message_type, status, metadata_json, attachments_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
     )
     .bind(&record.id)
     .bind(&record.thread_id)
     .bind(&record.run_id)
     .bind(&record.role)
     .bind(&record.content_markdown)
+    .bind(&record.parts_json)
     .bind(&record.message_type)
     .bind(&record.status)
     .bind(&record.metadata_json)
@@ -302,6 +304,75 @@ pub async fn replace_content(pool: &SqlitePool, id: &str, content: &str) -> Resu
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn replace_parts(
+    pool: &SqlitePool,
+    id: &str,
+    parts_json: Option<&str>,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE messages SET parts_json = ? WHERE id = ?")
+        .bind(parts_json)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn merge_chart_artifact_part(
+    pool: &SqlitePool,
+    id: &str,
+    artifact_id: &str,
+    chart_payload: serde_json::Value,
+) -> Result<(), AppError> {
+    let existing = find_by_id(pool, id).await?;
+    let (mut parts, content_markdown) = match existing {
+        Some(message) => {
+            let parsed = message
+                .parts_json
+                .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
+                .unwrap_or_default();
+            (parsed, message.content_markdown)
+        }
+        None => (Vec::new(), String::new()),
+    };
+
+    if parts.is_empty() && !content_markdown.trim().is_empty() {
+        parts.push(serde_json::json!({
+            "type": "text",
+            "text": content_markdown,
+        }));
+    }
+
+    let chart_part = serde_json::json!({
+        "type": "chart",
+        "artifactId": artifact_id,
+        "library": chart_payload.get("library").cloned().unwrap_or_else(|| serde_json::json!("vega-lite")),
+        "spec": chart_payload.get("spec").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "source": chart_payload.get("source").cloned().unwrap_or(serde_json::Value::Null),
+        "title": chart_payload.get("title").cloned().unwrap_or(serde_json::Value::Null),
+        "caption": chart_payload.get("caption").cloned().unwrap_or(serde_json::Value::Null),
+        "status": chart_payload.get("status").cloned().unwrap_or_else(|| serde_json::json!("ready")),
+        "error": chart_payload.get("error").cloned().unwrap_or(serde_json::Value::Null),
+    });
+
+    if let Some(index) = parts.iter().position(|part| {
+        part.get("type").and_then(serde_json::Value::as_str) == Some("chart")
+            && part.get("artifactId").and_then(serde_json::Value::as_str) == Some(artifact_id)
+    }) {
+        parts[index] = chart_part;
+    } else {
+        parts.push(chart_part);
+    }
+
+    let serialized = serde_json::to_string(&parts).map_err(|error| {
+        AppError::internal(
+            crate::model::errors::ErrorSource::Database,
+            format!("failed to serialize message parts: {error}"),
+        )
+    })?;
+
+    replace_parts(pool, id, Some(&serialized)).await
 }
 
 pub async fn update_metadata(
@@ -394,6 +465,7 @@ mod tests {
             run_id: None,
             role: role.to_string(),
             content_markdown: content.to_string(),
+            parts_json: None,
             message_type: "plain_message".to_string(),
             status: "completed".to_string(),
             metadata_json: None,
@@ -409,6 +481,7 @@ mod tests {
             run_id: None,
             role: "system".to_string(),
             content_markdown: "Context is now reset".to_string(),
+            parts_json: None,
             message_type: "summary_marker".to_string(),
             status: "completed".to_string(),
             metadata_json: Some(metadata.to_string()),
@@ -496,6 +569,7 @@ mod tests {
                 run_id: None,
                 role: "system".to_string(),
                 content_markdown: "<context_summary>state</context_summary>".to_string(),
+                parts_json: None,
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(serde_json::json!({"kind": "context_summary"}).to_string()),
@@ -572,6 +646,7 @@ mod tests {
                 run_id: None,
                 role: "system".to_string(),
                 content_markdown: "<context_summary>state</context_summary>".to_string(),
+                parts_json: None,
                 message_type: "summary_marker".to_string(),
                 status: "completed".to_string(),
                 metadata_json: Some(serde_json::json!({"kind": "context_summary"}).to_string()),
