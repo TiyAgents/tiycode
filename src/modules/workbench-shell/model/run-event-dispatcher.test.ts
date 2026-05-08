@@ -197,5 +197,14 @@ describe("run-event-dispatcher", () => {
       dispatchRunStatusChangedEvent("thread-1", "r1", "some_unknown_status");
       expect(machine.send).not.toHaveBeenCalled();
     });
+
+    it("falls back to completed for unknown status on unregistered thread", () => {
+      dispatchRunStatusChangedEvent("thread-unknown", "r1", "some_unknown_status");
+      expect(setThreadStatus).toHaveBeenCalledWith(
+        "thread-unknown",
+        "completed",
+        expect.objectContaining({ runId: "r1", source: "tauri_event" }),
+      );
+    });
   });
 });
