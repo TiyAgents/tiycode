@@ -577,6 +577,7 @@ impl ToolGateway {
                 run_id: None,
                 role: "user".to_string(),
                 content_markdown: response_text.to_string(),
+                parts_json: None,
                 message_type: "plain_message".to_string(),
                 status: "completed".to_string(),
                 metadata_json: None,

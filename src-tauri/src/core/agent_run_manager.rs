@@ -200,6 +200,7 @@ impl AgentRunManager {
                     run_id: None,
                     role: "user".to_string(),
                     content_markdown: display_prompt.unwrap_or_else(|| prompt.to_string()),
+                    parts_json: None,
                     message_type: "plain_message".to_string(),
                     status: "completed".to_string(),
                     metadata_json: prompt_metadata.map(|value| value.to_string()),
@@ -257,7 +258,10 @@ impl AgentRunManager {
             }
 
             let (runtime_tx, runtime_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
-            let runtime_finish_rx = self.runtime.start_session(spec, runtime_tx).await?;
+            let runtime_finish_rx = self
+                .runtime
+                .start_session(spec, runtime_tx, Arc::clone(&self.active_runs))
+                .await?;
             self.spawn_runtime_event_loop(run_id.clone(), runtime_rx);
             self.spawn_runtime_finish_watchdog(run_id.clone(), runtime_finish_rx);
 
@@ -515,6 +519,7 @@ impl AgentRunManager {
             run_id: None,
             role: "system".to_string(),
             content_markdown: "Context is now reset".to_string(),
+            parts_json: None,
             message_type: "summary_marker".to_string(),
             status: "completed".to_string(),
             metadata_json: Some(
@@ -534,6 +539,7 @@ impl AgentRunManager {
             run_id: None,
             role: "assistant".to_string(),
             content_markdown: crate::core::plan_checkpoint::plan_markdown(plan_metadata),
+            parts_json: None,
             message_type: "plan".to_string(),
             status: "completed".to_string(),
             metadata_json: serde_json::to_string(plan_metadata).ok(),

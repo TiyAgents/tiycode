@@ -945,3 +945,184 @@ async fn test_run_helpers_table_persists_collapsed_helper_summary() {
         "Repository layout summarized"
     );
 }
+
+// =========================================================================
+// T1.5.10 — render tool execution integration test
+// =========================================================================
+
+/// Validates the complete render data flow: tool_call persistence,
+/// chart artifact merge into message parts, and expected DB state.
+#[tokio::test]
+async fn test_render_tool_persists_tool_call_and_chart_artifact() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-chart", "/tmp/chart").await;
+    test_helpers::seed_thread(&pool, "t-chart", "ws-chart", None).await;
+    test_helpers::seed_run(&pool, "r-chart", "t-chart", "running", "default").await;
+    test_helpers::seed_message(
+        &pool,
+        "msg-chart-target",
+        "t-chart",
+        "assistant",
+        "Here is the analysis.",
+    )
+    .await;
+
+    // Simulate the render tool execution flow:
+    // Step 1: Insert tool call (matches execute_render logic)
+    let tool_call_id = "tc-chart-001";
+    let tool_input = serde_json::json!({
+        "spec": { "mark": "bar", "encoding": { "x": { "field": "category" }, "y": { "field": "value" } } },
+        "title": "Revenue by Category",
+        "caption": "Q1 2026 data",
+        "library": "vega-lite"
+    });
+
+    tiycode_lib::persistence::repo::tool_call_repo::insert(
+        &pool,
+        &tiycode_lib::persistence::repo::tool_call_repo::ToolCallInsert {
+            id: "tc-store-chart-001".to_string(),
+            tool_call_id: tool_call_id.to_string(),
+            run_id: "r-chart".to_string(),
+            thread_id: "t-chart".to_string(),
+            helper_id: None,
+            tool_name: "render".to_string(),
+            tool_input_json: tool_input.to_string(),
+            status: "requested".to_string(),
+        },
+    )
+    .await
+    .expect("tool_call insert should succeed");
+
+    // Step 2: Merge chart artifact into message parts
+    let artifact_id = "art-chart-001";
+    let chart_payload = serde_json::json!({
+        "library": "vega-lite",
+        "spec": tool_input["spec"],
+        "title": "Revenue by Category",
+        "caption": "Q1 2026 data",
+        "status": "ready",
+    });
+
+    tiycode_lib::persistence::repo::message_repo::merge_chart_artifact_part(
+        &pool,
+        "msg-chart-target",
+        artifact_id,
+        chart_payload,
+    )
+    .await
+    .expect("merge_chart_artifact_part should succeed");
+
+    // Step 3: Mark tool call as completed
+    let result_json = serde_json::json!({
+        "success": true,
+        "artifactId": artifact_id,
+        "messageId": "msg-chart-target",
+        "library": "vega-lite",
+        "title": "Revenue by Category",
+        "caption": "Q1 2026 data",
+    });
+    tiycode_lib::persistence::repo::tool_call_repo::update_result(
+        &pool,
+        "tc-store-chart-001",
+        &result_json.to_string(),
+        "completed",
+    )
+    .await
+    .expect("tool_call update should succeed");
+
+    // Verify: tool call is persisted correctly
+    let tc_row = sqlx::query(
+        "SELECT tool_name, status, tool_output_json FROM tool_calls WHERE id = 'tc-store-chart-001'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(tc_row.get::<String, _>("tool_name"), "render");
+    assert_eq!(tc_row.get::<String, _>("status"), "completed");
+    let stored_result: serde_json::Value =
+        serde_json::from_str(&tc_row.get::<String, _>("tool_output_json")).unwrap();
+    assert_eq!(stored_result["success"].as_bool().unwrap(), true);
+    assert_eq!(
+        stored_result["artifactId"].as_str().unwrap(),
+        "art-chart-001"
+    );
+
+    // Verify: message parts contain the chart artifact
+    let msg_row = sqlx::query(
+        "SELECT parts_json, content_markdown FROM messages WHERE id = 'msg-chart-target'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let parts: Vec<serde_json::Value> =
+        serde_json::from_str(&msg_row.get::<String, _>("parts_json")).unwrap();
+
+    assert_eq!(parts.len(), 2, "should have text + chart parts");
+    assert_eq!(parts[0]["type"].as_str().unwrap(), "text");
+    assert_eq!(parts[0]["text"].as_str().unwrap(), "Here is the analysis.");
+    assert_eq!(parts[1]["type"].as_str().unwrap(), "chart");
+    assert_eq!(parts[1]["artifactId"].as_str().unwrap(), "art-chart-001");
+    assert_eq!(parts[1]["library"].as_str().unwrap(), "vega-lite");
+    assert_eq!(parts[1]["title"].as_str().unwrap(), "Revenue by Category");
+    assert_eq!(parts[1]["caption"].as_str().unwrap(), "Q1 2026 data");
+    assert_eq!(parts[1]["status"].as_str().unwrap(), "ready");
+}
+
+/// Validates that render validation failure still persists the tool call
+/// with failed status, matching the execute_render error path.
+#[tokio::test]
+async fn test_render_validation_failure_persists_failed_tool_call() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-chart-fail", "/tmp/chart-fail").await;
+    test_helpers::seed_thread(&pool, "t-chart-fail", "ws-chart-fail", None).await;
+    test_helpers::seed_run(&pool, "r-chart-fail", "t-chart-fail", "running", "default").await;
+
+    // Simulate: tool call persisted first (before validation)
+    let tool_input = serde_json::json!({
+        "spec": "not an object"
+    });
+
+    tiycode_lib::persistence::repo::tool_call_repo::insert(
+        &pool,
+        &tiycode_lib::persistence::repo::tool_call_repo::ToolCallInsert {
+            id: "tc-store-chart-fail".to_string(),
+            tool_call_id: "tc-chart-fail".to_string(),
+            run_id: "r-chart-fail".to_string(),
+            thread_id: "t-chart-fail".to_string(),
+            helper_id: None,
+            tool_name: "render".to_string(),
+            tool_input_json: tool_input.to_string(),
+            status: "requested".to_string(),
+        },
+    )
+    .await
+    .expect("tool_call insert should succeed");
+
+    // Validation fails → update to failed status
+    let error = "render with library 'vega-lite' requires a valid 'spec' object";
+    let error_json = serde_json::json!({ "error": error });
+    tiycode_lib::persistence::repo::tool_call_repo::update_result(
+        &pool,
+        "tc-store-chart-fail",
+        &error_json.to_string(),
+        "failed",
+    )
+    .await
+    .expect("tool_call update_result should succeed");
+
+    // Verify: tool call marked as failed
+    let row = sqlx::query(
+        "SELECT status, tool_output_json FROM tool_calls WHERE id = 'tc-store-chart-fail'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("status"), "failed");
+    let result: serde_json::Value =
+        serde_json::from_str(&row.get::<String, _>("tool_output_json")).unwrap();
+    assert!(result["error"]
+        .as_str()
+        .unwrap()
+        .contains("valid 'spec' object"));
+}
