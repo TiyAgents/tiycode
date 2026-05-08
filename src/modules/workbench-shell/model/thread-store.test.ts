@@ -160,6 +160,47 @@ describe("setThreadStatus", () => {
       threadStore.getState().threadStatuses["new-thread"].status,
     ).toBe("running");
   });
+
+  it("rejects idle write with null runId when existing status is running with valid runId", () => {
+    threadStore.reset();
+    setThreadStatus("thread-1", "running", { runId: "run-1", source: "stream" });
+
+    // Simulate stale snapshot reset — should be rejected
+    setThreadStatus("thread-1", "idle", { runId: null, source: "stream" });
+
+    const record = threadStore.getState().threadStatuses["thread-1"];
+    expect(record.status).toBe("running");
+    expect(record.runId).toBe("run-1");
+  });
+
+  it("rejects idle write with undefined runId when existing is waiting_approval", () => {
+    threadStore.reset();
+    setThreadStatus("thread-1", "waiting_approval", { runId: "run-1", source: "stream" });
+
+    setThreadStatus("thread-1", "idle", { source: "stream" });
+
+    expect(threadStore.getState().threadStatuses["thread-1"].status).toBe("waiting_approval");
+  });
+
+  it("allows idle write when existing runId is null (no active run)", () => {
+    threadStore.reset();
+    setThreadStatus("thread-1", "running", { runId: null, source: "optimistic" });
+
+    // When existing runId is null, the guard should NOT block
+    setThreadStatus("thread-1", "idle", { runId: null, source: "stream" });
+
+    expect(threadStore.getState().threadStatuses["thread-1"].status).toBe("idle");
+  });
+
+  it("allows completed write even with null runId (legitimate terminal state)", () => {
+    threadStore.reset();
+    setThreadStatus("thread-1", "running", { runId: "run-1", source: "stream" });
+
+    // Completed is not "idle" — guard 2 only blocks "idle"
+    setThreadStatus("thread-1", "completed", { runId: null, source: "stream" });
+
+    expect(threadStore.getState().threadStatuses["thread-1"].status).toBe("completed");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -178,6 +219,17 @@ describe("batchSetThreadStatuses", () => {
     expect(Object.keys(statuses)).toHaveLength(2);
     expect(statuses["thread-1"].status).toBe("running");
     expect(statuses["thread-2"].status).toBe("idle");
+  });
+
+  it("rejects idle/null downgrade for running threads in batch", () => {
+    threadStore.reset();
+    setThreadStatus("thread-1", "running", { runId: "run-1", source: "stream" });
+
+    batchSetThreadStatuses({
+      "thread-1": { status: "idle", runId: null },
+    });
+
+    expect(threadStore.getState().threadStatuses["thread-1"].status).toBe("running");
   });
 });
 
