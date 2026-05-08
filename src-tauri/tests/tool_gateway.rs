@@ -854,11 +854,9 @@ async fn test_tool_gateway_can_fold_approval_into_escalation() {
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root =
-        std::env::temp_dir().join(format!("tiy-tool-gateway-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&workspace_root).unwrap();
-    std::fs::write(workspace_root.join("README.md"), "hello").unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(tmp_dir.path().join("README.md"), "hello").unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
     let readme_path = std::fs::canonicalize(workspace_root.join("README.md")).unwrap();
 
     test_helpers::seed_workspace(
@@ -967,16 +965,15 @@ async fn test_search_repo_allows_relative_directory_within_workspace() {
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root =
-        std::env::temp_dir().join(format!("tiy-search-relative-{}", uuid::Uuid::now_v7()));
-    let search_dir = workspace_root.join("src-tauri");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let search_dir = tmp_dir.path().join("src-tauri");
     std::fs::create_dir_all(&search_dir).unwrap();
     std::fs::write(
         search_dir.join("main.rs"),
         "fn main() { println!(\"hello\"); }\n",
     )
     .unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
     test_helpers::seed_workspace(
         &pool,
@@ -1069,20 +1066,18 @@ async fn test_search_repo_ignores_wildcard_file_pattern_and_limits_preview() {
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root =
-        std::env::temp_dir().join(format!("tiy-search-wildcard-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&workspace_root).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
-        workspace_root.join("first.rs"),
+        tmp_dir.path().join("first.rs"),
         "fn first() { println!(\"hello\"); }\n",
     )
     .unwrap();
     std::fs::write(
-        workspace_root.join("second.ts"),
+        tmp_dir.path().join("second.ts"),
         "export const second = 'hello';\n",
     )
     .unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
     test_helpers::seed_workspace(
         &pool,
@@ -1183,15 +1178,13 @@ async fn test_search_repo_treats_regex_metacharacters_as_literal_text() {
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root =
-        std::env::temp_dir().join(format!("tiy-search-literal-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&workspace_root).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
-        workspace_root.join("macros.rs"),
+        tmp_dir.path().join("macros.rs"),
         "fn demo() {\n    warn!(\"literal metacharacters\");\n}\n",
     )
     .unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
     test_helpers::seed_workspace(&pool, "ws-search-literal", workspace_root.to_str().unwrap())
         .await;
@@ -1287,15 +1280,13 @@ async fn test_search_repo_supports_regex_count_mode_and_case_insensitive_matchin
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root =
-        std::env::temp_dir().join(format!("tiy-search-regex-count-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&workspace_root).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
-        workspace_root.join("macros.rs"),
+        tmp_dir.path().join("macros.rs"),
         "fn demo() {\n    WARN!(\"hello\");\n    warn!(\"again\");\n}\n",
     )
     .unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
     test_helpers::seed_workspace(
         &pool,
@@ -1386,11 +1377,9 @@ async fn test_search_repo_auto_resolves_file_pattern_type_conflict() {
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root =
-        std::env::temp_dir().join(format!("tiy-search-conflict-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&workspace_root).unwrap();
-    std::fs::write(workspace_root.join("config.toml"), "key = \"needle\"\n").unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(tmp_dir.path().join("config.toml"), "key = \"needle\"\n").unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
     test_helpers::seed_workspace(
         &pool,
@@ -1478,11 +1467,10 @@ async fn test_find_normalizes_double_star_pattern() {
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root =
-        std::env::temp_dir().join(format!("tiy-find-dstar-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(workspace_root.join("sub")).unwrap();
-    std::fs::write(workspace_root.join("sub/target.txt"), "data\n").unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp_dir.path().join("sub")).unwrap();
+    std::fs::write(tmp_dir.path().join("sub/target.txt"), "data\n").unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
     test_helpers::seed_workspace(&pool, "ws-find-dstar", workspace_root.to_str().unwrap()).await;
     test_helpers::seed_thread(&pool, "t-find-dstar", "ws-find-dstar", None).await;
@@ -1552,11 +1540,9 @@ async fn test_search_repo_zero_result_diagnostic_with_file_pattern_only() {
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root =
-        std::env::temp_dir().join(format!("tiy-search-zr-pat-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&workspace_root).unwrap();
-    std::fs::write(workspace_root.join("lib.rs"), "fn hello() {}\n").unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(tmp_dir.path().join("lib.rs"), "fn hello() {}\n").unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
     test_helpers::seed_workspace(&pool, "ws-search-zr-pat", workspace_root.to_str().unwrap()).await;
     test_helpers::seed_thread(&pool, "t-search-zr-pat", "ws-search-zr-pat", None).await;
@@ -1630,11 +1616,9 @@ async fn test_search_repo_zero_result_diagnostic_with_file_pattern_and_type() {
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root =
-        std::env::temp_dir().join(format!("tiy-search-zr-both-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&workspace_root).unwrap();
-    std::fs::write(workspace_root.join("lib.rs"), "fn hello() {}\n").unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(tmp_dir.path().join("lib.rs"), "fn hello() {}\n").unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
     test_helpers::seed_workspace(&pool, "ws-search-zr-both", workspace_root.to_str().unwrap())
         .await;
@@ -1715,9 +1699,8 @@ async fn test_execution_timeout_fires_for_slow_tool() {
     };
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root = std::env::temp_dir().join(format!("tiy-timeout-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&workspace_root).unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
     test_helpers::seed_workspace(&pool, "ws-timeout", workspace_root.to_str().unwrap()).await;
     test_helpers::seed_thread(&pool, "t-timeout", "ws-timeout", None).await;
@@ -1809,9 +1792,8 @@ async fn test_abort_signal_cancels_tool_execution() {
     use tiycore::agent::AbortSignal;
 
     let pool = test_helpers::setup_test_pool().await;
-    let workspace_root = std::env::temp_dir().join(format!("tiy-abort-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&workspace_root).unwrap();
-    let workspace_root = std::fs::canonicalize(&workspace_root).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let workspace_root = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
     test_helpers::seed_workspace(&pool, "ws-abort", workspace_root.to_str().unwrap()).await;
     test_helpers::seed_thread(&pool, "t-abort", "ws-abort", None).await;
