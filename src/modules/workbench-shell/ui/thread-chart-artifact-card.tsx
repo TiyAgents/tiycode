@@ -1,6 +1,6 @@
 import { Component, useEffect, useMemo, useRef, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import { AlertCircleIcon, BarChart3Icon, CodeIcon, EyeIcon } from "lucide-react";
+import { AlertCircleIcon, BarChart3Icon, ChevronsUpDownIcon, CodeIcon, EyeIcon } from "lucide-react";
 import { useTheme } from "@/app/providers/theme-provider";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { MessageResponse } from "@/components/ai-elements/message";
@@ -8,6 +8,7 @@ import type { SurfaceChartMessagePart } from "@/modules/workbench-shell/ui/runti
 import { cn } from "@/shared/lib/utils";
 import { validateSpec } from "@/modules/workbench-shell/ui/chart-spec-validation";
 import { FilePreviewSurface } from "@/modules/workbench-shell/ui/file-preview-surface";
+import { useT } from "@/i18n";
 
 type ThreadChartArtifactCardProps = {
   part: SurfaceChartMessagePart;
@@ -105,7 +106,8 @@ function VegaLiteRenderer({ spec }: { spec: unknown }) {
   return <div ref={containerRef} className="w-full overflow-x-auto [&_.vega-embed]:!w-full" />;
 }
 
-function HtmlSvgRenderer({ source }: { source: string; library: string }) {
+function HtmlSvgRenderer({ source, collapsed }: { source: string; collapsed: boolean }) {
+  if (collapsed) return null;
   return (
     <CodeBlock
       code={source}
@@ -125,21 +127,28 @@ function ChartErrorFallback({ message }: { message: string }) {
 }
 
 export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) {
+  const t = useT();
   const isHtmlSvg = part.library === "html" || part.library === "svg";
   const [showSpec, setShowSpec] = useState(false);
+  const [codeCollapsed, setCodeCollapsed] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
   const specText = useMemo(() => JSON.stringify(part.spec, null, 2), [part.spec]);
   const validationError = !isHtmlSvg && part.status !== "loading" ? validateSpec(part.spec) : null;
 
   return (
     <>
-      <div className="overflow-hidden rounded-2xl border border-app-border/30 bg-app-surface/18 shadow-sm">
-        <div className="flex items-start justify-between gap-3 border-b border-app-border/20 px-4 py-3">
+      <div
+        className={cn(
+          "overflow-hidden rounded-2xl border shadow-sm",
+          "border-blue-400/25 bg-blue-50/40 dark:border-blue-500/20 dark:bg-blue-950/25",
+        )}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-blue-400/15 dark:border-blue-500/12 px-4 py-3">
           <div className="min-w-0 space-y-1">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-app-subtle">
               <BarChart3Icon className="size-3.5" />
               <span>{getStatusLabel(part.status, part.library)}</span>
-              <span className="rounded-full border border-app-border/30 px-2 py-0.5 normal-case tracking-normal text-app-muted">
+              <span className="rounded-full border border-blue-400/25 dark:border-blue-500/20 px-2 py-0.5 normal-case tracking-normal text-app-muted">
                 {part.library}
               </span>
             </div>
@@ -150,18 +159,8 @@ export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) 
               <p className="text-sm leading-6 text-app-muted">{part.caption}</p>
             ) : null}
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            {isHtmlSvg && part.source ? (
-              <button
-                className="shrink-0 rounded-lg p-1.5 text-app-subtle transition-colors hover:bg-app-surface/50 hover:text-app-foreground"
-                onClick={() => setPreviewOpen(true)}
-                title="Preview"
-                type="button"
-              >
-                <EyeIcon className="size-4" />
-              </button>
-            ) : null}
-            {!isHtmlSvg && (
+          {!isHtmlSvg && (
+            <div className="flex shrink-0 items-center gap-1.5">
               <button
                 className="shrink-0 rounded-lg p-1.5 text-app-subtle transition-colors hover:bg-app-surface/50 hover:text-app-foreground"
                 onClick={() => setShowSpec((v) => !v)}
@@ -170,8 +169,8 @@ export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) 
               >
                 {showSpec ? <EyeIcon className="size-4" /> : <CodeIcon className="size-4" />}
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         <div className="space-y-3 px-4 py-4">
@@ -184,12 +183,32 @@ export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) 
           ) : null}
 
           {part.status === "loading" ? (
-            <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-app-border/30 bg-app-surface/35">
+            <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-blue-400/20 dark:border-blue-500/15 bg-blue-50/20 dark:bg-blue-950/15">
               <span className="text-sm text-app-subtle animate-pulse">Generating…</span>
             </div>
           ) : isHtmlSvg ? (
             part.source ? (
-              <HtmlSvgRenderer source={part.source} library={part.library} />
+              <>
+                <HtmlSvgRenderer source={part.source} collapsed={codeCollapsed} />
+                <div className="flex items-center justify-between">
+                  <button
+                    className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-app-subtle transition-colors hover:bg-app-surface/50 hover:text-app-foreground"
+                    onClick={() => setCodeCollapsed((v) => !v)}
+                    type="button"
+                  >
+                    <ChevronsUpDownIcon className="size-3.5" />
+                    <span>{codeCollapsed ? t("artifact.expandCode") : t("artifact.collapseCode")}</span>
+                  </button>
+                  <button
+                    className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-app-subtle transition-colors hover:bg-app-surface/50 hover:text-app-foreground"
+                    onClick={() => setPreviewOpen(true)}
+                    type="button"
+                  >
+                    <EyeIcon className="size-3.5" />
+                    <span>{t("artifact.preview")}</span>
+                  </button>
+                </div>
+              </>
             ) : (
               <ChartErrorFallback message="No source content available" />
             )
@@ -211,7 +230,7 @@ export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) 
                   "rounded-xl border px-2 py-2",
                   part.status === "error"
                     ? "border-app-danger/25 bg-app-danger/5"
-                    : "border-app-border/20 bg-app-surface/35",
+                    : "border-blue-400/15 dark:border-blue-500/12 bg-blue-50/15 dark:bg-blue-950/10",
                 )}
               >
                 <VegaLiteRenderer spec={part.spec} />
