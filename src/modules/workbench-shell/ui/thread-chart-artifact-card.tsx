@@ -189,7 +189,6 @@ export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) 
           ) : isHtmlSvg ? (
             part.source ? (
               <>
-                <HtmlSvgRenderer source={part.source} collapsed={codeCollapsed} />
                 <div className="flex items-center justify-between">
                   <button
                     className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-app-subtle transition-colors hover:bg-app-surface/50 hover:text-app-foreground"
@@ -208,6 +207,7 @@ export function ThreadChartArtifactCard({ part }: ThreadChartArtifactCardProps) 
                     <span>{t("artifact.preview")}</span>
                   </button>
                 </div>
+                <HtmlSvgRenderer source={part.source} collapsed={codeCollapsed} />
               </>
             ) : (
               <ChartErrorFallback message="No source content available" />
