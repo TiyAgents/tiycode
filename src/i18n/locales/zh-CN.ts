@@ -831,6 +831,11 @@ const zhCN = {
   "worktree.error.selectBranch": "请选择一个分支",
   "contextCompressing": "正在压缩上下文…",
 
+  // ── Artifact Card ─────────────────────────────────────────
+  "artifact.collapseCode": "收起代码",
+  "artifact.expandCode": "展开代码",
+  "artifact.preview": "点击预览",
+
   // ── Long message preview ──────────────────────────────────
   "longMessage.collapseAll": "收起全文",
   "longMessage.expandAll": "展开全文",

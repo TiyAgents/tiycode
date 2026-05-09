@@ -793,6 +793,11 @@ const en: Record<TranslationKey, string> = {
   "worktree.error.selectBranch": "Please select a branch",
   "contextCompressing": "Compressing context…",
 
+  // ── Artifact Card ─────────────────────────────────────────
+  "artifact.collapseCode": "Collapse code",
+  "artifact.expandCode": "Expand code",
+  "artifact.preview": "Preview",
+
   // ── Long message preview ──────────────────────────────────
   "longMessage.collapseAll": "Collapse",
   "longMessage.expandAll": "Expand",
