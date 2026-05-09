@@ -644,6 +644,11 @@ export function RuntimeThreadSurface({
       const message = error instanceof Error ? error.message : String(error);
       setLoadError(message);
       threadStore.setState({ runtimeContextUsage: null });
+      // Reset run machine so the optimistic "running" state doesn't permanently
+      // block the pending run effect when the snapshot IPC fails.
+      // Use "failed" rather than "idle" because Guard 2 in threadStore rejects
+      // idle/null writes when an optimistic running state with a real runId exists.
+      if (threadId) runMachine.reset("failed", { runId: null, errorMessage: message, retryCount: 0 });
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
     } finally {

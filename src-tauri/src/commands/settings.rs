@@ -67,7 +67,9 @@ pub async fn settings_set(
             Ok(enabled) => {
                 #[cfg(target_os = "macos")]
                 {
-                    startup_manager::set_launch_at_login(enabled)?;
+                    if let Err(error) = startup_manager::set_launch_at_login(enabled) {
+                        tracing::warn!(error = %error, "failed to update launch at login via SMAppService (non-fatal)");
+                    }
                 }
 
                 #[cfg(not(target_os = "macos"))]
