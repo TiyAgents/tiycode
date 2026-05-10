@@ -603,8 +603,30 @@ export function RuntimeThreadSurface({
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
-      if (threadId) runMachine.reset(nextState as RunMachineState, {
-        runId: snapshot.activeRun?.id ?? null, errorMessage: null, retryCount: 0 });
+      // Prevent stale snapshots from regressing an active approval/reply state.
+      // When the stream has already transitioned the machine to waiting_approval
+      // or needs_reply, a snapshot still reporting "running" is stale — the DB
+      // write hasn't landed yet. Keep the current state and schedule a retry.
+      const currentMachineState = runMachine.getState();
+      const isStaleRegression =
+        (currentMachineState === "waiting_approval" || currentMachineState === "needs_reply")
+        && nextState === "running";
+
+      if (threadId && !isStaleRegression) {
+        runMachine.reset(nextState as RunMachineState, {
+          runId: snapshot.activeRun?.id ?? null, errorMessage: null, retryCount: 0,
+        });
+      }
+
+      // If the snapshot was stale, retry after a short delay to pick up the
+      // approval_prompt message once the backend commit completes.
+      if (isStaleRegression) {
+        setTimeout(() => {
+          if (snapshotLoadRequestRef.current === requestId) {
+            void loadSnapshot();
+          }
+        }, 800);
+      }
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
       if (!shouldPreserveContextUsage) {
         threadStore.setState({ runtimeContextUsage: nextContextUsage });
