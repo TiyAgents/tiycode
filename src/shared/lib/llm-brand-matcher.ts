@@ -81,6 +81,7 @@ const BRAND_RULES: ReadonlyArray<BrandRule> = [
   { slug: "xai", providerPatterns: ["xai", "x ai"], modelPatterns: ["xai", "x ai"] },
   { slug: "zhipu", providerPatterns: ["zhipu", "智谱", "zai", "z ai", "glm", "glmv"], modelPatterns: ["zhipu", "智谱", "zai", "z ai", "glm", "glmv"] },
   { slug: "opencode", providerPatterns: ["opencode", "open code", "opencode go", "opencode-go"], modelPatterns: ["opencode", "open code"] },
+  { slug: "synthetic", providerPatterns: ["synthetic"], modelPatterns: ["synthetic"] },
   { slug: "anthropic", providerPatterns: ["anthropic"], modelPatterns: ["anthropic"] },
   { slug: "openai", providerPatterns: ["openai"], modelPatterns: ["openai", "chatgpt", "gpt", /(^|[^a-z0-9])o(?:1|3|4)(?:[^a-z0-9]|$)/u] },
   { slug: "google", providerPatterns: ["google"], modelPatterns: ["google"] },

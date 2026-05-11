@@ -33,7 +33,8 @@ export type ProviderType =
   | "zai"
   | "deepseek"
   | "zenmux"
-  | "xiaomi-mimo";
+  | "xiaomi-mimo"
+  | "synthetic";
 
 export type CustomProviderType =
   | "openai-compatible"
