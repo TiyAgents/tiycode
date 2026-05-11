@@ -47,6 +47,7 @@ jobs:
             openrouter.ai
             tokenhub.tencentmaas.com
             api.lkeap.cloud.tencent.com
+            api.synthetic.new
 
           # [Optional] Include globs (comma or newline separated); default is ** (all files)
           # Allowed values: any valid glob patterns

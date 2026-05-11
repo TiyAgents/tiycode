@@ -129,6 +129,12 @@ const BUILTIN_PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         display_name: "Xiaomi MIMO",
         default_base_url: "https://api.xiaomimimo.com/v1",
     },
+    ProviderCatalogEntry {
+        provider_key: "synthetic",
+        provider_type: "anthropic",
+        display_name: "Synthetic",
+        default_base_url: "https://api.synthetic.new/anthropic/v1",
+    },
 ];
 
 const CUSTOM_PROVIDER_TYPE_CATALOG: &[ProviderCatalogEntry] = &[
@@ -712,11 +718,24 @@ impl SettingsManager {
         let provider = provider_repo::find_by_id(&self.pool, id)
             .await?
             .ok_or_else(|| AppError::not_found(ErrorSource::Settings, "provider"))?;
-        let provider_type = TiyProvider::from(provider.provider_type.clone());
+
+        // Synthetic uses Anthropic protocol for chat but OpenAI-compatible /models endpoint
+        let (provider_type, base_url) = if provider.provider_key == "synthetic" {
+            (
+                TiyProvider::from("openai-compatible".to_string()),
+                "https://api.synthetic.new/openai/v1".to_string(),
+            )
+        } else {
+            (
+                TiyProvider::from(provider.provider_type.clone()),
+                provider.base_url.clone(),
+            )
+        };
+
         let request = tiycore::catalog::FetchModelsRequest {
             provider: provider_type,
             api_key: provider.api_key_encrypted.clone(),
-            base_url: Some(provider.base_url.clone()),
+            base_url: Some(base_url),
             headers: Some(inject_default_headers(parse_custom_headers_map(
                 provider.custom_headers_json.as_deref(),
             ))),
