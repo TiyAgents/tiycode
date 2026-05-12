@@ -54,6 +54,20 @@ function emit(events: ThreadStreamEvent[]) {
   };
 }
 
+type TerminalRunEvent = Extract<
+  ThreadStreamEvent,
+  { type: "run_checkpointed" | "run_completed" | "run_limit_reached" | "run_failed" | "run_cancelled" | "run_interrupted" }
+>;
+
+const terminalRunEvents: TerminalRunEvent[] = [
+  { type: "run_checkpointed", runId: "run-1" },
+  { type: "run_completed", runId: "run-1" },
+  { type: "run_limit_reached", runId: "run-1", error: "limit reached", maxTurns: 3 },
+  { type: "run_failed", runId: "run-1", error: "fatal error" },
+  { type: "run_cancelled", runId: "run-1" },
+  { type: "run_interrupted", runId: "run-1" },
+];
+
 describe("ThreadStream event routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -410,6 +424,81 @@ describe("ThreadStream uncovered events", () => {
     await stream.startRun("thread-1", { prompt: "hi" });
     expect(onRunStateChange).toHaveBeenCalledWith("running", "run-1");
     expect(stream.runId).toBe("run-1");
+  });
+
+  it.each(terminalRunEvents)("clears run caches for $type events", async (terminalEvent) => {
+    const stream = new ThreadStream();
+    const onToolEvent = vi.fn();
+    stream.onToolEvent = onToolEvent;
+
+    threadSubscribeRunMock.mockImplementationOnce((
+      _threadId: string,
+      onEvent: (event: ThreadStreamEvent) => void,
+    ) => {
+      for (const event of [
+        { type: "run_started", runId: "run-1", runMode: "default" } as const,
+        { type: "tool_requested", runId: "run-1", toolCallId: "tool-reused", toolName: "agent_review", toolInput: {} } as const,
+        terminalEvent,
+        { type: "tool_requested", runId: "run-2", toolCallId: "tool-reused", toolName: "read", toolInput: { path: "README.md" } } as const,
+        { type: "tool_running", runId: "run-2", toolCallId: "tool-reused" } as const,
+      ]) {
+        onEvent(event);
+      }
+      return Promise.resolve(null);
+    });
+
+    await stream.subscribe("thread-1");
+
+    expect(stream.runId).toBeNull();
+    expect(onToolEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "requested",
+      runId: "run-2",
+      toolCallId: "tool-reused",
+      toolName: "read",
+    }));
+    expect(onToolEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "running",
+      runId: "run-2",
+      toolCallId: "tool-reused",
+      toolName: "read",
+    }));
+  });
+
+  it("clears run caches on reset", async () => {
+    const stream = new ThreadStream();
+    const onToolEvent = vi.fn();
+    stream.onToolEvent = onToolEvent;
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "run_started", runId: "run-1", runMode: "default" },
+      { type: "tool_requested", runId: "run-1", toolCallId: "tool-reused", toolName: "agent_review", toolInput: {} },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "hi" });
+    expect(stream.runId).toBe("run-1");
+
+    stream.reset();
+    expect(stream.runId).toBeNull();
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "tool_requested", runId: "run-2", toolCallId: "tool-reused", toolName: "read", toolInput: { path: "README.md" } },
+      { type: "tool_running", runId: "run-2", toolCallId: "tool-reused" },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "again" });
+
+    expect(onToolEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "requested",
+      runId: "run-2",
+      toolCallId: "tool-reused",
+      toolName: "read",
+    }));
+    expect(onToolEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "running",
+      runId: "run-2",
+      toolCallId: "tool-reused",
+      toolName: "read",
+    }));
   });
 
   it("routes tool_failed events for visible tools", async () => {

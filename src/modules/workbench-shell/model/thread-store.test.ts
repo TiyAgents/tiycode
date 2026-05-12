@@ -221,6 +221,60 @@ describe("batchSetThreadStatuses", () => {
     expect(statuses["thread-2"].status).toBe("idle");
   });
 
+  it("applies same-run updates without updatedAt even when existing status is newer", () => {
+    threadStore.reset();
+    setThreadStatus("thread-1", "running", {
+      runId: "run-1",
+      source: "stream",
+      updatedAt: 200,
+    });
+
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    batchSetThreadStatuses({
+      "thread-1": { status: "waiting_approval", runId: "run-1", source: "snapshot" },
+    });
+    nowSpy.mockRestore();
+
+    const status = threadStore.getState().threadStatuses["thread-1"];
+    expect(status.status).toBe("waiting_approval");
+    expect(status.runId).toBe("run-1");
+    expect(status.updatedAt).toBe(1_000);
+  });
+
+  it("skips same-run updates with an explicit older updatedAt", () => {
+    threadStore.reset();
+    setThreadStatus("thread-1", "running", {
+      runId: "run-1",
+      source: "stream",
+      updatedAt: 200,
+    });
+
+    batchSetThreadStatuses({
+      "thread-1": { status: "waiting_approval", runId: "run-1", updatedAt: 100 },
+    });
+
+    const status = threadStore.getState().threadStatuses["thread-1"];
+    expect(status.status).toBe("running");
+    expect(status.updatedAt).toBe(200);
+  });
+
+  it("applies same-run updates with an explicit newer updatedAt", () => {
+    threadStore.reset();
+    setThreadStatus("thread-1", "running", {
+      runId: "run-1",
+      source: "stream",
+      updatedAt: 200,
+    });
+
+    batchSetThreadStatuses({
+      "thread-1": { status: "waiting_approval", runId: "run-1", updatedAt: 300 },
+    });
+
+    const status = threadStore.getState().threadStatuses["thread-1"];
+    expect(status.status).toBe("waiting_approval");
+    expect(status.updatedAt).toBe(300);
+  });
+
   it("rejects idle/null downgrade for running threads in batch", () => {
     threadStore.reset();
     setThreadStatus("thread-1", "running", { runId: "run-1", source: "stream" });

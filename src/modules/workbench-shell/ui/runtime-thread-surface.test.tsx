@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { mapSnapshotToRunState, isTaskBoardTool, getDefaultToolOpenState } from "./runtime-thread-surface-logic";
-import { mapMessageParts, mapSnapshotMessage } from "./runtime-thread-surface-state";
+import { mapMessageParts, mapSnapshotMessage, mergeSnapshotTools } from "./runtime-thread-surface-state";
 import type { MessageDto, RunStatus, ThreadSnapshotDto } from "@/shared/types/api";
 
 function makeMessage(overrides: Partial<MessageDto> = {}): MessageDto {
@@ -59,6 +59,19 @@ function makeSnapshot(activeStatus: RunStatus | null): ThreadSnapshotDto {
     helpers: [],
     taskBoards: [],
     activeTaskBoardId: null,
+  };
+}
+
+type TestSurfaceTool = Parameters<typeof mergeSnapshotTools>[0][number];
+
+function makeTool(overrides: Partial<TestSurfaceTool>): TestSurfaceTool {
+  return {
+    id: "tool-1",
+    name: "read",
+    runId: "run-1",
+    startedAt: "2026-05-06T00:00:00Z",
+    state: "output-available",
+    ...overrides,
   };
 }
 
@@ -140,6 +153,27 @@ describe("isTaskBoardTool", () => {
     expect(isTaskBoardTool("")).toBe(false);
     expect(isTaskBoardTool("create_task_extra")).toBe(false);
     expect(isTaskBoardTool("CREATE_TASK")).toBe(false);
+  });
+});
+
+describe("mergeSnapshotTools", () => {
+  it("keeps the more advanced live terminal state when merging stale snapshots", () => {
+    const deniedSnapshot = makeTool({ state: "output-denied", result: "denied snapshot" });
+    const errorLive = makeTool({ state: "output-error", error: "live error" });
+
+    expect(mergeSnapshotTools([deniedSnapshot], [errorLive])[0]).toBe(errorLive);
+
+    const errorSnapshot = makeTool({ state: "output-error", error: "snapshot error" });
+    const availableLive = makeTool({ state: "output-available", result: "live result" });
+
+    expect(mergeSnapshotTools([errorSnapshot], [availableLive])[0]).toBe(availableLive);
+  });
+
+  it("keeps the snapshot when a live terminal state is less advanced", () => {
+    const availableSnapshot = makeTool({ state: "output-available", result: "snapshot result" });
+    const deniedLive = makeTool({ state: "output-denied", result: "denied live" });
+
+    expect(mergeSnapshotTools([availableSnapshot], [deniedLive])[0]).toBe(availableSnapshot);
   });
 });
 

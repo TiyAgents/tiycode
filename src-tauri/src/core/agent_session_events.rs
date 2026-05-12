@@ -92,11 +92,10 @@ pub(crate) fn handle_agent_event(
                         return;
                     }
 
-                    // Extract thinking_signature from the partial message's last
-                    // Thinking content block.  The signature is populated by the
-                    // protocol layer during streaming and is complete by the time
-                    // ThinkingEnd fires.
-                    // 从 partial.content 的最后一个 ThinkingContent 块中提取（反向查找）。
+                    // Extract thinking_signature from the partial message's final
+                    // Thinking content block. The protocol layer populates this
+                    // during streaming, so search from the end of partial.content
+                    // to find the complete block when ThinkingEnd fires.
                     let thinking_signature = partial
                         .content
                         .iter()
@@ -296,4 +295,32 @@ fn reset_reasoning_state(
     reset_message_id(current_reasoning_message_id);
     let mut buffer = lock_or_recover(reasoning_buffer, "reset_reasoning_state");
     buffer.clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_or_recover_recovers_poisoned_mutex() {
+        let mutex = StdMutex::new(String::from("before"));
+
+        let result = std::panic::catch_unwind(|| {
+            let _guard = mutex.lock().expect("mutex should lock before poison");
+            panic!("poison mutex for recovery test");
+        });
+        assert!(result.is_err());
+
+        {
+            let mut guard = lock_or_recover(&mutex, "test");
+            assert_eq!(guard.as_str(), "before");
+            guard.clear();
+            guard.push_str("after");
+        }
+
+        let guard = mutex
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(guard.as_str(), "after");
+    }
 }
