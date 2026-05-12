@@ -1,5 +1,12 @@
 import type { RunState } from "@/services/thread-stream";
 import type { MessageDto, MessagePartDto, ThreadSnapshotDto } from "@/shared/types/api";
+import {
+  isDefaultCollapsedTool,
+  isTaskBoardTool,
+} from "@/shared/constants/tool-names";
+
+// Re-export from shared constants for backward compatibility with existing imports.
+export { isDefaultCollapsedTool, isTaskBoardTool };
 
 export type RuntimeSurfaceToolState =
   | "approval-requested"
@@ -115,17 +122,6 @@ export function shouldUseLongMessagePreview(message: RuntimeSurfaceMessagePrevie
   return true;
 }
 
-export function isTaskBoardTool(toolName: string) {
-  return (
-    toolName === "create_task"
-    || toolName === "update_task"
-    || toolName === "query_task"
-  );
-}
-
-export function isDefaultCollapsedTool(toolName: string) {
-  return isTaskBoardTool(toolName) || toolName === "render";
-}
 
 export function getDefaultToolOpenState(
   toolName: string,

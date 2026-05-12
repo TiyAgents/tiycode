@@ -424,12 +424,13 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn plan_read_only_profile_includes_shell_excludes_mutating_terminal_tools() {
+    fn plan_read_only_profile_excludes_shell_and_mutating_terminal_tools() {
         let tools = runtime_tools_for_profile(PLAN_READ_ONLY_TOOL_PROFILE);
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
-        // Shell is available in plan mode (follows normal approval policy).
-        assert!(tool_names.contains(&"shell"));
+        // Shell is excluded in plan mode — arbitrary command execution is not
+        // compatible with read-only intent (prompt-only constraint was insufficient).
+        assert!(!tool_names.contains(&"shell"));
         // Write-oriented terminal tools are excluded.
         assert!(!tool_names.contains(&"term_write"));
         assert!(!tool_names.contains(&"term_restart"));

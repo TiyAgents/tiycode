@@ -172,13 +172,16 @@ export function batchSetThreadStatuses(
     const next = { ...prev.threadStatuses };
     for (const [threadId, upd] of Object.entries(updates)) {
       const existing = next[threadId];
+      // Guard 1: ignore stale writes within the same run (same semantics as
+      // setThreadStatus — only compare when updatedAt is explicitly provided).
       if (
         existing &&
         existing.runId !== null &&
         upd.runId !== undefined &&
         upd.runId !== null &&
         existing.runId === upd.runId &&
-        existing.updatedAt > (upd.updatedAt ?? 0)
+        upd.updatedAt !== undefined &&
+        existing.updatedAt > upd.updatedAt
       ) {
         continue;
       }

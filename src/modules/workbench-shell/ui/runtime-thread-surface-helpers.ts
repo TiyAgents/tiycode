@@ -56,6 +56,9 @@ export function mapSnapshotHelper(
 
   return {
     completedSteps: toolSummary.completedSteps,
+    // Defaults below are overridden by applyHelperSnapshot() when live
+    // stream events arrive. They are intentional initial values for the
+    // snapshot-only path (no streaming data yet).
     currentAction: null,
     error: helper.errorSummary ?? undefined,
     finishedAt: helper.finishedAt,

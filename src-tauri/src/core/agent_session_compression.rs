@@ -281,6 +281,7 @@ pub(crate) async fn run_auto_compression(
     // id slightly overshoot (include a few more old DB rows in the next reload
     // than strictly necessary) but NEVER undershoot — so no in-memory recent
     // message can get dropped by the next load.
+    // **重要**: 该缓冲区解决了 DB 层 ID 与内存层 Message 数量不一致的问题，保证边界标记的稳健性。
     const BOUNDARY_BUFFER: usize = 16;
 
     match summary_result {

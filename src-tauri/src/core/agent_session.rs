@@ -24,7 +24,7 @@ pub(crate) const DEFAULT_CONTEXT_WINDOW: u32 = 128_000;
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32_000;
 pub(crate) const DEFAULT_FULL_TOOL_PROFILE: &str = "default_full";
 pub(crate) const PLAN_READ_ONLY_TOOL_PROFILE: &str = "plan_read_only";
-const STANDARD_TOOL_TIMEOUT_SECS: u64 = 120;
+pub(crate) const STANDARD_TOOL_TIMEOUT_SECS: u64 = 120;
 const SUBAGENT_TOOL_TIMEOUT_SECS: u64 = 600;
 /// Main agent timeout is effectively unlimited (24 h) because user-interactive
 /// tools like `clarify` and approval prompts must wait for human input without
@@ -33,6 +33,9 @@ const SUBAGENT_TOOL_TIMEOUT_SECS: u64 = 600;
 /// tool calls.
 const MAIN_AGENT_TOOL_TIMEOUT_SECS: u64 = 86_400;
 pub(crate) const CLARIFY_TOOL_NAME: &str = "clarify";
+pub(crate) const PLAN_TOOL_NAME: &str = "update_plan";
+pub(crate) const RENDER_TOOL_NAME: &str = "render";
+pub(crate) const TASK_TOOL_NAMES: &[&str] = &["create_task", "update_task", "query_task"];
 pub(crate) const PLAN_MODE_MISSING_CHECKPOINT_ERROR: &str =
     "Plan mode requires publishing a plan with update_plan before the run can finish.";
 pub(crate) const TEXT_ATTACHMENT_MAX_CHARS: usize = 12_000;

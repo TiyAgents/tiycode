@@ -606,6 +606,10 @@ export function getToolStatusClass(state: SurfaceToolState) {
 /**
  * Defines a rough ordering of tool states through their lifecycle.
  * Higher numbers mean the tool is further along.
+ *
+ * Terminal states are differentiated so that `isMoreAdvancedToolState` can
+ * correctly resolve conflicts when a live event and a stale snapshot report
+ * different terminal outcomes (e.g. denied vs. available).
  */
 const TOOL_STATE_ORDER: Record<SurfaceToolState, number> = {
   "input-streaming": 0,
@@ -613,9 +617,9 @@ const TOOL_STATE_ORDER: Record<SurfaceToolState, number> = {
   "clarify-requested": 2,
   "approval-requested": 3,
   "approval-responded": 4,
-  "output-available": 5,
   "output-denied": 5,
-  "output-error": 5,
+  "output-error": 6,
+  "output-available": 7,
 };
 
 /**

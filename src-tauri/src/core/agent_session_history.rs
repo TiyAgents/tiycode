@@ -162,7 +162,7 @@ pub(crate) fn convert_history_messages(
         let mut pos_to_timeline_idx: std::collections::HashMap<usize, usize> =
             std::collections::HashMap::new();
         for (tl_idx, (key, _)) in timeline.iter().enumerate() {
-            if key.sub == 2 {
+            if key.sub == sub_position::POSITIONAL {
                 // sub == 2 means a positional message (not a tool call)
                 pos_to_timeline_idx.insert(key.position, tl_idx);
             }
@@ -264,7 +264,7 @@ pub(crate) fn convert_history_messages(
                 .iter()
                 .rposition(|(key, entry)| {
                     key.position == insert_pos
-                        && key.sub == 3
+                        && key.sub == sub_position::STANDALONE_TOOL_CALL
                         && matches!(entry, TimelineEntry::Msg(AgentMessage::Assistant(_)))
                 })
                 .and_then(|tl_idx| {
@@ -361,21 +361,36 @@ pub(crate) fn convert_history_messages(
     result
 }
 
+/// Sub-position constants for [`SortKey`] ordering.
+///
+/// These govern how entries at the same `position` are interleaved:
+///
+/// | Value | Meaning                                               |
+/// |-------|-------------------------------------------------------|
+/// |   0   | Merged tool-call result, placed *before* positional   |
+/// |   2   | Positional message (Phase 1 text/reasoning/plan)      |
+/// |   3   | Standalone tool-call assistant + result, placed *after*|
+mod sub_position {
+    /// Tool result merged into preceding assistant message (before positional).
+    pub const MERGED_TOOL_RESULT: u8 = 0;
+    /// Original positional message from Phase 1.
+    pub const POSITIONAL: u8 = 2;
+    /// Standalone tool-call assistant + result (after positional messages, so
+    /// that Phase 4 can attach preceding `PendingThinking`).
+    pub const STANDALONE_TOOL_CALL: u8 = 3;
+}
+
 /// Sort key for interleaving messages and tool calls chronologically.
 ///
 /// Messages get a whole-number position (their index in the original list).
 /// Tool calls are placed relative to a specific position using sub-keys.
 ///
-/// Sub-key ordering (ascending):
-///   0 = merged tool-call result placed *before* a positional message
-///   2 = positional message (Phase 1 text / reasoning / plan entries)
-///   3 = standalone tool-call assistant + result placed *after* positional
-///       messages so that Phase 4 can attach preceding PendingThinking
+/// Sub-key ordering (ascending) — see [`sub_position`] for the constants.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SortKey {
     /// Main position (message index).
     position: usize,
-    /// Determines ordering within the same position — see doc above.
+    /// Determines ordering within the same position — see [`sub_position`].
     sub: u8,
     /// Tiebreaker for multiple entries at the same (position, sub).
     seq: usize,
@@ -385,7 +400,7 @@ impl SortKey {
     pub(crate) fn positional(pos: usize) -> Self {
         Self {
             position: pos,
-            sub: 2,
+            sub: sub_position::POSITIONAL,
             seq: 0,
         }
     }
@@ -393,7 +408,7 @@ impl SortKey {
     pub(crate) fn before_position(pos: usize, seq: usize) -> Self {
         Self {
             position: pos,
-            sub: 0,
+            sub: sub_position::MERGED_TOOL_RESULT,
             seq,
         }
     }
@@ -406,7 +421,7 @@ impl SortKey {
     pub(crate) fn after_position(pos: usize, seq: usize) -> Self {
         Self {
             position: pos,
-            sub: 3,
+            sub: sub_position::STANDALONE_TOOL_CALL,
             seq,
         }
     }

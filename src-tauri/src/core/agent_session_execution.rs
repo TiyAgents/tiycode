@@ -3,6 +3,10 @@ use std::sync::atomic::Ordering;
 use tiycore::agent::AgentToolResult;
 use tiycore::types::{ContentBlock, TextContent};
 
+use crate::core::agent_session::{
+    standard_tool_timeout, CLARIFY_TOOL_NAME, PLAN_TOOL_NAME, RENDER_TOOL_NAME,
+    STANDARD_TOOL_TIMEOUT_SECS, TASK_TOOL_NAMES,
+};
 use crate::core::agent_session_tools::{
     agent_error_result, agent_tool_result_from_output, resolve_helper_model_role,
     resolve_helper_profile, validate_clarify_input,
@@ -22,7 +26,7 @@ use crate::ipc::frontend_channels::{ArtifactStatus, ThreadStreamEvent};
 use crate::model::thread::MessageRecord;
 use crate::persistence::repo::{message_repo, tool_call_repo};
 
-use super::agent_session::{standard_tool_timeout, AgentSession, CLARIFY_TOOL_NAME};
+use super::agent_session::AgentSession;
 
 #[derive(Debug)]
 struct HelperToolTask {
@@ -66,18 +70,46 @@ impl AgentSession {
         tool_call_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
-        if tool_name == "update_plan" {
-            return self.execute_plan_checkpoint(tool_input).await;
+        if tool_name == PLAN_TOOL_NAME {
+            return match tokio::time::timeout(
+                standard_tool_timeout(),
+                self.execute_plan_checkpoint(tool_input),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => agent_error_result(format!(
+                    "Tool '{tool_name}' timed out after {STANDARD_TOOL_TIMEOUT_SECS}s"
+                )),
+            };
         }
 
-        if tool_name == "create_task" || tool_name == "update_task" || tool_name == "query_task" {
-            return self
-                .execute_task_tool(tool_name, tool_call_id, tool_input)
-                .await;
+        if TASK_TOOL_NAMES.contains(&tool_name) {
+            return match tokio::time::timeout(
+                standard_tool_timeout(),
+                self.execute_task_tool(tool_name, tool_call_id, tool_input),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => agent_error_result(format!(
+                    "Tool '{tool_name}' timed out after {STANDARD_TOOL_TIMEOUT_SECS}s"
+                )),
+            };
         }
 
-        if tool_name == "render" {
-            return self.execute_render(tool_call_id, tool_input).await;
+        if tool_name == RENDER_TOOL_NAME {
+            return match tokio::time::timeout(
+                standard_tool_timeout(),
+                self.execute_render(tool_call_id, tool_input),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => agent_error_result(format!(
+                    "Tool '{tool_name}' timed out after {STANDARD_TOOL_TIMEOUT_SECS}s"
+                )),
+            };
         }
 
         if tool_name == CLARIFY_TOOL_NAME {

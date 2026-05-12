@@ -115,7 +115,7 @@ pub async fn list_since_last_reset(
     pool: &SqlitePool,
     thread_id: &str,
 ) -> Result<Vec<MessageRecord>, AppError> {
-    const SAFETY_LIMIT: i64 = 2000;
+    const SAFETY_LIMIT: i64 = 10000;
 
     let reset = find_last_context_reset(pool, thread_id).await?;
 

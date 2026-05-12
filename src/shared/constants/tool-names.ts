@@ -1,0 +1,37 @@
+/**
+ * Shared tool name constants.
+ *
+ * These mirror the Rust-side constants in `agent_session.rs` to eliminate
+ * hardcoded tool name strings scattered across the frontend codebase.
+ */
+
+/** Runtime orchestration tools — hidden from UI (never shown in timeline). */
+export const RUNTIME_ORCHESTRATION_TOOLS = [
+  "agent_explore",
+  "agent_review",
+] as const;
+
+/** Task board tools. */
+export const TASK_BOARD_TOOLS = [
+  "create_task",
+  "update_task",
+  "query_task",
+] as const;
+
+/** Tools that are collapsed by default in the timeline. */
+export const DEFAULT_COLLAPSED_TOOLS = [
+  ...TASK_BOARD_TOOLS,
+  "render",
+] as const;
+
+export function isRuntimeOrchestrationToolName(toolName: string): boolean {
+  return (RUNTIME_ORCHESTRATION_TOOLS as ReadonlyArray<string>).includes(toolName);
+}
+
+export function isTaskBoardTool(toolName: string): boolean {
+  return (TASK_BOARD_TOOLS as ReadonlyArray<string>).includes(toolName);
+}
+
+export function isDefaultCollapsedTool(toolName: string): boolean {
+  return (DEFAULT_COLLAPSED_TOOLS as ReadonlyArray<string>).includes(toolName);
+}
