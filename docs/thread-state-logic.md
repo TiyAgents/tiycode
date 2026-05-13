@@ -65,7 +65,7 @@ pub enum ThreadStatus {
 |---|---|---|
 | id | String | Run UUID |
 | thread_id | String | 所属线程 |
-| run_mode | String | `"default"` 或 `"plan"` |
+| run_mode | String | `"default"` / `"plan"`；后端手动 `/compact` 会落库为 `"compact"` |
 | status | String | 运行状态字符串 |
 | model_id / model_display_name | Option\<String\> | 模型信息 |
 | context_window | Option\<String\> | 上下文窗口规格 |
@@ -103,9 +103,11 @@ pub enum ThreadStatus {
 
 **关键设计**: `limit_reached` → `NeedsReply`，因为用户需要继续对话来恢复上下文。
 
+**例外路径**: 手动 `/compact` 不通过 `derive_thread_status()` 完成最终状态推导。`agent_run_compaction.rs::compact_thread_context()` 会创建 `run_mode = "compact"`、`status = "running"` 的 run，并把线程置为 `Running`；后台压缩结束后 `run_compact_background()` 根据结果把 run 更新为 `completed` / `cancelled` / `failed`，但都会直接把 `threads.status` 重置为 `Idle` 并移除 active run。
+
 ### 3.2 状态更新时机
 
-正常流程中线程状态**不通过** `sync_status` 周期性推导，而是由 `agent_run_event_handler.rs` 的 `handle_runtime_event` 在处理**侧边栏可见的生命周期事件**时即时更新 DB + 广播前端，例如 run started、approval/clarify required 或 resolved、checkpoint、completed、failed、cancelled、interrupted、limit reached。工具调用、消息增量、usage 更新等事件通常只更新 run/message/tool 相关表，不一定更新 thread status。`RunRetrying` 会把 `thread_runs.status` 更新为 `running` 并广播 `thread-run-status-changed: running`，但不会直接更新 `threads.status`。`sync_status` 主要用于崩溃恢复或显式状态重算。
+正常流程中线程状态**不通过** `sync_status` 周期性推导，而是由 `agent_run_event_handler.rs` 的 `handle_runtime_event` 在处理**侧边栏可见的生命周期事件**时即时更新 DB + 广播前端，例如 run started、approval/clarify required 或 resolved、checkpoint、completed、failed、cancelled、interrupted、limit reached。工具调用、消息增量、usage 更新等事件通常只更新 run/message/tool 相关表，不一定更新 thread status。`RunRetrying` 会把 `thread_runs.status` 更新为 `running` 并广播 `thread-run-status-changed: running`，但不会直接更新 `threads.status`。手动 `/compact` 由 `agent_run_compaction.rs` 自己写入 run/thread 状态并通过 `ThreadStreamEvent::RunStarted` / `ContextCompressing` / 终态事件驱动前端，不走 `agent_run_event_handler.rs`。`sync_status` 主要用于崩溃恢复或显式状态重算。
 
 ---
 
@@ -257,6 +259,8 @@ setThreadStatus(threadId, currentState, { runId, source: "stream" });
 | `run_limit_reached` | `LIMIT_REACHED` |
 
 `run_checkpointed` 与 `approval_required` 都映射为 `APPROVAL_REQUIRED`。后端会把 plan run 停在 `waiting_approval`，并将 `RunCheckpointed` 视为 terminal runtime event，移除 active runtime session；后续 `executeApprovedPlan()` 会启动新的 implementation run。
+
+**注意**: `ContextCompressing` 不是 RunLifecycleMachine 状态事件；它只用于运行面板把占位文案切换为“Compressing context…”。手动 `/compact` 仍依赖 `run_started` 进入 `running`，并依赖 `run_completed` / `run_failed` / `run_cancelled` 进入终态。
 
 ---
 
@@ -449,7 +453,8 @@ interface ComposerDraftData {
 ### 9.4 RunMode
 
 ```typescript
-type RunMode = "default" | "plan";
+// src/shared/types/api.ts 当前前端类型
+export type RunMode = "default" | "plan";
 ```
 
 | 模式 | 工具配置 | 行为 |
@@ -457,9 +462,13 @@ type RunMode = "default" | "plan";
 | `default` | 默认 `"default_full"` — 允许所有工具 | 直接执行 |
 | `plan` | 默认 `"plan_read_only"` — 只允许只读工具 | 先产出计划，等待用户审批后执行第二阶段 |
 
-后端解析工具配置时会优先使用 `modelPlan.toolProfileByMode[runMode]` 中的显式配置；只有缺省时才 fallback 到 `default_full` / `plan_read_only`。
+`default` / `plan` 是 Composer 可选择并由 `PendingThreadRun.runMode` 承载的交互模式。后端解析工具配置时会优先使用 `modelPlan.toolProfileByMode[runMode]` 中的显式配置；只有缺省时才 fallback 到 `default_full` / `plan_read_only`。
+
+**实现差异**: 后端 `RunSummaryDto.run_mode` 是普通 `String`，手动 `/compact` 会在 `agent_run_compaction.rs` 中插入 `run_mode = "compact"`，并通过 `ThreadStreamEvent::RunStarted { run_mode: "compact" }` 通知前端；当前 `src/shared/types/api.ts` 的 `RunMode` union 尚未覆盖 `"compact"`。因此文档中凡描述 API/数据库 run_mode 时应按字符串处理，凡描述 Composer/PendingRun 时仍是 `"default" | "plan"`。
 
 **Plan 模式流程**: Run 以 `plan` 启动 → Agent 产出计划 → `waiting_approval` → 用户选择 `apply_plan` 或 `apply_plan_with_context_reset` → `stream.executeApprovedPlan()` → 后端启动新的 implementation run，并把原 planning run 从 `waiting_approval` 更新为 `completed`。如果用户未审批而直接启动新 run，`expire_pending_plan_approval()` 会把待审批计划标记为 superseded，并取消该线程中停在 `waiting_approval` 的 run。
+
+**手动 `/compact` 流程**: `thread_compact_context` IPC 调用 `AgentRunManager::compact_thread_context()`；若当前线程有 active run，会先尝试取消。随后后端同步持久化 `/compact` 用户命令消息和 `context_reset` summary marker，创建 `run_mode = "compact"` / `status = "running"` 的 run，把 thread 置为 `Running`，并发送 `RunStarted` + `ContextCompressing`。后台 LLM 摘要完成后写入 `context_summary` marker，成功发送 `RunCompleted`，取消发送 `RunCancelled`，失败则尽量写入 `compact_fallback` 摘要后发送 `RunFailed`；三种结果都会更新 run 终态、把 thread 重置为 `Idle` 并移除 active run。
 
 ---
 
@@ -734,6 +743,7 @@ type WorkspaceThreadItem = {
 | `src-tauri/src/model/thread.rs` | ThreadRecord / ThreadStatus / ThreadSnapshotDto |
 | `src-tauri/src/core/thread_manager.rs` | ThreadManager — create / load / sync_status / recover |
 | `src-tauri/src/core/agent_run_event_handler.rs` | handle_runtime_event — 运行时事件处理 |
+| `src-tauri/src/core/agent_run_compaction.rs` | 手动 `/compact` 上下文压缩 — 创建 `compact` run、发送压缩流事件、完成后重置 thread 为 Idle |
 | `src-tauri/src/ipc/frontend_channels.rs` | ThreadStreamEvent — Rust 到前端的流事件定义与通道 |
 | `src-tauri/src/persistence/repo/thread_repo.rs` | 线程 SQLite CRUD 与删除级联 |
 | `src-tauri/src/persistence/repo/run_repo.rs` | Run SQLite CRUD、active/latest 查询与状态更新 |
