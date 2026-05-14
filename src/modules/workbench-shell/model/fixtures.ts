@@ -114,71 +114,77 @@ export const WORKSPACE_ITEMS: ReadonlyArray<WorkspaceSeed> = [
   },
 ];
 
+const MOCK_WORKSPACE_ROOT = "TiyCode Workspaces";
+
+function mockProjectPath(projectName: string) {
+  return `${MOCK_WORKSPACE_ROOT}/${projectName}`;
+}
+
 export const RECENT_PROJECTS: ReadonlyArray<ProjectOption> = [
   {
     id: "tiycode",
     name: "tiycode",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/tiycode",
+    path: mockProjectPath("tiycode"),
     lastOpenedLabel: "刚刚",
   },
   {
     id: "agent-runtime",
     name: "agent-runtime",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/agent-runtime",
+    path: mockProjectPath("agent-runtime"),
     lastOpenedLabel: "12 分钟前",
   },
   {
     id: "openai-integration",
     name: "openai-integration",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/openai-integration",
+    path: mockProjectPath("openai-integration"),
     lastOpenedLabel: "今天",
   },
   {
     id: "design-system-lab",
     name: "design-system-lab",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/design-system-lab",
+    path: mockProjectPath("design-system-lab"),
     lastOpenedLabel: "昨天",
   },
   {
     id: "prompt-evals",
     name: "prompt-evals",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/prompt-evals",
+    path: mockProjectPath("prompt-evals"),
     lastOpenedLabel: "昨天",
   },
   {
     id: "internal-docs",
     name: "internal-docs",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/internal-docs",
+    path: mockProjectPath("internal-docs"),
     lastOpenedLabel: "2 天前",
   },
   {
     id: "billing-portal",
     name: "billing-portal",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/billing-portal",
+    path: mockProjectPath("billing-portal"),
     lastOpenedLabel: "2 天前",
   },
   {
     id: "desktop-shell",
     name: "desktop-shell",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/desktop-shell",
+    path: mockProjectPath("desktop-shell"),
     lastOpenedLabel: "3 天前",
   },
   {
     id: "thread-orchestrator",
     name: "thread-orchestrator",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/thread-orchestrator",
+    path: mockProjectPath("thread-orchestrator"),
     lastOpenedLabel: "4 天前",
   },
   {
     id: "markdown-export",
     name: "markdown-export",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/markdown-export",
+    path: mockProjectPath("markdown-export"),
     lastOpenedLabel: "上周",
   },
   {
     id: "release-checklist",
     name: "release-checklist",
-    path: "/Users/jorben/Documents/Codespace/TiyAgents/release-checklist",
+    path: mockProjectPath("release-checklist"),
     lastOpenedLabel: "上周",
   },
 ];
@@ -323,7 +329,7 @@ export const GIT_HISTORY_ITEMS: ReadonlyArray<GitHistoryItem> = [
     subject: "refactor(git-panel): align source control layout with VS Code",
     hash: "a81c2d4",
     relativeTime: "2m ago",
-    author: "Jorben Zhu",
+    author: "Test User",
     refs: ["HEAD", "main"],
   },
   {
@@ -331,7 +337,7 @@ export const GIT_HISTORY_ITEMS: ReadonlyArray<GitHistoryItem> = [
     subject: "feat(project-panel): add sticky root and filter controls",
     hash: "7f92ac1",
     relativeTime: "17m ago",
-    author: "Jorben Zhu",
+    author: "Test User",
     refs: ["origin/main"],
   },
   {
@@ -339,84 +345,84 @@ export const GIT_HISTORY_ITEMS: ReadonlyArray<GitHistoryItem> = [
     subject: "style(workbench): simplify right drawer icon bar",
     hash: "d42b083",
     relativeTime: "39m ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-4",
     subject: "chore(layout): tighten panel spacing and terminal split",
     hash: "3bc0ad8",
     relativeTime: "1h ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-5",
     subject: "feat(treeview): add file filter and sticky root header",
     hash: "28ae114",
     relativeTime: "2h ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-6",
     subject: "style(project-panel): mute ignored files and folders",
     hash: "91fd55c",
     relativeTime: "3h ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-7",
     subject: "refactor(drawer): split project and git tabs into icon bar",
     hash: "5f17ab2",
     relativeTime: "4h ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-8",
     subject: "feat(source-control): add compact tracked file staging list",
     hash: "bc3401d",
     relativeTime: "5h ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-9",
     subject: "style(network): tighten commit node spacing in history list",
     hash: "ec8a9f0",
     relativeTime: "7h ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-10",
     subject: "fix(layout): pin network panel to bottom of right drawer",
     hash: "4db926f",
     relativeTime: "9h ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-11",
     subject: "feat(workbench): simplify inspector drawer interactions",
     hash: "8c3e3aa",
     relativeTime: "12h ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-12",
     subject: "refactor(sidebar): rebalance panel heights and overflow behavior",
     hash: "e71bf42",
     relativeTime: "15h ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-13",
     subject: "chore(ui): polish icon actions across project and git panels",
     hash: "1af24de",
     relativeTime: "18h ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
   {
     id: "history-14",
     subject: "feat(shell): add terminal collapse state persistence",
     hash: "0d5bc7a",
     relativeTime: "1d ago",
-    author: "Jorben Zhu",
+    author: "Test User",
     refs: ["origin/main"],
   },
   {
@@ -424,7 +430,7 @@ export const GIT_HISTORY_ITEMS: ReadonlyArray<GitHistoryItem> = [
     subject: "style(theme): refine surface contrast for light workspace mode",
     hash: "6a20c18",
     relativeTime: "1d ago",
-    author: "Jorben Zhu",
+    author: "Test User",
   },
 ];
 
@@ -467,9 +473,9 @@ export const PANEL_VISIBILITY_STORAGE_KEY = "tiy-agent-panel-visibility";
 export const UPDATE_STATUS_DURATION = 2200;
 
 export const MOCK_USER_SESSION: MockUserSession = {
-  name: "Jorben Zhu",
-  avatar: "JZ",
-  email: "jorbenzhu@gmail.com",
+  name: "Test User",
+  avatar: "TU",
+  email: "test.user@example.com",
 };
 
 export const DEFAULT_PANEL_VISIBILITY_STATE: PanelVisibilityState = {

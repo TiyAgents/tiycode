@@ -115,7 +115,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/bundled-catalog
-          CATALOG_BASE="https://tiyagents.github.io/tiycore/catalog"
+          CATALOG_BASE="https://tiylabs.github.io/tiycore/catalog"
           curl -sSfL "$CATALOG_BASE/manifest.json" \
             -o src-tauri/bundled-catalog/catalog.manifest.json \
             --retry 3 --max-time 30
@@ -438,12 +438,12 @@ jobs:
             version "__VERSION__"
 
             on_arm do
-              url "https://github.com/TiyAgents/tiycode/releases/download/#{version}/TiyCode_#{version}_aarch64.dmg"
+              url "https://github.com/tiylabs/tiycode/releases/download/#{version}/TiyCode_#{version}_aarch64.dmg"
               sha256 "__SHA256_ARM64__"
             end
 
             on_intel do
-              url "https://github.com/TiyAgents/tiycode/releases/download/#{version}/TiyCode_#{version}_x64.dmg"
+              url "https://github.com/tiylabs/tiycode/releases/download/#{version}/TiyCode_#{version}_x64.dmg"
               sha256 "__SHA256_X64__"
             end
 
@@ -488,7 +488,7 @@ jobs:
           API_TOKEN_GITHUB: ${{ secrets.PAT_TOKEN }}
         with:
           source_file: tiycode.rb
-          destination_repo: TiyAgents/homebrew-tap
+          destination_repo: tiylabs/homebrew-tap
           destination_folder: Casks
           destination_branch: master
           user_email: github-actions[bot]@users.noreply.github.com

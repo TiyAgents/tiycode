@@ -73,7 +73,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY3MTVGMjk0NkQ5MURGNzYKUldSMjM1RnRsUElWOXliUU5iMzBxeUFnTVM5YjgxQ3ZMbVU0OGp3aFZFYUFHMTZubFR4emVnbTQK",
       "endpoints": [
-        "https://github.com/TiyAgents/tiycode/releases/latest/download/latest.json"
+        "https://github.com/tiylabs/tiycode/releases/latest/download/latest.json"
       ]
     }
   }

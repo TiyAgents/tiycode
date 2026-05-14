@@ -36,7 +36,7 @@ Around that collaboration model, TiyCode brings together Agent Profiles, workspa
 - **Desktop shell:** Tauri 2
 - **Frontend:** React 19, TypeScript, Vite
 - **Backend / native core:** Rust
-- **AI runtime:** [`tiycore`](https://github.com/TiyAgents/tiycore)
+- **AI runtime:** [`tiycore`](https://github.com/tiylabs/tiycore)
 - **UI foundation:** Tailwind CSS v4, shadcn/ui (Radix UI primitives), Vercel AI SDK (UI types), Lucide React icons, Motion animations
 - **Terminal:** xterm.js with addon-fit
 - **Code highlighting:** Shiki
@@ -49,7 +49,7 @@ Around that collaboration model, TiyCode brings together Agent Profiles, workspa
 ### Install via Homebrew (macOS)
 
 ```bash
-brew tap TiyAgents/tap
+brew tap tiylabs/tap
 brew install --cask tiycode
 ```
 
@@ -61,7 +61,7 @@ brew upgrade tiycode
 
 ### Download from GitHub Releases
 
-Pre-built binaries for macOS, Windows, and Linux are available on the [Releases](https://github.com/TiyAgents/tiycode/releases) page.
+Pre-built binaries for macOS, Windows, and Linux are available on the [Releases](https://github.com/tiylabs/tiycode/releases) page.
 
 > **macOS requirement:** TiyCode currently requires **macOS 10.15 Catalina or later**. We recommend using a newer supported macOS release for the best compatibility.
 >

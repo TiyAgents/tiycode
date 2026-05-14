@@ -153,13 +153,13 @@ These extension tools appear alongside built-in tools and follow the same policy
 
 **macOS (Homebrew):**
 ```bash
-brew tap TiyAgents/tap
+brew tap tiylabs/tap
 brew install --cask tiycode
 # Upgrade later:
 brew upgrade tiycode
 ```
 
-**All platforms:** Download pre-built binaries from [GitHub Releases](https://github.com/TiyAgents/tiycode/releases).
+**All platforms:** Download pre-built binaries from [GitHub Releases](https://github.com/tiylabs/tiycode/releases).
 
 ### Shell Environment (Important)
 
