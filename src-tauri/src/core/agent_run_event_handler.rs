@@ -326,27 +326,21 @@ impl AgentRunManager {
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::WaitingApproval)
                     .await?;
             }
-            ThreadStreamEvent::RunCompleted { .. } => {
-                self.finish_run(run_id, RunStatus::Completed, None).await?;
-            }
-            ThreadStreamEvent::RunLimitReached { error, .. } => {
-                self.finish_run(run_id, RunStatus::LimitReached, Some(error))
-                    .await?;
-            }
-            ThreadStreamEvent::RunFailed { error, .. } => {
-                self.finish_run(run_id, RunStatus::Failed, Some(error))
-                    .await?;
-            }
-            ThreadStreamEvent::RunCancelled { .. } => {
-                self.finish_run(run_id, RunStatus::Cancelled, None).await?;
-            }
-            ThreadStreamEvent::RunInterrupted { .. } => {
-                let final_status = if self.was_cancel_requested(run_id).await {
-                    RunStatus::Cancelled
-                } else {
-                    RunStatus::Interrupted
-                };
-                self.finish_run(run_id, final_status, None).await?;
+            ThreadStreamEvent::RunCompleted { .. }
+            | ThreadStreamEvent::RunLimitReached { .. }
+            | ThreadStreamEvent::RunFailed { .. }
+            | ThreadStreamEvent::RunCancelled { .. }
+            | ThreadStreamEvent::RunInterrupted { .. } => {
+                let final_status =
+                    terminal_event_status(&event, self.was_cancel_requested(run_id).await);
+                if let Some(final_status) = final_status {
+                    let error_message = match &event {
+                        ThreadStreamEvent::RunLimitReached { error, .. }
+                        | ThreadStreamEvent::RunFailed { error, .. } => Some(error.as_str()),
+                        _ => None,
+                    };
+                    self.finish_run(run_id, final_status, error_message).await?;
+                }
             }
             _ => {}
         }
