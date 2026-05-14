@@ -4,6 +4,7 @@ use sqlx::SqlitePool;
 use tiycore::agent::AgentMessage;
 use tokio::sync::broadcast;
 
+use crate::core::agent_run_event_handler::finalize_run;
 use crate::core::agent_run_summary::{generate_primary_summary, primary_summary_model};
 use crate::core::agent_session::{
     build_session_spec, convert_history_messages, trim_history_to_current_context,
@@ -11,7 +12,7 @@ use crate::core::agent_session::{
 };
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
-use crate::model::thread::{MessageRecord, ThreadStatus};
+use crate::model::thread::{MessageRecord, RunStatus, ThreadStatus};
 use crate::persistence::repo::{
     message_repo, run_repo, thread_repo, tool_call_repo, workspace_repo,
 };
@@ -213,6 +214,7 @@ impl AgentRunManager {
                     auxiliary_model_role: None,
                     primary_model_role: None,
                     streaming_message_id: None,
+                    last_completed_message_id: None,
                     reasoning_message_id: None,
                     cancellation_requested: false,
                 },
@@ -450,18 +452,27 @@ impl AgentRunManager {
 
         // Final bookkeeping: run row status, thread status, active-run cleanup.
         let final_status = match &final_event {
-            ThreadStreamEvent::RunCompleted { .. } => "completed",
-            ThreadStreamEvent::RunCancelled { .. } => "cancelled",
-            ThreadStreamEvent::RunFailed { .. } => "failed",
-            _ => "completed",
+            ThreadStreamEvent::RunCompleted { .. } => RunStatus::Completed,
+            ThreadStreamEvent::RunCancelled { .. } => RunStatus::Cancelled,
+            ThreadStreamEvent::RunFailed { .. } => RunStatus::Failed,
+            _ => RunStatus::Completed,
         };
-        if let Err(e) = run_repo::update_status(&self.pool, &run_id, final_status).await {
-            tracing::warn!(run_id = %run_id, error = %e, "Failed to update compact run status");
-        }
-        if let Err(e) =
-            thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Idle).await
+        if let Err(e) = finalize_run(
+            &self.pool,
+            &self.app_handle,
+            &run_id,
+            &thread_id,
+            final_status,
+            None,
+        )
+        .await
         {
-            tracing::warn!(thread_id = %thread_id, error = %e, "Failed to reset thread status after compact");
+            tracing::warn!(
+                run_id = %run_id,
+                thread_id = %thread_id,
+                error = %e,
+                "Failed to finalize compact run"
+            );
         }
 
         let _ = frontend_tx.send(final_event);

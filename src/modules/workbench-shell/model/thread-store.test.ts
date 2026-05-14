@@ -97,28 +97,27 @@ describe("setThreadStatus", () => {
     );
   });
 
-  it("ignores stale writes within the same runId", () => {
+  it("ignores stale terminal events from a different (older) run", () => {
     threadStore.reset();
 
-    const now = Date.now();
+    // run-2 is active
     setThreadStatus("thread-1", "running", {
-      runId: "run-1",
+      runId: "run-2",
       source: "stream",
-      updatedAt: now + 1000,
     });
 
-    // Try to overwrite with same runId but older timestamp — should be rejected
-    setThreadStatus("thread-1", "failed", {
+    // Late-arriving terminal event from run-1 — Guard A should reject it
+    setThreadStatus("thread-1", "completed", {
       runId: "run-1",
       source: "tauri_event",
-      updatedAt: now,
     });
 
+    // Status and runId should remain unchanged (run-2 is still active)
     expect(threadStore.getState().threadStatuses["thread-1"].status).toBe(
       "running",
     );
     expect(threadStore.getState().threadStatuses["thread-1"].runId).toBe(
-      "run-1",
+      "run-2",
     );
   });
 
@@ -196,10 +195,12 @@ describe("setThreadStatus", () => {
     threadStore.reset();
     setThreadStatus("thread-1", "running", { runId: "run-1", source: "stream" });
 
-    // Completed is not "idle" — guard 2 only blocks "idle"
+    // Completed is not "idle" — guard B only blocks "idle"
     setThreadStatus("thread-1", "completed", { runId: null, source: "stream" });
 
     expect(threadStore.getState().threadStatuses["thread-1"].status).toBe("completed");
+    // Terminal statuses clear the runId
+    expect(threadStore.getState().threadStatuses["thread-1"].runId).toBeNull();
   });
 });
 
@@ -221,58 +222,51 @@ describe("batchSetThreadStatuses", () => {
     expect(statuses["thread-2"].status).toBe("idle");
   });
 
-  it("applies same-run updates without updatedAt even when existing status is newer", () => {
+  it("applies same-run updates to advance status forward", () => {
     threadStore.reset();
     setThreadStatus("thread-1", "running", {
       runId: "run-1",
       source: "stream",
-      updatedAt: 200,
     });
 
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     batchSetThreadStatuses({
       "thread-1": { status: "waiting_approval", runId: "run-1", source: "snapshot" },
     });
-    nowSpy.mockRestore();
 
     const status = threadStore.getState().threadStatuses["thread-1"];
     expect(status.status).toBe("waiting_approval");
     expect(status.runId).toBe("run-1");
-    expect(status.updatedAt).toBe(1_000);
   });
 
-  it("skips same-run updates with an explicit older updatedAt", () => {
+  it("rejects stale terminal from different run in batch", () => {
     threadStore.reset();
     setThreadStatus("thread-1", "running", {
-      runId: "run-1",
+      runId: "run-2",
       source: "stream",
-      updatedAt: 200,
     });
 
+    // Late terminal from run-1 should be rejected by Guard A
     batchSetThreadStatuses({
-      "thread-1": { status: "waiting_approval", runId: "run-1", updatedAt: 100 },
+      "thread-1": { status: "completed", runId: "run-1" },
     });
 
     const status = threadStore.getState().threadStatuses["thread-1"];
     expect(status.status).toBe("running");
-    expect(status.updatedAt).toBe(200);
   });
 
-  it("applies same-run updates with an explicit newer updatedAt", () => {
+  it("allows terminal from current active run in batch", () => {
     threadStore.reset();
     setThreadStatus("thread-1", "running", {
       runId: "run-1",
       source: "stream",
-      updatedAt: 200,
     });
 
     batchSetThreadStatuses({
-      "thread-1": { status: "waiting_approval", runId: "run-1", updatedAt: 300 },
+      "thread-1": { status: "completed", runId: "run-1" },
     });
 
     const status = threadStore.getState().threadStatuses["thread-1"];
-    expect(status.status).toBe("waiting_approval");
-    expect(status.updatedAt).toBe(300);
+    expect(status.status).toBe("completed");
   });
 
   it("rejects idle/null downgrade for running threads in batch", () => {

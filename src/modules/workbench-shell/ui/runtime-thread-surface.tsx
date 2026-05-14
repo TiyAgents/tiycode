@@ -41,11 +41,14 @@ import { cn } from "@/shared/lib/utils";
 import {
   threadStore,
   useStore,
+  isPendingRunHandled,
+  markPendingRunHandled,
 } from "@/modules/workbench-shell/model/thread-store";
 import {
   createRunLifecycleMachine,
   mapStreamEventToMachineEvent,
   type RunMachineContext,
+  type RunMachineEvent,
   type RunMachinePayload,
   type RunMachineState,
 } from "@/modules/workbench-shell/model/run-lifecycle-machine";
@@ -317,7 +320,8 @@ export function RuntimeThreadSurface({
     () => createRunLifecycleMachine(threadId ?? ""),
     [threadId],
   );
-  const handledInitialPromptRequestIdRef = useRef<string | null>(null);
+  const snapshotLoadingRef = useRef(false);
+  const eventBufferRef = useRef<Array<{ event: RunMachineEvent; payload?: RunMachinePayload }>>([]);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
@@ -509,10 +513,14 @@ export function RuntimeThreadSurface({
     setLoading(true);
     setHistoryLoadError(null);
     setLoadError(null);
+    snapshotLoadingRef.current = true;
+    eventBufferRef.current = [];
 
     try {
       const snapshot = await threadLoad(threadId);
       if (snapshotLoadRequestRef.current !== requestId) {
+        snapshotLoadingRef.current = false;
+        eventBufferRef.current = [];
         return;
       }
 
@@ -584,6 +592,15 @@ export function RuntimeThreadSurface({
           } else if (
             merged[snapshotIdx].status === localMsg.status
             && merged[snapshotIdx].role === "assistant"
+            && localMsg.parts.length > merged[snapshotIdx].parts.length
+          ) {
+            // Local message has richer parts (e.g. chart artifacts from
+            // streaming that haven't been persisted to DB yet) — keep the
+            // local version to avoid losing visible artifacts.
+            merged[snapshotIdx] = localMsg;
+          } else if (
+            merged[snapshotIdx].status === localMsg.status
+            && merged[snapshotIdx].role === "assistant"
             && merged[snapshotIdx].content.length === 0
             && localMsg.content.length > 0
           ) {
@@ -603,29 +620,21 @@ export function RuntimeThreadSurface({
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
-      // Prevent stale snapshots from regressing an active approval/reply state.
-      // When the stream has already transitioned the machine to waiting_approval
-      // or needs_reply, a snapshot still reporting "running" is stale — the DB
-      // write hasn't landed yet. Keep the current state and schedule a retry.
-      const currentMachineState = runMachine.getState();
-      const isStaleRegression =
-        (currentMachineState === "waiting_approval" || currentMachineState === "needs_reply")
-        && nextState === "running";
 
-      if (threadId && !isStaleRegression) {
+      // Reset the machine to snapshot state, then replay any lifecycle events
+      // that were buffered during the async IPC round-trip.  The machine will
+      // naturally reject transitions that are invalid from the reset state,
+      // but will accept forward transitions (e.g. running → waiting_approval
+      // that arrived while the snapshot was in flight).
+      if (threadId) {
+        snapshotLoadingRef.current = false;
         runMachine.reset(nextState as RunMachineState, {
           runId: snapshot.activeRun?.id ?? null, errorMessage: null, retryCount: 0,
         });
-      }
-
-      // If the snapshot was stale, retry after a short delay to pick up the
-      // approval_prompt message once the backend commit completes.
-      if (isStaleRegression) {
-        setTimeout(() => {
-          if (snapshotLoadRequestRef.current === requestId) {
-            void loadSnapshot();
-          }
-        }, 800);
+        for (const buffered of eventBufferRef.current) {
+          runMachine.send(buffered.event, buffered.payload);
+        }
+        eventBufferRef.current = [];
       }
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
       if (!shouldPreserveContextUsage) {
@@ -674,6 +683,8 @@ export function RuntimeThreadSurface({
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
     } finally {
+      snapshotLoadingRef.current = false;
+      eventBufferRef.current = [];
       if (snapshotLoadRequestRef.current === requestId) {
         setLoading(false);
       }
@@ -831,7 +842,15 @@ export function RuntimeThreadSurface({
         if (machineEvent === "RUN_RETRYING" && "runId" in event && typeof event.runId === "string") {
           payload.newRunId = event.runId;
         }
-        runMachine.send(machineEvent, payload);
+        // Buffer lifecycle events during snapshot loading to prevent the
+        // subsequent reset() from overwriting them.  The buffer is replayed
+        // after reset() completes — the machine naturally rejects any
+        // transitions that are invalid from the reset state.
+        if (snapshotLoadingRef.current) {
+          eventBufferRef.current.push({ event: machineEvent, payload });
+        } else {
+          runMachine.send(machineEvent, payload);
+        }
       }
 
       if (shouldCompleteThinkingPhase(event)) {
@@ -1539,14 +1558,13 @@ export function RuntimeThreadSurface({
       || initialPromptRequest.threadId !== threadId
       || !isCurrentThreadSnapshotReady
       || hasBlockingRun
-      || handledInitialPromptRequestIdRef.current === initialPromptRequestId
+      || isPendingRunHandled(initialPromptRequestId!)
     ) {
       return;
     }
 
-    // Parent state clears this request asynchronously, so mark it handled
-    // before awaiting to keep effect re-runs from starting the same run twice.
-    handledInitialPromptRequestIdRef.current = initialPromptRequestId;
+    // Mark as handled at the store level — survives component unmount/remount.
+    markPendingRunHandled(initialPromptRequestId!);
     if (initialPromptRequest.runMode) {
       setSelectedRunMode(initialPromptRequest.runMode);
     }

@@ -19,7 +19,7 @@ pub(super) mod tests {
         build_plan_artifact_from_tool_input, build_plan_message_metadata, PlanApprovalAction,
     };
     use crate::ipc::frontend_channels::ThreadStreamEvent;
-    use crate::model::thread::MessageRecord;
+    use crate::model::thread::{MessageRecord, RunStatus};
     use std::collections::HashMap;
     use tiycore::agent::AgentMessage;
     use tiycore::types::{Message as TiyMessage, UserMessage};
@@ -48,6 +48,7 @@ pub(super) mod tests {
                 auxiliary_model_role: None,
                 primary_model_role: None,
                 streaming_message_id: None,
+                last_completed_message_id: None,
                 reasoning_message_id: None,
                 cancellation_requested: false,
             },
@@ -87,6 +88,7 @@ pub(super) mod tests {
             auxiliary_model_role: None,
             primary_model_role: None,
             streaming_message_id: None,
+            last_completed_message_id: None,
             reasoning_message_id: None,
             cancellation_requested: false,
         }
@@ -116,12 +118,18 @@ pub(super) mod tests {
             run_id: "run-1".to_string(),
         };
 
-        assert_eq!(terminal_event_status(&interrupted, true), Some("cancelled"));
+        assert_eq!(
+            terminal_event_status(&interrupted, true),
+            Some(RunStatus::Cancelled)
+        );
         assert_eq!(
             terminal_event_status(&interrupted, false),
-            Some("interrupted")
+            Some(RunStatus::Interrupted)
         );
-        assert_eq!(terminal_event_status(&cancelled, false), Some("cancelled"));
+        assert_eq!(
+            terminal_event_status(&cancelled, false),
+            Some(RunStatus::Cancelled)
+        );
     }
 
     #[test]
@@ -198,7 +206,7 @@ pub(super) mod tests {
                 },
                 false,
             ),
-            Some("completed")
+            Some(RunStatus::Completed)
         );
         assert_eq!(
             terminal_event_status(
@@ -209,7 +217,7 @@ pub(super) mod tests {
                 },
                 false,
             ),
-            Some("limit_reached")
+            Some(RunStatus::LimitReached)
         );
         assert_eq!(
             terminal_event_status(
@@ -219,7 +227,7 @@ pub(super) mod tests {
                 },
                 false,
             ),
-            Some("failed")
+            Some(RunStatus::Failed)
         );
         assert_eq!(
             terminal_event_status(
@@ -228,7 +236,7 @@ pub(super) mod tests {
                 },
                 false,
             ),
-            Some("cancelled")
+            Some(RunStatus::Cancelled)
         );
         assert_eq!(
             terminal_event_status(
@@ -237,7 +245,7 @@ pub(super) mod tests {
                 },
                 false,
             ),
-            Some("interrupted")
+            Some(RunStatus::Interrupted)
         );
         assert_eq!(
             terminal_event_status(
@@ -246,7 +254,7 @@ pub(super) mod tests {
                 },
                 true,
             ),
-            Some("cancelled")
+            Some(RunStatus::Cancelled)
         );
         assert_eq!(
             terminal_event_status(
@@ -669,7 +677,10 @@ pub(super) mod tests {
         let completed = ThreadStreamEvent::RunCompleted {
             run_id: "run-1".to_string(),
         };
-        assert_eq!(terminal_event_status(&completed, false), Some("completed"));
+        assert_eq!(
+            terminal_event_status(&completed, false),
+            Some(RunStatus::Completed)
+        );
         assert!(is_terminal_runtime_event(&completed));
 
         let limit = ThreadStreamEvent::RunLimitReached {
@@ -677,28 +688,40 @@ pub(super) mod tests {
             error: "too many turns".to_string(),
             max_turns: 10,
         };
-        assert_eq!(terminal_event_status(&limit, false), Some("limit_reached"));
+        assert_eq!(
+            terminal_event_status(&limit, false),
+            Some(RunStatus::LimitReached)
+        );
         assert!(is_terminal_runtime_event(&limit));
 
         let failed = ThreadStreamEvent::RunFailed {
             run_id: "run-1".to_string(),
             error: "boom".to_string(),
         };
-        assert_eq!(terminal_event_status(&failed, false), Some("failed"));
+        assert_eq!(
+            terminal_event_status(&failed, false),
+            Some(RunStatus::Failed)
+        );
 
         let cancelled = ThreadStreamEvent::RunCancelled {
             run_id: "run-1".to_string(),
         };
-        assert_eq!(terminal_event_status(&cancelled, false), Some("cancelled"));
+        assert_eq!(
+            terminal_event_status(&cancelled, false),
+            Some(RunStatus::Cancelled)
+        );
 
         let interrupted = ThreadStreamEvent::RunInterrupted {
             run_id: "run-1".to_string(),
         };
         assert_eq!(
             terminal_event_status(&interrupted, false),
-            Some("interrupted")
+            Some(RunStatus::Interrupted)
         );
-        assert_eq!(terminal_event_status(&interrupted, true), Some("cancelled"));
+        assert_eq!(
+            terminal_event_status(&interrupted, true),
+            Some(RunStatus::Cancelled)
+        );
 
         let delta = ThreadStreamEvent::MessageDelta {
             run_id: "run-1".to_string(),
@@ -1554,7 +1577,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("running")
+            Some(RunStatus::Running)
         );
     }
 
@@ -1569,7 +1592,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("waiting_approval")
+            Some(RunStatus::WaitingApproval)
         );
     }
 
@@ -1583,7 +1606,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("needs_reply")
+            Some(RunStatus::NeedsReply)
         );
     }
 
@@ -1596,7 +1619,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("running")
+            Some(RunStatus::Running)
         );
     }
 
@@ -1607,7 +1630,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, true),
-            Some("cancelled")
+            Some(RunStatus::Cancelled)
         );
     }
 
@@ -1618,7 +1641,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("interrupted")
+            Some(RunStatus::Interrupted)
         );
     }
 
@@ -1639,7 +1662,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("waiting_approval")
+            Some(RunStatus::WaitingApproval)
         );
     }
 
@@ -1652,7 +1675,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("limit_reached")
+            Some(RunStatus::LimitReached)
         );
     }
 
@@ -1663,7 +1686,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("completed")
+            Some(RunStatus::Completed)
         );
     }
 
@@ -1675,7 +1698,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("failed")
+            Some(RunStatus::Failed)
         );
     }
 
@@ -1686,7 +1709,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("cancelled")
+            Some(RunStatus::Cancelled)
         );
     }
 
@@ -1701,7 +1724,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("running")
+            Some(RunStatus::Running)
         );
     }
 
@@ -1714,7 +1737,7 @@ pub(super) mod tests {
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
-            Some("running")
+            Some(RunStatus::Running)
         );
     }
 

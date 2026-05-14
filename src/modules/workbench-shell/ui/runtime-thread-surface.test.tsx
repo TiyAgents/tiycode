@@ -110,8 +110,8 @@ describe("mapSnapshotMessage", () => {
 });
 
 describe("mapSnapshotToRunState", () => {
-  it("treats cancelling snapshots as cancelled instead of running", () => {
-    expect(mapSnapshotToRunState(makeSnapshot("cancelling"))).toBe("cancelled");
+  it("treats cancelling snapshots as still running (aligned with backend derive_thread_status)", () => {
+    expect(mapSnapshotToRunState(makeSnapshot("cancelling"))).toBe("running");
   });
 
   it("still keeps waiting_tool_result snapshots in running state", () => {

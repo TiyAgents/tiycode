@@ -874,6 +874,14 @@ impl AgentSession {
                         }
                     }
                 }
+                // Fallback: the most recently completed assistant message.
+                // Render/chart tools fire *after* MessageCompleted clears
+                // streaming_message_id, so this preserves the correct target.
+                if let Some(ref id) = run.last_completed_message_id {
+                    if !id.is_empty() {
+                        return Some(id.clone());
+                    }
+                }
             }
         }
         // Fallback: query DB for the last non-reasoning assistant message in this run

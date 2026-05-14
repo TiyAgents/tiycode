@@ -64,6 +64,9 @@ export interface ThreadStoreState {
   runtimeContextUsage: ThreadContextUsage | null;
   /** Thread ID currently being inline-renamed in the sidebar. */
   editingThreadId: string | null;
+  /** IDs of pending runs that have already been submitted to prevent
+   *  re-submission after component unmount/remount cycles. */
+  handledPendingRunIds: Record<string, number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +88,7 @@ export const threadStore = createStore<ThreadStoreState>({
   activeThreadProfileIdOverride: null,
   runtimeContextUsage: null,
   editingThreadId: null,
+  handledPendingRunIds: {},
 });
 
 // ---------------------------------------------------------------------------
@@ -94,18 +98,16 @@ export const threadStore = createStore<ThreadStoreState>({
 /**
  * Write a thread's run status into the store.
  *
- * **Phase 1 transition period**: called directly by Tauri global events,
- * ThreadStream callbacks, and optimistic writes.
+ * Two guards prevent stale or out-of-order events from corrupting the status:
  *
- * **Phase 3 onwards**: only called by the `runLifecycleMachine` subscribe
- * callback. External event sources will send events to the state machine
- * first, and the machine will sync validated states here.
+ * **Guard A — Cross-run terminal protection**: A late-arriving terminal event
+ * (completed, failed, …) from a *previous* run cannot overwrite the *current*
+ * active run's status. This prevents the core race condition where
+ * `thread-run-finished(run-1, completed)` arrives after `RUN_STARTED(run-2)`.
  *
- * Includes a minimal runId-based out-of-order guard: if the store already
- * holds a *newer* runId with a later `updatedAt`, the stale write is
- * silently ignored. This prevents a late-arriving `run-finished` event
- * from overwriting a newer `running` status — one of the core bugs of the
- * three-source inconsistency.
+ * **Guard B — Idle downgrade protection**: A null-runId "idle" write (e.g. from
+ * a stale snapshot `reset()`) cannot overwrite an active status that carries a
+ * real runId.
  */
 export function setThreadStatus(
   threadId: string,
@@ -113,37 +115,33 @@ export function setThreadStatus(
   meta: {
     runId?: string | null;
     source?: ThreadStatusSource;
-    updatedAt?: number;
   } = {},
 ): void {
   threadStore.setState((prev) => {
     const existing = prev.threadStatuses[threadId];
+    const incomingRunId = meta.runId ?? null;
 
-    // Minimal out-of-order guard: ignore stale writes within the same run.
-    // When runId changes it means a legitimate new run started — always accept.
-    // Only apply when the caller explicitly provides updatedAt so we can compare.
+    // Guard A: reject terminal events from a *different* (older) run when
+    // the current run is still tracked. This is the fix for the cross-run
+    // overwrite race condition.
     if (
       existing &&
       existing.runId !== null &&
-      meta.runId !== undefined &&
-      meta.runId !== null &&
-      existing.runId === meta.runId &&
-      meta.updatedAt !== undefined &&
-      existing.updatedAt > meta.updatedAt
+      incomingRunId !== null &&
+      incomingRunId !== existing.runId &&
+      isTerminalStatus(status)
     ) {
-      return {}; // no update
+      return {}; // stale terminal event from old run — ignore
     }
 
-    // Guard 2: reject idle/null downgrade of an active running state.
-    // When a stale snapshot triggers runMachine.reset("idle", { runId: null }),
-    // it must not overwrite a valid running status that arrived via stream or
-    // global event with a real runId.
+    // Guard B: reject idle/null downgrade of an active running state.
+    // Prevents stale snapshot resets from clobbering live stream state.
     if (
       existing &&
       existing.runId !== null &&
-      (existing.status === "running" || existing.status === "waiting_approval" || existing.status === "needs_reply") &&
+      isActiveOrPendingStatus(existing.status) &&
       status === "idle" &&
-      (meta.runId === undefined || meta.runId === null)
+      incomingRunId === null
     ) {
       return {}; // reject — don't downgrade active state with a null-runId idle write
     }
@@ -153,9 +151,9 @@ export function setThreadStatus(
         ...prev.threadStatuses,
         [threadId]: {
           status,
-          runId: meta.runId ?? existing?.runId ?? null,
+          runId: isTerminalStatus(status) ? null : (incomingRunId ?? existing?.runId ?? null),
           source: meta.source ?? "tauri_event",
-          updatedAt: meta.updatedAt ?? Date.now(),
+          updatedAt: Date.now(),
         },
       },
     };
@@ -165,45 +163,52 @@ export function setThreadStatus(
 export function batchSetThreadStatuses(
   updates: Record<
     string,
-    { status: ThreadRunStatus; runId?: string | null; source?: ThreadStatusSource; updatedAt?: number }
+    { status: ThreadRunStatus; runId?: string | null; source?: ThreadStatusSource }
   >,
 ): void {
   threadStore.setState((prev) => {
     const next = { ...prev.threadStatuses };
     for (const [threadId, upd] of Object.entries(updates)) {
       const existing = next[threadId];
-      // Guard 1: ignore stale writes within the same run (same semantics as
-      // setThreadStatus — only compare when updatedAt is explicitly provided).
+      const incomingRunId = upd.runId ?? null;
+
+      // Guard A: reject stale terminal events from a different (older) run.
       if (
         existing &&
         existing.runId !== null &&
-        upd.runId !== undefined &&
-        upd.runId !== null &&
-        existing.runId === upd.runId &&
-        upd.updatedAt !== undefined &&
-        existing.updatedAt > upd.updatedAt
+        incomingRunId !== null &&
+        incomingRunId !== existing.runId &&
+        isTerminalStatus(upd.status)
       ) {
         continue;
       }
-      // Guard 2: reject idle/null downgrade of an active running state.
+      // Guard B: reject idle/null downgrade of an active running state.
       if (
         existing &&
         existing.runId !== null &&
-        (existing.status === "running" || existing.status === "waiting_approval" || existing.status === "needs_reply") &&
+        isActiveOrPendingStatus(existing.status) &&
         upd.status === "idle" &&
-        (upd.runId === undefined || upd.runId === null)
+        incomingRunId === null
       ) {
         continue;
       }
       next[threadId] = {
         status: upd.status,
-        runId: upd.runId ?? existing?.runId ?? null,
+        runId: isTerminalStatus(upd.status) ? null : (incomingRunId ?? existing?.runId ?? null),
         source: upd.source ?? "tauri_event",
-        updatedAt: upd.updatedAt ?? Date.now(),
+        updatedAt: Date.now(),
       };
     }
     return { threadStatuses: next };
   });
+}
+
+function isTerminalStatus(s: ThreadRunStatus): boolean {
+  return s === "completed" || s === "failed" || s === "cancelled" || s === "interrupted" || s === "limit_reached";
+}
+
+function isActiveOrPendingStatus(s: ThreadRunStatus): boolean {
+  return s === "running" || s === "waiting_approval" || s === "needs_reply";
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +329,29 @@ export function removePendingRun(threadId: string): void {
     delete next[threadId];
     return { pendingRuns: next };
   });
+}
+
+const PENDING_RUN_HANDLED_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Mark a pending run as handled at the store level.
+ * Survives component unmount/remount cycles, unlike a component-scoped ref.
+ */
+export function markPendingRunHandled(pendingRunId: string): void {
+  threadStore.setState((prev) => ({
+    handledPendingRunIds: { ...prev.handledPendingRunIds, [pendingRunId]: Date.now() },
+  }));
+}
+
+/**
+ * Check whether a pending run has already been submitted.
+ * Returns false for entries older than TTL (allows retry after long periods).
+ */
+export function isPendingRunHandled(pendingRunId: string): boolean {
+  const ts = threadStore.getState().handledPendingRunIds[pendingRunId];
+  if (!ts) return false;
+  if (Date.now() - ts > PENDING_RUN_HANDLED_TTL_MS) return false;
+  return true;
 }
 
 // ---------------------------------------------------------------------------

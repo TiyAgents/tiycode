@@ -18,30 +18,9 @@ export type ThreadRunStatus =
   | "interrupted"
   | "limit_reached";
 
-/**
- * Map a {@link ThreadRunStatus} value to the subset used for sidebar display
- * (matching the legacy {@link ThreadStatus} union).
- */
-export function threadRunStatusToDisplayStatus(
-  status: ThreadRunStatus,
-): ThreadStatus {
-  switch (status) {
-    case "idle":
-    case "completed":
-    case "cancelled":
-      return "completed";
-    case "waiting_approval":
-    case "needs_reply":
-    case "limit_reached":
-      return "needs-reply";
-    case "running":
-      return "running";
-    case "failed":
-      return "failed";
-    case "interrupted":
-      return "interrupted";
-  }
-}
+// Re-export the display mapping from the unified status-mappings module.
+// Kept here for backward compatibility with existing import sites.
+export { threadRunStatusToDisplayStatus } from "./status-mappings";
 
 export type ThreadItem = {
   name: string;

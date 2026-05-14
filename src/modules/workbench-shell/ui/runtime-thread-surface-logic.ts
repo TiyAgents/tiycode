@@ -51,7 +51,7 @@ export function mapSnapshotToRunState(snapshot: ThreadSnapshotDto): RunState {
       case "waiting_tool_result":
         return "running";
       case "cancelling":
-        return "cancelled";
+        return "running"; // cancelling is still active — aligned with backend derive_thread_status
       case "failed":
       case "denied":
         return "failed";

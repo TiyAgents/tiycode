@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 use tiycore::types::Usage;
 
 use crate::model::errors::AppError;
-use crate::model::thread::{RunSummaryDto, RunUsageDto};
+use crate::model::thread::{RunStatus, RunSummaryDto, RunUsageDto};
 
 #[derive(sqlx::FromRow)]
 struct RunRow {
@@ -55,23 +55,18 @@ pub async fn insert(pool: &SqlitePool, r: &RunInsert) -> Result<(), AppError> {
     Ok(())
 }
 
-pub async fn update_status(pool: &SqlitePool, id: &str, status: &str) -> Result<(), AppError> {
-    let is_terminal = matches!(
-        status,
-        "completed" | "failed" | "denied" | "interrupted" | "cancelled" | "limit_reached"
-    );
-
-    if is_terminal {
+pub async fn update_status(pool: &SqlitePool, id: &str, status: RunStatus) -> Result<(), AppError> {
+    if status.is_terminal() {
         let now = Utc::now().to_rfc3339();
         sqlx::query("UPDATE thread_runs SET status = ?, finished_at = ? WHERE id = ?")
-            .bind(status)
+            .bind(status.as_str())
             .bind(&now)
             .bind(id)
             .execute(pool)
             .await?;
     } else {
         sqlx::query("UPDATE thread_runs SET status = ? WHERE id = ?")
-            .bind(status)
+            .bind(status.as_str())
             .bind(id)
             .execute(pool)
             .await?;
@@ -136,12 +131,13 @@ pub async fn find_active_by_thread(
     thread_id: &str,
 ) -> Result<Option<RunSummaryDto>, AppError> {
     let row = sqlx::query_as::<_, RunRow>(
+        // Excludes all non-progressing statuses — see RunStatus::non_progressing_sql_in_clause()
         "SELECT id, thread_id, run_mode, status, model_id, effective_model_plan_json,
                 error_message, started_at, input_tokens, output_tokens,
                 cache_read_tokens, cache_write_tokens, total_tokens
          FROM thread_runs
          WHERE thread_id = ?
-           AND status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled', 'limit_reached', 'waiting_approval')
+           AND status NOT IN ('completed','failed','denied','interrupted','cancelled','limit_reached','waiting_approval','needs_reply')
          ORDER BY started_at DESC
          LIMIT 1",
     )
@@ -203,11 +199,10 @@ pub async fn find_latest_with_prompt_usage_by_thread_excluding_run(
 
 pub async fn list_thread_ids_with_active_runs(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
     let rows = sqlx::query_scalar::<_, String>(
+        // Excludes all non-progressing statuses — see RunStatus::non_progressing_sql_in_clause()
         "SELECT DISTINCT thread_id
          FROM thread_runs
-         WHERE status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled')
-           AND status != 'limit_reached'
-           AND status != 'waiting_approval'
+         WHERE status NOT IN ('completed','failed','denied','interrupted','cancelled','limit_reached','waiting_approval','needs_reply')
            AND finished_at IS NULL",
     )
     .fetch_all(pool)
@@ -241,6 +236,7 @@ pub async fn cancel_waiting_approval_by_thread(
 /// Mark all non-terminal runs for a thread as interrupted (crash recovery).
 pub async fn interrupt_active_runs(pool: &SqlitePool) -> Result<u64, AppError> {
     let result = sqlx::query(
+        // Excludes all non-progressing statuses — see RunStatus::non_progressing_sql_in_clause()
         "UPDATE thread_runs
          SET status = 'interrupted',
              error_message = COALESCE(
@@ -248,8 +244,7 @@ pub async fn interrupt_active_runs(pool: &SqlitePool) -> Result<u64, AppError> {
                  'The app closed or the run was terminated before completion. Restarted in interrupted state.'
              ),
              finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE status NOT IN ('completed', 'failed', 'denied', 'interrupted', 'cancelled', 'limit_reached')
-           AND status != 'waiting_approval'
+         WHERE status NOT IN ('completed','failed','denied','interrupted','cancelled','limit_reached','waiting_approval','needs_reply')
            AND finished_at IS NULL",
     )
     .execute(pool)
@@ -494,7 +489,9 @@ mod tests {
         let pool = setup_test_pool().await;
         insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
 
-        update_status(&pool, "run-1", "completed").await.unwrap();
+        update_status(&pool, "run-1", RunStatus::Completed)
+            .await
+            .unwrap();
 
         let found = find_latest_by_thread(&pool, "t1")
             .await
@@ -508,7 +505,7 @@ mod tests {
         let pool = setup_test_pool().await;
         insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
 
-        update_status(&pool, "run-1", "waiting_approval")
+        update_status(&pool, "run-1", RunStatus::WaitingApproval)
             .await
             .unwrap();
 
@@ -656,7 +653,7 @@ mod tests {
         insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
 
         // Move run-1 to waiting_approval (non-terminal, no finished_at)
-        update_status(&pool, "run-1", "waiting_approval")
+        update_status(&pool, "run-1", RunStatus::WaitingApproval)
             .await
             .unwrap();
         let before = find_latest_by_thread(&pool, "t1")
