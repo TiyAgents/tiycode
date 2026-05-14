@@ -119,13 +119,13 @@ import {
   getSnapshotRuntimeError,
   getToolStatusClass,
   isApprovalDenied,
-  isMoreAdvancedMessageStatus,
   isRenderableTimelineMessage,
   isVisibleTimelineTool,
   mapRunSummaryToContextUsage,
   mapSnapshotMessage,
   mapSnapshotTool,
   mergeArtifactPartIntoMessage,
+  mergeSnapshotMessages,
   mergeSnapshotTools,
   prependOlderMessages,
   shouldCompleteThinkingPhase,
@@ -519,8 +519,8 @@ export function RuntimeThreadSurface({
     try {
       const snapshot = await threadLoad(threadId);
       if (snapshotLoadRequestRef.current !== requestId) {
-        snapshotLoadingRef.current = false;
-        eventBufferRef.current = [];
+        // Stale request — do NOT clear snapshotLoadingRef or eventBufferRef
+        // because a newer request owns them now.
         return;
       }
 
@@ -544,72 +544,13 @@ export function RuntimeThreadSurface({
       // (loaded while the DB write is still in-flight) from overwriting a
       // message that the user already saw streaming.
       setMessages((currentMessages) => {
-        if (currentMessages.length === 0) {
-          return snapshotMessages;
-        }
-
-        // Start from the snapshot list, then merge any local messages that
-        // are more "advanced" than the snapshot version or completely absent.
-        const merged = snapshotMessages.slice();
-        for (const localMsg of currentMessages) {
-          const snapshotIdx = merged.findIndex((m) => m.id === localMsg.id);
-          if (snapshotIdx === -1) {
-            // Message exists locally but not in snapshot.
-            if (
-              localMsg.id.startsWith("local-user-") && localMsg.role === "user"
-              && lastOptimisticUserIdRef.current === localMsg.id
-            ) {
-              // Optimistic user message — check if snapshot contains its
-              // persisted counterpart (same role + content, new to this snapshot).
-              const persistedIdx = merged.findIndex(
-                (m) =>
-                  m.role === "user"
-                  && m.content === localMsg.content
-                  && !currentMessages.some((c) => c.id === m.id),
-              );
-              if (persistedIdx !== -1) {
-                // Backend has persisted the message. Replace the snapshot
-                // entry's id with the optimistic id so the React key stays
-                // stable and no DOM remount / scroll jump occurs.
-                merged[persistedIdx] = { ...merged[persistedIdx], id: localMsg.id };
-                lastOptimisticUserIdRef.current = null;
-              } else {
-                // DB write hasn't landed yet — keep the optimistic message
-                // so it doesn't vanish from the list mid-frame.
-                merged.push(localMsg);
-              }
-            } else if (
-              localMsg.role === "assistant"
-              && (localMsg.status === "streaming" || localMsg.status === "completed")
-              && localMsg.content.length > 0
-            ) {
-              merged.push(localMsg);
-            }
-          } else if (
-            isMoreAdvancedMessageStatus(localMsg.status, merged[snapshotIdx].status)
-          ) {
-            merged[snapshotIdx] = localMsg;
-          } else if (
-            merged[snapshotIdx].status === localMsg.status
-            && merged[snapshotIdx].role === "assistant"
-            && localMsg.parts.length > merged[snapshotIdx].parts.length
-          ) {
-            // Local message has richer parts (e.g. chart artifacts from
-            // streaming that haven't been persisted to DB yet) — keep the
-            // local version to avoid losing visible artifacts.
-            merged[snapshotIdx] = localMsg;
-          } else if (
-            merged[snapshotIdx].status === localMsg.status
-            && merged[snapshotIdx].role === "assistant"
-            && merged[snapshotIdx].content.length === 0
-            && localMsg.content.length > 0
-          ) {
-            // Snapshot has same status but empty content while local has
-            // content — keep the local version (DB write not yet committed).
-            merged[snapshotIdx] = localMsg;
-          }
-        }
-        return merged;
+        const result = mergeSnapshotMessages(
+          snapshotMessages,
+          currentMessages,
+          lastOptimisticUserIdRef.current,
+        );
+        lastOptimisticUserIdRef.current = result.lastOptimisticUserId;
+        return result.messages;
       });
       setHasMoreMessages(snapshot.hasMoreMessages);
       setApprovingPlanMessageId(null);
@@ -683,9 +624,11 @@ export function RuntimeThreadSurface({
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
     } finally {
-      snapshotLoadingRef.current = false;
-      eventBufferRef.current = [];
+      // Only the current (latest) request should clear snapshot-loading state.
+      // A stale request must not touch these refs — a newer request owns them.
       if (snapshotLoadRequestRef.current === requestId) {
+        snapshotLoadingRef.current = false;
+        eventBufferRef.current = [];
         setLoading(false);
       }
     }
