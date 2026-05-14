@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 import {
   threadStore,
@@ -12,6 +12,8 @@ import {
   updateThreadTitle,
   addPendingRun,
   removePendingRun,
+  markPendingRunHandled,
+  isPendingRunHandled,
   setDisplayCount,
   setHasMore,
   setLoadMorePending,
@@ -392,6 +394,48 @@ describe("addPendingRun / removePendingRun", () => {
     threadStore.reset();
     removePendingRun("unknown");
     expect(threadStore.getState().pendingRuns).toEqual({});
+  });
+});
+
+describe("handled pending run IDs", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    threadStore.reset();
+  });
+
+  it("marks fresh pending runs as handled", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    threadStore.reset();
+
+    markPendingRunHandled("pending-1");
+
+    expect(isPendingRunHandled("pending-1")).toBe(true);
+  });
+
+  it("allows retry after the handled pending run TTL expires", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    threadStore.reset();
+
+    markPendingRunHandled("pending-1");
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+
+    expect(isPendingRunHandled("pending-1")).toBe(false);
+  });
+
+  it("prunes expired handled pending run IDs when marking a new one", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    threadStore.reset();
+
+    markPendingRunHandled("expired-pending");
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+    markPendingRunHandled("fresh-pending");
+
+    expect(threadStore.getState().handledPendingRunIds).toEqual({
+      "fresh-pending": Date.now(),
+    });
   });
 });
 

@@ -333,14 +333,31 @@ export function removePendingRun(threadId: string): void {
 
 const PENDING_RUN_HANDLED_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+function pruneHandledPendingRunIds(
+  handledPendingRunIds: Record<string, number>,
+  now: number,
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(handledPendingRunIds).filter(
+      ([, ts]) => now - ts <= PENDING_RUN_HANDLED_TTL_MS,
+    ),
+  );
+}
+
 /**
  * Mark a pending run as handled at the store level.
  * Survives component unmount/remount cycles, unlike a component-scoped ref.
  */
 export function markPendingRunHandled(pendingRunId: string): void {
-  threadStore.setState((prev) => ({
-    handledPendingRunIds: { ...prev.handledPendingRunIds, [pendingRunId]: Date.now() },
-  }));
+  threadStore.setState((prev) => {
+    const now = Date.now();
+    return {
+      handledPendingRunIds: {
+        ...pruneHandledPendingRunIds(prev.handledPendingRunIds, now),
+        [pendingRunId]: now,
+      },
+    };
+  });
 }
 
 /**
