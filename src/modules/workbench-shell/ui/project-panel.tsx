@@ -2,7 +2,7 @@ import { useDeferredValue, useEffect, useRef, useState, useCallback } from "reac
 import { useT } from "@/i18n";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Check, ChevronDown, ChevronRight, ClipboardCopy, FilePlus, FolderOpen, FolderPlus, LoaderCircle, RefreshCw, GripHorizontal } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ClipboardCopy, FilePlus, FolderOpen, FolderPlus, LoaderCircle, RefreshCw } from "lucide-react";
 import {
   type DirectoryChildrenResponse,
   indexFilterFiles,
@@ -31,11 +31,10 @@ import type { ProjectOption, WorkspaceOpenApp } from "@/modules/workbench-shell/
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
 import { FileEditorView } from "@/modules/workbench-shell/ui/file-editor-view";
 import { FileContextMenu, NewFileDialog } from "@/modules/workbench-shell/ui/file-context-menu";
+import { WorkbenchPreviewOverlay } from "@/modules/workbench-shell/ui/workbench-preview-overlay";
 import {
   openFile,
   useIsEditorMode,
-  useTreeSplitRatio,
-  setTreeSplitRatio,
 } from "@/modules/workbench-shell/model/file-editor-store";
 
 const PREFERRED_OPEN_APP_STORAGE_KEY = "tiy-preferred-open-app-id";
@@ -486,6 +485,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const [isOpenMenuOpen, setOpenMenuOpen] = useState(false);
   const [isRootNewDialogOpen, setRootNewDialogOpen] = useState(false);
   const [rootNewDialogIsDir, setRootNewDialogIsDir] = useState(false);
+  const [isFileEditorOverlayOpen, setFileEditorOverlayOpen] = useState(false);
+  const [isFileEditorOverlayClickThrough, setFileEditorOverlayClickThrough] = useState(false);
   const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(() => readCachedPreferredOpenAppId());
   const [activeOpenTargetId, setActiveOpenTargetId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -494,6 +495,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const openMenuRef = useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = useRef<number | null>(null);
   const revealTimeoutRef = useRef<number | null>(null);
+  const openFileTimeoutRef = useRef<number | null>(null);
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
   const treeRowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const isRefreshingTreeRef = useRef(false);
@@ -550,6 +552,9 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
       }
       if (revealTimeoutRef.current) {
         window.clearTimeout(revealTimeoutRef.current);
+      }
+      if (openFileTimeoutRef.current) {
+        window.clearTimeout(openFileTimeoutRef.current);
       }
     };
   }, []);
@@ -1238,40 +1243,45 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const filterResults = filterState.data?.results ?? [];
   const isFiltering = normalizedFilter.length > 0;
 
-  // Editor split pane state
   const isEditorMode = useIsEditorMode();
-  const treeSplitRatio = useTreeSplitRatio();
+  const handleOpenFileInEditor = useCallback((path: string) => {
+    if (!workspaceId) {
+      return;
+    }
 
-  // Split pane drag handler
-  const splitContainerRef = useRef<HTMLDivElement>(null);
-  const handleSplitDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const container = splitContainerRef.current;
-    if (!container) return;
-    const startY = e.clientY;
-    const containerRect = container.getBoundingClientRect();
-    const startRatio = treeSplitRatio;
+    if (openFileTimeoutRef.current) {
+      window.clearTimeout(openFileTimeoutRef.current);
+    }
 
-    const onMove = (ev: MouseEvent) => {
-      const delta = ev.clientY - startY;
-      const newRatio = startRatio + delta / containerRect.height;
-      setTreeSplitRatio(Math.max(0.15, Math.min(0.85, newRatio)));
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  }, [treeSplitRatio]);
+    setFileEditorOverlayOpen(true);
+    setFileEditorOverlayClickThrough(true);
+    void openFile(workspaceId, path);
+    openFileTimeoutRef.current = window.setTimeout(() => {
+      openFileTimeoutRef.current = null;
+      setFileEditorOverlayClickThrough(false);
+    }, 180);
+  }, [workspaceId]);
+
+  const handleOpenTreePathFromDoubleClick = useCallback((path: string, isDir: boolean) => {
+    if (openFileTimeoutRef.current) {
+      window.clearTimeout(openFileTimeoutRef.current);
+      openFileTimeoutRef.current = null;
+    }
+
+    setFileEditorOverlayClickThrough(false);
+    void handleOpenTreePath(path, isDir);
+  }, [handleOpenTreePath]);
+
+  useEffect(() => {
+    if (!isEditorMode) {
+      setFileEditorOverlayOpen(false);
+    }
+  }, [isEditorMode]);
 
   return (
-    <div ref={splitContainerRef} className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Tree pane */}
-      <div
-        className="min-h-0 overflow-hidden"
-        style={isEditorMode ? { height: `${treeSplitRatio * 100}%` } : { flex: 1 }}
-      >
+      <div className="min-h-0 flex-1 overflow-hidden">
     <div className="flex h-full min-h-0 flex-col px-4 pb-5 pt-2">
       <div className="shrink-0 bg-app-drawer">
         <div className="flex items-center justify-between gap-3 px-1 pr-1 text-[15px] font-medium">
@@ -1534,12 +1544,12 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
 
                           if (node.isDir) {
                             void handleTreeToggle(node);
-                          } else if (workspaceId) {
-                            void openFile(workspaceId, node.path);
+                          } else {
+                            handleOpenFileInEditor(node.path);
                           }
                         }}
                         onDoubleClick={() => {
-                          void handleOpenTreePath(node.path, node.isDir);
+                          handleOpenTreePathFromDoubleClick(node.path, node.isDir);
                         }}
                       >
                         <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
@@ -1586,20 +1596,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     </div>
       </div>
 
-      {/* Split drag handle + editor pane */}
-      {isEditorMode && (
-        <>
-          <div
-            className="flex h-1.5 shrink-0 cursor-row-resize items-center justify-center border-y border-app-border bg-app-drawer/80 hover:bg-primary/20 active:bg-primary/30"
-            onMouseDown={handleSplitDragStart}
-          >
-            <GripHorizontal className="size-3 text-muted-foreground" />
-          </div>
-          <div className="min-h-0 flex-1 overflow-hidden">
-            {workspaceId && <FileEditorView workspaceId={workspaceId} />}
-          </div>
-        </>
-      )}
       {workspaceId ? (
         <NewFileDialog
           open={isRootNewDialogOpen}
@@ -1610,6 +1606,16 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
           onSuccess={handleRefreshTree}
         />
       ) : null}
+      <WorkbenchPreviewOverlay
+        open={isEditorMode && isFileEditorOverlayOpen && Boolean(workspaceId)}
+        title="File Preview / Editor"
+        onClose={() => setFileEditorOverlayOpen(false)}
+        overlayClassName={isFileEditorOverlayClickThrough ? "pointer-events-none" : undefined}
+      >
+        <div className="h-full min-h-0 overflow-hidden">
+          {workspaceId ? <FileEditorView workspaceId={workspaceId} /> : null}
+        </div>
+      </WorkbenchPreviewOverlay>
     </div>
   );
 }

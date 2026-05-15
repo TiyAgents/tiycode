@@ -6,6 +6,8 @@ export type WorkbenchPreviewOverlayProps = {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  /** Optional extra class on the root overlay container */
+  overlayClassName?: string;
   /** Optional extra class on the inner card container */
   className?: string;
 };
@@ -23,13 +25,14 @@ export function WorkbenchPreviewOverlay({
   title,
   onClose,
   children,
+  overlayClassName,
   className,
 }: WorkbenchPreviewOverlayProps) {
   if (!open) return null;
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-app-chrome/50 px-6 py-12 backdrop-blur-sm"
+      className={`fixed inset-0 z-[80] flex items-center justify-center bg-app-chrome/50 px-6 py-12 backdrop-blur-sm ${overlayClassName ?? ""}`}
       onClick={onClose}
     >
       <div

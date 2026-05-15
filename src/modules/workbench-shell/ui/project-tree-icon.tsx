@@ -22,6 +22,7 @@ export function ProjectTreeIcon({
     <svg
       className={cn(
         "file-type-icon size-4 shrink-0",
+        isDir && "file-type-icon--folder",
         muted && "file-type-icon--muted",
       )}
       aria-hidden="true"

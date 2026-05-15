@@ -21,7 +21,6 @@ export interface FileEditorState {
   [key: string]: unknown;
   tabs: FileTab[];
   activeTabPath: string | null;
-  treeSplitRatio: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -30,8 +29,6 @@ export interface FileEditorState {
 
 const MAX_TABS = 10;
 const AUTO_SAVE_DELAY_MS = 10_000;
-
-const SPLIT_RATIO_STORAGE_KEY = "tiy-file-editor-split-ratio";
 
 // ---------------------------------------------------------------------------
 // Language detection
@@ -87,22 +84,10 @@ export function isImageFile(path: string): boolean {
 // Initial state
 // ---------------------------------------------------------------------------
 
-function readSavedSplitRatio(): number {
-  try {
-    const saved = window.localStorage.getItem(SPLIT_RATIO_STORAGE_KEY);
-    if (saved) {
-      const n = parseFloat(saved);
-      if (!isNaN(n) && n >= 0.15 && n <= 0.85) return n;
-    }
-  } catch { /* noop */ }
-  return 0.5;
-}
-
 function getInitialState(): FileEditorState {
   return {
     tabs: [],
     activeTabPath: null,
-    treeSplitRatio: readSavedSplitRatio(),
   };
 }
 
@@ -111,18 +96,6 @@ function getInitialState(): FileEditorState {
 // ---------------------------------------------------------------------------
 
 export const fileEditorStore = createStore<FileEditorState>(getInitialState());
-
-// Persist split ratio
-let lastPersistedRatio: number | null = null;
-fileEditorStore.subscribe(() => {
-  const { treeSplitRatio } = fileEditorStore.getState();
-  if (treeSplitRatio !== lastPersistedRatio) {
-    lastPersistedRatio = treeSplitRatio;
-    try {
-      window.localStorage.setItem(SPLIT_RATIO_STORAGE_KEY, String(treeSplitRatio));
-    } catch { /* noop */ }
-  }
-});
 
 // ---------------------------------------------------------------------------
 // Auto-save debounce management
@@ -314,11 +287,6 @@ export function setPreviewMode(path: string, mode: "editor" | "preview"): void {
   }));
 }
 
-/** Set the tree/editor split ratio (0.15–0.85). */
-export function setTreeSplitRatio(ratio: number): void {
-  fileEditorStore.setState({ treeSplitRatio: Math.max(0.15, Math.min(0.85, ratio)) });
-}
-
 /** Reload a tab's content from disk (e.g., after external change). */
 export async function reloadTab(workspaceId: string, path: string): Promise<void> {
   const tab = fileEditorStore.getState().tabs.find((t) => t.path === path);
@@ -371,10 +339,6 @@ export function useOpenTabs(): FileTab[] {
 
 export function useIsEditorMode(): boolean {
   return useStoreBase(fileEditorStore, (s) => s.tabs.length > 0);
-}
-
-export function useTreeSplitRatio(): number {
-  return useStoreBase(fileEditorStore, (s) => s.treeSplitRatio);
 }
 
 export function useActiveTabPath(): string | null {

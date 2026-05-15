@@ -357,22 +357,28 @@
   }
 }
 
+:root {
+  --file-type-icon-filter: grayscale(1) brightness(0.42);
+  --file-type-icon-opacity: 0.84;
+  --file-type-icon-folder-opacity: 0.9;
+  --file-type-icon-muted-opacity: 0.42;
+}
+
+.dark {
+  --file-type-icon-filter: grayscale(1) brightness(0) invert(0.98) contrast(1.04);
+  --file-type-icon-opacity: 0.94;
+  --file-type-icon-folder-opacity: 1;
+  --file-type-icon-muted-opacity: 0.58;
+}
+
 /* ── File type icons: monochrome + theme-adaptive ───────────────── */
 .file-type-icon {
-  /* Light mode: strip color → dark silhouette */
-  filter: grayscale(1) brightness(0.38);
-  opacity: 0.82;
+  filter: var(--file-type-icon-filter);
+  opacity: var(--file-type-icon-opacity);
+}
+.file-type-icon--folder {
+  opacity: var(--file-type-icon-folder-opacity);
 }
 .file-type-icon--muted {
-  opacity: 0.4;
-}
-@variant dark {
-  .file-type-icon {
-    /* Dark mode: strip color → white silhouette */
-    filter: grayscale(1) brightness(0) invert(1);
-    opacity: 0.62;
-  }
-  .file-type-icon--muted {
-    opacity: 0.3;
-  }
+  opacity: var(--file-type-icon-muted-opacity);
 }

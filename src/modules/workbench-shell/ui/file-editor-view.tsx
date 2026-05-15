@@ -352,7 +352,7 @@ export const FileEditorView: FC<FileEditorViewProps> = ({ workspaceId }) => {
   if (tabs.length === 0) return null;
 
   return (
-    <div className="flex h-full flex-col" onKeyDown={handleKeyDown}>
+    <div className="flex h-full min-h-0 flex-col" onKeyDown={handleKeyDown}>
       <TabBar
         tabs={tabs}
         activeTabPath={activeTab?.path ?? null}
