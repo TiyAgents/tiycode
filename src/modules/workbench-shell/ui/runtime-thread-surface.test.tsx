@@ -1,7 +1,9 @@
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { createMachine } from "@/shared/lib/create-machine";
 import { mapSnapshotToRunState, isTaskBoardTool, getDefaultToolOpenState } from "./runtime-thread-surface-logic";
+import { LongMessageBody, shouldRenderTextPartAsPlainText } from "./long-message-body";
 import { mapMessageParts, mapSnapshotMessage, mergeSnapshotMessages, mergeSnapshotTools } from "./runtime-thread-surface-state";
 import type { SurfaceMessage } from "./runtime-thread-surface-state";
 import type { MessageDto, RunStatus, ThreadSnapshotDto } from "@/shared/types/api";
@@ -76,6 +78,66 @@ function makeTool(overrides: Partial<TestSurfaceTool>): TestSurfaceTool {
     ...overrides,
   };
 }
+
+function t(key: string, params?: Record<string, unknown>) {
+  if (params && "count" in params) {
+    return `${key}:${params.count}`;
+  }
+
+  return key;
+}
+
+describe("message text rendering policy", () => {
+  it("renders user text parts as plain text so HTML stays inert", () => {
+    expect(shouldRenderTextPartAsPlainText("user")).toBe(true);
+  });
+
+  it("keeps assistant and system text parts on the rich Markdown path", () => {
+    expect(shouldRenderTextPartAsPlainText("assistant")).toBe(false);
+    expect(shouldRenderTextPartAsPlainText("system")).toBe(false);
+  });
+
+  it("renders user message HTML as escaped text without creating image nodes", () => {
+    const html = renderToStaticMarkup(
+      <LongMessageBody
+        message={{
+          content: "<img src=x onerror=alert(1)>\n<script>alert(1)</script>",
+          id: "user-message-1",
+          messageType: "plain_message",
+          parts: [{ type: "text", text: "<img src=x onerror=alert(1)>\n<script>alert(1)</script>" }],
+          role: "user",
+          status: "completed",
+        }}
+        t={t as never}
+      />,
+    );
+
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<script");
+  });
+
+  it("keeps assistant messages on the Markdown rendering path", () => {
+    const html = renderToStaticMarkup(
+      <LongMessageBody
+        message={{
+          content: "**bold**",
+          id: "assistant-message-1",
+          messageType: "plain_message",
+          parts: [{ type: "text", text: "**bold**" }],
+          role: "assistant",
+          status: "completed",
+        }}
+        t={t as never}
+      />,
+    );
+
+    expect(html).toContain('data-streamdown="strong"');
+    expect(html).toContain(">bold</span>");
+    expect(html).not.toContain("**bold**");
+  });
+});
 
 describe("mapMessageParts", () => {
   it("falls back to a single text part for legacy markdown-only messages", () => {
