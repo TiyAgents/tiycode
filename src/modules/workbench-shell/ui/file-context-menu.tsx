@@ -39,6 +39,8 @@ export interface FileContextMenuProps {
   isDir: boolean;
   isRoot?: boolean;
   workspaceId: string;
+  /** Workspace root absolute path, used to build absolute paths for "Copy Path". */
+  workspaceRoot?: string;
   /** Called after a CRUD operation to refresh the tree. */
   onTreeRefresh: () => void;
   /** Copy relative path to clipboard. */
@@ -278,6 +280,7 @@ export const FileContextMenu: FC<FileContextMenuProps> = ({
   isDir,
   isRoot = false,
   workspaceId,
+  workspaceRoot,
   onTreeRefresh,
   onCopyPath,
   onOpenExternal,
@@ -363,7 +366,12 @@ export const FileContextMenu: FC<FileContextMenuProps> = ({
             <DropdownMenuItem
               className="gap-2 text-xs"
               onClick={() => {
-                void navigator.clipboard.writeText(nodePath);
+                const absolutePath = workspaceRoot
+                  ? nodePath
+                    ? `${workspaceRoot}/${nodePath}`
+                    : workspaceRoot
+                  : nodePath;
+                void navigator.clipboard.writeText(absolutePath);
               }}
             >
               <ClipboardCopy className="size-3.5" />

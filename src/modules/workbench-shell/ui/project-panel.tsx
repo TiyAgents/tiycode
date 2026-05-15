@@ -1529,6 +1529,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                         isDir={node.isDir}
                         isRoot={depth === 0 && node.path === ""}
                         workspaceId={workspaceId ?? ""}
+                        workspaceRoot={projectPath ?? undefined}
                         onTreeRefresh={handleRefreshTree}
                         onCopyPath={handleCopyRelativePath}
                         onOpenExternal={(p) => void handleOpenTreeFile(p)}
