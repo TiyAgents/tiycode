@@ -636,7 +636,7 @@ pub async fn resolve_runtime_model_role(
     // requests that omit it with HTTP 400.
     if let Some(true) = role.reasoning_content_constrained {
         let mut compat = maybe_compat.unwrap_or_default();
-        compat.reasoning_content_constrained = true;
+        compat.thinking.content_constrained = true;
         builder = builder.compat(compat);
     } else if let Some(compat) = maybe_compat {
         builder = builder.compat(compat);
