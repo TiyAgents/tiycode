@@ -309,23 +309,23 @@ You may call this tool multiple times in a run to incrementally refine the plan.
     ];
     tools.extend(runtime_orchestration_tools());
 
-    // Shell is available in both profiles (plan mode applies read-only constraints via prompt).
-    tools.push(AgentTool::new(
-        "shell",
-        "Run Command",
-        "Run a non-interactive shell command inside the current workspace.",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "command": { "type": "string" },
-                "cwd": { "type": "string" },
-                "timeout": { "type": "number" }
-            },
-            "required": ["command"]
-        }),
-    ));
-
     if profile_name == DEFAULT_FULL_TOOL_PROFILE {
+        // Shell is gated to the full profile — plan mode must not allow arbitrary
+        // command execution (the previous prompt-only constraint was insufficient).
+        tools.push(AgentTool::new(
+            "shell",
+            "Run Command",
+            "Run a non-interactive shell command inside the current workspace.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string" },
+                    "cwd": { "type": "string" },
+                    "timeout": { "type": "number" }
+                },
+                "required": ["command"]
+            }),
+        ));
         tools.push(AgentTool::new(
             "edit",
             "Edit File",

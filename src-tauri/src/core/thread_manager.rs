@@ -4,8 +4,8 @@ use sqlx::SqlitePool;
 
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{
-    AddMessageInput, MessageDto, MessageRecord, RunSummaryDto, ThreadRecord, ThreadSnapshotDto,
-    ThreadStatus, ThreadSummaryDto,
+    AddMessageInput, MessageDto, MessageRecord, RunStatus, RunSummaryDto, ThreadRecord,
+    ThreadSnapshotDto, ThreadStatus, ThreadSummaryDto,
 };
 use crate::persistence::repo::{
     message_repo, run_helper_repo, run_repo, thread_repo, tool_call_repo,
@@ -264,16 +264,8 @@ impl ThreadManager {
 fn derive_thread_status(latest_run: Option<&RunSummaryDto>) -> ThreadStatus {
     match latest_run {
         None => ThreadStatus::Idle,
-        Some(run) => match run.status.as_str() {
-            "created" | "dispatching" | "running" | "waiting_tool_result" | "cancelling" => {
-                ThreadStatus::Running
-            }
-            "waiting_approval" => ThreadStatus::WaitingApproval,
-            "needs_reply" => ThreadStatus::NeedsReply,
-            "limit_reached" => ThreadStatus::NeedsReply,
-            "interrupted" => ThreadStatus::Interrupted,
-            "failed" | "denied" => ThreadStatus::Failed,
-            _ => ThreadStatus::Idle, // completed, cancelled → idle
-        },
+        Some(run) => RunStatus::from_str(&run.status)
+            .map(|s| s.to_thread_status())
+            .unwrap_or(ThreadStatus::Idle),
     }
 }

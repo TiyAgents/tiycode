@@ -41,11 +41,14 @@ import { cn } from "@/shared/lib/utils";
 import {
   threadStore,
   useStore,
+  isPendingRunHandled,
+  markPendingRunHandled,
 } from "@/modules/workbench-shell/model/thread-store";
 import {
   createRunLifecycleMachine,
   mapStreamEventToMachineEvent,
   type RunMachineContext,
+  type RunMachineEvent,
   type RunMachinePayload,
   type RunMachineState,
 } from "@/modules/workbench-shell/model/run-lifecycle-machine";
@@ -116,13 +119,13 @@ import {
   getSnapshotRuntimeError,
   getToolStatusClass,
   isApprovalDenied,
-  isMoreAdvancedMessageStatus,
   isRenderableTimelineMessage,
   isVisibleTimelineTool,
   mapRunSummaryToContextUsage,
   mapSnapshotMessage,
   mapSnapshotTool,
   mergeArtifactPartIntoMessage,
+  mergeSnapshotMessages,
   mergeSnapshotTools,
   prependOlderMessages,
   shouldCompleteThinkingPhase,
@@ -317,7 +320,8 @@ export function RuntimeThreadSurface({
     () => createRunLifecycleMachine(threadId ?? ""),
     [threadId],
   );
-  const handledInitialPromptRequestIdRef = useRef<string | null>(null);
+  const snapshotLoadingRef = useRef(false);
+  const eventBufferRef = useRef<Array<{ event: RunMachineEvent; payload?: RunMachinePayload }>>([]);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
@@ -509,10 +513,14 @@ export function RuntimeThreadSurface({
     setLoading(true);
     setHistoryLoadError(null);
     setLoadError(null);
+    snapshotLoadingRef.current = true;
+    eventBufferRef.current = [];
 
     try {
       const snapshot = await threadLoad(threadId);
       if (snapshotLoadRequestRef.current !== requestId) {
+        // Stale request — do NOT clear snapshotLoadingRef or eventBufferRef
+        // because a newer request owns them now.
         return;
       }
 
@@ -536,63 +544,13 @@ export function RuntimeThreadSurface({
       // (loaded while the DB write is still in-flight) from overwriting a
       // message that the user already saw streaming.
       setMessages((currentMessages) => {
-        if (currentMessages.length === 0) {
-          return snapshotMessages;
-        }
-
-        // Start from the snapshot list, then merge any local messages that
-        // are more "advanced" than the snapshot version or completely absent.
-        const merged = snapshotMessages.slice();
-        for (const localMsg of currentMessages) {
-          const snapshotIdx = merged.findIndex((m) => m.id === localMsg.id);
-          if (snapshotIdx === -1) {
-            // Message exists locally but not in snapshot.
-            if (
-              localMsg.id.startsWith("local-user-") && localMsg.role === "user"
-              && lastOptimisticUserIdRef.current === localMsg.id
-            ) {
-              // Optimistic user message — check if snapshot contains its
-              // persisted counterpart (same role + content, new to this snapshot).
-              const persistedIdx = merged.findIndex(
-                (m) =>
-                  m.role === "user"
-                  && m.content === localMsg.content
-                  && !currentMessages.some((c) => c.id === m.id),
-              );
-              if (persistedIdx !== -1) {
-                // Backend has persisted the message. Replace the snapshot
-                // entry's id with the optimistic id so the React key stays
-                // stable and no DOM remount / scroll jump occurs.
-                merged[persistedIdx] = { ...merged[persistedIdx], id: localMsg.id };
-                lastOptimisticUserIdRef.current = null;
-              } else {
-                // DB write hasn't landed yet — keep the optimistic message
-                // so it doesn't vanish from the list mid-frame.
-                merged.push(localMsg);
-              }
-            } else if (
-              localMsg.role === "assistant"
-              && (localMsg.status === "streaming" || localMsg.status === "completed")
-              && localMsg.content.length > 0
-            ) {
-              merged.push(localMsg);
-            }
-          } else if (
-            isMoreAdvancedMessageStatus(localMsg.status, merged[snapshotIdx].status)
-          ) {
-            merged[snapshotIdx] = localMsg;
-          } else if (
-            merged[snapshotIdx].status === localMsg.status
-            && merged[snapshotIdx].role === "assistant"
-            && merged[snapshotIdx].content.length === 0
-            && localMsg.content.length > 0
-          ) {
-            // Snapshot has same status but empty content while local has
-            // content — keep the local version (DB write not yet committed).
-            merged[snapshotIdx] = localMsg;
-          }
-        }
-        return merged;
+        const result = mergeSnapshotMessages(
+          snapshotMessages,
+          currentMessages,
+          lastOptimisticUserIdRef.current,
+        );
+        lastOptimisticUserIdRef.current = result.lastOptimisticUserId;
+        return result.messages;
       });
       setHasMoreMessages(snapshot.hasMoreMessages);
       setApprovingPlanMessageId(null);
@@ -603,29 +561,21 @@ export function RuntimeThreadSurface({
       setHelpers((snapshot.helpers ?? []).map((helper) => mapSnapshotHelper(helper, snapshot.toolCalls ?? [])));
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
-      // Prevent stale snapshots from regressing an active approval/reply state.
-      // When the stream has already transitioned the machine to waiting_approval
-      // or needs_reply, a snapshot still reporting "running" is stale — the DB
-      // write hasn't landed yet. Keep the current state and schedule a retry.
-      const currentMachineState = runMachine.getState();
-      const isStaleRegression =
-        (currentMachineState === "waiting_approval" || currentMachineState === "needs_reply")
-        && nextState === "running";
 
-      if (threadId && !isStaleRegression) {
+      // Reset the machine to snapshot state, then replay any lifecycle events
+      // that were buffered during the async IPC round-trip.  The machine will
+      // naturally reject transitions that are invalid from the reset state,
+      // but will accept forward transitions (e.g. running → waiting_approval
+      // that arrived while the snapshot was in flight).
+      if (threadId) {
+        snapshotLoadingRef.current = false;
         runMachine.reset(nextState as RunMachineState, {
           runId: snapshot.activeRun?.id ?? null, errorMessage: null, retryCount: 0,
         });
-      }
-
-      // If the snapshot was stale, retry after a short delay to pick up the
-      // approval_prompt message once the backend commit completes.
-      if (isStaleRegression) {
-        setTimeout(() => {
-          if (snapshotLoadRequestRef.current === requestId) {
-            void loadSnapshot();
-          }
-        }, 800);
+        for (const buffered of eventBufferRef.current) {
+          runMachine.send(buffered.event, buffered.payload);
+        }
+        eventBufferRef.current = [];
       }
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
       if (!shouldPreserveContextUsage) {
@@ -674,7 +624,11 @@ export function RuntimeThreadSurface({
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
     } finally {
+      // Only the current (latest) request should clear snapshot-loading state.
+      // A stale request must not touch these refs — a newer request owns them.
       if (snapshotLoadRequestRef.current === requestId) {
+        snapshotLoadingRef.current = false;
+        eventBufferRef.current = [];
         setLoading(false);
       }
     }
@@ -831,7 +785,15 @@ export function RuntimeThreadSurface({
         if (machineEvent === "RUN_RETRYING" && "runId" in event && typeof event.runId === "string") {
           payload.newRunId = event.runId;
         }
-        runMachine.send(machineEvent, payload);
+        // Buffer lifecycle events during snapshot loading to prevent the
+        // subsequent reset() from overwriting them.  The buffer is replayed
+        // after reset() completes — the machine naturally rejects any
+        // transitions that are invalid from the reset state.
+        if (snapshotLoadingRef.current) {
+          eventBufferRef.current.push({ event: machineEvent, payload });
+        } else {
+          runMachine.send(machineEvent, payload);
+        }
       }
 
       if (shouldCompleteThinkingPhase(event)) {
@@ -1539,14 +1501,13 @@ export function RuntimeThreadSurface({
       || initialPromptRequest.threadId !== threadId
       || !isCurrentThreadSnapshotReady
       || hasBlockingRun
-      || handledInitialPromptRequestIdRef.current === initialPromptRequestId
+      || isPendingRunHandled(initialPromptRequestId!)
     ) {
       return;
     }
 
-    // Parent state clears this request asynchronously, so mark it handled
-    // before awaiting to keep effect re-runs from starting the same run twice.
-    handledInitialPromptRequestIdRef.current = initialPromptRequestId;
+    // Mark as handled at the store level — survives component unmount/remount.
+    markPendingRunHandled(initialPromptRequestId!);
     if (initialPromptRequest.runMode) {
       setSelectedRunMode(initialPromptRequest.runMode);
     }

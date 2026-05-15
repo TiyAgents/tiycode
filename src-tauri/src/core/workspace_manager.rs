@@ -460,12 +460,12 @@ mod tests {
 
     #[test]
     fn builds_default_thread_workspace_path_under_tiy_workspace_directory() {
-        let home_dir = Path::new("/tmp/jorben");
+        let home_dir = Path::new("/tmp/tiycode-user");
         let workspace_path = default_thread_workspace_path_for_home(home_dir);
 
         assert_eq!(
             workspace_path,
-            PathBuf::from("/tmp/jorben/.tiy/workspace/Default")
+            PathBuf::from("/tmp/tiycode-user/.tiy/workspace/Default")
         );
     }
 

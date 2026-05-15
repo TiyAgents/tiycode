@@ -929,8 +929,12 @@ fn collect_file_changes_from_diff(
 }
 
 fn collect_history(repo: &Repository, limit: usize) -> Result<Vec<GitCommitSummaryDto>, AppError> {
-    let ref_map = build_ref_map(repo)?;
     let head_oid = repo.head().ok().and_then(|head| head.target());
+    if head_oid.is_none() {
+        return Ok(Vec::new());
+    }
+
+    let ref_map = build_ref_map(repo)?;
     let mut revwalk = repo.revwalk().map_err(|error| {
         AppError::recoverable(
             ErrorSource::Git,

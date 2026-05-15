@@ -421,6 +421,88 @@ export function isMoreAdvancedMessageStatus(localStatus: string, snapshotStatus:
   return localRank > snapshotRank;
 }
 
+/**
+ * Pure function that merges snapshot messages with local (live-streamed) messages.
+ * Extracted from the inline `setMessages` callback in `loadSnapshot` to enable
+ * direct unit testing.
+ *
+ * The merge strategy uses the snapshot as the base and selectively preserves
+ * local messages that are more "advanced" than their snapshot counterpart or
+ * that exist locally but not yet in the snapshot (DB write in-flight).
+ *
+ * @param snapshotMessages - Messages from the latest snapshot.
+ * @param currentMessages  - Messages currently held in local state (live-streamed).
+ * @param lastOptimisticUserId - The id of the most recent optimistic user message
+ *   (null if none). When a match is found in the snapshot the caller should clear it.
+ * @returns An object with the merged messages and an updated `lastOptimisticUserId`.
+ */
+export function mergeSnapshotMessages(
+  snapshotMessages: Array<SurfaceMessage>,
+  currentMessages: Array<SurfaceMessage>,
+  lastOptimisticUserId: string | null,
+): { messages: Array<SurfaceMessage>; lastOptimisticUserId: string | null } {
+  if (currentMessages.length === 0) {
+    return { messages: snapshotMessages, lastOptimisticUserId };
+  }
+
+  let nextOptimisticUserId = lastOptimisticUserId;
+  const merged = snapshotMessages.slice();
+  for (const localMsg of currentMessages) {
+    const snapshotIdx = merged.findIndex((m) => m.id === localMsg.id);
+    if (snapshotIdx === -1) {
+      // Message exists locally but not in snapshot.
+      if (
+        localMsg.id.startsWith("local-user-") && localMsg.role === "user"
+        && lastOptimisticUserId === localMsg.id
+      ) {
+        // Optimistic user message — check if snapshot contains its
+        // persisted counterpart (same role + content, new to this snapshot).
+        const persistedIdx = merged.findIndex(
+          (m) =>
+            m.role === "user"
+            && m.content === localMsg.content
+            && !currentMessages.some((c) => c.id === m.id),
+        );
+        if (persistedIdx !== -1) {
+          merged[persistedIdx] = { ...merged[persistedIdx], id: localMsg.id };
+          nextOptimisticUserId = null;
+        } else {
+          merged.push(localMsg);
+        }
+      } else if (
+        localMsg.role === "assistant"
+        && (localMsg.status === "streaming" || localMsg.status === "completed")
+        && localMsg.content.length > 0
+      ) {
+        merged.push(localMsg);
+      }
+    } else if (
+      isMoreAdvancedMessageStatus(localMsg.status, merged[snapshotIdx].status)
+    ) {
+      merged[snapshotIdx] = localMsg;
+    } else if (
+      merged[snapshotIdx].status === localMsg.status
+      && merged[snapshotIdx].role === "assistant"
+      && localMsg.parts.length > merged[snapshotIdx].parts.length
+    ) {
+      // Local message has richer parts (e.g. chart artifacts from
+      // streaming that haven't been persisted to DB yet) — keep the
+      // local version to avoid losing visible artifacts.
+      merged[snapshotIdx] = localMsg;
+    } else if (
+      merged[snapshotIdx].status === localMsg.status
+      && merged[snapshotIdx].role === "assistant"
+      && merged[snapshotIdx].content.length === 0
+      && localMsg.content.length > 0
+    ) {
+      // Snapshot has same status but empty content while local has
+      // content — keep the local version (DB write not yet committed).
+      merged[snapshotIdx] = localMsg;
+    }
+  }
+  return { messages: merged, lastOptimisticUserId: nextOptimisticUserId };
+}
+
 export function appendOrReplaceMessage(
   messages: Array<SurfaceMessage>,
   nextMessage: SurfaceMessage,
@@ -606,6 +688,10 @@ export function getToolStatusClass(state: SurfaceToolState) {
 /**
  * Defines a rough ordering of tool states through their lifecycle.
  * Higher numbers mean the tool is further along.
+ *
+ * Terminal states are differentiated so that `isMoreAdvancedToolState` can
+ * correctly resolve conflicts when a live event and a stale snapshot report
+ * different terminal outcomes (e.g. denied vs. available).
  */
 const TOOL_STATE_ORDER: Record<SurfaceToolState, number> = {
   "input-streaming": 0,
@@ -613,9 +699,9 @@ const TOOL_STATE_ORDER: Record<SurfaceToolState, number> = {
   "clarify-requested": 2,
   "approval-requested": 3,
   "approval-responded": 4,
-  "output-available": 5,
   "output-denied": 5,
-  "output-error": 5,
+  "output-error": 6,
+  "output-available": 7,
 };
 
 /**

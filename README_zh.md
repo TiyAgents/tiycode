@@ -36,7 +36,7 @@ TiyCode 面向的是希望以 AI 时代的方式进行编码协作的用户。�
 - **桌面壳层：** Tauri 2
 - **前端：** React 19、TypeScript、Vite
 - **后端 / 原生核心：** Rust
-- **AI Runtime：** [`tiycore`](https://github.com/TiyAgents/tiycore)
+- **AI Runtime：** [`tiycore`](https://github.com/tiylabs/tiycore)
 - **UI 基础：** Tailwind CSS v4、shadcn/ui（Radix UI 基础组件）、Vercel AI SDK（UI 类型）、Lucide React 图标、Motion 动画
 - **终端：** xterm.js + addon-fit
 - **代码高亮：** Shiki
@@ -49,7 +49,7 @@ TiyCode 面向的是希望以 AI 时代的方式进行编码协作的用户。�
 ### 通过 Homebrew 安装（macOS）
 
 ```bash
-brew tap TiyAgents/tap
+brew tap tiylabs/tap
 brew install --cask tiycode
 ```
 
@@ -61,7 +61,7 @@ brew upgrade tiycode
 
 ### 从 GitHub Releases 下载
 
-macOS、Windows 和 Linux 的预编译安装包可在 [Releases](https://github.com/TiyAgents/tiycode/releases) 页面下载。
+macOS、Windows 和 Linux 的预编译安装包可在 [Releases](https://github.com/tiylabs/tiycode/releases) 页面下载。
 
 > **macOS 版本要求：** TiyCode 当前要求 **macOS 10.15 Catalina 及以上版本**。为了获得更好的兼容性，建议使用较新的受支持 macOS 版本。
 >

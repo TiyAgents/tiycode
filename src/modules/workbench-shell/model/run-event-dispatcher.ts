@@ -4,8 +4,12 @@ import type {
   RunMachineEvent,
   RunMachineState,
 } from "./run-lifecycle-machine";
-import type { ThreadRunStatus } from "./types";
 import { setThreadStatus } from "./thread-store";
+import {
+  backendStatusToMachineEvent,
+  backendToThreadRunStatus,
+  machineEventToThreadRunStatus,
+} from "./status-mappings";
 
 // ---------------------------------------------------------------------------
 // Module-level registry
@@ -61,7 +65,7 @@ export function dispatchGlobalEvent(
     machine.send(event, payload);
   } else {
     // Fallback: no active surface, write directly to threadStore
-    const status = mapMachineEventToStatus(event);
+    const status = machineEventToThreadRunStatus(event);
     setThreadStatus(threadId, status, {
       runId: payload?.runId ?? null,
       source: "tauri_event",
@@ -80,12 +84,14 @@ export function dispatchRunFinishedEvent(
 ): void {
   const machine = activeMachines.get(threadId);
   if (machine) {
-    const event = mapBackendFinishedStatusToMachineEvent(backendStatus);
-    machine.send(event, { runId, message: undefined });
+    const event = backendStatusToMachineEvent(backendStatus);
+    if (event) {
+      machine.send(event, { runId, message: undefined });
+    }
   } else {
     setThreadStatus(
       threadId,
-      backendStatusToThreadRunStatus(backendStatus),
+      backendToThreadRunStatus(backendStatus),
       { runId, source: "tauri_event" },
     );
   }
@@ -108,114 +114,15 @@ export function dispatchRunStatusChangedEvent(
 ): void {
   const machine = activeMachines.get(threadId);
   if (machine) {
-    const event = mapBackendStatusToMachineEvent(backendStatus);
+    const event = backendStatusToMachineEvent(backendStatus);
     if (event) {
       machine.send(event, { runId, message: undefined });
     }
   } else {
     setThreadStatus(
       threadId,
-      backendStatusToThreadRunStatus(backendStatus),
+      backendToThreadRunStatus(backendStatus),
       { runId, source: "tauri_event" },
     );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function mapMachineEventToStatus(event: RunMachineEvent): ThreadRunStatus {
-  switch (event) {
-    case "RUN_STARTED":
-    case "APPROVAL_RESOLVED":
-    case "CLARIFY_RESOLVED":
-    case "RUN_RETRYING":
-      return "running";
-    case "RUN_COMPLETED":
-      return "completed";
-    case "RUN_FAILED":
-      return "failed";
-    case "RUN_CANCELLED":
-      return "cancelled";
-    case "RUN_INTERRUPTED":
-      return "interrupted";
-    case "LIMIT_REACHED":
-      return "limit_reached";
-    case "APPROVAL_REQUIRED":
-      return "waiting_approval";
-    case "CLARIFY_REQUIRED":
-      return "needs_reply";
-  }
-}
-
-function mapBackendFinishedStatusToMachineEvent(
-  status: string,
-): RunMachineEvent {
-  switch (status) {
-    case "failed":
-      return "RUN_FAILED";
-    case "interrupted":
-      return "RUN_INTERRUPTED";
-    case "cancelled":
-      return "RUN_CANCELLED";
-    case "limit_reached":
-      return "LIMIT_REACHED";
-    default:
-      return "RUN_COMPLETED";
-  }
-}
-
-/**
- * Map any backend status string (including intermediate states) to a machine
- * event. Returns `null` for unrecognized statuses so the caller can skip.
- */
-function mapBackendStatusToMachineEvent(
-  status: string,
-): RunMachineEvent | null {
-  switch (status) {
-    case "running":
-      return "RUN_STARTED";
-    case "waiting_approval":
-      return "APPROVAL_REQUIRED";
-    case "needs_reply":
-      return "CLARIFY_REQUIRED";
-    case "completed":
-      return "RUN_COMPLETED";
-    case "failed":
-      return "RUN_FAILED";
-    case "cancelled":
-      return "RUN_CANCELLED";
-    case "interrupted":
-      return "RUN_INTERRUPTED";
-    case "limit_reached":
-      return "LIMIT_REACHED";
-    default:
-      return null;
-  }
-}
-
-function backendStatusToThreadRunStatus(
-  status: string,
-): ThreadRunStatus {
-  switch (status) {
-    case "running":
-      return "running";
-    case "waiting_approval":
-      return "waiting_approval";
-    case "needs_reply":
-      return "needs_reply";
-    case "completed":
-      return "completed";
-    case "failed":
-      return "failed";
-    case "interrupted":
-      return "interrupted";
-    case "cancelled":
-      return "cancelled";
-    case "limit_reached":
-      return "limit_reached";
-    default:
-      return "completed";
   }
 }

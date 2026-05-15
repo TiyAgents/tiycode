@@ -45,7 +45,8 @@ pub(crate) fn handle_agent_event(
             ..
         } => {
             // Track the current turn_index for response boundary grouping
-            if let Ok(mut guard) = current_turn_index.lock() {
+            {
+                let mut guard = lock_or_recover(current_turn_index, "current_turn_index");
                 *guard = Some(*turn_index);
             }
             match assistant_event.as_ref() {
@@ -61,28 +62,29 @@ pub(crate) fn handle_agent_event(
                     reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
                 }
                 AssistantMessageEvent::ThinkingDelta { delta, .. } => {
-                    if let Ok(mut buffer) = reasoning_buffer.lock() {
-                        buffer.push_str(delta);
-                        let message_id = ensure_message_id(current_reasoning_message_id);
-                        let ti = current_turn_index.lock().ok().and_then(|g| *g);
-                        let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
-                            run_id: run_id.to_string(),
-                            message_id,
-                            reasoning: buffer.clone(),
-                            thinking_signature: None,
-                            turn_index: ti,
-                        });
-                    }
+                    let mut buffer =
+                        lock_or_recover(reasoning_buffer, "ThinkingDelta:reasoning_buffer");
+                    buffer.push_str(delta);
+                    let message_id = ensure_message_id(current_reasoning_message_id);
+                    let ti =
+                        lock_or_recover(current_turn_index, "ThinkingDelta:turn_index").clone();
+                    let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
+                        run_id: run_id.to_string(),
+                        message_id,
+                        reasoning: buffer.clone(),
+                        thinking_signature: None,
+                        turn_index: ti,
+                    });
                 }
                 AssistantMessageEvent::ThinkingEnd {
                     content, partial, ..
                 } => {
-                    let reasoning = if let Ok(mut buffer) = reasoning_buffer.lock() {
+                    let reasoning = {
+                        let mut buffer =
+                            lock_or_recover(reasoning_buffer, "ThinkingEnd:reasoning_buffer");
                         buffer.clear();
                         buffer.push_str(content);
                         buffer.clone()
-                    } else {
-                        content.clone()
                     };
 
                     if reasoning.trim().is_empty() {
@@ -90,10 +92,10 @@ pub(crate) fn handle_agent_event(
                         return;
                     }
 
-                    // Extract thinking_signature from the partial message's last
-                    // Thinking content block.  The signature is populated by the
-                    // protocol layer during streaming and is complete by the time
-                    // ThinkingEnd fires.
+                    // Extract thinking_signature from the partial message's final
+                    // Thinking content block. The protocol layer populates this
+                    // during streaming, so search from the end of partial.content
+                    // to find the complete block when ThinkingEnd fires.
                     let thinking_signature = partial
                         .content
                         .iter()
@@ -102,7 +104,7 @@ pub(crate) fn handle_agent_event(
                         .and_then(|t| t.thinking_signature.clone());
 
                     let message_id = ensure_message_id(current_reasoning_message_id);
-                    let ti = current_turn_index.lock().ok().and_then(|g| *g);
+                    let ti = lock_or_recover(current_turn_index, "ThinkingEnd:turn_index").clone();
                     let _ = event_tx.send(ThreadStreamEvent::ReasoningUpdated {
                         run_id: run_id.to_string(),
                         message_id,
@@ -172,7 +174,7 @@ pub(crate) fn handle_agent_event(
                 );
                 let message_id = take_or_create_message_id(current_message_id);
                 set_last_completed_message_id(last_completed_message_id, Some(message_id.clone()));
-                let ti = current_turn_index.lock().ok().and_then(|g| *g);
+                let ti = lock_or_recover(current_turn_index, "MessageEnd:turn_index").clone();
                 let _ = event_tx.send(ThreadStreamEvent::MessageCompleted {
                     run_id: run_id.to_string(),
                     message_id,
@@ -205,7 +207,8 @@ fn emit_usage_update_if_changed(
     context_window: &str,
     model_display_name: &str,
 ) {
-    let should_emit = if let Ok(mut previous_usage) = last_usage.lock() {
+    let should_emit = {
+        let mut previous_usage = lock_or_recover(last_usage, "emit_usage:last_usage");
         if previous_usage.as_ref() == Some(usage) {
             return;
         }
@@ -221,12 +224,6 @@ fn emit_usage_update_if_changed(
 
         *previous_usage = Some(*usage);
         true
-    } else {
-        usage.total_tokens > 0
-            || usage.input > 0
-            || usage.output > 0
-            || usage.cache_read > 0
-            || usage.cache_write > 0
     };
 
     if !should_emit {
@@ -243,52 +240,52 @@ fn emit_usage_update_if_changed(
     });
 }
 
+/// Helper to recover a poisoned `StdMutex`. All mutex helpers below use this
+/// pattern so that a panic in an unrelated thread never silently corrupts
+/// message-tracking state.
+fn lock_or_recover<'a, T>(mutex: &'a StdMutex<T>, context: &str) -> std::sync::MutexGuard<'a, T> {
+    mutex.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("{context}: mutex poisoned, recovering");
+        poisoned.into_inner()
+    })
+}
+
 fn ensure_message_id(current_message_id: &StdMutex<Option<String>>) -> String {
-    if let Ok(mut guard) = current_message_id.lock() {
-        if let Some(existing) = guard.clone() {
-            return existing;
-        }
-
-        let message_id = uuid::Uuid::now_v7().to_string();
-        *guard = Some(message_id.clone());
-        return message_id;
+    let mut guard = lock_or_recover(current_message_id, "ensure_message_id");
+    if let Some(existing) = guard.clone() {
+        return existing;
     }
-
-    uuid::Uuid::now_v7().to_string()
+    let message_id = uuid::Uuid::now_v7().to_string();
+    *guard = Some(message_id.clone());
+    message_id
 }
 
 fn take_or_create_message_id(current_message_id: &StdMutex<Option<String>>) -> String {
-    if let Ok(mut guard) = current_message_id.lock() {
-        if let Some(existing) = guard.take() {
-            return existing;
-        }
+    let mut guard = lock_or_recover(current_message_id, "take_or_create_message_id");
+    if let Some(existing) = guard.take() {
+        return existing;
     }
-
     uuid::Uuid::now_v7().to_string()
 }
 
 fn reset_message_id(current_message_id: &StdMutex<Option<String>>) {
-    if let Ok(mut guard) = current_message_id.lock() {
-        *guard = None;
-    }
+    let mut guard = lock_or_recover(current_message_id, "reset_message_id");
+    *guard = None;
 }
 
 fn set_last_completed_message_id(
     last_completed_message_id: &StdMutex<Option<String>>,
     value: Option<String>,
 ) {
-    if let Ok(mut guard) = last_completed_message_id.lock() {
-        *guard = value;
-    }
+    let mut guard = lock_or_recover(last_completed_message_id, "set_last_completed_message_id");
+    *guard = value;
 }
 
 fn read_last_completed_message_id(
     last_completed_message_id: &StdMutex<Option<String>>,
 ) -> Option<String> {
-    last_completed_message_id
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone())
+    let guard = lock_or_recover(last_completed_message_id, "read_last_completed_message_id");
+    guard.clone()
 }
 
 fn reset_reasoning_state(
@@ -296,7 +293,34 @@ fn reset_reasoning_state(
     reasoning_buffer: &StdMutex<String>,
 ) {
     reset_message_id(current_reasoning_message_id);
-    if let Ok(mut buffer) = reasoning_buffer.lock() {
-        buffer.clear();
+    let mut buffer = lock_or_recover(reasoning_buffer, "reset_reasoning_state");
+    buffer.clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_or_recover_recovers_poisoned_mutex() {
+        let mutex = StdMutex::new(String::from("before"));
+
+        let result = std::panic::catch_unwind(|| {
+            let _guard = mutex.lock().expect("mutex should lock before poison");
+            panic!("poison mutex for recovery test");
+        });
+        assert!(result.is_err());
+
+        {
+            let mut guard = lock_or_recover(&mutex, "test");
+            assert_eq!(guard.as_str(), "before");
+            guard.clear();
+            guard.push_str("after");
+        }
+
+        let guard = mutex
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(guard.as_str(), "after");
     }
 }

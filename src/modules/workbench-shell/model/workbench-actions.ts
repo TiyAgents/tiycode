@@ -295,14 +295,17 @@ export async function deleteThread(threadId: string, options?: ThreadDeleteOptio
   // Clean up terminal session
   terminalStore.removeSession(threadId);
 
-  // Remove thread from workspaces
+  // Remove thread from workspaces and clean threadStatuses
   threadStore.setState((prev) => {
     const next = prev.workspaces.map((w) => ({
       ...w,
       threads: w.threads.filter((t) => t.id !== threadId),
     }));
+    const nextStatuses = { ...prev.threadStatuses };
+    delete nextStatuses[threadId];
     return {
       workspaces: isDeletingActiveThread ? clearActiveThreads(next) : next,
+      threadStatuses: nextStatuses,
     };
   });
 
@@ -395,6 +398,8 @@ export async function removeWorkspace(workspace: WorkspaceItem): Promise<void> {
   if (isRemovingActiveWorkspace) {
     threadStore.setState({
       isNewThreadMode: true,
+      activeThreadId: null,
+      activeThreadProfileIdOverride: null,
       workspaces: clearActiveThreads(threadStore.getState().workspaces),
     });
     composerStore.setState({ error: null });
@@ -687,6 +692,8 @@ export async function submitNewThread(submission: NewThreadSubmission): Promise<
   composerStore.setState({
     newThreadValue: "",
     newThreadRunMode: "default",
+    newThreadReferencedFiles: [],
+    newThreadAttachmentData: [],
     error: null,
   });
 }

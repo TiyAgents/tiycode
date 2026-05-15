@@ -44,6 +44,132 @@ impl ThreadStatus {
 }
 
 // ---------------------------------------------------------------------------
+// RunStatus — status of an individual thread run
+// ---------------------------------------------------------------------------
+
+/// Authoritative run-level status enum. Serializes to/from the same
+/// lowercase snake_case strings stored in SQLite, so no migration is needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatus {
+    Created,
+    Dispatching,
+    Running,
+    WaitingApproval,
+    NeedsReply,
+    WaitingToolResult,
+    Cancelling,
+    Completed,
+    LimitReached,
+    Failed,
+    Denied,
+    Interrupted,
+    Cancelled,
+}
+
+impl RunStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Dispatching => "dispatching",
+            Self::Running => "running",
+            Self::WaitingApproval => "waiting_approval",
+            Self::NeedsReply => "needs_reply",
+            Self::WaitingToolResult => "waiting_tool_result",
+            Self::Cancelling => "cancelling",
+            Self::Completed => "completed",
+            Self::LimitReached => "limit_reached",
+            Self::Failed => "failed",
+            Self::Denied => "denied",
+            Self::Interrupted => "interrupted",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "created" => Some(Self::Created),
+            "dispatching" => Some(Self::Dispatching),
+            "running" => Some(Self::Running),
+            "waiting_approval" => Some(Self::WaitingApproval),
+            "needs_reply" => Some(Self::NeedsReply),
+            "waiting_tool_result" => Some(Self::WaitingToolResult),
+            "cancelling" => Some(Self::Cancelling),
+            "completed" => Some(Self::Completed),
+            "limit_reached" => Some(Self::LimitReached),
+            "failed" => Some(Self::Failed),
+            "denied" => Some(Self::Denied),
+            "interrupted" => Some(Self::Interrupted),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+
+    /// Whether this run has reached a terminal state and will not transition further.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed
+                | Self::Failed
+                | Self::Denied
+                | Self::Interrupted
+                | Self::Cancelled
+                | Self::LimitReached
+        )
+    }
+
+    /// Whether this run is actively executing (consuming compute resources).
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self,
+            Self::Created
+                | Self::Dispatching
+                | Self::Running
+                | Self::WaitingToolResult
+                | Self::Cancelling
+        )
+    }
+
+    /// Whether this run is paused waiting for user action.
+    pub fn is_needs_user_action(&self) -> bool {
+        matches!(self, Self::WaitingApproval | Self::NeedsReply)
+    }
+
+    /// Derive the thread-level status from this run status.
+    pub fn to_thread_status(&self) -> ThreadStatus {
+        match self {
+            Self::Created
+            | Self::Dispatching
+            | Self::Running
+            | Self::WaitingToolResult
+            | Self::Cancelling => ThreadStatus::Running,
+            Self::WaitingApproval => ThreadStatus::WaitingApproval,
+            Self::NeedsReply | Self::LimitReached => ThreadStatus::NeedsReply,
+            Self::Interrupted => ThreadStatus::Interrupted,
+            Self::Failed | Self::Denied => ThreadStatus::Failed,
+            Self::Completed | Self::Cancelled => ThreadStatus::Idle,
+        }
+    }
+
+    /// SQL `IN(...)` clause containing all terminal status strings.
+    pub fn terminal_sql_in_clause() -> &'static str {
+        "('completed','failed','denied','interrupted','cancelled','limit_reached')"
+    }
+
+    /// SQL `IN(...)` clause containing all non-progressing statuses
+    /// (terminal + needs-user-action). Used to find "truly active" runs.
+    pub fn non_progressing_sql_in_clause() -> &'static str {
+        "('completed','failed','denied','interrupted','cancelled','limit_reached','waiting_approval','needs_reply')"
+    }
+}
+
+impl std::fmt::Display for RunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ThreadRecord
 // ---------------------------------------------------------------------------
 
@@ -256,4 +382,107 @@ pub struct AddMessageInput {
     pub content: String,
     pub message_type: Option<String>,
     pub metadata: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RunStatus, ThreadStatus};
+
+    fn all_run_status_cases() -> Vec<(RunStatus, &'static str, ThreadStatus)> {
+        vec![
+            (RunStatus::Created, "created", ThreadStatus::Running),
+            (RunStatus::Dispatching, "dispatching", ThreadStatus::Running),
+            (RunStatus::Running, "running", ThreadStatus::Running),
+            (
+                RunStatus::WaitingApproval,
+                "waiting_approval",
+                ThreadStatus::WaitingApproval,
+            ),
+            (
+                RunStatus::NeedsReply,
+                "needs_reply",
+                ThreadStatus::NeedsReply,
+            ),
+            (
+                RunStatus::WaitingToolResult,
+                "waiting_tool_result",
+                ThreadStatus::Running,
+            ),
+            (RunStatus::Cancelling, "cancelling", ThreadStatus::Running),
+            (RunStatus::Completed, "completed", ThreadStatus::Idle),
+            (
+                RunStatus::LimitReached,
+                "limit_reached",
+                ThreadStatus::NeedsReply,
+            ),
+            (RunStatus::Failed, "failed", ThreadStatus::Failed),
+            (RunStatus::Denied, "denied", ThreadStatus::Failed),
+            (
+                RunStatus::Interrupted,
+                "interrupted",
+                ThreadStatus::Interrupted,
+            ),
+            (RunStatus::Cancelled, "cancelled", ThreadStatus::Idle),
+        ]
+    }
+
+    #[test]
+    fn run_status_string_conversions_round_trip_for_every_variant() {
+        for (status, expected, _) in all_run_status_cases() {
+            assert_eq!(status.as_str(), expected);
+            assert_eq!(RunStatus::from_str(expected), Some(status));
+            assert_eq!(status.to_string(), expected);
+        }
+
+        assert_eq!(RunStatus::from_str("unknown"), None);
+        assert_eq!(RunStatus::from_str(""), None);
+    }
+
+    #[test]
+    fn run_status_thread_status_mapping_is_explicit_for_every_variant() {
+        for (status, _, expected_thread_status) in all_run_status_cases() {
+            assert_eq!(status.to_thread_status(), expected_thread_status);
+        }
+    }
+
+    #[test]
+    fn run_status_classification_matches_run_lifecycle_semantics() {
+        let terminal = [
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::Denied,
+            RunStatus::Interrupted,
+            RunStatus::Cancelled,
+            RunStatus::LimitReached,
+        ];
+        let active = [
+            RunStatus::Created,
+            RunStatus::Dispatching,
+            RunStatus::Running,
+            RunStatus::WaitingToolResult,
+            RunStatus::Cancelling,
+        ];
+        let needs_user_action = [RunStatus::WaitingApproval, RunStatus::NeedsReply];
+
+        for (status, _, _) in all_run_status_cases() {
+            assert_eq!(status.is_terminal(), terminal.contains(&status));
+            assert_eq!(status.is_active(), active.contains(&status));
+            assert_eq!(
+                status.is_needs_user_action(),
+                needs_user_action.contains(&status)
+            );
+        }
+    }
+
+    #[test]
+    fn run_status_sql_clauses_match_status_sets() {
+        assert_eq!(
+            RunStatus::terminal_sql_in_clause(),
+            "('completed','failed','denied','interrupted','cancelled','limit_reached')"
+        );
+        assert_eq!(
+            RunStatus::non_progressing_sql_in_clause(),
+            "('completed','failed','denied','interrupted','cancelled','limit_reached','waiting_approval','needs_reply')"
+        );
+    }
 }

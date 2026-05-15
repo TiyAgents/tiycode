@@ -1441,8 +1441,8 @@ function AboutSettingsPanel({
   const architectureSummary = runtime?.arch ?? "Unknown architecture";
   const aboutActions = [
     { href: "https://tiy.ai", label: t("settings.about.officialWebsite") },
-    { href: "https://github.com/TiyAgents/tiycode/blob/master/LICENSE", label: t("settings.about.license") },
-    { href: "https://github.com/TiyAgents/tiycode/issues", label: t("settings.about.feedback") },
+    { href: "https://github.com/tiylabs/tiycode/blob/master/LICENSE", label: t("settings.about.license") },
+    { href: "https://github.com/tiylabs/tiycode/issues", label: t("settings.about.feedback") },
     { href: "mailto:contact@tiy.ai", label: t("settings.about.contactEmail") },
   ] as const;
 
@@ -3282,7 +3282,7 @@ function WorkspaceSettingsPanel({
     if (!isTauri()) {
       onAddWorkspace({
         name: "New Workspace",
-        path: "/Users/jorben/Documents/Codespace/new-project",
+        path: "TiyCode Workspaces/new-project",
         isDefault: false,
         isGit: false,
         autoWorkTree: false,

@@ -11,6 +11,7 @@ import {
 import type {
   SurfaceChartMessagePart,
   SurfaceDataMessagePart,
+  SurfaceMessage,
   SurfaceMessagePart,
   SurfaceTextMessagePart,
   SurfaceUnknownMessagePart,
@@ -18,7 +19,7 @@ import type {
 import { ThreadChartArtifactCard } from "@/modules/workbench-shell/ui/thread-chart-artifact-card";
 
 type LongMessageBodyProps = {
-  message: RuntimeSurfaceMessagePreviewInput & { id: string; parts?: SurfaceMessagePart[] };
+  message: RuntimeSurfaceMessagePreviewInput & Pick<SurfaceMessage, "id" | "role"> & { parts?: SurfaceMessagePart[] };
   t: ReturnType<typeof useT>;
 };
 
@@ -38,8 +39,28 @@ function isUnknownPart(part: SurfaceMessagePart): part is SurfaceUnknownMessageP
   return !isTextPart(part) && !isChartPart(part) && !isDataPart(part);
 }
 
-function renderMessagePart(part: SurfaceMessagePart, key: string) {
+type RenderMessagePartOptions = {
+  renderTextAsPlainText: boolean;
+};
+
+export function shouldRenderTextPartAsPlainText(role: SurfaceMessage["role"]) {
+  return role === "user";
+}
+
+function PlainTextMessagePart({ text }: { text: string }) {
+  return (
+    <div className="whitespace-pre-wrap break-words text-sm leading-6 text-app-foreground">
+      {text}
+    </div>
+  );
+}
+
+function renderMessagePart(part: SurfaceMessagePart, key: string, options: RenderMessagePartOptions) {
   if (isTextPart(part)) {
+    if (options.renderTextAsPlainText) {
+      return <PlainTextMessagePart key={key} text={part.text} />;
+    }
+
     return <MessageResponse key={key}>{part.text}</MessageResponse>;
   }
 
@@ -93,15 +114,18 @@ export const LongMessageBody = memo(function LongMessageBody({
     : null;
   const canPreview = preview !== null && preview.isLong;
   const usePreview = canPreview && !isExpanded;
+  const renderOptions: RenderMessagePartOptions = {
+    renderTextAsPlainText: shouldRenderTextPartAsPlainText(message.role),
+  };
 
   if (hasNonTextParts) {
-    return <div className="space-y-3">{parts.map((part, index) => renderMessagePart(part, `${message.id}-part-${index}`))}</div>;
+    return <div className="space-y-3">{parts.map((part, index) => renderMessagePart(part, `${message.id}-part-${index}`, renderOptions))}</div>;
   }
 
   if (!usePreview) {
     return (
       <div className="space-y-3">
-        {parts.map((part, index) => renderMessagePart(part, `${message.id}-part-${index}`))}
+        {parts.map((part, index) => renderMessagePart(part, `${message.id}-part-${index}`, renderOptions))}
         {canPreview ? (
           <div className="flex justify-end">
             <Button

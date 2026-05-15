@@ -289,6 +289,78 @@ async fn test_git_refresh_invalidates_cached_overlay() {
 }
 
 #[tokio::test]
+async fn test_git_snapshot_handles_unborn_head_repository() {
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let root = tmp.path();
+
+    std::fs::create_dir_all(root.join("src")).expect("should create src directory");
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("should write source file");
+    std::fs::write(root.join("README.md"), "# Demo\n").expect("should write readme");
+
+    let _repo = Repository::init(root).expect("should init repository");
+
+    let snapshot = GitManager::new()
+        .get_snapshot("workspace-1", &root.to_string_lossy())
+        .await
+        .expect("snapshot should succeed for an unborn HEAD repository");
+
+    assert!(
+        snapshot.capabilities.repo_available,
+        "unborn HEAD repository should still be detected as a Git repository"
+    );
+    assert_eq!(
+        snapshot.head_ref, None,
+        "unborn HEAD should not expose a resolved HEAD ref"
+    );
+    assert_eq!(
+        snapshot.head_oid, None,
+        "unborn HEAD should not expose a commit OID"
+    );
+    assert!(
+        !snapshot.is_detached,
+        "unborn HEAD should not be treated as detached"
+    );
+    assert_eq!(snapshot.ahead_count, 0);
+    assert_eq!(snapshot.behind_count, 0);
+    assert!(
+        snapshot.recent_commits.is_empty(),
+        "unborn HEAD repository should have an empty commit history"
+    );
+    assert!(
+        snapshot
+            .untracked_files
+            .iter()
+            .any(|file| file.path == "README.md" && file.status == GitChangeKind::Added),
+        "untracked files should still be reported before the first commit"
+    );
+    assert!(
+        snapshot
+            .untracked_files
+            .iter()
+            .any(|file| file.path == "src/main.rs" && file.status == GitChangeKind::Added),
+        "nested untracked files should still be reported before the first commit"
+    );
+}
+
+#[tokio::test]
+async fn test_git_history_handles_unborn_head_repository() {
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let root = tmp.path();
+
+    Repository::init(root).expect("should init repository");
+
+    let history = GitManager::new()
+        .get_history(&root.to_string_lossy(), Some(10))
+        .await
+        .expect("history lookup should succeed for an unborn HEAD repository");
+
+    assert!(
+        history.is_empty(),
+        "unborn HEAD repository should return an empty commit history"
+    );
+}
+
+#[tokio::test]
 async fn test_git_snapshot_groups_staged_unstaged_untracked_and_history() {
     let tmp = tempfile::tempdir().expect("should create tempdir");
     let root = tmp.path();

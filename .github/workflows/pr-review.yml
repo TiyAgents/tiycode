@@ -24,7 +24,7 @@ jobs:
 
       - name: Run Action From Current Branch
         if: ${{ env.LLM_API_KEY != '' }}
-        uses: TiyAgents/code-review-agent-action@v3
+        uses: tiylabs/code-review-agent-action@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # Provider 配置（新字段）

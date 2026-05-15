@@ -34,6 +34,7 @@ import type {
 } from "@/shared/types/api";
 import type { ThreadStreamEvent } from "./types";
 import { formatInvokeErrorMessage } from "@/shared/lib/invoke-error";
+import { isRuntimeOrchestrationToolName } from "@/shared/constants/tool-names";
 
 // ---------------------------------------------------------------------------
 // Callback types for AI Elements mapping
@@ -377,6 +378,15 @@ export class ThreadStream {
    * Reset stream state (e.g. when switching threads).
    */
   reset() {
+    this.clearRunCaches();
+  }
+
+  /**
+   * Clear all per-run caches. Called on terminal events and reset().
+   * Prevents unbounded growth of toolNameCache and hiddenToolCallIds
+   * when tool lifecycle events are lost (e.g. network interruption).
+   */
+  private clearRunCaches() {
     this.currentRunId = null;
     this.hiddenToolCallIds.clear();
     this.toolNameCache.clear();
@@ -661,7 +671,7 @@ export class ThreadStream {
         break;
 
       case "run_checkpointed":
-        this.currentRunId = null;
+        this.clearRunCaches();
         this.onRunStateChange?.("waiting_approval", event.runId);
         break;
 
@@ -671,38 +681,31 @@ export class ThreadStream {
         break;
 
       case "run_completed":
-        this.currentRunId = null;
+        this.clearRunCaches();
         this.onRunStateChange?.("completed", event.runId);
         break;
 
       case "run_limit_reached":
-        this.currentRunId = null;
+        this.clearRunCaches();
         this.onRunStateChange?.("limit_reached", event.runId);
         this.onError?.(event.error, event.runId);
         break;
 
       case "run_failed":
-        this.currentRunId = null;
+        this.clearRunCaches();
         this.onRunStateChange?.("failed", event.runId);
         this.onError?.(event.error, event.runId);
         break;
 
       case "run_cancelled":
-        this.currentRunId = null;
+        this.clearRunCaches();
         this.onRunStateChange?.("cancelled", event.runId);
         break;
 
       case "run_interrupted":
-        this.currentRunId = null;
+        this.clearRunCaches();
         this.onRunStateChange?.("interrupted", event.runId);
         break;
     }
   }
-}
-
-function isRuntimeOrchestrationToolName(toolName: string) {
-  return (
-    toolName === "agent_explore"
-    || toolName === "agent_review"
-  );
 }

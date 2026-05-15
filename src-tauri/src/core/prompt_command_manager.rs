@@ -403,7 +403,7 @@ Example: `feat(auth): ✨ Add OAuth2 authentication flow`
 ## Test Plan
 <Brief testing checklist>
 
-🤖 Generated with [TiyCode](https://github.com/TiyAgents/tiycode)
+🤖 Generated with [TiyCode](https://github.com/tiylabs/tiycode)
 ```
 
 ### Full Style
@@ -435,7 +435,7 @@ Example: `feat(auth): ✨ Add OAuth2 authentication flow`
 - [ ] Documentation has been updated
 - [ ] No new warnings or errors introduced
 
-🤖 Generated with [TiyCode](https://github.com/TiyAgents/tiycode)
+🤖 Generated with [TiyCode](https://github.com/tiylabs/tiycode)
 ```
 
 ## PR Types & Emojis
@@ -576,7 +576,7 @@ Title: feat(api): ✨ Add user profile endpoint
 - [ ] Test with invalid user ID
 - [ ] Verify cache behavior
 
-🤖 Generated with [TiyCode](https://github.com/TiyAgents/tiycode)
+🤖 Generated with [TiyCode](https://github.com/tiylabs/tiycode)
 ```
 
 ### Full Style Bug Fix PR
@@ -620,7 +620,7 @@ Refs #198
 - [x] Documentation has been updated
 - [x] No new warnings or errors introduced
 
-🤖 Generated with [TiyCode](https://github.com/TiyAgents/tiycode)
+🤖 Generated with [TiyCode](https://github.com/tiylabs/tiycode)
 ```
 
 ## Important Notes

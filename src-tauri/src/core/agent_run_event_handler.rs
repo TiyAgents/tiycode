@@ -1,3 +1,4 @@
+use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::broadcast;
 
@@ -10,10 +11,55 @@ use crate::ipc::app_events::{
 };
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
-use crate::model::thread::{MessageRecord, ThreadStatus};
+use crate::model::thread::{MessageRecord, RunStatus, ThreadStatus};
 use crate::persistence::repo::{message_repo, run_repo, thread_repo};
 
 use super::agent_run_manager::AgentRunManager;
+
+pub(crate) async fn persist_final_run_state(
+    pool: &SqlitePool,
+    run_id: &str,
+    thread_id: &str,
+    status: RunStatus,
+    error_message: Option<&str>,
+) -> Result<(), AppError> {
+    run_repo::update_status(pool, run_id, status).await?;
+    if let Some(msg) = error_message {
+        run_repo::set_error_message(pool, run_id, msg).await?;
+    }
+
+    let thread_status = status.to_thread_status();
+    thread_repo::update_status(pool, thread_id, &thread_status).await?;
+
+    Ok(())
+}
+
+/// Core run finalization: update DB statuses + emit THREAD_RUN_FINISHED.
+///
+/// Called by both `finish_run` (normal runs) and compact flow.
+/// The caller remains responsible for run-specific cleanup (message finalization,
+/// task board reconciliation, title generation, active_run removal).
+pub(crate) async fn finalize_run(
+    pool: &SqlitePool,
+    app_handle: &AppHandle,
+    run_id: &str,
+    thread_id: &str,
+    status: RunStatus,
+    error_message: Option<&str>,
+) -> Result<(), AppError> {
+    persist_final_run_state(pool, run_id, thread_id, status, error_message).await?;
+
+    let _ = app_handle.emit(
+        app_events::THREAD_RUN_FINISHED,
+        ThreadRunFinishedPayload {
+            thread_id: thread_id.to_string(),
+            run_id: run_id.to_string(),
+            status: status.as_str().to_string(),
+        },
+    );
+
+    Ok(())
+}
 
 pub(crate) fn build_orphaned_run_terminal_event(
     run_id: &str,
@@ -33,16 +79,16 @@ pub(crate) fn build_orphaned_run_terminal_event(
 pub(crate) fn terminal_event_status(
     event: &ThreadStreamEvent,
     cancellation_requested: bool,
-) -> Option<&'static str> {
+) -> Option<RunStatus> {
     match event {
-        ThreadStreamEvent::RunCompleted { .. } => Some("completed"),
-        ThreadStreamEvent::RunLimitReached { .. } => Some("limit_reached"),
-        ThreadStreamEvent::RunFailed { .. } => Some("failed"),
-        ThreadStreamEvent::RunCancelled { .. } => Some("cancelled"),
+        ThreadStreamEvent::RunCompleted { .. } => Some(RunStatus::Completed),
+        ThreadStreamEvent::RunLimitReached { .. } => Some(RunStatus::LimitReached),
+        ThreadStreamEvent::RunFailed { .. } => Some(RunStatus::Failed),
+        ThreadStreamEvent::RunCancelled { .. } => Some(RunStatus::Cancelled),
         ThreadStreamEvent::RunInterrupted { .. } => Some(if cancellation_requested {
-            "cancelled"
+            RunStatus::Cancelled
         } else {
-            "interrupted"
+            RunStatus::Interrupted
         }),
         _ => None,
     }
@@ -64,34 +110,32 @@ pub(crate) fn is_terminal_runtime_event(event: &ThreadStreamEvent) -> bool {
 /// be broadcast globally. Returns `None` for events that do not change the
 /// thread's user-visible run status (e.g. message deltas, usage updates).
 ///
-/// The returned string matches the `ThreadStatus` values used by the frontend
-/// sidebar indicator: `running`, `waiting_approval`, `needs_reply`, `completed`,
-/// `limit_reached`, `failed`, `cancelled`, `interrupted`.
+/// The returned `RunStatus` is converted to a string for the frontend payload.
 pub(crate) fn sidebar_status_for_runtime_event(
     event: &ThreadStreamEvent,
     cancellation_requested: bool,
-) -> Option<&'static str> {
+) -> Option<RunStatus> {
     match event {
         ThreadStreamEvent::RunStarted { .. }
         | ThreadStreamEvent::RunRetrying { .. }
         | ThreadStreamEvent::ApprovalResolved { .. }
-        | ThreadStreamEvent::ClarifyResolved { .. } => Some("running"),
+        | ThreadStreamEvent::ClarifyResolved { .. } => Some(RunStatus::Running),
 
         ThreadStreamEvent::ApprovalRequired { .. } | ThreadStreamEvent::RunCheckpointed { .. } => {
-            Some("waiting_approval")
+            Some(RunStatus::WaitingApproval)
         }
 
-        ThreadStreamEvent::ClarifyRequired { .. } => Some("needs_reply"),
+        ThreadStreamEvent::ClarifyRequired { .. } => Some(RunStatus::NeedsReply),
 
-        ThreadStreamEvent::RunCompleted { .. } => Some("completed"),
-        ThreadStreamEvent::RunLimitReached { .. } => Some("limit_reached"),
-        ThreadStreamEvent::RunFailed { .. } => Some("failed"),
-        ThreadStreamEvent::RunCancelled { .. } => Some("cancelled"),
+        ThreadStreamEvent::RunCompleted { .. } => Some(RunStatus::Completed),
+        ThreadStreamEvent::RunLimitReached { .. } => Some(RunStatus::LimitReached),
+        ThreadStreamEvent::RunFailed { .. } => Some(RunStatus::Failed),
+        ThreadStreamEvent::RunCancelled { .. } => Some(RunStatus::Cancelled),
         ThreadStreamEvent::RunInterrupted { .. } => {
             if cancellation_requested {
-                Some("cancelled")
+                Some(RunStatus::Cancelled)
             } else {
-                Some("interrupted")
+                Some(RunStatus::Interrupted)
             }
         }
         _ => None,
@@ -160,12 +204,12 @@ impl AgentRunManager {
 
         match &event {
             ThreadStreamEvent::RunStarted { .. } => {
-                run_repo::update_status(&self.pool, run_id, "running").await?;
+                run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
             }
             ThreadStreamEvent::RunRetrying { .. } => {
-                run_repo::update_status(&self.pool, run_id, "running").await?;
+                run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
             }
             ThreadStreamEvent::MessageDelta {
                 message_id, delta, ..
@@ -198,7 +242,10 @@ impl AgentRunManager {
 
                 let mut runs = self.active_runs.lock().await;
                 if let Some(run) = runs.get_mut(run_id) {
-                    run.streaming_message_id = None;
+                    // Move the ID to last_completed so that tools executing
+                    // after this event (e.g. render) can still find the target
+                    // message for artifact attachment.
+                    run.last_completed_message_id = run.streaming_message_id.take();
                 }
             }
             ThreadStreamEvent::MessageDiscarded { message_id, .. } => {
@@ -236,30 +283,30 @@ impl AgentRunManager {
                 }
             }
             ThreadStreamEvent::ToolRequested { .. } => {
-                run_repo::update_status(&self.pool, run_id, "waiting_tool_result").await?;
+                run_repo::update_status(&self.pool, run_id, RunStatus::WaitingToolResult).await?;
             }
             ThreadStreamEvent::SubagentStarted { .. } => {
-                run_repo::update_status(&self.pool, run_id, "waiting_tool_result").await?;
+                run_repo::update_status(&self.pool, run_id, RunStatus::WaitingToolResult).await?;
             }
             ThreadStreamEvent::ApprovalRequired { .. } => {
-                run_repo::update_status(&self.pool, run_id, "waiting_approval").await?;
+                run_repo::update_status(&self.pool, run_id, RunStatus::WaitingApproval).await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::WaitingApproval)
                     .await?;
             }
             ThreadStreamEvent::ClarifyRequired { .. } => {
-                run_repo::update_status(&self.pool, run_id, "needs_reply").await?;
+                run_repo::update_status(&self.pool, run_id, RunStatus::NeedsReply).await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::NeedsReply)
                     .await?;
             }
             ThreadStreamEvent::ApprovalResolved { .. } => {
-                run_repo::update_status(&self.pool, run_id, "running").await?;
+                run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
             }
             ThreadStreamEvent::ClarifyResolved { .. } => {
-                run_repo::update_status(&self.pool, run_id, "running").await?;
+                run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
             }
@@ -271,7 +318,7 @@ impl AgentRunManager {
                 // status back to "running" — keep it at "cancelling" so the
                 // terminal RunCancelled event sees a consistent state.
                 if !self.was_cancel_requested(run_id).await {
-                    run_repo::update_status(&self.pool, run_id, "running").await?;
+                    run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
                 }
             }
             ThreadStreamEvent::ThreadUsageUpdated { usage, .. } => {
@@ -286,31 +333,26 @@ impl AgentRunManager {
                 run_repo::update_usage(&self.pool, run_id, &usage).await?;
             }
             ThreadStreamEvent::RunCheckpointed { .. } => {
-                run_repo::update_status(&self.pool, run_id, "waiting_approval").await?;
+                run_repo::update_status(&self.pool, run_id, RunStatus::WaitingApproval).await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::WaitingApproval)
                     .await?;
             }
-            ThreadStreamEvent::RunCompleted { .. } => {
-                self.finish_run(run_id, "completed", None).await?;
-            }
-            ThreadStreamEvent::RunLimitReached { error, .. } => {
-                self.finish_run(run_id, "limit_reached", Some(error))
-                    .await?;
-            }
-            ThreadStreamEvent::RunFailed { error, .. } => {
-                self.finish_run(run_id, "failed", Some(error)).await?;
-            }
-            ThreadStreamEvent::RunCancelled { .. } => {
-                self.finish_run(run_id, "cancelled", None).await?;
-            }
-            ThreadStreamEvent::RunInterrupted { .. } => {
-                let final_status = if self.was_cancel_requested(run_id).await {
-                    "cancelled"
-                } else {
-                    "interrupted"
-                };
-                self.finish_run(run_id, final_status, None).await?;
+            ThreadStreamEvent::RunCompleted { .. }
+            | ThreadStreamEvent::RunLimitReached { .. }
+            | ThreadStreamEvent::RunFailed { .. }
+            | ThreadStreamEvent::RunCancelled { .. }
+            | ThreadStreamEvent::RunInterrupted { .. } => {
+                let final_status =
+                    terminal_event_status(&event, self.was_cancel_requested(run_id).await);
+                if let Some(final_status) = final_status {
+                    let error_message = match &event {
+                        ThreadStreamEvent::RunLimitReached { error, .. }
+                        | ThreadStreamEvent::RunFailed { error, .. } => Some(error.as_str()),
+                        _ => None,
+                    };
+                    self.finish_run(run_id, final_status, error_message).await?;
+                }
             }
             _ => {}
         }
@@ -330,23 +372,6 @@ impl AgentRunManager {
                     },
                 );
             }
-            ThreadStreamEvent::RunCompleted { .. }
-            | ThreadStreamEvent::RunLimitReached { .. }
-            | ThreadStreamEvent::RunFailed { .. }
-            | ThreadStreamEvent::RunCancelled { .. }
-            | ThreadStreamEvent::RunInterrupted { .. } => {
-                let thread_id = self.get_thread_id(run_id).await;
-                let status = terminal_event_status(&event, self.was_cancel_requested(run_id).await)
-                    .expect("terminal run event should resolve to a status");
-                let _ = self.app_handle.emit(
-                    app_events::THREAD_RUN_FINISHED,
-                    ThreadRunFinishedPayload {
-                        thread_id,
-                        run_id: run_id.to_string(),
-                        status: status.to_string(),
-                    },
-                );
-            }
             _ => {}
         }
 
@@ -362,7 +387,7 @@ impl AgentRunManager {
                 ThreadRunStatusChangedPayload {
                     thread_id,
                     run_id: run_id.to_string(),
-                    status: sidebar_status.to_string(),
+                    status: sidebar_status.as_str().to_string(),
                 },
             );
         }
@@ -428,6 +453,9 @@ impl AgentRunManager {
         .await?;
 
         run.streaming_message_id = Some(message_id.clone());
+        // A new streaming message means any previous completed message is no
+        // longer the "last" — clear it so tools attach to the new message.
+        run.last_completed_message_id = None;
         Ok(message_id)
     }
 
@@ -519,10 +547,10 @@ impl AgentRunManager {
     async fn finish_run(
         &self,
         run_id: &str,
-        status: &str,
+        status: RunStatus,
         error_message: Option<&str>,
     ) -> Result<(), AppError> {
-        let finalized_message_status = if status == "failed" {
+        let finalized_message_status = if status == RunStatus::Failed {
             "failed"
         } else {
             "completed"
@@ -558,7 +586,7 @@ impl AgentRunManager {
         }
         // Reasoning termination: classify by content/signature validity
         if let Some(message_id) = reasoning_message_id {
-            let should_discard = if status != "completed" {
+            let should_discard = if status != RunStatus::Completed {
                 // Non-normal termination: check if reasoning has valid content + signature
                 match message_repo::find_by_id(&self.pool, &message_id).await? {
                     Some(msg) => {
@@ -602,20 +630,17 @@ impl AgentRunManager {
             });
         }
 
-        run_repo::update_status(&self.pool, run_id, status).await?;
-        if let Some(error_message) = error_message {
-            run_repo::set_error_message(&self.pool, run_id, error_message).await?;
-        }
+        finalize_run(
+            &self.pool,
+            &self.app_handle,
+            run_id,
+            &thread_id,
+            status,
+            error_message,
+        )
+        .await?;
 
-        let thread_status = match status {
-            "failed" | "denied" => ThreadStatus::Failed,
-            "limit_reached" => ThreadStatus::NeedsReply,
-            "interrupted" => ThreadStatus::Interrupted,
-            _ => ThreadStatus::Idle,
-        };
-        thread_repo::update_status(&self.pool, &thread_id, &thread_status).await?;
-
-        if status == "completed" {
+        if status == RunStatus::Completed {
             self.spawn_thread_title_generation(
                 run_id.to_string(),
                 thread_id,
@@ -694,4 +719,154 @@ pub(crate) fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> 
             | ThreadStreamEvent::RunCancelled { .. }
             | ThreadStreamEvent::RunInterrupted { .. }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::persist_final_run_state;
+    use crate::model::thread::{RunStatus, ThreadRecord, ThreadStatus};
+    use crate::model::workspace::{WorkspaceKind, WorkspaceRecord, WorkspaceStatus};
+    use crate::persistence::repo::{run_repo, thread_repo, workspace_repo};
+    use chrono::Utc;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::SqlitePool;
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        pool
+    }
+
+    async fn seed_run(pool: &SqlitePool) {
+        let now = Utc::now();
+        workspace_repo::insert(
+            pool,
+            &WorkspaceRecord {
+                id: "workspace-1".to_string(),
+                name: "Workspace".to_string(),
+                path: "/tmp/workspace".to_string(),
+                canonical_path: "/tmp/workspace".to_string(),
+                display_path: "/tmp/workspace".to_string(),
+                is_default: false,
+                is_git: false,
+                auto_work_tree: false,
+                status: WorkspaceStatus::Ready,
+                last_validated_at: None,
+                created_at: now,
+                updated_at: now,
+                kind: WorkspaceKind::Standalone,
+                parent_workspace_id: None,
+                git_common_dir: None,
+                branch: None,
+                worktree_name: None,
+            },
+        )
+        .await
+        .expect("workspace insert");
+
+        thread_repo::insert(
+            pool,
+            &ThreadRecord {
+                id: "thread-1".to_string(),
+                workspace_id: "workspace-1".to_string(),
+                profile_id: None,
+                title: "Thread".to_string(),
+                status: ThreadStatus::Running,
+                summary: None,
+                last_active_at: now.to_rfc3339(),
+                created_at: now.to_rfc3339(),
+                updated_at: now.to_rfc3339(),
+            },
+        )
+        .await
+        .expect("thread insert");
+
+        run_repo::insert(
+            pool,
+            &run_repo::RunInsert {
+                id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                profile_id: None,
+                run_mode: "default".to_string(),
+                provider_id: None,
+                model_id: None,
+                effective_model_plan_json: None,
+                status: RunStatus::Running.as_str().to_string(),
+            },
+        )
+        .await
+        .expect("run insert");
+    }
+
+    #[tokio::test]
+    async fn persist_final_run_state_updates_run_error_and_thread_status() {
+        let pool = setup_test_pool().await;
+        seed_run(&pool).await;
+
+        persist_final_run_state(
+            &pool,
+            "run-1",
+            "thread-1",
+            RunStatus::Failed,
+            Some("runtime failed"),
+        )
+        .await
+        .expect("persist final run state");
+
+        let row = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+            "SELECT status, error_message, finished_at FROM thread_runs WHERE id = ?",
+        )
+        .bind("run-1")
+        .fetch_one(&pool)
+        .await
+        .expect("run row");
+        assert_eq!(row.0, "failed");
+        assert_eq!(row.1.as_deref(), Some("runtime failed"));
+        assert!(row.2.is_some(), "terminal run should receive finished_at");
+
+        let thread = thread_repo::find_by_id(&pool, "thread-1")
+            .await
+            .expect("thread lookup")
+            .expect("thread exists");
+        assert_eq!(thread.status, ThreadStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn persist_final_run_state_maps_limit_reached_to_needs_reply() {
+        let pool = setup_test_pool().await;
+        seed_run(&pool).await;
+
+        persist_final_run_state(&pool, "run-1", "thread-1", RunStatus::LimitReached, None)
+            .await
+            .expect("persist final run state");
+
+        let row = sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT status, error_message FROM thread_runs WHERE id = ?",
+        )
+        .bind("run-1")
+        .fetch_one(&pool)
+        .await
+        .expect("run row");
+        assert_eq!(row.0, "limit_reached");
+        assert_eq!(row.1, None);
+
+        let thread = thread_repo::find_by_id(&pool, "thread-1")
+            .await
+            .expect("thread lookup")
+            .expect("thread exists");
+        assert_eq!(thread.status, ThreadStatus::NeedsReply);
+    }
 }

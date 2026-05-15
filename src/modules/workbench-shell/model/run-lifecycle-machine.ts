@@ -48,6 +48,28 @@ export interface RunMachinePayload {
 }
 
 // ---------------------------------------------------------------------------
+// Shared transitions — DRY helpers for actions reused across multiple states
+// ---------------------------------------------------------------------------
+
+/** Transition for RUN_STARTED: reused in idle, waiting_approval, needs_reply, and all 5 terminal states. */
+const RUN_STARTED_TRANSITION = {
+  target: "running" as const,
+  action: (ctx: RunMachineContext, payload?: unknown): RunMachineContext => {
+    const p = payload as RunMachinePayload | undefined;
+    return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
+  },
+};
+
+/** Transition for RUN_FAILED: reused in running, waiting_approval, and needs_reply. */
+const RUN_FAILED_TRANSITION = {
+  target: "failed" as const,
+  action: (ctx: RunMachineContext, payload?: unknown): RunMachineContext => {
+    const p = payload as RunMachinePayload | undefined;
+    return { ...ctx, errorMessage: p?.message ?? null };
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Machine factory
 // ---------------------------------------------------------------------------
 
@@ -74,18 +96,7 @@ export function createRunLifecycleMachine(
     states: {
       idle: {
         on: {
-          RUN_STARTED: {
-            target: "running",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return {
-                ...ctx,
-                runId: p?.runId ?? null,
-                retryCount: 0,
-                errorMessage: null,
-              };
-            },
-          },
+          RUN_STARTED: RUN_STARTED_TRANSITION,
         },
       },
       running: {
@@ -104,13 +115,7 @@ export function createRunLifecycleMachine(
             },
           },
           RUN_COMPLETED: "completed",
-          RUN_FAILED: {
-            target: "failed",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return { ...ctx, errorMessage: p?.message ?? null };
-            },
-          },
+          RUN_FAILED: RUN_FAILED_TRANSITION,
           RUN_CANCELLED: "cancelled",
           RUN_INTERRUPTED: "interrupted",
           LIMIT_REACHED: "limit_reached",
@@ -118,22 +123,10 @@ export function createRunLifecycleMachine(
       },
       waiting_approval: {
         on: {
-          RUN_STARTED: {
-            target: "running",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
-            },
-          },
+          RUN_STARTED: RUN_STARTED_TRANSITION,
           APPROVAL_RESOLVED: "running",
           RUN_COMPLETED: "completed",
-          RUN_FAILED: {
-            target: "failed",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return { ...ctx, errorMessage: p?.message ?? null };
-            },
-          },
+          RUN_FAILED: RUN_FAILED_TRANSITION,
           RUN_CANCELLED: "cancelled",
           RUN_INTERRUPTED: "interrupted",
           LIMIT_REACHED: "limit_reached",
@@ -141,82 +134,20 @@ export function createRunLifecycleMachine(
       },
       needs_reply: {
         on: {
-          RUN_STARTED: {
-            target: "running",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
-            },
-          },
+          RUN_STARTED: RUN_STARTED_TRANSITION,
           CLARIFY_RESOLVED: "running",
           RUN_COMPLETED: "completed",
-          RUN_FAILED: {
-            target: "failed",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return { ...ctx, errorMessage: p?.message ?? null };
-            },
-          },
+          RUN_FAILED: RUN_FAILED_TRANSITION,
           RUN_CANCELLED: "cancelled",
           RUN_INTERRUPTED: "interrupted",
           LIMIT_REACHED: "limit_reached",
         },
       },
-      completed:   {
-        on: {
-          RUN_STARTED: {
-            target: "running",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
-            },
-          },
-        },
-      },
-      failed:      {
-        on: {
-          RUN_STARTED: {
-            target: "running",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
-            },
-          },
-        },
-      },
-      cancelled:   {
-        on: {
-          RUN_STARTED: {
-            target: "running",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
-            },
-          },
-        },
-      },
-      interrupted: {
-        on: {
-          RUN_STARTED: {
-            target: "running",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
-            },
-          },
-        },
-      },
-      limit_reached: {
-        on: {
-          RUN_STARTED: {
-            target: "running",
-            action: (ctx, payload) => {
-              const p = payload as RunMachinePayload | undefined;
-              return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
-            },
-          },
-        },
-      },
+      completed:     { on: { RUN_STARTED: RUN_STARTED_TRANSITION } },
+      failed:        { on: { RUN_STARTED: RUN_STARTED_TRANSITION } },
+      cancelled:     { on: { RUN_STARTED: RUN_STARTED_TRANSITION } },
+      interrupted:   { on: { RUN_STARTED: RUN_STARTED_TRANSITION } },
+      limit_reached: { on: { RUN_STARTED: RUN_STARTED_TRANSITION } },
     },
   });
 
@@ -235,30 +166,7 @@ export function createRunLifecycleMachine(
 }
 
 // ---------------------------------------------------------------------------
-// Stream event mapping
+// Stream event mapping — re-exported from the unified status-mappings module
 // ---------------------------------------------------------------------------
 
-/**
- * Map a raw ThreadStream event type string to the corresponding
- * run-lifecycle machine event.  Returns `null` when the event is
- * not relevant to run lifecycle state (e.g. message deltas, tool events).
- */
-export function mapStreamEventToMachineEvent(
-  eventType: string,
-): RunMachineEvent | null {
-  const mapping: Record<string, RunMachineEvent> = {
-    run_started: "RUN_STARTED",
-    approval_required: "APPROVAL_REQUIRED",
-    clarify_required: "CLARIFY_REQUIRED",
-    approval_resolved: "APPROVAL_RESOLVED",
-    clarify_resolved: "CLARIFY_RESOLVED",
-    run_checkpointed: "APPROVAL_REQUIRED", // plan checkpoint ≡ approval
-    run_retrying: "RUN_RETRYING",
-    run_completed: "RUN_COMPLETED",
-    run_failed: "RUN_FAILED",
-    run_cancelled: "RUN_CANCELLED",
-    run_interrupted: "RUN_INTERRUPTED",
-    run_limit_reached: "LIMIT_REACHED",
-  };
-  return mapping[eventType] ?? null;
-}
+export { streamEventToMachineEvent as mapStreamEventToMachineEvent } from "./status-mappings";

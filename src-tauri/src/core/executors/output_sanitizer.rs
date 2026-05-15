@@ -96,11 +96,11 @@ mod tests {
 
     #[test]
     fn strips_ansi_and_osc_sequences() {
-        let raw = "\u{1b}[0m\u{1b}[49mhello\u{1b}[39m\n\u{1b}]1;whoami\u{7}whoami\njorben\r\n";
+        let raw = "\u{1b}[0m\u{1b}[49mhello\u{1b}[39m\n\u{1b}]1;whoami\u{7}whoami\ntest-user\r\n";
 
         let sanitized = sanitize_terminal_output(raw);
 
-        assert_eq!(sanitized, "hello\nwhoami\njorben\n");
+        assert_eq!(sanitized, "hello\nwhoami\ntest-user\n");
     }
 
     #[test]

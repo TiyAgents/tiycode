@@ -281,6 +281,8 @@ pub(crate) async fn run_auto_compression(
     // id slightly overshoot (include a few more old DB rows in the next reload
     // than strictly necessary) but NEVER undershoot — so no in-memory recent
     // message can get dropped by the next load.
+    // The buffer accounts for DB rows that expand into multiple in-memory
+    // messages, keeping boundary marker resolution conservative and robust.
     const BOUNDARY_BUFFER: usize = 16;
 
     match summary_result {

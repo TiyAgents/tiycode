@@ -44,7 +44,7 @@ pub fn tiycode_default_headers() -> std::collections::HashMap<String, String> {
     headers.insert("X-Title".to_string(), "TiyCode".to_string());
     headers.insert(
         "HTTP-Referer".to_string(),
-        "https://github.com/TiyAgents/tiycode".to_string(),
+        "https://github.com/tiylabs/tiycode".to_string(),
     );
     headers
 }

@@ -20,7 +20,7 @@ use crate::core::plan_checkpoint::{
 use crate::core::sleep_manager::SleepManager;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
-use crate::model::thread::{MessageAttachmentDto, MessageRecord};
+use crate::model::thread::{MessageAttachmentDto, MessageRecord, RunStatus};
 use crate::persistence::repo::{message_repo, run_repo, thread_repo, workspace_repo};
 
 pub(crate) use crate::core::agent_run_event_handler::build_orphaned_run_terminal_event;
@@ -55,6 +55,11 @@ pub(crate) struct ActiveRun {
     pub(crate) auxiliary_model_role: Option<ResolvedModelRole>,
     pub(crate) primary_model_role: Option<ResolvedModelRole>,
     pub(crate) streaming_message_id: Option<String>,
+    /// The message ID of the most recently completed assistant message.
+    /// Kept so that tools executing *after* `MessageCompleted` (which clears
+    /// `streaming_message_id`) can still locate the correct target message
+    /// for artifact attachment (e.g. render / chart tools).
+    pub(crate) last_completed_message_id: Option<String>,
     pub(crate) reasoning_message_id: Option<String>,
     pub(crate) cancellation_requested: bool,
 }
@@ -186,6 +191,7 @@ impl AgentRunManager {
                     auxiliary_model_role: None,
                     primary_model_role: None,
                     streaming_message_id: None,
+                    last_completed_message_id: None,
                     reasoning_message_id: None,
                     cancellation_requested: false,
                 },
@@ -385,7 +391,7 @@ impl AgentRunManager {
 
         // Terminate the planning run that was parked in waiting_approval so it
         // does not linger as a zombie with no finished_at timestamp.
-        run_repo::update_status(&self.pool, &planning_run_id, "completed").await?;
+        run_repo::update_status(&self.pool, &planning_run_id, RunStatus::Completed).await?;
 
         Ok(result)
     }
@@ -413,7 +419,7 @@ impl AgentRunManager {
             return Ok(false);
         };
 
-        run_repo::update_status(&self.pool, &run_id, "cancelling").await?;
+        run_repo::update_status(&self.pool, &run_id, RunStatus::Cancelling).await?;
         let cancel_delivered = self.runtime.cancel_session(&run_id).await?;
 
         if !cancel_delivered {
