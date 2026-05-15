@@ -29,7 +29,7 @@ export interface FileEditorState {
 // ---------------------------------------------------------------------------
 
 const MAX_TABS = 10;
-const AUTO_SAVE_DELAY_MS = 1500;
+const AUTO_SAVE_DELAY_MS = 10_000;
 
 const SPLIT_RATIO_STORAGE_KEY = "tiy-file-editor-split-ratio";
 

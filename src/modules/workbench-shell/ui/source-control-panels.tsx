@@ -74,7 +74,6 @@ import type {
   GitChangeFile,
   GitSplitDiffRow,
   ProjectOption,
-  ProjectTreeItem,
 } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
 
@@ -94,7 +93,6 @@ type GitPanelProps = {
 
 export type GitDiffSelection = GitFileChangeDto & {
   staged: boolean;
-  icon: ProjectTreeItem["icon"];
   isConflict?: boolean;
 };
 
@@ -154,41 +152,6 @@ function parseSummary(summary: string) {
   const additions = Number(summary.match(/\+(\d+)/)?.[1] ?? 0);
   const deletions = Number(summary.match(/-(\d+)/)?.[1] ?? 0);
   return { additions, deletions };
-}
-
-function inferIconFromPath(path: string): ProjectTreeItem["icon"] {
-  const lowerName = path.toLowerCase();
-  const extension = lowerName.includes(".") ? lowerName.split(".").pop() ?? "" : "";
-
-  if (lowerName === ".gitignore" || lowerName.startsWith(".git")) {
-    return "git";
-  }
-
-  if (extension === "json") {
-    return "json";
-  }
-
-  if (extension === "html") {
-    return "html";
-  }
-
-  if (extension === "css") {
-    return "css";
-  }
-
-  if (lowerName.endsWith("license")) {
-    return "license";
-  }
-
-  if (lowerName.endsWith("readme.md")) {
-    return "readme";
-  }
-
-  if (extension === "ts" || extension === "tsx") {
-    return "ts";
-  }
-
-  return "file";
 }
 
 function buildMockSnapshot(): GitSnapshotDto {
@@ -489,7 +452,6 @@ function toPreviewSelection(change: GitFileChangeDto, staged: boolean, isConflic
   return {
     ...change,
     staged,
-    icon: inferIconFromPath(change.path),
     isConflict,
   };
 }
@@ -585,7 +547,6 @@ function buildMockPreviewSelection(selection: GitDiffSelection, t: TFunc): GitCh
     id: selection.path,
     path: selection.path,
     status: statusCode(selection.status) as GitChangeFile["status"],
-    icon: selection.icon,
     summary: formatChangeSummary(selection, t),
     initialStaged: selection.staged,
   };
@@ -695,7 +656,7 @@ function ChangeGroup({
               {statusCode(file.status)}
             </span>
             <span className="shrink-0">
-              <ProjectTreeIcon icon={inferIconFromPath(file.path)} />
+              <ProjectTreeIcon name={file.path.split("/").pop() ?? file.path} isDir={false} />
             </span>
             <span className={DRAWER_LIST_LABEL_CLASS}>
               {file.path.split("/").pop() ?? file.path}
@@ -781,7 +742,7 @@ function ConflictGroup({
               C
             </span>
             <span className="shrink-0">
-              <ProjectTreeIcon icon={inferIconFromPath(file.path)} />
+              <ProjectTreeIcon name={file.path.split("/").pop() ?? file.path} isDir={false} />
             </span>
             <span className={DRAWER_LIST_LABEL_CLASS}>
               {file.path.split("/").pop() ?? file.path}
@@ -2038,7 +1999,7 @@ export function GitDiffPreviewPanel({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="shrink-0">
-                <ProjectTreeIcon icon={selection.icon} />
+                <ProjectTreeIcon name={selection.path.split("/").pop() ?? selection.path} isDir={false} />
               </span>
               <p className="truncate text-sm font-semibold text-app-foreground">{fileName}</p>
               <span className="shrink-0 rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-subtle">

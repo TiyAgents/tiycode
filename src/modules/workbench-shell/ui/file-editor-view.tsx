@@ -14,6 +14,7 @@ import { python } from "@codemirror/lang-python";
 import { keymap } from "@codemirror/view";
 import type { ViewUpdate } from "@codemirror/view";
 import { X, Eye, Code2, Save, Loader2, AlertCircle } from "lucide-react";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/shared/lib/utils";
 import {
   type FileTab,
@@ -156,8 +157,10 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
 // ---------------------------------------------------------------------------
 
 const MarkdownPreview: FC<{ content: string }> = ({ content }) => (
-  <div className="prose prose-invert prose-sm max-w-none overflow-auto p-3">
-    <pre className="whitespace-pre-wrap text-xs text-muted-foreground">{content}</pre>
+  <div className="h-full overflow-auto bg-app-canvas/70 px-4 py-3 text-app-foreground">
+    <div className="mx-auto max-w-4xl text-sm leading-6">
+      <MessageResponse>{content}</MessageResponse>
+    </div>
   </div>
 );
 

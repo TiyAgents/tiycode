@@ -27,7 +27,7 @@ import {
 } from "@/modules/workbench-shell/model/fixtures";
 import { PANE_AUTO_REFRESH_INTERVAL_MS } from "@/modules/workbench-shell/model/panel-auto-refresh";
 import { useWorkspaceOpenApps } from "@/modules/workbench-shell/model/use-workspace-open-apps";
-import type { ProjectOption, ProjectTreeItem, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
+import type { ProjectOption, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
 import { FileEditorView } from "@/modules/workbench-shell/ui/file-editor-view";
 import { FileContextMenu } from "@/modules/workbench-shell/ui/file-context-menu";
@@ -192,45 +192,6 @@ function buildMockFilterResponse(query: string): FileFilterResponse {
     results,
     count: results.length,
   };
-}
-
-function inferIcon(name: string, isDir: boolean): ProjectTreeItem["icon"] {
-  if (isDir) {
-    return "folder";
-  }
-
-  const lowerName = name.toLowerCase();
-  const extension = lowerName.includes(".") ? lowerName.split(".").pop() ?? "" : "";
-
-  if (lowerName === ".gitignore" || lowerName.startsWith(".git")) {
-    return "git";
-  }
-
-  if (lowerName.endsWith(".json")) {
-    return "json";
-  }
-
-  if (lowerName.endsWith(".html")) {
-    return "html";
-  }
-
-  if (lowerName.endsWith(".css")) {
-    return "css";
-  }
-
-  if (lowerName === "license") {
-    return "license";
-  }
-
-  if (lowerName === "readme.md") {
-    return "readme";
-  }
-
-  if (extension === "ts" || extension === "tsx") {
-    return "ts";
-  }
-
-  return "file";
 }
 
 function flattenVisibleTree(
@@ -1418,7 +1379,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
           <div className={DRAWER_LIST_STACK_CLASS}>
             {isFiltering
               ? filterResults.map((match) => {
-                  const icon = inferIcon(match.name, false);
                   const isRevealing = activeFilterRevealPath === match.path;
 
                   return (
@@ -1436,7 +1396,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                       <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
                         {isRevealing ? <LoaderCircle className="size-3 animate-spin" /> : null}
                       </span>
-                      <ProjectTreeIcon icon={icon} muted={false} />
+                      <ProjectTreeIcon name={match.name} isDir={false} muted={false} />
                       <span className={DRAWER_LIST_LABEL_CLASS}>{match.name}</span>
                       {match.parentPath ? (
                         <span className={cn(DRAWER_LIST_META_CLASS, "max-w-[48%] truncate")}>
@@ -1471,7 +1431,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                   const isUntracked = node.gitState === "untracked";
                   const isConflicted = node.gitState === "conflicted";
                   const badgeLabel = isConflicted ? "C" : isUntracked ? "U" : isModified ? "M" : null;
-                  const icon = inferIcon(node.name, node.isDir);
 
                   return (
                     <div
@@ -1515,7 +1474,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                             isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />
                           ) : null}
                         </span>
-                        <ProjectTreeIcon icon={icon} muted={isIgnored} />
+                        <ProjectTreeIcon name={node.name} isDir={node.isDir} isExpanded={isExpanded} muted={isIgnored} />
                         <span className={cn(DRAWER_LIST_LABEL_CLASS, "min-w-0 flex-1")}>{node.name}</span>
                         {badgeLabel ? (
                           <span className="shrink-0 rounded-full bg-app-warning/12 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-app-warning">
