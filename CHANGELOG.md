@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.14] - 2026-05-15
+### :sparkles: New Features
+- [`b69da0e`](https://github.com/tiylabs/tiycode/commit/b69da0eabe5278c137354492b80d57408bf231f2) - **providers**: ✨ add Synthetic LLM provider support *(PR [#178](https://github.com/tiylabs/tiycode/pull/178) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`5a70362`](https://github.com/tiylabs/tiycode/commit/5a703623ea7b00d0033f8394134d27b0db0e849f) - **thread-status**: 🐛 Prevent runState deadlock when loadSnapshot IPC fails *(PR [#175](https://github.com/tiylabs/tiycode/pull/175) by [@jorben](https://github.com/jorben))*
+- [`c4a7868`](https://github.com/tiylabs/tiycode/commit/c4a78680eec5f1b2f247cd071501c296c3ac923a) - **artifact-card**: 🐛 Keep code toggle and preview buttons at top of content area *(PR [#176](https://github.com/tiylabs/tiycode/pull/176) by [@HayWolf](https://github.com/HayWolf))*
+- [`aa0def2`](https://github.com/tiylabs/tiycode/commit/aa0def2b0bae198d0051ab209bed5a4fee3d1def) - **workbench-shell**: prevent stale snapshot from regressing waiting_approval state *(PR [#177](https://github.com/tiylabs/tiycode/pull/177) by [@HayWolf](https://github.com/HayWolf))*
+
+### :recycle: Refactors
+- [`454e9cd`](https://github.com/tiylabs/tiycode/commit/454e9cdec60adb07f038d780c397c30cf2ecc634) - **thread**: ♻️ Unify run status handling *(PR [#180](https://github.com/tiylabs/tiycode/pull/180) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.3.13] - 2026-05-08
 ### :sparkles: New Features
 - [`9220052`](https://github.com/TiyAgents/tiycode/commit/922005284f3778fae6f06c2d8142a20fb896636f) - **composer**: ✨ 为 Slash Command 引入结构化参数解析与模板变量替换 *(PR [#167](https://github.com/TiyAgents/tiycode/pull/167) by [@HayWolf](https://github.com/HayWolf))*
@@ -733,3 +746,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.11]: https://github.com/TiyAgents/tiycode/compare/0.3.10...0.3.11
 [0.3.12]: https://github.com/TiyAgents/tiycode/compare/0.3.11...0.3.12
 [0.3.13]: https://github.com/TiyAgents/tiycode/compare/0.3.12...0.3.13
+[0.3.14]: https://github.com/tiylabs/tiycode/compare/0.3.13...0.3.14
