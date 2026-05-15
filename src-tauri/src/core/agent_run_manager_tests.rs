@@ -1820,6 +1820,7 @@ pub(super) mod tests {
             ThreadStreamEvent::ToolCompleted {
                 run_id: "r".to_string(),
                 tool_call_id: "tc".to_string(),
+                tool_name: "test_tool".to_string(),
                 result: serde_json::json!({}),
             },
         ];

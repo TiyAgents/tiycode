@@ -113,6 +113,7 @@ fn test_thread_stream_event_tool_completed_serialization() {
     let event = ThreadStreamEvent::ToolCompleted {
         run_id: "run-1".into(),
         tool_call_id: "tc-1".into(),
+        tool_name: "read".into(),
         result: serde_json::json!({"content": "file contents here"}),
     };
 
@@ -128,6 +129,7 @@ fn test_thread_stream_event_tool_completed_preserves_edit_diff_counts() {
     let event = ThreadStreamEvent::ToolCompleted {
         run_id: "run-1".into(),
         tool_call_id: "tc-edit-1".into(),
+        tool_name: "edit".into(),
         result: serde_json::json!({
             "path": "/workspace/src/example.ts",
             "diff": "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1,3 +1,3 @@\n line 1\n-line 2\n+line 2 updated\n line 3\n",
@@ -463,6 +465,7 @@ fn test_all_events_have_type_field() {
         ThreadStreamEvent::ToolCompleted {
             run_id: "r".into(),
             tool_call_id: "t".into(),
+            tool_name: "test".into(),
             result: serde_json::json!({}),
         },
         ThreadStreamEvent::ToolFailed {

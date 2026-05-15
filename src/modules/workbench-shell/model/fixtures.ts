@@ -439,6 +439,11 @@ export const MIN_TERMINAL_HEIGHT = 180;
 export const MIN_WORKBENCH_HEIGHT = 500;
 export const TOPBAR_HEIGHT = 36;
 
+export const DEFAULT_DRAWER_WIDTH = 360;
+export const MIN_DRAWER_WIDTH = 320;
+export const MAX_DRAWER_WIDTH_RATIO = 0.5; // 50% of viewport
+export const DRAWER_WIDTH_STORAGE_KEY = "tiy-drawer-width";
+
 export const THEME_OPTIONS: Array<{
   labelKey: TranslationKey;
   value: ThemePreference;

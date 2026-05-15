@@ -230,6 +230,7 @@ impl AgentSession {
                         let _ = self.event_tx.send(ThreadStreamEvent::ToolCompleted {
                             run_id: self.spec.run_id.clone(),
                             tool_call_id: tool_call_id.to_string(),
+                            tool_name: tool_name.to_string(),
                             result: output.result.clone(),
                         });
                         agent_tool_result_from_output(output)
@@ -372,6 +373,7 @@ impl AgentSession {
                 let _ = self.event_tx.send(ThreadStreamEvent::ToolCompleted {
                     run_id: self.spec.run_id.clone(),
                     tool_call_id: tool_call_id.to_string(),
+                    tool_name: tool_name.to_string(),
                     result: output.result.clone(),
                 });
                 agent_tool_result_from_output(output)
@@ -857,6 +859,7 @@ impl AgentSession {
         let _ = self.event_tx.send(ThreadStreamEvent::ToolCompleted {
             run_id: self.spec.run_id.clone(),
             tool_call_id: tool_call_id.to_string(),
+            tool_name: "render".to_string(),
             result: result_json.clone(),
         });
 
@@ -1038,6 +1041,7 @@ impl AgentSession {
                 let _ = self.event_tx.send(ThreadStreamEvent::ToolCompleted {
                     run_id: self.spec.run_id.clone(),
                     tool_call_id: tool_call_id.to_string(),
+                    tool_name: tool_name.to_string(),
                     result: result_json.clone(),
                 });
 

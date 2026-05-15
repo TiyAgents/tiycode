@@ -141,6 +141,7 @@ pub enum ThreadStreamEvent {
     ToolCompleted {
         run_id: String,
         tool_call_id: String,
+        tool_name: String,
         result: serde_json::Value,
     },
     ToolFailed {

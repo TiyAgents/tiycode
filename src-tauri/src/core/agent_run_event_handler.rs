@@ -7,7 +7,8 @@ use crate::core::agent_session::ResolvedModelRole;
 use crate::core::built_in_agent_runtime::RuntimeSessionFinishState;
 use crate::core::task_board_manager;
 use crate::ipc::app_events::{
-    self, ThreadRunFinishedPayload, ThreadRunStartedPayload, ThreadRunStatusChangedPayload,
+    self, AgentFileChangedPayload, ThreadRunFinishedPayload, ThreadRunStartedPayload,
+    ThreadRunStatusChangedPayload,
 };
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
@@ -373,6 +374,28 @@ impl AgentRunManager {
                 );
             }
             _ => {}
+        }
+
+        // Broadcast file-changed event when a file-mutating tool completes,
+        // so the frontend editor can reload open tabs.
+        if let ThreadStreamEvent::ToolCompleted {
+            tool_name, result, ..
+        } = &event
+        {
+            if matches!(tool_name.as_str(), "write" | "edit" | "patch") {
+                if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
+                    let thread_id = self.get_thread_id(run_id).await;
+                    let _ = self.app_handle.emit(
+                        app_events::AGENT_FILE_CHANGED,
+                        AgentFileChangedPayload {
+                            thread_id,
+                            run_id: run_id.to_string(),
+                            tool_name: tool_name.clone(),
+                            path: path.to_string(),
+                        },
+                    );
+                }
+            }
         }
 
         // Broadcast unified status-changed event so the frontend sidebar can

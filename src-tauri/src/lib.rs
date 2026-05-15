@@ -225,6 +225,12 @@ pub fn run() {
     let app = builder
         .invoke_handler(tauri::generate_handler![
             commands::attachment::attachment_read_files,
+            // File operations
+            commands::file::file_read,
+            commands::file::file_write,
+            commands::file::file_create,
+            commands::file::file_delete,
+            commands::file::file_rename,
             // System
             commands::system::get_system_metadata,
             commands::system::is_homebrew_installed,

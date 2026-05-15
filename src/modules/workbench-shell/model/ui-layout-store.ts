@@ -1,7 +1,7 @@
 import { createStore, useStore as useStoreBase, shallowEqual } from "@/shared/lib/create-store";
 import type { DrawerPanel, PanelVisibilityState, WorkbenchOverlay } from "@/modules/workbench-shell/model/types";
 import type { GitDiffSelection } from "@/modules/workbench-shell/ui/source-control-panels";
-import { DEFAULT_TERMINAL_HEIGHT, PANEL_VISIBILITY_STORAGE_KEY } from "@/modules/workbench-shell/model/fixtures";
+import { DEFAULT_TERMINAL_HEIGHT, PANEL_VISIBILITY_STORAGE_KEY, DEFAULT_DRAWER_WIDTH, DRAWER_WIDTH_STORAGE_KEY } from "@/modules/workbench-shell/model/fixtures";
 import { readPanelVisibilityState } from "@/modules/workbench-shell/model/helpers";
 import type { SettingsCategory } from "@/modules/settings-center/model/types";
 import type { NewWorktreeDialogContext } from "@/modules/workbench-shell/ui/new-worktree-dialog";
@@ -15,6 +15,11 @@ export interface TerminalResizeState {
   startHeight: number;
 }
 
+export interface DrawerResizeState {
+  startX: number;
+  startWidth: number;
+}
+
 export interface UILayoutStoreState {
   [key: string]: unknown;
   // Overlay
@@ -26,6 +31,10 @@ export interface UILayoutStoreState {
   panelVisibility: PanelVisibilityState;
   activeDrawerPanel: DrawerPanel;
   selectedDiffSelection: GitDiffSelection | null;
+
+  // Drawer width (resizable)
+  drawerWidth: number;
+  drawerResize: DrawerResizeState | null;
 
   // Terminal layout
   terminalCollapsedByThreadKey: Record<string, boolean>;
@@ -47,6 +56,17 @@ export interface UILayoutStoreState {
 // Initial state
 // ---------------------------------------------------------------------------
 
+function readSavedDrawerWidth(): number {
+  try {
+    const saved = window.localStorage.getItem(DRAWER_WIDTH_STORAGE_KEY);
+    if (saved) {
+      const n = parseInt(saved, 10);
+      if (!isNaN(n) && n >= 320) return n;
+    }
+  } catch { /* noop */ }
+  return DEFAULT_DRAWER_WIDTH;
+}
+
 function getInitialState(): UILayoutStoreState {
   return {
     activeOverlay: null,
@@ -55,6 +75,8 @@ function getInitialState(): UILayoutStoreState {
     panelVisibility: readPanelVisibilityState(),
     activeDrawerPanel: "project",
     selectedDiffSelection: null,
+    drawerWidth: readSavedDrawerWidth(),
+    drawerResize: null,
     terminalCollapsedByThreadKey: {},
     terminalHeight: DEFAULT_TERMINAL_HEIGHT,
     terminalResize: null,
@@ -73,8 +95,9 @@ export const uiLayoutStore = createStore<UILayoutStoreState>(getInitialState());
 
 // Auto-persist panelVisibility to localStorage
 let lastPersistedPanelVisibility: string | null = null;
+let lastPersistedDrawerWidth: number | null = null;
 uiLayoutStore.subscribe(() => {
-  const { panelVisibility } = uiLayoutStore.getState();
+  const { panelVisibility, drawerWidth } = uiLayoutStore.getState();
   const serialized = JSON.stringify(panelVisibility);
   if (serialized !== lastPersistedPanelVisibility) {
     lastPersistedPanelVisibility = serialized;
@@ -83,6 +106,12 @@ uiLayoutStore.subscribe(() => {
     } catch {
       // localStorage may be unavailable (SSR / sandboxed iframe)
     }
+  }
+  if (drawerWidth !== lastPersistedDrawerWidth) {
+    lastPersistedDrawerWidth = drawerWidth;
+    try {
+      window.localStorage.setItem(DRAWER_WIDTH_STORAGE_KEY, String(drawerWidth));
+    } catch { /* noop */ }
   }
 });
 
@@ -163,6 +192,18 @@ export function setActiveDrawerPanel(panel: DrawerPanel): void {
 
 export function setSelectedDiffSelection(selection: GitDiffSelection | null): void {
   uiLayoutStore.setState({ selectedDiffSelection: selection });
+}
+
+// ---------------------------------------------------------------------------
+// Actions — Drawer width
+// ---------------------------------------------------------------------------
+
+export function setDrawerWidth(width: number): void {
+  uiLayoutStore.setState({ drawerWidth: width });
+}
+
+export function setDrawerResize(resize: DrawerResizeState | null): void {
+  uiLayoutStore.setState({ drawerResize: resize });
 }
 
 // ---------------------------------------------------------------------------

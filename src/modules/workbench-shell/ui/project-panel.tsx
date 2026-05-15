@@ -1,8 +1,8 @@
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState, useCallback } from "react";
 import { useT } from "@/i18n";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Check, ChevronDown, ChevronRight, Copy, FolderOpen, LoaderCircle, RefreshCw } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FolderOpen, LoaderCircle, RefreshCw, GripHorizontal } from "lucide-react";
 import {
   type DirectoryChildrenResponse,
   indexFilterFiles,
@@ -29,6 +29,14 @@ import { PANE_AUTO_REFRESH_INTERVAL_MS } from "@/modules/workbench-shell/model/p
 import { useWorkspaceOpenApps } from "@/modules/workbench-shell/model/use-workspace-open-apps";
 import type { ProjectOption, ProjectTreeItem, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
+import { FileEditorView } from "@/modules/workbench-shell/ui/file-editor-view";
+import { FileContextMenu } from "@/modules/workbench-shell/ui/file-context-menu";
+import {
+  openFile,
+  useIsEditorMode,
+  useTreeSplitRatio,
+  setTreeSplitRatio,
+} from "@/modules/workbench-shell/model/file-editor-store";
 
 const PREFERRED_OPEN_APP_STORAGE_KEY = "tiy-preferred-open-app-id";
 const FILE_MANAGER_APP_IDS = ["finder", "explorer"];
@@ -1222,7 +1230,40 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const filterResults = filterState.data?.results ?? [];
   const isFiltering = normalizedFilter.length > 0;
 
+  // Editor split pane state
+  const isEditorMode = useIsEditorMode();
+  const treeSplitRatio = useTreeSplitRatio();
+
+  // Split pane drag handler
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+  const handleSplitDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = splitContainerRef.current;
+    if (!container) return;
+    const startY = e.clientY;
+    const containerRect = container.getBoundingClientRect();
+    const startRatio = treeSplitRatio;
+
+    const onMove = (ev: MouseEvent) => {
+      const delta = ev.clientY - startY;
+      const newRatio = startRatio + delta / containerRect.height;
+      setTreeSplitRatio(Math.max(0.15, Math.min(0.85, newRatio)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [treeSplitRatio]);
+
   return (
+    <div ref={splitContainerRef} className="flex h-full min-h-0 flex-col">
+      {/* Tree pane */}
+      <div
+        className="min-h-0 overflow-hidden"
+        style={isEditorMode ? { height: `${treeSplitRatio * 100}%` } : { flex: 1 }}
+      >
     <div className="flex h-full min-h-0 flex-col px-4 pb-5 pt-2">
       <div className="shrink-0 bg-app-drawer">
         <div className="flex items-center justify-between gap-3 px-1 pr-1 text-[15px] font-medium">
@@ -1431,7 +1472,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                   const isConflicted = node.gitState === "conflicted";
                   const badgeLabel = isConflicted ? "C" : isUntracked ? "U" : isModified ? "M" : null;
                   const icon = inferIcon(node.name, node.isDir);
-                  const isCopied = copiedPath === node.path;
 
                   return (
                     <div
@@ -1453,10 +1493,18 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                         type="button"
                         disabled={treeState.isLoading}
                         className="min-w-0 flex flex-1 items-center gap-2 text-left disabled:cursor-wait"
-                        onClick={() => void handleTreeToggle(node)}
+                        onClick={() => {
+                          if (node.isDir) {
+                            void handleTreeToggle(node);
+                          } else if (workspaceId) {
+                            void openFile(workspaceId, node.path);
+                          }
+                        }}
                         onDoubleClick={() => {
                           if (!node.isDir) {
-                            void handleOpenTreeFile(node.path);
+                            if (workspaceId) {
+                              void openFile(workspaceId, node.path, true);
+                            }
                           }
                         }}
                       >
@@ -1476,21 +1524,16 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                         ) : null}
                       </button>
 
-                      <button
-                        type="button"
-                        aria-label={`${isCopied ? "Copied relative path for" : "Copy relative path for"} ${node.name}`}
-                        title={isCopied ? "Copied" : "Copy relative path"}
-                        className={cn(
-                          "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md opacity-100 transition-colors hover:bg-app-surface-hover sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100",
-                          isCopied ? "text-app-success" : "text-app-subtle hover:text-app-foreground",
-                        )}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void handleCopyRelativePath(node.path);
-                        }}
-                      >
-                        {isCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                      </button>
+                      <FileContextMenu
+                        nodePath={node.path}
+                        isDir={node.isDir}
+                        isRoot={depth === 0 && node.path === ""}
+                        workspaceId={workspaceId ?? ""}
+                        onTreeRefresh={handleRefreshTree}
+                        onCopyPath={handleCopyRelativePath}
+                        onOpenExternal={(p) => void handleOpenTreeFile(p)}
+                        className="ml-auto opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                      />
                     </div>
                   );
                 })}
@@ -1505,6 +1548,23 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
           </div>
         </div>
       </div>
+    </div>
+      </div>
+
+      {/* Split drag handle + editor pane */}
+      {isEditorMode && (
+        <>
+          <div
+            className="flex h-1.5 shrink-0 cursor-row-resize items-center justify-center border-y border-app-border bg-app-drawer/80 hover:bg-primary/20 active:bg-primary/30"
+            onMouseDown={handleSplitDragStart}
+          >
+            <GripHorizontal className="size-3 text-muted-foreground" />
+          </div>
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {workspaceId && <FileEditorView workspaceId={workspaceId} />}
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -11,6 +11,7 @@ pub const THREAD_RUN_FINISHED: &str = "thread-run-finished";
 pub const THREAD_RUN_STATUS_CHANGED: &str = "thread-run-status-changed";
 pub const THREAD_TITLE_UPDATED: &str = "thread-title-updated";
 pub const INDEX_GIT_OVERLAY_READY: &str = "index-git-overlay-ready";
+pub const AGENT_FILE_CHANGED: &str = "agent-file-changed";
 
 /// Payload emitted when a thread run transitions to the `running` state.
 #[derive(Debug, Clone, Serialize)]
@@ -57,4 +58,14 @@ pub struct IndexGitOverlayReadyPayload {
     pub workspace_id: String,
     pub repo_available: bool,
     pub states: std::collections::HashMap<String, crate::model::git::GitFileState>,
+}
+
+/// Payload emitted when an agent tool modifies a file (write/edit/patch).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFileChangedPayload {
+    pub thread_id: String,
+    pub run_id: String,
+    pub tool_name: String,
+    pub path: String,
 }

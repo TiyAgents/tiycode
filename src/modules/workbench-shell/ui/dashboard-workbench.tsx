@@ -50,6 +50,8 @@ import {
   RECENT_PROJECTS,
   THEME_OPTIONS,
   UPDATE_STATUS_DURATION,
+  MIN_DRAWER_WIDTH,
+  MAX_DRAWER_WIDTH_RATIO,
   
 } from "@/modules/workbench-shell/model/fixtures";
 import {
@@ -110,6 +112,8 @@ import {
   setTerminalCollapsed,
   setActiveWorkspaceMenuId,
   setShowOnboarding,
+  setDrawerWidth,
+  setDrawerResize,
 } from "@/modules/workbench-shell/model/ui-layout-store";
 import {
   composerStore,
@@ -255,6 +259,7 @@ export function DashboardWorkbench() {
   const terminalCollapsedByThreadKey = useStore(uiLayoutStore, (s) => s.terminalCollapsedByThreadKey, shallowEqual);
   const terminalHeight = useStore(uiLayoutStore, (s) => s.terminalHeight);
   const activeDrawerPanel = useStore(uiLayoutStore, (s) => s.activeDrawerPanel);
+const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
 
   const composerValue = useStore(composerStore, (s) => s.newThreadValue);
   const composerError = useStore(composerStore, (s) => s.error);
@@ -1091,12 +1096,38 @@ export function DashboardWorkbench() {
 
               <aside
                 className={cn(
-                  "min-h-0 shrink-0 overflow-hidden bg-app-drawer transition-[width,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                  "relative min-h-0 shrink-0 overflow-hidden bg-app-drawer transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
                   isDrawerOpen
-                    ? "w-[360px] border-l border-app-border opacity-100 translate-x-0"
-                    : "w-0 border-l-0 opacity-0 translate-x-2 pointer-events-none",
+                    ? "border-l border-app-border opacity-100 translate-x-0"
+                    : "!w-0 border-l-0 opacity-0 translate-x-2 pointer-events-none",
                 )}
+                style={isDrawerOpen ? { width: drawerWidth } : undefined}
               >
+                {/* Drawer resize drag handle */}
+                {isDrawerOpen && (
+                  <div
+                    className="absolute left-0 top-0 bottom-0 z-20 w-1 cursor-col-resize hover:bg-primary/30 active:bg-primary/50"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      const startX = e.clientX;
+                      const startWidth = drawerWidth;
+                      setDrawerResize({ startX, startWidth });
+                      const onMove = (ev: MouseEvent) => {
+                        const maxW = Math.floor(window.innerWidth * MAX_DRAWER_WIDTH_RATIO);
+                        // Dragging left = increasing width (drawer is on right side)
+                        const newWidth = Math.max(MIN_DRAWER_WIDTH, Math.min(maxW, startWidth + (startX - ev.clientX)));
+                        setDrawerWidth(newWidth);
+                      };
+                      const onUp = () => {
+                        setDrawerResize(null);
+                        window.removeEventListener("mousemove", onMove);
+                        window.removeEventListener("mouseup", onUp);
+                      };
+                      window.addEventListener("mousemove", onMove);
+                      window.addEventListener("mouseup", onUp);
+                    }}
+                  />
+                )}
                 <div className="flex h-full min-h-0 flex-col">
                   <div className="sticky top-0 z-10 bg-app-drawer/95 px-3 py-2 backdrop-blur-xl">
                     <WorkbenchSegmentedControl
