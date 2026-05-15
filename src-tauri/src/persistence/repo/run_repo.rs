@@ -604,6 +604,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn needs_reply_runs_are_non_progressing_for_active_lookup_and_recovery() {
+        let pool = setup_test_pool().await;
+        let r = RunInsert {
+            id: "run-needs-reply".into(),
+            thread_id: "t1".into(),
+            profile_id: None,
+            run_mode: "default".into(),
+            provider_id: None,
+            model_id: None,
+            effective_model_plan_json: None,
+            status: RunStatus::NeedsReply.as_str().into(),
+        };
+        insert(&pool, &r).await.unwrap();
+
+        assert!(find_active_by_thread(&pool, "t1").await.unwrap().is_none());
+        assert!(list_thread_ids_with_active_runs(&pool)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let affected = interrupt_active_runs(&pool).await.unwrap();
+        assert_eq!(affected, 0);
+
+        let found = find_latest_by_thread(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("needs_reply run should still exist");
+        assert_eq!(found.status, RunStatus::NeedsReply.as_str());
+        assert!(found.error_message.is_none());
+    }
+
+    #[tokio::test]
     async fn list_thread_ids_with_active_runs_finds_running() {
         let pool = setup_test_pool().await;
         let r = RunInsert {

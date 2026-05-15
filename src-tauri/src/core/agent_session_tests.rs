@@ -418,6 +418,7 @@ pub(super) mod tests {
         let tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
+        assert!(tool_names.contains(&"shell"));
         assert!(tool_names.contains(&"term_write"));
         assert!(tool_names.contains(&"term_restart"));
         assert!(tool_names.contains(&"term_close"));
