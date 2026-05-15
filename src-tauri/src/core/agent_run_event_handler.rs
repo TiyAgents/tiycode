@@ -16,6 +16,24 @@ use crate::persistence::repo::{message_repo, run_repo, thread_repo};
 
 use super::agent_run_manager::AgentRunManager;
 
+pub(crate) async fn persist_final_run_state(
+    pool: &SqlitePool,
+    run_id: &str,
+    thread_id: &str,
+    status: RunStatus,
+    error_message: Option<&str>,
+) -> Result<(), AppError> {
+    run_repo::update_status(pool, run_id, status).await?;
+    if let Some(msg) = error_message {
+        run_repo::set_error_message(pool, run_id, msg).await?;
+    }
+
+    let thread_status = status.to_thread_status();
+    thread_repo::update_status(pool, thread_id, &thread_status).await?;
+
+    Ok(())
+}
+
 /// Core run finalization: update DB statuses + emit THREAD_RUN_FINISHED.
 ///
 /// Called by both `finish_run` (normal runs) and compact flow.
@@ -29,13 +47,7 @@ pub(crate) async fn finalize_run(
     status: RunStatus,
     error_message: Option<&str>,
 ) -> Result<(), AppError> {
-    run_repo::update_status(pool, run_id, status).await?;
-    if let Some(msg) = error_message {
-        run_repo::set_error_message(pool, run_id, msg).await?;
-    }
-
-    let thread_status = status.to_thread_status();
-    thread_repo::update_status(pool, thread_id, &thread_status).await?;
+    persist_final_run_state(pool, run_id, thread_id, status, error_message).await?;
 
     let _ = app_handle.emit(
         app_events::THREAD_RUN_FINISHED,
@@ -707,4 +719,154 @@ pub(crate) fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> 
             | ThreadStreamEvent::RunCancelled { .. }
             | ThreadStreamEvent::RunInterrupted { .. }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::persist_final_run_state;
+    use crate::model::thread::{RunStatus, ThreadRecord, ThreadStatus};
+    use crate::model::workspace::{WorkspaceKind, WorkspaceRecord, WorkspaceStatus};
+    use crate::persistence::repo::{run_repo, thread_repo, workspace_repo};
+    use chrono::Utc;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::SqlitePool;
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        pool
+    }
+
+    async fn seed_run(pool: &SqlitePool) {
+        let now = Utc::now();
+        workspace_repo::insert(
+            pool,
+            &WorkspaceRecord {
+                id: "workspace-1".to_string(),
+                name: "Workspace".to_string(),
+                path: "/tmp/workspace".to_string(),
+                canonical_path: "/tmp/workspace".to_string(),
+                display_path: "/tmp/workspace".to_string(),
+                is_default: false,
+                is_git: false,
+                auto_work_tree: false,
+                status: WorkspaceStatus::Ready,
+                last_validated_at: None,
+                created_at: now,
+                updated_at: now,
+                kind: WorkspaceKind::Standalone,
+                parent_workspace_id: None,
+                git_common_dir: None,
+                branch: None,
+                worktree_name: None,
+            },
+        )
+        .await
+        .expect("workspace insert");
+
+        thread_repo::insert(
+            pool,
+            &ThreadRecord {
+                id: "thread-1".to_string(),
+                workspace_id: "workspace-1".to_string(),
+                profile_id: None,
+                title: "Thread".to_string(),
+                status: ThreadStatus::Running,
+                summary: None,
+                last_active_at: now.to_rfc3339(),
+                created_at: now.to_rfc3339(),
+                updated_at: now.to_rfc3339(),
+            },
+        )
+        .await
+        .expect("thread insert");
+
+        run_repo::insert(
+            pool,
+            &run_repo::RunInsert {
+                id: "run-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                profile_id: None,
+                run_mode: "default".to_string(),
+                provider_id: None,
+                model_id: None,
+                effective_model_plan_json: None,
+                status: RunStatus::Running.as_str().to_string(),
+            },
+        )
+        .await
+        .expect("run insert");
+    }
+
+    #[tokio::test]
+    async fn persist_final_run_state_updates_run_error_and_thread_status() {
+        let pool = setup_test_pool().await;
+        seed_run(&pool).await;
+
+        persist_final_run_state(
+            &pool,
+            "run-1",
+            "thread-1",
+            RunStatus::Failed,
+            Some("runtime failed"),
+        )
+        .await
+        .expect("persist final run state");
+
+        let row = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+            "SELECT status, error_message, finished_at FROM thread_runs WHERE id = ?",
+        )
+        .bind("run-1")
+        .fetch_one(&pool)
+        .await
+        .expect("run row");
+        assert_eq!(row.0, "failed");
+        assert_eq!(row.1.as_deref(), Some("runtime failed"));
+        assert!(row.2.is_some(), "terminal run should receive finished_at");
+
+        let thread = thread_repo::find_by_id(&pool, "thread-1")
+            .await
+            .expect("thread lookup")
+            .expect("thread exists");
+        assert_eq!(thread.status, ThreadStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn persist_final_run_state_maps_limit_reached_to_needs_reply() {
+        let pool = setup_test_pool().await;
+        seed_run(&pool).await;
+
+        persist_final_run_state(&pool, "run-1", "thread-1", RunStatus::LimitReached, None)
+            .await
+            .expect("persist final run state");
+
+        let row = sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT status, error_message FROM thread_runs WHERE id = ?",
+        )
+        .bind("run-1")
+        .fetch_one(&pool)
+        .await
+        .expect("run row");
+        assert_eq!(row.0, "limit_reached");
+        assert_eq!(row.1, None);
+
+        let thread = thread_repo::find_by_id(&pool, "thread-1")
+            .await
+            .expect("thread lookup")
+            .expect("thread exists");
+        assert_eq!(thread.status, ThreadStatus::NeedsReply);
+    }
 }

@@ -383,3 +383,106 @@ pub struct AddMessageInput {
     pub message_type: Option<String>,
     pub metadata: Option<serde_json::Value>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{RunStatus, ThreadStatus};
+
+    fn all_run_status_cases() -> Vec<(RunStatus, &'static str, ThreadStatus)> {
+        vec![
+            (RunStatus::Created, "created", ThreadStatus::Running),
+            (RunStatus::Dispatching, "dispatching", ThreadStatus::Running),
+            (RunStatus::Running, "running", ThreadStatus::Running),
+            (
+                RunStatus::WaitingApproval,
+                "waiting_approval",
+                ThreadStatus::WaitingApproval,
+            ),
+            (
+                RunStatus::NeedsReply,
+                "needs_reply",
+                ThreadStatus::NeedsReply,
+            ),
+            (
+                RunStatus::WaitingToolResult,
+                "waiting_tool_result",
+                ThreadStatus::Running,
+            ),
+            (RunStatus::Cancelling, "cancelling", ThreadStatus::Running),
+            (RunStatus::Completed, "completed", ThreadStatus::Idle),
+            (
+                RunStatus::LimitReached,
+                "limit_reached",
+                ThreadStatus::NeedsReply,
+            ),
+            (RunStatus::Failed, "failed", ThreadStatus::Failed),
+            (RunStatus::Denied, "denied", ThreadStatus::Failed),
+            (
+                RunStatus::Interrupted,
+                "interrupted",
+                ThreadStatus::Interrupted,
+            ),
+            (RunStatus::Cancelled, "cancelled", ThreadStatus::Idle),
+        ]
+    }
+
+    #[test]
+    fn run_status_string_conversions_round_trip_for_every_variant() {
+        for (status, expected, _) in all_run_status_cases() {
+            assert_eq!(status.as_str(), expected);
+            assert_eq!(RunStatus::from_str(expected), Some(status));
+            assert_eq!(status.to_string(), expected);
+        }
+
+        assert_eq!(RunStatus::from_str("unknown"), None);
+        assert_eq!(RunStatus::from_str(""), None);
+    }
+
+    #[test]
+    fn run_status_thread_status_mapping_is_explicit_for_every_variant() {
+        for (status, _, expected_thread_status) in all_run_status_cases() {
+            assert_eq!(status.to_thread_status(), expected_thread_status);
+        }
+    }
+
+    #[test]
+    fn run_status_classification_matches_run_lifecycle_semantics() {
+        let terminal = [
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::Denied,
+            RunStatus::Interrupted,
+            RunStatus::Cancelled,
+            RunStatus::LimitReached,
+        ];
+        let active = [
+            RunStatus::Created,
+            RunStatus::Dispatching,
+            RunStatus::Running,
+            RunStatus::WaitingToolResult,
+            RunStatus::Cancelling,
+        ];
+        let needs_user_action = [RunStatus::WaitingApproval, RunStatus::NeedsReply];
+
+        for (status, _, _) in all_run_status_cases() {
+            assert_eq!(status.is_terminal(), terminal.contains(&status));
+            assert_eq!(status.is_active(), active.contains(&status));
+            assert_eq!(
+                status.is_needs_user_action(),
+                needs_user_action.contains(&status)
+            );
+        }
+    }
+
+    #[test]
+    fn run_status_sql_clauses_match_status_sets() {
+        assert_eq!(
+            RunStatus::terminal_sql_in_clause(),
+            "('completed','failed','denied','interrupted','cancelled','limit_reached')"
+        );
+        assert_eq!(
+            RunStatus::non_progressing_sql_in_clause(),
+            "('completed','failed','denied','interrupted','cancelled','limit_reached','waiting_approval','needs_reply')"
+        );
+    }
+}

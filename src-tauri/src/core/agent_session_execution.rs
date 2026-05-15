@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use tiycore::agent::AgentToolResult;
 use tiycore::types::{ContentBlock, TextContent};
 
+use crate::core::agent_run_manager::ActiveRun;
 use crate::core::agent_session::{
     standard_tool_timeout, CLARIFY_TOOL_NAME, PLAN_TOOL_NAME, RENDER_TOOL_NAME,
     STANDARD_TOOL_TIMEOUT_SECS, TASK_TOOL_NAMES,
@@ -61,6 +62,22 @@ fn resolve_helper_tool_task(
         task,
         review_request: None,
     })
+}
+
+fn message_id_from_active_run(run: &ActiveRun) -> Option<String> {
+    if let Some(ref id) = run.streaming_message_id {
+        if !id.is_empty() {
+            let is_reasoning = run.reasoning_message_id.as_ref() == Some(id);
+            if !is_reasoning {
+                return Some(id.clone());
+            }
+        }
+    }
+
+    run.last_completed_message_id
+        .as_ref()
+        .filter(|id| !id.is_empty())
+        .cloned()
 }
 
 impl AgentSession {
@@ -855,32 +872,14 @@ impl AgentSession {
     /// Get the last streaming/completed message ID for the current run.
     /// Skips reasoning messages since they cannot host artifact parts.
     async fn active_runs_message_id(&self) -> Option<String> {
-        // First: check the in-memory streaming_message_id tracked by the run
-        // manager — this is authoritative and avoids the DB race where the
-        // message hasn't been persisted yet by the async event handler.
-        // However, skip it if it points to a reasoning message.
+        // First: check the in-memory message IDs tracked by the run manager —
+        // this is authoritative and avoids the DB race where the message hasn't
+        // been persisted yet by the async event handler.
         {
             let runs = self.active_runs.lock().await;
             if let Some(run) = runs.get(&self.spec.run_id) {
-                if let Some(ref id) = run.streaming_message_id {
-                    if !id.is_empty() {
-                        // If the streaming message is a reasoning message, skip it
-                        let is_reasoning = run
-                            .reasoning_message_id
-                            .as_ref()
-                            .map_or(false, |rid| rid == id);
-                        if !is_reasoning {
-                            return Some(id.clone());
-                        }
-                    }
-                }
-                // Fallback: the most recently completed assistant message.
-                // Render/chart tools fire *after* MessageCompleted clears
-                // streaming_message_id, so this preserves the correct target.
-                if let Some(ref id) = run.last_completed_message_id {
-                    if !id.is_empty() {
-                        return Some(id.clone());
-                    }
+                if let Some(message_id) = message_id_from_active_run(run) {
+                    return Some(message_id);
                 }
             }
         }
@@ -1075,8 +1074,72 @@ impl AgentSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_helper_tool_task, RuntimeOrchestrationTool};
+    use super::{message_id_from_active_run, resolve_helper_tool_task, RuntimeOrchestrationTool};
+    use crate::core::agent_run_manager::ActiveRun;
     use crate::core::subagent::review_contract::{GlobalScanMode, ReviewScope, ReviewTarget};
+    use tokio::sync::broadcast;
+
+    fn active_run(
+        streaming_message_id: Option<&str>,
+        last_completed_message_id: Option<&str>,
+        reasoning_message_id: Option<&str>,
+    ) -> ActiveRun {
+        let (frontend_tx, _) = broadcast::channel(1);
+        ActiveRun {
+            run_id: "run-1".to_string(),
+            thread_id: "thread-1".to_string(),
+            profile_id: None,
+            frontend_tx,
+            lightweight_model_role: None,
+            auxiliary_model_role: None,
+            primary_model_role: None,
+            streaming_message_id: streaming_message_id.map(str::to_string),
+            last_completed_message_id: last_completed_message_id.map(str::to_string),
+            reasoning_message_id: reasoning_message_id.map(str::to_string),
+            cancellation_requested: false,
+        }
+    }
+
+    #[test]
+    fn message_id_from_active_run_prefers_non_reasoning_streaming_message() {
+        let run = active_run(Some("streaming-msg"), Some("completed-msg"), None);
+
+        assert_eq!(
+            message_id_from_active_run(&run),
+            Some("streaming-msg".to_string())
+        );
+    }
+
+    #[test]
+    fn message_id_from_active_run_skips_reasoning_streaming_message_and_uses_completed() {
+        let run = active_run(
+            Some("reasoning-msg"),
+            Some("completed-msg"),
+            Some("reasoning-msg"),
+        );
+
+        assert_eq!(
+            message_id_from_active_run(&run),
+            Some("completed-msg".to_string())
+        );
+    }
+
+    #[test]
+    fn message_id_from_active_run_uses_completed_when_streaming_is_missing() {
+        let run = active_run(None, Some("completed-msg"), None);
+
+        assert_eq!(
+            message_id_from_active_run(&run),
+            Some("completed-msg".to_string())
+        );
+    }
+
+    #[test]
+    fn message_id_from_active_run_ignores_empty_message_ids() {
+        let run = active_run(Some(""), Some(""), None);
+
+        assert_eq!(message_id_from_active_run(&run), None);
+    }
 
     #[test]
     fn resolve_helper_tool_task_trims_explore_task() {
