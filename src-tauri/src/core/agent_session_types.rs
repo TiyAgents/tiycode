@@ -101,7 +101,7 @@ pub(crate) fn default_openai_compatible_compat(
     }
 
     let mut compat = OpenAICompletionsCompat::default();
-    compat.supports_developer_role = false;
+    compat.capabilities.supports_developer_role = false;
     Some(compat)
 }
 

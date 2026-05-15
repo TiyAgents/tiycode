@@ -738,7 +738,7 @@ async fn test_build_session_spec_defaults_openai_compatible_to_system_role_compa
         .expect("openai-compatible models should set explicit compat defaults");
 
     assert!(spec.model_plan.primary.model.reasoning);
-    assert!(!compat.supports_developer_role);
+    assert!(!compat.capabilities.supports_developer_role);
 }
 
 #[tokio::test]

@@ -1481,14 +1481,14 @@ Used for prompt assembly coverage.
 
         // When reasoning_content_constrained is Some(true), the compat flag must be set.
         let constrained_compat = constrained.model.compat.as_ref().expect("compat present");
-        assert!(constrained_compat.reasoning_content_constrained);
+        assert!(constrained_compat.thinking.content_constrained);
 
         // When Some(false) or None, the compat flag must remain at its default (false).
         let unconstrained_compat = unconstrained.model.compat.as_ref().expect("compat present");
-        assert!(!unconstrained_compat.reasoning_content_constrained);
+        assert!(!unconstrained_compat.thinking.content_constrained);
 
         let unspecified_compat = unspecified.model.compat.as_ref().expect("compat present");
-        assert!(!unspecified_compat.reasoning_content_constrained);
+        assert!(!unspecified_compat.thinking.content_constrained);
     }
 
     #[tokio::test]
@@ -1559,7 +1559,7 @@ Used for prompt assembly coverage.
             .compat
             .as_ref()
             .expect("compat created for constrained");
-        assert!(constrained_compat.reasoning_content_constrained);
+        assert!(constrained_compat.thinking.content_constrained);
 
         // For Some(false) or None, no compat should be applied at all
         // (unlike openai-compatible providers that always get compat).
