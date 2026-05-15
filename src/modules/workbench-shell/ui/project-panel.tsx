@@ -2,7 +2,7 @@ import { useDeferredValue, useEffect, useRef, useState, useCallback } from "reac
 import { useT } from "@/i18n";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Check, ChevronDown, ChevronRight, FolderOpen, LoaderCircle, RefreshCw, GripHorizontal } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ClipboardCopy, FilePlus, FolderOpen, FolderPlus, LoaderCircle, RefreshCw, GripHorizontal } from "lucide-react";
 import {
   type DirectoryChildrenResponse,
   indexFilterFiles,
@@ -30,7 +30,7 @@ import { useWorkspaceOpenApps } from "@/modules/workbench-shell/model/use-worksp
 import type { ProjectOption, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
 import { FileEditorView } from "@/modules/workbench-shell/ui/file-editor-view";
-import { FileContextMenu } from "@/modules/workbench-shell/ui/file-context-menu";
+import { FileContextMenu, NewFileDialog } from "@/modules/workbench-shell/ui/file-context-menu";
 import {
   openFile,
   useIsEditorMode,
@@ -484,6 +484,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const [isRefreshingTree, setRefreshingTree] = useState(false);
   const [treeReloadVersion, setTreeReloadVersion] = useState(0);
   const [isOpenMenuOpen, setOpenMenuOpen] = useState(false);
+  const [isRootNewDialogOpen, setRootNewDialogOpen] = useState(false);
+  const [rootNewDialogIsDir, setRootNewDialogIsDir] = useState(false);
   const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(() => readCachedPreferredOpenAppId());
   const [activeOpenTargetId, setActiveOpenTargetId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -901,6 +903,52 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     setTreeReloadVersion((current) => current + 1);
   };
 
+  const handleCreateRootEntry = (isDir: boolean) => {
+    setRootNewDialogIsDir(isDir);
+    setRootNewDialogOpen(true);
+    setOpenMenuOpen(false);
+  };
+
+  const handleCopyRootPath = async () => {
+    if (!projectPath) {
+      return;
+    }
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(projectPath);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = projectPath;
+        textArea.setAttribute("readonly", "true");
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
+        textArea.style.pointerEvents = "none";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const didCopy = document.execCommand("copy");
+        document.body.removeChild(textArea);
+
+        if (!didCopy) {
+          throw new Error("copy command failed");
+        }
+      }
+
+      setOpenMenuOpen(false);
+      setOpenError(null);
+    } catch {
+      setOpenError("Failed to copy root path");
+    }
+  };
+
+  const handleSelectOpenApp = (app: WorkspaceOpenApp) => {
+    setPreferredOpenAppId(app.id);
+    writeCachedPreferredOpenAppId(app.id);
+    setOpenMenuOpen(false);
+    setOpenError(null);
+  };
+
   const handleOpenInApp = async (app: WorkspaceOpenApp) => {
     if (!projectPath) {
       return;
@@ -914,8 +962,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
         appId: app.id,
         appPath: app.openWith,
       });
-      setPreferredOpenAppId(app.id);
-      writeCachedPreferredOpenAppId(app.id);
       setOpenMenuOpen(false);
       setOpenError(null);
     } catch (error) {
@@ -933,7 +979,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     }
   };
 
-  const handleOpenTreeFile = async (relativePath: string) => {
+  const handleOpenTreePath = async (relativePath: string, isDirectory: boolean) => {
     if (!projectPath || !preferredOpenApp) {
       return;
     }
@@ -944,13 +990,14 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     try {
       await invoke("open_tree_path_in_app", {
         targetPath,
-        isDirectory: false,
+        isDirectory,
         appId: preferredOpenApp.id,
         appPath: preferredOpenApp.openWith,
       });
       setOpenError(null);
     } catch (error) {
-      const message = getInvokeErrorMessage(error, `Couldn't open file in ${preferredOpenApp.name}`);
+      const targetType = isDirectory ? "folder" : "file";
+      const message = getInvokeErrorMessage(error, `Couldn't open ${targetType} in ${preferredOpenApp.name}`);
       setOpenError(message);
       if (errorTimeoutRef.current) {
         window.clearTimeout(errorTimeoutRef.current);
@@ -1282,6 +1329,34 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
 
               {isOpenMenuOpen ? (
                 <div className="absolute right-0 top-[calc(100%+0.45rem)] z-20 min-w-[220px] overflow-hidden rounded-2xl border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
+                  <div className="space-y-0.5 pb-1.5">
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-app-muted transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                      onClick={() => handleCreateRootEntry(false)}
+                    >
+                      <FilePlus className="size-4 shrink-0 text-app-subtle" />
+                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium">New File</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-app-muted transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+                      onClick={() => handleCreateRootEntry(true)}
+                    >
+                      <FolderPlus className="size-4 shrink-0 text-app-subtle" />
+                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium">New Folder</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-app-muted transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={!projectPath}
+                      onClick={() => void handleCopyRootPath()}
+                    >
+                      <ClipboardCopy className="size-4 shrink-0 text-app-subtle" />
+                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium">Copy Path</span>
+                    </button>
+                  </div>
+                  <div className="my-1 h-px bg-app-border/80" />
                   <div className="px-2.5 pb-1.5 pt-1">
                     <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-app-subtle">Open in</div>
                   </div>
@@ -1301,7 +1376,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                               : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
                           )}
                           disabled={Boolean(activeOpenTargetId)}
-                          onClick={() => void handleOpenInApp(app)}
+                          onClick={() => handleSelectOpenApp(app)}
                         >
                           {isPending ? (
                             <LoaderCircle className="size-4 shrink-0 animate-spin text-app-subtle" />
@@ -1452,7 +1527,11 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                         type="button"
                         disabled={treeState.isLoading}
                         className="min-w-0 flex flex-1 items-center gap-2 text-left disabled:cursor-wait"
-                        onClick={() => {
+                        onClick={(event) => {
+                          if (event.detail > 1) {
+                            return;
+                          }
+
                           if (node.isDir) {
                             void handleTreeToggle(node);
                           } else if (workspaceId) {
@@ -1460,11 +1539,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                           }
                         }}
                         onDoubleClick={() => {
-                          if (!node.isDir) {
-                            if (workspaceId) {
-                              void openFile(workspaceId, node.path, true);
-                            }
-                          }
+                          void handleOpenTreePath(node.path, node.isDir);
                         }}
                       >
                         <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
@@ -1491,7 +1566,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                         workspaceRoot={projectPath ?? undefined}
                         onTreeRefresh={handleRefreshTree}
                         onCopyPath={handleCopyRelativePath}
-                        onOpenExternal={(p) => void handleOpenTreeFile(p)}
+                        onOpenExternal={(p) => void handleOpenTreePath(p, node.isDir)}
                         className="ml-auto opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
                       />
                     </div>
@@ -1525,6 +1600,16 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
           </div>
         </>
       )}
+      {workspaceId ? (
+        <NewFileDialog
+          open={isRootNewDialogOpen}
+          onOpenChange={setRootNewDialogOpen}
+          parentPath=""
+          workspaceId={workspaceId}
+          defaultIsDir={rootNewDialogIsDir}
+          onSuccess={handleRefreshTree}
+        />
+      ) : null}
     </div>
   );
 }

@@ -64,7 +64,7 @@ interface NewFileDialogProps {
   onSuccess: () => void;
 }
 
-const NewFileDialog: FC<NewFileDialogProps> = ({
+export const NewFileDialog: FC<NewFileDialogProps> = ({
   open,
   onOpenChange,
   parentPath,
