@@ -1203,6 +1203,7 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
       </div>
 
       <DashboardOverlays
+        resolvedWorkspaceId={resolvedWorkspaceId}
         overlayContentRef={overlayContentRef}
         configDiagnostics={configDiagnostics}
         extensionDetailById={extensionDetailById}

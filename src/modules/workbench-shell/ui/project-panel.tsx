@@ -29,13 +29,14 @@ import { PANE_AUTO_REFRESH_INTERVAL_MS } from "@/modules/workbench-shell/model/p
 import { useWorkspaceOpenApps } from "@/modules/workbench-shell/model/use-workspace-open-apps";
 import type { ProjectOption, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
-import { FileEditorView } from "@/modules/workbench-shell/ui/file-editor-view";
 import { FileContextMenu, NewFileDialog } from "@/modules/workbench-shell/ui/file-context-menu";
-import { WorkbenchPreviewOverlay } from "@/modules/workbench-shell/ui/workbench-preview-overlay";
 import {
   openFile,
-  useIsEditorMode,
 } from "@/modules/workbench-shell/model/file-editor-store";
+import {
+  setFileEditorOverlayClickThrough,
+  setFileEditorOverlayOpen,
+} from "@/modules/workbench-shell/model/ui-layout-store";
 
 const PREFERRED_OPEN_APP_STORAGE_KEY = "tiy-preferred-open-app-id";
 const FILE_MANAGER_APP_IDS = ["finder", "explorer"];
@@ -485,8 +486,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const [isOpenMenuOpen, setOpenMenuOpen] = useState(false);
   const [isRootNewDialogOpen, setRootNewDialogOpen] = useState(false);
   const [rootNewDialogIsDir, setRootNewDialogIsDir] = useState(false);
-  const [isFileEditorOverlayOpen, setFileEditorOverlayOpen] = useState(false);
-  const [isFileEditorOverlayClickThrough, setFileEditorOverlayClickThrough] = useState(false);
   const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(() => readCachedPreferredOpenAppId());
   const [activeOpenTargetId, setActiveOpenTargetId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -556,6 +555,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
       if (openFileTimeoutRef.current) {
         window.clearTimeout(openFileTimeoutRef.current);
       }
+      setFileEditorOverlayClickThrough(false);
     };
   }, []);
 
@@ -1243,7 +1243,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const filterResults = filterState.data?.results ?? [];
   const isFiltering = normalizedFilter.length > 0;
 
-  const isEditorMode = useIsEditorMode();
   const handleOpenFileInEditor = useCallback((path: string) => {
     if (!workspaceId) {
       return;
@@ -1272,11 +1271,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     void handleOpenTreePath(path, isDir);
   }, [handleOpenTreePath]);
 
-  useEffect(() => {
-    if (!isEditorMode) {
-      setFileEditorOverlayOpen(false);
-    }
-  }, [isEditorMode]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1606,16 +1600,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
           onSuccess={handleRefreshTree}
         />
       ) : null}
-      <WorkbenchPreviewOverlay
-        open={isEditorMode && isFileEditorOverlayOpen && Boolean(workspaceId)}
-        title="File Preview / Editor"
-        onClose={() => setFileEditorOverlayOpen(false)}
-        overlayClassName={isFileEditorOverlayClickThrough ? "pointer-events-none" : undefined}
-      >
-        <div className="h-full min-h-0 overflow-hidden">
-          {workspaceId ? <FileEditorView workspaceId={workspaceId} /> : null}
-        </div>
-      </WorkbenchPreviewOverlay>
     </div>
   );
 }

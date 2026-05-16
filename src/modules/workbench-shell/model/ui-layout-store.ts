@@ -26,6 +26,8 @@ export interface UILayoutStoreState {
   activeOverlay: WorkbenchOverlay;
   activeSettingsCategory: SettingsCategory;
   openSettingsSection: "theme" | "language" | null;
+  isFileEditorOverlayOpen: boolean;
+  isFileEditorOverlayClickThrough: boolean;
 
   // Panel visibility
   panelVisibility: PanelVisibilityState;
@@ -72,6 +74,8 @@ function getInitialState(): UILayoutStoreState {
     activeOverlay: null,
     activeSettingsCategory: "general",
     openSettingsSection: null,
+    isFileEditorOverlayOpen: false,
+    isFileEditorOverlayClickThrough: false,
     panelVisibility: readPanelVisibilityState(),
     activeDrawerPanel: "project",
     selectedDiffSelection: null,
@@ -150,6 +154,14 @@ export function setActiveSettingsCategory(category: SettingsCategory): void {
 
 export function setOpenSettingsSection(section: "theme" | "language" | null): void {
   uiLayoutStore.setState({ openSettingsSection: section });
+}
+
+export function setFileEditorOverlayOpen(open: boolean): void {
+  uiLayoutStore.setState({ isFileEditorOverlayOpen: open });
+}
+
+export function setFileEditorOverlayClickThrough(enabled: boolean): void {
+  uiLayoutStore.setState({ isFileEditorOverlayClickThrough: enabled });
 }
 
 // ---------------------------------------------------------------------------
