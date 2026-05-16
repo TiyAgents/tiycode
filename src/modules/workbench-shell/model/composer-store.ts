@@ -19,6 +19,8 @@ export interface SerializableAttachment {
 export interface ComposerDraftData {
   text: string;
   referencedFiles: ComposerReferencedFile[];
+  /** Serialized attachment data (images, files) for draft restore after thread switch. */
+  attachmentData: SerializableAttachment[];
 }
 
 export interface ComposerStoreState {
@@ -105,13 +107,18 @@ export function setDraft(threadId: string, data: ComposerDraftData): void {
 export function getDraft(threadId: string): ComposerDraftData {
   const raw = composerStore.getState().drafts[threadId];
   if (!raw) {
-    return { text: "", referencedFiles: [] };
+    return { text: "", referencedFiles: [], attachmentData: [] };
   }
   // Backward compat: old drafts were plain strings.
   if (typeof raw === "string") {
-    return { text: raw, referencedFiles: [] };
+    return { text: raw, referencedFiles: [], attachmentData: [] };
   }
-  return raw as ComposerDraftData;
+  const draft = raw as ComposerDraftData;
+  return {
+    text: draft.text,
+    referencedFiles: draft.referencedFiles ?? [],
+    attachmentData: draft.attachmentData ?? [],
+  };
 }
 
 export function removeDraft(threadId: string): void {

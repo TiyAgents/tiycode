@@ -118,7 +118,6 @@ import {
 import {
   composerStore,
   setNewThreadValue,
-  setNewThreadRunMode,
   setNewThreadReferencedFiles,
   setNewThreadAttachmentData,
   setComposerError,
@@ -977,15 +976,12 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                             enabledSkills={enabledSkillEntries}
                             error={composerError}
                             onErrorMessageChange={setComposerError}
-                            onRunModeChange={setNewThreadRunMode}
                             onOpenProfileSettings={() => handleOpenSettings("general")}
                             onSelectAgentProfile={handleSelectAgentProfileForThread}
                             onStop={() => undefined}
                             onSubmit={handleComposerSubmit}
                             placeholder={t("composer.placeholder")}
                             providers={providers}
-                            runMode={newThreadRunMode}
-                            showRunModeToggle
                             status="ready"
                             value={composerValue}
                             workspaceId={selectedProjectWorkspaceId}
