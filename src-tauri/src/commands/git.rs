@@ -546,6 +546,64 @@ pub async fn git_create_branch(
 }
 
 #[tauri::command]
+pub async fn git_restore(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    paths: Vec<String>,
+    approved: Option<bool>,
+) -> Result<GitMutationResponseDto, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+    let git_manager = state.git_manager.clone();
+    let workspace_id_for_run = workspace_id.clone();
+    let workspace_path = workspace.canonical_path.clone();
+    let paths_for_run = paths.clone();
+    let input = serde_json::json!({ "paths": paths });
+
+    authorize_and_run_git_mutation(
+        &state,
+        &workspace,
+        GitMutationAction::Restore,
+        &input,
+        approved.unwrap_or(false),
+        move || async move {
+            git_manager
+                .restore(&workspace_id_for_run, &workspace_path, &paths_for_run)
+                .await
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn git_clean(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    paths: Vec<String>,
+    approved: Option<bool>,
+) -> Result<GitMutationResponseDto, AppError> {
+    let workspace = load_workspace(&state, &workspace_id).await?;
+    let git_manager = state.git_manager.clone();
+    let workspace_id_for_run = workspace_id.clone();
+    let workspace_path = workspace.canonical_path.clone();
+    let paths_for_run = paths.clone();
+    let input = serde_json::json!({ "paths": paths });
+
+    authorize_and_run_git_mutation(
+        &state,
+        &workspace,
+        GitMutationAction::Clean,
+        &input,
+        approved.unwrap_or(false),
+        move || async move {
+            git_manager
+                .clean(&workspace_id_for_run, &workspace_path, &paths_for_run)
+                .await
+        },
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn git_generate_branch_name(
     state: State<'_, AppState>,
     workspace_id: String,

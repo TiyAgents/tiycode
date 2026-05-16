@@ -198,6 +198,22 @@ export async function gitCheckoutBranch(
   });
 }
 
+export async function gitRestore(
+  workspaceId: string,
+  paths: string[],
+): Promise<GitMutationResponseDto> {
+  requireTauri("git_restore");
+  return invoke<GitMutationResponseDto>("git_restore", { workspaceId, paths });
+}
+
+export async function gitClean(
+  workspaceId: string,
+  paths: string[],
+): Promise<GitMutationResponseDto> {
+  requireTauri("git_clean");
+  return invoke<GitMutationResponseDto>("git_clean", { workspaceId, paths });
+}
+
 export async function gitCreateBranch(
   workspaceId: string,
   branch: string,

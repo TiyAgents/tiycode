@@ -110,6 +110,22 @@ pub async fn execute(
                 result: serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({})),
             })
         }
+        "git_restore" => {
+            let paths = read_paths(input)?;
+            let result = restore(workspace_path, &paths).await?;
+            Ok(ToolOutput {
+                success: true,
+                result: serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({})),
+            })
+        }
+        "git_clean" => {
+            let paths = read_paths(input)?;
+            let result = clean(workspace_path, &paths).await?;
+            Ok(ToolOutput {
+                success: true,
+                result: serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({})),
+            })
+        }
         _ => Ok(ToolOutput {
             success: false,
             result: serde_json::json!({
@@ -258,6 +274,28 @@ pub async fn create_branch(
         ],
     )
     .await
+}
+
+pub async fn restore(
+    workspace_path: &str,
+    paths: &[String],
+) -> Result<GitCommandResultDto, AppError> {
+    let normalized_paths = normalize_workspace_relative_paths(paths)?;
+    let mut args = vec!["restore".to_string(), "--".to_string()];
+    args.extend(normalized_paths);
+
+    run_git_action(workspace_path, GitMutationAction::Restore, args).await
+}
+
+pub async fn clean(
+    workspace_path: &str,
+    paths: &[String],
+) -> Result<GitCommandResultDto, AppError> {
+    let normalized_paths = normalize_workspace_relative_paths(paths)?;
+    let mut args = vec!["clean".to_string(), "-f".to_string(), "--".to_string()];
+    args.extend(normalized_paths);
+
+    run_git_action(workspace_path, GitMutationAction::Clean, args).await
 }
 
 pub async fn stage_paths(workspace_path: &str, workspace_paths: &[String]) -> Result<(), AppError> {
@@ -744,6 +782,26 @@ fn map_cli_failure(action: GitMutationAction, stdout: &str, stderr: &str) -> App
         }
     }
 
+    if action == GitMutationAction::Restore {
+        if combined.contains("did not match any") || combined.contains("no such file") {
+            return git_error(
+                "git.restore.not_found",
+                "The specified file could not be restored",
+                false,
+            );
+        }
+    }
+
+    if action == GitMutationAction::Clean {
+        if combined.contains("not a directory") || combined.contains("not removing") {
+            return git_error(
+                "git.clean.failed",
+                "Could not remove the specified untracked files",
+                false,
+            );
+        }
+    }
+
     git_error(
         &format!("git.{}.failed", action.as_str()),
         format!(
@@ -776,6 +834,8 @@ fn success_summary(action: GitMutationAction) -> String {
         GitMutationAction::Push => "Pushed local commits".to_string(),
         GitMutationAction::Checkout => "Switched branch".to_string(),
         GitMutationAction::CreateBranch => "Created and switched to new branch".to_string(),
+        GitMutationAction::Restore => "Restored file changes".to_string(),
+        GitMutationAction::Clean => "Removed untracked files".to_string(),
     }
 }
 

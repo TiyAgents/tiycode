@@ -211,6 +211,15 @@ const zhCN = {
   "sourceControl.untracked": "未跟踪",
   "sourceControl.conflicts": "冲突",
   "sourceControl.failedLoadFileDiff": "加载文件差异失败",
+  "sourceControl.discardChanges": "撤销更改",
+  "sourceControl.deleteFile": "删除文件",
+  "sourceControl.discardTrackedTitle": "撤销已跟踪更改",
+  "sourceControl.discardTrackedDescription": "此操作将把文件还原到最后一次提交的版本，且不可撤销。",
+  "sourceControl.discardUntrackedTitle": "删除未跟踪文件",
+  "sourceControl.discardUntrackedDescription": "此操作将永久删除该文件，且不可撤销。",
+  "sourceControl.discardButton": "撤销更改",
+  "sourceControl.deleteButton": "删除文件",
+  "sourceControl.discardFailed": "撤销更改失败",
 
   // ── Branch Selector ────────────────────────────────────────
   "sourceControl.branch.search": "搜索分支...",

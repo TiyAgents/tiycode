@@ -15,6 +15,7 @@ import {
   Plus,
   RefreshCw,
   Sparkles,
+  Trash2,
   Undo2,
 } from "lucide-react";
 import {
@@ -29,6 +30,8 @@ import {
   gitPush,
   gitGetSnapshot,
   gitRefresh,
+  gitRestore,
+  gitClean,
   gitStage,
   gitSubscribe,
   gitUnstage,
@@ -56,6 +59,13 @@ import {
 } from "@/shared/ui/dialog";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/shared/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/tooltip";
 import { cn } from "@/shared/lib/utils";
 import {
@@ -581,28 +591,41 @@ function EmptyState({
   );
 }
 
+export type DiscardGroupType = "tracked" | "untracked";
+
+export type DiscardTarget = {
+  paths: string[];
+  groupType: DiscardGroupType;
+};
+
 function ChangeGroup({
   title,
   files,
   staged,
+  groupType,
   pendingPaths,
   t,
   onOpenDiffPreview,
   onToggleStage,
   onToggleAll,
+  onDiscardChanges,
 }: {
   title: string;
   files: GitFileChangeDto[];
   staged: boolean;
+  groupType?: DiscardGroupType;
   pendingPaths: ReadonlySet<string>;
   t: TFunc;
   onOpenDiffPreview: (selection: GitDiffSelection) => void;
   onToggleStage: (paths: string[], staged: boolean) => void;
   onToggleAll: (paths: string[], staged: boolean) => void;
+  onDiscardChanges?: (paths: string[], groupType: DiscardGroupType) => void;
 }) {
   if (files.length === 0) {
     return null;
   }
+
+  const canDiscard = groupType != null && onDiscardChanges != null;
 
   return (
     <div className="space-y-1">
@@ -625,67 +648,98 @@ function ChangeGroup({
       </div>
 
       <div className={DRAWER_LIST_STACK_CLASS}>
-        {files.map((file) => (
-          <div
-            key={`${staged ? "staged" : "working"}:${file.path}`}
-            role="button"
-            tabIndex={0}
-            title={file.path}
-            className={cn(
-              "flex items-center gap-2 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
-              DRAWER_LIST_ROW_CLASS,
-            )}
-            onClick={() => onOpenDiffPreview(toPreviewSelection(file, staged))}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onOpenDiffPreview(toPreviewSelection(file, staged));
-              }
-            }}
-          >
-            <span
+        {files.map((file) => {
+          const fileRow = (
+            <div
+              key={`${staged ? "staged" : "working"}:${file.path}`}
+              role="button"
+              tabIndex={0}
+              title={file.path}
               className={cn(
-                "inline-flex min-w-5 shrink-0 items-center justify-center rounded px-1 text-[10px] font-semibold",
-                file.status === "added"
-                  ? "text-app-success"
-                  : file.status === "deleted"
-                    ? "text-app-danger"
-                    : "text-app-subtle",
+                "flex items-center gap-2 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-app-border-strong",
+                DRAWER_LIST_ROW_CLASS,
               )}
-            >
-              {statusCode(file.status)}
-            </span>
-            <span className="shrink-0">
-              <ProjectTreeIcon name={file.path.split("/").pop() ?? file.path} isDir={false} />
-            </span>
-            <span className={DRAWER_LIST_LABEL_CLASS}>
-              {file.path.split("/").pop() ?? file.path}
-            </span>
-            {renderChangeStats(file, t)}
-            <button
-              type="button"
-              aria-label={staged ? `Unstage ${file.path}` : `Stage ${file.path}`}
-              title={staged ? t("sourceControl.unstage") : t("sourceControl.stage")}
-              disabled={pendingPaths.has(file.path)}
-              className={cn(
-                "flex size-6 shrink-0 items-center justify-center rounded-md border border-app-border text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-wait disabled:opacity-60",
-                staged && "bg-app-surface-muted text-app-foreground",
-              )}
-              onClick={(event) => {
-                event.stopPropagation();
-                onToggleStage([file.path], staged);
+              onClick={() => onOpenDiffPreview(toPreviewSelection(file, staged))}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onOpenDiffPreview(toPreviewSelection(file, staged));
+                }
               }}
             >
-              {pendingPaths.has(file.path) ? (
-                <LoaderCircle className="size-3.5 animate-spin" />
-              ) : staged ? (
-                <Undo2 className="size-3.5" />
-              ) : (
-                <Plus className="size-3.5" />
-              )}
-            </button>
-          </div>
-        ))}
+              <span
+                className={cn(
+                  "inline-flex min-w-5 shrink-0 items-center justify-center rounded px-1 text-[10px] font-semibold",
+                  file.status === "added"
+                    ? "text-app-success"
+                    : file.status === "deleted"
+                      ? "text-app-danger"
+                      : "text-app-subtle",
+                )}
+              >
+                {statusCode(file.status)}
+              </span>
+              <span className="shrink-0">
+                <ProjectTreeIcon name={file.path.split("/").pop() ?? file.path} isDir={false} />
+              </span>
+              <span className={DRAWER_LIST_LABEL_CLASS}>
+                {file.path.split("/").pop() ?? file.path}
+              </span>
+              {renderChangeStats(file, t)}
+              <button
+                type="button"
+                aria-label={staged ? `Unstage ${file.path}` : `Stage ${file.path}`}
+                title={staged ? t("sourceControl.unstage") : t("sourceControl.stage")}
+                disabled={pendingPaths.has(file.path)}
+                className={cn(
+                  "flex size-6 shrink-0 items-center justify-center rounded-md border border-app-border text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-wait disabled:opacity-60",
+                  staged && "bg-app-surface-muted text-app-foreground",
+                )}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleStage([file.path], staged);
+                }}
+              >
+                {pendingPaths.has(file.path) ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : staged ? (
+                  <Undo2 className="size-3.5" />
+                ) : (
+                  <Plus className="size-3.5" />
+                )}
+              </button>
+            </div>
+          );
+
+          if (!canDiscard) {
+            return fileRow;
+          }
+
+          return (
+            <ContextMenu key={`${staged ? "staged" : "working"}:${file.path}`}>
+              <ContextMenuTrigger asChild>
+                {fileRow}
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem
+                  onClick={() => onToggleStage([file.path], staged)}
+                >
+                  {staged ? t("sourceControl.unstage") : t("sourceControl.stage")}
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  variant="destructive"
+                  onClick={() => onDiscardChanges!([file.path], groupType!)}
+                >
+                  <Trash2 className="size-4" />
+                  {groupType === "untracked"
+                    ? t("sourceControl.deleteFile")
+                    : t("sourceControl.discardChanges")}
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          );
+        })}
       </div>
     </div>
   );
@@ -787,6 +841,7 @@ export function GitPanel({
   const [error, setError] = useState<string | null>(null);
   const [actionAlert, setActionAlert] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<GitMutationAction | null>(null);
+  const [discardTarget, setDiscardTarget] = useState<DiscardTarget | null>(null);
   const [pendingAction, setPendingAction] = useState<GitMutationAction | null>(null);
   const [isGeneratingCommitMessage, setIsGeneratingCommitMessage] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
@@ -1112,6 +1167,80 @@ export function GitPanel({
 
   const clearConfirmAction = () => {
     setConfirmAction(null);
+  };
+
+  const clearDiscardTarget = () => {
+    setDiscardTarget(null);
+  };
+
+  const handleDiscardChangesRequest = (paths: string[], groupType: DiscardGroupType) => {
+    setDiscardTarget({ paths, groupType });
+  };
+
+  const executeDiscardChanges = async () => {
+    if (!discardTarget || !snapshot) {
+      return;
+    }
+
+    const { paths, groupType } = discardTarget;
+    setDiscardTarget(null);
+    setPendingPaths((current) => new Set([...current, ...paths]));
+
+    if (isMockMode) {
+      setSnapshot((current) => {
+        if (current === null) {
+          return current;
+        }
+
+        if (groupType === "tracked") {
+          return {
+            ...current,
+            unstagedFiles: current.unstagedFiles.filter((file) => !paths.includes(file.path)),
+            lastRefreshedAt: new Date().toISOString(),
+          };
+        }
+
+        return {
+          ...current,
+          untrackedFiles: current.untrackedFiles.filter((file) => !paths.includes(file.path)),
+          lastRefreshedAt: new Date().toISOString(),
+        };
+      });
+      setPendingPaths((current) => {
+        const next = new Set(current);
+        paths.forEach((path) => next.delete(path));
+        return next;
+      });
+      return;
+    }
+
+    if (!workspaceId) {
+      setPendingPaths((current) => {
+        const next = new Set(current);
+        paths.forEach((path) => next.delete(path));
+        return next;
+      });
+      return;
+    }
+
+    const mutate = groupType === "tracked" ? gitRestore : gitClean;
+
+    try {
+      const response = await mutate(workspaceId, paths);
+      if (response.type === "completed" && "snapshot" in response) {
+        setSnapshot(response.snapshot as GitSnapshotDto);
+        setHistory((response.snapshot as GitSnapshotDto).recentCommits);
+      }
+    } catch (nextError) {
+      const message = formatUiError(nextError, t("sourceControl.discardFailed"));
+      showActionAlert(message);
+    } finally {
+      setPendingPaths((current) => {
+        const next = new Set(current);
+        paths.forEach((path) => next.delete(path));
+        return next;
+      });
+    }
   };
 
   const resetCommitMessage = () => {
@@ -1484,6 +1613,50 @@ export function GitPanel({
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={discardTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            clearDiscardTarget();
+          }
+        }}
+      >
+        <DialogContent
+          showCloseButton={false}
+          className="max-w-md rounded-2xl border-app-border bg-app-surface p-5"
+        >
+          <DialogHeader className="gap-2 text-left">
+            <DialogTitle className="text-base font-semibold text-app-foreground">
+              {discardTarget?.groupType === "untracked"
+                ? t("sourceControl.discardUntrackedTitle")
+                : t("sourceControl.discardTrackedTitle")}
+            </DialogTitle>
+            <DialogDescription className="text-[13px] leading-6 text-app-subtle">
+              {discardTarget?.groupType === "untracked"
+                ? t("sourceControl.discardUntrackedDescription")
+                : t("sourceControl.discardTrackedDescription")}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-1">
+            <Button
+              variant="outline"
+              onClick={clearDiscardTarget}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void executeDiscardChanges()}
+              autoFocus
+            >
+              {discardTarget?.groupType === "untracked"
+                ? t("sourceControl.deleteButton")
+                : t("sourceControl.discardButton")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div
         ref={panelRef}
         className="relative flex h-full min-h-0 flex-col px-4 pb-4 pt-3"
@@ -1653,21 +1826,25 @@ export function GitPanel({
                   title={t("sourceControl.tracked")}
                   files={snapshot.unstagedFiles}
                   staged={false}
+                  groupType="tracked"
                   pendingPaths={pendingPaths}
                   t={t}
                   onOpenDiffPreview={onOpenDiffPreview}
                   onToggleStage={handleToggleStage}
                   onToggleAll={handleToggleAll}
+                  onDiscardChanges={handleDiscardChangesRequest}
                 />
                 <ChangeGroup
                   title={t("sourceControl.untracked")}
                   files={snapshot.untrackedFiles}
                   staged={false}
+                  groupType="untracked"
                   pendingPaths={pendingPaths}
                   t={t}
                   onOpenDiffPreview={onOpenDiffPreview}
                   onToggleStage={handleToggleStage}
                   onToggleAll={handleToggleAll}
+                  onDiscardChanges={handleDiscardChangesRequest}
                 />
                 {snapshot.conflictedFiles.length > 0 && (
                   <ConflictGroup

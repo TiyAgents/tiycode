@@ -478,6 +478,28 @@ impl GitManager {
         Ok((result, snapshot))
     }
 
+    pub async fn restore(
+        &self,
+        workspace_id: &str,
+        workspace_path: &str,
+        paths: &[String],
+    ) -> Result<(GitCommandResultDto, GitSnapshotDto), AppError> {
+        let result = git_executor::restore(workspace_path, paths).await?;
+        let snapshot = self.refresh(workspace_id, workspace_path).await?;
+        Ok((result, snapshot))
+    }
+
+    pub async fn clean(
+        &self,
+        workspace_id: &str,
+        workspace_path: &str,
+        paths: &[String],
+    ) -> Result<(GitCommandResultDto, GitSnapshotDto), AppError> {
+        let result = git_executor::clean(workspace_path, paths).await?;
+        let snapshot = self.refresh(workspace_id, workspace_path).await?;
+        Ok((result, snapshot))
+    }
+
     async fn get_or_create_sender(&self, workspace_id: &str) -> broadcast::Sender<GitStreamEvent> {
         let mut streams = self.streams.lock().await;
 

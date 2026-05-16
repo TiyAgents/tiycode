@@ -349,6 +349,8 @@ pub fn run() {
             commands::git::git_list_branches,
             commands::git::git_checkout_branch,
             commands::git::git_create_branch,
+            commands::git::git_restore,
+            commands::git::git_clean,
             commands::git::git_generate_branch_name,
             // Terminal
             commands::terminal::terminal_create_or_attach,

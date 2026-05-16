@@ -211,6 +211,15 @@ const en: Record<TranslationKey, string> = {
   "sourceControl.untracked": "Untracked",
   "sourceControl.conflicts": "Conflicts",
   "sourceControl.failedLoadFileDiff": "Failed to load file diff",
+  "sourceControl.discardChanges": "Discard Changes",
+  "sourceControl.deleteFile": "Delete File",
+  "sourceControl.discardTrackedTitle": "Discard Tracked Changes",
+  "sourceControl.discardTrackedDescription": "This will revert the file to its last committed version. This action cannot be undone.",
+  "sourceControl.discardUntrackedTitle": "Delete Untracked File",
+  "sourceControl.discardUntrackedDescription": "This will permanently delete the file from disk. This action cannot be undone.",
+  "sourceControl.discardButton": "Discard Changes",
+  "sourceControl.deleteButton": "Delete File",
+  "sourceControl.discardFailed": "Failed to discard changes",
 
   // ── Branch Selector ────────────────────────────────────────
   "sourceControl.branch.search": "Search branches...",
