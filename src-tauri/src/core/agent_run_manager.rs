@@ -196,6 +196,10 @@ impl AgentRunManager {
             broadcast::channel::<ThreadStreamEvent>(FRONTEND_EVENT_BUFFER_SIZE);
         let run_id = uuid::Uuid::now_v7().to_string();
 
+        // Clear any stale retry-cancellation signal left over from a
+        // previous run so it doesn't suppress retries for the new one.
+        self.retry_cancellations.lock().await.remove(thread_id);
+
         {
             let mut runs = self.active_runs.lock().await;
             if runs.values().any(|run| run.thread_id == thread_id) {
