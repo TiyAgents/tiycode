@@ -69,7 +69,6 @@ import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { ModelBrandIcon } from "@/shared/ui/model-brand-icon";
-import { Switch } from "@/shared/ui/switch";
 
 type ComposerAttachment = {
   id: string;
@@ -110,15 +109,11 @@ type WorkbenchPromptComposerProps = {
   error?: string | null;
   onErrorMessageChange?: (message: string | null) => void;
   onOpenProfileSettings?: () => void;
-  onRunModeChange?: (mode: RunMode) => void;
   onSelectAgentProfile: (id: string) => void;
   onStop: () => void;
   onSubmit: (submission: ComposerSubmission) => void | Promise<void>;
   placeholder: string;
   providers: ReadonlyArray<ProviderEntry>;
-  runMode?: RunMode;
-  runModeDisabled?: boolean;
-  showRunModeToggle?: boolean;
   status: ChatStatus;
   suggestions?: ReadonlyArray<string>;
   textareaClassName?: string;
@@ -1165,38 +1160,6 @@ function ProfileDetailsPanel({
   );
 }
 
-function RunModeToggle({
-  disabled = false,
-  onChange,
-  runMode,
-}: {
-  disabled?: boolean;
-  onChange: (mode: RunMode) => void;
-  runMode: RunMode;
-}) {
-  const checked = runMode === "plan";
-
-  return (
-    <div className="inline-flex items-center gap-2">
-      <Switch
-        aria-label="Toggle plan mode"
-        checked={checked}
-        disabled={disabled}
-        onCheckedChange={(nextChecked) => onChange(nextChecked ? "plan" : "default")}
-        size="sm"
-      />
-      <span
-        className={cn(
-          "min-w-[6.75rem] text-left text-sm font-medium",
-          checked ? "text-app-info" : "text-app-muted",
-        )}
-      >
-        {checked ? "Plan mode" : "Default mode"}
-      </span>
-    </div>
-  );
-}
-
 export function mapComposerAttachments(files: Array<FileUIPart>) {
   return files.map((file, index) => ({
     id: file.url || `${file.filename || "attachment"}-${index}`,
@@ -1252,15 +1215,11 @@ export function WorkbenchPromptComposer({
   error,
   onErrorMessageChange,
   onOpenProfileSettings,
-  onRunModeChange = () => undefined,
   onSelectAgentProfile,
   onStop,
   onSubmit,
   placeholder,
   providers,
-  runMode = "default",
-  runModeDisabled = false,
-  showRunModeToggle = false,
   status,
   suggestions,
   textareaClassName,
@@ -1512,7 +1471,7 @@ export function WorkbenchPromptComposer({
   // must be called inside a PromptInput descendant.
 
   const handlePromptSubmit = async (message: PromptInputMessage) => {
-    const submission = buildSubmissionFromPromptInput(message, commandRegistry, runMode, referencedFiles);
+    const submission = buildSubmissionFromPromptInput(message, commandRegistry, "default", referencedFiles);
     await onSubmit(submission);
     // Only clear referenced files and sources after a successful submit.
     // If onSubmit throws (e.g. thread has an active run), the composer
@@ -2051,16 +2010,7 @@ export function WorkbenchPromptComposer({
                   </PromptInputButton>
                 )}
 
-                {showRunModeToggle ? (
-                  <>
-                    <span aria-hidden="true" className="h-4 w-px bg-app-border/55" />
-                    <RunModeToggle
-                      disabled={runModeDisabled || hasMissingActiveProfile}
-                      onChange={onRunModeChange}
-                      runMode={runMode}
-                    />
-                  </>
-                ) : null}
+                
               </div>
             </PromptInputTools>
 
