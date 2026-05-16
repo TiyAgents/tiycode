@@ -796,7 +796,7 @@ describe("addCommand / removeCommand / updateCommand", () => {
     expect(mockPromptCommandDelete).toHaveBeenCalledWith("cmd-1");
   });
 
-  it("updateCommand: triggers backend create when pending name becomes non-empty", () => {
+  it("updateCommand: keeps pendingCreate when name becomes non-empty (defers to commitNewCommand)", () => {
     mockIsTauri.mockReturnValue(true);
     const cmd = makeCommandEntry({
       id: "cmd-1",
@@ -804,14 +804,15 @@ describe("addCommand / removeCommand / updateCommand", () => {
       pendingCreate: true,
     });
     settingsStore.setState({ commands: [cmd] });
-    // No clearAllMocks — keep default mock values set by beforeEach
+    vi.clearAllMocks();
 
     updateCommand("cmd-1", { name: "Filled Command" });
 
     const state = settingsStore.getState();
     expect(state.commands).toHaveLength(1);
-    expect(state.commands[0].pendingCreate).toBeUndefined();
-    expect(mockPromptCommandCreate).toHaveBeenCalledTimes(1);
+    expect(state.commands[0].pendingCreate).toBe(true);
+    expect(state.commands[0].name).toBe("Filled Command");
+    expect(mockPromptCommandCreate).not.toHaveBeenCalled();
   });
 
   it("updateCommand: keeps pendingCreate when name is still empty", () => {
@@ -889,5 +890,217 @@ describe("addCommand / removeCommand / updateCommand", () => {
       fileName: null,
     });
     await vi.runAllTimersAsync();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — commitNewCommand (explicit backend commit for pending commands)
+// ---------------------------------------------------------------------------
+
+describe("commitNewCommand", () => {
+  let commitNewCommand: typeof import("./settings-ipc-actions").commitNewCommand;
+
+  beforeAll(async () => {
+    commitNewCommand = (await import("./settings-ipc-actions"))
+      .commitNewCommand;
+  });
+
+  beforeEach(() => {
+    settingsStore.setState({ commands: [] });
+    vi.clearAllMocks();
+    mockPromptCommandCreate.mockResolvedValue({
+      id: "cmd-created",
+      name: "Created",
+      path: "/test",
+      argumentHint: "",
+      description: "",
+      prompt: "echo test",
+      source: "user",
+      enabled: true,
+      version: 1,
+      fileName: null,
+    });
+  });
+
+  it("skips commit when command name is empty", () => {
+    mockIsTauri.mockReturnValue(true);
+    const cmd = makeCommandEntry({
+      id: "cmd-1",
+      name: "",
+      pendingCreate: true,
+    });
+    settingsStore.setState({ commands: [cmd] });
+    vi.clearAllMocks();
+
+    commitNewCommand("cmd-1");
+
+    expect(mockPromptCommandCreate).not.toHaveBeenCalled();
+    expect(settingsStore.getState().commands[0].pendingCreate).toBe(true);
+  });
+
+  it("skips commit when command name is whitespace only", () => {
+    mockIsTauri.mockReturnValue(true);
+    const cmd = makeCommandEntry({
+      id: "cmd-1",
+      name: "   ",
+      pendingCreate: true,
+    });
+    settingsStore.setState({ commands: [cmd] });
+    vi.clearAllMocks();
+
+    commitNewCommand("cmd-1");
+
+    expect(mockPromptCommandCreate).not.toHaveBeenCalled();
+    expect(settingsStore.getState().commands[0].pendingCreate).toBe(true);
+  });
+
+  it("no-ops when command is not found", () => {
+    mockIsTauri.mockReturnValue(true);
+    settingsStore.setState({ commands: [] });
+    vi.clearAllMocks();
+
+    commitNewCommand("nonexistent");
+
+    expect(mockPromptCommandCreate).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when command is not pendingCreate", () => {
+    mockIsTauri.mockReturnValue(true);
+    const cmd = makeCommandEntry({
+      id: "cmd-1",
+      name: "Existing",
+    });
+    settingsStore.setState({ commands: [cmd] });
+    vi.clearAllMocks();
+
+    commitNewCommand("cmd-1");
+
+    expect(mockPromptCommandCreate).not.toHaveBeenCalled();
+  });
+
+  it("non-Tauri: strips pendingCreate without calling backend", () => {
+    mockIsTauri.mockReturnValue(false);
+    const cmd = makeCommandEntry({
+      id: "cmd-1",
+      name: "My Command",
+      pendingCreate: true,
+    });
+    settingsStore.setState({ commands: [cmd] });
+    vi.clearAllMocks();
+
+    commitNewCommand("cmd-1");
+
+    expect(mockPromptCommandCreate).not.toHaveBeenCalled();
+    const state = settingsStore.getState();
+    expect(state.commands).toHaveLength(1);
+    expect(state.commands[0].pendingCreate).toBeUndefined();
+    expect(state.commands[0].id).toBe("cmd-1");
+    expect(state.commands[0].name).toBe("My Command");
+  });
+
+  it("Tauri: calls backend and replaces store entry on success", async () => {
+    mockIsTauri.mockReturnValue(true);
+    const cmd = makeCommandEntry({
+      id: "cmd-1",
+      name: "My Command",
+      pendingCreate: true,
+    });
+    settingsStore.setState({ commands: [cmd] });
+    // Keep default resolved mock from beforeEach
+
+    commitNewCommand("cmd-1");
+    await vi.runAllTimersAsync();
+
+    expect(mockPromptCommandCreate).toHaveBeenCalledTimes(1);
+    expect(mockPromptCommandCreate).toHaveBeenCalledWith({
+      name: "My Command",
+      path: "/test/path",
+      argumentHint: "",
+      description: "",
+      prompt: "echo test",
+      source: "user",
+      enabled: true,
+      version: 1,
+    });
+    const state = settingsStore.getState();
+    expect(state.commands[0].id).toBe("cmd-created");
+    expect(state.commands[0].pendingCreate).toBeUndefined();
+  });
+
+  it("Tauri: logs warning on backend failure and keeps pendingCreate", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockIsTauri.mockReturnValue(true);
+    const error = new Error("Backend error");
+    mockPromptCommandCreate.mockRejectedValue(error);
+    const cmd = makeCommandEntry({
+      id: "cmd-1",
+      name: "My Command",
+      pendingCreate: true,
+    });
+    settingsStore.setState({ commands: [cmd] });
+    vi.clearAllMocks(); // clears resolved mock from beforeEach
+
+    commitNewCommand("cmd-1");
+    await vi.runAllTimersAsync();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "Failed to create prompt command",
+      error,
+    );
+    // pendingCreate should be preserved since commit failed
+    expect(settingsStore.getState().commands[0].pendingCreate).toBe(true);
+
+    warnSpy.mockRestore();
+  });
+
+  it("Tauri: allows retry after error (inflight cleanup on rejection)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockIsTauri.mockReturnValue(true);
+    mockPromptCommandCreate.mockRejectedValueOnce(new Error("First call fails"));
+    mockPromptCommandCreate.mockResolvedValueOnce({
+      id: "cmd-created",
+      name: "My Command",
+      path: "/test/path",
+      argumentHint: "",
+      description: "",
+      prompt: "echo test",
+      source: "user",
+      enabled: true,
+      version: 1,
+      fileName: null,
+    });
+    const cmd = makeCommandEntry({
+      id: "cmd-1",
+      name: "My Command",
+      pendingCreate: true,
+    });
+    settingsStore.setState({ commands: [cmd] });
+    vi.clearAllMocks();
+
+    // First call: rejects
+    commitNewCommand("cmd-1");
+    await vi.runAllTimersAsync();
+
+    expect(mockPromptCommandCreate).toHaveBeenCalledTimes(1);
+    expect(settingsStore.getState().commands[0].pendingCreate).toBe(true);
+
+    // Restore pendingCreate for retry
+    mockPromptCommandCreate.mockClear();
+    settingsStore.setState((prev) => ({
+      commands: prev.commands.map((c) =>
+        c.id === "cmd-1" ? { ...c, pendingCreate: true as const } : c,
+      ),
+    }));
+
+    // Second call should succeed (inflight was cleaned by .finally())
+    commitNewCommand("cmd-1");
+    await vi.runAllTimersAsync();
+
+    expect(mockPromptCommandCreate).toHaveBeenCalledTimes(1);
+    expect(
+      settingsStore.getState().commands[0].pendingCreate,
+    ).toBeUndefined();
+
+    warnSpy.mockRestore();
   });
 });
