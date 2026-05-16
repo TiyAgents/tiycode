@@ -839,6 +839,7 @@ const zhCN = {
   "worktree.field.selectBranchHint": "将检出此已有分支到新 worktree",
   "worktree.error.selectBranch": "请选择一个分支",
   "contextCompressing": "正在压缩上下文…",
+  "run.retrying": "服务端错误，第 {{attempt}} 次重试中…",
 
   // ── Artifact Card ─────────────────────────────────────────
   "artifact.collapseCode": "收起代码",

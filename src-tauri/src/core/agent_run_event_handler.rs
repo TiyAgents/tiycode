@@ -732,6 +732,7 @@ pub(crate) fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> 
     !matches!(
         event,
         ThreadStreamEvent::RunStarted { .. }
+            | ThreadStreamEvent::RunRetrying { .. }
             | ThreadStreamEvent::ReasoningUpdated { .. }
             | ThreadStreamEvent::ThreadUsageUpdated { .. }
             | ThreadStreamEvent::RunCheckpointed { .. }

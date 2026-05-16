@@ -801,6 +801,7 @@ const en: Record<TranslationKey, string> = {
   "worktree.field.selectBranchHint": "Check out this existing branch into a new worktree",
   "worktree.error.selectBranch": "Please select a branch",
   "contextCompressing": "Compressing context…",
+  "run.retrying": "Server error, retry {{attempt}} of {{maxAttempts}}…",
 
   // ── Artifact Card ─────────────────────────────────────────
   "artifact.collapseCode": "Collapse code",

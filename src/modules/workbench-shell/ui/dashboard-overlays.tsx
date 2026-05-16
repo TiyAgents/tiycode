@@ -40,6 +40,7 @@ import {
   addProvider,
   addWorkspace,
   addWritableRoot,
+  commitNewCommand,
   duplicateAgentProfile,
   removeAgentProfile,
   removeAllowEntry,
@@ -276,6 +277,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
           onAddAgentProfile={addAgentProfile}
           onAddAllowEntry={addAllowEntry}
           onAddCommand={addCommand}
+          onCommitNewCommand={commitNewCommand}
           onAddDenyEntry={addDenyEntry}
           onAddProvider={addProvider}
           onAddWorkspace={addWorkspace}
