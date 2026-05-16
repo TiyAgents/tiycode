@@ -142,6 +142,7 @@ type SettingsCenterOverlayProps = {
   onAddAgentProfile: (entry: Omit<AgentProfile, "id">) => void;
   onAddAllowEntry: (entry: Omit<PatternEntry, "id">) => void;
   onAddCommand: (entry: Omit<CommandEntry, "id">) => void;
+  onCommitNewCommand: (id: string) => void;
   onAddDenyEntry: (entry: Omit<PatternEntry, "id">) => void;
   onAddProvider: (entry: Omit<ProviderEntry, "id">) => void;
   onAddWorkspace: (entry: Omit<WorkspaceEntry, "id">) => void;
@@ -302,6 +303,7 @@ export function SettingsCenterOverlay({
   onAddAgentProfile,
   onAddAllowEntry,
   onAddCommand,
+  onCommitNewCommand,
   onAddDenyEntry,
   onAddProvider,
   onAddWorkspace,
@@ -505,6 +507,7 @@ export function SettingsCenterOverlay({
                     description={activeMeta.description}
                     commands={commands}
                     onAddCommand={onAddCommand}
+                    onCommitNewCommand={onCommitNewCommand}
                     onRemoveCommand={onRemoveCommand}
                     onUpdateCommand={onUpdateCommand}
                   />
@@ -1526,12 +1529,14 @@ function CommandSettingsPanel({
   description,
   commands,
   onAddCommand,
+  onCommitNewCommand,
   onRemoveCommand,
   onUpdateCommand,
 }: {
   description: string;
   commands: CommandSettings;
   onAddCommand: (entry: Omit<CommandEntry, "id">) => void;
+  onCommitNewCommand: (id: string) => void;
   onRemoveCommand: (id: string) => void;
   onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
 }) {
@@ -1543,6 +1548,7 @@ function CommandSettingsPanel({
       <CommandsSection
         commands={commands.commands}
         onAddCommand={onAddCommand}
+        onCommitNewCommand={onCommitNewCommand}
         onRemoveCommand={onRemoveCommand}
         onUpdateCommand={onUpdateCommand}
       />
@@ -1553,11 +1559,13 @@ function CommandSettingsPanel({
 function CommandsSection({
   commands,
   onAddCommand,
+  onCommitNewCommand,
   onRemoveCommand,
   onUpdateCommand,
 }: {
   commands: Array<CommandEntry>;
   onAddCommand: (entry: Omit<CommandEntry, "id">) => void;
+  onCommitNewCommand: (id: string) => void;
   onRemoveCommand: (id: string) => void;
   onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
 }) {
@@ -1609,8 +1617,18 @@ function CommandsSection({
               key={command.id}
               command={command}
               isEditing={editingId === command.id}
-              onEdit={() => setEditingId(editingId === command.id ? null : command.id)}
-              onCancelEdit={() => setEditingId(null)}
+              onEdit={() => {
+                if (command.pendingCreate) {
+                  onCommitNewCommand(command.id);
+                }
+                setEditingId(editingId === command.id ? null : command.id);
+              }}
+              onCancelEdit={() => {
+                if (command.pendingCreate) {
+                  onRemoveCommand(command.id);
+                }
+                setEditingId(null);
+              }}
               onRemove={() => onRemoveCommand(command.id)}
               onUpdate={(patch) => onUpdateCommand(command.id, patch)}
             />
@@ -1692,15 +1710,17 @@ function CommandItem({
               >
                 <Pencil className="size-3.5" />
               </button>
-              <button
-                type="button"
-                title={t("settings.commands.removeCommand")}
-                aria-label={t("settings.commands.removeCommand")}
-                className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-red-500"
-                onClick={onRemove}
-              >
-                <Trash2 className="size-3.5" />
-              </button>
+              {command.source === "user" ? (
+                <button
+                  type="button"
+                  title={t("settings.commands.removeCommand")}
+                  aria-label={t("settings.commands.removeCommand")}
+                  className="flex size-7 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-red-500"
+                  onClick={onRemove}
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              ) : null}
             </>
           )}
         </div>
