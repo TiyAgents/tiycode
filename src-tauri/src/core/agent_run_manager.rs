@@ -1,6 +1,6 @@
 //! Manages the lifecycle of agent runs backed by the built-in Rust runtime.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ use crate::core::plan_checkpoint::{
 use crate::core::sleep_manager::SleepManager;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
-use crate::model::thread::{MessageAttachmentDto, MessageRecord, RunStatus};
+use crate::model::thread::{MessageAttachmentDto, MessageRecord, RunStatus, ThreadStatus};
 use crate::persistence::repo::{message_repo, run_repo, thread_repo, workspace_repo};
 
 pub(crate) use crate::core::agent_run_event_handler::build_orphaned_run_terminal_event;
@@ -45,6 +45,13 @@ pub(crate) const TITLE_CONTEXT_MAX_CHARS: usize = 1_200;
 /// derived budget collapses to zero.
 pub(crate) const SUMMARY_HISTORY_MIN_CHARS: usize = 8_000;
 pub(crate) const FRONTEND_EVENT_BUFFER_SIZE: usize = 2048;
+
+/// Maximum number of automatic retries for retryable provider errors
+/// (HTTP 408/429/500/502/503/504) at the run level.
+const PROVIDER_ERROR_MAX_RETRIES: usize = 5;
+
+/// Base delay for exponential back-off between run-level retries (2 s).
+const PROVIDER_ERROR_RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
 
 pub(crate) struct ActiveRun {
     pub(crate) run_id: String,
@@ -76,6 +83,21 @@ struct ContextResetMessageBundle {
     persisted_messages: Vec<MessageRecord>,
 }
 
+/// Returned by `spawn_runtime_event_loop` when a run ends with a retryable
+/// provider error so the caller can decide whether to retry.
+struct RetryContext {
+    error: String,
+}
+
+/// Returns `true` when the error string looks like a retryable HTTP server /
+/// rate-limit error. Auth errors (401, 403) are intentionally excluded.
+fn is_retryable_provider_error(error: &str) -> bool {
+    const RETRYABLE_CODES: &[&str] = &[
+        "HTTP 408", "HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504",
+    ];
+    RETRYABLE_CODES.iter().any(|code| error.contains(code))
+}
+
 async fn mark_thread_run_cancellation_requested(
     active_runs: &Mutex<HashMap<String, ActiveRun>>,
     thread_id: &str,
@@ -92,6 +114,9 @@ pub struct AgentRunManager {
     pub(crate) runtime: Arc<BuiltInAgentRuntime>,
     pub(crate) sleep_manager: Arc<SleepManager>,
     pub(crate) active_runs: Arc<Mutex<HashMap<String, ActiveRun>>>,
+    /// Thread IDs with an in-progress retry loop that the user has requested to
+    /// cancel.  Checked by `spawn_provider_error_retry_loop` between attempts.
+    retry_cancellations: Arc<Mutex<HashSet<String>>>,
 }
 
 impl AgentRunManager {
@@ -107,6 +132,7 @@ impl AgentRunManager {
             runtime,
             sleep_manager,
             active_runs: Arc::new(Mutex::new(HashMap::new())),
+            retry_cancellations: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -269,16 +295,31 @@ impl AgentRunManager {
                 .runtime
                 .start_session(spec, runtime_tx, Arc::clone(&self.active_runs))
                 .await?;
-            self.spawn_runtime_event_loop(run_id.clone(), runtime_rx);
+            let event_loop_handle = self.spawn_runtime_event_loop(run_id.clone(), runtime_rx);
             self.spawn_runtime_finish_watchdog(run_id.clone(), runtime_finish_rx);
 
-            Ok::<(), AppError>(())
+            Ok::<_, AppError>((event_loop_handle, frontend_tx.clone()))
         }
         .await;
 
-        if let Err(error) = start_result {
-            self.remove_active_run(&run_id).await;
-            return Err(error);
+        match start_result {
+            Ok((event_loop_handle, frontend_tx)) => {
+                // Spawn background retry wrapper that monitors the event loop
+                // and automatically retries on retryable provider errors.
+                self.spawn_provider_error_retry_loop(
+                    run_id.clone(),
+                    thread_id.to_string(),
+                    workspace_path,
+                    run_mode.to_string(),
+                    model_plan.clone(),
+                    frontend_tx,
+                    event_loop_handle,
+                );
+            }
+            Err(error) => {
+                self.remove_active_run(&run_id).await;
+                return Err(error);
+            }
         }
 
         Ok((run_id, frontend_rx))
@@ -416,6 +457,10 @@ impl AgentRunManager {
         let Some(run_id) =
             mark_thread_run_cancellation_requested(&self.active_runs, thread_id).await
         else {
+            // No active run — but a retry loop may be sleeping between
+            // attempts. Signal it to stop before the next retry.
+            let mut cancels = self.retry_cancellations.lock().await;
+            cancels.insert(thread_id.to_string());
             return Ok(false);
         };
 
@@ -623,14 +668,29 @@ impl AgentRunManager {
         Ok((message, metadata))
     }
 
-    pub fn spawn_runtime_event_loop(
+    fn spawn_runtime_event_loop(
         self: &Arc<Self>,
         run_id: String,
         mut event_rx: mpsc::UnboundedReceiver<ThreadStreamEvent>,
-    ) {
+    ) -> tokio::task::JoinHandle<Option<RetryContext>> {
         let manager = Arc::clone(self);
         tokio::spawn(async move {
+            let mut retry_context: Option<RetryContext> = None;
+
             while let Some(event) = event_rx.recv().await {
+                // Capture retryable errors before forwarding to the handler
+                // (which will clean up the run). We only capture the *first*
+                // terminal RunFailed with a retryable error string.
+                if retry_context.is_none() {
+                    if let ThreadStreamEvent::RunFailed { ref error, .. } = event {
+                        if is_retryable_provider_error(error) {
+                            retry_context = Some(RetryContext {
+                                error: error.clone(),
+                            });
+                        }
+                    }
+                }
+
                 if let Err(error) = manager.handle_runtime_event(&run_id, event).await {
                     tracing::error!(run_id = %run_id, error = %error, "failed to handle runtime event");
                 }
@@ -643,7 +703,9 @@ impl AgentRunManager {
                     "failed to reconcile run after runtime event channel closed"
                 );
             }
-        });
+
+            retry_context
+        })
     }
 
     pub(crate) fn spawn_runtime_finish_watchdog(
@@ -681,6 +743,241 @@ impl AgentRunManager {
                 );
             }
         });
+    }
+
+    /// Monitors the event loop of the current run and, if it ends with a
+    /// retryable provider error, automatically starts a new run attempt
+    /// (up to `PROVIDER_ERROR_MAX_RETRIES` times) with exponential back-off.
+    ///
+    /// The retry loop reuses the same `frontend_tx` broadcast channel so the
+    /// frontend subscriber receives `RunRetrying` + subsequent `RunStarted`
+    /// events seamlessly.
+    fn spawn_provider_error_retry_loop(
+        self: &Arc<Self>,
+        initial_run_id: String,
+        thread_id: String,
+        workspace_path: String,
+        run_mode: String,
+        model_plan: serde_json::Value,
+        frontend_tx: broadcast::Sender<ThreadStreamEvent>,
+        initial_event_loop_handle: tokio::task::JoinHandle<Option<RetryContext>>,
+    ) {
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut event_loop_handle = initial_event_loop_handle;
+            let mut last_run_id = initial_run_id;
+
+            for attempt in 1..=PROVIDER_ERROR_MAX_RETRIES {
+                // Wait for the current run's event loop to finish.
+                let retry_ctx = match event_loop_handle.await {
+                    Ok(Some(ctx)) => ctx,
+                    // No retryable error or task panicked — stop.
+                    _ => return,
+                };
+
+                // Check whether the run was cancelled — if so, don't retry.
+                // (cancellation_requested is cleared after remove_active_run,
+                // so we check the DB run status instead)
+                if let Ok(Some(status)) =
+                    run_repo::find_status_by_id(&manager.pool, &last_run_id).await
+                {
+                    if status == RunStatus::Cancelled.as_str() {
+                        return;
+                    }
+                }
+
+                // Also check if a cancellation was requested during the gap
+                // between runs (i.e. the user clicked cancel while no ActiveRun
+                // existed). The flag is set by cancel_run_if_active.
+                {
+                    let mut cancels = manager.retry_cancellations.lock().await;
+                    if cancels.remove(&thread_id) {
+                        tracing::info!(
+                            thread_id = %thread_id,
+                            "retry loop cancelled by user between attempts"
+                        );
+                        return;
+                    }
+                }
+
+                // Discard any failed streaming messages left by the previous
+                // run so they don't pollute the LLM history on retry.
+                if let Err(e) =
+                    message_repo::discard_failed_messages_for_run(&manager.pool, &last_run_id).await
+                {
+                    tracing::warn!(
+                        run_id = %last_run_id,
+                        error = %e,
+                        "failed to discard failed messages before retry"
+                    );
+                }
+
+                let delay_ms =
+                    PROVIDER_ERROR_RETRY_BASE_DELAY.as_millis() as u64 * (1u64 << (attempt - 1));
+
+                // Emit RunRetrying to frontend via the shared broadcast channel
+                let new_run_id = uuid::Uuid::now_v7().to_string();
+                let _ = frontend_tx.send(ThreadStreamEvent::RunRetrying {
+                    run_id: new_run_id.clone(),
+                    attempt,
+                    max_attempts: PROVIDER_ERROR_MAX_RETRIES,
+                    delay_ms,
+                    reason: retry_ctx.error.clone(),
+                });
+
+                tracing::info!(
+                    thread_id = %thread_id,
+                    prev_run_id = %last_run_id,
+                    new_run_id = %new_run_id,
+                    attempt,
+                    delay_ms,
+                    reason = %retry_ctx.error,
+                    "retrying run after retryable provider error"
+                );
+
+                sleep(Duration::from_millis(delay_ms)).await;
+
+                // Create a new run attempt — reuse the same frontend_tx.
+                let retry_result = manager
+                    .start_retry_run(
+                        &new_run_id,
+                        &thread_id,
+                        &workspace_path,
+                        &run_mode,
+                        &model_plan,
+                        &frontend_tx,
+                    )
+                    .await;
+
+                match retry_result {
+                    Ok(handle) => {
+                        last_run_id = new_run_id;
+                        event_loop_handle = handle;
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            thread_id = %thread_id,
+                            attempt,
+                            error = %e,
+                            "failed to start retry run"
+                        );
+                        return;
+                    }
+                }
+            }
+
+            // Exhausted all retries — the last RunFailed has already been emitted
+            // by the event loop, so the frontend will show the error.
+            tracing::warn!(
+                thread_id = %thread_id,
+                last_run_id = %last_run_id,
+                "exhausted all provider error retries"
+            );
+        });
+    }
+
+    /// Creates a new run attempt for the retry loop, reusing the existing
+    /// `frontend_tx` broadcast channel. Returns the event-loop join handle.
+    async fn start_retry_run(
+        self: &Arc<Self>,
+        run_id: &str,
+        thread_id: &str,
+        workspace_path: &str,
+        run_mode: &str,
+        model_plan: &serde_json::Value,
+        frontend_tx: &broadcast::Sender<ThreadStreamEvent>,
+    ) -> Result<tokio::task::JoinHandle<Option<RetryContext>>, AppError> {
+        // Insert new active run entry with the shared broadcast channel.
+        {
+            let mut runs = self.active_runs.lock().await;
+            if runs.values().any(|r| r.thread_id == thread_id) {
+                return Err(AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.run.already_active",
+                    "A run is already active for this thread",
+                ));
+            }
+            runs.insert(
+                run_id.to_string(),
+                ActiveRun {
+                    run_id: run_id.to_string(),
+                    thread_id: thread_id.to_string(),
+                    profile_id: None,
+                    frontend_tx: frontend_tx.clone(),
+                    lightweight_model_role: None,
+                    auxiliary_model_role: None,
+                    primary_model_role: None,
+                    streaming_message_id: None,
+                    last_completed_message_id: None,
+                    reasoning_message_id: None,
+                    cancellation_requested: false,
+                },
+            );
+        }
+        self.sleep_manager.set_has_active_runs(true).await;
+
+        let inner = async {
+            // Update thread status back to running
+            thread_repo::update_status(&self.pool, thread_id, &ThreadStatus::Running).await?;
+
+            // Insert a new run record
+            run_repo::insert(
+                &self.pool,
+                &run_repo::RunInsert {
+                    id: run_id.to_string(),
+                    thread_id: thread_id.to_string(),
+                    profile_id: None,
+                    run_mode: run_mode.to_string(),
+                    provider_id: None,
+                    model_id: None,
+                    effective_model_plan_json: Some(model_plan.to_string()),
+                    status: "created".to_string(),
+                },
+            )
+            .await?;
+
+            // Build session spec from current DB state (failed messages are now
+            // discarded, so the history is clean).
+            let spec = build_session_spec(
+                &self.pool,
+                run_id,
+                thread_id,
+                workspace_path,
+                run_mode,
+                model_plan,
+            )
+            .await?;
+
+            {
+                let mut runs = self.active_runs.lock().await;
+                if let Some(run) = runs.get_mut(run_id) {
+                    run.lightweight_model_role = spec.model_plan.lightweight.clone();
+                    run.auxiliary_model_role = spec.model_plan.auxiliary.clone();
+                    run.primary_model_role = Some(spec.model_plan.primary.clone());
+                }
+            }
+
+            let (runtime_tx, runtime_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
+            let runtime_finish_rx = self
+                .runtime
+                .start_session(spec, runtime_tx, Arc::clone(&self.active_runs))
+                .await?;
+            let event_loop_handle = self.spawn_runtime_event_loop(run_id.to_string(), runtime_rx);
+            self.spawn_runtime_finish_watchdog(run_id.to_string(), runtime_finish_rx);
+
+            Ok::<_, AppError>(event_loop_handle)
+        }
+        .await;
+
+        match inner {
+            Ok(handle) => Ok(handle),
+            Err(e) => {
+                // Clean up the ActiveRun we inserted above so the thread is not
+                // permanently blocked from starting future runs.
+                self.remove_active_run(run_id).await;
+                Err(e)
+            }
+        }
     }
 
     pub(crate) async fn get_thread_id(&self, run_id: &str) -> String {
