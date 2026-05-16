@@ -2,7 +2,18 @@ import { useDeferredValue, useEffect, useRef, useState, useCallback } from "reac
 import { useT } from "@/i18n";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Check, ChevronDown, ChevronRight, ClipboardCopy, FilePlus, FolderOpen, FolderPlus, LoaderCircle, RefreshCw } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ClipboardCopy,
+  FilePlus,
+  FolderOpen,
+  FolderPlus,
+  LoaderCircle,
+  MoreHorizontal,
+  RefreshCw,
+} from "lucide-react";
 import {
   type DirectoryChildrenResponse,
   indexFilterFiles,
@@ -16,6 +27,14 @@ import {
   type IndexGitOverlayReadyPayload,
 } from "@/services/bridge";
 import { Input } from "@/shared/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 import { cn } from "@/shared/lib/utils";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import {
@@ -483,7 +502,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const [activeFilterRevealPath, setActiveFilterRevealPath] = useState<string | null>(null);
   const [isRefreshingTree, setRefreshingTree] = useState(false);
   const [treeReloadVersion, setTreeReloadVersion] = useState(0);
-  const [isOpenMenuOpen, setOpenMenuOpen] = useState(false);
+  const [isRootActionsMenuOpen, setRootActionsMenuOpen] = useState(false);
+  const [isOpenAppMenuOpen, setOpenAppMenuOpen] = useState(false);
   const [isRootNewDialogOpen, setRootNewDialogOpen] = useState(false);
   const [rootNewDialogIsDir, setRootNewDialogIsDir] = useState(false);
   const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(() => readCachedPreferredOpenAppId());
@@ -491,7 +511,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const deferredFilterValue = useDeferredValue(filterValue);
-  const openMenuRef = useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = useRef<number | null>(null);
   const revealTimeoutRef = useRef<number | null>(null);
   const openFileTimeoutRef = useRef<number | null>(null);
@@ -572,25 +591,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   }, [copiedPath]);
 
   useEffect(() => {
-    if (!isOpenMenuOpen || typeof window === "undefined") {
-      return;
-    }
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-
-      if (target && openMenuRef.current?.contains(target)) {
-        return;
-      }
-
-      setOpenMenuOpen(false);
-    };
-
-    window.addEventListener("mousedown", handlePointerDown);
-    return () => window.removeEventListener("mousedown", handlePointerDown);
-  }, [isOpenMenuOpen]);
-
-  useEffect(() => {
     if (openApps.length === 0) {
       return;
     }
@@ -607,6 +607,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     setRevealedPath(null);
     setActiveFilterRevealPath(null);
     setCopiedPath(null);
+    setRootActionsMenuOpen(false);
+    setOpenAppMenuOpen(false);
   }, [workspaceId, projectPath]);
 
   useEffect(() => {
@@ -908,16 +910,23 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     setTreeReloadVersion((current) => current + 1);
   };
 
+  const closeHeaderMenus = () => {
+    setRootActionsMenuOpen(false);
+    setOpenAppMenuOpen(false);
+  };
+
   const handleCreateRootEntry = (isDir: boolean) => {
+    closeHeaderMenus();
     setRootNewDialogIsDir(isDir);
     setRootNewDialogOpen(true);
-    setOpenMenuOpen(false);
   };
 
   const handleCopyRootPath = async () => {
     if (!projectPath) {
       return;
     }
+
+    closeHeaderMenus();
 
     try {
       if (navigator?.clipboard?.writeText) {
@@ -940,7 +949,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
         }
       }
 
-      setOpenMenuOpen(false);
       setOpenError(null);
     } catch {
       setOpenError("Failed to copy root path");
@@ -950,7 +958,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const handleSelectOpenApp = (app: WorkspaceOpenApp) => {
     setPreferredOpenAppId(app.id);
     writeCachedPreferredOpenAppId(app.id);
-    setOpenMenuOpen(false);
+    closeHeaderMenus();
     setOpenError(null);
   };
 
@@ -959,7 +967,9 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
       return;
     }
 
+    closeHeaderMenus();
     setActiveOpenTargetId(app.id);
+    setOpenError(null);
 
     try {
       await invoke("open_workspace_in_app", {
@@ -967,8 +977,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
         appId: app.id,
         appPath: app.openWith,
       });
-      setOpenMenuOpen(false);
-      setOpenError(null);
     } catch (error) {
       const message = getInvokeErrorMessage(error, `Couldn't open in ${app.name}`);
       setOpenError(message);
@@ -1283,120 +1291,152 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
             <FolderOpen className="size-4 shrink-0 text-app-subtle" />
             <span className="truncate text-app-foreground">{projectName}</span>
           </div>
-          {isLoadingOpenApps || preferredOpenApp ? (
-            <div ref={openMenuRef} className="relative shrink-0">
+          <div className="flex shrink-0 items-center gap-1.5">
+            {isLoadingOpenApps || preferredOpenApp ? (
               <div
                 className={cn(
                   "inline-flex h-8 items-stretch overflow-hidden rounded-2xl border border-app-border bg-app-surface/90 text-app-subtle transition-[border-color,background-color,box-shadow]",
-                  isOpenMenuOpen && "border-app-border-strong bg-app-surface text-app-foreground shadow-[0_8px_18px_rgba(15,23,42,0.08)]",
+                  isOpenAppMenuOpen && "border-app-border-strong bg-app-surface text-app-foreground shadow-[0_8px_18px_rgba(15,23,42,0.08)]",
                 )}
               >
                 <button
                   type="button"
                   aria-label={preferredOpenApp ? `Open folder with ${preferredOpenApp.name}` : "Loading supported apps"}
                   title={preferredOpenApp ? `Open folder with ${preferredOpenApp.name}` : "Loading supported apps"}
-                  disabled={!projectPath || isLoadingOpenApps || openApps.length === 0 || !preferredOpenApp}
-                  className="inline-flex min-w-0 items-center px-2.5 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!projectPath || isLoadingOpenApps || !preferredOpenApp || Boolean(activeOpenTargetId)}
+                  className="inline-flex min-w-0 items-center gap-2 px-2.5 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
                   onClick={() => {
                     if (preferredOpenApp) {
                       void handleOpenInApp(preferredOpenApp);
                     }
                   }}
                 >
-                  {isLoadingOpenApps ? (
+                  {activeOpenTargetId === preferredOpenApp?.id || isLoadingOpenApps ? (
                     <LoaderCircle className="size-4 shrink-0 animate-spin text-app-subtle" />
                   ) : preferredOpenApp ? (
                     <WorkspaceAppIcon app={preferredOpenApp} sizeClassName="size-[18px]" radiusClassName="rounded-[5px]" />
                   ) : null}
+                  <span className="min-w-0 truncate text-[12px] font-medium">Open</span>
                 </button>
 
                 <div className="w-px bg-app-border/80" />
 
+                <DropdownMenu
+                  open={isOpenAppMenuOpen}
+                  onOpenChange={(open) => {
+                    setOpenAppMenuOpen(open);
+                    if (open) {
+                      setRootActionsMenuOpen(false);
+                    }
+                  }}
+                >
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Choose default app"
+                      title="Choose default app"
+                      aria-haspopup="menu"
+                      aria-expanded={isOpenAppMenuOpen}
+                      disabled={!projectPath || isLoadingOpenApps || openApps.length === 0 || Boolean(activeOpenTargetId)}
+                      className="inline-flex w-7 items-center justify-center transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <ChevronDown
+                        className={cn(
+                          "size-3.5 shrink-0 transition-transform duration-200",
+                          isOpenAppMenuOpen && "rotate-180",
+                        )}
+                      />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" sideOffset={10} className="w-60 overflow-hidden rounded-2xl border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
+                    <DropdownMenuLabel className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-app-subtle">
+                      Default app
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator className="bg-app-border/80" />
+                    <div className="space-y-0.5">
+                      {openApps.map((app) => {
+                        const isPreferred = preferredOpenApp?.id === app.id;
+
+                        return (
+                          <DropdownMenuItem
+                            key={app.id}
+                            className={cn(
+                              "flex items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-app-surface-hover hover:text-app-foreground",
+                              isPreferred && "bg-app-surface-hover/80 text-app-foreground",
+                            )}
+                            disabled={Boolean(activeOpenTargetId)}
+                            onClick={() => handleSelectOpenApp(app)}
+                          >
+                            <WorkspaceAppIcon app={app} sizeClassName="size-5" radiusClassName="rounded-[7px]" />
+                            <span className="min-w-0 flex-1 truncate font-medium">{app.name}</span>
+                            {isPreferred ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
+                          </DropdownMenuItem>
+                        );
+                      })}
+                    </div>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            ) : null}
+
+            <DropdownMenu
+              open={isRootActionsMenuOpen}
+              onOpenChange={(open) => {
+                setRootActionsMenuOpen(open);
+                if (open) {
+                  setOpenAppMenuOpen(false);
+                }
+              }}
+            >
+              <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  aria-label="Choose app to open folder"
-                  title="Choose app to open folder"
+                  aria-label="Project root actions"
+                  title="Project root actions"
                   aria-haspopup="menu"
-                  aria-expanded={isOpenMenuOpen}
-                  disabled={!projectPath || isLoadingOpenApps || openApps.length === 0}
-                  className="inline-flex w-7 items-center justify-center transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
-                  onClick={() => setOpenMenuOpen((current) => !current)}
+                  aria-expanded={isRootActionsMenuOpen}
+                  disabled={!projectPath && !workspaceId}
+                  className={cn(
+                    "inline-flex size-8 items-center justify-center rounded-2xl border border-app-border bg-app-surface/90 text-app-subtle transition-[border-color,background-color,box-shadow] hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-60",
+                    isRootActionsMenuOpen && "border-app-border-strong bg-app-surface text-app-foreground shadow-[0_8px_18px_rgba(15,23,42,0.08)]",
+                  )}
                 >
-                  <ChevronDown
-                    className={cn(
-                      "size-3.5 shrink-0 transition-transform duration-200",
-                      isOpenMenuOpen && "rotate-180",
-                    )}
-                  />
+                  <MoreHorizontal className="size-3.5" />
                 </button>
-              </div>
-
-              {isOpenMenuOpen ? (
-                <div className="absolute right-0 top-[calc(100%+0.45rem)] z-20 min-w-[220px] overflow-hidden rounded-2xl border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
-                  <div className="space-y-0.5 pb-1.5">
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-app-muted transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
-                      onClick={() => handleCreateRootEntry(false)}
-                    >
-                      <FilePlus className="size-4 shrink-0 text-app-subtle" />
-                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium">New File</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-app-muted transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
-                      onClick={() => handleCreateRootEntry(true)}
-                    >
-                      <FolderPlus className="size-4 shrink-0 text-app-subtle" />
-                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium">New Folder</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-app-muted transition-colors hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={!projectPath}
-                      onClick={() => void handleCopyRootPath()}
-                    >
-                      <ClipboardCopy className="size-4 shrink-0 text-app-subtle" />
-                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium">Copy Path</span>
-                    </button>
-                  </div>
-                  <div className="my-1 h-px bg-app-border/80" />
-                  <div className="px-2.5 pb-1.5 pt-1">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-app-subtle">Open in</div>
-                  </div>
-                  <div className="space-y-0.5">
-                    {openApps.map((app) => {
-                      const isPending = activeOpenTargetId === app.id;
-                      const isPreferred = preferredOpenApp?.id === app.id;
-
-                      return (
-                        <button
-                          key={app.id}
-                          type="button"
-                          className={cn(
-                            "flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors disabled:cursor-wait disabled:opacity-70",
-                            isPreferred
-                              ? "bg-app-surface-hover/80 text-app-foreground"
-                              : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                          )}
-                          disabled={Boolean(activeOpenTargetId)}
-                          onClick={() => handleSelectOpenApp(app)}
-                        >
-                          {isPending ? (
-                            <LoaderCircle className="size-4 shrink-0 animate-spin text-app-subtle" />
-                          ) : (
-                            <WorkspaceAppIcon app={app} sizeClassName="size-5" radiusClassName="rounded-[7px]" />
-                          )}
-                          <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{app.name}</span>
-                          {isPreferred ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" sideOffset={10} className="w-56 overflow-hidden rounded-2xl border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
+                <DropdownMenuLabel className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-app-subtle">
+                  Project actions
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-app-border/80" />
+                <DropdownMenuItem
+                  className="gap-2 rounded-xl px-2.5 py-2 text-xs"
+                  disabled={!workspaceId}
+                  onClick={() => handleCreateRootEntry(false)}
+                >
+                  <FilePlus className="size-3.5" />
+                  {t("fileContextMenu.newFile")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="gap-2 rounded-xl px-2.5 py-2 text-xs"
+                  disabled={!workspaceId}
+                  onClick={() => handleCreateRootEntry(true)}
+                >
+                  <FolderPlus className="size-3.5" />
+                  {t("fileContextMenu.newFolder")}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator className="bg-app-border/80" />
+                <DropdownMenuItem
+                  className="gap-2 rounded-xl px-2.5 py-2 text-xs"
+                  disabled={!projectPath}
+                  onClick={() => void handleCopyRootPath()}
+                >
+                  <ClipboardCopy className="size-3.5" />
+                  {t("fileContextMenu.copyPath")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
 
         <div className="relative mt-2.5 pr-1 pb-2.5">
