@@ -1038,8 +1038,7 @@ export function updateCommand(
 
   const nextCommand = { ...currentCommand, ...patch };
   const isPending = currentCommand.pendingCreate;
-  const shouldKeepPending = isPending && !nextCommand.name.trim();
-  const cleanCommand = shouldKeepPending
+  const cleanCommand = isPending
     ? { ...nextCommand, pendingCreate: true as const }
     : (({ pendingCreate: _, ...rest }: CommandEntry) => rest)({
         ...nextCommand,
@@ -1054,35 +1053,8 @@ export function updateCommand(
   if (!isTauri()) return;
 
   if (currentCommand.pendingCreate) {
-    if (!nextCommand.name.trim()) return;
-
-    if (inflightCreateIds.has(id)) return;
-
-    inflightCreateIds.add(id);
-    void promptCommandCreate({
-      name: nextCommand.name,
-      path: nextCommand.path,
-      argumentHint: nextCommand.argumentHint,
-      description: nextCommand.description,
-      prompt: nextCommand.prompt,
-      source: nextCommand.source ?? "user",
-      enabled: nextCommand.enabled ?? true,
-      version: nextCommand.version ?? 1,
-    })
-      .then((command) => {
-        const mapped = mapPromptCommandDto(command);
-        settingsStore.setState((prev) => ({
-          commands: prev.commands.map((entry) =>
-            entry.id === id ? mapped : entry,
-          ),
-        }));
-      })
-      .catch((error) => {
-        console.warn("Failed to create prompt command", error);
-      })
-      .finally(() => {
-        inflightCreateIds.delete(id);
-      });
+    // For pending entries, only update local state.
+    // Actual backend creation happens via commitNewCommand().
     return;
   }
 
@@ -1107,5 +1079,56 @@ export function updateCommand(
     })
     .catch((error) => {
       console.warn("Failed to update prompt command", error);
+    });
+}
+
+/**
+ * Explicitly commit a pending-create command to the backend.
+ * Called when the user confirms (clicks save) after filling in the fields.
+ */
+export function commitNewCommand(id: string) {
+  const current = settingsStore.getState();
+  const cmd = current.commands.find((c) => c.id === id);
+  if (!cmd || !cmd.pendingCreate) return;
+  if (!cmd.name.trim()) return;
+
+  if (!isTauri()) {
+    // In non-Tauri mode, just strip the pendingCreate flag.
+    settingsStore.setState((prev) => ({
+      commands: prev.commands.map((entry) =>
+        entry.id === id
+          ? (({ pendingCreate: _, ...rest }) => rest)(entry)
+          : entry,
+      ),
+    }));
+    return;
+  }
+
+  if (inflightCreateIds.has(id)) return;
+
+  inflightCreateIds.add(id);
+  void promptCommandCreate({
+    name: cmd.name,
+    path: cmd.path,
+    argumentHint: cmd.argumentHint,
+    description: cmd.description,
+    prompt: cmd.prompt,
+    source: cmd.source ?? "user",
+    enabled: cmd.enabled ?? true,
+    version: cmd.version ?? 1,
+  })
+    .then((command) => {
+      const mapped = mapPromptCommandDto(command);
+      settingsStore.setState((prev) => ({
+        commands: prev.commands.map((entry) =>
+          entry.id === id ? mapped : entry,
+        ),
+      }));
+    })
+    .catch((error) => {
+      console.warn("Failed to create prompt command", error);
+    })
+    .finally(() => {
+      inflightCreateIds.delete(id);
     });
 }
