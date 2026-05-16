@@ -27,7 +27,7 @@ function getDefaultTitle(contentType: PreviewContentType): string {
  * A reusable file preview surface for HTML, SVG, and Markdown content.
  * Renders inside a WorkbenchPreviewOverlay (Git-diff-sized full-screen panel).
  *
- * - HTML: sandboxed iframe (allow-scripts + allow-same-origin for network resources)
+ * - HTML: sandboxed iframe (allow-scripts, without allow-same-origin)
  * - SVG: inline render via dangerouslySetInnerHTML
  * - Markdown: (placeholder) rendered via MessageResponse / Streamdown
  *
@@ -72,7 +72,7 @@ function PreviewContent({ source, contentType }: { source: string; contentType: 
       return (
         <iframe
           srcDoc={source}
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts"
           className="h-full min-h-full w-full border-0 bg-white"
           title="HTML Preview"
         />
