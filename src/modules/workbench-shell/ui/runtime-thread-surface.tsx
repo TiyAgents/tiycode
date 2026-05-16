@@ -803,6 +803,19 @@ export function RuntimeThreadSurface({
         finalizeReasoningForRun(event.runId);
       }
 
+      // Show retry progress in the thinking placeholder when the backend
+      // is automatically retrying after a retryable provider error.
+      if (event.type === "run_retrying") {
+        showThinkingPlaceholder(
+          event.runId,
+          undefined,
+          t("run.retrying", {
+            attempt: String(event.attempt),
+            maxAttempts: String(event.maxAttempts),
+          }),
+        );
+      }
+
       if (event.type === "run_started") {
         setApprovingPlanMessageId(null);
         if (event.runMode === "default" || event.runMode === "plan") {

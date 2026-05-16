@@ -253,6 +253,15 @@ pub async fn interrupt_active_runs(pool: &SqlitePool) -> Result<u64, AppError> {
     Ok(result.rows_affected())
 }
 
+/// Returns the status of a specific run by ID.
+pub async fn find_status_by_id(pool: &SqlitePool, id: &str) -> Result<Option<String>, AppError> {
+    let row = sqlx::query_scalar::<_, String>("SELECT status FROM thread_runs WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
 fn map_run_summary(row: RunRow) -> RunSummaryDto {
     let (model_display_name, context_window) =
         extract_primary_model_details(row.effective_model_plan_json.as_deref());

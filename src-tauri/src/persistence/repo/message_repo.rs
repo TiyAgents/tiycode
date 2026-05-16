@@ -407,6 +407,23 @@ pub async fn discard_dangling_reasoning(pool: &SqlitePool) -> Result<u64, AppErr
     Ok(result.rows_affected())
 }
 
+/// Mark all `failed` messages for the given run as `discarded` so they are
+/// excluded from subsequent `list_since_last_reset` queries and do not pollute
+/// the LLM history on automatic run-level retries.
+pub async fn discard_failed_messages_for_run(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "UPDATE messages SET status = 'discarded' \
+         WHERE run_id = ? AND status = 'failed'",
+    )
+    .bind(run_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Helper: Check if metadata contains the expected kind value.
 fn metadata_kind_matches(raw: Option<&str>, expected: &str) -> bool {
     if let Some(json_str) = raw {
