@@ -1066,12 +1066,15 @@ export function DashboardWorkbench() {
                               ) : null}
                             </div>
                           </div>
-                          <BranchSelector
-                            workspaceId={resolvedWorkspaceId}
-                            snapshot={branchSnapshot}
-                            modelPlan={commitMessageModelPlan}
-                            readOnly={currentProject?.kind === "worktree"}
-                          />
+                          {topBarGitSnapshot?.capabilities.repoAvailable &&
+                          topBarGitSnapshot?.capabilities.gitCliAvailable ? (
+                            <BranchSelector
+                              workspaceId={resolvedWorkspaceId}
+                              snapshot={branchSnapshot}
+                              modelPlan={commitMessageModelPlan}
+                              readOnly={currentProject?.kind === "worktree"}
+                            />
+                          ) : null}
                         </div>
                       </div>
 
