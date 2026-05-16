@@ -841,6 +841,44 @@ const zhCN = {
   "longMessage.expandAll": "展开全文",
   "longMessage.hiddenLines": "已折叠约 {{count}} 行内容",
   "longMessage.hiddenContent": "已折叠部分长内容以优化加载与滚动性能",
+
+  // ── File Context Menu ─────────────────────────────────────
+  "fileContextMenu.newFolder": "新建文件夹",
+  "fileContextMenu.newFile": "新建文件",
+  "fileContextMenu.createIn": "创建于：",
+  "fileContextMenu.folderPlaceholder": "文件夹名称",
+  "fileContextMenu.filePlaceholder": "文件名称.扩展名",
+  "fileContextMenu.file": "文件",
+  "fileContextMenu.folder": "文件夹",
+  "fileContextMenu.creating": "创建中…",
+  "fileContextMenu.create": "创建",
+  "fileContextMenu.rename": "重命名",
+  "fileContextMenu.renaming": "重命名中…",
+  "fileContextMenu.deleteAction": "删除",
+  "fileContextMenu.cancel": "取消",
+  "fileContextMenu.deleting": "删除中…",
+  "fileContextMenu.deleteFileTitle": "删除文件",
+  "fileContextMenu.deleteFolderTitle": "删除文件夹",
+  "fileContextMenu.deleteConfirm": "确定要删除 {{path}} 吗？",
+  "fileContextMenu.deleteRecursive": "这将递归删除所有内容。",
+  "fileContextMenu.fileActions": "文件操作",
+  "fileContextMenu.copyRelativePath": "复制相对路径",
+  "fileContextMenu.copyPath": "复制路径",
+  "fileContextMenu.openInExternalApp": "在外部应用中打开",
+
+  // ── File Editor ──────────────────────────────────────────
+  "fileEditor.loading": "加载中…",
+  "fileEditor.save": "保存",
+  "fileEditor.saveShortcut": "保存 (⌘S)",
+  "fileEditor.htmlPreview": "HTML 预览",
+  "fileEditor.editor": "编辑器",
+  "fileEditor.preview": "预览",
+  "fileEditor.closePreview": "关闭预览",
+  "fileEditor.binaryFile": "二进制文件 — 无法编辑",
+
+  // ── Dashboard (extended) ─────────────────────────────────
+  "dashboard.preparingTerminal": "正在准备终端…",
+  "dashboard.filePreviewEditor": "文件预览 / 编辑器",
 } as const;
 
 export type TranslationKey = keyof typeof zhCN;

@@ -244,7 +244,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
 
       <WorkbenchPreviewOverlay
         open={isFileEditorOverlayOpen && Boolean(resolvedWorkspaceId)}
-        title="File Preview / Editor"
+        title={t("dashboard.filePreviewEditor")}
         onClose={() => setFileEditorOverlayOpen(false)}
         overlayClassName={isFileEditorOverlayClickThrough ? "pointer-events-none" : undefined}
       >

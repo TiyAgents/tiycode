@@ -803,6 +803,44 @@ const en: Record<TranslationKey, string> = {
   "longMessage.expandAll": "Expand",
   "longMessage.hiddenLines": "~{{count}} lines collapsed",
   "longMessage.hiddenContent": "Long content collapsed to optimize loading and scrolling",
+
+  // ── File Context Menu ─────────────────────────────────────
+  "fileContextMenu.newFolder": "New Folder",
+  "fileContextMenu.newFile": "New File",
+  "fileContextMenu.createIn": "Create in:",
+  "fileContextMenu.folderPlaceholder": "folder-name",
+  "fileContextMenu.filePlaceholder": "file-name.ext",
+  "fileContextMenu.file": "File",
+  "fileContextMenu.folder": "Folder",
+  "fileContextMenu.creating": "Creating…",
+  "fileContextMenu.create": "Create",
+  "fileContextMenu.rename": "Rename",
+  "fileContextMenu.renaming": "Renaming…",
+  "fileContextMenu.deleteAction": "Delete",
+  "fileContextMenu.cancel": "Cancel",
+  "fileContextMenu.deleting": "Deleting…",
+  "fileContextMenu.deleteFileTitle": "Delete File",
+  "fileContextMenu.deleteFolderTitle": "Delete Folder",
+  "fileContextMenu.deleteConfirm": "Are you sure you want to delete {{path}}?",
+  "fileContextMenu.deleteRecursive": "This will delete all contents recursively.",
+  "fileContextMenu.fileActions": "File actions",
+  "fileContextMenu.copyRelativePath": "Copy Relative Path",
+  "fileContextMenu.copyPath": "Copy Path",
+  "fileContextMenu.openInExternalApp": "Open in External App",
+
+  // ── File Editor ──────────────────────────────────────────
+  "fileEditor.loading": "Loading…",
+  "fileEditor.save": "Save",
+  "fileEditor.saveShortcut": "Save (⌘S)",
+  "fileEditor.htmlPreview": "HTML Preview",
+  "fileEditor.editor": "Editor",
+  "fileEditor.preview": "Preview",
+  "fileEditor.closePreview": "Close preview",
+  "fileEditor.binaryFile": "Binary file — cannot edit",
+
+  // ── Dashboard (extended) ─────────────────────────────────
+  "dashboard.preparingTerminal": "Preparing terminal…",
+  "dashboard.filePreviewEditor": "File Preview / Editor",
 };
 
 export default en;

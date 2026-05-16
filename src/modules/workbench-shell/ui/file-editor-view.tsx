@@ -16,6 +16,7 @@ import type { ViewUpdate } from "@codemirror/view";
 import { X, Eye, Code2, Save, Loader2, AlertCircle } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/shared/lib/utils";
+import { useT } from "@/i18n";
 import {
   type FileTab,
   useOpenTabs,
@@ -164,14 +165,17 @@ const MarkdownPreview: FC<{ content: string }> = ({ content }) => (
   </div>
 );
 
-const HtmlPreview: FC<{ content: string }> = ({ content }) => (
-  <iframe
-    sandbox="allow-scripts"
-    srcDoc={content}
-    className="h-full w-full border-0 bg-white"
-    title="HTML Preview"
-  />
-);
+const HtmlPreview: FC<{ content: string }> = ({ content }) => {
+  const t = useT();
+  return (
+    <iframe
+      sandbox="allow-scripts"
+      srcDoc={content}
+      className="h-full w-full border-0 bg-white"
+      title={t("fileEditor.htmlPreview")}
+    />
+  );
+};
 
 const ImagePreview: FC<{ content: string; path: string }> = ({ content, path }) => (
   <div className="flex h-full items-center justify-center overflow-auto p-4">
@@ -252,6 +256,7 @@ interface ToolbarProps {
 }
 
 const EditorToolbar: FC<ToolbarProps> = ({ tab, workspaceId }) => {
+  const t = useT();
   const canPreview = isPreviewable(tab.path);
   return (
     <div className="flex items-center justify-between border-b border-app-border px-2 py-1">
@@ -259,7 +264,7 @@ const EditorToolbar: FC<ToolbarProps> = ({ tab, workspaceId }) => {
         {canPreview && (
           <>
             <button
-              title="Editor"
+              title={t("fileEditor.editor")}
               className={cn(
                 "rounded p-1 text-xs transition-colors",
                 tab.previewMode === "editor"
@@ -271,7 +276,7 @@ const EditorToolbar: FC<ToolbarProps> = ({ tab, workspaceId }) => {
               <Code2 className="size-3.5" />
             </button>
             <button
-              title="Preview"
+              title={t("fileEditor.preview")}
               className={cn(
                 "rounded p-1 text-xs transition-colors",
                 tab.previewMode === "preview"
@@ -288,12 +293,12 @@ const EditorToolbar: FC<ToolbarProps> = ({ tab, workspaceId }) => {
       <div className="flex items-center gap-1">
         {tab.isDirty && (
           <button
-            title="Save (⌘S)"
+            title={t("fileEditor.saveShortcut")}
             className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             onClick={() => void saveFile(workspaceId, tab.path)}
           >
             <Save className="size-3" />
-            <span>Save</span>
+            <span>{t("fileEditor.save")}</span>
           </button>
         )}
         {tab.error && (
@@ -315,6 +320,7 @@ export interface FileEditorViewProps {
 }
 
 export const FileEditorView: FC<FileEditorViewProps> = ({ workspaceId }) => {
+  const t = useT();
   const tabs = useOpenTabs();
   const activeTab = useActiveTab();
 
@@ -364,13 +370,17 @@ export const FileEditorView: FC<FileEditorViewProps> = ({ workspaceId }) => {
             {activeTab.isLoading ? (
               <div className="flex h-full items-center justify-center text-muted-foreground">
                 <Loader2 className="mr-2 size-4 animate-spin" />
-                <span className="text-xs">Loading…</span>
+                <span className="text-xs">{t("fileEditor.loading")}</span>
               </div>
             ) : activeTab.error && activeTab.content === null ? (
               <div className="flex h-full items-center justify-center p-4 text-center">
                 <div>
                   <AlertCircle className="mx-auto mb-2 size-5 text-destructive" />
-                  <p className="text-xs text-muted-foreground">{activeTab.error}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {activeTab.error === "Binary file — cannot edit"
+                      ? t("fileEditor.binaryFile")
+                      : activeTab.error}
+                  </p>
                 </div>
               </div>
             ) : isImageFile(activeTab.path) && activeTab.content ? (

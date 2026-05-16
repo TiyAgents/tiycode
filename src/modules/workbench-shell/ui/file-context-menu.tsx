@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { fileCreate, fileDelete, fileRename } from "@/services/bridge/file-commands";
 import { cn } from "@/shared/lib/utils";
+import { useT } from "@/i18n";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,6 +73,7 @@ export const NewFileDialog: FC<NewFileDialogProps> = ({
   defaultIsDir = false,
   onSuccess,
 }) => {
+  const t = useT();
   const [name, setName] = useState("");
   const [isDir, setIsDir] = useState(defaultIsDir);
   const [error, setError] = useState<string | null>(null);
@@ -104,16 +106,16 @@ export const NewFileDialog: FC<NewFileDialogProps> = ({
       <DialogContent className="sm:max-w-[360px]">
         <DialogHeader>
           <DialogTitle className="text-sm">
-            {isDir ? "New Folder" : "New File"}
+            {isDir ? t("fileContextMenu.newFolder") : t("fileContextMenu.newFile")}
           </DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
-            Create in: <code className="text-[10px]">{parentPath || "/"}</code>
+            {t("fileContextMenu.createIn")} <code className="text-[10px]">{parentPath || "/"}</code>
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
           <Input
             autoFocus
-            placeholder={isDir ? "folder-name" : "file-name.ext"}
+            placeholder={isDir ? t("fileContextMenu.folderPlaceholder") : t("fileContextMenu.filePlaceholder")}
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void handleSubmit(); }}
@@ -124,20 +126,20 @@ export const NewFileDialog: FC<NewFileDialogProps> = ({
               className={`rounded px-2 py-1 text-xs transition-colors ${!isDir ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
               onClick={() => setIsDir(false)}
             >
-              File
+              {t("fileContextMenu.file")}
             </button>
             <button
               className={`rounded px-2 py-1 text-xs transition-colors ${isDir ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
               onClick={() => setIsDir(true)}
             >
-              Folder
+              {t("fileContextMenu.folder")}
             </button>
           </div>
           {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
         <DialogFooter>
           <Button size="sm" disabled={!name.trim() || pending} onClick={() => void handleSubmit()}>
-            {pending ? "Creating…" : "Create"}
+            {pending ? t("fileContextMenu.creating") : t("fileContextMenu.create")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -162,6 +164,7 @@ const RenameDialog: FC<RenameDialogProps> = ({
   workspaceId,
   onSuccess,
 }) => {
+  const t = useT();
   const [name, setName] = useState(currentName);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -185,7 +188,7 @@ const RenameDialog: FC<RenameDialogProps> = ({
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setError(null); }}>
       <DialogContent className="sm:max-w-[360px]">
         <DialogHeader>
-          <DialogTitle className="text-sm">Rename</DialogTitle>
+          <DialogTitle className="text-sm">{t("fileContextMenu.rename")}</DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
             <code className="text-[10px]">{currentPath}</code>
           </DialogDescription>
@@ -206,7 +209,7 @@ const RenameDialog: FC<RenameDialogProps> = ({
             disabled={!name.trim() || name.trim() === currentName || pending}
             onClick={() => void handleSubmit()}
           >
-            {pending ? "Renaming…" : "Rename"}
+            {pending ? t("fileContextMenu.renaming") : t("fileContextMenu.rename")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -231,6 +234,7 @@ const DeleteDialog: FC<DeleteDialogProps> = ({
   workspaceId,
   onSuccess,
 }) => {
+  const t = useT();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -252,18 +256,21 @@ const DeleteDialog: FC<DeleteDialogProps> = ({
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setError(null); }}>
       <DialogContent className="sm:max-w-[360px]">
         <DialogHeader>
-          <DialogTitle className="text-sm">Delete {isDir ? "Folder" : "File"}</DialogTitle>
+          <DialogTitle className="text-sm">
+            {isDir ? t("fileContextMenu.deleteFolderTitle") : t("fileContextMenu.deleteFileTitle")}
+          </DialogTitle>
           <DialogDescription className="text-xs">
-            Are you sure you want to delete{" "}
-            <code className="text-[10px] font-semibold">{path}</code>?
-            {isDir && " This will delete all contents recursively."}
+            {t("fileContextMenu.deleteConfirm", { path: path })}
+            {isDir && ` ${t("fileContextMenu.deleteRecursive")}`}
           </DialogDescription>
         </DialogHeader>
         {error && <p className="text-xs text-destructive px-1">{error}</p>}
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+            {t("fileContextMenu.cancel")}
+          </Button>
           <Button variant="destructive" size="sm" disabled={pending} onClick={() => void handleDelete()}>
-            {pending ? "Deleting…" : "Delete"}
+            {pending ? t("fileContextMenu.deleting") : t("fileContextMenu.deleteAction")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -292,6 +299,7 @@ export const FileContextMenu: FC<FileContextMenuProps> = ({
   const [deleteDialog, setDeleteDialog] = useState(false);
 
   const fileName = nodePath.split("/").pop() ?? nodePath;
+  const t = useT();
 
   return (
     <>
@@ -299,7 +307,7 @@ export const FileContextMenu: FC<FileContextMenuProps> = ({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            aria-label="File actions"
+            aria-label={t("fileContextMenu.fileActions")}
             className={cn(
               "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground",
               className,
@@ -318,14 +326,14 @@ export const FileContextMenu: FC<FileContextMenuProps> = ({
                 onClick={() => { setNewDialogIsDir(false); setNewDialog(true); }}
               >
                 <FilePlus className="size-3.5" />
-                New File
+                {t("fileContextMenu.newFile")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="gap-2 text-xs"
                 onClick={() => { setNewDialogIsDir(true); setNewDialog(true); }}
               >
                 <FolderPlus className="size-3.5" />
-                New Folder
+                {t("fileContextMenu.newFolder")}
               </DropdownMenuItem>
               {!isRoot && <DropdownMenuSeparator />}
             </>
@@ -339,14 +347,14 @@ export const FileContextMenu: FC<FileContextMenuProps> = ({
                 onClick={() => setRenameDialog(true)}
               >
                 <Pencil className="size-3.5" />
-                Rename
+                {t("fileContextMenu.rename")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="gap-2 text-xs text-destructive focus:text-destructive"
                 onClick={() => setDeleteDialog(true)}
               >
                 <Trash2 className="size-3.5" />
-                Delete
+                {t("fileContextMenu.deleteAction")}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
             </>
@@ -359,7 +367,7 @@ export const FileContextMenu: FC<FileContextMenuProps> = ({
               onClick={() => onCopyPath(nodePath)}
             >
               <Copy className="size-3.5" />
-              Copy Relative Path
+              {t("fileContextMenu.copyRelativePath")}
             </DropdownMenuItem>
           )}
           {!isRoot && (
@@ -375,7 +383,7 @@ export const FileContextMenu: FC<FileContextMenuProps> = ({
               }}
             >
               <ClipboardCopy className="size-3.5" />
-              Copy Path
+              {t("fileContextMenu.copyPath")}
             </DropdownMenuItem>
           )}
 
@@ -388,7 +396,7 @@ export const FileContextMenu: FC<FileContextMenuProps> = ({
                 onClick={() => onOpenExternal(nodePath)}
               >
                 <ExternalLink className="size-3.5" />
-                Open in External App
+                {t("fileContextMenu.openInExternalApp")}
               </DropdownMenuItem>
             </>
           )}

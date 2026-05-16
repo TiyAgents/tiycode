@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { CircleXIcon } from "lucide-react";
+import { useT } from "@/i18n";
 
 export type WorkbenchPreviewOverlayProps = {
   open: boolean;
@@ -28,6 +29,7 @@ export function WorkbenchPreviewOverlay({
   overlayClassName,
   className,
 }: WorkbenchPreviewOverlayProps) {
+  const t = useT();
   if (!open) return null;
 
   return (
@@ -45,8 +47,8 @@ export function WorkbenchPreviewOverlay({
             <h2 className="text-sm font-medium text-app-foreground">{title}</h2>
             <button
               type="button"
-              aria-label="Close preview"
-              title="Close preview"
+              aria-label={t("fileEditor.closePreview")}
+              title={t("fileEditor.closePreview")}
               className="flex size-8 shrink-0 items-center justify-center rounded-lg text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
               onClick={onClose}
             >

@@ -878,7 +878,7 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
   const newThreadTerminalIdleMessage = !selectedProject
     ? t("dashboard.terminalDisabledHint")
     : !resolvedTerminalThreadId && !terminalBootstrapError
-      ? "Preparing terminal…"
+      ? t("dashboard.preparingTerminal")
       : undefined;
 
   return (
