@@ -808,8 +808,12 @@ impl AgentRunManager {
                     tracing::warn!(
                         run_id = %last_run_id,
                         error = %e,
-                        "failed to discard failed messages before retry"
+                        "failed to discard failed messages before retry; aborting retry loop"
                     );
+                    // Cannot safely retry with polluted history — the LLM
+                    // would see stale partial messages. Abort the retry loop
+                    // entirely; the last RunFailed has already been broadcast.
+                    return;
                 }
 
                 let delay_ms =
@@ -837,6 +841,19 @@ impl AgentRunManager {
 
                 sleep(Duration::from_millis(delay_ms)).await;
 
+                // Re-check cancellation after the delay — the user may have
+                // requested a cancel while we were sleeping.
+                {
+                    let mut cancels = manager.retry_cancellations.lock().await;
+                    if cancels.remove(&thread_id) {
+                        tracing::info!(
+                            thread_id = %thread_id,
+                            "retry loop cancelled by user during back-off delay"
+                        );
+                        return;
+                    }
+                }
+
                 // Create a new run attempt — reuse the same frontend_tx.
                 let retry_result = manager
                     .start_retry_run(
@@ -861,6 +878,12 @@ impl AgentRunManager {
                             error = %e,
                             "failed to start retry run"
                         );
+                        // Emit RunFailed so the frontend can exit the
+                        // "retrying" placeholder state and show the error.
+                        let _ = frontend_tx.send(ThreadStreamEvent::RunFailed {
+                            run_id: new_run_id,
+                            error: format!("Retry failed: {e}"),
+                        });
                         return;
                     }
                 }
