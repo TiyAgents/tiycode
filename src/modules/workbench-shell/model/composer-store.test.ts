@@ -11,6 +11,7 @@ import {
   setComposerError,
   clearComposerError,
   clearNewThreadComposer,
+  type SerializableAttachment,
 } from "./composer-store";
 
 beforeEach(() => {
@@ -47,13 +48,13 @@ describe("composerStore", () => {
 
   describe("drafts", () => {
     it("should set and get drafts", () => {
-      setDraft("thread-1", { text: "draft content", referencedFiles: [] });
+      setDraft("thread-1", { text: "draft content", referencedFiles: [], attachmentData: [] });
       expect(getDraft("thread-1").text).toBe("draft content");
       expect(getDraft("thread-2").text).toBe(""); // non-existent → empty
     });
 
     it("should remove drafts", () => {
-      setDraft("thread-1", { text: "content", referencedFiles: [] });
+      setDraft("thread-1", { text: "content", referencedFiles: [], attachmentData: [] });
       removeDraft("thread-1");
       expect(getDraft("thread-1").text).toBe("");
     });
@@ -64,22 +65,41 @@ describe("composerStore", () => {
     });
 
     it("should support multiple thread drafts", () => {
-      setDraft("t1", { text: "a", referencedFiles: [] });
-      setDraft("t2", { text: "b", referencedFiles: [] });
+      setDraft("t1", { text: "a", referencedFiles: [], attachmentData: [] });
+      setDraft("t2", { text: "b", referencedFiles: [], attachmentData: [] });
       expect(getDraft("t1").text).toBe("a");
       expect(getDraft("t2").text).toBe("b");
     });
 
     it("setDraft should update existing draft", () => {
-      setDraft("t1", { text: "first", referencedFiles: [] });
-      setDraft("t1", { text: "second", referencedFiles: [] });
+      setDraft("t1", { text: "first", referencedFiles: [], attachmentData: [] });
+      setDraft("t1", { text: "second", referencedFiles: [], attachmentData: [] });
       expect(getDraft("t1").text).toBe("second");
     });
 
     it("should store and retrieve referencedFiles", () => {
       const files = [{ name: "app.ts", path: "src/app.ts", parentPath: "src" }];
-      setDraft("t1", { text: "hello", referencedFiles: files });
+      setDraft("t1", { text: "hello", referencedFiles: files, attachmentData: [] });
       expect(getDraft("t1").referencedFiles).toEqual(files);
+    });
+
+    it("should store and retrieve attachmentData", () => {
+      const attachments: SerializableAttachment[] = [
+        { id: "1", name: "photo.png", mediaType: "image/png", dataUrl: "data:image/png;base64,abc" },
+      ];
+      setDraft("t1", { text: "check this out", referencedFiles: [], attachmentData: attachments });
+      expect(getDraft("t1").attachmentData).toEqual(attachments);
+    });
+
+    it("should update attachmentData independently of other draft fields", () => {
+      setDraft("t1", { text: "hello", referencedFiles: [], attachmentData: [] });
+      const existing = getDraft("t1");
+      const attachments: SerializableAttachment[] = [
+        { id: "2", name: "doc.pdf", mediaType: "application/pdf", dataUrl: "data:application/pdf;base64,xyz" },
+      ];
+      setDraft("t1", { ...existing, attachmentData: attachments });
+      expect(getDraft("t1").text).toBe("hello");
+      expect(getDraft("t1").attachmentData).toEqual(attachments);
     });
 
     it("getDraft should handle legacy string drafts", () => {
@@ -88,6 +108,25 @@ describe("composerStore", () => {
       const draft = getDraft("legacy");
       expect(draft.text).toBe("old text");
       expect(draft.referencedFiles).toEqual([]);
+      expect(draft.attachmentData).toEqual([]);
+    });
+
+    it("getDraft should handle drafts missing attachmentData (backward compat)", () => {
+      // Simulate an old object draft that lacks attachmentData
+      composerStore.setState({
+        drafts: {
+          oldObj: { text: "old draft", referencedFiles: [] } as any,
+        },
+      });
+      const draft = getDraft("oldObj");
+      expect(draft.text).toBe("old draft");
+      expect(draft.referencedFiles).toEqual([]);
+      expect(draft.attachmentData).toEqual([]);
+    });
+
+    it("getDraft should return empty attachmentData for non-existent thread", () => {
+      const draft = getDraft("nonexistent");
+      expect(draft.attachmentData).toEqual([]);
     });
   });
 

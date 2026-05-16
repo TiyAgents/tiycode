@@ -56,7 +56,7 @@ import {
   registerRunMachine,
   unregisterRunMachine,
 } from "@/modules/workbench-shell/model/run-event-dispatcher";
-import { composerStore, setDraft, getDraft } from "@/modules/workbench-shell/model/composer-store";
+import { composerStore, setDraft, getDraft, type SerializableAttachment } from "@/modules/workbench-shell/model/composer-store";
 import { settingsStore } from "@/modules/settings-center/model/settings-store";
 import { threadUpdateProfile } from "@/services/bridge";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
@@ -3051,11 +3051,18 @@ export function RuntimeThreadSurface({
             }
             onValueChange={setComposerValue}
             initialReferencedFiles={threadId ? getDraft(threadId).referencedFiles : []}
+            initialAttachmentData={threadId ? getDraft(threadId).attachmentData : undefined}
             clearSignal={composerClearSignal}
             onReferencedFilesChange={(files) => {
               if (threadId) {
                 const existing = getDraft(threadId);
                 setDraft(threadId, { ...existing, referencedFiles: files as ComposerReferencedFile[] });
+              }
+            }}
+            onAttachmentDataChange={(data: ReadonlyArray<SerializableAttachment>) => {
+              if (threadId) {
+                const existing = getDraft(threadId);
+                setDraft(threadId, { ...existing, attachmentData: data as SerializableAttachment[] });
               }
             }}
           />
