@@ -2966,7 +2966,6 @@ export function RuntimeThreadSurface({
             enabledSkills={enabledSkills}
             error={composerError}
             onErrorMessageChange={setComposerError}
-            onRunModeChange={setSelectedRunMode}
             onOpenProfileSettings={() => {
               uiLayoutStore.setState({ activeOverlay: "settings" });
             }}
@@ -3036,9 +3035,6 @@ export function RuntimeThreadSurface({
             onSubmit={handleSubmit}
             placeholder="Ask Tiy anything, @ to add files, / for commands, $ for skills"
             providers={providers}
-            runMode={selectedRunMode}
-            runModeDisabled={runState === "running" || runState === "waiting_approval"}
-            showRunModeToggle
             status={composerStatus}
             value={composerValue}
             workspaceId={
