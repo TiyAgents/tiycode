@@ -13,6 +13,7 @@ export interface FileTab {
   isDirty: boolean;
   isLoading: boolean;
   isPinned: boolean;
+  isBinary: boolean;
   previewMode: "editor" | "preview";
   error: string | null;
 }
@@ -153,6 +154,7 @@ export async function openFile(
     isDirty: false,
     isLoading: true,
     isPinned: pin,
+    isBinary: false,
     previewMode: isPreviewable(path) ? "preview" : "editor",
     error: null,
   };
@@ -188,6 +190,7 @@ export async function openFile(
   // Load content
   try {
     const dto = await fileRead(workspaceId, path);
+    const isBinaryOnly = dto.isBinary && !dto.content;
     fileEditorStore.setState((prev) => ({
       tabs: prev.tabs.map((t) =>
         t.path === path
@@ -196,7 +199,8 @@ export async function openFile(
               content: dto.content,
               originalContent: dto.isBinary ? null : dto.content,
               isLoading: false,
-              error: dto.isBinary && !dto.content ? "Binary file — cannot edit" : null,
+              isBinary: isBinaryOnly,
+              error: null,
             }
           : t,
       ),
@@ -205,7 +209,7 @@ export async function openFile(
     const message = err instanceof Error ? err.message : String(err);
     fileEditorStore.setState((prev) => ({
       tabs: prev.tabs.map((t) =>
-        t.path === path ? { ...t, isLoading: false, error: message } : t,
+        t.path === path ? { ...t, isLoading: false, isBinary: false, error: message } : t,
       ),
     }));
   }
@@ -293,11 +297,12 @@ export async function reloadTab(workspaceId: string, path: string): Promise<void
   if (!tab) return;
 
   fileEditorStore.setState((prev) => ({
-    tabs: prev.tabs.map((t) => (t.path === path ? { ...t, isLoading: true } : t)),
+    tabs: prev.tabs.map((t) => (t.path === path ? { ...t, isLoading: true, isBinary: false } : t)),
   }));
 
   try {
     const dto = await fileRead(workspaceId, path);
+    const isBinaryOnly = dto.isBinary && !dto.content;
     fileEditorStore.setState((prev) => ({
       tabs: prev.tabs.map((t) =>
         t.path === path
@@ -307,6 +312,7 @@ export async function reloadTab(workspaceId: string, path: string): Promise<void
               originalContent: dto.isBinary ? null : dto.content,
               isDirty: false,
               isLoading: false,
+              isBinary: isBinaryOnly,
               error: null,
             }
           : t,
@@ -316,7 +322,7 @@ export async function reloadTab(workspaceId: string, path: string): Promise<void
     const message = err instanceof Error ? err.message : String(err);
     fileEditorStore.setState((prev) => ({
       tabs: prev.tabs.map((t) =>
-        t.path === path ? { ...t, isLoading: false, error: message } : t,
+        t.path === path ? { ...t, isLoading: false, isBinary: false, error: message } : t,
       ),
     }));
   }

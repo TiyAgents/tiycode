@@ -307,8 +307,9 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
     [commandEntries, pluginCommandEntries],
   );
 
-  // ── DOM refs (4 UI-only refs) ──
+  // ── DOM refs (5 UI-only refs) ──
   const mainContentRef = useRef<HTMLElement | null>(null);
+  const drawerAsideRef = useRef<HTMLElement | null>(null);
   const overlayContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1091,6 +1092,7 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
               </section>
 
               <aside
+                ref={drawerAsideRef}
                 className={cn(
                   "relative min-h-0 shrink-0 overflow-hidden bg-app-drawer transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
                   isDrawerOpen
@@ -1107,15 +1109,40 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                       e.preventDefault();
                       const startX = e.clientX;
                       const startWidth = drawerWidth;
+                      let latestWidth = startWidth;
+                      let rafId: number | null = null;
+
+                      const applyWidth = () => {
+                        rafId = null;
+                        if (drawerAsideRef.current) {
+                          drawerAsideRef.current.style.width = `${latestWidth}px`;
+                        }
+                      };
+
+                      const scheduleWidthUpdate = () => {
+                        if (rafId === null) {
+                          rafId = window.requestAnimationFrame(applyWidth);
+                        }
+                      };
+
                       setDrawerResize({ startX, startWidth });
                       const onMove = (ev: MouseEvent) => {
                         const maxW = Math.floor(window.innerWidth * MAX_DRAWER_WIDTH_RATIO);
                         // Dragging left = increasing width (drawer is on right side)
-                        const newWidth = Math.max(MIN_DRAWER_WIDTH, Math.min(maxW, startWidth + (startX - ev.clientX)));
-                        setDrawerWidth(newWidth);
+                        latestWidth = Math.max(
+                          MIN_DRAWER_WIDTH,
+                          Math.min(maxW, startWidth + (startX - ev.clientX)),
+                        );
+                        scheduleWidthUpdate();
                       };
                       const onUp = () => {
+                        if (rafId !== null) {
+                          window.cancelAnimationFrame(rafId);
+                          rafId = null;
+                        }
+                        applyWidth();
                         setDrawerResize(null);
+                        setDrawerWidth(latestWidth);
                         window.removeEventListener("mousemove", onMove);
                         window.removeEventListener("mouseup", onUp);
                       };

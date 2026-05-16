@@ -372,14 +372,12 @@ export const FileEditorView: FC<FileEditorViewProps> = ({ workspaceId }) => {
                 <Loader2 className="mr-2 size-4 animate-spin" />
                 <span className="text-xs">{t("fileEditor.loading")}</span>
               </div>
-            ) : activeTab.error && activeTab.content === null ? (
+            ) : (activeTab.isBinary || (activeTab.error && activeTab.content === null)) ? (
               <div className="flex h-full items-center justify-center p-4 text-center">
                 <div>
                   <AlertCircle className="mx-auto mb-2 size-5 text-destructive" />
                   <p className="text-xs text-muted-foreground">
-                    {activeTab.error === "Binary file — cannot edit"
-                      ? t("fileEditor.binaryFile")
-                      : activeTab.error}
+                    {activeTab.isBinary ? t("fileEditor.binaryFile") : activeTab.error}
                   </p>
                 </div>
               </div>

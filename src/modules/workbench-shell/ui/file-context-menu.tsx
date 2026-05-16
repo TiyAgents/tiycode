@@ -53,6 +53,23 @@ export interface FileContextMenuProps {
 }
 
 // ---------------------------------------------------------------------------
+// Path helpers
+// ---------------------------------------------------------------------------
+
+function joinWorkspacePath(workspaceRoot: string | undefined, nodePath: string): string {
+  if (!workspaceRoot) return nodePath;
+  if (!nodePath) return workspaceRoot;
+
+  const separator = workspaceRoot.includes("\\") ? "\\" : "/";
+  const normalizedRoot = workspaceRoot.replace(/[\\/]+$/, "");
+  const normalizedNodePath = nodePath
+    .replace(/^[\\/]+/, "")
+    .replace(/[\\/]+/g, separator);
+
+  return `${normalizedRoot}${separator}${normalizedNodePath}`;
+}
+
+// ---------------------------------------------------------------------------
 // CRUD Dialogs
 // ---------------------------------------------------------------------------
 
@@ -374,11 +391,7 @@ export const FileContextMenu: FC<FileContextMenuProps> = ({
             <DropdownMenuItem
               className="gap-2 text-xs"
               onClick={() => {
-                const absolutePath = workspaceRoot
-                  ? nodePath
-                    ? `${workspaceRoot}/${nodePath}`
-                    : workspaceRoot
-                  : nodePath;
+                const absolutePath = joinWorkspacePath(workspaceRoot, nodePath);
                 void navigator.clipboard.writeText(absolutePath);
               }}
             >

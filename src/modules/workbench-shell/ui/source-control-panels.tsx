@@ -1642,7 +1642,7 @@ export function GitPanel({
               variant="outline"
               onClick={clearDiscardTarget}
             >
-              Cancel
+              {t("sourceControl.branch.cancel")}
             </Button>
             <Button
               variant="destructive"

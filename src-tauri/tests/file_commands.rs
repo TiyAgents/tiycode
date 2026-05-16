@@ -36,21 +36,24 @@ fn write_file(root: &Path, relative: &str, content: &str) {
 #[test]
 fn rejects_dotdot_traversal() {
     let dir = workspace_dir();
-    let root = dir.path();
-    // Create a file inside the workspace so canonicalize has something to work with
-    write_file(root, "legit.txt", "ok");
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let parent = root.parent().expect("workspace should have a parent");
+    let outside = tempfile::Builder::new()
+        .prefix("outside-workspace-")
+        .tempdir_in(parent)
+        .expect("failed to create sibling dir");
+    let outside_file = outside.path().join("passwd");
+    fs::write(&outside_file, "outside").unwrap();
 
-    // Relative path containing ".." must be rejected
-    let bad = "../../etc/passwd";
-    assert!(bad.contains(".."), "sanity check");
-    // The safe_resolve function (tested indirectly) should block ".."
-    // We verify by trying to join and checking the result doesn't escape root.
-    let joined = root.join(bad);
-    // If the joined path were canonicalized, it would NOT start_with(root)
-    // (unless by coincidence). The command code rejects ".." early.
+    let bad = root
+        .join("..")
+        .join(outside.path().file_name().unwrap())
+        .join("passwd");
+    let canonical_bad = bad.canonicalize().unwrap();
+
     assert!(
-        !joined.starts_with(root) || bad.contains(".."),
-        "path should be rejected"
+        !canonical_bad.starts_with(&root),
+        "canonicalized traversal target must escape the workspace root"
     );
 }
 

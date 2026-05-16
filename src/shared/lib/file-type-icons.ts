@@ -13,7 +13,7 @@ import { FILE_TYPE_ICON_IDS } from "@/shared/lib/file-type-icon-ids";
 // ---------------------------------------------------------------------------
 
 /** Exact filename → icon id */
-const FILE_NAME_MAP: Record<string, string> = {
+export const FILE_NAME_ICON_ID_MAP: Record<string, string> = {
   dockerfile: "docker",
   "docker-compose.yml": "docker",
   "docker-compose.yaml": "docker",
@@ -112,12 +112,12 @@ const FILE_NAME_MAP: Record<string, string> = {
   "webpack.config.js": "webpack",
   "webpack.config.ts": "webpack",
   "esbuild.config.js": "esbuild",
-  "tsup.config.ts": "tsup",
-  "components.json": "shadcn-ui",
+  "tsup.config.ts": "settings",
+  "components.json": "json",
 };
 
 /** File extension → icon id (resolved via language detection) */
-const EXTENSION_MAP: Record<string, string> = {
+export const EXTENSION_ICON_ID_MAP: Record<string, string> = {
   // JavaScript / TypeScript
   js: "javascript",
   jsx: "react",
@@ -146,7 +146,7 @@ const EXTENSION_MAP: Record<string, string> = {
   yml: "yaml",
   toml: "toml",
   xml: "xml",
-  csv: "csv",
+  csv: "table",
   ini: "settings",
   env: "settings",
   // Markdown / docs
@@ -246,8 +246,8 @@ const EXTENSION_MAP: Record<string, string> = {
   docx: "word",
   ppt: "powerpoint",
   pptx: "powerpoint",
-  xls: "excel",
-  xlsx: "excel",
+  xls: "table",
+  xlsx: "table",
   zip: "zip",
   tgz: "zip",
   gz: "zip",
@@ -257,7 +257,7 @@ const EXTENSION_MAP: Record<string, string> = {
 };
 
 /** Folder name → icon id (for well-known directories) */
-const FOLDER_NAME_MAP: Record<string, string> = {
+export const FOLDER_NAME_ICON_ID_MAP: Record<string, string> = {
   src: "folder-src",
   lib: "folder-lib",
   dist: "folder-dist",
@@ -312,16 +312,16 @@ function resolveIconId(name: string, isDir: boolean): string {
 
   if (isDir) {
     // Check folder name map
-    if (FOLDER_NAME_MAP[lower]) {
-      const id = FOLDER_NAME_MAP[lower];
+    if (FOLDER_NAME_ICON_ID_MAP[lower]) {
+      const id = FOLDER_NAME_ICON_ID_MAP[lower];
       return FILE_TYPE_ICON_IDS.has(id) ? id : FALLBACK_FOLDER_ICON;
     }
     return FALLBACK_FOLDER_ICON;
   }
 
   // 1. Exact filename match
-  if (FILE_NAME_MAP[lower]) {
-    const id = FILE_NAME_MAP[lower];
+  if (FILE_NAME_ICON_ID_MAP[lower]) {
+    const id = FILE_NAME_ICON_ID_MAP[lower];
     return FILE_TYPE_ICON_IDS.has(id) ? id : FALLBACK_ICON;
   }
 
@@ -332,8 +332,8 @@ function resolveIconId(name: string, isDir: boolean): string {
 
   // 3. Extension match
   const ext = lower.includes(".") ? lower.split(".").pop() ?? "" : "";
-  if (ext && EXTENSION_MAP[ext]) {
-    const id = EXTENSION_MAP[ext];
+  if (ext && EXTENSION_ICON_ID_MAP[ext]) {
+    const id = EXTENSION_ICON_ID_MAP[ext];
     return FILE_TYPE_ICON_IDS.has(id) ? id : FALLBACK_ICON;
   }
 

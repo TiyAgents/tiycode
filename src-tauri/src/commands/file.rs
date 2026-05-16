@@ -84,6 +84,36 @@ fn is_image_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn validate_bare_file_name(name: &str, field_label: &str) -> Result<(), AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        return Err(AppError::validation(
+            ErrorSource::System,
+            format!("{field_label} must be a non-empty file name"),
+        ));
+    }
+
+    if name.contains('/') || name.contains('\\') {
+        return Err(AppError::validation(
+            ErrorSource::System,
+            format!("{field_label} must not contain path separators"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn reject_workspace_root_target(root: &Path, target: &Path, action: &str) -> Result<(), AppError> {
+    if target == root {
+        return Err(AppError::validation(
+            ErrorSource::System,
+            format!("Cannot {action} the workspace root"),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Map an image file extension to its MIME type.
 fn mime_for_extension(ext: &str) -> &'static str {
     match ext.to_ascii_lowercase().as_str() {
@@ -205,13 +235,7 @@ pub async fn file_create(
         ));
     }
 
-    // Validate name: no path separators or traversal segments
-    if name.contains('/') || name.contains('\\') || name.contains("..") {
-        return Err(AppError::validation(
-            ErrorSource::System,
-            "Name must not contain path separators or '..' segments",
-        ));
-    }
+    validate_bare_file_name(&name, "Name")?;
 
     let target = parent.join(&name);
     if target.exists() {
@@ -245,6 +269,7 @@ pub async fn file_delete(
 ) -> Result<(), AppError> {
     let root = resolve_workspace_root(&state, &workspace_id).await?;
     let resolved = safe_resolve(&root, &path)?;
+    reject_workspace_root_target(&root, &resolved, "delete")?;
 
     if !resolved.exists() {
         return Err(AppError::not_found(
@@ -286,18 +311,20 @@ pub async fn file_rename(
         ));
     }
 
-    // new_name must be a bare filename (no path separators)
-    if new_name.contains('/') || new_name.contains('\\') {
-        return Err(AppError::validation(
-            ErrorSource::System,
-            "New name must not contain path separators",
-        ));
-    }
+    validate_bare_file_name(&new_name, "New name")?;
 
     let parent = resolved_old.parent().ok_or_else(|| {
         AppError::validation(ErrorSource::System, "Cannot determine parent directory")
     })?;
     let new_path = parent.join(&new_name);
+    reject_workspace_root_target(&root, &new_path, "rename to")?;
+
+    if !new_path.starts_with(&root) {
+        return Err(AppError::validation(
+            ErrorSource::System,
+            "New path escapes workspace boundary",
+        ));
+    }
 
     if new_path.exists() {
         return Err(AppError::validation(
@@ -332,6 +359,61 @@ mod tests {
 
         let result = safe_resolve(root, "../escape.txt");
         assert!(result.is_err(), "paths with '..' must be rejected");
+    }
+
+    #[test]
+    fn delete_guard_rejects_workspace_root_targets() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = fs::canonicalize(dir.path()).unwrap();
+
+        let empty_path = safe_resolve(&root, "").unwrap();
+        let dot_path = safe_resolve(&root, ".").unwrap();
+
+        assert_eq!(empty_path, root);
+        assert_eq!(dot_path, root);
+        assert!(reject_workspace_root_target(&root, &empty_path, "delete").is_err());
+        assert!(reject_workspace_root_target(&root, &dot_path, "delete").is_err());
+    }
+
+    #[test]
+    fn validate_bare_file_name_rejects_unsafe_names() {
+        let bad_names = ["", " ", ".", "..", "sub/file.txt", "sub\\file.txt"];
+
+        for name in bad_names {
+            assert!(
+                validate_bare_file_name(name, "Name").is_err(),
+                "{name:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_bare_file_name_accepts_simple_names() {
+        let good_names = ["file.txt", "folder", "archive.tar.gz", "hello-world_123"];
+
+        for name in good_names {
+            assert!(
+                validate_bare_file_name(name, "Name").is_ok(),
+                "{name:?} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn rename_target_boundary_check_rejects_root_escape() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let file_path = root.join("file.txt");
+        fs::write(&file_path, "ok").unwrap();
+        let parent = file_path.parent().unwrap();
+        let unsafe_target = parent.join("..");
+        let canonical_unsafe_target = unsafe_target.canonicalize().unwrap();
+
+        assert!(validate_bare_file_name("..", "New name").is_err());
+        assert!(
+            !canonical_unsafe_target.starts_with(&root),
+            "canonical unsafe rename target must escape root"
+        );
     }
 
     #[test]
