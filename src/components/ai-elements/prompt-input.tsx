@@ -1338,9 +1338,14 @@ export const PromptInputTextarea = ({
       }
 
       const files: File[] = [];
+      const seenTypes = new Set<string>();
 
       for (const item of items) {
         if (item.kind === "file") {
+          // Deduplicate by MIME type – macOS clipboard may include
+          // multiple DataTransferItems for the same pasted image.
+          if (seenTypes.has(item.type)) continue;
+          seenTypes.add(item.type);
           const file = item.getAsFile();
           if (file) {
             files.push(file);
