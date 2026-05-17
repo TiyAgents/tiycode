@@ -63,6 +63,17 @@ function getLanguageExtension(lang: string) {
 // CodeMirror Editor
 // ---------------------------------------------------------------------------
 
+const EDITOR_STORE_SYNC_DELAY_MS = 120;
+const editorContentFlushers = new Map<string, () => void>();
+
+function editorSyncKey(workspaceId: string, path: string): string {
+  return `${workspaceId}\u0000${path}`;
+}
+
+function flushEditorContent(workspaceId: string, path: string): void {
+  editorContentFlushers.get(editorSyncKey(workspaceId, path))?.();
+}
+
 interface CodeMirrorEditorProps {
   content: string;
   language: string;
@@ -80,15 +91,60 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
   const viewRef = useRef<EditorView | null>(null);
   const pathRef = useRef(path);
   const workspaceIdRef = useRef(workspaceId);
+  const pendingSyncRef = useRef<{
+    workspaceId: string;
+    path: string;
+    doc: string;
+  } | null>(null);
+  const syncTimerRef = useRef<number | null>(null);
 
   pathRef.current = path;
   workspaceIdRef.current = workspaceId;
+
+  const clearPendingSync = useCallback(() => {
+    if (syncTimerRef.current !== null) {
+      window.clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
+  }, []);
+
+  const flushPendingContent = useCallback(() => {
+    const pendingSync = pendingSyncRef.current;
+    if (pendingSync === null) return;
+    pendingSyncRef.current = null;
+    clearPendingSync();
+    updateContent(pendingSync.workspaceId, pendingSync.path, pendingSync.doc);
+  }, [clearPendingSync]);
+
+  const scheduleContentSync = useCallback((doc: string) => {
+    pendingSyncRef.current = {
+      workspaceId: workspaceIdRef.current,
+      path: pathRef.current,
+      doc,
+    };
+    clearPendingSync();
+    syncTimerRef.current = window.setTimeout(() => {
+      syncTimerRef.current = null;
+      flushPendingContent();
+    }, EDITOR_STORE_SYNC_DELAY_MS);
+  }, [clearPendingSync, flushPendingContent]);
+
+  useEffect(() => {
+    const key = editorSyncKey(workspaceId, path);
+    editorContentFlushers.set(key, flushPendingContent);
+    return () => {
+      if (editorContentFlushers.get(key) === flushPendingContent) {
+        editorContentFlushers.delete(key);
+      }
+    };
+  }, [flushPendingContent, path, workspaceId]);
 
   // Cmd+S / Ctrl+S save handler
   const saveKeymap = keymap.of([
     {
       key: "Mod-s",
       run: () => {
+        flushPendingContent();
         void saveFile(workspaceIdRef.current, pathRef.current);
         return true;
       },
@@ -108,7 +164,7 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
         EditorView.updateListener.of((update: ViewUpdate) => {
           if (update.docChanged) {
             const doc = update.state.doc.toString();
-            updateContent(workspaceIdRef.current, pathRef.current, doc);
+            scheduleContentSync(doc);
           }
         }),
         EditorView.theme({
@@ -126,6 +182,7 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
     viewRef.current = view;
 
     return () => {
+      flushPendingContent();
       view.destroy();
       viewRef.current = null;
     };
@@ -295,7 +352,10 @@ const EditorToolbar: FC<ToolbarProps> = ({ tab, workspaceId }) => {
           <button
             title={t("fileEditor.saveShortcut")}
             className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            onClick={() => void saveFile(workspaceId, tab.path)}
+            onClick={() => {
+              flushEditorContent(workspaceId, tab.path);
+              void saveFile(workspaceId, tab.path);
+            }}
           >
             <Save className="size-3" />
             <span>{t("fileEditor.save")}</span>
@@ -329,6 +389,7 @@ export const FileEditorView: FC<FileEditorViewProps> = ({ workspaceId }) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
         if (activeTab) {
+          flushEditorContent(workspaceId, activeTab.path);
           void saveFile(workspaceId, activeTab.path);
         }
       }

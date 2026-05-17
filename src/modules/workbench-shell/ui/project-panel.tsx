@@ -59,6 +59,7 @@ import {
 
 const PREFERRED_OPEN_APP_STORAGE_KEY = "tiy-preferred-open-app-id";
 const FILE_MANAGER_APP_IDS = ["finder", "explorer"];
+const FILE_EDITOR_OPEN_DELAY_MS = 300;
 
 function readCachedPreferredOpenAppId(): string | null {
   try {
@@ -509,7 +510,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(() => readCachedPreferredOpenAppId());
   const [activeOpenTargetId, setActiveOpenTargetId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
-  const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const deferredFilterValue = useDeferredValue(filterValue);
   const errorTimeoutRef = useRef<number | null>(null);
   const revealTimeoutRef = useRef<number | null>(null);
@@ -579,18 +579,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   }, []);
 
   useEffect(() => {
-    if (!copiedPath || typeof window === "undefined") {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setCopiedPath((current) => (current === copiedPath ? null : current));
-    }, 1600);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [copiedPath]);
-
-  useEffect(() => {
     if (openApps.length === 0) {
       return;
     }
@@ -606,7 +594,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     setPendingRevealPath(null);
     setRevealedPath(null);
     setActiveFilterRevealPath(null);
-    setCopiedPath(null);
     setRootActionsMenuOpen(false);
     setOpenAppMenuOpen(false);
   }, [workspaceId, projectPath]);
@@ -1209,7 +1196,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
 
   const handleCopyRelativePath = async (path: string) => {
     if (typeof window === "undefined") {
-      setCopiedPath(null);
       setOpenError("Failed to copy relative path");
       return;
     }
@@ -1235,10 +1221,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
         }
       }
 
-      setCopiedPath(path);
       setOpenError(null);
     } catch {
-      setCopiedPath(null);
       setOpenError("Failed to copy relative path");
     }
   };
@@ -1260,13 +1244,12 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
       window.clearTimeout(openFileTimeoutRef.current);
     }
 
-    setFileEditorOverlayOpen(true);
-    setFileEditorOverlayClickThrough(true);
-    void openFile(workspaceId, path);
     openFileTimeoutRef.current = window.setTimeout(() => {
       openFileTimeoutRef.current = null;
       setFileEditorOverlayClickThrough(false);
-    }, 180);
+      setFileEditorOverlayOpen(true);
+      void openFile(workspaceId, path);
+    }, FILE_EDITOR_OPEN_DELAY_MS);
   }, [workspaceId]);
 
   const handleOpenTreePathFromDoubleClick = useCallback((path: string, isDir: boolean) => {

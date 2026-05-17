@@ -50,8 +50,6 @@ import {
   RECENT_PROJECTS,
   THEME_OPTIONS,
   UPDATE_STATUS_DURATION,
-  MIN_DRAWER_WIDTH,
-  MAX_DRAWER_WIDTH_RATIO,
   
 } from "@/modules/workbench-shell/model/fixtures";
 import {
@@ -114,6 +112,7 @@ import {
   setShowOnboarding,
   setDrawerWidth,
   setDrawerResize,
+  clampDrawerWidth,
 } from "@/modules/workbench-shell/model/ui-layout-store";
 import {
   composerStore,
@@ -297,6 +296,7 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
     workspaceId: string;
     kind: "open" | "remove";
   } | null>(null);
+  const [draggingDrawerWidth, setDraggingDrawerWidth] = useState<number | null>(null);
 
   // ── Store-derived state (no more compat wrappers — actions use stores directly) ──
   const terminalBootstrapError = useStore(projectStore, (s) => s.terminalBootstrapError);
@@ -307,9 +307,8 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
     [commandEntries, pluginCommandEntries],
   );
 
-  // ── DOM refs (5 UI-only refs) ──
+  // ── DOM refs (4 UI-only refs) ──
   const mainContentRef = useRef<HTMLElement | null>(null);
-  const drawerAsideRef = useRef<HTMLElement | null>(null);
   const overlayContentRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1095,14 +1094,13 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
               </section>
 
               <aside
-                ref={drawerAsideRef}
                 className={cn(
                   "relative min-h-0 shrink-0 overflow-hidden bg-app-drawer transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
                   isDrawerOpen
                     ? "border-l border-app-border opacity-100 translate-x-0"
                     : "!w-0 border-l-0 opacity-0 translate-x-2 pointer-events-none",
                 )}
-                style={isDrawerOpen ? { width: drawerWidth } : undefined}
+                style={isDrawerOpen ? { width: draggingDrawerWidth ?? drawerWidth } : undefined}
               >
                 {/* Drawer resize drag handle */}
                 {isDrawerOpen && (
@@ -1111,15 +1109,13 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                     onMouseDown={(e) => {
                       e.preventDefault();
                       const startX = e.clientX;
-                      const startWidth = drawerWidth;
+                      const startWidth = draggingDrawerWidth ?? drawerWidth;
                       let latestWidth = startWidth;
                       let rafId: number | null = null;
 
                       const applyWidth = () => {
                         rafId = null;
-                        if (drawerAsideRef.current) {
-                          drawerAsideRef.current.style.width = `${latestWidth}px`;
-                        }
+                        setDraggingDrawerWidth(latestWidth);
                       };
 
                       const scheduleWidthUpdate = () => {
@@ -1129,13 +1125,10 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                       };
 
                       setDrawerResize({ startX, startWidth });
+                      setDraggingDrawerWidth(startWidth);
                       const onMove = (ev: MouseEvent) => {
-                        const maxW = Math.floor(window.innerWidth * MAX_DRAWER_WIDTH_RATIO);
                         // Dragging left = increasing width (drawer is on right side)
-                        latestWidth = Math.max(
-                          MIN_DRAWER_WIDTH,
-                          Math.min(maxW, startWidth + (startX - ev.clientX)),
-                        );
+                        latestWidth = clampDrawerWidth(startWidth + (startX - ev.clientX));
                         scheduleWidthUpdate();
                       };
                       const onUp = () => {
@@ -1143,7 +1136,7 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                           window.cancelAnimationFrame(rafId);
                           rafId = null;
                         }
-                        applyWidth();
+                        setDraggingDrawerWidth(null);
                         setDrawerResize(null);
                         setDrawerWidth(latestWidth);
                         window.removeEventListener("mousemove", onMove);

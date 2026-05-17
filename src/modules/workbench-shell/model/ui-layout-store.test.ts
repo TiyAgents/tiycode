@@ -15,6 +15,8 @@ import {
   setShowOnboarding,
   setSelectedDiffSelection,
   removeTerminalCollapsedForThreads,
+  clampDrawerWidth,
+  setDrawerWidth,
 } from "./ui-layout-store";
 
 // Helper: reset store to initial state before each test
@@ -79,6 +81,25 @@ describe("uiLayoutStore", () => {
       expect(uiLayoutStore.getState().panelVisibility.isDrawerOpen).toBe(true);
       setDrawerOpen(false);
       expect(uiLayoutStore.getState().panelVisibility.isDrawerOpen).toBe(false);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Drawer width
+  // -----------------------------------------------------------------------
+  describe("drawer width", () => {
+    it("should clamp drawer width to min and viewport ratio", () => {
+      expect(clampDrawerWidth(100, 1200)).toBe(320);
+      expect(clampDrawerWidth(900, 1200)).toBe(600);
+      expect(clampDrawerWidth(451.6, 1200)).toBe(452);
+    });
+
+    it("should clamp setDrawerWidth before storing", () => {
+      setDrawerWidth(9999);
+      expect(uiLayoutStore.getState().drawerWidth).toBe(clampDrawerWidth(9999));
+
+      setDrawerWidth(1);
+      expect(uiLayoutStore.getState().drawerWidth).toBe(320);
     });
   });
 

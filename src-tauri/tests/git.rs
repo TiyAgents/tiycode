@@ -784,6 +784,87 @@ async fn test_git_fetch_pull_and_push_round_trip_against_local_remote() {
     assert_eq!(remote_subject.trim(), "local push change");
 }
 
+#[tokio::test]
+async fn test_git_restore_discards_tracked_file_changes() {
+    if !git_cli_available() {
+        eprintln!("skipping git restore test: git CLI not available");
+        return;
+    }
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let root = tmp.path();
+    std::fs::write(root.join("tracked.txt"), "original\n").expect("should write tracked file");
+    let repo = Repository::init(root).expect("should init repository");
+    configure_git_user(root);
+    commit_selected(&repo, &["tracked.txt"], "initial commit");
+
+    std::fs::write(root.join("tracked.txt"), "changed\n").expect("should modify tracked file");
+
+    let manager = GitManager::new();
+    let (result, snapshot) = manager
+        .restore(
+            "workspace-restore",
+            &root.to_string_lossy(),
+            &["tracked.txt".to_string()],
+        )
+        .await
+        .expect("git restore should succeed");
+
+    assert_eq!(result.action.as_str(), "restore");
+    assert_eq!(
+        std::fs::read_to_string(root.join("tracked.txt")).unwrap(),
+        "original\n"
+    );
+    assert!(
+        snapshot
+            .unstaged_files
+            .iter()
+            .all(|file| file.path != "tracked.txt"),
+        "restored tracked file should disappear from unstaged changes"
+    );
+}
+
+#[tokio::test]
+async fn test_git_clean_deletes_untracked_file() {
+    if !git_cli_available() {
+        eprintln!("skipping git clean test: git CLI not available");
+        return;
+    }
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let root = tmp.path();
+    std::fs::write(root.join("tracked.txt"), "original\n").expect("should write tracked file");
+    let repo = Repository::init(root).expect("should init repository");
+    configure_git_user(root);
+    commit_selected(&repo, &["tracked.txt"], "initial commit");
+
+    let untracked_path = root.join("scratch.txt");
+    std::fs::write(&untracked_path, "scratch\n").expect("should write untracked file");
+
+    let manager = GitManager::new();
+    let (result, snapshot) = manager
+        .clean(
+            "workspace-clean",
+            &root.to_string_lossy(),
+            &["scratch.txt".to_string()],
+        )
+        .await
+        .expect("git clean should succeed");
+
+    assert_eq!(result.action.as_str(), "clean");
+    assert!(
+        !untracked_path.exists(),
+        "git clean should delete the untracked file"
+    );
+    assert!(
+        snapshot
+            .untracked_files
+            .iter()
+            .all(|file| file.path != "scratch.txt"),
+        "cleaned file should disappear from untracked changes"
+    );
+}
+
 fn commit_selected(repo: &Repository, paths: &[&str], message: &str) {
     let mut index = repo.index().expect("should get repository index");
 

@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tauri::State;
 
 use crate::core::app_state::AppState;
@@ -25,23 +25,36 @@ async fn resolve_workspace_root(state: &AppState, workspace_id: &str) -> Result<
     Ok(PathBuf::from(&workspace.canonical_path))
 }
 
+fn relative_path_has_parent_dir(relative: &str) -> bool {
+    Path::new(relative)
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+}
+
 /// Join a relative path onto the workspace root and canonicalize, rejecting
 /// any traversal that escapes the root.
 fn safe_resolve(root: &Path, relative: &str) -> Result<PathBuf, AppError> {
-    // Reject obviously malicious inputs early.
-    if relative.contains("..") {
+    // Reject parent-directory segments early while allowing valid names like
+    // `data..json` that merely contain consecutive dots.
+    if relative_path_has_parent_dir(relative) {
         return Err(AppError::validation(
             ErrorSource::System,
-            "Path must not contain '..' segments",
+            "Path must not contain parent directory (..) segments",
         ));
     }
 
-    let joined = root.join(relative);
+    let root_canonical = dunce::canonicalize(root).map_err(|e| {
+        AppError::internal(
+            ErrorSource::System,
+            format!("Failed to resolve workspace root: {e}"),
+        )
+    })?;
+    let joined = root_canonical.join(relative);
 
     // For existing paths we canonicalize; for new paths (create / write) we
     // resolve the parent and append the final component.
     let resolved = if joined.exists() {
-        joined.canonicalize().map_err(|e| {
+        dunce::canonicalize(&joined).map_err(|e| {
             AppError::internal(ErrorSource::System, format!("Failed to resolve path: {e}"))
         })?
     } else {
@@ -49,7 +62,7 @@ fn safe_resolve(root: &Path, relative: &str) -> Result<PathBuf, AppError> {
         let parent = joined
             .parent()
             .ok_or_else(|| AppError::validation(ErrorSource::System, "Invalid file path"))?;
-        let parent_canonical = parent.canonicalize().map_err(|e| {
+        let parent_canonical = dunce::canonicalize(parent).map_err(|e| {
             AppError::internal(
                 ErrorSource::System,
                 format!("Parent directory does not exist: {e}"),
@@ -61,7 +74,7 @@ fn safe_resolve(root: &Path, relative: &str) -> Result<PathBuf, AppError> {
         parent_canonical.join(file_name)
     };
 
-    if !resolved.starts_with(root) {
+    if !resolved.starts_with(&root_canonical) {
         return Err(AppError::validation(
             ErrorSource::System,
             "Path escapes workspace boundary",
@@ -352,19 +365,33 @@ mod tests {
     // ---- safe_resolve tests ------------------------------------------------
 
     #[test]
-    fn safe_resolve_rejects_dotdot() {
+    fn safe_resolve_rejects_dotdot_segments() {
         let dir = tempfile::tempdir().expect("temp dir");
         let root = dir.path();
         fs::write(root.join("legit.txt"), "ok").unwrap();
 
-        let result = safe_resolve(root, "../escape.txt");
-        assert!(result.is_err(), "paths with '..' must be rejected");
+        for path in ["../escape.txt", "nested/../escape.txt"] {
+            let result = safe_resolve(root, path);
+            assert!(result.is_err(), "{path:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn safe_resolve_accepts_names_with_consecutive_dots() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).unwrap();
+        let file_name = "data..json";
+        fs::write(root.join(file_name), "ok").unwrap();
+
+        let result = safe_resolve(&root, file_name).expect("consecutive dots are valid in names");
+
+        assert_eq!(result, root.join(file_name));
     }
 
     #[test]
     fn delete_guard_rejects_workspace_root_targets() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let root = fs::canonicalize(dir.path()).unwrap();
+        let root = dunce::canonicalize(dir.path()).unwrap();
 
         let empty_path = safe_resolve(&root, "").unwrap();
         let dot_path = safe_resolve(&root, ".").unwrap();
@@ -402,12 +429,12 @@ mod tests {
     #[test]
     fn rename_target_boundary_check_rejects_root_escape() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let root = fs::canonicalize(dir.path()).unwrap();
+        let root = dunce::canonicalize(dir.path()).unwrap();
         let file_path = root.join("file.txt");
         fs::write(&file_path, "ok").unwrap();
         let parent = file_path.parent().unwrap();
         let unsafe_target = parent.join("..");
-        let canonical_unsafe_target = unsafe_target.canonicalize().unwrap();
+        let canonical_unsafe_target = dunce::canonicalize(unsafe_target).unwrap();
 
         assert!(validate_bare_file_name("..", "New name").is_err());
         assert!(
@@ -419,7 +446,7 @@ mod tests {
     #[test]
     fn safe_resolve_accepts_simple_relative_path() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let root = fs::canonicalize(dir.path()).unwrap();
+        let root = dunce::canonicalize(dir.path()).unwrap();
         fs::write(root.join("a.txt"), "hello").unwrap();
 
         let result = safe_resolve(&root, "a.txt");
@@ -428,21 +455,27 @@ mod tests {
     }
 
     #[test]
-    fn safe_resolve_rejects_escape_via_canonicalize() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let root = fs::canonicalize(dir.path()).unwrap();
-        // Even though `..` is caught early, verify the boundary check too.
-        // We construct a path that resolves outside root but is not caught by
-        // the `..` check because it uses absolute or other tricks.
-        // Since `..` is rejected early, this test documents that behavior.
-        let result = safe_resolve(&root, "../../etc/passwd");
-        assert!(result.is_err());
+    fn safe_resolve_rejects_absolute_path_escape() {
+        let root_dir = tempfile::tempdir().expect("root dir");
+        let outside_dir = tempfile::tempdir().expect("outside dir");
+        let root = dunce::canonicalize(root_dir.path()).unwrap();
+        let outside_file = dunce::canonicalize(outside_dir.path())
+            .unwrap()
+            .join("outside.txt");
+        fs::write(&outside_file, "outside").unwrap();
+
+        let result = safe_resolve(&root, outside_file.to_string_lossy().as_ref());
+
+        assert!(
+            result.is_err(),
+            "absolute paths outside root must be rejected"
+        );
     }
 
     #[test]
     fn safe_resolve_new_file_in_existing_dir() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let root = fs::canonicalize(dir.path()).unwrap();
+        let root = dunce::canonicalize(dir.path()).unwrap();
 
         let result = safe_resolve(&root, "new_file.txt");
         assert!(result.is_ok(), "new file in existing dir should resolve");

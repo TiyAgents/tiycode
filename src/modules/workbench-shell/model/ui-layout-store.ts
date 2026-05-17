@@ -1,7 +1,7 @@
 import { createStore, useStore as useStoreBase, shallowEqual } from "@/shared/lib/create-store";
 import type { DrawerPanel, PanelVisibilityState, WorkbenchOverlay } from "@/modules/workbench-shell/model/types";
 import type { GitDiffSelection } from "@/modules/workbench-shell/ui/source-control-panels";
-import { DEFAULT_TERMINAL_HEIGHT, PANEL_VISIBILITY_STORAGE_KEY, DEFAULT_DRAWER_WIDTH, DRAWER_WIDTH_STORAGE_KEY } from "@/modules/workbench-shell/model/fixtures";
+import { DEFAULT_TERMINAL_HEIGHT, PANEL_VISIBILITY_STORAGE_KEY, DEFAULT_DRAWER_WIDTH, DRAWER_WIDTH_STORAGE_KEY, MIN_DRAWER_WIDTH, MAX_DRAWER_WIDTH_RATIO } from "@/modules/workbench-shell/model/fixtures";
 import { readPanelVisibilityState } from "@/modules/workbench-shell/model/helpers";
 import type { SettingsCategory } from "@/modules/settings-center/model/types";
 import type { NewWorktreeDialogContext } from "@/modules/workbench-shell/ui/new-worktree-dialog";
@@ -58,15 +58,31 @@ export interface UILayoutStoreState {
 // Initial state
 // ---------------------------------------------------------------------------
 
+export function clampDrawerWidth(width: number, viewportWidth?: number): number {
+  const fallbackViewportWidth = DEFAULT_DRAWER_WIDTH / MAX_DRAWER_WIDTH_RATIO;
+  const resolvedViewportWidth = viewportWidth
+    ?? (typeof window !== "undefined" ? window.innerWidth : fallbackViewportWidth);
+  const maxWidth = Math.max(
+    MIN_DRAWER_WIDTH,
+    Math.floor(resolvedViewportWidth * MAX_DRAWER_WIDTH_RATIO),
+  );
+
+  if (!Number.isFinite(width)) {
+    return DEFAULT_DRAWER_WIDTH;
+  }
+
+  return Math.max(MIN_DRAWER_WIDTH, Math.min(maxWidth, Math.round(width)));
+}
+
 function readSavedDrawerWidth(): number {
   try {
     const saved = window.localStorage.getItem(DRAWER_WIDTH_STORAGE_KEY);
     if (saved) {
       const n = parseInt(saved, 10);
-      if (!isNaN(n) && n >= 320) return n;
+      if (!isNaN(n)) return clampDrawerWidth(n);
     }
   } catch { /* noop */ }
-  return DEFAULT_DRAWER_WIDTH;
+  return clampDrawerWidth(DEFAULT_DRAWER_WIDTH);
 }
 
 function getInitialState(): UILayoutStoreState {
@@ -112,10 +128,16 @@ uiLayoutStore.subscribe(() => {
     }
   }
   if (drawerWidth !== lastPersistedDrawerWidth) {
-    lastPersistedDrawerWidth = drawerWidth;
+    const clampedDrawerWidth = clampDrawerWidth(drawerWidth);
+    lastPersistedDrawerWidth = clampedDrawerWidth;
     try {
-      window.localStorage.setItem(DRAWER_WIDTH_STORAGE_KEY, String(drawerWidth));
-    } catch { /* noop */ }
+      window.localStorage.setItem(DRAWER_WIDTH_STORAGE_KEY, String(clampedDrawerWidth));
+    } catch {
+      /* noop */
+    }
+    if (clampedDrawerWidth !== drawerWidth) {
+      uiLayoutStore.setState({ drawerWidth: clampedDrawerWidth });
+    }
   }
 });
 
@@ -211,7 +233,7 @@ export function setSelectedDiffSelection(selection: GitDiffSelection | null): vo
 // ---------------------------------------------------------------------------
 
 export function setDrawerWidth(width: number): void {
-  uiLayoutStore.setState({ drawerWidth: width });
+  uiLayoutStore.setState({ drawerWidth: clampDrawerWidth(width) });
 }
 
 export function setDrawerResize(resize: DrawerResizeState | null): void {
