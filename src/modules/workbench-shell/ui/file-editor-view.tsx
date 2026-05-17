@@ -15,6 +15,7 @@ import { keymap } from "@codemirror/view";
 import type { ViewUpdate } from "@codemirror/view";
 import { X, Eye, Code2, Save, Loader2, AlertCircle } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { buildHtmlPreviewDocument } from "@/modules/workbench-shell/ui/html-preview-document";
 import { cn } from "@/shared/lib/utils";
 import { useT } from "@/i18n";
 import {
@@ -227,7 +228,7 @@ const HtmlPreview: FC<{ content: string }> = ({ content }) => {
   return (
     <iframe
       sandbox="allow-scripts"
-      srcDoc={content}
+      srcDoc={buildHtmlPreviewDocument(content)}
       className="h-full w-full border-0 bg-white"
       title={t("fileEditor.htmlPreview")}
     />

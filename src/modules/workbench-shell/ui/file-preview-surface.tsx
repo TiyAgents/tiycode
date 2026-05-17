@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { WorkbenchPreviewOverlay } from "@/modules/workbench-shell/ui/workbench-preview-overlay";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { buildHtmlPreviewDocument } from "@/modules/workbench-shell/ui/html-preview-document";
 
 export type PreviewContentType = "html" | "svg" | "markdown";
 
@@ -71,7 +72,7 @@ function PreviewContent({ source, contentType }: { source: string; contentType: 
     case "html":
       return (
         <iframe
-          srcDoc={source}
+          srcDoc={buildHtmlPreviewDocument(source)}
           sandbox="allow-scripts"
           className="h-full min-h-full w-full border-0 bg-white"
           title="HTML Preview"
