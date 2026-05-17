@@ -355,6 +355,20 @@
     color: color-mix(in oklab, var(--app-subtle) 58%, transparent) !important;
     font-size: 11px !important;
   }
+
+  .file-editor-codemirror .cm-editor {
+    height: 100%;
+    width: 100%;
+  }
+
+  .file-editor-codemirror .cm-scroller {
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .file-editor-codemirror .cm-content {
+    min-height: 100%;
+  }
 }
 
 :root {

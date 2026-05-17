@@ -15,7 +15,6 @@ import { keymap } from "@codemirror/view";
 import type { ViewUpdate } from "@codemirror/view";
 import { X, Eye, Code2, Save, Loader2, AlertCircle } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
-import { buildHtmlPreviewDocument } from "@/modules/workbench-shell/ui/html-preview-document";
 import { cn } from "@/shared/lib/utils";
 import { useT } from "@/i18n";
 import {
@@ -182,7 +181,19 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
     });
     viewRef.current = view;
 
+    const refreshFrame = window.requestAnimationFrame(() => {
+      view.requestMeasure();
+    });
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(() => {
+          view.requestMeasure();
+        });
+    resizeObserver?.observe(containerRef.current);
+
     return () => {
+      window.cancelAnimationFrame(refreshFrame);
+      resizeObserver?.disconnect();
       flushPendingContent();
       view.destroy();
       viewRef.current = null;
@@ -208,7 +219,7 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
     });
   }, [content]);
 
-  return <div ref={containerRef} className="h-full w-full overflow-hidden" />;
+  return <div ref={containerRef} className="file-editor-codemirror h-full w-full overflow-hidden" />;
 };
 
 // ---------------------------------------------------------------------------
@@ -228,7 +239,7 @@ const HtmlPreview: FC<{ content: string }> = ({ content }) => {
   return (
     <iframe
       sandbox="allow-scripts"
-      srcDoc={buildHtmlPreviewDocument(content)}
+      srcDoc={content}
       className="h-full w-full border-0 bg-white"
       title={t("fileEditor.htmlPreview")}
     />
