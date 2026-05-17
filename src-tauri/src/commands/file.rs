@@ -140,18 +140,8 @@ fn mime_for_extension(ext: &str) -> &'static str {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------
-
-#[tauri::command]
-pub async fn file_read(
-    state: State<'_, AppState>,
-    workspace_id: String,
-    path: String,
-) -> Result<FileContentDto, AppError> {
-    let root = resolve_workspace_root(&state, &workspace_id).await?;
-    let resolved = safe_resolve(&root, &path)?;
+async fn file_read_at_root(root: &Path, path: &str) -> Result<FileContentDto, AppError> {
+    let resolved = safe_resolve(root, path)?;
 
     let metadata = tokio::fs::metadata(&resolved)
         .await
@@ -211,15 +201,8 @@ pub async fn file_read(
     })
 }
 
-#[tauri::command]
-pub async fn file_write(
-    state: State<'_, AppState>,
-    workspace_id: String,
-    path: String,
-    content: String,
-) -> Result<(), AppError> {
-    let root = resolve_workspace_root(&state, &workspace_id).await?;
-    let resolved = safe_resolve(&root, &path)?;
+async fn file_write_at_root(root: &Path, path: &str, content: &str) -> Result<(), AppError> {
+    let resolved = safe_resolve(root, path)?;
 
     tokio::fs::write(&resolved, content.as_bytes())
         .await
@@ -230,16 +213,13 @@ pub async fn file_write(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn file_create(
-    state: State<'_, AppState>,
-    workspace_id: String,
-    parent_path: String,
-    name: String,
+async fn file_create_at_root(
+    root: &Path,
+    parent_path: &str,
+    name: &str,
     is_dir: bool,
 ) -> Result<(), AppError> {
-    let root = resolve_workspace_root(&state, &workspace_id).await?;
-    let parent = safe_resolve(&root, &parent_path)?;
+    let parent = safe_resolve(root, parent_path)?;
 
     if !parent.is_dir() {
         return Err(AppError::validation(
@@ -248,9 +228,9 @@ pub async fn file_create(
         ));
     }
 
-    validate_bare_file_name(&name, "Name")?;
+    validate_bare_file_name(name, "Name")?;
 
-    let target = parent.join(&name);
+    let target = parent.join(name);
     if target.exists() {
         return Err(AppError::validation(
             ErrorSource::System,
@@ -274,15 +254,9 @@ pub async fn file_create(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn file_delete(
-    state: State<'_, AppState>,
-    workspace_id: String,
-    path: String,
-) -> Result<(), AppError> {
-    let root = resolve_workspace_root(&state, &workspace_id).await?;
-    let resolved = safe_resolve(&root, &path)?;
-    reject_workspace_root_target(&root, &resolved, "delete")?;
+async fn file_delete_at_root(root: &Path, path: &str) -> Result<(), AppError> {
+    let resolved = safe_resolve(root, path)?;
+    reject_workspace_root_target(root, &resolved, "delete")?;
 
     if !resolved.exists() {
         return Err(AppError::not_found(
@@ -307,15 +281,8 @@ pub async fn file_delete(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn file_rename(
-    state: State<'_, AppState>,
-    workspace_id: String,
-    old_path: String,
-    new_name: String,
-) -> Result<(), AppError> {
-    let root = resolve_workspace_root(&state, &workspace_id).await?;
-    let resolved_old = safe_resolve(&root, &old_path)?;
+async fn file_rename_at_root(root: &Path, old_path: &str, new_name: &str) -> Result<(), AppError> {
+    let resolved_old = safe_resolve(root, old_path)?;
 
     if !resolved_old.exists() {
         return Err(AppError::not_found(
@@ -324,15 +291,15 @@ pub async fn file_rename(
         ));
     }
 
-    validate_bare_file_name(&new_name, "New name")?;
+    validate_bare_file_name(new_name, "New name")?;
 
     let parent = resolved_old.parent().ok_or_else(|| {
         AppError::validation(ErrorSource::System, "Cannot determine parent directory")
     })?;
-    let new_path = parent.join(&new_name);
-    reject_workspace_root_target(&root, &new_path, "rename to")?;
+    let new_path = parent.join(new_name);
+    reject_workspace_root_target(root, &new_path, "rename to")?;
 
-    if !new_path.starts_with(&root) {
+    if !new_path.starts_with(root) {
         return Err(AppError::validation(
             ErrorSource::System,
             "New path escapes workspace boundary",
@@ -351,6 +318,64 @@ pub async fn file_rename(
         .map_err(|e| AppError::internal(ErrorSource::System, format!("Failed to rename: {e}")))?;
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn file_read(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    path: String,
+) -> Result<FileContentDto, AppError> {
+    let root = resolve_workspace_root(&state, &workspace_id).await?;
+    file_read_at_root(&root, &path).await
+}
+
+#[tauri::command]
+pub async fn file_write(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    path: String,
+    content: String,
+) -> Result<(), AppError> {
+    let root = resolve_workspace_root(&state, &workspace_id).await?;
+    file_write_at_root(&root, &path, &content).await
+}
+
+#[tauri::command]
+pub async fn file_create(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    parent_path: String,
+    name: String,
+    is_dir: bool,
+) -> Result<(), AppError> {
+    let root = resolve_workspace_root(&state, &workspace_id).await?;
+    file_create_at_root(&root, &parent_path, &name, is_dir).await
+}
+
+#[tauri::command]
+pub async fn file_delete(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    path: String,
+) -> Result<(), AppError> {
+    let root = resolve_workspace_root(&state, &workspace_id).await?;
+    file_delete_at_root(&root, &path).await
+}
+
+#[tauri::command]
+pub async fn file_rename(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    old_path: String,
+    new_name: String,
+) -> Result<(), AppError> {
+    let root = resolve_workspace_root(&state, &workspace_id).await?;
+    file_rename_at_root(&root, &old_path, &new_name).await
 }
 
 // ---------------------------------------------------------------------------
@@ -608,5 +633,134 @@ mod tests {
                 "MIME mismatch for extension '{ext}'"
             );
         }
+    }
+
+    // ---- command-core helper tests -----------------------------------------
+
+    #[tokio::test]
+    async fn file_read_at_root_reads_text_and_rejects_directories() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).unwrap();
+        fs::write(root.join("note.txt"), "hello").unwrap();
+        fs::create_dir(root.join("folder")).unwrap();
+
+        let text = file_read_at_root(&root, "note.txt").await.unwrap();
+        assert_eq!(text.content, "hello");
+        assert!(!text.is_binary);
+        assert_eq!(text.size_bytes, 5);
+
+        let err = file_read_at_root(&root, "folder").await.unwrap_err();
+        assert_eq!(err.error_code, "system.validation");
+        assert_eq!(err.user_message, "Cannot read a directory as a file");
+    }
+
+    #[tokio::test]
+    async fn file_read_at_root_handles_large_invalid_utf8_binary_and_image_files() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).unwrap();
+
+        fs::write(root.join("bad.txt"), [0xFF, 0xFE, 0xFD]).unwrap();
+        let invalid_utf8 = file_read_at_root(&root, "bad.txt").await.unwrap_err();
+        assert_eq!(invalid_utf8.error_code, "system._internal");
+
+        fs::write(root.join("binary.bin"), b"abc\0def").unwrap();
+        let binary = file_read_at_root(&root, "binary.bin").await.unwrap();
+        assert!(binary.is_binary);
+        assert!(binary.content.is_empty());
+
+        fs::write(root.join("image.png"), b"png bytes").unwrap();
+        let image = file_read_at_root(&root, "image.png").await.unwrap();
+        assert!(image.is_binary);
+        assert!(image.content.starts_with("data:image/png;base64,"));
+
+        let large_content = vec![b'a'; (MAX_READ_SIZE + 1) as usize];
+        fs::write(root.join("large.txt"), large_content).unwrap();
+        let large = file_read_at_root(&root, "large.txt").await.unwrap_err();
+        assert_eq!(large.error_code, "system.validation");
+        assert!(large.user_message.contains("File too large"));
+    }
+
+    #[tokio::test]
+    async fn file_write_at_root_writes_text_and_rejects_missing_parent_and_escape() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).unwrap();
+
+        file_write_at_root(&root, "created.txt", "hello")
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("created.txt")).unwrap(),
+            "hello"
+        );
+
+        let missing_parent = file_write_at_root(&root, "missing/file.txt", "hello")
+            .await
+            .unwrap_err();
+        assert_eq!(missing_parent.error_code, "system._internal");
+
+        let escaped = file_write_at_root(&root, "../outside.txt", "nope")
+            .await
+            .unwrap_err();
+        assert_eq!(escaped.error_code, "system.validation");
+    }
+
+    #[tokio::test]
+    async fn file_create_delete_and_rename_at_root_cover_validation_paths() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).unwrap();
+
+        file_create_at_root(&root, "", "new.txt", false)
+            .await
+            .unwrap();
+        assert!(root.join("new.txt").is_file());
+
+        file_create_at_root(&root, "", "folder", true)
+            .await
+            .unwrap();
+        assert!(root.join("folder").is_dir());
+
+        let exists = file_create_at_root(&root, "", "new.txt", false)
+            .await
+            .unwrap_err();
+        assert_eq!(exists.error_code, "system.validation");
+
+        let bad_name = file_create_at_root(&root, "", "bad/name.txt", false)
+            .await
+            .unwrap_err();
+        assert_eq!(bad_name.error_code, "system.validation");
+
+        let missing_parent = file_create_at_root(&root, "missing", "child.txt", false)
+            .await
+            .unwrap_err();
+        assert_eq!(missing_parent.error_code, "system.validation");
+
+        file_rename_at_root(&root, "new.txt", "renamed.txt")
+            .await
+            .unwrap();
+        assert!(!root.join("new.txt").exists());
+        assert!(root.join("renamed.txt").exists());
+
+        let bad_rename = file_rename_at_root(&root, "renamed.txt", "bad/name.txt")
+            .await
+            .unwrap_err();
+        assert_eq!(bad_rename.error_code, "system.validation");
+
+        fs::write(root.join("existing.txt"), "existing").unwrap();
+        let rename_exists = file_rename_at_root(&root, "renamed.txt", "existing.txt")
+            .await
+            .unwrap_err();
+        assert_eq!(rename_exists.error_code, "system.validation");
+
+        file_delete_at_root(&root, "renamed.txt").await.unwrap();
+        assert!(!root.join("renamed.txt").exists());
+
+        file_delete_at_root(&root, "folder").await.unwrap();
+        assert!(!root.join("folder").exists());
+
+        let missing_delete = file_delete_at_root(&root, "ghost.txt").await.unwrap_err();
+        assert_eq!(missing_delete.error_code, "system.not_found");
+
+        let delete_root = file_delete_at_root(&root, "").await.unwrap_err();
+        assert_eq!(delete_root.error_code, "system.validation");
     }
 }

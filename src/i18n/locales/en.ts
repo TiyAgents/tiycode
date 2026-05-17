@@ -841,7 +841,7 @@ const en: Record<TranslationKey, string> = {
   // ── File Editor ──────────────────────────────────────────
   "fileEditor.loading": "Loading…",
   "fileEditor.save": "Save",
-  "fileEditor.saveShortcut": "Save (⌘S)",
+  "fileEditor.saveShortcut": "Save (Ctrl/Cmd + S)",
   "fileEditor.htmlPreview": "HTML Preview",
   "fileEditor.editor": "Editor",
   "fileEditor.preview": "Preview",

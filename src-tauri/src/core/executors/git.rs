@@ -1321,6 +1321,39 @@ mod tests {
     }
 
     #[test]
+    fn map_cli_failure_classifies_restore_and_clean_errors() {
+        let restore_missing = map_cli_failure(
+            GitMutationAction::Restore,
+            "",
+            "error: pathspec 'missing.txt' did not match any file(s) known to git",
+        );
+        assert_eq!(restore_missing.error_code, "git.restore.not_found");
+        assert!(!restore_missing.retryable);
+
+        let restore_no_file = map_cli_failure(
+            GitMutationAction::Restore,
+            "",
+            "fatal: no such file: missing.txt",
+        );
+        assert_eq!(restore_no_file.error_code, "git.restore.not_found");
+
+        let clean_not_removing = map_cli_failure(
+            GitMutationAction::Clean,
+            "",
+            "fatal: clean.requireForce defaults to true and neither -i, -n, nor -f given; not removing files",
+        );
+        assert_eq!(clean_not_removing.error_code, "git.clean.failed");
+        assert!(!clean_not_removing.retryable);
+
+        let clean_not_directory = map_cli_failure(
+            GitMutationAction::Clean,
+            "",
+            "fatal: not a directory: nested/file.txt",
+        );
+        assert_eq!(clean_not_directory.error_code, "git.clean.failed");
+    }
+
+    #[test]
     fn cli_hint_and_success_summary_are_stable() {
         assert_eq!(first_line("one\ntwo"), "one");
         assert_eq!(render_cli_hint("stdout line", ""), ": stdout line");

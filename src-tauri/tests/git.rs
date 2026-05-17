@@ -865,6 +865,34 @@ async fn test_git_clean_deletes_untracked_file() {
     );
 }
 
+#[tokio::test]
+async fn test_git_restore_missing_path_reports_not_found() {
+    if !git_cli_available() {
+        eprintln!("skipping git restore missing-path test: git CLI not available");
+        return;
+    }
+
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let root = tmp.path();
+    std::fs::write(root.join("tracked.txt"), "original\n").expect("should write tracked file");
+    let repo = Repository::init(root).expect("should init repository");
+    configure_git_user(root);
+    commit_selected(&repo, &["tracked.txt"], "initial commit");
+
+    let manager = GitManager::new();
+    let err = manager
+        .restore(
+            "workspace-restore-missing",
+            &root.to_string_lossy(),
+            &["missing.txt".to_string()],
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.error_code, "git.restore.not_found");
+    assert!(!err.retryable);
+}
+
 fn commit_selected(repo: &Repository, paths: &[&str], message: &str) {
     let mut index = repo.index().expect("should get repository index");
 

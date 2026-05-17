@@ -879,7 +879,7 @@ const zhCN = {
   // ── File Editor ──────────────────────────────────────────
   "fileEditor.loading": "加载中…",
   "fileEditor.save": "保存",
-  "fileEditor.saveShortcut": "保存 (⌘S)",
+  "fileEditor.saveShortcut": "保存 (Ctrl/Cmd + S)",
   "fileEditor.htmlPreview": "HTML 预览",
   "fileEditor.editor": "编辑器",
   "fileEditor.preview": "预览",

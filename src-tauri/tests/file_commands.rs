@@ -1,9 +1,9 @@
-//! Integration tests for the file CRUD commands (`commands/file.rs`).
+//! Filesystem smoke tests for file-command behavior.
 //!
-//! These tests exercise the `safe_resolve` path-safety helper and the five
-//! Tauri command functions at the Rust function level (bypassing the Tauri
-//! invoke layer) by calling the same underlying logic directly through
-//! the filesystem.
+//! Command-core path-safety and AppError behavior is covered in
+//! `commands/file.rs` unit tests, where private command helpers can be invoked
+//! directly without constructing a full Tauri `State<AppState>`. This file keeps
+//! broader filesystem round-trip checks around CRUD-adjacent behavior.
 
 mod test_helpers;
 
