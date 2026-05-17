@@ -1,8 +1,19 @@
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState, useCallback } from "react";
 import { useT } from "@/i18n";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Check, ChevronDown, ChevronRight, Copy, FolderOpen, LoaderCircle, RefreshCw } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ClipboardCopy,
+  FilePlus,
+  FolderOpen,
+  FolderPlus,
+  LoaderCircle,
+  MoreHorizontal,
+  RefreshCw,
+} from "lucide-react";
 import {
   type DirectoryChildrenResponse,
   indexFilterFiles,
@@ -16,6 +27,14 @@ import {
   type IndexGitOverlayReadyPayload,
 } from "@/services/bridge";
 import { Input } from "@/shared/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 import { cn } from "@/shared/lib/utils";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import {
@@ -27,11 +46,20 @@ import {
 } from "@/modules/workbench-shell/model/fixtures";
 import { PANE_AUTO_REFRESH_INTERVAL_MS } from "@/modules/workbench-shell/model/panel-auto-refresh";
 import { useWorkspaceOpenApps } from "@/modules/workbench-shell/model/use-workspace-open-apps";
-import type { ProjectOption, ProjectTreeItem, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
+import type { ProjectOption, WorkspaceOpenApp } from "@/modules/workbench-shell/model/types";
 import { ProjectTreeIcon } from "@/modules/workbench-shell/ui/project-tree-icon";
+import { FileContextMenu, NewFileDialog } from "@/modules/workbench-shell/ui/file-context-menu";
+import {
+  openFile,
+} from "@/modules/workbench-shell/model/file-editor-store";
+import {
+  setFileEditorOverlayClickThrough,
+  setFileEditorOverlayOpen,
+} from "@/modules/workbench-shell/model/ui-layout-store";
 
 const PREFERRED_OPEN_APP_STORAGE_KEY = "tiy-preferred-open-app-id";
 const FILE_MANAGER_APP_IDS = ["finder", "explorer"];
+const FILE_EDITOR_OPEN_DELAY_MS = 300;
 
 function readCachedPreferredOpenAppId(): string | null {
   try {
@@ -184,45 +212,6 @@ function buildMockFilterResponse(query: string): FileFilterResponse {
     results,
     count: results.length,
   };
-}
-
-function inferIcon(name: string, isDir: boolean): ProjectTreeItem["icon"] {
-  if (isDir) {
-    return "folder";
-  }
-
-  const lowerName = name.toLowerCase();
-  const extension = lowerName.includes(".") ? lowerName.split(".").pop() ?? "" : "";
-
-  if (lowerName === ".gitignore" || lowerName.startsWith(".git")) {
-    return "git";
-  }
-
-  if (lowerName.endsWith(".json")) {
-    return "json";
-  }
-
-  if (lowerName.endsWith(".html")) {
-    return "html";
-  }
-
-  if (lowerName.endsWith(".css")) {
-    return "css";
-  }
-
-  if (lowerName === "license") {
-    return "license";
-  }
-
-  if (lowerName === "readme.md") {
-    return "readme";
-  }
-
-  if (extension === "ts" || extension === "tsx") {
-    return "ts";
-  }
-
-  return "file";
 }
 
 function flattenVisibleTree(
@@ -514,15 +503,17 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const [activeFilterRevealPath, setActiveFilterRevealPath] = useState<string | null>(null);
   const [isRefreshingTree, setRefreshingTree] = useState(false);
   const [treeReloadVersion, setTreeReloadVersion] = useState(0);
-  const [isOpenMenuOpen, setOpenMenuOpen] = useState(false);
+  const [isRootActionsMenuOpen, setRootActionsMenuOpen] = useState(false);
+  const [isOpenAppMenuOpen, setOpenAppMenuOpen] = useState(false);
+  const [isRootNewDialogOpen, setRootNewDialogOpen] = useState(false);
+  const [rootNewDialogIsDir, setRootNewDialogIsDir] = useState(false);
   const [preferredOpenAppId, setPreferredOpenAppId] = useState<string | null>(() => readCachedPreferredOpenAppId());
   const [activeOpenTargetId, setActiveOpenTargetId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
-  const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const deferredFilterValue = useDeferredValue(filterValue);
-  const openMenuRef = useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = useRef<number | null>(null);
   const revealTimeoutRef = useRef<number | null>(null);
+  const openFileTimeoutRef = useRef<number | null>(null);
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
   const treeRowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const isRefreshingTreeRef = useRef(false);
@@ -580,39 +571,12 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
       if (revealTimeoutRef.current) {
         window.clearTimeout(revealTimeoutRef.current);
       }
+      if (openFileTimeoutRef.current) {
+        window.clearTimeout(openFileTimeoutRef.current);
+      }
+      setFileEditorOverlayClickThrough(false);
     };
   }, []);
-
-  useEffect(() => {
-    if (!copiedPath || typeof window === "undefined") {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setCopiedPath((current) => (current === copiedPath ? null : current));
-    }, 1600);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [copiedPath]);
-
-  useEffect(() => {
-    if (!isOpenMenuOpen || typeof window === "undefined") {
-      return;
-    }
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-
-      if (target && openMenuRef.current?.contains(target)) {
-        return;
-      }
-
-      setOpenMenuOpen(false);
-    };
-
-    window.addEventListener("mousedown", handlePointerDown);
-    return () => window.removeEventListener("mousedown", handlePointerDown);
-  }, [isOpenMenuOpen]);
 
   useEffect(() => {
     if (openApps.length === 0) {
@@ -630,7 +594,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     setPendingRevealPath(null);
     setRevealedPath(null);
     setActiveFilterRevealPath(null);
-    setCopiedPath(null);
+    setRootActionsMenuOpen(false);
+    setOpenAppMenuOpen(false);
   }, [workspaceId, projectPath]);
 
   useEffect(() => {
@@ -932,12 +897,66 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     setTreeReloadVersion((current) => current + 1);
   };
 
+  const closeHeaderMenus = () => {
+    setRootActionsMenuOpen(false);
+    setOpenAppMenuOpen(false);
+  };
+
+  const handleCreateRootEntry = (isDir: boolean) => {
+    closeHeaderMenus();
+    setRootNewDialogIsDir(isDir);
+    setRootNewDialogOpen(true);
+  };
+
+  const handleCopyRootPath = async () => {
+    if (!projectPath) {
+      return;
+    }
+
+    closeHeaderMenus();
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(projectPath);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = projectPath;
+        textArea.setAttribute("readonly", "true");
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
+        textArea.style.pointerEvents = "none";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const didCopy = document.execCommand("copy");
+        document.body.removeChild(textArea);
+
+        if (!didCopy) {
+          throw new Error("copy command failed");
+        }
+      }
+
+      setOpenError(null);
+    } catch {
+      setOpenError("Failed to copy root path");
+    }
+  };
+
+  const handleSelectOpenApp = (app: WorkspaceOpenApp) => {
+    setPreferredOpenAppId(app.id);
+    writeCachedPreferredOpenAppId(app.id);
+    closeHeaderMenus();
+    setOpenError(null);
+  };
+
   const handleOpenInApp = async (app: WorkspaceOpenApp) => {
     if (!projectPath) {
       return;
     }
 
+    closeHeaderMenus();
     setActiveOpenTargetId(app.id);
+    setOpenError(null);
 
     try {
       await invoke("open_workspace_in_app", {
@@ -945,10 +964,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
         appId: app.id,
         appPath: app.openWith,
       });
-      setPreferredOpenAppId(app.id);
-      writeCachedPreferredOpenAppId(app.id);
-      setOpenMenuOpen(false);
-      setOpenError(null);
     } catch (error) {
       const message = getInvokeErrorMessage(error, `Couldn't open in ${app.name}`);
       setOpenError(message);
@@ -964,7 +979,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     }
   };
 
-  const handleOpenTreeFile = async (relativePath: string) => {
+  const handleOpenTreePath = async (relativePath: string, isDirectory: boolean) => {
     if (!projectPath || !preferredOpenApp) {
       return;
     }
@@ -975,13 +990,14 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
     try {
       await invoke("open_tree_path_in_app", {
         targetPath,
-        isDirectory: false,
+        isDirectory,
         appId: preferredOpenApp.id,
         appPath: preferredOpenApp.openWith,
       });
       setOpenError(null);
     } catch (error) {
-      const message = getInvokeErrorMessage(error, `Couldn't open file in ${preferredOpenApp.name}`);
+      const targetType = isDirectory ? "folder" : "file";
+      const message = getInvokeErrorMessage(error, `Couldn't open ${targetType} in ${preferredOpenApp.name}`);
       setOpenError(message);
       if (errorTimeoutRef.current) {
         window.clearTimeout(errorTimeoutRef.current);
@@ -1180,7 +1196,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
 
   const handleCopyRelativePath = async (path: string) => {
     if (typeof window === "undefined") {
-      setCopiedPath(null);
       setOpenError("Failed to copy relative path");
       return;
     }
@@ -1206,10 +1221,8 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
         }
       }
 
-      setCopiedPath(path);
       setOpenError(null);
     } catch {
-      setCopiedPath(null);
       setOpenError("Failed to copy relative path");
     }
   };
@@ -1222,7 +1235,38 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
   const filterResults = filterState.data?.results ?? [];
   const isFiltering = normalizedFilter.length > 0;
 
+  const handleOpenFileInEditor = useCallback((path: string) => {
+    if (!workspaceId) {
+      return;
+    }
+
+    if (openFileTimeoutRef.current) {
+      window.clearTimeout(openFileTimeoutRef.current);
+    }
+
+    openFileTimeoutRef.current = window.setTimeout(() => {
+      openFileTimeoutRef.current = null;
+      setFileEditorOverlayClickThrough(false);
+      setFileEditorOverlayOpen(true);
+      void openFile(workspaceId, path);
+    }, FILE_EDITOR_OPEN_DELAY_MS);
+  }, [workspaceId]);
+
+  const handleOpenTreePathFromDoubleClick = useCallback((path: string, isDir: boolean) => {
+    if (openFileTimeoutRef.current) {
+      window.clearTimeout(openFileTimeoutRef.current);
+      openFileTimeoutRef.current = null;
+    }
+
+    setFileEditorOverlayClickThrough(false);
+    void handleOpenTreePath(path, isDir);
+  }, [handleOpenTreePath]);
+
+
   return (
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Tree pane */}
+      <div className="min-h-0 flex-1 overflow-hidden">
     <div className="flex h-full min-h-0 flex-col px-4 pb-5 pt-2">
       <div className="shrink-0 bg-app-drawer">
         <div className="flex items-center justify-between gap-3 px-1 pr-1 text-[15px] font-medium">
@@ -1230,92 +1274,152 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
             <FolderOpen className="size-4 shrink-0 text-app-subtle" />
             <span className="truncate text-app-foreground">{projectName}</span>
           </div>
-          {isLoadingOpenApps || preferredOpenApp ? (
-            <div ref={openMenuRef} className="relative shrink-0">
+          <div className="flex shrink-0 items-center gap-1.5">
+            {isLoadingOpenApps || preferredOpenApp ? (
               <div
                 className={cn(
                   "inline-flex h-8 items-stretch overflow-hidden rounded-2xl border border-app-border bg-app-surface/90 text-app-subtle transition-[border-color,background-color,box-shadow]",
-                  isOpenMenuOpen && "border-app-border-strong bg-app-surface text-app-foreground shadow-[0_8px_18px_rgba(15,23,42,0.08)]",
+                  isOpenAppMenuOpen && "border-app-border-strong bg-app-surface text-app-foreground shadow-[0_8px_18px_rgba(15,23,42,0.08)]",
                 )}
               >
                 <button
                   type="button"
                   aria-label={preferredOpenApp ? `Open folder with ${preferredOpenApp.name}` : "Loading supported apps"}
                   title={preferredOpenApp ? `Open folder with ${preferredOpenApp.name}` : "Loading supported apps"}
-                  disabled={!projectPath || isLoadingOpenApps || openApps.length === 0 || !preferredOpenApp}
-                  className="inline-flex min-w-0 items-center px-2.5 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!projectPath || isLoadingOpenApps || !preferredOpenApp || Boolean(activeOpenTargetId)}
+                  className="inline-flex min-w-0 items-center gap-2 px-2.5 transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
                   onClick={() => {
                     if (preferredOpenApp) {
                       void handleOpenInApp(preferredOpenApp);
                     }
                   }}
                 >
-                  {isLoadingOpenApps ? (
+                  {activeOpenTargetId === preferredOpenApp?.id || isLoadingOpenApps ? (
                     <LoaderCircle className="size-4 shrink-0 animate-spin text-app-subtle" />
                   ) : preferredOpenApp ? (
                     <WorkspaceAppIcon app={preferredOpenApp} sizeClassName="size-[18px]" radiusClassName="rounded-[5px]" />
                   ) : null}
+                  <span className="min-w-0 truncate text-[12px] font-medium">Open</span>
                 </button>
 
                 <div className="w-px bg-app-border/80" />
 
+                <DropdownMenu
+                  open={isOpenAppMenuOpen}
+                  onOpenChange={(open) => {
+                    setOpenAppMenuOpen(open);
+                    if (open) {
+                      setRootActionsMenuOpen(false);
+                    }
+                  }}
+                >
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Choose default app"
+                      title="Choose default app"
+                      aria-haspopup="menu"
+                      aria-expanded={isOpenAppMenuOpen}
+                      disabled={!projectPath || isLoadingOpenApps || openApps.length === 0 || Boolean(activeOpenTargetId)}
+                      className="inline-flex w-7 items-center justify-center transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <ChevronDown
+                        className={cn(
+                          "size-3.5 shrink-0 transition-transform duration-200",
+                          isOpenAppMenuOpen && "rotate-180",
+                        )}
+                      />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" sideOffset={10} className="w-60 overflow-hidden rounded-2xl border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
+                    <DropdownMenuLabel className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-app-subtle">
+                      Default app
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator className="bg-app-border/80" />
+                    <div className="space-y-0.5">
+                      {openApps.map((app) => {
+                        const isPreferred = preferredOpenApp?.id === app.id;
+
+                        return (
+                          <DropdownMenuItem
+                            key={app.id}
+                            className={cn(
+                              "flex items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-app-surface-hover hover:text-app-foreground",
+                              isPreferred && "bg-app-surface-hover/80 text-app-foreground",
+                            )}
+                            disabled={Boolean(activeOpenTargetId)}
+                            onClick={() => handleSelectOpenApp(app)}
+                          >
+                            <WorkspaceAppIcon app={app} sizeClassName="size-5" radiusClassName="rounded-[7px]" />
+                            <span className="min-w-0 flex-1 truncate font-medium">{app.name}</span>
+                            {isPreferred ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
+                          </DropdownMenuItem>
+                        );
+                      })}
+                    </div>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            ) : null}
+
+            <DropdownMenu
+              open={isRootActionsMenuOpen}
+              onOpenChange={(open) => {
+                setRootActionsMenuOpen(open);
+                if (open) {
+                  setOpenAppMenuOpen(false);
+                }
+              }}
+            >
+              <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  aria-label="Choose app to open folder"
-                  title="Choose app to open folder"
+                  aria-label="Project root actions"
+                  title="Project root actions"
                   aria-haspopup="menu"
-                  aria-expanded={isOpenMenuOpen}
-                  disabled={!projectPath || isLoadingOpenApps || openApps.length === 0}
-                  className="inline-flex w-7 items-center justify-center transition-colors hover:bg-app-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
-                  onClick={() => setOpenMenuOpen((current) => !current)}
+                  aria-expanded={isRootActionsMenuOpen}
+                  disabled={!projectPath && !workspaceId}
+                  className={cn(
+                    "inline-flex size-8 items-center justify-center rounded-2xl border border-app-border bg-app-surface/90 text-app-subtle transition-[border-color,background-color,box-shadow] hover:bg-app-surface-hover hover:text-app-foreground disabled:cursor-not-allowed disabled:opacity-60",
+                    isRootActionsMenuOpen && "border-app-border-strong bg-app-surface text-app-foreground shadow-[0_8px_18px_rgba(15,23,42,0.08)]",
+                  )}
                 >
-                  <ChevronDown
-                    className={cn(
-                      "size-3.5 shrink-0 transition-transform duration-200",
-                      isOpenMenuOpen && "rotate-180",
-                    )}
-                  />
+                  <MoreHorizontal className="size-3.5" />
                 </button>
-              </div>
-
-              {isOpenMenuOpen ? (
-                <div className="absolute right-0 top-[calc(100%+0.45rem)] z-20 min-w-[220px] overflow-hidden rounded-2xl border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
-                  <div className="px-2.5 pb-1.5 pt-1">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-app-subtle">Open in</div>
-                  </div>
-                  <div className="space-y-0.5">
-                    {openApps.map((app) => {
-                      const isPending = activeOpenTargetId === app.id;
-                      const isPreferred = preferredOpenApp?.id === app.id;
-
-                      return (
-                        <button
-                          key={app.id}
-                          type="button"
-                          className={cn(
-                            "flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors disabled:cursor-wait disabled:opacity-70",
-                            isPreferred
-                              ? "bg-app-surface-hover/80 text-app-foreground"
-                              : "text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                          )}
-                          disabled={Boolean(activeOpenTargetId)}
-                          onClick={() => void handleOpenInApp(app)}
-                        >
-                          {isPending ? (
-                            <LoaderCircle className="size-4 shrink-0 animate-spin text-app-subtle" />
-                          ) : (
-                            <WorkspaceAppIcon app={app} sizeClassName="size-5" radiusClassName="rounded-[7px]" />
-                          )}
-                          <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{app.name}</span>
-                          {isPreferred ? <Check className="size-3.5 shrink-0 text-app-foreground" /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" sideOffset={10} className="w-56 overflow-hidden rounded-2xl border border-app-border bg-app-menu/98 p-1.5 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.38)] backdrop-blur-xl dark:bg-app-menu/94">
+                <DropdownMenuLabel className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-app-subtle">
+                  Project actions
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-app-border/80" />
+                <DropdownMenuItem
+                  className="gap-2 rounded-xl px-2.5 py-2 text-xs"
+                  disabled={!workspaceId}
+                  onClick={() => handleCreateRootEntry(false)}
+                >
+                  <FilePlus className="size-3.5" />
+                  {t("fileContextMenu.newFile")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="gap-2 rounded-xl px-2.5 py-2 text-xs"
+                  disabled={!workspaceId}
+                  onClick={() => handleCreateRootEntry(true)}
+                >
+                  <FolderPlus className="size-3.5" />
+                  {t("fileContextMenu.newFolder")}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator className="bg-app-border/80" />
+                <DropdownMenuItem
+                  className="gap-2 rounded-xl px-2.5 py-2 text-xs"
+                  disabled={!projectPath}
+                  onClick={() => void handleCopyRootPath()}
+                >
+                  <ClipboardCopy className="size-3.5" />
+                  {t("fileContextMenu.copyPath")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
 
         <div className="relative mt-2.5 pr-1 pb-2.5">
@@ -1377,7 +1481,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
           <div className={DRAWER_LIST_STACK_CLASS}>
             {isFiltering
               ? filterResults.map((match) => {
-                  const icon = inferIcon(match.name, false);
                   const isRevealing = activeFilterRevealPath === match.path;
 
                   return (
@@ -1395,7 +1498,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                       <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
                         {isRevealing ? <LoaderCircle className="size-3 animate-spin" /> : null}
                       </span>
-                      <ProjectTreeIcon icon={icon} muted={false} />
+                      <ProjectTreeIcon name={match.name} isDir={false} muted={false} />
                       <span className={DRAWER_LIST_LABEL_CLASS}>{match.name}</span>
                       {match.parentPath ? (
                         <span className={cn(DRAWER_LIST_META_CLASS, "max-w-[48%] truncate")}>
@@ -1430,8 +1533,6 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                   const isUntracked = node.gitState === "untracked";
                   const isConflicted = node.gitState === "conflicted";
                   const badgeLabel = isConflicted ? "C" : isUntracked ? "U" : isModified ? "M" : null;
-                  const icon = inferIcon(node.name, node.isDir);
-                  const isCopied = copiedPath === node.path;
 
                   return (
                     <div
@@ -1453,11 +1554,19 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                         type="button"
                         disabled={treeState.isLoading}
                         className="min-w-0 flex flex-1 items-center gap-2 text-left disabled:cursor-wait"
-                        onClick={() => void handleTreeToggle(node)}
-                        onDoubleClick={() => {
-                          if (!node.isDir) {
-                            void handleOpenTreeFile(node.path);
+                        onClick={(event) => {
+                          if (event.detail > 1) {
+                            return;
                           }
+
+                          if (node.isDir) {
+                            void handleTreeToggle(node);
+                          } else {
+                            handleOpenFileInEditor(node.path);
+                          }
+                        }}
+                        onDoubleClick={() => {
+                          handleOpenTreePathFromDoubleClick(node.path, node.isDir);
                         }}
                       >
                         <span className="flex size-4 shrink-0 items-center justify-center text-app-subtle/80">
@@ -1467,7 +1576,7 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                             isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />
                           ) : null}
                         </span>
-                        <ProjectTreeIcon icon={icon} muted={isIgnored} />
+                        <ProjectTreeIcon name={node.name} isDir={node.isDir} isExpanded={isExpanded} muted={isIgnored} />
                         <span className={cn(DRAWER_LIST_LABEL_CLASS, "min-w-0 flex-1")}>{node.name}</span>
                         {badgeLabel ? (
                           <span className="shrink-0 rounded-full bg-app-warning/12 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-app-warning">
@@ -1476,21 +1585,17 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
                         ) : null}
                       </button>
 
-                      <button
-                        type="button"
-                        aria-label={`${isCopied ? "Copied relative path for" : "Copy relative path for"} ${node.name}`}
-                        title={isCopied ? "Copied" : "Copy relative path"}
-                        className={cn(
-                          "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md opacity-100 transition-colors hover:bg-app-surface-hover sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100",
-                          isCopied ? "text-app-success" : "text-app-subtle hover:text-app-foreground",
-                        )}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void handleCopyRelativePath(node.path);
-                        }}
-                      >
-                        {isCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                      </button>
+                      <FileContextMenu
+                        nodePath={node.path}
+                        isDir={node.isDir}
+                        isRoot={depth === 0 && node.path === ""}
+                        workspaceId={workspaceId ?? ""}
+                        workspaceRoot={projectPath ?? undefined}
+                        onTreeRefresh={handleRefreshTree}
+                        onCopyPath={handleCopyRelativePath}
+                        onOpenExternal={(p) => void handleOpenTreePath(p, node.isDir)}
+                        className="ml-auto opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                      />
                     </div>
                   );
                 })}
@@ -1505,6 +1610,19 @@ const [gitOverlayResolved, setGitOverlayResolved] = useState(false);
           </div>
         </div>
       </div>
+    </div>
+      </div>
+
+      {workspaceId ? (
+        <NewFileDialog
+          open={isRootNewDialogOpen}
+          onOpenChange={setRootNewDialogOpen}
+          parentPath=""
+          workspaceId={workspaceId}
+          defaultIsDir={rootNewDialogIsDir}
+          onSuccess={handleRefreshTree}
+        />
+      ) : null}
     </div>
   );
 }

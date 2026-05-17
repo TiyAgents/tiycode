@@ -110,6 +110,9 @@ import {
   setTerminalCollapsed,
   setActiveWorkspaceMenuId,
   setShowOnboarding,
+  setDrawerWidth,
+  setDrawerResize,
+  clampDrawerWidth,
 } from "@/modules/workbench-shell/model/ui-layout-store";
 import {
   composerStore,
@@ -254,6 +257,7 @@ export function DashboardWorkbench() {
   const terminalCollapsedByThreadKey = useStore(uiLayoutStore, (s) => s.terminalCollapsedByThreadKey, shallowEqual);
   const terminalHeight = useStore(uiLayoutStore, (s) => s.terminalHeight);
   const activeDrawerPanel = useStore(uiLayoutStore, (s) => s.activeDrawerPanel);
+const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
 
   const composerValue = useStore(composerStore, (s) => s.newThreadValue);
   const composerError = useStore(composerStore, (s) => s.error);
@@ -292,6 +296,7 @@ export function DashboardWorkbench() {
     workspaceId: string;
     kind: "open" | "remove";
   } | null>(null);
+  const [draggingDrawerWidth, setDraggingDrawerWidth] = useState<number | null>(null);
 
   // ── Store-derived state (no more compat wrappers — actions use stores directly) ──
   const terminalBootstrapError = useStore(projectStore, (s) => s.terminalBootstrapError);
@@ -872,7 +877,7 @@ export function DashboardWorkbench() {
   const newThreadTerminalIdleMessage = !selectedProject
     ? t("dashboard.terminalDisabledHint")
     : !resolvedTerminalThreadId && !terminalBootstrapError
-      ? "Preparing terminal…"
+      ? t("dashboard.preparingTerminal")
       : undefined;
 
   return (
@@ -1090,12 +1095,58 @@ export function DashboardWorkbench() {
 
               <aside
                 className={cn(
-                  "min-h-0 shrink-0 overflow-hidden bg-app-drawer transition-[width,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                  "relative min-h-0 shrink-0 overflow-hidden bg-app-drawer transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
                   isDrawerOpen
-                    ? "w-[360px] border-l border-app-border opacity-100 translate-x-0"
-                    : "w-0 border-l-0 opacity-0 translate-x-2 pointer-events-none",
+                    ? "border-l border-app-border opacity-100 translate-x-0"
+                    : "!w-0 border-l-0 opacity-0 translate-x-2 pointer-events-none",
                 )}
+                style={isDrawerOpen ? { width: draggingDrawerWidth ?? drawerWidth } : undefined}
               >
+                {/* Drawer resize drag handle */}
+                {isDrawerOpen && (
+                  <div
+                    className="absolute left-0 top-0 bottom-0 z-20 w-1 cursor-col-resize hover:bg-primary/30 active:bg-primary/50"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      const startX = e.clientX;
+                      const startWidth = draggingDrawerWidth ?? drawerWidth;
+                      let latestWidth = startWidth;
+                      let rafId: number | null = null;
+
+                      const applyWidth = () => {
+                        rafId = null;
+                        setDraggingDrawerWidth(latestWidth);
+                      };
+
+                      const scheduleWidthUpdate = () => {
+                        if (rafId === null) {
+                          rafId = window.requestAnimationFrame(applyWidth);
+                        }
+                      };
+
+                      setDrawerResize({ startX, startWidth });
+                      setDraggingDrawerWidth(startWidth);
+                      const onMove = (ev: MouseEvent) => {
+                        // Dragging left = increasing width (drawer is on right side)
+                        latestWidth = clampDrawerWidth(startWidth + (startX - ev.clientX));
+                        scheduleWidthUpdate();
+                      };
+                      const onUp = () => {
+                        if (rafId !== null) {
+                          window.cancelAnimationFrame(rafId);
+                          rafId = null;
+                        }
+                        setDraggingDrawerWidth(null);
+                        setDrawerResize(null);
+                        setDrawerWidth(latestWidth);
+                        window.removeEventListener("mousemove", onMove);
+                        window.removeEventListener("mouseup", onUp);
+                      };
+                      window.addEventListener("mousemove", onMove);
+                      window.addEventListener("mouseup", onUp);
+                    }}
+                  />
+                )}
                 <div className="flex h-full min-h-0 flex-col">
                   <div className="sticky top-0 z-10 bg-app-drawer/95 px-3 py-2 backdrop-blur-xl">
                     <WorkbenchSegmentedControl
@@ -1171,6 +1222,7 @@ export function DashboardWorkbench() {
       </div>
 
       <DashboardOverlays
+        resolvedWorkspaceId={resolvedWorkspaceId}
         overlayContentRef={overlayContentRef}
         configDiagnostics={configDiagnostics}
         extensionDetailById={extensionDetailById}

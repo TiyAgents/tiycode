@@ -4,5 +4,6 @@ export * from "./thread-commands";
 export * from "./agent-commands";
 export * from "./index-commands";
 export * from "./git-commands";
+export * from "./file-commands";
 export * from "./terminal-commands";
 export * from "./extension-commands";

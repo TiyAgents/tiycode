@@ -211,6 +211,15 @@ const en: Record<TranslationKey, string> = {
   "sourceControl.untracked": "Untracked",
   "sourceControl.conflicts": "Conflicts",
   "sourceControl.failedLoadFileDiff": "Failed to load file diff",
+  "sourceControl.discardChanges": "Discard Changes",
+  "sourceControl.deleteFile": "Delete File",
+  "sourceControl.discardTrackedTitle": "Discard Tracked Changes",
+  "sourceControl.discardTrackedDescription": "This will revert the file to its last committed version. This action cannot be undone.",
+  "sourceControl.discardUntrackedTitle": "Delete Untracked File",
+  "sourceControl.discardUntrackedDescription": "This will permanently delete the file from disk. This action cannot be undone.",
+  "sourceControl.discardButton": "Discard Changes",
+  "sourceControl.deleteButton": "Delete File",
+  "sourceControl.discardFailed": "Failed to discard changes",
 
   // ── Branch Selector ────────────────────────────────────────
   "sourceControl.branch.search": "Search branches...",
@@ -804,6 +813,44 @@ const en: Record<TranslationKey, string> = {
   "longMessage.expandAll": "Expand",
   "longMessage.hiddenLines": "~{{count}} lines collapsed",
   "longMessage.hiddenContent": "Long content collapsed to optimize loading and scrolling",
+
+  // ── File Context Menu ─────────────────────────────────────
+  "fileContextMenu.newFolder": "New Folder",
+  "fileContextMenu.newFile": "New File",
+  "fileContextMenu.createIn": "Create in:",
+  "fileContextMenu.folderPlaceholder": "folder-name",
+  "fileContextMenu.filePlaceholder": "file-name.ext",
+  "fileContextMenu.file": "File",
+  "fileContextMenu.folder": "Folder",
+  "fileContextMenu.creating": "Creating…",
+  "fileContextMenu.create": "Create",
+  "fileContextMenu.rename": "Rename",
+  "fileContextMenu.renaming": "Renaming…",
+  "fileContextMenu.deleteAction": "Delete",
+  "fileContextMenu.cancel": "Cancel",
+  "fileContextMenu.deleting": "Deleting…",
+  "fileContextMenu.deleteFileTitle": "Delete File",
+  "fileContextMenu.deleteFolderTitle": "Delete Folder",
+  "fileContextMenu.deleteConfirm": "Are you sure you want to delete {{path}}?",
+  "fileContextMenu.deleteRecursive": "This will delete all contents recursively.",
+  "fileContextMenu.fileActions": "File actions",
+  "fileContextMenu.copyRelativePath": "Copy Relative Path",
+  "fileContextMenu.copyPath": "Copy Path",
+  "fileContextMenu.openInExternalApp": "Open in External App",
+
+  // ── File Editor ──────────────────────────────────────────
+  "fileEditor.loading": "Loading…",
+  "fileEditor.save": "Save",
+  "fileEditor.saveShortcut": "Save (Ctrl/Cmd + S)",
+  "fileEditor.htmlPreview": "HTML Preview",
+  "fileEditor.editor": "Editor",
+  "fileEditor.preview": "Preview",
+  "fileEditor.closePreview": "Close preview",
+  "fileEditor.binaryFile": "Binary file — cannot edit",
+
+  // ── Dashboard (extended) ─────────────────────────────────
+  "dashboard.preparingTerminal": "Preparing terminal…",
+  "dashboard.filePreviewEditor": "File Preview / Editor",
 };
 
 export default en;

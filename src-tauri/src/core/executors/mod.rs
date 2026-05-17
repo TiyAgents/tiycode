@@ -38,7 +38,7 @@ pub async fn execute_tool(
         "patch" => edit::edit_file(input, workspace_path, writable_roots).await,
         "shell" => process::run_command(input, workspace_path).await,
         "git_status" | "git_diff" | "git_log" | "git_add" | "git_stage" | "git_unstage"
-        | "git_commit" | "git_fetch" | "git_pull" | "git_push" => {
+        | "git_commit" | "git_fetch" | "git_pull" | "git_push" | "git_restore" | "git_clean" => {
             git::execute(tool_name, input, workspace_path).await
         }
         "term_status" | "term_output" | "term_write" | "term_restart" | "term_close" => {

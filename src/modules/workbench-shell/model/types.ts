@@ -81,7 +81,6 @@ export type GitChangeFile = {
   id: string;
   path: string;
   status: "M" | "A" | "D";
-  icon: ProjectTreeItem["icon"];
   summary: string;
   initialStaged: boolean;
 };

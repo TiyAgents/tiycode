@@ -148,6 +148,8 @@ pub enum GitMutationAction {
     Push,
     Checkout,
     CreateBranch,
+    Restore,
+    Clean,
 }
 
 impl GitMutationAction {
@@ -159,6 +161,8 @@ impl GitMutationAction {
             Self::Push => "push",
             Self::Checkout => "checkout",
             Self::CreateBranch => "create_branch",
+            Self::Restore => "restore",
+            Self::Clean => "clean",
         }
     }
 
@@ -170,6 +174,8 @@ impl GitMutationAction {
             Self::Push => "git_push",
             Self::Checkout => "git_checkout_branch",
             Self::CreateBranch => "git_create_branch",
+            Self::Restore => "git_restore",
+            Self::Clean => "git_clean",
         }
     }
 }

@@ -59,7 +59,6 @@ function gitFile(status: "M" | "A" | "D"): GitChangeFile {
     id: "file-1",
     path: "src/app.ts",
     status,
-    icon: "ts",
     summary: "Update app",
     initialStaged: false,
   };
@@ -231,24 +230,24 @@ describe("helpers: formatProjectPathLabel", () => {
 
 describe("helpers: getDiffTemplate (via buildGitDiffPreview)", () => {
   it("returns .css template for .css files", () => {
-    const preview = buildGitDiffPreview({ id: "f1", path: "styles.css", status: "M", icon: "css", summary: "", initialStaged: false });
+    const preview = buildGitDiffPreview({ id: "f1", path: "styles.css", status: "M", summary: "", initialStaged: false });
     expect(preview.lines.some((l) => l.text.includes("tracked-row"))).toBe(true);
   });
 
   it("returns .json template for .json files", () => {
-    const preview = buildGitDiffPreview({ id: "f1", path: "config.json", status: "M", icon: "json", summary: "", initialStaged: false });
+    const preview = buildGitDiffPreview({ id: "f1", path: "config.json", status: "M", summary: "", initialStaged: false });
     expect(preview.lines.some((l) => l.text.includes("beforeDevCommand"))).toBe(true);
     expect(preview.lines.some((l) => l.text.includes("sourceControlPreview"))).toBe(true);
   });
 
   it("returns .md template for .md files", () => {
-    const preview = buildGitDiffPreview({ id: "f1", path: "README.md", status: "M", icon: "readme", summary: "", initialStaged: false });
+    const preview = buildGitDiffPreview({ id: "f1", path: "README.md", status: "M", summary: "", initialStaged: false });
     expect(preview.lines.some((l) => l.text.includes("Tiy Desktop"))).toBe(true);
     expect(preview.lines.some((l) => l.text.includes("Diff preview overlay"))).toBe(true);
   });
 
   it("returns default template for unknown extensions", () => {
-    const preview = buildGitDiffPreview({ id: "f1", path: "some.py", status: "M", icon: "file", summary: "", initialStaged: false });
+    const preview = buildGitDiffPreview({ id: "f1", path: "some.py", status: "M", summary: "", initialStaged: false });
     expect(preview.lines.some((l) => l.text.includes("panelState"))).toBe(true);
   });
 });

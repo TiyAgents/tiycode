@@ -14,6 +14,8 @@ import { UpdateAvailableDialog } from "@/modules/workbench-shell/ui/update-avail
 import {
   GitDiffPreviewPanel,
 } from "@/modules/workbench-shell/ui/source-control-panels";
+import { FileEditorView } from "@/modules/workbench-shell/ui/file-editor-view";
+import { WorkbenchPreviewOverlay } from "@/modules/workbench-shell/ui/workbench-preview-overlay";
 import {
   NewWorktreeDialog,
 } from "@/modules/workbench-shell/ui/new-worktree-dialog";
@@ -23,13 +25,13 @@ import {
   uiLayoutStore,
   closeOverlay,
   setActiveSettingsCategory,
+  setFileEditorOverlayOpen,
   setOpenSettingsSection,
   setSelectedDiffSelection,
   setShowOnboarding,
 } from "@/modules/workbench-shell/model/ui-layout-store";
 import { useStore, shallowEqual } from "@/shared/lib/create-store";
 import { settingsStore } from "@/modules/settings-center/model/settings-store";
-import { projectStore } from "@/modules/workbench-shell/model/project-store";
 import {
   addAgentProfile,
   addAllowEntry,
@@ -67,9 +69,6 @@ import {
 import {
   activateWorkspace,
 } from "@/modules/workbench-shell/model/workbench-actions";
-import {
-  getWorkspaceBindingId,
-} from "@/modules/workbench-shell/model/workspace-path-bindings";
 
 type SettingsOverlayProps = ComponentProps<typeof SettingsCenterOverlay>;
 type ExtensionsOverlayProps = ComponentProps<typeof ExtensionsCenterOverlay>;
@@ -80,6 +79,8 @@ type ExtensionsOverlayProps = ComponentProps<typeof ExtensionsCenterOverlay>;
  * level (useExtensionsController, useAppUpdater).
  */
 type DashboardOverlaysProps = {
+  /** Workspace currently backing the workbench drawer/project panel. */
+  resolvedWorkspaceId: string | null;
   /** DOM ref for overlay content selection (Cmd+A). */
   overlayContentRef: SettingsOverlayProps["contentRef"];
   /** Extension/marketplace data from useExtensionsController. */
@@ -121,6 +122,7 @@ type DashboardOverlaysProps = {
 
 export function DashboardOverlays(props: DashboardOverlaysProps) {
   const {
+    resolvedWorkspaceId,
     overlayContentRef,
     extensionDetailById,
     extensionsError,
@@ -169,17 +171,11 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
     return t("dashboard.upToDate", { version: data?.version ?? "0.1.0" });
   }, [appUpdater.phase, data?.version, t]);
 
-  // ── Derived workspace ID (replaces resolvedWorkspaceId prop) ──
-  const selectedProject = useStore(projectStore, (s) => s.selectedProject);
-  const terminalWorkspaceBindings = useStore(projectStore, (s) => s.terminalWorkspaceBindings, shallowEqual);
-  const resolvedWorkspaceId = getWorkspaceBindingId(
-    terminalWorkspaceBindings,
-    selectedProject?.path ?? null,
-  );
-
   // ── Subscribe to uiLayoutStore ──────────────────────────────────
   const activeOverlay = useStore(uiLayoutStore, (s) => s.activeOverlay);
   const activeSettingsCategory = useStore(uiLayoutStore, (s) => s.activeSettingsCategory);
+  const isFileEditorOverlayOpen = useStore(uiLayoutStore, (s) => s.isFileEditorOverlayOpen);
+  const isFileEditorOverlayClickThrough = useStore(uiLayoutStore, (s) => s.isFileEditorOverlayClickThrough);
   const selectedDiffSelection = useStore(uiLayoutStore, (s) => s.selectedDiffSelection);
   const showOnboarding = useStore(uiLayoutStore, (s) => s.showOnboarding);
   const worktreeDialogContext = useStore(uiLayoutStore, (s) => s.worktreeDialogContext);
@@ -224,6 +220,10 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
         closeOverlay();
         return;
       }
+      if (isFileEditorOverlayOpen) {
+        setFileEditorOverlayOpen(false);
+        return;
+      }
       if (selectedDiffSelection) {
         setSelectedDiffSelection(null);
       }
@@ -231,7 +231,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeOverlay, selectedDiffSelection]);
+  }, [activeOverlay, isFileEditorOverlayOpen, selectedDiffSelection]);
 
   return (
     <>
@@ -242,6 +242,17 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
           onClose={() => setSelectedDiffSelection(null)}
         />
       ) : null}
+
+      <WorkbenchPreviewOverlay
+        open={isFileEditorOverlayOpen && Boolean(resolvedWorkspaceId)}
+        title={t("dashboard.filePreviewEditor")}
+        onClose={() => setFileEditorOverlayOpen(false)}
+        overlayClassName={isFileEditorOverlayClickThrough ? "pointer-events-none" : undefined}
+      >
+        <div className="h-full min-h-0 overflow-hidden">
+          {resolvedWorkspaceId ? <FileEditorView workspaceId={resolvedWorkspaceId} /> : null}
+        </div>
+      </WorkbenchPreviewOverlay>
 
       {isSettingsOpen ? (
         <SettingsCenterOverlay
