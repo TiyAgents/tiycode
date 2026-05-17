@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, type FC } from "react";
+import { useRef, useEffect, useCallback, useState, useMemo, type FC } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { EditorView, basicSetup } from "codemirror";
@@ -31,6 +31,7 @@ import {
   fileEditorStore,
   reloadTab,
 } from "@/modules/workbench-shell/model/file-editor-store";
+import { fileRead } from "@/services/bridge/file-commands";
 
 // ---------------------------------------------------------------------------
 // Language extension resolver
@@ -226,13 +227,107 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
 // Preview renderers
 // ---------------------------------------------------------------------------
 
-const MarkdownPreview: FC<{ content: string }> = ({ content }) => (
-  <div className="h-full overflow-auto bg-app-canvas/70 px-4 py-3 text-app-foreground">
-    <div className="mx-auto max-w-4xl text-sm leading-6">
-      <MessageResponse>{content}</MessageResponse>
+/**
+ * Normalize a relative path by collapsing `.` and `..` segments.
+ * E.g. `"./public/../assets/logo.png"` → `"assets/logo.png"`
+ */
+function normalizeRelativePath(raw: string): string {
+  const parts = raw.split("/");
+  const out: string[] = [];
+  for (const p of parts) {
+    if (p === "." || p === "") continue;
+    if (p === "..") { out.pop(); continue; }
+    out.push(p);
+  }
+  return out.join("/");
+}
+
+/** Returns `true` when `url` looks like a local relative reference. */
+function isLocalRelativeUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return false; // absolute scheme
+  if (url.startsWith("//")) return false;               // protocol-relative
+  if (url.startsWith("#")) return false;                 // fragment-only
+  return true;
+}
+
+/**
+ * An `<img>` replacement for markdown preview that resolves workspace-relative
+ * image paths via the existing `fileRead` command (returns base64 data URIs
+ * for image files).  Remote URLs pass through unchanged.
+ */
+const WorkspaceImage: FC<
+  React.ImgHTMLAttributes<HTMLImageElement> & {
+    workspaceId: string;
+    /** Directory of the markdown file relative to the workspace root (e.g. "" or "docs"). */
+    fileDir: string;
+  }
+> = ({ src, workspaceId, fileDir, ...rest }) => {
+  const [resolved, setResolved] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const isLocal = isLocalRelativeUrl(src);
+
+  useEffect(() => {
+    if (!isLocal || !src) {
+      setResolved(src ?? null);
+      return;
+    }
+
+    let cancelled = false;
+    const relative = normalizeRelativePath(fileDir ? `${fileDir}/${src}` : src);
+
+    fileRead(workspaceId, relative)
+      .then((dto) => {
+        if (cancelled) return;
+        // fileRead returns data:<mime>;base64,… for image files
+        if (dto.content) setResolved(dto.content);
+        else setFailed(true);
+      })
+      .catch(() => { if (!cancelled) setFailed(true); });
+
+    return () => { cancelled = true; };
+  }, [src, workspaceId, fileDir, isLocal]);
+
+  if (failed) {
+    // Fall back to showing the original (likely broken) img so alt text is visible
+    return <img src={src} {...rest} />;
+  }
+  if (resolved === null && isLocal) {
+    // Still loading — show a tiny placeholder to avoid layout shift
+    return (
+      <span className="inline-block h-4 w-4 animate-pulse rounded bg-muted" />
+    );
+  }
+  return <img src={resolved ?? src} {...rest} />;
+};
+
+interface MarkdownPreviewProps {
+  content: string;
+  workspaceId: string;
+  /** Relative path of the previewed file within the workspace (e.g. "README.md"). */
+  filePath: string;
+}
+
+const MarkdownPreview: FC<MarkdownPreviewProps> = ({ content, workspaceId, filePath }) => {
+  const fileDir = filePath.split("/").slice(0, -1).join("/");
+
+  const components = useMemo(
+    () => ({
+      img: (props: React.ImgHTMLAttributes<HTMLImageElement>) => (
+        <WorkspaceImage {...props} workspaceId={workspaceId} fileDir={fileDir} />
+      ),
+    }),
+    [workspaceId, fileDir],
+  );
+
+  return (
+    <div className="h-full overflow-auto bg-app-canvas/70 px-4 py-3 text-app-foreground">
+      <div className="mx-auto max-w-4xl text-sm leading-6">
+        <MessageResponse components={components}>{content}</MessageResponse>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 const HtmlPreview: FC<{ content: string }> = ({ content }) => {
   const t = useT();
@@ -460,7 +555,7 @@ export const FileEditorView: FC<FileEditorViewProps> = ({ workspaceId }) => {
               activeTab.path.endsWith(".html") || activeTab.path.endsWith(".htm") ? (
                 <HtmlPreview content={activeTab.content} />
               ) : (
-                <MarkdownPreview content={activeTab.content} />
+                <MarkdownPreview content={activeTab.content} workspaceId={workspaceId} filePath={activeTab.path} />
               )
             ) : activeTab.content !== null ? (
               <CodeMirrorEditor
