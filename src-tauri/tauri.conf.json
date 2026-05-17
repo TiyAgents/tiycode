@@ -32,7 +32,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' customprotocol: asset:; script-src 'self' 'unsafe-inline' 'unsafe-eval' asset: https: http:; style-src 'self' 'unsafe-inline' asset: https: http:; font-src 'self' asset: data: https://fonts.gstatic.com; img-src 'self' asset: http://asset.localhost https: http: data: blob:; connect-src ipc: http://ipc.localhost https: http: data: blob: ws: wss:"
+      "csp": "default-src 'self' customprotocol: asset:; script-src 'self' 'unsafe-inline' 'unsafe-eval' asset: https: http:; style-src 'self' 'unsafe-inline' asset: https: http:; font-src 'self' asset: data: https://fonts.gstatic.com; img-src 'self' asset: http://asset.localhost https: http: data: blob:; connect-src ipc: http://ipc.localhost https: http: data: blob: ws: wss:",
+      "dangerousDisableAssetCspModification": ["script-src", "style-src"]
     },
     "macOSPrivateApi": true
   },
