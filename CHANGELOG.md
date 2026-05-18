@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.15] - 2026-05-18
+### :boom: BREAKING CHANGES
+- due to [`9e0b7e5`](https://github.com/tiylabs/tiycode/commit/9e0b7e529fb27a3ebf6694ab3c3f4e131bfda6b8) - ✨ Add local image resolution for markdown preview *(PR [#187](https://github.com/tiylabs/tiycode/pull/187) by [@HayWolf](https://github.com/HayWolf))*:
+
+  `activeTabPath` renamed to `activeTabKey`; all action functions (`openFile`, `closeTab`, `pinTab`, etc.) now require `workspaceId` as first parameter; `useActiveTab`, `useOpenTabs`, `useIsEditorMode`, `useActiveTabPath` now accept optional `workspaceId`.  
+  * fix(file-editor): 🐛 reset failed and resolved state on src change  
+  * refactor(file-editor-view): ♻️ replace editorSyncKey with getFileTabKey  
+  ---------
+
+
+### :sparkles: New Features
+- [`0a463e8`](https://github.com/tiylabs/tiycode/commit/0a463e8396067482fe1a7cc7d9ba6015e1962822) - **agent-session**: ✨ Add run-level auto-retry for retryable provider errors *(PR [#186](https://github.com/tiylabs/tiycode/pull/186) by [@HayWolf](https://github.com/HayWolf))*
+- [`11313e5`](https://github.com/tiylabs/tiycode/commit/11313e544eff66b0ec8b81015a8244e3518e6231) - **workbench**: ✨ add integrated file management with editor, preview and CRUD *(PR [#183](https://github.com/tiylabs/tiycode/pull/183) by [@HayWolf](https://github.com/HayWolf))*
+- [`9e0b7e5`](https://github.com/tiylabs/tiycode/commit/9e0b7e529fb27a3ebf6694ab3c3f4e131bfda6b8) - **file-editor**: ✨ Add local image resolution for markdown preview *(PR [#187](https://github.com/tiylabs/tiycode/pull/187) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`c5adf3f`](https://github.com/tiylabs/tiycode/commit/c5adf3f7baede72eed88c4d14b299c20ab518c83) - **core**: 🐛 adapt to updated tiycore API *(PR [#182](https://github.com/tiylabs/tiycode/pull/182) by [@jorben](https://github.com/jorben))*
+- [`68dd8ff`](https://github.com/tiylabs/tiycode/commit/68dd8fff7c0f3acade42e17ea896b7d9134b75a2) - **composer**: 🐛 Persist attachments in thread drafts & remove plan mode toggle *(PR [#184](https://github.com/tiylabs/tiycode/pull/184) by [@HayWolf](https://github.com/HayWolf))*
+- [`97763e1`](https://github.com/tiylabs/tiycode/commit/97763e1fa3d245b017dec6652c18ad1519750dd3) - **ui**: 🐛 fix double-paste and related UI issues *(PR [#185](https://github.com/tiylabs/tiycode/pull/185) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.3.14] - 2026-05-15
 ### :sparkles: New Features
 - [`b69da0e`](https://github.com/tiylabs/tiycode/commit/b69da0eabe5278c137354492b80d57408bf231f2) - **providers**: ✨ add Synthetic LLM provider support *(PR [#178](https://github.com/tiylabs/tiycode/pull/178) by [@HayWolf](https://github.com/HayWolf))*
@@ -747,3 +768,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.12]: https://github.com/TiyAgents/tiycode/compare/0.3.11...0.3.12
 [0.3.13]: https://github.com/TiyAgents/tiycode/compare/0.3.12...0.3.13
 [0.3.14]: https://github.com/tiylabs/tiycode/compare/0.3.13...0.3.14
+[0.3.15]: https://github.com/tiylabs/tiycode/compare/0.3.14...0.3.15
