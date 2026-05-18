@@ -16,6 +16,7 @@ use crate::core::subagent::runtime_orchestration::{RuntimeOrchestrationTool, Sub
 use crate::core::tool_gateway::{
     ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
 };
+use crate::core::TIYCORE_REQUEST_MAX_RETRIES;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::persistence::repo::{run_helper_repo, tool_call_repo};
@@ -143,6 +144,7 @@ impl HelperAgentOrchestrator {
         let max_turns =
             crate::core::agent_runtime_limits::desktop_agent_max_turns(&self.pool).await;
         agent.set_max_turns(max_turns);
+        agent.set_max_retries(Some(TIYCORE_REQUEST_MAX_RETRIES));
         agent.set_system_prompt(build_helper_system_prompt(
             &request.system_prompt,
             helper_profile,

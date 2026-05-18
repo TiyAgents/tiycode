@@ -2767,7 +2767,7 @@ export function RuntimeThreadSurface({
                         <div className="text-app-muted">
                           <button
                             aria-expanded={open}
-                            className="group inline-flex max-w-full items-center gap-2 text-left text-2xl font-light leading-8 tracking-[-0.02em] text-app-muted/80 transition-colors hover:text-app-foreground"
+                            className="group inline-flex max-w-full items-center gap-2 text-left text-sm font-medium leading-5 text-app-muted transition-colors hover:text-app-foreground"
                             onClick={() => {
                               setRequestRetryOpen((current) => ({
                                 ...current,
@@ -2790,7 +2790,7 @@ export function RuntimeThreadSurface({
                             />
                           </button>
                           {open ? (
-                            <div className="mt-4 max-w-3xl space-y-2 text-2xl font-light leading-9 tracking-[-0.02em] text-app-muted/80">
+                            <div className="mt-2 max-w-3xl space-y-2 text-sm leading-6 text-app-muted">
                               <p className="whitespace-pre-wrap break-words">{requestRetry.reason}</p>
                               {detailParts ? (
                                 <p className="text-sm leading-5 text-app-subtle">{detailParts}</p>
