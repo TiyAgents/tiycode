@@ -7,7 +7,7 @@
     <a href="./README_zh.md">简体中文</a>
   </p>
   <br />
-  <img src="https://github.com/user-attachments/assets/e0f3fdb3-58a9-4216-ac6f-f67bb95ee4e5" alt="TiyCode screenshot" width="960" />
+  <img width="1611" height="1032"  alt="TiyCode screenshot" src="https://github.com/user-attachments/assets/d30c016c-8642-43fe-bde9-0dac9feb2148" />
 </div>
 
 ## Why TiyCode

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, type FC } from "react";
+import { useRef, useEffect, useCallback, useState, useMemo, type FC } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { EditorView, basicSetup } from "codemirror";
@@ -21,6 +21,8 @@ import {
   type FileTab,
   useOpenTabs,
   useActiveTab,
+  getFileTabKey,
+  setActiveTab,
   closeTab,
   pinTab,
   setPreviewMode,
@@ -31,6 +33,8 @@ import {
   fileEditorStore,
   reloadTab,
 } from "@/modules/workbench-shell/model/file-editor-store";
+import { fileRead, type FileContentDto } from "@/services/bridge/file-commands";
+import { isLocalRelativeUrl, normalizeRelativePath } from "./markdown-preview-paths";
 
 // ---------------------------------------------------------------------------
 // Language extension resolver
@@ -65,13 +69,26 @@ function getLanguageExtension(lang: string) {
 
 const EDITOR_STORE_SYNC_DELAY_MS = 120;
 const editorContentFlushers = new Map<string, () => void>();
+const inFlightMarkdownImageReads = new Map<string, Promise<FileContentDto>>();
 
-function editorSyncKey(workspaceId: string, path: string): string {
+function markdownImageCacheKey(workspaceId: string, path: string): string {
   return `${workspaceId}\u0000${path}`;
 }
 
+function readMarkdownImage(workspaceId: string, path: string): Promise<FileContentDto> {
+  const cacheKey = markdownImageCacheKey(workspaceId, path);
+  const cached = inFlightMarkdownImageReads.get(cacheKey);
+  if (cached) return cached;
+
+  const request = fileRead(workspaceId, path).finally(() => {
+    inFlightMarkdownImageReads.delete(cacheKey);
+  });
+  inFlightMarkdownImageReads.set(cacheKey, request);
+  return request;
+}
+
 function flushEditorContent(workspaceId: string, path: string): void {
-  editorContentFlushers.get(editorSyncKey(workspaceId, path))?.();
+  editorContentFlushers.get(getFileTabKey(workspaceId, path))?.();
 }
 
 interface CodeMirrorEditorProps {
@@ -130,7 +147,7 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
   }, [clearPendingSync, flushPendingContent]);
 
   useEffect(() => {
-    const key = editorSyncKey(workspaceId, path);
+    const key = getFileTabKey(workspaceId, path);
     editorContentFlushers.set(key, flushPendingContent);
     return () => {
       if (editorContentFlushers.get(key) === flushPendingContent) {
@@ -226,13 +243,87 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
 // Preview renderers
 // ---------------------------------------------------------------------------
 
-const MarkdownPreview: FC<{ content: string }> = ({ content }) => (
-  <div className="h-full overflow-auto bg-app-canvas/70 px-4 py-3 text-app-foreground">
-    <div className="mx-auto max-w-4xl text-sm leading-6">
-      <MessageResponse>{content}</MessageResponse>
+/**
+ * An `<img>` replacement for markdown preview that resolves workspace-relative
+ * image paths via the existing `fileRead` command (returns base64 data URIs
+ * for image files).  Remote URLs pass through unchanged.
+ */
+const WorkspaceImage: FC<
+  React.ImgHTMLAttributes<HTMLImageElement> & {
+    workspaceId: string;
+    /** Directory of the markdown file relative to the workspace root (e.g. "" or "docs"). */
+    fileDir: string;
+  }
+> = ({ src, workspaceId, fileDir, ...rest }) => {
+  const [resolved, setResolved] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const isLocal = isLocalRelativeUrl(src);
+
+  useEffect(() => {
+    setFailed(false);
+
+    if (!isLocal || !src) {
+      setResolved(src ?? null);
+      return;
+    }
+
+    setResolved(null);
+
+    let cancelled = false;
+    const relative = normalizeRelativePath(fileDir ? `${fileDir}/${src}` : src);
+
+    readMarkdownImage(workspaceId, relative)
+      .then((dto) => {
+        if (cancelled) return;
+        // fileRead returns data:<mime>;base64,… for image files
+        if (dto.content) setResolved(dto.content);
+        else setFailed(true);
+      })
+      .catch(() => { if (!cancelled) setFailed(true); });
+
+    return () => { cancelled = true; };
+  }, [src, workspaceId, fileDir, isLocal]);
+
+  if (failed) {
+    // Fall back to showing the original (likely broken) img so alt text is visible
+    return <img src={src} {...rest} />;
+  }
+  if (resolved === null && isLocal) {
+    // Still loading — show a tiny placeholder to avoid layout shift
+    return (
+      <span className="inline-block h-4 w-4 animate-pulse rounded bg-muted" />
+    );
+  }
+  return <img src={resolved ?? src} {...rest} />;
+};
+
+interface MarkdownPreviewProps {
+  content: string;
+  workspaceId: string;
+  /** Relative path of the previewed file within the workspace (e.g. "README.md"). */
+  filePath: string;
+}
+
+const MarkdownPreview: FC<MarkdownPreviewProps> = ({ content, workspaceId, filePath }) => {
+  const fileDir = filePath.split("/").slice(0, -1).join("/");
+
+  const components = useMemo(
+    () => ({
+      img: (props: React.ImgHTMLAttributes<HTMLImageElement>) => (
+        <WorkspaceImage {...props} workspaceId={workspaceId} fileDir={fileDir} />
+      ),
+    }),
+    [workspaceId, fileDir],
+  );
+
+  return (
+    <div className="h-full overflow-auto bg-app-canvas/70 px-4 py-3 text-app-foreground">
+      <div className="mx-auto max-w-4xl text-sm leading-6">
+        <MessageResponse components={components}>{content}</MessageResponse>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 const HtmlPreview: FC<{ content: string }> = ({ content }) => {
   const t = useT();
@@ -262,17 +353,18 @@ const ImagePreview: FC<{ content: string; path: string }> = ({ content, path }) 
 
 interface TabBarProps {
   tabs: FileTab[];
-  activeTabPath: string | null;
+  activeTabKey: string | null;
 }
 
-const TabBar: FC<TabBarProps> = ({ tabs, activeTabPath }) => (
+const TabBar: FC<TabBarProps> = ({ tabs, activeTabKey }) => (
   <div className="flex min-h-0 items-center gap-0 overflow-x-auto border-b border-app-border bg-app-drawer/50">
     {tabs.map((tab) => {
       const fileName = tab.path.split("/").pop() ?? tab.path;
-      const isActive = tab.path === activeTabPath;
+      const tabKey = getFileTabKey(tab.workspaceId, tab.path);
+      const isActive = tabKey === activeTabKey;
       return (
         <button
-          key={tab.path}
+          key={tabKey}
           className={cn(
             "group relative flex shrink-0 items-center gap-1 border-r border-app-border px-2.5 py-1.5 text-[11px] transition-colors",
             isActive
@@ -280,14 +372,14 @@ const TabBar: FC<TabBarProps> = ({ tabs, activeTabPath }) => (
               : "text-muted-foreground hover:text-foreground hover:bg-app-drawer/80",
           )}
           onClick={() => {
-            fileEditorStore.setState({ activeTabPath: tab.path });
+            setActiveTab(tab.workspaceId, tab.path);
           }}
-          onDoubleClick={() => pinTab(tab.path)}
+          onDoubleClick={() => pinTab(tab.workspaceId, tab.path)}
           onMouseDown={(e) => {
             // Middle-click to close
             if (e.button === 1) {
               e.preventDefault();
-              closeTab(tab.path);
+              closeTab(tab.workspaceId, tab.path);
             }
           }}
         >
@@ -304,7 +396,7 @@ const TabBar: FC<TabBarProps> = ({ tabs, activeTabPath }) => (
             className="ml-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
             onClick={(e) => {
               e.stopPropagation();
-              closeTab(tab.path);
+              closeTab(tab.workspaceId, tab.path);
             }}
           >
             <X className="size-3" />
@@ -321,10 +413,9 @@ const TabBar: FC<TabBarProps> = ({ tabs, activeTabPath }) => (
 
 interface ToolbarProps {
   tab: FileTab;
-  workspaceId: string;
 }
 
-const EditorToolbar: FC<ToolbarProps> = ({ tab, workspaceId }) => {
+const EditorToolbar: FC<ToolbarProps> = ({ tab }) => {
   const t = useT();
   const canPreview = isPreviewable(tab.path);
   return (
@@ -340,7 +431,7 @@ const EditorToolbar: FC<ToolbarProps> = ({ tab, workspaceId }) => {
                   ? "bg-muted text-foreground"
                   : "text-muted-foreground hover:text-foreground",
               )}
-              onClick={() => setPreviewMode(tab.path, "editor")}
+              onClick={() => setPreviewMode(tab.workspaceId, tab.path, "editor")}
             >
               <Code2 className="size-3.5" />
             </button>
@@ -352,7 +443,7 @@ const EditorToolbar: FC<ToolbarProps> = ({ tab, workspaceId }) => {
                   ? "bg-muted text-foreground"
                   : "text-muted-foreground hover:text-foreground",
               )}
-              onClick={() => setPreviewMode(tab.path, "preview")}
+              onClick={() => setPreviewMode(tab.workspaceId, tab.path, "preview")}
             >
               <Eye className="size-3.5" />
             </button>
@@ -365,8 +456,8 @@ const EditorToolbar: FC<ToolbarProps> = ({ tab, workspaceId }) => {
             title={t("fileEditor.saveShortcut")}
             className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             onClick={() => {
-              flushEditorContent(workspaceId, tab.path);
-              void saveFile(workspaceId, tab.path);
+              flushEditorContent(tab.workspaceId, tab.path);
+              void saveFile(tab.workspaceId, tab.path);
             }}
           >
             <Save className="size-3" />
@@ -393,20 +484,28 @@ export interface FileEditorViewProps {
 
 export const FileEditorView: FC<FileEditorViewProps> = ({ workspaceId }) => {
   const t = useT();
-  const tabs = useOpenTabs();
-  const activeTab = useActiveTab();
+  const tabs = useOpenTabs(workspaceId);
+  const activeTab = useActiveTab(workspaceId);
+  const activeTabKey = activeTab ? getFileTabKey(activeTab.workspaceId, activeTab.path) : null;
+
+  useEffect(() => {
+    if (!activeTab && tabs.length > 0) {
+      const fallback = tabs[tabs.length - 1];
+      setActiveTab(fallback.workspaceId, fallback.path);
+    }
+  }, [activeTab, tabs]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
         if (activeTab) {
-          flushEditorContent(workspaceId, activeTab.path);
-          void saveFile(workspaceId, activeTab.path);
+          flushEditorContent(activeTab.workspaceId, activeTab.path);
+          void saveFile(activeTab.workspaceId, activeTab.path);
         }
       }
     },
-    [workspaceId, activeTab],
+    [activeTab],
   );
 
   // Listen for agent file-changed events to reload affected tabs
@@ -417,7 +516,9 @@ export const FileEditorView: FC<FileEditorViewProps> = ({ workspaceId }) => {
     void listen<{ path: string }>("agent-file-changed", (event) => {
       if (cancelled) return;
       const { path } = event.payload;
-      const tab = fileEditorStore.getState().tabs.find((t) => t.path === path);
+      const tab = fileEditorStore.getState().tabs.find(
+        (item) => item.workspaceId === workspaceId && item.path === path,
+      );
       if (tab && !tab.isDirty) {
         void reloadTab(workspaceId, path);
       }
@@ -434,11 +535,11 @@ export const FileEditorView: FC<FileEditorViewProps> = ({ workspaceId }) => {
     <div className="flex h-full min-h-0 flex-col" onKeyDown={handleKeyDown}>
       <TabBar
         tabs={tabs}
-        activeTabPath={activeTab?.path ?? null}
+        activeTabKey={activeTabKey}
       />
       {activeTab && (
         <>
-          <EditorToolbar tab={activeTab} workspaceId={workspaceId} />
+          <EditorToolbar tab={activeTab} />
           <div className="min-h-0 flex-1 overflow-hidden">
             {activeTab.isLoading ? (
               <div className="flex h-full items-center justify-center text-muted-foreground">
@@ -460,7 +561,7 @@ export const FileEditorView: FC<FileEditorViewProps> = ({ workspaceId }) => {
               activeTab.path.endsWith(".html") || activeTab.path.endsWith(".htm") ? (
                 <HtmlPreview content={activeTab.content} />
               ) : (
-                <MarkdownPreview content={activeTab.content} />
+                <MarkdownPreview content={activeTab.content} workspaceId={workspaceId} filePath={activeTab.path} />
               )
             ) : activeTab.content !== null ? (
               <CodeMirrorEditor
