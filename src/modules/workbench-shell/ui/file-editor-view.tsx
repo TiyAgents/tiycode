@@ -264,10 +264,14 @@ const WorkspaceImage: FC<
   const isLocal = isLocalRelativeUrl(src);
 
   useEffect(() => {
+    setFailed(false);
+
     if (!isLocal || !src) {
       setResolved(src ?? null);
       return;
     }
+
+    setResolved(null);
 
     let cancelled = false;
     const relative = normalizeRelativePath(fileDir ? `${fileDir}/${src}` : src);
