@@ -426,6 +426,20 @@ describe("ThreadStream uncovered events", () => {
     expect(stream.runId).toBe("run-1");
   });
 
+  it("routes request_retrying events", async () => {
+    const stream = new ThreadStream();
+    const onRunStateChange = vi.fn();
+    stream.onRunStateChange = onRunStateChange;
+
+    threadStartRunMock.mockImplementationOnce(emit([
+      { type: "request_retrying", runId: "run-1", attempt: 2, maxRetries: 5, delayMs: 750, reason: "stream disconnected", status: null },
+    ]));
+
+    await stream.startRun("thread-1", { prompt: "hi" });
+    expect(onRunStateChange).toHaveBeenCalledWith("running", "run-1");
+    expect(stream.runId).toBe("run-1");
+  });
+
   it.each(terminalRunEvents)("clears run caches for $type events", async (terminalEvent) => {
     const stream = new ThreadStream();
     const onToolEvent = vi.fn();

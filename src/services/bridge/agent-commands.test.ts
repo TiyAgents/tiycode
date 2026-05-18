@@ -106,3 +106,40 @@ describe("normalizeThreadStreamEvent artifact_updated", () => {
     warnSpy.mockRestore();
   });
 });
+
+describe("normalizeThreadStreamEvent request_retrying", () => {
+  it("normalizes request_retrying with snake_case retry fields", () => {
+    const result = normalizeThreadStreamEvent({
+      type: "request_retrying",
+      run_id: "run-1",
+      attempt: 2,
+      max_retries: 5,
+      delay_ms: 750,
+      reason: "stream disconnected",
+      status: 503,
+    }) as Extract<ThreadStreamEvent, { type: "request_retrying" }>;
+
+    expect(result).toEqual({
+      type: "request_retrying",
+      runId: "run-1",
+      attempt: 2,
+      maxRetries: 5,
+      delayMs: 750,
+      reason: "stream disconnected",
+      status: 503,
+    });
+  });
+
+  it("normalizes missing request_retrying status to null", () => {
+    const result = normalizeThreadStreamEvent({
+      type: "request_retrying",
+      runId: "run-1",
+      attempt: 1,
+      maxRetries: 3,
+      delayMs: 500,
+      reason: "operation timed out",
+    }) as Extract<ThreadStreamEvent, { type: "request_retrying" }>;
+
+    expect(result.status).toBeNull();
+  });
+});

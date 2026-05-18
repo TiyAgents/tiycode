@@ -58,6 +58,22 @@ pub(crate) fn handle_agent_event(
                         delta: delta.clone(),
                     });
                 }
+                AssistantMessageEvent::Retrying {
+                    attempt,
+                    max_retries,
+                    delay_ms,
+                    reason,
+                    status,
+                } => {
+                    let _ = event_tx.send(ThreadStreamEvent::RequestRetrying {
+                        run_id: run_id.to_string(),
+                        attempt: *attempt,
+                        max_retries: *max_retries,
+                        delay_ms: *delay_ms,
+                        reason: reason.clone(),
+                        status: *status,
+                    });
+                }
                 AssistantMessageEvent::ThinkingStart { .. } => {
                     reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
                 }

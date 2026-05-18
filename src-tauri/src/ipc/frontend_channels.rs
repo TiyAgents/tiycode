@@ -39,6 +39,15 @@ pub enum ThreadStreamEvent {
         delay_ms: u64,
         reason: String,
     },
+    RequestRetrying {
+        run_id: String,
+        attempt: u32,
+        max_retries: u32,
+        delay_ms: u64,
+        reason: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<u16>,
+    },
     MessageDelta {
         run_id: String,
         message_id: String,

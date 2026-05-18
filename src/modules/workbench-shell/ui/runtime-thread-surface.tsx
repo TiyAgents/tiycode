@@ -1,7 +1,7 @@
 "use client";
 
 import type { ChatStatus } from "ai";
-import { AlertCircleIcon, BotIcon, Info, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
+import { AlertCircleIcon, BotIcon, ChevronDownIcon, Info, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "@/i18n";
@@ -135,6 +135,7 @@ import {
   updateTool,
   type SurfaceHelperEntry,
   type SurfaceMessage,
+  type SurfaceRequestRetryEntry,
   type SurfaceRuntimeError,
   type SurfaceToolEntry,
   type SurfaceToolState,
@@ -280,6 +281,8 @@ export function RuntimeThreadSurface({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
   const [queueArtifact, setQueueArtifact] = useState<unknown>(null);
+  const [requestRetryEntries, setRequestRetryEntries] = useState<Array<SurfaceRequestRetryEntry>>([]);
+  const [requestRetryOpen, setRequestRetryOpen] = useState<Record<string, boolean>>({});
   const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
   const runState = useStore(
     threadStore,
@@ -296,6 +299,8 @@ export function RuntimeThreadSurface({
     if (prevThreadIdRef.current !== threadId) {
       prevThreadIdRef.current = threadId;
       setSelectedRunMode("default");
+      setRequestRetryEntries([]);
+      setRequestRetryOpen({});
       wrapperRefsMap.current.clear();
       userManuallyOpenedIds.current.clear();
     }
@@ -814,6 +819,34 @@ export function RuntimeThreadSurface({
             maxAttempts: String(event.maxAttempts),
           }),
         );
+      }
+
+      if (event.type === "request_retrying") {
+        const now = new Date().toISOString();
+        setRequestRetryEntries((current) => {
+          const existing = current.find((entry) => entry.runId === event.runId);
+          const nextEntry: SurfaceRequestRetryEntry = {
+            createdAt: existing?.createdAt ?? now,
+            delayMs: event.delayMs,
+            id: existing?.id ?? `request-retry-${event.runId}`,
+            maxRetries: event.maxRetries,
+            attempt: event.attempt,
+            reason: event.reason,
+            runId: event.runId,
+            status: event.status,
+            updatedAt: now,
+          };
+
+          if (existing) {
+            return current.map((entry) => entry.runId === event.runId ? nextEntry : entry);
+          }
+
+          return [...current, nextEntry];
+        });
+        setRequestRetryOpen((current) => ({
+          ...current,
+          [`request-retry-${event.runId}`]: event.attempt > 1,
+        }));
       }
 
       if (event.type === "run_started") {
@@ -1565,6 +1598,7 @@ export function RuntimeThreadSurface({
   const hasRuntimeArtifacts =
     Boolean(runtimeError)
     || Boolean(queueArtifact)
+    || requestRetryEntries.length > 0
     || helpers.length > 0
     || visibleTools.length > 0
     || Boolean(taskBoards.activeBoard);
@@ -1583,6 +1617,12 @@ export function RuntimeThreadSurface({
           occurredAt: helper.startedAt,
           helper,
         })),
+        ...requestRetryEntries.map((requestRetry) => ({
+          kind: "request_retry" as const,
+          key: `request-retry:${requestRetry.id}`,
+          occurredAt: requestRetry.createdAt,
+          requestRetry,
+        })),
         ...visibleTools.map((tool) => ({
           kind: "tool" as const,
           key: `tool:${tool.id}`,
@@ -1590,7 +1630,7 @@ export function RuntimeThreadSurface({
           tool,
         })),
       ].sort(compareTimelineEntries),
-    [helpers, messages, visibleTools],
+    [helpers, messages, requestRetryEntries, visibleTools],
   );
   const presentationEntries = timelineEntries;
 
@@ -1630,6 +1670,9 @@ export function RuntimeThreadSurface({
         const isCompleted = entry.helper.status === "completed";
         const isOpen = helperOpen[entry.helper.id] ?? true;
         result.push({ id: entry.helper.id, completed: isCompleted, currentOpen: isOpen });
+      } else if (entry.kind === "request_retry") {
+        const isOpen = requestRetryOpen[entry.requestRetry.id] ?? entry.requestRetry.attempt > 1;
+        result.push({ id: entry.requestRetry.id, completed: true, currentOpen: isOpen });
       } else if (entry.kind === "message" && entry.message.messageType === "reasoning") {
         const isCompleted = entry.message.status !== "streaming";
         const isOpen = reasoningOpen[entry.message.id] ?? true;
@@ -1637,19 +1680,20 @@ export function RuntimeThreadSurface({
       }
     }
     return result;
-  }, [presentationEntries, completedToolOpen, helperOpen, reasoningOpen]);
+  }, [presentationEntries, completedToolOpen, helperOpen, requestRetryOpen, reasoningOpen]);
 
   // Keep a ref to presentationEntries for the viewport collapse callback.
   const presentationEntriesRef = useRef(presentationEntries);
   presentationEntriesRef.current = presentationEntries;
 
   const handleViewportCollapse = useCallback((id: string) => {
-    // Determine whether this id belongs to a tool, helper, or reasoning
+    // Determine whether this id belongs to a tool, helper, request retry, or reasoning
     // and only update the relevant state map.
     const entry = presentationEntriesRef.current.find(
       (e) =>
         (e.kind === "tool" && e.tool.id === id)
         || (e.kind === "helper" && e.helper.id === id)
+        || (e.kind === "request_retry" && e.requestRetry.id === id)
         || (e.kind === "message" && e.message.messageType === "reasoning" && e.message.id === id),
     );
     if (!entry) return;
@@ -1657,6 +1701,8 @@ export function RuntimeThreadSurface({
       setCompletedToolOpen((current) => (current[id] === false ? current : { ...current, [id]: false }));
     } else if (entry.kind === "helper") {
       setHelperOpen((current) => (current[id] === false ? current : { ...current, [id]: false }));
+    } else if (entry.kind === "request_retry") {
+      setRequestRetryOpen((current) => (current[id] === false ? current : { ...current, [id]: false }));
     } else {
       setReasoningOpen((current) => (current[id] === false ? current : { ...current, [id]: false }));
     }
@@ -2696,6 +2742,62 @@ export function RuntimeThreadSurface({
                             );
                           })()
                         )}
+                      </MessageContent>
+                    </Message>
+                  </div>
+                );
+              }
+
+              if (entry.kind === "request_retry") {
+                const { requestRetry } = entry;
+                const open = requestRetryOpen[requestRetry.id] ?? requestRetry.attempt > 1;
+                const detailParts = [
+                  requestRetry.status !== null
+                    ? t("requestRetry.status", { status: String(requestRetry.status) })
+                    : null,
+                  requestRetry.delayMs > 0
+                    ? t("requestRetry.delay", { seconds: (requestRetry.delayMs / 1000).toFixed(1) })
+                    : null,
+                ].filter(Boolean).join(" · ");
+
+                return (
+                  <div className={spacingClass} key={entry.key}>
+                    <Message className="max-w-full" from="assistant">
+                      <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                        <div className="text-app-muted">
+                          <button
+                            aria-expanded={open}
+                            className="group inline-flex max-w-full items-center gap-2 text-left text-2xl font-light leading-8 tracking-[-0.02em] text-app-muted/80 transition-colors hover:text-app-foreground"
+                            onClick={() => {
+                              setRequestRetryOpen((current) => ({
+                                ...current,
+                                [requestRetry.id]: !(current[requestRetry.id] ?? requestRetry.attempt > 1),
+                              }));
+                            }}
+                            type="button"
+                          >
+                            <span className="truncate">
+                              {t("requestRetry.reconnecting", {
+                                attempt: String(requestRetry.attempt),
+                                maxRetries: String(requestRetry.maxRetries),
+                              })}
+                            </span>
+                            <ChevronDownIcon
+                              className={cn(
+                                "mt-1 size-5 shrink-0 transition-transform text-app-muted/70",
+                                open ? "rotate-180" : "rotate-0",
+                              )}
+                            />
+                          </button>
+                          {open ? (
+                            <div className="mt-4 max-w-3xl space-y-2 text-2xl font-light leading-9 tracking-[-0.02em] text-app-muted/80">
+                              <p className="whitespace-pre-wrap break-words">{requestRetry.reason}</p>
+                              {detailParts ? (
+                                <p className="text-sm leading-5 text-app-subtle">{detailParts}</p>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
                       </MessageContent>
                     </Message>
                   </div>

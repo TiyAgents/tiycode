@@ -54,6 +54,43 @@ fn test_thread_stream_event_stream_resync_required_serialization() {
 }
 
 #[test]
+fn test_thread_stream_event_request_retrying_serialization() {
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
+
+    let event = ThreadStreamEvent::RequestRetrying {
+        run_id: "run-1".into(),
+        attempt: 2,
+        max_retries: 5,
+        delay_ms: 750,
+        reason: "stream disconnected before completion".into(),
+        status: Some(503),
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "request_retrying");
+    assert_eq!(json["run_id"].as_str().unwrap(), "run-1");
+    assert_eq!(json["attempt"].as_u64().unwrap(), 2);
+    assert_eq!(json["max_retries"].as_u64().unwrap(), 5);
+    assert_eq!(json["delay_ms"].as_u64().unwrap(), 750);
+    assert_eq!(json["status"].as_u64().unwrap(), 503);
+    assert_eq!(
+        json["reason"].as_str().unwrap(),
+        "stream disconnected before completion"
+    );
+
+    let no_status = ThreadStreamEvent::RequestRetrying {
+        run_id: "run-1".into(),
+        attempt: 1,
+        max_retries: 5,
+        delay_ms: 500,
+        reason: "operation timed out".into(),
+        status: None,
+    };
+    let json = serde_json::to_value(&no_status).unwrap();
+    assert!(json.get("status").is_none());
+}
+
+#[test]
 fn test_thread_stream_event_message_delta_serialization() {
     use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
@@ -357,6 +394,14 @@ fn test_all_events_have_type_field() {
             delay_ms: 500,
             reason: "retry".into(),
         },
+        ThreadStreamEvent::RequestRetrying {
+            run_id: "r".into(),
+            attempt: 1,
+            max_retries: 3,
+            delay_ms: 500,
+            reason: "HTTP 503".into(),
+            status: Some(503),
+        },
         ThreadStreamEvent::MessageDelta {
             run_id: "r".into(),
             message_id: "m".into(),
@@ -515,11 +560,11 @@ fn test_all_events_have_type_field() {
         assert!(!type_val.is_empty(), "Event type should not be empty");
     }
 
-    // Verify total count matches enum variants (29 variants)
+    // Verify total count matches enum variants (30 variants)
     assert_eq!(
         events.len(),
-        29,
-        "Should test all 29 ThreadStreamEvent variants"
+        30,
+        "Should test all 30 ThreadStreamEvent variants"
     );
 }
 
