@@ -32,6 +32,7 @@ import {
   reloadTab,
 } from "@/modules/workbench-shell/model/file-editor-store";
 import { fileRead, type FileContentDto } from "@/services/bridge/file-commands";
+import { isLocalRelativeUrl, normalizeRelativePath } from "./markdown-preview-paths";
 
 // ---------------------------------------------------------------------------
 // Language extension resolver
@@ -243,30 +244,6 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
 // ---------------------------------------------------------------------------
 // Preview renderers
 // ---------------------------------------------------------------------------
-
-/**
- * Normalize a relative path by collapsing `.` and `..` segments.
- * E.g. `"./public/../assets/logo.png"` → `"assets/logo.png"`
- */
-function normalizeRelativePath(raw: string): string {
-  const parts = raw.split("/");
-  const out: string[] = [];
-  for (const p of parts) {
-    if (p === "." || p === "") continue;
-    if (p === "..") { out.pop(); continue; }
-    out.push(p);
-  }
-  return out.join("/");
-}
-
-/** Returns `true` when `url` looks like a local relative reference. */
-function isLocalRelativeUrl(url: string | undefined): boolean {
-  if (!url) return false;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return false; // absolute scheme
-  if (url.startsWith("//")) return false;               // protocol-relative
-  if (url.startsWith("#")) return false;                 // fragment-only
-  return true;
-}
 
 /**
  * An `<img>` replacement for markdown preview that resolves workspace-relative
