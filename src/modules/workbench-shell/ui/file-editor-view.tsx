@@ -66,7 +66,7 @@ function getLanguageExtension(lang: string) {
 
 const EDITOR_STORE_SYNC_DELAY_MS = 120;
 const editorContentFlushers = new Map<string, () => void>();
-const markdownImageReadCache = new Map<string, Promise<FileContentDto>>();
+const inFlightMarkdownImageReads = new Map<string, Promise<FileContentDto>>();
 
 function editorSyncKey(workspaceId: string, path: string): string {
   return `${workspaceId}\u0000${path}`;
@@ -78,14 +78,13 @@ function markdownImageCacheKey(workspaceId: string, path: string): string {
 
 function readMarkdownImage(workspaceId: string, path: string): Promise<FileContentDto> {
   const cacheKey = markdownImageCacheKey(workspaceId, path);
-  const cached = markdownImageReadCache.get(cacheKey);
+  const cached = inFlightMarkdownImageReads.get(cacheKey);
   if (cached) return cached;
 
-  const request = fileRead(workspaceId, path).catch((error: unknown) => {
-    markdownImageReadCache.delete(cacheKey);
-    throw error;
+  const request = fileRead(workspaceId, path).finally(() => {
+    inFlightMarkdownImageReads.delete(cacheKey);
   });
-  markdownImageReadCache.set(cacheKey, request);
+  inFlightMarkdownImageReads.set(cacheKey, request);
   return request;
 }
 
