@@ -808,8 +808,8 @@ export function RuntimeThreadSurface({
         finalizeReasoningForRun(event.runId);
       }
 
-      // Show retry progress in the thinking placeholder when the backend
-      // is automatically retrying after a retryable provider error.
+      // Show retry progress in the thinking placeholder for turn-level
+      // retries emitted by tiycore as AgentEvent::TurnRetrying.
       if (event.type === "run_retrying") {
         showThinkingPlaceholder(
           event.runId,
