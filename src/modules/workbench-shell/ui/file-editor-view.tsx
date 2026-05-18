@@ -31,7 +31,7 @@ import {
   fileEditorStore,
   reloadTab,
 } from "@/modules/workbench-shell/model/file-editor-store";
-import { fileRead } from "@/services/bridge/file-commands";
+import { fileRead, type FileContentDto } from "@/services/bridge/file-commands";
 
 // ---------------------------------------------------------------------------
 // Language extension resolver
@@ -66,9 +66,27 @@ function getLanguageExtension(lang: string) {
 
 const EDITOR_STORE_SYNC_DELAY_MS = 120;
 const editorContentFlushers = new Map<string, () => void>();
+const markdownImageReadCache = new Map<string, Promise<FileContentDto>>();
 
 function editorSyncKey(workspaceId: string, path: string): string {
   return `${workspaceId}\u0000${path}`;
+}
+
+function markdownImageCacheKey(workspaceId: string, path: string): string {
+  return `${workspaceId}\u0000${path}`;
+}
+
+function readMarkdownImage(workspaceId: string, path: string): Promise<FileContentDto> {
+  const cacheKey = markdownImageCacheKey(workspaceId, path);
+  const cached = markdownImageReadCache.get(cacheKey);
+  if (cached) return cached;
+
+  const request = fileRead(workspaceId, path).catch((error: unknown) => {
+    markdownImageReadCache.delete(cacheKey);
+    throw error;
+  });
+  markdownImageReadCache.set(cacheKey, request);
+  return request;
 }
 
 function flushEditorContent(workspaceId: string, path: string): void {
@@ -276,7 +294,7 @@ const WorkspaceImage: FC<
     let cancelled = false;
     const relative = normalizeRelativePath(fileDir ? `${fileDir}/${src}` : src);
 
-    fileRead(workspaceId, relative)
+    readMarkdownImage(workspaceId, relative)
       .then((dto) => {
         if (cancelled) return;
         // fileRead returns data:<mime>;base64,… for image files
