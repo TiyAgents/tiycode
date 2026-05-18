@@ -71,10 +71,6 @@ const EDITOR_STORE_SYNC_DELAY_MS = 120;
 const editorContentFlushers = new Map<string, () => void>();
 const inFlightMarkdownImageReads = new Map<string, Promise<FileContentDto>>();
 
-function editorSyncKey(workspaceId: string, path: string): string {
-  return `${workspaceId}\u0000${path}`;
-}
-
 function markdownImageCacheKey(workspaceId: string, path: string): string {
   return `${workspaceId}\u0000${path}`;
 }
@@ -92,7 +88,7 @@ function readMarkdownImage(workspaceId: string, path: string): Promise<FileConte
 }
 
 function flushEditorContent(workspaceId: string, path: string): void {
-  editorContentFlushers.get(editorSyncKey(workspaceId, path))?.();
+  editorContentFlushers.get(getFileTabKey(workspaceId, path))?.();
 }
 
 interface CodeMirrorEditorProps {
@@ -151,7 +147,7 @@ const CodeMirrorEditor: FC<CodeMirrorEditorProps> = ({
   }, [clearPendingSync, flushPendingContent]);
 
   useEffect(() => {
-    const key = editorSyncKey(workspaceId, path);
+    const key = getFileTabKey(workspaceId, path);
     editorContentFlushers.set(key, flushPendingContent);
     return () => {
       if (editorContentFlushers.get(key) === flushPendingContent) {
