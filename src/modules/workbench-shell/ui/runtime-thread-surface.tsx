@@ -148,6 +148,7 @@ import {
   parseApprovalPromptMetadata,
   parseCommandComposerMetadata,
   parseSummaryMarkerMetadata,
+  parseRunEventMetadata,
   parseClarifyPrompt,
   formatPlanMetadata,
 } from "@/modules/workbench-shell/ui/runtime-thread-surface-metadata";
@@ -2460,6 +2461,41 @@ export function RuntimeThreadSurface({
                           </div>
                         </MessageContent>
                       </Message>
+                    </div>
+                  );
+                }
+
+                if (message.messageType === "run_event") {
+                  const runEvent = parseRunEventMetadata(message.metadata);
+                  const isRetryEvent = runEvent?.kind === "run_retrying";
+                  const retryLabel = isRetryEvent && runEvent.attempt !== null && runEvent.maxAttempts !== null
+                    ? t("run.retrying", {
+                        attempt: String(runEvent.attempt),
+                        maxAttempts: String(runEvent.maxAttempts),
+                      })
+                    : message.content;
+                  const delayLabel = isRetryEvent && runEvent.delayMs !== null && runEvent.delayMs > 0
+                    ? `${Math.round(runEvent.delayMs / 1000)}s delay`
+                    : null;
+
+                  return (
+                    <div className={spacingClass} key={entry.key}>
+                      <div className="flex justify-center py-1">
+                        <div className="max-w-[min(720px,100%)] rounded-full border border-app-border/24 bg-app-surface/40 px-3 py-1.5 text-xs text-app-muted shadow-sm">
+                          <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
+                            <RefreshCcwIcon className="size-3.5 text-app-subtle" />
+                            <span>{retryLabel}</span>
+                            {delayLabel ? (
+                              <span className="text-app-subtle">{delayLabel}</span>
+                            ) : null}
+                          </div>
+                          {runEvent?.reason ? (
+                            <div className="mt-1 max-w-[680px] truncate text-center text-[11px] text-app-subtle">
+                              {runEvent.reason}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   );
                 }

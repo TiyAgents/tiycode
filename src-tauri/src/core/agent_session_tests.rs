@@ -1806,6 +1806,66 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn convert_history_messages_skips_run_event_messages() {
+        let messages = vec![
+            MessageRecord {
+                id: "msg-user".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: None,
+                role: "user".to_string(),
+                content_markdown: "Please continue.".to_string(),
+                parts_json: None,
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-retry".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-next".to_string()),
+                role: "system".to_string(),
+                content_markdown: "正在重试请求（1/5）…".to_string(),
+                parts_json: None,
+                message_type: "run_event".to_string(),
+                status: "completed".to_string(),
+                metadata_json: Some(
+                    serde_json::json!({
+                        "kind": "run_retrying",
+                        "attempt": 1,
+                        "maxAttempts": 5,
+                        "reason": "Provider error: error sending request for url"
+                    })
+                    .to_string(),
+                ),
+                attachments_json: None,
+                created_at: String::new(),
+            },
+            MessageRecord {
+                id: "msg-assistant".to_string(),
+                thread_id: "thread-1".to_string(),
+                run_id: Some("run-next".to_string()),
+                role: "assistant".to_string(),
+                content_markdown: "Done.".to_string(),
+                parts_json: None,
+                message_type: "plain_message".to_string(),
+                status: "completed".to_string(),
+                metadata_json: None,
+                attachments_json: None,
+                created_at: String::new(),
+            },
+        ];
+
+        let history =
+            convert_history_messages(&messages, &[], &sample_resolved_model_role("primary").model);
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(message_text(&history[0]), "Please continue.");
+        assert_eq!(message_text(&history[1]), "Done.");
+    }
+
+    #[test]
     fn convert_history_messages_uses_effective_prompt_for_command_messages() {
         let messages = vec![MessageRecord {
             id: "msg-command".to_string(),

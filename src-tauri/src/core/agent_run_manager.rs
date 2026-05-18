@@ -89,13 +89,109 @@ struct RetryContext {
     error: String,
 }
 
-/// Returns `true` when the error string looks like a retryable HTTP server /
-/// rate-limit error. Auth errors (401, 403) are intentionally excluded.
+/// Returns `true` when the error string looks like a retryable provider
+/// failure. Server/rate-limit HTTP responses and transient transport failures
+/// are retryable; authentication, authorization, malformed-request, and
+/// context-limit errors are intentionally excluded.
 fn is_retryable_provider_error(error: &str) -> bool {
     const RETRYABLE_CODES: &[&str] = &[
-        "HTTP 408", "HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504",
+        "http 408", "http 429", "http 500", "http 502", "http 503", "http 504",
     ];
-    RETRYABLE_CODES.iter().any(|code| error.contains(code))
+    const NON_RETRYABLE_MARKERS: &[&str] = &[
+        "http 400",
+        "http 401",
+        "http 403",
+        "bad request",
+        "invalid request",
+        "invalid api key",
+        "invalid_api_key",
+        "authentication",
+        "unauthorized",
+        "forbidden",
+        "permission denied",
+        "context length",
+        "context_length",
+        "maximum context",
+        "max context",
+        "token limit",
+        "model_not_found",
+        "model not found",
+    ];
+    const TRANSIENT_NETWORK_MARKERS: &[&str] = &[
+        "error sending request for url",
+        "request timed out",
+        "operation timed out",
+        "deadline has elapsed",
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "connection aborted",
+        "connection terminated",
+        "connection error",
+        "broken pipe",
+        "dns error",
+        "failed to lookup address",
+        "temporary failure in name resolution",
+        "tls handshake",
+        "unexpected eof",
+        "incomplete message",
+    ];
+
+    let normalized = error.to_ascii_lowercase();
+    if NON_RETRYABLE_MARKERS
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    {
+        return false;
+    }
+
+    if RETRYABLE_CODES.iter().any(|code| normalized.contains(code)) {
+        return true;
+    }
+
+    TRANSIENT_NETWORK_MARKERS
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+async fn persist_run_retry_event_message(
+    pool: &SqlitePool,
+    thread_id: &str,
+    previous_run_id: &str,
+    next_run_id: &str,
+    attempt: usize,
+    max_attempts: usize,
+    delay_ms: u64,
+    reason: &str,
+) -> Result<(), AppError> {
+    let content = format!("正在重试请求（{attempt}/{max_attempts}）…");
+    let metadata = serde_json::json!({
+        "kind": "run_retrying",
+        "attempt": attempt,
+        "maxAttempts": max_attempts,
+        "delayMs": delay_ms,
+        "reason": reason,
+        "previousRunId": previous_run_id,
+        "nextRunId": next_run_id,
+    });
+
+    message_repo::insert(
+        pool,
+        &MessageRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            thread_id: thread_id.to_string(),
+            run_id: Some(next_run_id.to_string()),
+            role: "system".to_string(),
+            content_markdown: content,
+            parts_json: None,
+            message_type: "run_event".to_string(),
+            status: "completed".to_string(),
+            metadata_json: Some(metadata.to_string()),
+            attachments_json: None,
+            created_at: String::new(),
+        },
+    )
+    .await
 }
 
 async fn mark_thread_run_cancellation_requested(
@@ -825,6 +921,27 @@ impl AgentRunManager {
 
                 // Emit RunRetrying to frontend via the shared broadcast channel
                 let new_run_id = uuid::Uuid::now_v7().to_string();
+                if let Err(e) = persist_run_retry_event_message(
+                    &manager.pool,
+                    &thread_id,
+                    &last_run_id,
+                    &new_run_id,
+                    attempt,
+                    PROVIDER_ERROR_MAX_RETRIES,
+                    delay_ms,
+                    &retry_ctx.error,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        prev_run_id = %last_run_id,
+                        new_run_id = %new_run_id,
+                        attempt,
+                        error = %e,
+                        "failed to persist run retry event message"
+                    );
+                }
                 let _ = frontend_tx.send(ThreadStreamEvent::RunRetrying {
                     run_id: new_run_id.clone(),
                     attempt,

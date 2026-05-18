@@ -7,8 +7,9 @@ pub(super) mod tests {
         build_orphaned_run_terminal_event, build_title_model_candidates, build_title_prompt,
         build_title_prompt_from_messages, collapse_whitespace, detect_prior_summary,
         extract_context_summary_block, extract_run_model_refs, extract_run_string,
-        is_terminal_runtime_event, mark_thread_run_cancellation_requested, merge_json_value,
-        normalize_compact_summary, normalize_generated_title, render_compact_summary_history,
+        is_retryable_provider_error, is_terminal_runtime_event,
+        mark_thread_run_cancellation_requested, merge_json_value, normalize_compact_summary,
+        normalize_generated_title, persist_run_retry_event_message, render_compact_summary_history,
         should_complete_reasoning_for_event, sidebar_status_for_runtime_event,
         summary_history_char_budget, terminal_event_status, truncate_chars,
         truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
@@ -20,7 +21,10 @@ pub(super) mod tests {
     };
     use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::thread::{MessageRecord, RunStatus};
+    use crate::persistence::repo::message_repo;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::collections::HashMap;
+    use std::str::FromStr;
     use tiycore::agent::AgentMessage;
     use tiycore::types::{Message as TiyMessage, UserMessage};
     use tokio::sync::{broadcast, Mutex};
@@ -94,6 +98,51 @@ pub(super) mod tests {
         }
     }
 
+    async fn setup_retry_event_test_pool() -> sqlx::SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path, is_default, status)
+             VALUES ('workspace-retry', 'Retry Workspace', '/tmp/retry', '/tmp/retry', '/tmp/retry', 0, 'ready')",
+        )
+        .execute(&pool)
+        .await
+        .expect("workspace insert");
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status)
+             VALUES ('thread-retry', 'workspace-retry', 'Retry Thread', 'running')",
+        )
+        .execute(&pool)
+        .await
+        .expect("thread insert");
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status)
+             VALUES ('run-previous', 'thread-retry', 'default', 'failed')",
+        )
+        .execute(&pool)
+        .await
+        .expect("previous run insert");
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status)
+             VALUES ('run-next', 'thread-retry', 'default', 'running')",
+        )
+        .execute(&pool)
+        .await
+        .expect("next run insert");
+
+        pool
+    }
+
     #[test]
     fn orphaned_run_terminal_event_uses_cancelled_when_user_requested_stop() {
         let cancelled = build_orphaned_run_terminal_event("run-1", true);
@@ -107,6 +156,94 @@ pub(super) mod tests {
             interrupted,
             ThreadStreamEvent::RunInterrupted { ref run_id } if run_id == "run-2"
         ));
+    }
+
+    #[test]
+    fn retryable_provider_error_detects_http_and_transient_network_failures() {
+        let retryable_errors = [
+            "Provider error: Anthropic stream error: HTTP 429 rate limited",
+            "Provider error: upstream HTTP 503 unavailable",
+            "Provider error: Anthropic stream error: error sending request for url (https://www.pomoai.ai/v1/messages)",
+            "Provider error: request timed out while streaming response",
+            "Provider error: connection reset by peer",
+            "Provider error: temporary failure in name resolution",
+            "Provider error: TLS handshake failed with unexpected EOF",
+        ];
+
+        for error in retryable_errors {
+            assert!(
+                is_retryable_provider_error(error),
+                "expected retryable provider error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn retryable_provider_error_excludes_auth_request_and_context_errors() {
+        let non_retryable_errors = [
+            "Provider error: HTTP 400 bad request",
+            "Provider error: HTTP 401 unauthorized",
+            "Provider error: HTTP 403 forbidden",
+            "Provider error: invalid API key",
+            "Provider error: permission denied",
+            "Provider error: context length exceeded",
+            "Provider error: model not found",
+            "Provider error: invalid request: unsupported tool schema",
+        ];
+
+        for error in non_retryable_errors {
+            assert!(
+                !is_retryable_provider_error(error),
+                "expected non-retryable provider error: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn persist_run_retry_event_message_writes_structured_run_event() {
+        let pool = setup_retry_event_test_pool().await;
+
+        persist_run_retry_event_message(
+            &pool,
+            "thread-retry",
+            "run-previous",
+            "run-next",
+            2,
+            5,
+            4000,
+            "Provider error: Anthropic stream error: error sending request for url (https://www.pomoai.ai/v1/messages)",
+        )
+        .await
+        .expect("retry event message persisted");
+
+        let messages = message_repo::list_recent(&pool, "thread-retry", None, 10)
+            .await
+            .expect("messages loaded");
+        assert_eq!(messages.len(), 1);
+        let message = &messages[0];
+        assert_eq!(message.thread_id, "thread-retry");
+        assert_eq!(message.run_id.as_deref(), Some("run-next"));
+        assert_eq!(message.role, "system");
+        assert_eq!(message.message_type, "run_event");
+        assert_eq!(message.status, "completed");
+        assert_eq!(message.content_markdown, "正在重试请求（2/5）…");
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            message
+                .metadata_json
+                .as_deref()
+                .expect("metadata should be present"),
+        )
+        .expect("metadata should be valid JSON");
+        assert_eq!(metadata["kind"], "run_retrying");
+        assert_eq!(metadata["attempt"], 2);
+        assert_eq!(metadata["maxAttempts"], 5);
+        assert_eq!(metadata["delayMs"], 4000);
+        assert_eq!(metadata["previousRunId"], "run-previous");
+        assert_eq!(metadata["nextRunId"], "run-next");
+        assert!(metadata["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("error sending request for url")));
     }
 
     #[test]

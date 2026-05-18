@@ -221,6 +221,31 @@ export function parseSummaryMarkerMetadata(value: unknown): {
   };
 }
 
+export function parseRunEventMetadata(value: unknown): {
+  attempt: number | null;
+  delayMs: number | null;
+  kind: string | null;
+  maxAttempts: number | null;
+  nextRunId: string | null;
+  previousRunId: string | null;
+  reason: string | null;
+} | null {
+  const record = asObjectRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  return {
+    attempt: readNumberField(record, "attempt"),
+    delayMs: readNumberField(record, "delayMs"),
+    kind: readStringField(record, "kind"),
+    maxAttempts: readNumberField(record, "maxAttempts"),
+    nextRunId: readStringField(record, "nextRunId"),
+    previousRunId: readStringField(record, "previousRunId"),
+    reason: readStringField(record, "reason"),
+  };
+}
+
 export function parseClarifyPrompt(value: unknown): ClarifyPrompt | null {
   const record = asObjectRecord(value);
   if (!record) {

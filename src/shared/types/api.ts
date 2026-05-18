@@ -273,6 +273,7 @@ export type MessageType =
   | "reasoning"
   | "tool_request"
   | "tool_result"
+  | "run_event"
   | "approval_prompt"
   | "sources"
   | "summary_marker";
