@@ -13,7 +13,7 @@ import { rust } from "@codemirror/lang-rust";
 import { python } from "@codemirror/lang-python";
 import { keymap } from "@codemirror/view";
 import type { ViewUpdate } from "@codemirror/view";
-import { X, Eye, Code2, Save, Loader2, AlertCircle } from "lucide-react";
+import { X, Eye, Code2, Save, Loader2, AlertCircle, RefreshCw } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/shared/lib/utils";
 import { useT } from "@/i18n";
@@ -451,6 +451,16 @@ const EditorToolbar: FC<ToolbarProps> = ({ tab }) => {
         )}
       </div>
       <div className="flex items-center gap-1">
+        <button
+          title={tab.isDirty ? t("fileEditor.refreshDisabledDirty") : t("fileEditor.refresh")}
+          className="rounded p-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:text-muted-foreground"
+          disabled={tab.isDirty || tab.isLoading}
+          onClick={() => {
+            void reloadTab(tab.workspaceId, tab.path);
+          }}
+        >
+          <RefreshCw className={cn("size-3.5", tab.isLoading && "animate-spin")} />
+        </button>
         {tab.isDirty && (
           <button
             title={t("fileEditor.saveShortcut")}

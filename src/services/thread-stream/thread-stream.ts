@@ -440,6 +440,11 @@ export class ThreadStream {
         this.onRunStateChange?.("running", event.runId);
         break;
 
+      case "request_retrying":
+        this.currentRunId = event.runId;
+        this.onRunStateChange?.("running", event.runId);
+        break;
+
       case "message_delta":
         this.onMessage?.({
           kind: "delta",

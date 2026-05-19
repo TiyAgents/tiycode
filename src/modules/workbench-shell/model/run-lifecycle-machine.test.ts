@@ -280,6 +280,7 @@ describe("mapStreamEventToMachineEvent", () => {
 
   it("returns null for non-lifecycle events", () => {
     expect(mapStreamEventToMachineEvent("message_delta")).toBeNull();
+    expect(mapStreamEventToMachineEvent("request_retrying")).toBeNull();
     expect(mapStreamEventToMachineEvent("tool_requested")).toBeNull();
     expect(mapStreamEventToMachineEvent("reasoning_updated")).toBeNull();
     expect(mapStreamEventToMachineEvent("unknown_event")).toBeNull();

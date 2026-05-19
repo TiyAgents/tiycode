@@ -474,6 +474,15 @@ export type ThreadStreamEvent =
       delayMs: number;
       reason: string;
     }
+  | {
+      type: "request_retrying";
+      runId: string;
+      attempt: number;
+      maxRetries: number;
+      delayMs: number;
+      reason: string;
+      status: number | null;
+    }
   | { type: "message_delta"; runId: string; messageId: string; delta: string }
   | {
       type: "artifact_updated";

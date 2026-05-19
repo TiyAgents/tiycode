@@ -13,6 +13,7 @@ use crate::core::agent_session::{
 };
 use crate::core::tiycode_default_headers;
 use crate::core::tiycode_url_policy;
+use crate::core::TIYCORE_REQUEST_MAX_RETRIES;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::MessageRecord;
@@ -227,6 +228,7 @@ pub(crate) async fn generate_thread_title(
         headers: Some(tiycode_default_headers()),
         on_payload: build_provider_options_payload_hook(model_role.provider_options.clone()),
         security: Some(tiycore::types::SecurityConfig::default().with_url(tiycode_url_policy())),
+        max_retries: Some(TIYCORE_REQUEST_MAX_RETRIES),
         ..TiyStreamOptions::default()
     };
 

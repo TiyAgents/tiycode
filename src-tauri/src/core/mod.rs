@@ -38,6 +38,10 @@ pub mod workspace_manager;
 pub mod workspace_paths;
 pub mod worktree_manager;
 
+/// Application-level retry count override for transient LLM requests.
+/// tiycore defaults to 2 when this is not set.
+pub const TIYCORE_REQUEST_MAX_RETRIES: u32 = 5;
+
 /// Returns the default HTTP headers that identify TiyCode in every LLM API request.
 pub fn tiycode_default_headers() -> std::collections::HashMap<String, String> {
     let mut headers = std::collections::HashMap::new();

@@ -119,6 +119,7 @@ pub(crate) fn sidebar_status_for_runtime_event(
     match event {
         ThreadStreamEvent::RunStarted { .. }
         | ThreadStreamEvent::RunRetrying { .. }
+        | ThreadStreamEvent::RequestRetrying { .. }
         | ThreadStreamEvent::ApprovalResolved { .. }
         | ThreadStreamEvent::ClarifyResolved { .. } => Some(RunStatus::Running),
 
@@ -210,6 +211,9 @@ impl AgentRunManager {
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
             }
             ThreadStreamEvent::RunRetrying { .. } => {
+                run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
+            }
+            ThreadStreamEvent::RequestRetrying { .. } => {
                 run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
             }
             ThreadStreamEvent::MessageDelta {
@@ -733,6 +737,7 @@ pub(crate) fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> 
         event,
         ThreadStreamEvent::RunStarted { .. }
             | ThreadStreamEvent::RunRetrying { .. }
+            | ThreadStreamEvent::RequestRetrying { .. }
             | ThreadStreamEvent::ReasoningUpdated { .. }
             | ThreadStreamEvent::ThreadUsageUpdated { .. }
             | ThreadStreamEvent::RunCheckpointed { .. }

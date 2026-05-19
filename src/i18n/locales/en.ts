@@ -801,7 +801,10 @@ const en: Record<TranslationKey, string> = {
   "worktree.field.selectBranchHint": "Check out this existing branch into a new worktree",
   "worktree.error.selectBranch": "Please select a branch",
   "contextCompressing": "Compressing context…",
-  "run.retrying": "Server error, retry {{attempt}} of {{maxAttempts}}…",
+  "run.retrying": "Regenerating response… {{attempt}}/{{maxAttempts}}",
+  "requestRetry.reconnecting": "Reconnecting… {{attempt}}/{{maxRetries}}",
+  "requestRetry.status": "HTTP {{status}}",
+  "requestRetry.delay": "Retrying in {{seconds}}s",
 
   // ── Artifact Card ─────────────────────────────────────────
   "artifact.collapseCode": "Collapse code",
@@ -845,6 +848,8 @@ const en: Record<TranslationKey, string> = {
   "fileEditor.htmlPreview": "HTML Preview",
   "fileEditor.editor": "Editor",
   "fileEditor.preview": "Preview",
+  "fileEditor.refresh": "Refresh preview from disk",
+  "fileEditor.refreshDisabledDirty": "Save changes before refreshing",
   "fileEditor.closePreview": "Close preview",
   "fileEditor.binaryFile": "Binary file — cannot edit",
 

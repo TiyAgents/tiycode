@@ -94,6 +94,19 @@ function readValue(
   return event[camelKey] ?? event[snakeKey];
 }
 
+function readNumberOrNull(
+  event: RawThreadStreamEvent,
+  camelKey: string,
+  snakeKey: string,
+) {
+  const value = event[camelKey] ?? event[snakeKey];
+  if (value == null) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function readSnapshot(
   event: RawThreadStreamEvent,
   camelKey: string,
@@ -200,6 +213,16 @@ export function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): Thre
         maxAttempts: Number(readValue(rawEvent, "maxAttempts", "max_attempts") ?? 0),
         delayMs: Number(readValue(rawEvent, "delayMs", "delay_ms") ?? 0),
         reason: readRequiredString(rawEvent, "reason", "reason"),
+      };
+    case "request_retrying":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        attempt: Number(readValue(rawEvent, "attempt", "attempt") ?? 0),
+        maxRetries: Number(readValue(rawEvent, "maxRetries", "max_retries") ?? 0),
+        delayMs: Number(readValue(rawEvent, "delayMs", "delay_ms") ?? 0),
+        reason: readRequiredString(rawEvent, "reason", "reason"),
+        status: readNumberOrNull(rawEvent, "status", "status"),
       };
     case "message_delta":
       return {

@@ -1043,6 +1043,63 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn request_retrying_message_update_emits_request_retry_notice() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let last_completed_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
+        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
+
+        handle_agent_event(
+            "run-request-retry",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            &current_turn_index,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &AgentEvent::MessageUpdate {
+                turn_index: 0,
+                message: AgentMessage::Assistant(sample_partial_assistant_message()),
+                assistant_event: Box::new(AssistantMessageEvent::Retrying {
+                    attempt: 2,
+                    max_retries: 5,
+                    delay_ms: 750,
+                    reason: "stream disconnected before completion".to_string(),
+                    status: None,
+                }),
+            },
+        );
+
+        let events = std::iter::from_fn(|| event_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(matches!(
+            events.as_slice(),
+            [ThreadStreamEvent::RequestRetrying {
+                run_id,
+                attempt: 2,
+                max_retries: 5,
+                delay_ms: 750,
+                reason,
+                status: None,
+            }] if run_id == "run-request-retry" && reason.contains("stream disconnected")
+        ));
+        assert!(
+            current_message_id
+                .lock()
+                .expect("current message id lock")
+                .is_none(),
+            "request retrying must not create an assistant message id"
+        );
+    }
+
+    #[test]
     fn message_end_empty_content_no_tool_calls_skips_message_completed() {
         // When a provider error interrupts the stream before any text is
         // generated, MessageEnd arrives with empty text_content() and no

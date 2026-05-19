@@ -98,12 +98,30 @@ export type SurfaceToolEntry = {
 
 export type SurfaceHelperEntry = RuntimeSurfaceHelperEntry;
 
+export type SurfaceRequestRetryEntry = {
+  createdAt: string;
+  delayMs: number;
+  id: string;
+  maxRetries: number;
+  attempt: number;
+  reason: string;
+  runId: string;
+  status: number | null;
+  updatedAt: string;
+};
+
 export type TimelineEntry =
   | {
       kind: "message";
       key: string;
       occurredAt: string;
       message: SurfaceMessage;
+    }
+  | {
+      kind: "request_retry";
+      key: string;
+      occurredAt: string;
+      requestRetry: SurfaceRequestRetryEntry;
     }
   | {
       kind: "tool";
@@ -849,8 +867,10 @@ function getTimelineEntryKindOrder(entry: TimelineEntry) {
       return 5;
     case "helper":
       return 3;
-    case "tool":
+    case "request_retry":
       return 4;
+    case "tool":
+      return 5;
   }
 }
 

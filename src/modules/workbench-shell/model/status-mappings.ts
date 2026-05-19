@@ -95,6 +95,8 @@ export function streamEventToMachineEvent(
       return "CLARIFY_RESOLVED";
     case "run_retrying":
       return "RUN_RETRYING";
+    case "request_retrying":
+      return null;
     case "run_completed":
       return "RUN_COMPLETED";
     case "run_failed":

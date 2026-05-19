@@ -22,6 +22,7 @@ use crate::core::agent_session::{
 use crate::core::app_state::AppState;
 use crate::core::tiycode_default_headers;
 use crate::core::tiycode_url_policy;
+use crate::core::TIYCORE_REQUEST_MAX_RETRIES;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{
     AddMessageInput, MessageDto, MessageRecord, ThreadSnapshotDto, ThreadSummaryDto,
@@ -243,6 +244,7 @@ pub async fn thread_regenerate_title(
             security: Some(
                 tiycore::types::SecurityConfig::default().with_url(tiycode_url_policy()),
             ),
+            max_retries: Some(TIYCORE_REQUEST_MAX_RETRIES),
             ..TiyStreamOptions::default()
         };
 

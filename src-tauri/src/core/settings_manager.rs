@@ -19,6 +19,7 @@ use tiycore::types::{
 };
 
 use crate::core::catalog_model_id_normalizer::NormalizingCatalogMetadataStore;
+use crate::core::TIYCORE_REQUEST_MAX_RETRIES;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::{
     AgentProfileInput, AgentProfileRecord, CustomProviderCreateInput, ProviderCatalogEntryDto,
@@ -457,6 +458,7 @@ fn build_provider_model_test_request(
         ),
         on_payload: build_provider_options_payload_hook(model.provider_options_json.as_deref()),
         transport: None,
+        max_retries: Some(TIYCORE_REQUEST_MAX_RETRIES),
         max_retry_delay_ms: None,
         ..TiyStreamOptions::default()
     };
@@ -1870,6 +1872,10 @@ mod tests {
         assert_eq!(
             request.options.max_tokens,
             Some(PROVIDER_MODEL_TEST_MIN_MAX_TOKENS)
+        );
+        assert_eq!(
+            request.options.max_retries,
+            Some(TIYCORE_REQUEST_MAX_RETRIES)
         );
         assert_eq!(request.model.max_tokens, 16_384);
         assert_eq!(request.model.context_window, 128_000);

@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use crate::core::prompt;
 use crate::core::subagent::HelperAgentOrchestrator;
 use crate::core::tool_gateway::ToolGateway;
+use crate::core::TIYCORE_REQUEST_MAX_RETRIES;
 use crate::extensions::ExtensionsManager;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
@@ -155,6 +156,7 @@ impl AgentSession {
                 ContextCompressionRuntimeState::new(spec.initial_context_calibration),
             ));
             agent.set_max_turns(max_turns);
+            agent.set_max_retries(Some(TIYCORE_REQUEST_MAX_RETRIES));
             configure_agent(
                 &agent,
                 &spec,

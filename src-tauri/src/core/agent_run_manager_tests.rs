@@ -170,6 +170,14 @@ pub(super) mod tests {
                 run_id: "run-1".to_string(),
                 run_mode: "default".to_string(),
             },
+            ThreadStreamEvent::RequestRetrying {
+                run_id: "run-1".to_string(),
+                attempt: 2,
+                max_retries: 5,
+                delay_ms: 750,
+                reason: "stream disconnected".to_string(),
+                status: None,
+            },
             ThreadStreamEvent::MessageDelta {
                 run_id: "run-1".to_string(),
                 message_id: "message-1".to_string(),
@@ -308,6 +316,14 @@ pub(super) mod tests {
             ThreadStreamEvent::RunStarted {
                 run_id: "run-1".to_string(),
                 run_mode: "default".to_string(),
+            },
+            ThreadStreamEvent::RequestRetrying {
+                run_id: "run-1".to_string(),
+                attempt: 1,
+                max_retries: 3,
+                delay_ms: 500,
+                reason: "HTTP 503".to_string(),
+                status: Some(503),
             },
             ThreadStreamEvent::ReasoningUpdated {
                 run_id: "run-1".to_string(),
@@ -1761,6 +1777,14 @@ pub(super) mod tests {
                 max_attempts: 3,
                 delay_ms: 500,
                 reason: "retry".to_string(),
+            },
+            ThreadStreamEvent::RequestRetrying {
+                run_id: "r".to_string(),
+                attempt: 1,
+                max_retries: 3,
+                delay_ms: 500,
+                reason: "HTTP 503".to_string(),
+                status: Some(503),
             },
             ThreadStreamEvent::ApprovalRequired {
                 run_id: "r".to_string(),
