@@ -20,7 +20,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Confirmation, ConfirmationAccepted, ConfirmationAction, ConfirmationActions, ConfirmationRejected, ConfirmationRequest, ConfirmationTitle } from "@/components/ai-elements/confirmation";
-import { useViewportAutoCollapse, type ViewportAutoCollapseEntry } from "@/shared/hooks/use-viewport-auto-collapse";
+import { useDelayedAutoCollapse, type DelayedAutoCollapseEntry } from "@/shared/hooks/use-delayed-auto-collapse";
 import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/run-model-plan";
 import type { CommandEntry } from "@/modules/settings-center/model/types";
 import { threadClearContext, threadLoad } from "@/services/bridge";
@@ -222,6 +222,7 @@ function renderPlanProseSection(title: string, content: string) {
 
 
 const BASE_CONVERSATION_BOTTOM_PADDING = 40;
+const THREAD_AUTO_COLLAPSE_DELAY_MS = 4000;
 
 /** Idle context used when resetting the run-lifecycle machine. */
 const RESET_IDLE_CONTEXT: RunMachineContext = {
@@ -301,7 +302,6 @@ export function RuntimeThreadSurface({
       setSelectedRunMode("default");
       setRequestRetryEntries([]);
       setRequestRetryOpen({});
-      wrapperRefsMap.current.clear();
       userManuallyOpenedIds.current.clear();
     }
   }, [threadId]);
@@ -370,10 +370,7 @@ export function RuntimeThreadSurface({
     return result;
   }
 
-  // --- Viewport auto-collapse infrastructure ---
-  const [scrollContainerEl, setScrollContainerEl] = useState<HTMLElement | null>(null);
-  const contentSentinelRef = useRef<HTMLDivElement | null>(null);
-  const wrapperRefsMap = useRef<Map<string, HTMLElement>>(new Map());
+  // --- Delayed auto-collapse infrastructure ---
   const userManuallyOpenedIds = useRef<Set<string>>(new Set());
 
   const clearScheduledThinkingPhase = useCallback(() => {
@@ -1634,33 +1631,9 @@ export function RuntimeThreadSurface({
   );
   const presentationEntries = timelineEntries;
 
-  // --- Viewport auto-collapse: detect scroll container once content mounts ---
-  // We derive the scroll container from StickToBottom's scrollRef rather than
-  // walking the DOM with findScrollParent.  A ref callback runs *before*
-  // layout effects, so StickToBottom hasn't set `overflow: auto` on the scroll
-  // div yet, causing findScrollParent to miss it and return null.
-  // A passive effect fires *after* layout effects, guaranteeing the ref is ready.
-  const contentSentinelCallback = useCallback((node: HTMLDivElement | null) => {
-    contentSentinelRef.current = node;
-  }, []);
-
-  useEffect(() => {
-    if (!snapshotReady) {
-      setScrollContainerEl(null);
-      return;
-    }
-    const scrollEl = conversationContextRef.current?.scrollRef?.current ?? null;
-    setScrollContainerEl(scrollEl);
-  }, [snapshotReady]);
-
-  const getIsStuckToBottom = useCallback(
-    () => conversationContextRef.current?.isAtBottom ?? true,
-    [],
-  );
-
-  // Build entries for the viewport auto-collapse hook.
-  const viewportCollapseEntries = useMemo<ReadonlyArray<ViewportAutoCollapseEntry>>(() => {
-    const result: ViewportAutoCollapseEntry[] = [];
+  // Build entries for the delayed auto-collapse hook.
+  const delayedCollapseEntries = useMemo<ReadonlyArray<DelayedAutoCollapseEntry>>(() => {
+    const result: DelayedAutoCollapseEntry[] = [];
     for (const entry of presentationEntries) {
       if (entry.kind === "tool") {
         const isCompleted = isCompletedToolState(entry.tool.state);
@@ -1682,11 +1655,11 @@ export function RuntimeThreadSurface({
     return result;
   }, [presentationEntries, completedToolOpen, helperOpen, requestRetryOpen, reasoningOpen]);
 
-  // Keep a ref to presentationEntries for the viewport collapse callback.
+  // Keep a ref to presentationEntries for the delayed collapse callback.
   const presentationEntriesRef = useRef(presentationEntries);
   presentationEntriesRef.current = presentationEntries;
 
-  const handleViewportCollapse = useCallback((id: string) => {
+  const handleDelayedCollapse = useCallback((id: string) => {
     // Determine whether this id belongs to a tool, helper, request retry, or reasoning
     // and only update the relevant state map.
     const entry = presentationEntriesRef.current.find(
@@ -1708,13 +1681,11 @@ export function RuntimeThreadSurface({
     }
   }, []);
 
-  useViewportAutoCollapse({
-    scrollContainer: scrollContainerEl,
-    getIsStuckToBottom,
-    entries: viewportCollapseEntries,
-    wrapperRefs: wrapperRefsMap.current,
+  useDelayedAutoCollapse({
+    delayMs: THREAD_AUTO_COLLAPSE_DELAY_MS,
+    entries: delayedCollapseEntries,
     userManuallyOpenedIds: userManuallyOpenedIds.current,
-    onCollapse: handleViewportCollapse,
+    onCollapse: handleDelayedCollapse,
   });
   const lastPresentationRole = presentationEntries.length > 0
     ? getPresentationEntryRole(presentationEntries[presentationEntries.length - 1])
@@ -2414,8 +2385,6 @@ export function RuntimeThreadSurface({
             className="mx-auto w-full max-w-4xl gap-0 px-6 pt-8"
             style={{ paddingBottom: `${conversationBottomPadding}px` }}
           >
-            {/* Invisible sentinel used to locate the scroll container for viewport auto-collapse */}
-            <div ref={contentSentinelCallback} className="hidden" />
             {hasMoreMessages ? (
               <div className="pb-4">
                 <div className="flex flex-col items-center gap-2">
@@ -2514,18 +2483,7 @@ export function RuntimeThreadSurface({
                   const reasoningIsStreaming = message.status === "streaming";
                   const reasoningIsOpen = reasoningOpen[message.id] ?? reasoningIsStreaming;
                   return (
-                    <div
-                      className={spacingClass}
-                      data-timeline-entry-id={message.id}
-                      key={entry.key}
-                      ref={(node) => {
-                        if (node) {
-                          wrapperRefsMap.current.set(message.id, node);
-                        } else {
-                          wrapperRefsMap.current.delete(message.id);
-                        }
-                      }}
-                    >
+                    <div className={spacingClass} key={entry.key}>
                       <Message className="max-w-full" from="assistant">
                         <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
                           <Reasoning
@@ -2769,10 +2727,14 @@ export function RuntimeThreadSurface({
                             aria-expanded={open}
                             className="group inline-flex max-w-full items-center gap-2 text-left text-sm font-medium leading-5 text-app-muted transition-colors hover:text-app-foreground"
                             onClick={() => {
+                              const nextOpen = !open;
                               setRequestRetryOpen((current) => ({
                                 ...current,
-                                [requestRetry.id]: !(current[requestRetry.id] ?? requestRetry.attempt > 1),
+                                [requestRetry.id]: nextOpen,
                               }));
+                              if (nextOpen) {
+                                userManuallyOpenedIds.current.add(requestRetry.id);
+                              }
                             }}
                             type="button"
                           >
@@ -2815,18 +2777,7 @@ export function RuntimeThreadSurface({
                   toolUses: helper.totalToolCalls,
                 });
                 return (
-                  <div
-                    className={spacingClass}
-                    data-timeline-entry-id={helper.id}
-                    key={entry.key}
-                    ref={(node) => {
-                      if (node) {
-                        wrapperRefsMap.current.set(helper.id, node);
-                      } else {
-                        wrapperRefsMap.current.delete(helper.id);
-                      }
-                    }}
-                  >
+                  <div className={spacingClass} key={entry.key}>
                     <Message className="max-w-full" from="assistant">
                       <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
                         <CompactCollapsible
@@ -2941,18 +2892,7 @@ export function RuntimeThreadSurface({
 
               const { tool } = entry;
               return (
-                <div
-                  className={spacingClass}
-                  data-timeline-entry-id={tool.id}
-                  key={entry.key}
-                  ref={(node) => {
-                    if (node) {
-                      wrapperRefsMap.current.set(tool.id, node);
-                    } else {
-                      wrapperRefsMap.current.delete(tool.id);
-                    }
-                  }}
-                >
+                <div className={spacingClass} key={entry.key}>
                   {renderToolEntry(tool, entry.key)}
                 </div>
               );
