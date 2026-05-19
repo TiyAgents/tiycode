@@ -886,6 +886,8 @@ const zhCN = {
   "fileEditor.htmlPreview": "HTML 预览",
   "fileEditor.editor": "编辑器",
   "fileEditor.preview": "预览",
+  "fileEditor.refresh": "从磁盘刷新预览",
+  "fileEditor.refreshDisabledDirty": "请先保存修改再刷新",
   "fileEditor.closePreview": "关闭预览",
   "fileEditor.binaryFile": "二进制文件 — 无法编辑",
 

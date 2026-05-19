@@ -848,6 +848,8 @@ const en: Record<TranslationKey, string> = {
   "fileEditor.htmlPreview": "HTML Preview",
   "fileEditor.editor": "Editor",
   "fileEditor.preview": "Preview",
+  "fileEditor.refresh": "Refresh preview from disk",
+  "fileEditor.refreshDisabledDirty": "Save changes before refreshing",
   "fileEditor.closePreview": "Close preview",
   "fileEditor.binaryFile": "Binary file — cannot edit",
 
