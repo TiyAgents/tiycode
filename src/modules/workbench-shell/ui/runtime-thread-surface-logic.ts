@@ -134,5 +134,5 @@ export function getDefaultToolOpenState(
   if (!isCompletedToolState(toolState)) {
     return true;
   }
-  return explicitOpen ?? true;
+  return explicitOpen ?? false;
 }

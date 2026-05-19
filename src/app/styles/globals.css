@@ -356,6 +356,18 @@
     font-size: 11px !important;
   }
 
+  .collapsible-content-accordion {
+    overflow: hidden;
+  }
+
+  .collapsible-content-accordion[data-state="open"] {
+    animation: collapsible-content-open 1000ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .collapsible-content-accordion[data-state="closed"] {
+    animation: collapsible-content-close 1000ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
   .file-editor-codemirror .cm-editor {
     height: 100%;
     width: 100%;
@@ -395,4 +407,26 @@
 }
 .file-type-icon--muted {
   opacity: var(--file-type-icon-muted-opacity);
+}
+
+@keyframes collapsible-content-open {
+  from {
+    height: 0;
+    opacity: 0.72;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes collapsible-content-close {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0.72;
+  }
 }
