@@ -91,6 +91,29 @@ fn test_thread_stream_event_request_retrying_serialization() {
 }
 
 #[test]
+fn test_thread_stream_event_request_retrying_boundary_serialization() {
+    use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
+
+    let event = ThreadStreamEvent::RequestRetrying {
+        run_id: "run-1".into(),
+        attempt: 0,
+        max_retries: 0,
+        delay_ms: 0,
+        reason: String::new(),
+        status: Some(0),
+    };
+
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"].as_str().unwrap(), "request_retrying");
+    assert_eq!(json["run_id"].as_str().unwrap(), "run-1");
+    assert_eq!(json["attempt"].as_u64().unwrap(), 0);
+    assert_eq!(json["max_retries"].as_u64().unwrap(), 0);
+    assert_eq!(json["delay_ms"].as_u64().unwrap(), 0);
+    assert_eq!(json["reason"].as_str().unwrap(), "");
+    assert_eq!(json["status"].as_u64().unwrap(), 0);
+}
+
+#[test]
 fn test_thread_stream_event_message_delta_serialization() {
     use tiycode_lib::ipc::frontend_channels::ThreadStreamEvent;
 
