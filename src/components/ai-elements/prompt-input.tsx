@@ -182,7 +182,7 @@ export type PromptInputPasteBatchGuard = {
 };
 
 export const getAttachmentFileFingerprint = (file: File): string =>
-  [file.name || "", file.type || "", file.size, file.lastModified || 0].join("|");
+  JSON.stringify([file.name || "", file.type || "", file.size, file.lastModified || 0]);
 
 export const createAttachmentFileBatchKey = (files: readonly File[]): string =>
   files.map(getAttachmentFileFingerprint).join("\n");

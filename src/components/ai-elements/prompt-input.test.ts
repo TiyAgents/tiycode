@@ -63,6 +63,16 @@ describe("prompt input attachment paste dedupe", () => {
     ]);
   });
 
+  it("does not deduplicate files whose old pipe-joined fingerprints would collide", () => {
+    const first = createFile({ name: "a|b", size: 12, type: "c" });
+    const second = createFile({ name: "a", size: 12, type: "b|c" });
+
+    expect(dedupeAttachmentFileBatch([first, second])).toEqual([
+      first,
+      second,
+    ]);
+  });
+
   it("detects duplicate paste batches only inside the short guard window", () => {
     const file = createFile({ name: "image.png", size: 12, type: "image/png" });
     const batchKey = createAttachmentFileBatchKey([file]);
