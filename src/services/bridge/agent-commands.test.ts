@@ -142,4 +142,18 @@ describe("normalizeThreadStreamEvent request_retrying", () => {
 
     expect(result.status).toBeNull();
   });
+
+  it("normalizes malformed request_retrying status to null", () => {
+    const result = normalizeThreadStreamEvent({
+      type: "request_retrying",
+      runId: "run-1",
+      attempt: 1,
+      maxRetries: 3,
+      delayMs: 500,
+      reason: "operation timed out",
+      status: "not-a-number",
+    }) as Extract<ThreadStreamEvent, { type: "request_retrying" }>;
+
+    expect(result.status).toBeNull();
+  });
 });

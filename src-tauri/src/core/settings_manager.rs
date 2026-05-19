@@ -1873,6 +1873,10 @@ mod tests {
             request.options.max_tokens,
             Some(PROVIDER_MODEL_TEST_MIN_MAX_TOKENS)
         );
+        assert_eq!(
+            request.options.max_retries,
+            Some(TIYCORE_REQUEST_MAX_RETRIES)
+        );
         assert_eq!(request.model.max_tokens, 16_384);
         assert_eq!(request.model.context_window, 128_000);
         assert_eq!(

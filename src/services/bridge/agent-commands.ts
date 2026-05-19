@@ -103,7 +103,8 @@ function readNumberOrNull(
   if (value == null) {
     return null;
   }
-  return Number(value);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function readSnapshot(
