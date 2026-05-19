@@ -293,9 +293,9 @@ describe("getDefaultToolOpenState", () => {
     expect(getDefaultToolOpenState("read", "input-available", false)).toBe(true);
   });
 
-  it("defaults non-task completed tools to expanded", () => {
-    expect(getDefaultToolOpenState("read", "output-available", undefined)).toBe(true);
-    expect(getDefaultToolOpenState("edit", "output-error", undefined)).toBe(true);
+  it("defaults non-task completed tools to collapsed", () => {
+    expect(getDefaultToolOpenState("read", "output-available", undefined)).toBe(false);
+    expect(getDefaultToolOpenState("edit", "output-error", undefined)).toBe(false);
   });
 
   it("respects explicit open state for non-task completed tools", () => {

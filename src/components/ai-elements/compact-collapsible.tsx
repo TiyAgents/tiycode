@@ -106,7 +106,7 @@ export const CompactCollapsibleContent = memo(
   ({ className, ...props }: CompactCollapsibleContentProps) => (
     <CollapsibleContent
       className={cn(
-        "mt-2 outline-none data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 data-[state=closed]:animate-out data-[state=open]:animate-in duration-500 ease-out",
+        "collapsible-content-accordion mt-2 outline-none",
         className,
       )}
       {...props}

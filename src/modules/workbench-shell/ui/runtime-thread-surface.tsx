@@ -222,7 +222,7 @@ function renderPlanProseSection(title: string, content: string) {
 
 
 const BASE_CONVERSATION_BOTTOM_PADDING = 40;
-const THREAD_AUTO_COLLAPSE_DELAY_MS = 4000;
+const THREAD_AUTO_COLLAPSE_DELAY_MS = 8000;
 
 /** Idle context used when resetting the run-lifecycle machine. */
 const RESET_IDLE_CONTEXT: RunMachineContext = {
@@ -302,6 +302,9 @@ export function RuntimeThreadSurface({
       setSelectedRunMode("default");
       setRequestRetryEntries([]);
       setRequestRetryOpen({});
+      setCompletedToolOpen({});
+      setHelperOpen({});
+      setReasoningOpen({});
       userManuallyOpenedIds.current.clear();
     }
   }, [threadId]);
@@ -1641,14 +1644,14 @@ export function RuntimeThreadSurface({
         result.push({ id: entry.tool.id, completed: isCompleted, currentOpen: isOpen });
       } else if (entry.kind === "helper") {
         const isCompleted = entry.helper.status === "completed";
-        const isOpen = helperOpen[entry.helper.id] ?? true;
+        const isOpen = helperOpen[entry.helper.id] ?? !isCompleted;
         result.push({ id: entry.helper.id, completed: isCompleted, currentOpen: isOpen });
       } else if (entry.kind === "request_retry") {
         const isOpen = requestRetryOpen[entry.requestRetry.id] ?? entry.requestRetry.attempt > 1;
         result.push({ id: entry.requestRetry.id, completed: true, currentOpen: isOpen });
       } else if (entry.kind === "message" && entry.message.messageType === "reasoning") {
         const isCompleted = entry.message.status !== "streaming";
-        const isOpen = reasoningOpen[entry.message.id] ?? true;
+        const isOpen = reasoningOpen[entry.message.id] ?? !isCompleted;
         result.push({ id: entry.message.id, completed: isCompleted, currentOpen: isOpen });
       }
     }
@@ -1723,7 +1726,7 @@ export function RuntimeThreadSurface({
     const nextToolStates = Object.fromEntries(visibleTools.map((tool) => [tool.id, tool.state]));
 
     setCompletedToolOpen((current) => {
-      const next: Record<string, boolean> = {};
+      const next: Record<string, boolean> = { ...current };
 
       for (const tool of visibleTools) {
         const previousState = previousToolStates[tool.id];
@@ -1738,8 +1741,8 @@ export function RuntimeThreadSurface({
           } else if (!isCompletedToolState(tool.state)) {
             next[tool.id] = true;
           } else {
-            // Completed: preserve current open state (default open).
-            next[tool.id] = tool.id in current ? current[tool.id] : true;
+            // Completed: preserve current open state; otherwise default to collapsed.
+            next[tool.id] = tool.id in current ? current[tool.id] : false;
           }
           continue;
         }
@@ -1777,7 +1780,7 @@ export function RuntimeThreadSurface({
     );
 
     setHelperOpen((current) => {
-      const next: Record<string, boolean> = {};
+      const next: Record<string, boolean> = { ...current };
 
       for (const helper of helpers) {
         const previousStatus = previousHelperStatuses[helper.id];
@@ -1790,7 +1793,7 @@ export function RuntimeThreadSurface({
           if (!isCompleted) {
             next[helper.id] = true;
           } else {
-            next[helper.id] = helper.id in current ? current[helper.id] : true;
+            next[helper.id] = helper.id in current ? current[helper.id] : false;
           }
           continue;
         }
@@ -2782,7 +2785,7 @@ export function RuntimeThreadSurface({
                       <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
                         <CompactCollapsible
                           onOpenChange={(open) => handleHelperOpenChange(helper.id, open)}
-                          open={helperOpen[helper.id] ?? true}
+                          open={helperOpen[helper.id] ?? helper.status !== "completed"}
                         >
                           <CompactCollapsibleHeader
                             className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground"

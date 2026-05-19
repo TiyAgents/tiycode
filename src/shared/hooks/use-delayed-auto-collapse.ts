@@ -39,7 +39,7 @@ export interface SyncDelayedAutoCollapseTimersOptions {
   userManuallyOpenedIds: ReadonlySet<string>;
 }
 
-const DEFAULT_DELAY_MS = 4000;
+const DEFAULT_DELAY_MS = 8000;
 
 export function syncDelayedAutoCollapseTimers({
   clearTimer = clearTimeout,
