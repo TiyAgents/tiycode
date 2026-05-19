@@ -174,6 +174,112 @@ const buildSyntheticAttachmentName = (file: File, index: number): string => {
   return `attachment-${timestamp}-${index + 1}${extensionFromType}`;
 };
 
+const PASTE_DUPLICATE_GUARD_MS = 750;
+
+export type PromptInputPasteBatchGuard = {
+  key: string;
+  timestamp: number;
+};
+
+export const getAttachmentFileFingerprint = (file: File): string =>
+  [file.name || "", file.type || "", file.size, file.lastModified || 0].join("|");
+
+export const createAttachmentFileBatchKey = (files: readonly File[]): string =>
+  files.map(getAttachmentFileFingerprint).join("\n");
+
+export const dedupeAttachmentFileBatch = (files: readonly File[]): File[] => {
+  const uniqueFiles: File[] = [];
+  const seenFingerprints = new Set<string>();
+
+  for (const file of files) {
+    const fingerprint = getAttachmentFileFingerprint(file);
+    if (seenFingerprints.has(fingerprint)) {
+      continue;
+    }
+    seenFingerprints.add(fingerprint);
+    uniqueFiles.push(file);
+  }
+
+  return uniqueFiles;
+};
+
+const normalizeAttachmentFileName = (name: string): string =>
+  name.trim().toLowerCase();
+
+const getAttachmentFileNameStem = (name: string): string =>
+  normalizeAttachmentFileName(name).replace(/\.[^.]+$/, "");
+
+const isGenericClipboardImageName = (name: string): boolean => {
+  const normalized = normalizeAttachmentFileName(name);
+  return !normalized || /^(?:clipboard|image)(?:\.[a-z0-9]+)?$/i.test(normalized);
+};
+
+const isPastedImageFlavorCandidate = (file: File): boolean =>
+  file.type.startsWith("image/") ||
+  (file.type === "" && isGenericClipboardImageName(file.name));
+
+const isLikelyAlternatePastedImageFlavor = (first: File, next: File): boolean => {
+  if (
+    !isPastedImageFlavorCandidate(first) ||
+    !isPastedImageFlavorCandidate(next)
+  ) {
+    return false;
+  }
+
+  if (isGenericClipboardImageName(first.name) && isGenericClipboardImageName(next.name)) {
+    return true;
+  }
+
+  const firstStem = getAttachmentFileNameStem(first.name);
+  const nextStem = getAttachmentFileNameStem(next.name);
+  return Boolean(firstStem && firstStem === nextStem && first.type !== next.type);
+};
+
+export const dedupePastedAttachmentFileBatch = (files: readonly File[]): File[] => {
+  const uniqueFiles: File[] = [];
+  const keptImageFiles: File[] = [];
+  const seenFingerprints = new Set<string>();
+
+  for (const file of files) {
+    const fingerprint = getAttachmentFileFingerprint(file);
+    if (seenFingerprints.has(fingerprint)) {
+      continue;
+    }
+    seenFingerprints.add(fingerprint);
+
+    if (
+      keptImageFiles.some((keptImage) =>
+        isLikelyAlternatePastedImageFlavor(keptImage, file)
+      )
+    ) {
+      continue;
+    }
+    if (isPastedImageFlavorCandidate(file)) {
+      keptImageFiles.push(file);
+    }
+
+    uniqueFiles.push(file);
+  }
+
+  return uniqueFiles;
+};
+
+export const shouldIgnoreDuplicatePasteBatch = ({
+  batchKey,
+  lastBatch,
+  now,
+}: {
+  batchKey: string;
+  lastBatch: PromptInputPasteBatchGuard | null;
+  now: number;
+}): boolean =>
+  Boolean(
+    lastBatch &&
+      lastBatch.key === batchKey &&
+      now - lastBatch.timestamp >= 0 &&
+      now - lastBatch.timestamp < PASTE_DUPLICATE_GUARD_MS
+  );
+
 const captureScreenshot = async (): Promise<File | null> => {
   if (
     typeof navigator === "undefined" ||
@@ -342,7 +448,7 @@ export const PromptInputProvider = ({
   const openRef = useRef<() => void>(() => {});
 
   const add = useCallback((files: File[] | FileList) => {
-    const incoming = [...files];
+    const incoming = dedupeAttachmentFileBatch([...files]);
     if (incoming.length === 0) {
       return;
     }
@@ -660,7 +766,7 @@ export const PromptInput = ({
 
   const addLocal = useCallback(
     (fileList: File[] | FileList) => {
-      const incoming = [...fileList];
+      const incoming = dedupeAttachmentFileBatch([...fileList]);
       const accepted = incoming.filter((f) => matchesAccept(f));
       if (incoming.length && accepted.length === 0) {
         onError?.({
@@ -725,7 +831,7 @@ export const PromptInput = ({
   // Wrapper that validates files before calling provider's add
   const addWithProviderValidation = useCallback(
     (fileList: File[] | FileList) => {
-      const incoming = [...fileList];
+      const incoming = dedupeAttachmentFileBatch([...fileList]);
       const accepted = incoming.filter((f) => matchesAccept(f));
       if (incoming.length && accepted.length === 0) {
         onError?.({
@@ -1227,6 +1333,7 @@ export const PromptInputTextarea = ({
   const controller = useOptionalPromptInputController();
   const attachments = usePromptInputAttachments();
   const [isComposing, setIsComposing] = useState(false);
+  const lastPasteBatchRef = useRef<PromptInputPasteBatchGuard | null>(null);
 
   const moveCaretToLineBoundary = useCallback(
     (textarea: HTMLTextAreaElement, key: "Home" | "End", extendSelection: boolean) => {
@@ -1337,24 +1444,35 @@ export const PromptInputTextarea = ({
         return;
       }
 
-      const files: File[] = [];
-      const seenTypes = new Set<string>();
+      const pastedFiles: File[] = [];
 
       for (const item of items) {
-        if (item.kind === "file") {
-          // Deduplicate by MIME type – macOS clipboard may include
-          // multiple DataTransferItems for the same pasted image.
-          if (seenTypes.has(item.type)) continue;
-          seenTypes.add(item.type);
-          const file = item.getAsFile();
-          if (file) {
-            files.push(file);
-          }
+        if (item.kind !== "file") {
+          continue;
+        }
+
+        const file = item.getAsFile();
+        if (file) {
+          pastedFiles.push(file);
         }
       }
 
+      const files = dedupePastedAttachmentFileBatch(pastedFiles);
+
       if (files.length > 0) {
         event.preventDefault();
+        const batchKey = createAttachmentFileBatchKey(files);
+        const now = Date.now();
+        if (
+          shouldIgnoreDuplicatePasteBatch({
+            batchKey,
+            lastBatch: lastPasteBatchRef.current,
+            now,
+          })
+        ) {
+          return;
+        }
+        lastPasteBatchRef.current = { key: batchKey, timestamp: now };
         attachments.add(files);
       }
     },
