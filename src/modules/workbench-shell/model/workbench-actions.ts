@@ -74,6 +74,19 @@ export interface ThreadDeleteOptions {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Clears transient new-thread composer data when entering new-thread mode.
+ * Unlike `clearNewThreadComposer`, this intentionally preserves typed text,
+ * referenced files, and run mode while dropping stale serialized attachments
+ * and errors that should not be restored after a mode transition.
+ */
+const resetNewThreadComposerTransientState = (): void => {
+  composerStore.setState({
+    error: null,
+    newThreadAttachmentData: [],
+  });
+};
+
 /** Pending thread creation promises, keyed by workspace ID. Used for deduplication. */
 const pendingCreations: Record<string, Promise<string>> = {};
 
@@ -265,7 +278,7 @@ export function activateWorkspace(workspaceId: string, project: ProjectOption): 
     activeThreadProfileIdOverride: null,
     editingThreadId: null,
   });
-  composerStore.setState({ error: null });
+  resetNewThreadComposerTransientState();
   projectStore.setState({ terminalBootstrapError: null });
   uiLayoutStore.setState({ activeWorkspaceMenuId: null });
 }
@@ -351,7 +364,7 @@ export async function deleteThread(threadId: string, options?: ThreadDeleteOptio
       activeThreadId: null,
       activeThreadProfileIdOverride: null,
     });
-    composerStore.setState({ error: null });
+    resetNewThreadComposerTransientState();
   }
 }
 
@@ -402,7 +415,7 @@ export async function removeWorkspace(workspace: WorkspaceItem): Promise<void> {
       activeThreadProfileIdOverride: null,
       workspaces: clearActiveThreads(threadStore.getState().workspaces),
     });
-    composerStore.setState({ error: null });
+    resetNewThreadComposerTransientState();
   }
 
   // Update selected project if needed
@@ -724,7 +737,7 @@ export function enterNewThreadMode(): void {
   threadStore.setState((prev) => ({
     workspaces: clearActiveThreads(prev.workspaces),
   }));
-  composerStore.setState({ error: null });
+  resetNewThreadComposerTransientState();
   projectStore.setState({ terminalBootstrapError: null });
 }
 

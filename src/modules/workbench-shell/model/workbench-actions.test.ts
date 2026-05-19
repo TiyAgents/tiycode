@@ -125,6 +125,19 @@ function hasTerminalSession(threadId: string): boolean {
   return threadId in terminalStore.getState().sessionsByThreadId;
 }
 
+function setStaleNewThreadAttachmentData() {
+  composerStore.setState({
+    newThreadAttachmentData: [
+      {
+        dataUrl: "data:image/png;base64,AA==",
+        id: "attachment-1",
+        mediaType: "image/png",
+        name: "image.png",
+      },
+    ],
+  });
+}
+
 beforeEach(() => {
   resetAllStores();
   // Set up minimal settingsStore state
@@ -287,6 +300,15 @@ describe("activateWorkspace", () => {
     expect(composerStore.getState().error).toBeNull();
   });
 
+  it("clears stale new-thread attachment data", () => {
+    setStaleNewThreadAttachmentData();
+    threadStore.setState({ isNewThreadMode: false, workspaces: [] });
+
+    activateWorkspace("ws-2", makeProject({ id: "ws-2" }));
+
+    expect(composerStore.getState().newThreadAttachmentData).toEqual([]);
+  });
+
   it("closes workspace menu", () => {
     uiLayoutStore.setState({ activeWorkspaceMenuId: "ws-1" });
     threadStore.setState({ isNewThreadMode: false, workspaces: [] });
@@ -384,12 +406,14 @@ describe("deleteThread", () => {
       selectedProject: makeProject({ id: "ws-1" }),
       recentProjects: [makeProject({ id: "ws-1" })],
     });
+    setStaleNewThreadAttachmentData();
 
     await deleteThread("thread-1", { skipIpc: true });
 
     expect(threadStore.getState().isNewThreadMode).toBe(true);
     expect(threadStore.getState().activeThreadProfileIdOverride).toBeNull();
     expect(composerStore.getState().error).toBeNull();
+    expect(composerStore.getState().newThreadAttachmentData).toEqual([]);
   });
 
   it("cleans terminal collapsed state", async () => {
@@ -473,6 +497,18 @@ describe("removeWorkspace", () => {
 
     expect(projectStore.getState().selectedProject).toBeNull();
   });
+
+  it("clears stale new-thread attachment data when removing the active workspace", async () => {
+    const thread = makeThread("thread-1");
+    const ws1 = makeWorkspace("ws-1", [thread]);
+    threadStore.setState({ activeThreadId: "thread-1", workspaces: [ws1] });
+    setStaleNewThreadAttachmentData();
+
+    await removeWorkspace(ws1 as any);
+
+    expect(threadStore.getState().isNewThreadMode).toBe(true);
+    expect(composerStore.getState().newThreadAttachmentData).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -505,6 +541,14 @@ describe("enterNewThreadMode", () => {
     enterNewThreadMode();
 
     expect(composerStore.getState().error).toBeNull();
+  });
+
+  it("clears stale new-thread attachment data", () => {
+    setStaleNewThreadAttachmentData();
+
+    enterNewThreadMode();
+
+    expect(composerStore.getState().newThreadAttachmentData).toEqual([]);
   });
 
   it("preserves workspaces structure", () => {

@@ -725,6 +725,28 @@ function dataUrlToFile(dataUrl: string, name: string, mediaType: string): File {
   return new File([u8arr], name, { type: mime });
 }
 
+export type ComposerInitialAttachmentRestoreState = {
+  hasRestored: boolean;
+};
+
+/**
+ * Marks initial attachment restoration as attempted and returns whether the
+ * current initial data should be restored. This intentionally mutates `state`
+ * on the first call, including empty initial data, so later draft-sync updates
+ * from the same mounted composer are not treated as initial state.
+ */
+export const markAndShouldRestoreInitialAttachmentData = (
+  state: ComposerInitialAttachmentRestoreState,
+  initialAttachmentData: ReadonlyArray<SerializableAttachment> | undefined,
+): initialAttachmentData is ReadonlyArray<SerializableAttachment> => {
+  if (state.hasRestored) {
+    return false;
+  }
+
+  state.hasRestored = true;
+  return Boolean(initialAttachmentData && initialAttachmentData.length > 0);
+};
+
 /**
  * Restores initial attachment data on mount by converting data URLs
  * into File objects and calling the PromptInput add() API.
@@ -735,13 +757,17 @@ function ComposerInitialStateRestorer({
   initialAttachmentData: ReadonlyArray<SerializableAttachment> | undefined;
 }) {
   const attachments = usePromptInputAttachments();
-  const hasRestoredRef = useRef(false);
+  const restoreStateRef = useRef<ComposerInitialAttachmentRestoreState>({
+    hasRestored: false,
+  });
 
   useEffect(() => {
-    if (hasRestoredRef.current) {
-      return;
-    }
-    if (!initialAttachmentData || initialAttachmentData.length === 0) {
+    if (
+      !markAndShouldRestoreInitialAttachmentData(
+        restoreStateRef.current,
+        initialAttachmentData,
+      )
+    ) {
       return;
     }
 
@@ -755,7 +781,6 @@ function ComposerInitialStateRestorer({
     }
 
     if (files.length > 0) {
-      hasRestoredRef.current = true;
       attachments.add(files);
     }
   }, [attachments, initialAttachmentData]);
