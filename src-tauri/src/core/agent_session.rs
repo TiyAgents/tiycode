@@ -149,10 +149,9 @@ fn trim_runtime_queue_state(state: &mut RuntimeQueueState) {
 }
 
 fn build_runtime_queue_snapshot(
-    agent: &Agent,
+    stats: &tiycore::agent::QueueStats,
     state: &RuntimeQueueState,
 ) -> RuntimeQueueSnapshotDto {
-    let stats = agent.queue_stats();
     RuntimeQueueSnapshotDto {
         steering_depth: stats.steering_depth,
         follow_up_depth: stats.follow_up_depth,
@@ -552,15 +551,17 @@ impl AgentSession {
             .lock()
             .expect("runtime queue state poisoned");
         attach_runtime_queue_message_handle(&mut state.messages, &message_id, handle);
-        Ok(build_runtime_queue_snapshot(&self.agent, &state))
+        let stats = self.agent.queue_stats();
+        Ok(build_runtime_queue_snapshot(&stats, &state))
     }
 
     pub fn runtime_queue_snapshot(&self) -> RuntimeQueueSnapshotDto {
+        let stats = self.agent.queue_stats();
         let state = self
             .runtime_queue_state
             .lock()
             .expect("runtime queue state poisoned");
-        build_runtime_queue_snapshot(&self.agent, &state)
+        build_runtime_queue_snapshot(&stats, &state)
     }
 
     pub fn cancel_runtime_queue_message(
@@ -605,7 +606,8 @@ impl AgentSession {
             RuntimeQueueMessageStatus::Cancelled,
             &now,
         );
-        Ok(build_runtime_queue_snapshot(&self.agent, &state))
+        let stats = self.agent.queue_stats();
+        Ok(build_runtime_queue_snapshot(&stats, &state))
     }
 
     pub fn clear_runtime_queue(
@@ -618,11 +620,12 @@ impl AgentSession {
             None => self.agent.clear_all_queues(),
         }
 
+        let stats = self.agent.queue_stats();
         let state = self
             .runtime_queue_state
             .lock()
             .expect("runtime queue state poisoned");
-        build_runtime_queue_snapshot(&self.agent, &state)
+        build_runtime_queue_snapshot(&stats, &state)
     }
 
     async fn run(self: Arc<Self>) {
@@ -931,6 +934,12 @@ fn configure_agent(
             let Some(agent_ref) = agent_ref.upgrade() else {
                 return;
             };
+            // Fetch queue stats BEFORE acquiring runtime_queue_state to
+            // avoid an ABBA deadlock: this callback runs inside the Agent's
+            // internal lock, and client methods acquire runtime_queue_state
+            // before calling agent.queue_stats().  By reading stats first
+            // we never hold both locks simultaneously in conflicting order.
+            let stats = agent_ref.queue_stats();
             let (snapshot, consumed_messages) = {
                 let mut state = runtime_queue_state
                     .lock()
@@ -938,7 +947,7 @@ fn configure_agent(
                 let update = update_runtime_queue_state_for_event(&mut state, &event);
                 let _event = update.event;
                 (
-                    build_runtime_queue_snapshot(&agent_ref, &state),
+                    build_runtime_queue_snapshot(&stats, &state),
                     update.consumed_messages,
                 )
             };
