@@ -471,6 +471,7 @@ export interface RuntimeQueueMessageDto {
   id: string;
   kind: RuntimeQueueMessageKind;
   content: string;
+  metadata?: Record<string, unknown> | null;
   status: RuntimeQueueMessageStatus;
   createdAt: string;
   updatedAt: string;

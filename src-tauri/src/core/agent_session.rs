@@ -193,12 +193,14 @@ fn append_runtime_queue_message(
     state: &mut RuntimeQueueState,
     kind: AgentQueueMessageKind,
     content: String,
+    metadata: Option<serde_json::Value>,
 ) {
     let now = runtime_queue_timestamp();
     state.messages.push(RuntimeQueueMessageDto {
         id: uuid::Uuid::now_v7().to_string(),
         kind,
         content,
+        metadata,
         status: RuntimeQueueMessageStatus::Pending,
         created_at: now.clone(),
         updated_at: now,
@@ -374,6 +376,7 @@ impl AgentSession {
         &self,
         kind: AgentQueueMessageKind,
         message: String,
+        metadata: Option<serde_json::Value>,
     ) -> Result<RuntimeQueueSnapshotDto, AppError> {
         let text = message.trim();
         if text.is_empty() {
@@ -388,7 +391,7 @@ impl AgentSession {
                 .runtime_queue_state
                 .lock()
                 .expect("runtime queue state poisoned");
-            append_runtime_queue_message(&mut state, kind, text.to_string());
+            append_runtime_queue_message(&mut state, kind, text.to_string(), metadata);
         }
 
         match kind {

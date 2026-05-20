@@ -188,16 +188,25 @@ pub(super) mod tests {
             &mut state,
             AgentQueueMessageKind::Steer,
             "First steer".to_string(),
+            Some(serde_json::json!({
+                "composer": {
+                    "kind": "command",
+                    "displayText": "/first",
+                    "effectivePrompt": "First steer"
+                }
+            })),
         );
         super::super::append_runtime_queue_message(
             &mut state,
             AgentQueueMessageKind::Steer,
             "Second steer".to_string(),
+            None,
         );
         super::super::append_runtime_queue_message(
             &mut state,
             AgentQueueMessageKind::FollowUp,
             "Follow up".to_string(),
+            None,
         );
 
         let update = update_runtime_queue_state_for_event(
@@ -211,6 +220,14 @@ pub(super) mod tests {
 
         assert_eq!(update.consumed_messages.len(), 2);
         assert_eq!(update.consumed_messages[0].content, "First steer");
+        assert_eq!(
+            update.consumed_messages[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.pointer("/composer/displayText"))
+                .and_then(serde_json::Value::as_str),
+            Some("/first"),
+        );
         assert_eq!(update.consumed_messages[1].content, "Second steer");
         assert_eq!(
             state.messages[0].status,
@@ -230,6 +247,7 @@ pub(super) mod tests {
             &mut state,
             AgentQueueMessageKind::FollowUp,
             "Follow up".to_string(),
+            None,
         );
 
         let update = update_runtime_queue_state_for_event(

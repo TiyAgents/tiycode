@@ -1126,6 +1126,21 @@ function GeneralSettingsPanel({
             />
           }
         />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.defaultAppendKindLabel")}
+          description={t("settings.general.defaultAppendKindDesc")}
+          control={
+            <ChoiceGroup
+              options={[
+                { label: t("composer.queueMode.steer"), value: "steer" },
+                { label: t("composer.queueMode.followUp"), value: "follow_up" },
+              ]}
+              value={generalPreferences.defaultAppendMessageKind}
+              onValueChange={(value) => onUpdateGeneralPreference("defaultAppendMessageKind", value)}
+            />
+          }
+        />
       </SettingsSection>
 
       <SettingsSection

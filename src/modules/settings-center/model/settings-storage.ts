@@ -5,6 +5,7 @@ import {
   SETTINGS_STORAGE_SCHEMA_VERSION,
 } from "@/modules/settings-center/model/defaults";
 import type {
+  AppendMessageKind,
   LocalUiSettingsState,
   TerminalCursorStyle,
 } from "@/modules/settings-center/model/types";
@@ -13,6 +14,10 @@ const LEGACY_SETTINGS_STORAGE_KEY = "tiy-agent-workbench-settings";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isAppendMessageKind(value: unknown): value is AppendMessageKind {
+  return value === "steer" || value === "follow_up";
 }
 
 function isTerminalCursorStyle(value: unknown): value is TerminalCursorStyle {
@@ -27,6 +32,9 @@ function parseGeneralPreferences(raw: Record<string, unknown>) {
         ? raw.preventSleepWhileRunning
         : DEFAULT_GENERAL_PREFERENCES.preventSleepWhileRunning,
     minimizeToTray: typeof raw.minimizeToTray === "boolean" ? raw.minimizeToTray : DEFAULT_GENERAL_PREFERENCES.minimizeToTray,
+    defaultAppendMessageKind: isAppendMessageKind(raw.defaultAppendMessageKind)
+      ? raw.defaultAppendMessageKind
+      : DEFAULT_GENERAL_PREFERENCES.defaultAppendMessageKind,
   };
 }
 

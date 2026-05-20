@@ -115,6 +115,7 @@ impl BuiltInAgentRuntime {
         run_id: &str,
         kind: AgentQueueMessageKind,
         message: String,
+        metadata: Option<serde_json::Value>,
     ) -> Result<Option<RuntimeQueueSnapshotDto>, AppError> {
         let session = {
             let sessions = self.sessions.lock().await;
@@ -122,7 +123,7 @@ impl BuiltInAgentRuntime {
         };
 
         session
-            .map(|session| session.enqueue_queue_message(kind, message))
+            .map(|session| session.enqueue_queue_message(kind, message, metadata))
             .transpose()
     }
 

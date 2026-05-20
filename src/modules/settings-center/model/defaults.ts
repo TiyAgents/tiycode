@@ -10,11 +10,13 @@ import type {
 } from "@/modules/settings-center/model/types";
 
 export const SETTINGS_STORAGE_KEY = "tiy-agent-local-ui-settings";
-export const SETTINGS_STORAGE_SCHEMA_VERSION = 1;
+export const SETTINGS_STORAGE_SCHEMA_VERSION = 2;
 export const GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY = "general.launch_at_login";
 export const GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY =
   "general.prevent_sleep_while_running";
 export const GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY = "general.minimize_to_tray";
+export const GENERAL_DEFAULT_APPEND_MESSAGE_KIND_KEY =
+  "general.default_append_message_kind";
 
 export const TERMINAL_SHELL_PATH_SETTING_KEY = "terminal.shell_path";
 export const TERMINAL_SHELL_ARGS_SETTING_KEY = "terminal.shell_args";
@@ -701,6 +703,7 @@ export const DEFAULT_GENERAL_PREFERENCES: GeneralPreferences = {
   launchAtLogin: false,
   preventSleepWhileRunning: false,
   minimizeToTray: true,
+  defaultAppendMessageKind: "follow_up",
 };
 
 export const DEFAULT_POLICY_SETTINGS: PolicySettings = {

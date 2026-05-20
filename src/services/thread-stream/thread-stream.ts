@@ -286,9 +286,10 @@ export class ThreadStream {
     threadId: string,
     kind: RuntimeQueueMessageKind,
     message: string,
+    metadata?: Record<string, unknown> | null,
   ): Promise<RuntimeQueueSnapshotDto> {
     try {
-      const queue = await threadEnqueueQueueMessage(threadId, kind, message);
+      const queue = await threadEnqueueQueueMessage(threadId, kind, message, metadata);
       this.onQueue?.({ runId: this.currentRunId ?? "", queue });
       return queue;
     } catch (error) {

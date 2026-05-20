@@ -9,6 +9,11 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import type { ComponentProps } from "react";
+import {
+  CompactCollapsible,
+  CompactCollapsibleContent,
+  CompactCollapsibleHeader,
+} from "@/components/ai-elements/compact-collapsible";
 import { useT } from "@/i18n";
 import type {
   RuntimeQueueMessageDto,
@@ -21,6 +26,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/shared/ui/collapsible";
+import { parseCommandComposerMetadata } from "./runtime-thread-surface-metadata";
 
 export type RuntimeQueueTimelineProps = ComponentProps<"div"> & {
   queue: RuntimeQueueSnapshotDto | null;
@@ -59,6 +65,18 @@ function RuntimeQueueMessageCard({
   message: RuntimeQueueMessageDto;
   t: ReturnType<typeof useT>;
 }) {
+  const commandComposer = parseCommandComposerMetadata(message.metadata);
+  const commandDisplayText = commandComposer?.kind === "command"
+    ? commandComposer.displayText
+    : null;
+  const displayText = commandDisplayText?.trim() ? commandDisplayText : message.content;
+  const expandedPrompt = commandComposer?.kind === "command"
+    ? ((commandComposer.effectivePrompt ?? message.content).trim())
+    : "";
+  const shouldShowExpandedPrompt = Boolean(
+    expandedPrompt && expandedPrompt !== displayText.trim(),
+  );
+
   return (
     <div
       className={cn(
@@ -77,8 +95,27 @@ function RuntimeQueueMessageCard({
             </span>
           </div>
           <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-app-muted">
-            {message.content}
+            {displayText}
           </p>
+          {shouldShowExpandedPrompt ? (
+            <CompactCollapsible className="mt-2" defaultOpen={false}>
+              <CompactCollapsibleHeader className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-app-subtle">
+                    Expanded prompt
+                  </div>
+                  <div className="truncate text-xs text-app-muted">
+                    {expandedPrompt}
+                  </div>
+                </div>
+              </CompactCollapsibleHeader>
+              <CompactCollapsibleContent className="pl-0">
+                <div className="whitespace-pre-wrap rounded-xl border border-app-border/25 bg-app-surface/35 px-3 py-2 text-xs leading-5 text-app-muted">
+                  {expandedPrompt}
+                </div>
+              </CompactCollapsibleContent>
+            </CompactCollapsible>
+          ) : null}
         </div>
       </div>
     </div>

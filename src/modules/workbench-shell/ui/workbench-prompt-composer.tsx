@@ -1052,7 +1052,7 @@ function RuntimeQueueModeSelect({
       <PromptInputSelectTrigger
         aria-label={t("composer.queueMode.ariaLabel")}
         className={cn(
-          "h-8 rounded-full border border-app-border/55 bg-app-surface/45 px-2.5 text-xs shadow-none",
+          "h-8 rounded-full border border-app-border/55 bg-app-surface/45 px-1.5 text-xs shadow-none",
           "hover:border-app-border hover:bg-app-surface-muted/65",
           isSteer
             ? "text-app-warning hover:text-app-warning aria-expanded:text-app-warning"
@@ -1062,13 +1062,15 @@ function RuntimeQueueModeSelect({
         title={t("composer.queueMode.tooltip")}
       >
         <PromptInputSelectValue>
-          <span className="flex items-center gap-1.5">
-            {isSteer ? <ZapIcon className="size-3" /> : <CornerDownRightIcon className="size-3" />}
-            <span>{isSteer ? t("composer.queueMode.steer") : t("composer.queueMode.followUp")}</span>
+          <span className="flex items-center">
+            {isSteer ? <ZapIcon className="size-3.5" /> : <CornerDownRightIcon className="size-3.5" />}
           </span>
         </PromptInputSelectValue>
       </PromptInputSelectTrigger>
-      <PromptInputSelectContent align="end" className="min-w-[220px]">
+      <PromptInputSelectContent align="end" className="min-w-[260px]">
+        <div className="px-3 pb-1.5 pt-2">
+          <span className="text-xs font-medium text-app-subtle">{t("composer.queueMode.panelTitle")}</span>
+        </div>
         <PromptInputSelectItem value="steer">
           <span className="flex min-w-0 flex-col gap-0.5">
             <span className="flex items-center gap-2 font-medium text-app-foreground">
@@ -1370,7 +1372,7 @@ export function WorkbenchPromptComposer({
     allowMissingActiveProfile && Boolean(activeAgentProfileId) && activeProfile === null;
   const canSwitchProfiles = agentProfiles.length > 0;
   const shouldShowRuntimeQueueModeSelect = showRuntimeQueueSubmitMode && Boolean(onRuntimeQueueSubmitModeChange);
-  const selectedRuntimeQueueSubmitMode = runtimeQueueSubmitMode ?? "steer";
+  const selectedRuntimeQueueSubmitMode = runtimeQueueSubmitMode ?? "follow_up";
   const commandRegistry = useMemo(
     () => buildComposerCommandRegistry(commands),
     [commands],

@@ -115,6 +115,8 @@ pub struct RuntimeQueueMessageDto {
     pub id: String,
     pub kind: AgentQueueMessageKind,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
     pub status: RuntimeQueueMessageStatus,
     pub created_at: String,
     pub updated_at: String,

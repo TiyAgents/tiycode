@@ -468,6 +468,7 @@ impl AgentRunManager {
         thread_id: &str,
         kind: AgentQueueMessageKind,
         message: String,
+        metadata: Option<serde_json::Value>,
     ) -> Result<RuntimeQueueSnapshotDto, AppError> {
         let Some(run_id) = active_run_id_for_thread(&self.active_runs, thread_id).await else {
             return Err(AppError::recoverable(
@@ -478,7 +479,7 @@ impl AgentRunManager {
         };
 
         self.runtime
-            .enqueue_queue_message(&run_id, kind, message)
+            .enqueue_queue_message(&run_id, kind, message, metadata)
             .await?
             .ok_or_else(|| {
                 AppError::recoverable(

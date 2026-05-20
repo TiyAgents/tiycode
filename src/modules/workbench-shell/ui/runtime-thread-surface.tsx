@@ -244,6 +244,7 @@ export function RuntimeThreadSurface({
   const globalAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
   const agentProfiles = useStore(settingsStore, (s) => s.agentProfiles);
   const providers = useStore(settingsStore, (s) => s.providers);
+  const defaultAppendMessageKind = useStore(settingsStore, (s) => s.general.defaultAppendMessageKind);
   const isNewThreadMode = useStore(threadStore, (s) => s.isNewThreadMode);
   const activeThreadProfileIdOverride = useStore(threadStore, (s) => s.activeThreadProfileIdOverride);
   const pendingRuns = useStore(threadStore, (s) => s.pendingRuns);
@@ -286,7 +287,8 @@ export function RuntimeThreadSurface({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
   const [runtimeQueue, setRuntimeQueue] = useState<RuntimeQueueSnapshotDto | null>(null);
-  const [runtimeQueueSubmitMode, setRuntimeQueueSubmitMode] = useState<RuntimeQueueSubmitMode>("steer");
+  const [runtimeQueueSubmitMode, setRuntimeQueueSubmitMode] = useState<RuntimeQueueSubmitMode>(defaultAppendMessageKind);
+  const previousDefaultAppendMessageKindRef = useRef(defaultAppendMessageKind);
   const [requestRetryEntries, setRequestRetryEntries] = useState<Array<SurfaceRequestRetryEntry>>([]);
   const [requestRetryOpen, setRequestRetryOpen] = useState<Record<string, boolean>>({});
   const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
@@ -297,6 +299,16 @@ export function RuntimeThreadSurface({
   const [selectedRunMode, setSelectedRunMode] = useState<RunMode>("default");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [snapshotThreadId, setSnapshotThreadId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const previousDefault = previousDefaultAppendMessageKindRef.current;
+    if (previousDefault === defaultAppendMessageKind) return;
+
+    previousDefaultAppendMessageKindRef.current = defaultAppendMessageKind;
+    setRuntimeQueueSubmitMode((current) => (
+      current === previousDefault ? defaultAppendMessageKind : current
+    ));
+  }, [defaultAppendMessageKind]);
 
   // Reset run mode (plan toggle) when switching to a different thread so it
   // doesn't leak from one thread to another.
@@ -1425,6 +1437,7 @@ export function RuntimeThreadSurface({
           threadId,
           runtimeQueueSubmitMode,
           prompt,
+          submission.metadata ?? null,
         );
         if (queue) {
           setRuntimeQueue(queue);

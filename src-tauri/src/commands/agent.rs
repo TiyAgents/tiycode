@@ -170,10 +170,11 @@ pub async fn thread_enqueue_queue_message(
     thread_id: String,
     kind: AgentQueueMessageKind,
     message: String,
+    metadata: Option<serde_json::Value>,
 ) -> Result<RuntimeQueueSnapshotDto, AppError> {
     state
         .agent_run_manager
-        .enqueue_queue_message(&thread_id, kind, message)
+        .enqueue_queue_message(&thread_id, kind, message, metadata)
         .await
 }
 

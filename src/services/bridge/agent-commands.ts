@@ -209,6 +209,9 @@ function readRuntimeQueueSnapshot(value: unknown): RuntimeQueueSnapshotDto {
         id: typeof entry.id === "string" ? entry.id : fallbackId(),
         kind: entry.kind === "follow_up" ? "follow_up" : "steer",
         content: typeof entry.content === "string" ? entry.content : "",
+        metadata: entry.metadata && typeof entry.metadata === "object"
+          ? entry.metadata as Record<string, unknown>
+          : null,
         status:
           entry.status === "consumed" || entry.status === "cleared"
             ? entry.status
@@ -570,12 +573,14 @@ export async function threadEnqueueQueueMessage(
   threadId: string,
   kind: RuntimeQueueMessageKind,
   message: string,
+  metadata?: Record<string, unknown> | null,
 ): Promise<RuntimeQueueSnapshotDto> {
   requireTauri("thread_enqueue_queue_message");
   return readRuntimeQueueSnapshot(await invoke("thread_enqueue_queue_message", {
     threadId,
     kind,
     message,
+    metadata: metadata ?? null,
   }));
 }
 
