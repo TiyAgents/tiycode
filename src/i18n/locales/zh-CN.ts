@@ -364,7 +364,7 @@ const zhCN = {
   "settings.general.closeToTrayLabel": "关闭到托盘",
   "settings.general.closeToTrayDesc": "关闭窗口时最小化到系统托盘而非退出。",
   "settings.general.defaultAppendKindLabel": "追加消息默认类型",
-  "settings.general.defaultAppendKindDesc": "选择 composer 追加输入默认使用引导还是 Follow-up。",
+  "settings.general.defaultAppendKindDesc": "选择 composer 追加输入默认使用引导还是排队。",
   "settings.general.agentProfiles": "Agent Profiles",
   "settings.general.addProfile": "添加 Profile",
   "settings.general.responseStyle": "回复风格",

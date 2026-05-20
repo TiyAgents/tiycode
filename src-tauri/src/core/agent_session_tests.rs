@@ -10,10 +10,11 @@ pub(super) mod tests {
         resolve_runtime_model_role, response_style_system_instruction,
         runtime_queue_message_display_content, runtime_security_config, runtime_tools_for_profile,
         runtime_tools_for_profile_with_extensions, standard_tool_timeout,
-        trim_history_to_current_context, update_runtime_queue_state_for_event,
-        AgentQueueMessageKind, AgentSession, AgentSessionSpec, ContextCompressionRuntimeState,
-        ProfileResponseStyle, ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan,
-        RuntimeQueueEventAction, RuntimeQueueMessageStatus, RuntimeQueueState, SortKey,
+        trim_history_to_current_context, trim_runtime_queue_state,
+        update_runtime_queue_state_for_event, AgentQueueMessageKind, AgentSession,
+        AgentSessionSpec, ContextCompressionRuntimeState, ProfileResponseStyle, ResolvedModelRole,
+        ResolvedRuntimeModelPlan, RuntimeModelPlan, RuntimeQueueEventAction, RuntimeQueueEventDto,
+        RuntimeQueueMessageDto, RuntimeQueueMessageStatus, RuntimeQueueState, SortKey,
         DEFAULT_FULL_TOOL_PROFILE, MAIN_AGENT_TOOL_TIMEOUT_SECS,
         PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
         STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
@@ -3907,5 +3908,329 @@ Used for prompt assembly coverage.
             }
             other => panic!("expected text Assistant at index 3, got {:?}", other),
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // #5: trim_runtime_queue_state boundary tests (0 / 80 / 81 items)
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn trim_runtime_queue_state_does_nothing_when_empty() {
+        let mut state = RuntimeQueueState::default();
+        trim_runtime_queue_state(&mut state);
+        assert!(state.messages.is_empty());
+        assert!(state.events.is_empty());
+    }
+
+    #[test]
+    fn trim_runtime_queue_state_keeps_exact_max_without_dropping() {
+        let mut state = RuntimeQueueState::default();
+        for i in 0..80 {
+            super::super::append_runtime_queue_message(
+                &mut state,
+                AgentQueueMessageKind::Steer,
+                format!("steer-{i}"),
+                None,
+            );
+        }
+        // Exactly at the limit — no trimming expected.
+        assert_eq!(state.messages.len(), 80);
+        trim_runtime_queue_state(&mut state);
+        assert_eq!(
+            state.messages.len(),
+            80,
+            "messages at exactly RUNTIME_QUEUE_MAX_MESSAGES should not be trimmed"
+        );
+    }
+
+    #[test]
+    fn trim_runtime_queue_state_drops_oldest_when_over_max() {
+        let mut state = RuntimeQueueState::default();
+        // Manually push 82 messages to bypass the automatic trimming that
+        // append_runtime_queue_message performs on each call.
+        for i in 0..82 {
+            state.messages.push(RuntimeQueueMessageDto {
+                id: format!("msg-{i}"),
+                kind: AgentQueueMessageKind::FollowUp,
+                status: RuntimeQueueMessageStatus::Pending,
+                content: format!("follow-up-{i}"),
+                metadata: None,
+                handle: None,
+                created_at: "2026-05-21T00:00:00.000Z".to_string(),
+                updated_at: String::new(),
+            });
+        }
+        assert_eq!(state.messages.len(), 82);
+        trim_runtime_queue_state(&mut state);
+        assert_eq!(
+            state.messages.len(),
+            80,
+            "messages should be trimmed to RUNTIME_QUEUE_MAX_MESSAGES"
+        );
+        // The newest 80 messages should survive (indices 2..82 in original).
+        assert_eq!(state.messages[0].content, "follow-up-2");
+        assert_eq!(state.messages[79].content, "follow-up-81");
+    }
+
+    #[test]
+    fn trim_runtime_queue_state_trims_events_independently() {
+        let mut state = RuntimeQueueState::default();
+        // Add one message (under message limit).
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "only message".to_string(),
+            None,
+        );
+        // Manually push 82 events to exceed the event limit.
+        for _ in 0..82 {
+            state.events.push(RuntimeQueueEventDto {
+                id: uuid::Uuid::now_v7().to_string(),
+                kind: AgentQueueMessageKind::Steer,
+                action: RuntimeQueueEventAction::Enqueued,
+                count: 1,
+                queue_depth: Some(1),
+                remaining: None,
+                count_dropped: None,
+                created_at: "2026-05-21T00:00:00.000Z".to_string(),
+            });
+        }
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.events.len(), 82);
+        trim_runtime_queue_state(&mut state);
+        // Messages untouched (under limit), events trimmed to 80.
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.events.len(), 80);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // #3: Removed event synchronization boundary tests
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn removed_event_skips_pending_id_with_kind_mismatch() {
+        let mut state = RuntimeQueueState::default();
+        let steer_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "steer msg".to_string(),
+            None,
+        );
+        let _follow_up_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "follow-up msg".to_string(),
+            None,
+        );
+        // Register the steer message ID as pending for a FollowUp Removed event.
+        // The kind mismatch should cause the ID to be popped but skipped,
+        // and the fallback FIFO marking should cancel the correct FollowUp message.
+        state.pending_removed_message_ids.push(steer_id.clone());
+
+        let update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::FollowUp,
+                count: 1,
+                remaining: 0,
+            },
+        );
+
+        // The steer message should still be Pending (kind mismatch caused skip).
+        assert_eq!(
+            state.messages[0].status,
+            RuntimeQueueMessageStatus::Pending,
+            "steer message should remain pending after kind mismatch"
+        );
+        // The follow-up message should be Cancelled via FIFO fallback.
+        assert_eq!(
+            state.messages[1].status,
+            RuntimeQueueMessageStatus::Cancelled,
+            "follow-up message should be cancelled via FIFO fallback"
+        );
+        assert!(state.pending_removed_message_ids.is_empty());
+        assert_eq!(update.event.action, RuntimeQueueEventAction::Removed);
+    }
+
+    #[test]
+    fn removed_event_partial_match_when_pending_ids_exhausted() {
+        let mut state = RuntimeQueueState::default();
+        let first_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "first".to_string(),
+            None,
+        );
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "second".to_string(),
+            None,
+        );
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "third".to_string(),
+            None,
+        );
+        // Only one pending ID registered, but Removed event reports count=3.
+        state.pending_removed_message_ids.push(first_id.clone());
+
+        let _update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::FollowUp,
+                count: 3,
+                remaining: 0,
+            },
+        );
+
+        // The first message should be cancelled via pending ID match.
+        assert_eq!(state.messages[0].id, first_id);
+        assert_eq!(
+            state.messages[0].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+        // The second and third should be cancelled via FIFO fallback.
+        assert_eq!(
+            state.messages[1].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+        assert_eq!(
+            state.messages[2].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+        assert!(state.pending_removed_message_ids.is_empty());
+    }
+
+    #[test]
+    fn removed_event_exhausted_pending_ids_falls_back_to_fifo() {
+        let mut state = RuntimeQueueState::default();
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "steer-1".to_string(),
+            None,
+        );
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "steer-2".to_string(),
+            None,
+        );
+        // No pending IDs registered; Removed event should fall back to FIFO.
+        assert!(state.pending_removed_message_ids.is_empty());
+
+        let _update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::Steering,
+                count: 2,
+                remaining: 0,
+            },
+        );
+
+        assert_eq!(
+            state.messages[0].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+        assert_eq!(
+            state.messages[1].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // #6: cancel_runtime_queue_message rollback verification
+    //
+    // The rollback concern is: when agent.cancel_queued_message returns None
+    // (message already consumed), the pending ID should be removed from
+    // pending_removed_message_ids. We verify this indirectly by enqueuing a
+    // message, cancelling it (which may succeed or fail depending on timing),
+    // and then enqueuing another message — confirming the session stays in a
+    // consistent state with no leaked pending IDs corrupting subsequent
+    // operations.
+    // ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn cancel_runtime_queue_message_preserves_consistency() {
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+        let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+        let tool_gateway = Arc::new(ToolGateway::new(pool.clone(), terminal_manager));
+        let helper_orchestrator = Arc::new(HelperAgentOrchestrator::new(
+            pool.clone(),
+            Arc::clone(&tool_gateway),
+        ));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
+        let active_runs = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let spec = AgentSessionSpec {
+            run_id: "run-cancel-consistency".to_string(),
+            thread_id: "thread-cancel-consistency".to_string(),
+            workspace_path: temp_dir.path().to_string_lossy().to_string(),
+            run_mode: "default".to_string(),
+            tool_profile_name: DEFAULT_FULL_TOOL_PROFILE.to_string(),
+            runtime_tools: Vec::new(),
+            system_prompt: "You are a test agent.".to_string(),
+            history_messages: Vec::new(),
+            history_tool_calls: Vec::new(),
+            model_plan: sample_resolved_runtime_model_plan(None),
+            initial_prompt: None,
+            initial_context_calibration: Default::default(),
+        };
+        let session = AgentSession::new(
+            pool,
+            tool_gateway,
+            helper_orchestrator,
+            event_tx,
+            spec,
+            4,
+            active_runs,
+        );
+
+        // Enqueue a follow-up message.
+        let first_snapshot = session
+            .enqueue_queue_message(
+                AgentQueueMessageKind::FollowUp,
+                "first message".to_string(),
+                None,
+            )
+            .expect("enqueue first");
+        let first_id = first_snapshot.messages[0].id.clone();
+
+        // Attempt to cancel. Regardless of whether the agent has already
+        // consumed it, the session must remain in a consistent state.
+        let _cancel_result = session.cancel_runtime_queue_message(&first_id);
+
+        // Enqueue a second message to prove no state corruption.
+        let second_snapshot = session
+            .enqueue_queue_message(
+                AgentQueueMessageKind::Steer,
+                "second message".to_string(),
+                None,
+            )
+            .expect("enqueue second after cancel");
+
+        // The second message should appear as a new Pending entry.
+        assert!(
+            second_snapshot
+                .messages
+                .iter()
+                .any(|m| m.content == "second message"
+                    && m.status == RuntimeQueueMessageStatus::Pending),
+            "second enqueue should succeed with a Pending message"
+        );
+
+        // The first message must not still be Pending after a cancel attempt
+        // (it should be Cancelled or Consumed depending on timing).
+        let first_still_pending = second_snapshot
+            .messages
+            .iter()
+            .any(|m| m.id == first_id && m.status == RuntimeQueueMessageStatus::Pending);
+        assert!(
+            !first_still_pending,
+            "first message must not remain Pending after cancel attempt"
+        );
     }
 }

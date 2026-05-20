@@ -352,7 +352,7 @@ const en: Record<TranslationKey, string> = {
   "settings.general.closeToTrayLabel": "Close to tray",
   "settings.general.closeToTrayDesc": "Minimize to system tray instead of quitting when the window is closed.",
   "settings.general.defaultAppendKindLabel": "Default append message type",
-  "settings.general.defaultAppendKindDesc": "Choose whether appended composer input defaults to Steer or Follow-up.",
+  "settings.general.defaultAppendKindDesc": "Choose whether appended composer input defaults to Steer or Queue.",
   "settings.general.agentProfiles": "Agent Profiles",
   "settings.general.addProfile": "Add Profile",
   "settings.general.responseStyle": "Response style",
