@@ -1,11 +1,11 @@
 "use client";
 
 import {
-  ArrowRightIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
-  CornerDownRightIcon,
+  ListEnd,
   ListPlusIcon,
+  ListStart,
   Loader2Icon,
   Trash2Icon,
   XIcon,
@@ -51,8 +51,8 @@ function statusIcon(message: RuntimeQueueMessageDto) {
     return <XIcon className="size-3.5 text-app-subtle" />;
   }
   return message.kind === "follow_up"
-    ? <CornerDownRightIcon className="size-3.5 text-app-info" />
-    : <ArrowRightIcon className="size-3.5 text-app-warning" />;
+    ? <ListEnd className="size-3.5 text-app-info" />
+    : <ListStart className="size-3.5 text-app-warning" />;
 }
 
 function statusLabel(message: RuntimeQueueMessageDto, t: ReturnType<typeof useT>) {
