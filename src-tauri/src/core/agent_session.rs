@@ -259,9 +259,26 @@ fn update_runtime_queue_state_for_event(
             let queue_kind = AgentQueueMessageKind::from_tiy_queue_kind(*kind);
             let mut marked = 0usize;
             while marked < *count {
-                let Some(message_id) = state.pending_removed_message_ids.pop() else {
+                // Search from the back for a pending ID whose message matches
+                // the current kind, so that IDs for other kinds aren't
+                // accidentally discarded when kinds are cancelled concurrently.
+                let position = state
+                    .pending_removed_message_ids
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, id)| {
+                        state
+                            .messages
+                            .iter()
+                            .any(|m| m.id == **id && m.kind == queue_kind)
+                    })
+                    .map(|(pos, _)| pos);
+
+                let Some(pos) = position else {
                     break;
                 };
+                let message_id = state.pending_removed_message_ids.remove(pos);
                 // Look up the message by ID and kind.  If it was already
                 // marked Cancelled by the eager cancel path, count it as
                 // matched so the FIFO fallback doesn't cancel an unrelated
@@ -283,8 +300,8 @@ fn update_runtime_queue_state_for_event(
                         marked += 1;
                     }
                     _ => {
-                        // Kind mismatch or unexpected status — skip without
-                        // counting so the ID is simply discarded.
+                        // Unexpected status — skip without counting so the ID
+                        // is simply discarded.
                     }
                 }
             }

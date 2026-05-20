@@ -4008,7 +4008,7 @@ Used for prompt assembly coverage.
     // ──────────────────────────────────────────────────────────────
 
     #[test]
-    fn removed_event_skips_pending_id_with_kind_mismatch() {
+    fn removed_event_preserves_unmatched_kind_id_during_fifo_fallback() {
         let mut state = RuntimeQueueState::default();
         let steer_id = super::super::append_runtime_queue_message(
             &mut state,
@@ -4023,8 +4023,9 @@ Used for prompt assembly coverage.
             None,
         );
         // Register the steer message ID as pending for a FollowUp Removed event.
-        // The kind mismatch should cause the ID to be popped but skipped,
-        // and the fallback FIFO marking should cancel the correct FollowUp message.
+        // The new logic searches for a kind-matching ID and won't find one,
+        // so steer_id stays in the pending list and FIFO fallback handles the
+        // FollowUp cancellation.
         state.pending_removed_message_ids.push(steer_id.clone());
 
         let update = update_runtime_queue_state_for_event(
@@ -4036,11 +4037,11 @@ Used for prompt assembly coverage.
             },
         );
 
-        // The steer message should still be Pending (kind mismatch caused skip).
+        // The steer message should still be Pending (not matched by FollowUp search).
         assert_eq!(
             state.messages[0].status,
             RuntimeQueueMessageStatus::Pending,
-            "steer message should remain pending after kind mismatch"
+            "steer message should remain pending — not matched by FollowUp Removed"
         );
         // The follow-up message should be Cancelled via FIFO fallback.
         assert_eq!(
@@ -4048,7 +4049,12 @@ Used for prompt assembly coverage.
             RuntimeQueueMessageStatus::Cancelled,
             "follow-up message should be cancelled via FIFO fallback"
         );
-        assert!(state.pending_removed_message_ids.is_empty());
+        // steer_id must NOT be discarded — it remains in the pending list
+        // for when the Steering Removed event eventually arrives.
+        assert!(
+            state.pending_removed_message_ids.contains(&steer_id),
+            "steer_id must be preserved in pending_removed_message_ids"
+        );
         assert_eq!(update.event.action, RuntimeQueueEventAction::Removed);
     }
 
@@ -4254,6 +4260,93 @@ Used for prompt assembly coverage.
             state.messages[2].status,
             RuntimeQueueMessageStatus::Pending,
             "third message must remain Pending"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // #3: Cross-kind cancellation must not discard unrelated IDs.
+    //     When a Removed event of one kind arrives, it should find
+    //     its own ID even if a different kind's ID was pushed later.
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn removed_event_cross_kind_does_not_discard_other_kind_id() {
+        let mut state = RuntimeQueueState::default();
+        let steer_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "steer msg".to_string(),
+            None,
+        );
+        let follow_up_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "follow-up msg".to_string(),
+            None,
+        );
+
+        // User cancels both: steer first, then follow_up.
+        // IDs are pushed in order: [steer_id, follow_up_id].
+        state.pending_removed_message_ids.push(steer_id.clone());
+        state.pending_removed_message_ids.push(follow_up_id.clone());
+        // Eagerly mark both as Cancelled.
+        mark_runtime_queue_message_by_id(
+            &mut state.messages,
+            &steer_id,
+            RuntimeQueueMessageStatus::Cancelled,
+            "2026-05-21T00:00:00.000Z",
+        );
+        mark_runtime_queue_message_by_id(
+            &mut state.messages,
+            &follow_up_id,
+            RuntimeQueueMessageStatus::Cancelled,
+            "2026-05-21T00:00:00.000Z",
+        );
+
+        // FollowUp Removed event arrives first (LIFO from tiycore).
+        // It must find follow_up_id, not discard steer_id.
+        let _update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::FollowUp,
+                count: 1,
+                remaining: 0,
+            },
+        );
+
+        // follow_up_id must be removed from pending list.
+        assert!(
+            !state.pending_removed_message_ids.contains(&follow_up_id),
+            "follow_up_id must be consumed"
+        );
+        // steer_id must still be in pending list.
+        assert!(
+            state.pending_removed_message_ids.contains(&steer_id),
+            "steer_id must NOT be discarded by cross-kind Removed event"
+        );
+
+        // Now Steering Removed event arrives — it must find steer_id.
+        let _update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::Steering,
+                count: 1,
+                remaining: 0,
+            },
+        );
+
+        assert!(
+            state.pending_removed_message_ids.is_empty(),
+            "all pending IDs must be consumed"
+        );
+        // Both messages remain Cancelled (set by eager cancel).
+        assert_eq!(
+            state.messages[0].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+        assert_eq!(
+            state.messages[1].status,
+            RuntimeQueueMessageStatus::Cancelled
         );
     }
 
