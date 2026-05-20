@@ -1026,11 +1026,11 @@ function PromptInputSubmitButton({
   const hasAttachments = attachments.files.length > 0;
   const isStopping = status === "submitted" || status === "streaming";
   const canSubmit = Boolean(activeProfile) && !hasMissingActiveProfile && (
-    hasText
-    || (allowAttachmentsOnly && hasAttachments)
-    || (canSubmitWhileRunning && hasAttachments)
+    canSubmitWhileRunning
+      ? hasText && !hasAttachments
+      : hasText || (allowAttachmentsOnly && hasAttachments)
   );
-  const shouldSubmitWhileRunning = isStopping && canSubmitWhileRunning && (hasText || hasAttachments);
+  const shouldSubmitWhileRunning = isStopping && canSubmitWhileRunning && hasText && !hasAttachments;
   const effectiveStatus = shouldSubmitWhileRunning ? "ready" : status;
   const isEffectiveStopping = effectiveStatus === "submitted" || effectiveStatus === "streaming";
 
