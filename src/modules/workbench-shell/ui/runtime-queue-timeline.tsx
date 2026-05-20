@@ -6,7 +6,9 @@ import {
   ChevronDownIcon,
   CornerDownRightIcon,
   ListPlusIcon,
+  Loader2Icon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react";
 import type { ComponentProps } from "react";
 import {
@@ -30,6 +32,8 @@ import { parseCommandComposerMetadata } from "./runtime-thread-surface-metadata"
 
 export type RuntimeQueueTimelineProps = ComponentProps<"div"> & {
   queue: RuntimeQueueSnapshotDto | null;
+  onCancelMessage?: (messageId: string) => void;
+  cancellingMessageIds?: ReadonlySet<string>;
 };
 
 function kindLabel(kind: RuntimeQueueMessageKind, t: ReturnType<typeof useT>) {
@@ -43,6 +47,9 @@ function statusIcon(message: RuntimeQueueMessageDto) {
   if (message.status === "cleared") {
     return <Trash2Icon className="size-3.5 text-app-subtle" />;
   }
+  if (message.status === "cancelled") {
+    return <XIcon className="size-3.5 text-app-subtle" />;
+  }
   return message.kind === "follow_up"
     ? <CornerDownRightIcon className="size-3.5 text-app-info" />
     : <ArrowRightIcon className="size-3.5 text-app-warning" />;
@@ -55,15 +62,22 @@ function statusLabel(message: RuntimeQueueMessageDto, t: ReturnType<typeof useT>
   if (message.status === "cleared") {
     return t("queue.status.cleared");
   }
+  if (message.status === "cancelled") {
+    return t("queue.status.cancelled");
+  }
   return t("queue.status.pending");
 }
 
 function RuntimeQueueMessageCard({
   message,
   t,
+  onCancelMessage,
+  isCancelling,
 }: {
   message: RuntimeQueueMessageDto;
   t: ReturnType<typeof useT>;
+  onCancelMessage?: (messageId: string) => void;
+  isCancelling?: boolean;
 }) {
   const commandComposer = parseCommandComposerMetadata(message.metadata);
   const commandDisplayText = commandComposer?.kind === "command"
@@ -76,11 +90,13 @@ function RuntimeQueueMessageCard({
   const shouldShowExpandedPrompt = Boolean(
     expandedPrompt && expandedPrompt !== displayText.trim(),
   );
+  const canCancel = message.status === "pending" && Boolean(onCancelMessage);
+  const cancelLabel = isCancelling ? t("queue.cancellingMessage") : t("queue.cancelMessage");
 
   return (
     <div
       className={cn(
-        "rounded-lg border border-app-border/30 bg-app-surface/30 p-3",
+        "group/queue-card rounded-lg border border-app-border/30 bg-app-surface/30 p-3",
         message.kind === "steer" && message.status === "pending" && "border-app-warning/20 bg-app-warning/5",
         message.kind === "follow_up" && message.status === "pending" && "border-app-info/20 bg-app-info/5",
       )}
@@ -117,6 +133,26 @@ function RuntimeQueueMessageCard({
             </CompactCollapsible>
           ) : null}
         </div>
+        {canCancel ? (
+          <button
+            type="button"
+            aria-label={cancelLabel}
+            title={cancelLabel}
+            disabled={isCancelling}
+            className={cn(
+              "-mr-1 -mt-1 flex size-7 flex-shrink-0 items-center justify-center rounded-full text-app-subtle opacity-70 transition-all hover:bg-app-surface-hover hover:text-app-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-primary/40 disabled:cursor-not-allowed disabled:opacity-50 sm:opacity-0 sm:group-hover/queue-card:opacity-100",
+              isCancelling && "opacity-100 sm:opacity-100",
+            )}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (!isCancelling) {
+                onCancelMessage?.(message.id);
+              }
+            }}
+          >
+            {isCancelling ? <Loader2Icon className="size-3.5 animate-spin" /> : <XIcon className="size-3.5" />}
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -124,6 +160,8 @@ function RuntimeQueueMessageCard({
 
 export const RuntimeQueueTimeline = ({
   queue,
+  onCancelMessage,
+  cancellingMessageIds,
   className,
   ...props
 }: RuntimeQueueTimelineProps) => {
@@ -168,7 +206,13 @@ export const RuntimeQueueTimeline = ({
                 {t("queue.steeringQueued", { count: queue.steeringDepth })}
               </div>
               {steeringMessages.map((message) => (
-                <RuntimeQueueMessageCard key={message.id} message={message} t={t} />
+                <RuntimeQueueMessageCard
+                  key={message.id}
+                  message={message}
+                  t={t}
+                  onCancelMessage={onCancelMessage}
+                  isCancelling={cancellingMessageIds?.has(message.id)}
+                />
               ))}
             </div>
           ) : null}
@@ -178,7 +222,13 @@ export const RuntimeQueueTimeline = ({
                 {t("queue.followUpQueued", { count: queue.followUpDepth })}
               </div>
               {followUpMessages.map((message) => (
-                <RuntimeQueueMessageCard key={message.id} message={message} t={t} />
+                <RuntimeQueueMessageCard
+                  key={message.id}
+                  message={message}
+                  t={t}
+                  onCancelMessage={onCancelMessage}
+                  isCancelling={cancellingMessageIds?.has(message.id)}
+                />
               ))}
             </div>
           ) : null}

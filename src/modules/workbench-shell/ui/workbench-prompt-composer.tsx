@@ -1371,7 +1371,9 @@ export function WorkbenchPromptComposer({
   const hasMissingActiveProfile =
     allowMissingActiveProfile && Boolean(activeAgentProfileId) && activeProfile === null;
   const canSwitchProfiles = agentProfiles.length > 0;
-  const shouldShowRuntimeQueueModeSelect = showRuntimeQueueSubmitMode && Boolean(onRuntimeQueueSubmitModeChange);
+  const hasComposerText = hasNonWhitespace(value);
+  const shouldShowRuntimeQueueModeSelect =
+    showRuntimeQueueSubmitMode && hasComposerText && Boolean(onRuntimeQueueSubmitModeChange);
   const selectedRuntimeQueueSubmitMode = runtimeQueueSubmitMode ?? "follow_up";
   const commandRegistry = useMemo(
     () => buildComposerCommandRegistry(commands),

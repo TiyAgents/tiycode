@@ -99,6 +99,7 @@ pub enum RuntimeQueueMessageStatus {
     Pending,
     Consumed,
     Cleared,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -107,6 +108,7 @@ pub enum RuntimeQueueEventAction {
     Enqueued,
     Consumed,
     Cleared,
+    Removed,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -120,6 +122,8 @@ pub struct RuntimeQueueMessageDto {
     pub status: RuntimeQueueMessageStatus,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(skip)]
+    pub handle: Option<tiycore::agent::QueuedMessageHandle>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

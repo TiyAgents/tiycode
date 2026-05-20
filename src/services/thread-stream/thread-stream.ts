@@ -16,6 +16,7 @@
  */
 
 import {
+  threadCancelRuntimeQueueMessage,
   threadCancelRun,
   threadClearRuntimeQueue,
   threadCompactContext,
@@ -121,6 +122,7 @@ export type UserMessageEvent = {
   messageId: string;
   content: string;
   createdAt: string;
+  metadata?: Record<string, unknown> | null;
 };
 
 export type HelperEvent =
@@ -305,6 +307,21 @@ export class ThreadStream {
   ): Promise<RuntimeQueueSnapshotDto> {
     try {
       const queue = await threadClearRuntimeQueue(threadId, kind);
+      this.onQueue?.({ runId: this.currentRunId ?? "", queue });
+      return queue;
+    } catch (error) {
+      const message = formatInvokeErrorMessage(error) ?? "Unknown error";
+      this.onError?.(message, this.currentRunId ?? "");
+      throw error;
+    }
+  }
+
+  async cancelRuntimeQueueMessage(
+    threadId: string,
+    messageId: string,
+  ): Promise<RuntimeQueueSnapshotDto> {
+    try {
+      const queue = await threadCancelRuntimeQueueMessage(threadId, messageId);
       this.onQueue?.({ runId: this.currentRunId ?? "", queue });
       return queue;
     } catch (error) {
@@ -548,6 +565,7 @@ export class ThreadStream {
           messageId: event.messageId,
           content: event.content,
           createdAt: event.createdAt,
+          metadata: event.metadata ?? null,
         });
         break;
 

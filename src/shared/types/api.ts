@@ -464,8 +464,8 @@ export interface SubagentProgressSnapshot {
 }
 
 export type RuntimeQueueMessageKind = "steer" | "follow_up";
-export type RuntimeQueueMessageStatus = "pending" | "consumed" | "cleared";
-export type RuntimeQueueEventAction = "enqueued" | "consumed" | "cleared";
+export type RuntimeQueueMessageStatus = "pending" | "consumed" | "cleared" | "cancelled";
+export type RuntimeQueueEventAction = "enqueued" | "consumed" | "cleared" | "removed";
 
 export interface RuntimeQueueMessageDto {
   id: string;
@@ -548,6 +548,7 @@ export type ThreadStreamEvent =
       messageId: string;
       content: string;
       createdAt: string;
+      metadata?: Record<string, unknown> | null;
     }
   | {
       type: "subagent_started";

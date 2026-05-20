@@ -96,6 +96,13 @@ function readValue(
   return event[camelKey] ?? event[snakeKey];
 }
 
+function readObjectMetadata(event: RawThreadStreamEvent): Record<string, unknown> | null {
+  const value = readValue(event, "metadata", "metadata");
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 function readNumberOrNull(
   event: RawThreadStreamEvent,
   camelKey: string,
@@ -213,7 +220,9 @@ function readRuntimeQueueSnapshot(value: unknown): RuntimeQueueSnapshotDto {
           ? entry.metadata as Record<string, unknown>
           : null,
         status:
-          entry.status === "consumed" || entry.status === "cleared"
+          entry.status === "consumed"
+          || entry.status === "cleared"
+          || entry.status === "cancelled"
             ? entry.status
             : "pending",
         createdAt: typeof entry.createdAt === "string"
@@ -233,7 +242,9 @@ function readRuntimeQueueSnapshot(value: unknown): RuntimeQueueSnapshotDto {
         id: typeof entry.id === "string" ? entry.id : fallbackId(),
         kind: entry.kind === "follow_up" ? "follow_up" : "steer",
         action:
-          entry.action === "consumed" || entry.action === "cleared"
+          entry.action === "consumed"
+          || entry.action === "cleared"
+          || entry.action === "removed"
             ? entry.action
             : "enqueued",
         count: Number(entry.count ?? 0),
@@ -344,6 +355,7 @@ export function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): Thre
         messageId: readRequiredString(rawEvent, "messageId", "message_id"),
         content: readRequiredString(rawEvent, "content", "content"),
         createdAt: readRequiredString(rawEvent, "createdAt", "created_at"),
+        metadata: readObjectMetadata(rawEvent),
       };
     case "subagent_started":
       return {
@@ -592,6 +604,17 @@ export async function threadClearRuntimeQueue(
   return readRuntimeQueueSnapshot(await invoke("thread_clear_runtime_queue", {
     threadId,
     kind: kind ?? null,
+  }));
+}
+
+export async function threadCancelRuntimeQueueMessage(
+  threadId: string,
+  messageId: string,
+): Promise<RuntimeQueueSnapshotDto> {
+  requireTauri("thread_cancel_runtime_queue_message");
+  return readRuntimeQueueSnapshot(await invoke("thread_cancel_runtime_queue_message", {
+    threadId,
+    messageId,
   }));
 }
 

@@ -117,8 +117,15 @@ describe("ThreadStream event routing", () => {
         type: "user_message_recorded",
         runId: "run-1",
         messageId: "msg-user-1",
-        content: "Use the simpler approach",
+        content: "/init",
         createdAt: "2026-05-20T00:00:02Z",
+        metadata: {
+          composer: {
+            kind: "command",
+            displayText: "/init",
+            effectivePrompt: "Generate or update AGENTS.md",
+          },
+        },
       },
       {
         type: "task_board_updated",
@@ -161,8 +168,15 @@ describe("ThreadStream event routing", () => {
     expect(onUserMessage).toHaveBeenCalledWith({
       runId: "run-1",
       messageId: "msg-user-1",
-      content: "Use the simpler approach",
+      content: "/init",
       createdAt: "2026-05-20T00:00:02Z",
+      metadata: {
+        composer: {
+          kind: "command",
+          displayText: "/init",
+          effectivePrompt: "Generate or update AGENTS.md",
+        },
+      },
     });
     expect(onTaskBoard).toHaveBeenCalledWith({ taskBoard: expect.objectContaining({ id: "board-1" }) });
     expect(onThreadTitle).toHaveBeenCalledWith({ runId: "run-1", threadId: "thread-1", title: "New title" });

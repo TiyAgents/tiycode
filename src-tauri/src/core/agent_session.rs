@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 use chrono::{SecondsFormat, Utc};
 use sqlx::SqlitePool;
-use tiycore::agent::{Agent, AgentError, AgentMessage, QueueEvent, ToolExecutionMode};
+use tiycore::agent::{
+    Agent, AgentError, AgentMessage, QueueEvent, QueuedMessageHandle, ToolExecutionMode,
+};
 use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{Cost, InputType, Model, Provider, Usage};
 use tokio::sync::mpsc;
@@ -77,6 +79,63 @@ fn mark_runtime_queue_messages(
     marked
 }
 
+fn mark_runtime_queue_message_by_id(
+    messages: &mut [RuntimeQueueMessageDto],
+    message_id: &str,
+    status: RuntimeQueueMessageStatus,
+    updated_at: &str,
+) -> Option<RuntimeQueueMessageDto> {
+    let message = messages
+        .iter_mut()
+        .find(|message| message.id == message_id)?;
+    message.status = status;
+    message.updated_at = updated_at.to_string();
+    Some(message.clone())
+}
+
+fn attach_runtime_queue_message_handle(
+    messages: &mut [RuntimeQueueMessageDto],
+    message_id: &str,
+    handle: QueuedMessageHandle,
+) {
+    if let Some(message) = messages.iter_mut().find(|message| message.id == message_id) {
+        message.handle = Some(handle);
+    }
+}
+
+fn pending_runtime_queue_message_handle(
+    state: &RuntimeQueueState,
+    message_id: &str,
+) -> Result<QueuedMessageHandle, AppError> {
+    let Some(message) = state
+        .messages
+        .iter()
+        .find(|message| message.id == message_id)
+    else {
+        return Err(AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.queue_message.not_found",
+            "The queued message is no longer available",
+        ));
+    };
+
+    if message.status != RuntimeQueueMessageStatus::Pending {
+        return Err(AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.queue_message.not_pending",
+            "The queued message has already been consumed, cleared, or cancelled",
+        ));
+    }
+
+    message.handle.ok_or_else(|| {
+        AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.queue_message.handle_missing",
+            "The queued message cannot be cancelled yet",
+        )
+    })
+}
+
 fn trim_runtime_queue_state(state: &mut RuntimeQueueState) {
     if state.messages.len() > RUNTIME_QUEUE_MAX_MESSAGES {
         let drop_count = state.messages.len() - RUNTIME_QUEUE_MAX_MESSAGES;
@@ -100,6 +159,17 @@ fn build_runtime_queue_snapshot(
         messages: state.messages.clone(),
         events: state.events.clone(),
     }
+}
+
+fn runtime_queue_message_display_content(message: &RuntimeQueueMessageDto) -> String {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.pointer("/composer/displayText"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|display_text| !display_text.trim().is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| message.content.clone())
 }
 
 fn queue_snapshot_to_value(snapshot: RuntimeQueueSnapshotDto) -> serde_json::Value {
@@ -180,6 +250,23 @@ fn update_runtime_queue_state_for_event(
                 created_at: now,
             }
         }
+        QueueEvent::Removed {
+            kind,
+            count,
+            remaining,
+        } => {
+            let queue_kind = AgentQueueMessageKind::from_tiy_queue_kind(*kind);
+            RuntimeQueueEventDto {
+                id: uuid::Uuid::now_v7().to_string(),
+                kind: queue_kind,
+                action: RuntimeQueueEventAction::Removed,
+                count: *count,
+                queue_depth: None,
+                remaining: Some(*remaining),
+                count_dropped: None,
+                created_at: now,
+            }
+        }
     };
     state.events.push(dto.clone());
     trim_runtime_queue_state(state);
@@ -194,18 +281,21 @@ fn append_runtime_queue_message(
     kind: AgentQueueMessageKind,
     content: String,
     metadata: Option<serde_json::Value>,
-) {
+) -> String {
     let now = runtime_queue_timestamp();
+    let id = uuid::Uuid::now_v7().to_string();
     state.messages.push(RuntimeQueueMessageDto {
-        id: uuid::Uuid::now_v7().to_string(),
+        id: id.clone(),
         kind,
         content,
         metadata,
         status: RuntimeQueueMessageStatus::Pending,
         created_at: now.clone(),
         updated_at: now,
+        handle: None,
     });
     trim_runtime_queue_state(state);
+    id
 }
 
 use crate::core::agent_session_compression::{
@@ -386,23 +476,58 @@ impl AgentSession {
             ));
         }
 
-        {
+        let message_id = {
             let mut state = self
                 .runtime_queue_state
                 .lock()
                 .expect("runtime queue state poisoned");
-            append_runtime_queue_message(&mut state, kind, text.to_string(), metadata);
-        }
+            append_runtime_queue_message(&mut state, kind, text.to_string(), metadata)
+        };
 
-        match kind {
+        let handle = match kind {
             AgentQueueMessageKind::Steer => self.agent.steer(AgentMessage::from(text)),
             AgentQueueMessageKind::FollowUp => self.agent.follow_up(AgentMessage::from(text)),
-        }
+        };
 
-        let state = self
+        let mut state = self
             .runtime_queue_state
             .lock()
             .expect("runtime queue state poisoned");
+        attach_runtime_queue_message_handle(&mut state.messages, &message_id, handle);
+        Ok(build_runtime_queue_snapshot(&self.agent, &state))
+    }
+
+    pub fn cancel_runtime_queue_message(
+        &self,
+        message_id: &str,
+    ) -> Result<RuntimeQueueSnapshotDto, AppError> {
+        let handle = {
+            let state = self
+                .runtime_queue_state
+                .lock()
+                .expect("runtime queue state poisoned");
+            pending_runtime_queue_message_handle(&state, message_id)?
+        };
+
+        if self.agent.cancel_queued_message(handle).is_none() {
+            return Err(AppError::recoverable(
+                ErrorSource::Thread,
+                "thread.queue_message.cancel_failed",
+                "The queued message was already consumed or removed",
+            ));
+        }
+
+        let now = runtime_queue_timestamp();
+        let mut state = self
+            .runtime_queue_state
+            .lock()
+            .expect("runtime queue state poisoned");
+        mark_runtime_queue_message_by_id(
+            &mut state.messages,
+            message_id,
+            RuntimeQueueMessageStatus::Cancelled,
+            &now,
+        );
         Ok(build_runtime_queue_snapshot(&self.agent, &state))
     }
 
@@ -745,11 +870,14 @@ fn configure_agent(
                 queue: queue_snapshot_to_value(snapshot),
             });
             for message in consumed_messages {
+                let content = runtime_queue_message_display_content(&message);
+                let metadata = message.metadata.clone();
                 let _ = event_tx.send(ThreadStreamEvent::UserMessageRecorded {
                     run_id: run_id.clone(),
                     message_id: uuid::Uuid::now_v7().to_string(),
-                    content: message.content,
+                    content,
                     created_at: message.updated_at,
+                    metadata,
                 });
             }
         });

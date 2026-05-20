@@ -3,18 +3,19 @@ pub(super) mod tests {
     use super::super::{
         build_initial_context_token_calibration, build_profile_response_prompt_parts,
         build_system_prompt, convert_history_messages, current_context_token_calibration,
-        handle_agent_event, main_agent_security_config, normalize_profile_response_language,
-        normalize_profile_response_style, plan_mode_missing_checkpoint_error,
-        record_pending_prompt_estimate, resolve_helper_model_role, resolve_helper_profile,
-        resolve_model_plan, resolve_runtime_model_role, response_style_system_instruction,
-        runtime_security_config, runtime_tools_for_profile,
+        handle_agent_event, main_agent_security_config, mark_runtime_queue_message_by_id,
+        normalize_profile_response_language, normalize_profile_response_style,
+        plan_mode_missing_checkpoint_error, record_pending_prompt_estimate,
+        resolve_helper_model_role, resolve_helper_profile, resolve_model_plan,
+        resolve_runtime_model_role, response_style_system_instruction,
+        runtime_queue_message_display_content, runtime_security_config, runtime_tools_for_profile,
         runtime_tools_for_profile_with_extensions, standard_tool_timeout,
         trim_history_to_current_context, update_runtime_queue_state_for_event,
         AgentQueueMessageKind, ContextCompressionRuntimeState, ProfileResponseStyle,
-        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, RuntimeQueueMessageStatus,
-        RuntimeQueueState, SortKey, DEFAULT_FULL_TOOL_PROFILE, MAIN_AGENT_TOOL_TIMEOUT_SECS,
-        PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
-        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
+        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, RuntimeQueueEventAction,
+        RuntimeQueueMessageStatus, RuntimeQueueState, SortKey, DEFAULT_FULL_TOOL_PROFILE,
+        MAIN_AGENT_TOOL_TIMEOUT_SECS, PLAN_MODE_MISSING_CHECKPOINT_ERROR,
+        PLAN_READ_ONLY_TOOL_PROFILE, STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
     use std::sync::Mutex as StdMutex;
@@ -221,6 +222,10 @@ pub(super) mod tests {
         assert_eq!(update.consumed_messages.len(), 2);
         assert_eq!(update.consumed_messages[0].content, "First steer");
         assert_eq!(
+            runtime_queue_message_display_content(&update.consumed_messages[0]),
+            "/first",
+        );
+        assert_eq!(
             update.consumed_messages[0]
                 .metadata
                 .as_ref()
@@ -230,6 +235,10 @@ pub(super) mod tests {
         );
         assert_eq!(update.consumed_messages[1].content, "Second steer");
         assert_eq!(
+            runtime_queue_message_display_content(&update.consumed_messages[1]),
+            "Second steer",
+        );
+        assert_eq!(
             state.messages[0].status,
             RuntimeQueueMessageStatus::Consumed
         );
@@ -238,6 +247,28 @@ pub(super) mod tests {
             RuntimeQueueMessageStatus::Consumed
         );
         assert_eq!(state.messages[2].status, RuntimeQueueMessageStatus::Pending);
+    }
+
+    #[test]
+    fn runtime_queue_message_display_content_falls_back_for_blank_display_text() {
+        let mut state = RuntimeQueueState::default();
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "Expanded steer prompt".to_string(),
+            Some(serde_json::json!({
+                "composer": {
+                    "kind": "command",
+                    "displayText": "   ",
+                    "effectivePrompt": "Expanded steer prompt"
+                }
+            })),
+        );
+
+        assert_eq!(
+            runtime_queue_message_display_content(&state.messages[0]),
+            "Expanded steer prompt",
+        );
     }
 
     #[test]
@@ -260,6 +291,75 @@ pub(super) mod tests {
 
         assert!(update.consumed_messages.is_empty());
         assert_eq!(state.messages[0].status, RuntimeQueueMessageStatus::Cleared);
+    }
+
+    #[test]
+    fn update_runtime_queue_state_for_removed_does_not_mark_pending_messages() {
+        let mut state = RuntimeQueueState::default();
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "First follow up".to_string(),
+            None,
+        );
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Second follow up".to_string(),
+            None,
+        );
+
+        let update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::FollowUp,
+                count: 1,
+                remaining: 1,
+            },
+        );
+
+        assert!(update.consumed_messages.is_empty());
+        assert_eq!(update.event.action, RuntimeQueueEventAction::Removed);
+        assert_eq!(update.event.remaining, Some(1));
+        assert_eq!(state.messages[0].status, RuntimeQueueMessageStatus::Pending);
+        assert_eq!(state.messages[1].status, RuntimeQueueMessageStatus::Pending);
+    }
+
+    #[test]
+    fn mark_runtime_queue_message_by_id_only_marks_requested_message() {
+        let mut state = RuntimeQueueState::default();
+        let first_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "First follow up".to_string(),
+            None,
+        );
+        let second_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Second follow up".to_string(),
+            None,
+        );
+
+        let now = "2026-05-20T00:00:00.000Z";
+        let marked = mark_runtime_queue_message_by_id(
+            &mut state.messages,
+            &second_id,
+            RuntimeQueueMessageStatus::Cancelled,
+            now,
+        );
+
+        assert_eq!(
+            marked.as_ref().map(|message| message.id.as_str()),
+            Some(second_id.as_str())
+        );
+        assert_eq!(state.messages[0].id, first_id);
+        assert_eq!(state.messages[0].status, RuntimeQueueMessageStatus::Pending);
+        assert_eq!(
+            state.messages[1].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+        assert_eq!(state.messages[1].updated_at, now);
     }
 
     fn make_run_summary(model_id: &str, input_tokens: u64) -> RunSummaryDto {

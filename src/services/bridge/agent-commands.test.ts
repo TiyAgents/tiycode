@@ -149,6 +149,7 @@ describe("normalizeThreadStreamEvent queue_updated", () => {
           id: "q-1",
           kind: "follow_up",
           content: "Next step",
+          metadata: null,
           status: "pending",
           createdAt: "2026-05-20T00:00:00Z",
           updatedAt: "2026-05-20T00:00:01Z",
@@ -186,6 +187,34 @@ describe("normalizeThreadStreamEvent user_message_recorded", () => {
       messageId: "msg-user-1",
       content: "Use the simpler approach",
       createdAt: "2026-05-20T00:00:02Z",
+      metadata: null,
+    });
+  });
+
+  it("normalizes command metadata on a consumed queue user message event", () => {
+    const metadata = {
+      composer: {
+        kind: "command",
+        displayText: "/init",
+        effectivePrompt: "Generate or update AGENTS.md",
+      },
+    };
+    const result = normalizeThreadStreamEvent({
+      type: "user_message_recorded",
+      run_id: "run-1",
+      message_id: "msg-user-1",
+      content: "/init",
+      created_at: "2026-05-20T00:00:02Z",
+      metadata,
+    }) as Extract<ThreadStreamEvent, { type: "user_message_recorded" }>;
+
+    expect(result).toEqual({
+      type: "user_message_recorded",
+      runId: "run-1",
+      messageId: "msg-user-1",
+      content: "/init",
+      createdAt: "2026-05-20T00:00:02Z",
+      metadata,
     });
   });
 });

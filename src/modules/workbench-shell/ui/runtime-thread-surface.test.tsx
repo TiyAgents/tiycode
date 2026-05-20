@@ -183,11 +183,40 @@ describe("mapRecordedUserMessage", () => {
       createdAt: "2026-05-20T00:00:02Z",
       id: "msg-user-1",
       messageType: "plain_message",
+      metadata: null,
       attachments: [],
       role: "user",
       runId: null,
       content: "Use the simpler approach",
       parts: [{ type: "text", text: "Use the simpler approach" }],
+      status: "completed",
+    });
+  });
+
+  it("preserves command metadata and display text for consumed slash commands", () => {
+    const metadata = {
+      composer: {
+        kind: "command",
+        displayText: "/init",
+        effectivePrompt: "Generate or update AGENTS.md",
+      },
+    };
+
+    expect(mapRecordedUserMessage({
+      messageId: "msg-user-2",
+      content: "/init",
+      createdAt: "2026-05-20T00:00:03Z",
+      metadata,
+    })).toEqual({
+      createdAt: "2026-05-20T00:00:03Z",
+      id: "msg-user-2",
+      messageType: "plain_message",
+      metadata,
+      attachments: [],
+      role: "user",
+      runId: null,
+      content: "/init",
+      parts: [{ type: "text", text: "/init" }],
       status: "completed",
     });
   });

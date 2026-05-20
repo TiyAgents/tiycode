@@ -241,6 +241,7 @@ export type RecordedUserMessageEvent = {
   messageId: string;
   content: string;
   createdAt: string;
+  metadata?: Record<string, unknown> | null;
 };
 
 export function mapRecordedUserMessage(event: RecordedUserMessageEvent): SurfaceMessage {
@@ -248,6 +249,7 @@ export function mapRecordedUserMessage(event: RecordedUserMessageEvent): Surface
     createdAt: event.createdAt,
     id: event.messageId,
     messageType: "plain_message",
+    metadata: event.metadata ?? null,
     attachments: [],
     role: "user",
     runId: null,

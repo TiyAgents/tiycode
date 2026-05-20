@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import type { ComponentProps } from "react";
 import { describe, expect, it } from "vitest";
 
 import { LanguageProvider } from "@/app/providers/language-provider";
@@ -28,10 +29,13 @@ function queue(messages: RuntimeQueueMessageDto[]): RuntimeQueueSnapshotDto {
   };
 }
 
-function renderQueue(messages: RuntimeQueueMessageDto[]) {
+function renderQueue(
+  messages: RuntimeQueueMessageDto[],
+  props: Partial<ComponentProps<typeof RuntimeQueueTimeline>> = {},
+) {
   return renderToStaticMarkup(
     <LanguageProvider>
-      <RuntimeQueueTimeline queue={queue(messages)} />
+      <RuntimeQueueTimeline queue={queue(messages)} {...props} />
     </LanguageProvider>,
   );
 }
@@ -83,5 +87,25 @@ describe("RuntimeQueueTimeline", () => {
 
     expect(html).toContain("Model prompt only");
     expect(html).not.toContain("Expanded prompt");
+  });
+
+  it("renders a cancel action only for pending messages when a handler is provided", () => {
+    const pendingHtml = renderQueue([
+      message({ id: "pending-message", status: "pending" }),
+    ], {
+      onCancelMessage: () => undefined,
+    });
+    const consumedHtml = renderQueue([
+      message({ id: "consumed-message", status: "consumed" }),
+    ], {
+      onCancelMessage: () => undefined,
+    });
+    const noHandlerHtml = renderQueue([
+      message({ id: "pending-without-handler", status: "pending" }),
+    ]);
+
+    expect(pendingHtml).toMatch(/Cancel queued message|取消排队消息/);
+    expect(consumedHtml).not.toMatch(/Cancel queued message|取消排队消息/);
+    expect(noHandlerHtml).not.toMatch(/Cancel queued message|取消排队消息/);
   });
 });

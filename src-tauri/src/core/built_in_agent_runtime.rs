@@ -140,6 +140,21 @@ impl BuiltInAgentRuntime {
         session.map(|session| session.clear_runtime_queue(kind))
     }
 
+    pub async fn cancel_runtime_queue_message(
+        &self,
+        run_id: &str,
+        message_id: &str,
+    ) -> Result<Option<RuntimeQueueSnapshotDto>, AppError> {
+        let session = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(run_id).map(|entry| Arc::clone(&entry.session))
+        };
+
+        session
+            .map(|session| session.cancel_runtime_queue_message(message_id))
+            .transpose()
+    }
+
     pub(crate) async fn session_state(&self, run_id: &str) -> RuntimeSessionState {
         match self.session_finish_state(run_id).await {
             None => RuntimeSessionState::Missing,

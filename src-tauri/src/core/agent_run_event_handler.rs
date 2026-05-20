@@ -40,6 +40,7 @@ pub(crate) async fn persist_user_message_recorded(
     thread_id: &str,
     message_id: &str,
     content: &str,
+    metadata: Option<&serde_json::Value>,
 ) -> Result<(), AppError> {
     message_repo::insert(
         pool,
@@ -52,7 +53,7 @@ pub(crate) async fn persist_user_message_recorded(
             parts_json: None,
             message_type: "plain_message".to_string(),
             status: "completed".to_string(),
-            metadata_json: None,
+            metadata_json: metadata.map(|value| value.to_string()),
             attachments_json: None,
             created_at: String::new(),
         },
@@ -315,6 +316,7 @@ impl AgentRunManager {
             ThreadStreamEvent::UserMessageRecorded {
                 message_id,
                 content,
+                metadata,
                 ..
             } => {
                 let thread_id = self.get_thread_id(run_id).await;
@@ -325,8 +327,14 @@ impl AgentRunManager {
                         "skipping consumed queue user message because active thread id is unavailable"
                     );
                 } else {
-                    persist_user_message_recorded(&self.pool, &thread_id, message_id, content)
-                        .await?;
+                    persist_user_message_recorded(
+                        &self.pool,
+                        &thread_id,
+                        message_id,
+                        content,
+                        metadata.as_ref(),
+                    )
+                    .await?;
                 }
             }
             ThreadStreamEvent::ToolRequested { .. } => {
@@ -893,6 +901,7 @@ mod tests {
             "thread-1",
             "019e4470-0000-7000-8000-000000000001",
             "Use the simpler approach",
+            None,
         )
         .await
         .expect("persist user message");
@@ -909,7 +918,49 @@ mod tests {
         assert_eq!(message.message_type, "plain_message");
         assert_eq!(message.status, "completed");
         assert_eq!(message.parts_json, None);
+        assert_eq!(message.metadata_json, None);
         assert_eq!(message.attachments_json, None);
+    }
+
+    #[tokio::test]
+    async fn persist_user_message_recorded_preserves_command_metadata() {
+        let pool = setup_test_pool().await;
+        seed_run(&pool).await;
+        let metadata = serde_json::json!({
+            "composer": {
+                "kind": "command",
+                "displayText": "/init",
+                "effectivePrompt": "Generate or update AGENTS.md"
+            }
+        });
+
+        persist_user_message_recorded(
+            &pool,
+            "thread-1",
+            "019e4470-0000-7000-8000-000000000002",
+            "/init",
+            Some(&metadata),
+        )
+        .await
+        .expect("persist command user message");
+
+        let message = message_repo::find_by_id(&pool, "019e4470-0000-7000-8000-000000000002")
+            .await
+            .expect("message lookup")
+            .expect("message exists");
+        let persisted_metadata = message
+            .metadata_json
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+            .expect("metadata json");
+
+        assert_eq!(message.content_markdown, "/init");
+        assert_eq!(
+            persisted_metadata
+                .pointer("/composer/effectivePrompt")
+                .and_then(serde_json::Value::as_str),
+            Some("Generate or update AGENTS.md"),
+        );
     }
 
     #[tokio::test]

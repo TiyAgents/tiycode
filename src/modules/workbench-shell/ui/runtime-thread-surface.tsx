@@ -287,6 +287,7 @@ export function RuntimeThreadSurface({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
   const [runtimeQueue, setRuntimeQueue] = useState<RuntimeQueueSnapshotDto | null>(null);
+  const [cancellingRuntimeQueueMessageIds, setCancellingRuntimeQueueMessageIds] = useState<Set<string>>(() => new Set());
   const [runtimeQueueSubmitMode, setRuntimeQueueSubmitMode] = useState<RuntimeQueueSubmitMode>(defaultAppendMessageKind);
   const previousDefaultAppendMessageKindRef = useRef(defaultAppendMessageKind);
   const [requestRetryEntries, setRequestRetryEntries] = useState<Array<SurfaceRequestRetryEntry>>([]);
@@ -319,6 +320,7 @@ export function RuntimeThreadSurface({
       setSelectedRunMode("default");
       setRequestRetryEntries([]);
       setRequestRetryOpen({});
+      setCancellingRuntimeQueueMessageIds(new Set());
       setCompletedToolOpen({});
       setHelperOpen({});
       setReasoningOpen({});
@@ -748,6 +750,7 @@ export function RuntimeThreadSurface({
     setIsLoadingMoreMessages(false);
     setApprovingPlanMessageId(null);
     setRuntimeQueue(null);
+    setCancellingRuntimeQueueMessageIds(new Set());
     setRuntimeError(null);
     if (threadId) runMachine.reset("idle", RESET_IDLE_CONTEXT);
     setSnapshotReady(false);
@@ -1556,6 +1559,33 @@ export function RuntimeThreadSurface({
     }
     return true;
   }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, loadSnapshot, providers, runState, runtimeQueueSubmitMode, selectedRunMode, t, threadId]);
+
+  const cancelRuntimeQueueMessage = useCallback(async (messageId: string) => {
+    if (!threadId || !streamRef.current) {
+      return;
+    }
+
+    setComposerError(null);
+    setRuntimeError(null);
+    setCancellingRuntimeQueueMessageIds((current) => {
+      const next = new Set(current);
+      next.add(messageId);
+      return next;
+    });
+
+    try {
+      const queue = await streamRef.current.cancelRuntimeQueueMessage(threadId, messageId);
+      setRuntimeQueue(queue);
+    } catch {
+      // ThreadStream already routes the formatted backend error to runtimeError.
+    } finally {
+      setCancellingRuntimeQueueMessageIds((current) => {
+        const next = new Set(current);
+        next.delete(messageId);
+        return next;
+      });
+    }
+  }, [threadId]);
 
   const respondToClarify = useCallback(async (
     tool: SurfaceToolEntry,
@@ -2994,7 +3024,11 @@ export function RuntimeThreadSurface({
               <div className={getRoleSpacingClass(queuePreviousRole, "assistant")}>
                 <Message className="max-w-full" from="assistant">
                   <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                    <RuntimeQueueTimeline queue={runtimeQueue} />
+                    <RuntimeQueueTimeline
+                      queue={runtimeQueue}
+                      onCancelMessage={cancelRuntimeQueueMessage}
+                      cancellingMessageIds={cancellingRuntimeQueueMessageIds}
+                    />
                   </MessageContent>
                 </Message>
               </div>
