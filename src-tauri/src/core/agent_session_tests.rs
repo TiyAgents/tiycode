@@ -4141,6 +4141,123 @@ Used for prompt assembly coverage.
     }
 
     // ──────────────────────────────────────────────────────────────
+    // #8: Removed event must not cancel unrelated messages when
+    //     cancel already eagerly marked the target as Cancelled.
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn removed_event_counts_eagerly_cancelled_message_as_matched() {
+        let mut state = RuntimeQueueState::default();
+        let first_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "first follow-up".to_string(),
+            None,
+        );
+        let _second_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "second follow-up".to_string(),
+            None,
+        );
+
+        // Simulate the cancel path: eagerly mark first as Cancelled and
+        // register its ID in pending_removed_message_ids.
+        state.pending_removed_message_ids.push(first_id.clone());
+        mark_runtime_queue_message_by_id(
+            &mut state.messages,
+            &first_id,
+            RuntimeQueueMessageStatus::Cancelled,
+            "2026-05-21T00:00:00.000Z",
+        );
+
+        // Now the Removed event arrives from the agent runtime.
+        let _update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::FollowUp,
+                count: 1,
+                remaining: 1,
+            },
+        );
+
+        // The eagerly-cancelled first message must remain Cancelled.
+        assert_eq!(state.messages[0].id, first_id);
+        assert_eq!(
+            state.messages[0].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+        // The second message must NOT be touched by FIFO fallback.
+        assert_eq!(state.messages[1].content, "second follow-up");
+        assert_eq!(
+            state.messages[1].status,
+            RuntimeQueueMessageStatus::Pending,
+            "second message must remain Pending — FIFO fallback must not run"
+        );
+        assert!(state.pending_removed_message_ids.is_empty());
+    }
+
+    #[test]
+    fn removed_event_mixed_eager_cancel_and_fifo_for_remaining() {
+        let mut state = RuntimeQueueState::default();
+        let first_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "steer-1".to_string(),
+            None,
+        );
+        let _second_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "steer-2".to_string(),
+            None,
+        );
+        let third_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "steer-3".to_string(),
+            None,
+        );
+
+        // Eagerly cancel steer-1 and register its ID.
+        state.pending_removed_message_ids.push(first_id.clone());
+        mark_runtime_queue_message_by_id(
+            &mut state.messages,
+            &first_id,
+            RuntimeQueueMessageStatus::Cancelled,
+            "2026-05-21T00:00:00.000Z",
+        );
+
+        // Removed event reports count=2 (one from cancel, one consumed by agent).
+        let _update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::Steering,
+                count: 2,
+                remaining: 1,
+            },
+        );
+
+        // steer-1 already Cancelled (eager), counted as matched.
+        assert_eq!(
+            state.messages[0].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+        // steer-2 cancelled via FIFO fallback for the remaining count.
+        assert_eq!(
+            state.messages[1].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+        // steer-3 must remain Pending — not touched by fallback.
+        assert_eq!(state.messages[2].id, third_id);
+        assert_eq!(
+            state.messages[2].status,
+            RuntimeQueueMessageStatus::Pending,
+            "third message must remain Pending"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────
     // #6: cancel_runtime_queue_message rollback verification
     //
     // The rollback concern is: when agent.cancel_queued_message returns None

@@ -94,23 +94,6 @@ fn mark_runtime_queue_message_by_id(
     Some(message.clone())
 }
 
-fn mark_pending_runtime_queue_message_by_id_and_kind(
-    messages: &mut [RuntimeQueueMessageDto],
-    message_id: &str,
-    kind: AgentQueueMessageKind,
-    status: RuntimeQueueMessageStatus,
-    updated_at: &str,
-) -> Option<RuntimeQueueMessageDto> {
-    let message = messages.iter_mut().find(|message| {
-        message.id == message_id
-            && message.kind == kind
-            && message.status == RuntimeQueueMessageStatus::Pending
-    })?;
-    message.status = status;
-    message.updated_at = updated_at.to_string();
-    Some(message.clone())
-}
-
 fn attach_runtime_queue_message_handle(
     messages: &mut [RuntimeQueueMessageDto],
     message_id: &str,
@@ -279,16 +262,30 @@ fn update_runtime_queue_state_for_event(
                 let Some(message_id) = state.pending_removed_message_ids.pop() else {
                     break;
                 };
-                if mark_pending_runtime_queue_message_by_id_and_kind(
-                    &mut state.messages,
-                    &message_id,
-                    queue_kind,
-                    RuntimeQueueMessageStatus::Cancelled,
-                    &now,
-                )
-                .is_some()
-                {
-                    marked += 1;
+                // Look up the message by ID and kind.  If it was already
+                // marked Cancelled by the eager cancel path, count it as
+                // matched so the FIFO fallback doesn't cancel an unrelated
+                // pending message.
+                let matched = state
+                    .messages
+                    .iter_mut()
+                    .find(|message| message.id == message_id && message.kind == queue_kind);
+                match matched {
+                    Some(message) if message.status == RuntimeQueueMessageStatus::Cancelled => {
+                        // Eager cancel already transitioned this message;
+                        // update the timestamp but don't change status.
+                        message.updated_at = now.clone();
+                        marked += 1;
+                    }
+                    Some(message) if message.status == RuntimeQueueMessageStatus::Pending => {
+                        message.status = RuntimeQueueMessageStatus::Cancelled;
+                        message.updated_at = now.clone();
+                        marked += 1;
+                    }
+                    _ => {
+                        // Kind mismatch or unexpected status — skip without
+                        // counting so the ID is simply discarded.
+                    }
                 }
             }
             if marked < *count {
