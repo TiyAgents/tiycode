@@ -32,6 +32,9 @@ const MAIN_WINDOW_LABEL: &str = "main";
 const MAIN_TRAY_ID: &str = "main-tray";
 const TRAY_SHOW_ID: &str = "tray-show";
 const TRAY_QUIT_ID: &str = "tray-quit";
+#[cfg(target_os = "macos")]
+const TRAY_ICON: tauri::image::Image<'static> =
+    tauri::include_image!("icons/statusbar-icon-template.png");
 const LOG_FILE_PREFIX: &str = "tiycode";
 const LOG_FILE_SUFFIX: &str = "log";
 
@@ -172,6 +175,12 @@ fn build_tray<R: tauri::Runtime>(
         .show_menu_on_left_click(false)
         .tooltip("TiyCode");
 
+    #[cfg(target_os = "macos")]
+    {
+        tray_builder = tray_builder.icon(TRAY_ICON).icon_as_template(true);
+    }
+
+    #[cfg(not(target_os = "macos"))]
     if let Some(icon) = app.default_window_icon().cloned() {
         tray_builder = tray_builder.icon(icon);
     }
