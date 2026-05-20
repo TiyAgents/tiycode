@@ -96,6 +96,27 @@ const en: Record<TranslationKey, string> = {
   "composer.noMatchingFiles": "No matching files found.",
   "composer.typeSkillHint": "Type a skill name, tag, or trigger to search enabled skills.",
   "composer.noMatchingSkills": "No matching enabled skills found.",
+  "composer.queueMode.ariaLabel": "Queue new input mode",
+  "composer.queueMode.tooltip": "Choose how this input is queued for the running thread",
+  "composer.queueMode.steer": "Steer",
+  "composer.queueMode.followUp": "Follow-up",
+  "composer.queueMode.steerLabel": "Steer current run",
+  "composer.queueMode.steerDesc": "Apply this input as soon as the agent can consume it.",
+  "composer.queueMode.followUpLabel": "Add follow-up",
+  "composer.queueMode.followUpDesc": "Queue it after the current run finishes its active work.",
+
+  // ── Runtime Queue ────────────────────────────────────────
+  "queue.title": "Runtime Queue",
+  "queue.steer": "Steer",
+  "queue.followUp": "Follow-up",
+  "queue.status.pending": "Pending",
+  "queue.status.consumed": "Consumed",
+  "queue.status.cleared": "Cleared",
+  "queue.pendingCount": "{{count}} pending",
+  "queue.deferringSteer": "deferring steer",
+  "queue.steeringQueued": "Steering · {{count}} queued",
+  "queue.followUpQueued": "Follow-up · {{count}} queued",
+  "queue.waitingApprovalError": "This thread is waiting for approval before it can accept queued instructions.",
 
   // ── Runtime Thread Surface (Plan Approval) ───────────────
   "plan.implementAsPlan": "Implement as planned",

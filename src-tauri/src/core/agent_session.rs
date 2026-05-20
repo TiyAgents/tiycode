@@ -1,8 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 
+use chrono::{SecondsFormat, Utc};
 use sqlx::SqlitePool;
-use tiycore::agent::{Agent, AgentError, ToolExecutionMode};
+use tiycore::agent::{Agent, AgentError, AgentMessage, QueueEvent, ToolExecutionMode};
 use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{Cost, InputType, Model, Provider, Usage};
 use tokio::sync::mpsc;
@@ -40,6 +41,170 @@ pub(crate) const TASK_TOOL_NAMES: &[&str] = &["create_task", "update_task", "que
 pub(crate) const PLAN_MODE_MISSING_CHECKPOINT_ERROR: &str =
     "Plan mode requires publishing a plan with update_plan before the run can finish.";
 pub(crate) const TEXT_ATTACHMENT_MAX_CHARS: usize = 12_000;
+const RUNTIME_QUEUE_MAX_MESSAGES: usize = 80;
+const RUNTIME_QUEUE_MAX_EVENTS: usize = 80;
+
+#[derive(Debug, Default)]
+struct RuntimeQueueState {
+    messages: Vec<RuntimeQueueMessageDto>,
+    events: Vec<RuntimeQueueEventDto>,
+}
+
+fn runtime_queue_timestamp() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn mark_runtime_queue_messages(
+    messages: &mut [RuntimeQueueMessageDto],
+    kind: AgentQueueMessageKind,
+    count: usize,
+    status: RuntimeQueueMessageStatus,
+    updated_at: &str,
+) -> Vec<RuntimeQueueMessageDto> {
+    let mut remaining = count;
+    let mut marked = Vec::new();
+    for message in messages.iter_mut() {
+        if remaining == 0 {
+            break;
+        }
+        if message.kind == kind && message.status == RuntimeQueueMessageStatus::Pending {
+            message.status = status;
+            message.updated_at = updated_at.to_string();
+            marked.push(message.clone());
+            remaining = remaining.saturating_sub(1);
+        }
+    }
+    marked
+}
+
+fn trim_runtime_queue_state(state: &mut RuntimeQueueState) {
+    if state.messages.len() > RUNTIME_QUEUE_MAX_MESSAGES {
+        let drop_count = state.messages.len() - RUNTIME_QUEUE_MAX_MESSAGES;
+        state.messages.drain(0..drop_count);
+    }
+    if state.events.len() > RUNTIME_QUEUE_MAX_EVENTS {
+        let drop_count = state.events.len() - RUNTIME_QUEUE_MAX_EVENTS;
+        state.events.drain(0..drop_count);
+    }
+}
+
+fn build_runtime_queue_snapshot(
+    agent: &Agent,
+    state: &RuntimeQueueState,
+) -> RuntimeQueueSnapshotDto {
+    let stats = agent.queue_stats();
+    RuntimeQueueSnapshotDto {
+        steering_depth: stats.steering_depth,
+        follow_up_depth: stats.follow_up_depth,
+        is_deferring_steering: stats.is_deferring_steering,
+        messages: state.messages.clone(),
+        events: state.events.clone(),
+    }
+}
+
+fn queue_snapshot_to_value(snapshot: RuntimeQueueSnapshotDto) -> serde_json::Value {
+    serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeQueueEventUpdate {
+    event: RuntimeQueueEventDto,
+    consumed_messages: Vec<RuntimeQueueMessageDto>,
+}
+
+fn update_runtime_queue_state_for_event(
+    state: &mut RuntimeQueueState,
+    event: &QueueEvent,
+) -> RuntimeQueueEventUpdate {
+    let now = runtime_queue_timestamp();
+    let mut consumed_messages = Vec::new();
+    let dto = match event {
+        QueueEvent::Enqueued {
+            kind,
+            count,
+            queue_depth,
+        } => RuntimeQueueEventDto {
+            id: uuid::Uuid::now_v7().to_string(),
+            kind: AgentQueueMessageKind::from_tiy_queue_kind(*kind),
+            action: RuntimeQueueEventAction::Enqueued,
+            count: *count,
+            queue_depth: Some(*queue_depth),
+            remaining: None,
+            count_dropped: None,
+            created_at: now,
+        },
+        QueueEvent::Consumed {
+            kind,
+            count,
+            remaining,
+        } => {
+            let queue_kind = AgentQueueMessageKind::from_tiy_queue_kind(*kind);
+            consumed_messages = mark_runtime_queue_messages(
+                &mut state.messages,
+                queue_kind,
+                *count,
+                RuntimeQueueMessageStatus::Consumed,
+                &now,
+            );
+            RuntimeQueueEventDto {
+                id: uuid::Uuid::now_v7().to_string(),
+                kind: queue_kind,
+                action: RuntimeQueueEventAction::Consumed,
+                count: *count,
+                queue_depth: None,
+                remaining: Some(*remaining),
+                count_dropped: None,
+                created_at: now,
+            }
+        }
+        QueueEvent::Cleared {
+            kind,
+            count_dropped,
+        } => {
+            let queue_kind = AgentQueueMessageKind::from_tiy_queue_kind(*kind);
+            mark_runtime_queue_messages(
+                &mut state.messages,
+                queue_kind,
+                *count_dropped,
+                RuntimeQueueMessageStatus::Cleared,
+                &now,
+            );
+            RuntimeQueueEventDto {
+                id: uuid::Uuid::now_v7().to_string(),
+                kind: queue_kind,
+                action: RuntimeQueueEventAction::Cleared,
+                count: *count_dropped,
+                queue_depth: None,
+                remaining: None,
+                count_dropped: Some(*count_dropped),
+                created_at: now,
+            }
+        }
+    };
+    state.events.push(dto.clone());
+    trim_runtime_queue_state(state);
+    RuntimeQueueEventUpdate {
+        event: dto,
+        consumed_messages,
+    }
+}
+
+fn append_runtime_queue_message(
+    state: &mut RuntimeQueueState,
+    kind: AgentQueueMessageKind,
+    content: String,
+) {
+    let now = runtime_queue_timestamp();
+    state.messages.push(RuntimeQueueMessageDto {
+        id: uuid::Uuid::now_v7().to_string(),
+        kind,
+        content,
+        status: RuntimeQueueMessageStatus::Pending,
+        created_at: now.clone(),
+        updated_at: now,
+    });
+    trim_runtime_queue_state(state);
+}
 
 use crate::core::agent_session_compression::{
     build_initial_context_token_calibration, current_context_token_calibration,
@@ -127,6 +292,7 @@ pub struct AgentSession {
     pub(crate) checkpoint_requested: AtomicBool,
     pub(crate) abort_signal: tiycore::agent::AbortSignal,
     context_compression_state: Arc<StdMutex<ContextCompressionRuntimeState>>,
+    runtime_queue_state: Arc<StdMutex<RuntimeQueueState>>,
     /// Shared reference to the active-runs map so we can read the in-memory
     /// `streaming_message_id` without querying the database (avoids race).
     pub(crate) active_runs: Arc<
@@ -155,6 +321,7 @@ impl AgentSession {
             let context_compression_state = Arc::new(StdMutex::new(
                 ContextCompressionRuntimeState::new(spec.initial_context_calibration),
             ));
+            let runtime_queue_state = Arc::new(StdMutex::new(RuntimeQueueState::default()));
             agent.set_max_turns(max_turns);
             agent.set_max_retries(Some(TIYCORE_REQUEST_MAX_RETRIES));
             configure_agent(
@@ -162,6 +329,8 @@ impl AgentSession {
                 &spec,
                 weak_self.clone(),
                 Arc::clone(&context_compression_state),
+                Arc::clone(&runtime_queue_state),
+                event_tx.clone(),
             );
 
             Self {
@@ -175,6 +344,7 @@ impl AgentSession {
                 checkpoint_requested: AtomicBool::new(false),
                 abort_signal: tiycore::agent::AbortSignal::new(),
                 context_compression_state,
+                runtime_queue_state,
                 active_runs,
             }
         })
@@ -198,6 +368,56 @@ impl AgentSession {
         tokio::task::yield_now().await;
         // 4. Finally abort the main agent.
         self.agent.abort();
+    }
+
+    pub fn enqueue_queue_message(
+        &self,
+        kind: AgentQueueMessageKind,
+        message: String,
+    ) -> Result<RuntimeQueueSnapshotDto, AppError> {
+        let text = message.trim();
+        if text.is_empty() {
+            return Err(AppError::validation(
+                ErrorSource::Thread,
+                "Queue message cannot be empty",
+            ));
+        }
+
+        {
+            let mut state = self
+                .runtime_queue_state
+                .lock()
+                .expect("runtime queue state poisoned");
+            append_runtime_queue_message(&mut state, kind, text.to_string());
+        }
+
+        match kind {
+            AgentQueueMessageKind::Steer => self.agent.steer(AgentMessage::from(text)),
+            AgentQueueMessageKind::FollowUp => self.agent.follow_up(AgentMessage::from(text)),
+        }
+
+        let state = self
+            .runtime_queue_state
+            .lock()
+            .expect("runtime queue state poisoned");
+        Ok(build_runtime_queue_snapshot(&self.agent, &state))
+    }
+
+    pub fn clear_runtime_queue(
+        &self,
+        kind: Option<AgentQueueMessageKind>,
+    ) -> RuntimeQueueSnapshotDto {
+        match kind {
+            Some(AgentQueueMessageKind::Steer) => self.agent.clear_steering_queue(),
+            Some(AgentQueueMessageKind::FollowUp) => self.agent.clear_follow_up_queue(),
+            None => self.agent.clear_all_queues(),
+        }
+
+        let state = self
+            .runtime_queue_state
+            .lock()
+            .expect("runtime queue state poisoned");
+        build_runtime_queue_snapshot(&self.agent, &state)
     }
 
     async fn run(self: Arc<Self>) {
@@ -364,6 +584,8 @@ fn configure_agent(
     spec: &AgentSessionSpec,
     weak_self: Weak<AgentSession>,
     context_compression_state: Arc<StdMutex<ContextCompressionRuntimeState>>,
+    runtime_queue_state: Arc<StdMutex<RuntimeQueueState>>,
+    event_tx: mpsc::UnboundedSender<ThreadStreamEvent>,
 ) {
     agent.set_system_prompt(spec.system_prompt.clone());
     agent.replace_messages(convert_history_messages(
@@ -494,6 +716,41 @@ fn configure_agent(
     // Set session ID for prompt caching (used as prompt_cache_key in OpenAI Responses API).
     // Using thread_id ensures the same conversation thread shares a cache across runs.
     agent.set_session_id(&spec.thread_id);
+
+    {
+        let run_id = spec.run_id.clone();
+        let event_tx = event_tx.clone();
+        let agent_ref = Arc::downgrade(agent);
+        let runtime_queue_state = Arc::clone(&runtime_queue_state);
+        agent.set_on_queue_event(move |event| {
+            let Some(agent_ref) = agent_ref.upgrade() else {
+                return;
+            };
+            let (snapshot, consumed_messages) = {
+                let mut state = runtime_queue_state
+                    .lock()
+                    .expect("runtime queue state poisoned");
+                let update = update_runtime_queue_state_for_event(&mut state, &event);
+                let _event = update.event;
+                (
+                    build_runtime_queue_snapshot(&agent_ref, &state),
+                    update.consumed_messages,
+                )
+            };
+            let _ = event_tx.send(ThreadStreamEvent::QueueUpdated {
+                run_id: run_id.clone(),
+                queue: queue_snapshot_to_value(snapshot),
+            });
+            for message in consumed_messages {
+                let _ = event_tx.send(ThreadStreamEvent::UserMessageRecorded {
+                    run_id: run_id.clone(),
+                    message_id: uuid::Uuid::now_v7().to_string(),
+                    content: message.content,
+                    created_at: message.updated_at,
+                });
+            }
+        });
+    }
 
     // Inject default TiyCode identification headers for all LLM API requests.
     agent.set_custom_headers(crate::core::tiycode_default_headers());

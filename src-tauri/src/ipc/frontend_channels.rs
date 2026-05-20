@@ -82,6 +82,12 @@ pub enum ThreadStreamEvent {
         run_id: String,
         queue: serde_json::Value,
     },
+    UserMessageRecorded {
+        run_id: String,
+        message_id: String,
+        content: String,
+        created_at: String,
+    },
     SubagentStarted {
         run_id: String,
         subtask_id: String,

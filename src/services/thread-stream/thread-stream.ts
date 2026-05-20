@@ -17,7 +17,9 @@
 
 import {
   threadCancelRun,
+  threadClearRuntimeQueue,
   threadCompactContext,
+  threadEnqueueQueueMessage,
   threadExecuteApprovedPlan,
   threadStartRun,
   threadSubscribeRun,
@@ -28,6 +30,8 @@ import {
 import type {
   RunModelPlanDto,
   RunUsageDto,
+  RuntimeQueueMessageKind,
+  RuntimeQueueSnapshotDto,
   SubagentActivityStatus,
   SubagentProgressSnapshot,
   TaskBoardDto,
@@ -109,7 +113,14 @@ export type ReasoningEvent = {
 
 export type QueueEvent = {
   runId: string;
-  queue: unknown;
+  queue: RuntimeQueueSnapshotDto;
+};
+
+export type UserMessageEvent = {
+  runId: string;
+  messageId: string;
+  content: string;
+  createdAt: string;
 };
 
 export type HelperEvent =
@@ -178,6 +189,7 @@ export class ThreadStream {
   onArtifact: ((event: ArtifactEvent) => void) | null = null;
   onReasoning: ((event: ReasoningEvent) => void) | null = null;
   onQueue: ((event: QueueEvent) => void) | null = null;
+  onUserMessage: ((event: UserMessageEvent) => void) | null = null;
   onTaskBoard: ((event: { taskBoard: TaskBoardDto }) => void) | null = null;
   onHelperEvent: ((event: HelperEvent) => void) | null = null;
   onThreadTitle: ((event: ThreadTitleEvent) => void) | null = null;
@@ -263,6 +275,37 @@ export class ThreadStream {
   async cancelRun(threadId: string): Promise<boolean> {
     try {
       return await threadCancelRun(threadId);
+    } catch (error) {
+      const message = formatInvokeErrorMessage(error) ?? "Unknown error";
+      this.onError?.(message, this.currentRunId ?? "");
+      throw error;
+    }
+  }
+
+  async enqueueQueueMessage(
+    threadId: string,
+    kind: RuntimeQueueMessageKind,
+    message: string,
+  ): Promise<RuntimeQueueSnapshotDto> {
+    try {
+      const queue = await threadEnqueueQueueMessage(threadId, kind, message);
+      this.onQueue?.({ runId: this.currentRunId ?? "", queue });
+      return queue;
+    } catch (error) {
+      const messageText = formatInvokeErrorMessage(error) ?? "Unknown error";
+      this.onError?.(messageText, this.currentRunId ?? "");
+      throw error;
+    }
+  }
+
+  async clearRuntimeQueue(
+    threadId: string,
+    kind?: RuntimeQueueMessageKind | null,
+  ): Promise<RuntimeQueueSnapshotDto> {
+    try {
+      const queue = await threadClearRuntimeQueue(threadId, kind);
+      this.onQueue?.({ runId: this.currentRunId ?? "", queue });
+      return queue;
     } catch (error) {
       const message = formatInvokeErrorMessage(error) ?? "Unknown error";
       this.onError?.(message, this.currentRunId ?? "");
@@ -407,6 +450,7 @@ export class ThreadStream {
     this.onArtifact = null;
     this.onReasoning = null;
     this.onQueue = null;
+    this.onUserMessage = null;
     this.onHelperEvent = null;
     this.onThreadTitle = null;
     this.onUsage = null;
@@ -494,6 +538,15 @@ export class ThreadStream {
         this.onQueue?.({
           runId: event.runId,
           queue: event.queue,
+        });
+        break;
+
+      case "user_message_recorded":
+        this.onUserMessage?.({
+          runId: event.runId,
+          messageId: event.messageId,
+          content: event.content,
+          createdAt: event.createdAt,
         });
         break;
 

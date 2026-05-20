@@ -95,6 +95,27 @@ const zhCN = {
   "composer.typeSkillHint":
     "继续输入 skill 名称、标签或触发词以搜索已启用 skill。",
   "composer.noMatchingSkills": "没有找到匹配的已启用 skill。",
+  "composer.queueMode.ariaLabel": "排队新输入模式",
+  "composer.queueMode.tooltip": "选择此输入如何排队到运行中的线程",
+  "composer.queueMode.steer": "引导",
+  "composer.queueMode.followUp": "排队",
+  "composer.queueMode.steerLabel": "引导当前运行",
+  "composer.queueMode.steerDesc": "待 Agent 可处理时立即应用此输入。",
+  "composer.queueMode.followUpLabel": "添加排队",
+  "composer.queueMode.followUpDesc": "当前运行完成活跃工作后排入队列。",
+
+  // ── Runtime Queue ────────────────────────────────────────
+  "queue.title": "运行时队列",
+  "queue.steer": "引导",
+  "queue.followUp": "排队",
+  "queue.status.pending": "待处理",
+  "queue.status.consumed": "已消费",
+  "queue.status.cleared": "已清除",
+  "queue.pendingCount": "{{count}} 个待处理",
+  "queue.deferringSteer": "暂缓引导",
+  "queue.steeringQueued": "引导 · {{count}} 个排队",
+  "queue.followUpQueued": "排队 · {{count}} 个排队",
+  "queue.waitingApprovalError": "此线程正在等待审批，无法接受排队指令。",
 
   // ── Runtime Thread Surface (Plan Approval) ───────────────
   "plan.implementAsPlan": "按计划实施",

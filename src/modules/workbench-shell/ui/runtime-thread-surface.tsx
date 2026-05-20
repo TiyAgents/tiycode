@@ -15,7 +15,6 @@ import { Conversation, ConversationContent, ConversationEmptyState, Conversation
 import type { StickToBottomContext } from "use-stick-to-bottom";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Plan, PlanContent, PlanDescription, PlanHeader, PlanTitle, PlanTrigger } from "@/components/ai-elements/plan";
-import { Queue } from "@/components/ai-elements/queue";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
@@ -35,6 +34,8 @@ import {
 import type {
   MessageAttachmentDto,
   RunMode,
+  RuntimeQueueMessageKind,
+  RuntimeQueueSnapshotDto,
   TaskBoardDto,
 } from "@/shared/types/api";
 import { cn } from "@/shared/lib/utils";
@@ -103,6 +104,7 @@ import {
   mapSnapshotHelper,
 } from "@/modules/workbench-shell/ui/runtime-thread-surface-helpers";
 import { TaskBoardCard } from "@/modules/workbench-shell/ui/task-board-card";
+import { RuntimeQueueTimeline } from "@/modules/workbench-shell/ui/runtime-queue-timeline";
 import { TaskHistoryTimeline } from "@/modules/workbench-shell/ui/task-stage-history-card";
 import {
   appendOrReplaceMessage,
@@ -123,6 +125,7 @@ import {
   isVisibleTimelineTool,
   mapRunSummaryToContextUsage,
   mapSnapshotMessage,
+  mapRecordedUserMessage,
   mapSnapshotTool,
   mergeArtifactPartIntoMessage,
   mergeSnapshotMessages,
@@ -222,6 +225,7 @@ function renderPlanProseSection(title: string, content: string) {
 
 
 const BASE_CONVERSATION_BOTTOM_PADDING = 40;
+type RuntimeQueueSubmitMode = RuntimeQueueMessageKind;
 const THREAD_AUTO_COLLAPSE_DELAY_MS = 8000;
 
 /** Idle context used when resetting the run-lifecycle machine. */
@@ -281,7 +285,8 @@ export function RuntimeThreadSurface({
   const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
-  const [queueArtifact, setQueueArtifact] = useState<unknown>(null);
+  const [runtimeQueue, setRuntimeQueue] = useState<RuntimeQueueSnapshotDto | null>(null);
+  const [runtimeQueueSubmitMode, setRuntimeQueueSubmitMode] = useState<RuntimeQueueSubmitMode>("steer");
   const [requestRetryEntries, setRequestRetryEntries] = useState<Array<SurfaceRequestRetryEntry>>([]);
   const [requestRetryOpen, setRequestRetryOpen] = useState<Record<string, boolean>>({});
   const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
@@ -730,7 +735,7 @@ export function RuntimeThreadSurface({
     setMessages([]);
     setIsLoadingMoreMessages(false);
     setApprovingPlanMessageId(null);
-    setQueueArtifact(null);
+    setRuntimeQueue(null);
     setRuntimeError(null);
     if (threadId) runMachine.reset("idle", RESET_IDLE_CONTEXT);
     setSnapshotReady(false);
@@ -869,6 +874,11 @@ export function RuntimeThreadSurface({
           )),
         );
       }
+    });
+
+    stream.onUserMessage = withActiveStream((event) => {
+      setMessages((current) => appendOrReplaceMessage(current, mapRecordedUserMessage(event)));
+      conversationContextRef.current?.scrollToBottom("instant");
     });
 
     stream.onMessage = withActiveStream((event) => {
@@ -1012,7 +1022,7 @@ export function RuntimeThreadSurface({
     });
 
     stream.onQueue = withActiveStream((event: QueueEvent) => {
-      setQueueArtifact(event.queue);
+      setRuntimeQueue(event.queue);
     });
 
     stream.onTaskBoard = withActiveStream((event: { taskBoard: TaskBoardDto }) => {
@@ -1403,8 +1413,32 @@ export function RuntimeThreadSurface({
     }
 
     const activeRunId = streamRef.current?.runId ?? null;
-    if (runState === "running" || (runState === "waiting_approval" && activeRunId)) {
-      setComposerError("This thread already has an active run.");
+    if (runState === "running" && activeRunId) {
+      if (submission.attachments.length > 0) {
+        setComposerError("Attachments can only be sent when starting a new run.");
+        return false;
+      }
+      setComposerError(null);
+      setRuntimeError(null);
+      try {
+        const queue = await streamRef.current?.enqueueQueueMessage(
+          threadId,
+          runtimeQueueSubmitMode,
+          prompt,
+        );
+        if (queue) {
+          setRuntimeQueue(queue);
+        }
+        conversationContextRef.current?.scrollToBottom("instant");
+      } catch (error) {
+        setThinkingPlaceholder(null);
+        throw error;
+      }
+      return true;
+    }
+
+    if (runState === "waiting_approval" && activeRunId) {
+      setComposerError(t("queue.waitingApprovalError"));
       return false;
     }
 
@@ -1438,7 +1472,6 @@ export function RuntimeThreadSurface({
 
     setComposerError(null);
     setRuntimeError(null);
-    setQueueArtifact(null);
 
     if (submission.kind === "command" && submission.command?.behavior === "clear") {
       appendOptimisticUserMessage(submission.displayText, submission.metadata ?? null, [], false);
@@ -1509,7 +1542,7 @@ export function RuntimeThreadSurface({
       submittingRef.current = false;
     }
     return true;
-  }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, loadSnapshot, providers, runState, selectedRunMode, threadId]);
+  }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, loadSnapshot, providers, runState, runtimeQueueSubmitMode, selectedRunMode, t, threadId]);
 
   const respondToClarify = useCallback(async (
     tool: SurfaceToolEntry,
@@ -1522,7 +1555,6 @@ export function RuntimeThreadSurface({
 
     setComposerError(null);
     setRuntimeError(null);
-    setQueueArtifact(null);
     appendOptimisticUserMessage(displayText, null, []);
     conversationContextRef.current?.scrollToBottom("instant");
 
@@ -1597,7 +1629,7 @@ export function RuntimeThreadSurface({
   );
   const hasRuntimeArtifacts =
     Boolean(runtimeError)
-    || Boolean(queueArtifact)
+    || Boolean(runtimeQueue)
     || requestRetryEntries.length > 0
     || helpers.length > 0
     || visibleTools.length > 0
@@ -1712,10 +1744,10 @@ export function RuntimeThreadSurface({
   const queuePreviousRole: TimelineRole | null =
     showThinkingIndicator ? "assistant" : lastPresentationRole;
   const hasTaskHistoryTimeline = taskBoards.boards.some((board) => board.status !== "active");
-  const historyPreviousRole: TimelineRole | null = queueArtifact ? "assistant" : lastPresentationRole;
+  const historyPreviousRole: TimelineRole | null = runtimeQueue ? "assistant" : lastPresentationRole;
   const runtimeErrorPreviousRole: TimelineRole | null = hasTaskHistoryTimeline
     ? "assistant"
-    : queueArtifact || showThinkingIndicator
+    : runtimeQueue || showThinkingIndicator
       ? "assistant"
       : lastPresentationRole;
 
@@ -1827,8 +1859,13 @@ export function RuntimeThreadSurface({
   const handleSubmit = useCallback(async (submission: ComposerSubmission) => {
     const prompt = submission.effectivePrompt ?? "";
     const trimmedPrompt = prompt.trim();
-    if (!trimmedPrompt) {
+    if (!trimmedPrompt && submission.attachments.length === 0) {
       return;
+    }
+
+    if (runState === "running" && streamRef.current?.runId && submission.attachments.length > 0) {
+      setComposerError("Attachments can only be sent when starting a new run.");
+      throw new Error("submit_rejected");
     }
 
     if (pendingClarifyTool) {
@@ -1852,7 +1889,7 @@ export function RuntimeThreadSurface({
       throw new Error("submit_rejected");
     }
     setComposerValue("");
-  }, [pendingClarifyTool, respondToClarify, submitPrompt]);
+  }, [pendingClarifyTool, respondToClarify, runState, submitPrompt]);
 
   const handleCompletedToolOpenChange = useCallback((toolId: string, open: boolean) => {
     setCompletedToolOpen((current) => (current[toolId] === open ? current : { ...current, [toolId]: open }));
@@ -2940,18 +2977,11 @@ export function RuntimeThreadSurface({
               </div>
             </div>
 
-            {queueArtifact ? (
+            {runtimeQueue ? (
               <div className={getRoleSpacingClass(queuePreviousRole, "assistant")}>
                 <Message className="max-w-full" from="assistant">
                   <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                    <Queue className="rounded-2xl border border-app-border/24 bg-app-surface/16 p-2 shadow-none">
-                      <div>
-                        <div className="px-3 py-2 text-sm font-medium text-app-foreground">Runtime Queue</div>
-                        <div className="rounded-xl bg-app-surface/45 px-3 py-3 text-sm text-app-muted">
-                          <MessageResponse>{JSON.stringify(queueArtifact, null, 2)}</MessageResponse>
-                        </div>
-                      </div>
-                    </Queue>
+                    <RuntimeQueueTimeline queue={runtimeQueue} />
                   </MessageContent>
                 </Message>
               </div>
@@ -3016,6 +3046,7 @@ export function RuntimeThreadSurface({
             agentProfiles={agentProfiles}
             allowMissingActiveProfile
             canSubmitWhenAttachmentsOnly={false}
+            canSubmitWhileRunning={runState === "running" && Boolean(streamRef.current?.runId)}
             className="w-full max-w-none gap-0"
             commands={commands}
             composerShellClassName={taskBoards.activeBoard
@@ -3027,6 +3058,7 @@ export function RuntimeThreadSurface({
             onOpenProfileSettings={() => {
               uiLayoutStore.setState({ activeOverlay: "settings" });
             }}
+            onRuntimeQueueSubmitModeChange={setRuntimeQueueSubmitMode}
             onSelectAgentProfile={async (profileId: string) => {
               // In new-thread mode, just update the global active profile.
               if (isNewThreadMode || !threadId) {
@@ -3093,6 +3125,8 @@ export function RuntimeThreadSurface({
             onSubmit={handleSubmit}
             placeholder="Ask Tiy anything, @ to add files, / for commands, $ for skills"
             providers={providers}
+            runtimeQueueSubmitMode={runtimeQueueSubmitMode}
+            showRuntimeQueueSubmitMode={runState === "running" && Boolean(streamRef.current?.runId)}
             status={composerStatus}
             value={composerValue}
             workspaceId={

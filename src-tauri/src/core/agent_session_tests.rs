@@ -9,9 +9,10 @@ pub(super) mod tests {
         resolve_model_plan, resolve_runtime_model_role, response_style_system_instruction,
         runtime_security_config, runtime_tools_for_profile,
         runtime_tools_for_profile_with_extensions, standard_tool_timeout,
-        trim_history_to_current_context, ContextCompressionRuntimeState, ProfileResponseStyle,
-        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, SortKey,
-        DEFAULT_FULL_TOOL_PROFILE, MAIN_AGENT_TOOL_TIMEOUT_SECS,
+        trim_history_to_current_context, update_runtime_queue_state_for_event,
+        AgentQueueMessageKind, ContextCompressionRuntimeState, ProfileResponseStyle,
+        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, RuntimeQueueMessageStatus,
+        RuntimeQueueState, SortKey, DEFAULT_FULL_TOOL_PROFILE, MAIN_AGENT_TOOL_TIMEOUT_SECS,
         PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
         STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
@@ -19,7 +20,7 @@ pub(super) mod tests {
     use std::sync::Mutex as StdMutex;
 
     use tempfile::tempdir;
-    use tiycore::agent::{AgentEvent, AgentMessage, AgentTool};
+    use tiycore::agent::{AgentEvent, AgentMessage, AgentTool, QueueEvent, QueueKind};
     use tiycore::thinking::ThinkingLevel;
     use tiycore::types::{
         Api, AssistantMessage, AssistantMessageEvent, ContentBlock, Provider, StopReason,
@@ -178,6 +179,69 @@ pub(super) mod tests {
             attachments_json: None,
             created_at: "2026-01-01T00:00:00.000Z".to_string(),
         }
+    }
+
+    #[test]
+    fn update_runtime_queue_state_for_consumed_returns_pending_messages() {
+        let mut state = RuntimeQueueState::default();
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "First steer".to_string(),
+        );
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::Steer,
+            "Second steer".to_string(),
+        );
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Follow up".to_string(),
+        );
+
+        let update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Consumed {
+                kind: QueueKind::Steering,
+                count: 2,
+                remaining: 0,
+            },
+        );
+
+        assert_eq!(update.consumed_messages.len(), 2);
+        assert_eq!(update.consumed_messages[0].content, "First steer");
+        assert_eq!(update.consumed_messages[1].content, "Second steer");
+        assert_eq!(
+            state.messages[0].status,
+            RuntimeQueueMessageStatus::Consumed
+        );
+        assert_eq!(
+            state.messages[1].status,
+            RuntimeQueueMessageStatus::Consumed
+        );
+        assert_eq!(state.messages[2].status, RuntimeQueueMessageStatus::Pending);
+    }
+
+    #[test]
+    fn update_runtime_queue_state_for_cleared_does_not_return_consumed_messages() {
+        let mut state = RuntimeQueueState::default();
+        super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Follow up".to_string(),
+        );
+
+        let update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Cleared {
+                kind: QueueKind::FollowUp,
+                count_dropped: 1,
+            },
+        );
+
+        assert!(update.consumed_messages.is_empty());
+        assert_eq!(state.messages[0].status, RuntimeQueueMessageStatus::Cleared);
     }
 
     fn make_run_summary(model_id: &str, input_tokens: u64) -> RunSummaryDto {
