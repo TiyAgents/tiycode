@@ -497,6 +497,14 @@ impl AgentSession {
         Ok(build_runtime_queue_snapshot(&self.agent, &state))
     }
 
+    pub fn runtime_queue_snapshot(&self) -> RuntimeQueueSnapshotDto {
+        let state = self
+            .runtime_queue_state
+            .lock()
+            .expect("runtime queue state poisoned");
+        build_runtime_queue_snapshot(&self.agent, &state)
+    }
+
     pub fn cancel_runtime_queue_message(
         &self,
         message_id: &str,

@@ -414,12 +414,24 @@ impl AgentRunManager {
         &self,
         thread_id: &str,
     ) -> Result<Option<(String, broadcast::Receiver<ThreadStreamEvent>)>, AppError> {
-        let runs = self.active_runs.lock().await;
-        let Some(run) = runs.values().find(|run| run.thread_id == thread_id) else {
-            return Ok(None);
+        let (run_id, frontend_tx) = {
+            let runs = self.active_runs.lock().await;
+            let Some(run) = runs.values().find(|run| run.thread_id == thread_id) else {
+                return Ok(None);
+            };
+            (run.run_id.clone(), run.frontend_tx.clone())
         };
 
-        Ok(Some((run.run_id.clone(), run.frontend_tx.subscribe())))
+        let event_rx = frontend_tx.subscribe();
+        if let Some(snapshot) = self.runtime.runtime_queue_snapshot(&run_id).await {
+            let queue = serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({}));
+            let _ = frontend_tx.send(ThreadStreamEvent::QueueUpdated {
+                run_id: run_id.clone(),
+                queue,
+            });
+        }
+
+        Ok(Some((run_id, event_rx)))
     }
 
     pub async fn cancel_run(&self, thread_id: &str) -> Result<bool, AppError> {

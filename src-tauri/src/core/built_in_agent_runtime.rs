@@ -127,6 +127,15 @@ impl BuiltInAgentRuntime {
             .transpose()
     }
 
+    pub async fn runtime_queue_snapshot(&self, run_id: &str) -> Option<RuntimeQueueSnapshotDto> {
+        let session = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(run_id).map(|entry| Arc::clone(&entry.session))
+        };
+
+        session.map(|session| session.runtime_queue_snapshot())
+    }
+
     pub async fn clear_runtime_queue(
         &self,
         run_id: &str,

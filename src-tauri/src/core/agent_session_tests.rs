@@ -11,14 +11,15 @@ pub(super) mod tests {
         runtime_queue_message_display_content, runtime_security_config, runtime_tools_for_profile,
         runtime_tools_for_profile_with_extensions, standard_tool_timeout,
         trim_history_to_current_context, update_runtime_queue_state_for_event,
-        AgentQueueMessageKind, ContextCompressionRuntimeState, ProfileResponseStyle,
-        ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan, RuntimeQueueEventAction,
-        RuntimeQueueMessageStatus, RuntimeQueueState, SortKey, DEFAULT_FULL_TOOL_PROFILE,
-        MAIN_AGENT_TOOL_TIMEOUT_SECS, PLAN_MODE_MISSING_CHECKPOINT_ERROR,
-        PLAN_READ_ONLY_TOOL_PROFILE, STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
+        AgentQueueMessageKind, AgentSession, AgentSessionSpec, ContextCompressionRuntimeState,
+        ProfileResponseStyle, ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan,
+        RuntimeQueueEventAction, RuntimeQueueMessageStatus, RuntimeQueueState, SortKey,
+        DEFAULT_FULL_TOOL_PROFILE, MAIN_AGENT_TOOL_TIMEOUT_SECS,
+        PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
+        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
-    use std::sync::Mutex as StdMutex;
+    use std::sync::{Arc, Mutex as StdMutex};
 
     use tempfile::tempdir;
     use tiycore::agent::{AgentEvent, AgentMessage, AgentTool, QueueEvent, QueueKind};
@@ -35,7 +36,11 @@ pub(super) mod tests {
     use crate::core::prompt::providers::{
         final_response_structure_system_instruction, run_mode_prompt_body,
     };
-    use crate::core::subagent::{RuntimeOrchestrationTool, SubagentProfile};
+    use crate::core::subagent::{
+        HelperAgentOrchestrator, RuntimeOrchestrationTool, SubagentProfile,
+    };
+    use crate::core::terminal_manager::TerminalManager;
+    use crate::core::tool_gateway::ToolGateway;
     use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::{AgentProfileRecord, ProviderKind, ProviderRecord};
     use crate::model::thread::{MessageRecord, RunSummaryDto, RunUsageDto, ToolCallDto};
@@ -268,6 +273,76 @@ pub(super) mod tests {
         assert_eq!(
             runtime_queue_message_display_content(&state.messages[0]),
             "Expanded steer prompt",
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_session_runtime_queue_snapshot_returns_current_pending_messages() {
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+        let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+        let tool_gateway = Arc::new(ToolGateway::new(pool.clone(), terminal_manager));
+        let helper_orchestrator = Arc::new(HelperAgentOrchestrator::new(
+            pool.clone(),
+            Arc::clone(&tool_gateway),
+        ));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
+        let active_runs = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let spec = AgentSessionSpec {
+            run_id: "run-queue-snapshot".to_string(),
+            thread_id: "thread-queue-snapshot".to_string(),
+            workspace_path: temp_dir.path().to_string_lossy().to_string(),
+            run_mode: "default".to_string(),
+            tool_profile_name: DEFAULT_FULL_TOOL_PROFILE.to_string(),
+            runtime_tools: Vec::new(),
+            system_prompt: "You are a test agent.".to_string(),
+            history_messages: Vec::new(),
+            history_tool_calls: Vec::new(),
+            model_plan: sample_resolved_runtime_model_plan(None),
+            initial_prompt: None,
+            initial_context_calibration: Default::default(),
+        };
+        let session = AgentSession::new(
+            pool,
+            tool_gateway,
+            helper_orchestrator,
+            event_tx,
+            spec,
+            4,
+            active_runs,
+        );
+
+        let enqueue_snapshot = session
+            .enqueue_queue_message(
+                AgentQueueMessageKind::Steer,
+                "Keep the answer concise".to_string(),
+                Some(serde_json::json!({
+                    "composer": {
+                        "displayText": "Keep it concise"
+                    }
+                })),
+            )
+            .expect("enqueue queue message");
+        let replay_snapshot = session.runtime_queue_snapshot();
+
+        assert_eq!(enqueue_snapshot.messages.len(), 1);
+        assert_eq!(replay_snapshot.messages.len(), 1);
+        assert_eq!(
+            replay_snapshot.messages[0].kind,
+            AgentQueueMessageKind::Steer
+        );
+        assert_eq!(
+            replay_snapshot.messages[0].status,
+            RuntimeQueueMessageStatus::Pending,
+        );
+        assert_eq!(
+            replay_snapshot.messages[0].content,
+            "Keep the answer concise"
+        );
+        assert_eq!(
+            replay_snapshot.messages[0].metadata,
+            enqueue_snapshot.messages[0].metadata
         );
     }
 

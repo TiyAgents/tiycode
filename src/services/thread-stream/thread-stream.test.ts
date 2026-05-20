@@ -339,6 +339,40 @@ describe("ThreadStream commands", () => {
     expect(stream.runId).toBeNull();
   });
 
+  it("routes queue snapshots replayed during subscribe", async () => {
+    const replayedQueue = {
+      steeringDepth: 1,
+      followUpDepth: 1,
+      isDeferringSteering: false,
+      messages: [
+        {
+          id: "queue-message-1",
+          kind: "steer" as const,
+          content: "Keep it concise",
+          metadata: null,
+          status: "pending" as const,
+          createdAt: "2026-05-20T00:00:00Z",
+          updatedAt: "2026-05-20T00:00:00Z",
+        },
+      ],
+      events: [],
+    };
+    threadSubscribeRunMock.mockImplementationOnce((threadId: string, onEvent: (event: ThreadStreamEvent) => void) => {
+      expect(threadId).toBe("thread-1");
+      onEvent({ type: "queue_updated", runId: "run-sub", queue: replayedQueue });
+      return Promise.resolve("run-sub");
+    });
+
+    const stream = new ThreadStream();
+    const onQueue = vi.fn();
+    stream.onQueue = onQueue;
+
+    await expect(stream.subscribe("thread-1")).resolves.toBe("run-sub");
+
+    expect(onQueue).toHaveBeenCalledWith({ runId: "run-sub", queue: replayedQueue });
+    expect(stream.runId).toBe("run-sub");
+  });
+
   it("responds to approval and clarify requests", async () => {
     toolApprovalRespondMock.mockResolvedValueOnce(undefined);
     toolClarifyRespondMock.mockResolvedValueOnce(undefined);
