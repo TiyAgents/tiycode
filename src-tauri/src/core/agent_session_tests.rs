@@ -369,7 +369,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn update_runtime_queue_state_for_removed_does_not_mark_pending_messages() {
+    fn update_runtime_queue_state_for_removed_marks_pending_messages_cancelled() {
         let mut state = RuntimeQueueState::default();
         super::super::append_runtime_queue_message(
             &mut state,
@@ -396,8 +396,49 @@ pub(super) mod tests {
         assert!(update.consumed_messages.is_empty());
         assert_eq!(update.event.action, RuntimeQueueEventAction::Removed);
         assert_eq!(update.event.remaining, Some(1));
-        assert_eq!(state.messages[0].status, RuntimeQueueMessageStatus::Pending);
+        assert_eq!(
+            state.messages[0].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
         assert_eq!(state.messages[1].status, RuntimeQueueMessageStatus::Pending);
+    }
+
+    #[test]
+    fn update_runtime_queue_state_for_removed_prefers_registered_message_id() {
+        let mut state = RuntimeQueueState::default();
+        let first_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "First follow up".to_string(),
+            None,
+        );
+        let second_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Second follow up".to_string(),
+            None,
+        );
+        state.pending_removed_message_ids.push(second_id.clone());
+
+        let update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::FollowUp,
+                count: 1,
+                remaining: 1,
+            },
+        );
+
+        assert!(update.consumed_messages.is_empty());
+        assert_eq!(update.event.action, RuntimeQueueEventAction::Removed);
+        assert_eq!(state.messages[0].id, first_id);
+        assert_eq!(state.messages[0].status, RuntimeQueueMessageStatus::Pending);
+        assert_eq!(state.messages[1].id, second_id);
+        assert_eq!(
+            state.messages[1].status,
+            RuntimeQueueMessageStatus::Cancelled
+        );
+        assert!(state.pending_removed_message_ids.is_empty());
     }
 
     #[test]

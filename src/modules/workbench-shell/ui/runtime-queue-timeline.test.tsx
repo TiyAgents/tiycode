@@ -89,6 +89,23 @@ describe("RuntimeQueueTimeline", () => {
     expect(html).not.toContain("Expanded prompt");
   });
 
+  it("uses visible pending messages for grouped counts when backend depth is stale", () => {
+    const queueWithStaleDepth: RuntimeQueueSnapshotDto = {
+      ...queue([message({ kind: "steer", status: "pending" })]),
+      steeringDepth: 0,
+    };
+
+    const html = renderToStaticMarkup(
+      <LanguageProvider>
+        <RuntimeQueueTimeline queue={queueWithStaleDepth} />
+      </LanguageProvider>,
+    );
+
+    expect(html).toMatch(/Steering|引导/);
+    expect(html).toMatch(/1 (queued|个排队)/);
+    expect(html).not.toMatch(/0 (queued|个排队)/);
+  });
+
   it("renders a cancel action only for pending messages when a handler is provided", () => {
     const pendingHtml = renderQueue([
       message({ id: "pending-message", status: "pending" }),

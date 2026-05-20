@@ -203,7 +203,7 @@ export const RuntimeQueueTimeline = ({
           {steeringMessages.length > 0 ? (
             <div className="flex flex-col gap-2">
               <div className="text-[11px] font-medium uppercase tracking-wide text-app-subtle">
-                {t("queue.steeringQueued", { count: queue.steeringDepth })}
+                {t("queue.steeringQueued", { count: steeringMessages.length })}
               </div>
               {steeringMessages.map((message) => (
                 <RuntimeQueueMessageCard
@@ -219,7 +219,7 @@ export const RuntimeQueueTimeline = ({
           {followUpMessages.length > 0 ? (
             <div className="flex flex-col gap-2">
               <div className="text-[11px] font-medium uppercase tracking-wide text-app-subtle">
-                {t("queue.followUpQueued", { count: queue.followUpDepth })}
+                {t("queue.followUpQueued", { count: followUpMessages.length })}
               </div>
               {followUpMessages.map((message) => (
                 <RuntimeQueueMessageCard

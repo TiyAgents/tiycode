@@ -50,6 +50,7 @@ const RUNTIME_QUEUE_MAX_EVENTS: usize = 80;
 struct RuntimeQueueState {
     messages: Vec<RuntimeQueueMessageDto>,
     events: Vec<RuntimeQueueEventDto>,
+    pending_removed_message_ids: Vec<String>,
 }
 
 fn runtime_queue_timestamp() -> String {
@@ -88,6 +89,23 @@ fn mark_runtime_queue_message_by_id(
     let message = messages
         .iter_mut()
         .find(|message| message.id == message_id)?;
+    message.status = status;
+    message.updated_at = updated_at.to_string();
+    Some(message.clone())
+}
+
+fn mark_pending_runtime_queue_message_by_id_and_kind(
+    messages: &mut [RuntimeQueueMessageDto],
+    message_id: &str,
+    kind: AgentQueueMessageKind,
+    status: RuntimeQueueMessageStatus,
+    updated_at: &str,
+) -> Option<RuntimeQueueMessageDto> {
+    let message = messages.iter_mut().find(|message| {
+        message.id == message_id
+            && message.kind == kind
+            && message.status == RuntimeQueueMessageStatus::Pending
+    })?;
     message.status = status;
     message.updated_at = updated_at.to_string();
     Some(message.clone())
@@ -256,6 +274,32 @@ fn update_runtime_queue_state_for_event(
             remaining,
         } => {
             let queue_kind = AgentQueueMessageKind::from_tiy_queue_kind(*kind);
+            let mut marked = 0usize;
+            while marked < *count {
+                let Some(message_id) = state.pending_removed_message_ids.pop() else {
+                    break;
+                };
+                if mark_pending_runtime_queue_message_by_id_and_kind(
+                    &mut state.messages,
+                    &message_id,
+                    queue_kind,
+                    RuntimeQueueMessageStatus::Cancelled,
+                    &now,
+                )
+                .is_some()
+                {
+                    marked += 1;
+                }
+            }
+            if marked < *count {
+                mark_runtime_queue_messages(
+                    &mut state.messages,
+                    queue_kind,
+                    count.saturating_sub(marked),
+                    RuntimeQueueMessageStatus::Cancelled,
+                    &now,
+                );
+            }
             RuntimeQueueEventDto {
                 id: uuid::Uuid::now_v7().to_string(),
                 kind: queue_kind,
@@ -510,14 +554,25 @@ impl AgentSession {
         message_id: &str,
     ) -> Result<RuntimeQueueSnapshotDto, AppError> {
         let handle = {
-            let state = self
+            let mut state = self
                 .runtime_queue_state
                 .lock()
                 .expect("runtime queue state poisoned");
-            pending_runtime_queue_message_handle(&state, message_id)?
+            let handle = pending_runtime_queue_message_handle(&state, message_id)?;
+            state
+                .pending_removed_message_ids
+                .push(message_id.to_string());
+            handle
         };
 
         if self.agent.cancel_queued_message(handle).is_none() {
+            let mut state = self
+                .runtime_queue_state
+                .lock()
+                .expect("runtime queue state poisoned");
+            state
+                .pending_removed_message_ids
+                .retain(|pending_message_id| pending_message_id != message_id);
             return Err(AppError::recoverable(
                 ErrorSource::Thread,
                 "thread.queue_message.cancel_failed",
