@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { compareTimelineEntries, type TimelineEntry } from "./runtime-thread-surface-state";
+import { compareTimelineEntries, removeRequestRetryEntriesForRun, type SurfaceRequestRetryEntry, type TimelineEntry } from "./runtime-thread-surface-state";
 
 const occurredAt = "2026-05-19T00:00:00.000Z";
 
@@ -95,6 +95,41 @@ function labelEntry(entry: TimelineEntry) {
   }
   return entry.kind;
 }
+
+function makeRequestRetryEntry(runId: string): SurfaceRequestRetryEntry {
+  return {
+    attempt: 2,
+    createdAt: occurredAt,
+    delayMs: 750,
+    id: `request-retry-${runId}`,
+    maxRetries: 5,
+    reason: "stream disconnected",
+    runId,
+    status: null,
+    updatedAt: occurredAt,
+  };
+}
+
+describe("removeRequestRetryEntriesForRun", () => {
+  it("removes only request retry entries for the matching run", () => {
+    const run1 = makeRequestRetryEntry("run-1");
+    const run2 = makeRequestRetryEntry("run-2");
+
+    expect(removeRequestRetryEntriesForRun([run1, run2], "run-1")).toEqual([run2]);
+  });
+
+  it("keeps the original array reference when no entry matches", () => {
+    const entries = [makeRequestRetryEntry("run-1")];
+
+    expect(removeRequestRetryEntriesForRun(entries, "run-2")).toBe(entries);
+  });
+
+  it("returns the original empty array", () => {
+    const entries: SurfaceRequestRetryEntry[] = [];
+
+    expect(removeRequestRetryEntriesForRun(entries, "run-1")).toBe(entries);
+  });
+});
 
 describe("compareTimelineEntries", () => {
   it("orders request retry between helper and tool for matching timestamps", () => {

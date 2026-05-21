@@ -131,6 +131,7 @@ import {
   mergeSnapshotMessages,
   mergeSnapshotTools,
   prependOlderMessages,
+  removeRequestRetryEntriesForRun,
   shouldCompleteThinkingPhase,
   shouldFinalizeReasoningOnly,
   stringifyToolValue,
@@ -292,6 +293,19 @@ export function RuntimeThreadSurface({
   const previousDefaultAppendMessageKindRef = useRef(defaultAppendMessageKind);
   const [requestRetryEntries, setRequestRetryEntries] = useState<Array<SurfaceRequestRetryEntry>>([]);
   const [requestRetryOpen, setRequestRetryOpen] = useState<Record<string, boolean>>({});
+  const clearRequestRetryForRun = useCallback((runId: string) => {
+    setRequestRetryEntries((current) => removeRequestRetryEntriesForRun(current, runId));
+    setRequestRetryOpen((current) => {
+      const retryId = `request-retry-${runId}`;
+      if (!(retryId in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[retryId];
+      return next;
+    });
+  }, []);
   const [runtimeError, setRuntimeError] = useState<SurfaceRuntimeError | null>(null);
   const runState = useStore(
     threadStore,
@@ -898,6 +912,8 @@ export function RuntimeThreadSurface({
     });
 
     stream.onMessage = withActiveStream((event) => {
+      clearRequestRetryForRun(event.runId);
+
       if (event.kind === "delta") {
         setMessages((current) => {
           const existing = current.find((entry) => entry.id === event.messageId);
@@ -1293,6 +1309,7 @@ export function RuntimeThreadSurface({
         || state === "limit_reached"
       ) {
         completeThinkingPhase(runId);
+        clearRequestRetryForRun(runId);
       }
 
       if (state === "running") {
@@ -1350,6 +1367,7 @@ export function RuntimeThreadSurface({
       stream.dispose();
     };
   }, [
+    clearRequestRetryForRun,
     clearScheduledThinkingPhase,
     completeThinkingPhase,
     loadSnapshot,
