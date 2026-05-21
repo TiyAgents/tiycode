@@ -110,6 +110,18 @@ export type SurfaceRequestRetryEntry = {
   updatedAt: string;
 };
 
+export function removeRequestRetryEntriesForRun(
+  entries: Array<SurfaceRequestRetryEntry>,
+  runId: string,
+): Array<SurfaceRequestRetryEntry> {
+  if (entries.length === 0) {
+    return entries;
+  }
+
+  const nextEntries = entries.filter((entry) => entry.runId !== runId);
+  return nextEntries.length === entries.length ? entries : nextEntries;
+}
+
 export type TimelineEntry =
   | {
       kind: "message";
