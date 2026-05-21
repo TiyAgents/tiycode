@@ -114,16 +114,13 @@ impl RuntimeOrchestrationTool {
         }
     }
 
-    pub fn profile(self) -> SubagentProfile {
+    /// Returns the built-in profile for this tool, or `None` for custom subagents
+    /// (which must be resolved externally with full record data).
+    pub fn profile(&self) -> Option<SubagentProfile> {
         match self {
-            Self::Explore => SubagentProfile::Explore,
-            Self::Review => SubagentProfile::Review,
-            Self::Custom(_) => {
-                // Custom profile must be resolved externally with the full record data
-                unreachable!(
-                    "Custom subagent profile must be resolved via resolve_custom_profile()"
-                )
-            }
+            Self::Explore => Some(SubagentProfile::Explore),
+            Self::Review => Some(SubagentProfile::Review),
+            Self::Custom(_) => None,
         }
     }
 

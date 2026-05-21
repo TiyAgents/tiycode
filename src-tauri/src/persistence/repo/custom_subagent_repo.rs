@@ -183,17 +183,15 @@ pub async fn update(
         ));
     }
 
-    Ok(CustomSubagentRecord {
-        id: id.to_string(),
-        name: input.name.clone(),
-        slug: input.slug.clone(),
-        system_prompt: input.system_prompt.clone(),
-        invocation_description: input.invocation_description.clone(),
-        allowed_tools: tools_json,
-        is_enabled: is_enabled != 0,
-        created_at: String::new(), // caller can re-fetch if needed
-        updated_at: now,
-    })
+    // Re-fetch the full row to return accurate created_at
+    get_by_id(pool, id)
+        .await?
+        .ok_or_else(|| {
+            AppError::internal(
+                ErrorSource::Database,
+                "subagent disappeared after update".to_string(),
+            )
+        })
 }
 
 pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
@@ -229,10 +227,15 @@ pub async fn set_profile_access(
     profile_id: &str,
     subagent_ids: &[String],
 ) -> Result<(), AppError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| AppError::internal(ErrorSource::Database, e.to_string()))?;
+
     // Delete existing access records for this profile
     sqlx::query("DELETE FROM profile_subagent_access WHERE profile_id = ?")
         .bind(profile_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| AppError::internal(ErrorSource::Database, e.to_string()))?;
 
@@ -243,10 +246,14 @@ pub async fn set_profile_access(
         )
         .bind(profile_id)
         .bind(subagent_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| AppError::internal(ErrorSource::Database, e.to_string()))?;
     }
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::internal(ErrorSource::Database, e.to_string()))?;
 
     Ok(())
 }

@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from "react";
 import {
+  AlertTriangle,
   Bot,
   CheckCircle2,
   Code2,
@@ -18,6 +19,14 @@ import {
 } from "@/services/bridge/subagent-commands";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { Separator } from "@/shared/ui/separator";
 import { Switch } from "@/shared/ui/switch";
@@ -114,6 +123,12 @@ type AgentsSettingsPanelProps = {
   description?: string;
 };
 
+type AgentPendingAction =
+  | { type: "select"; id: string }
+  | { type: "collapse" }
+  | { type: "create" }
+  | { type: "delete"; id: string };
+
 export function AgentsSettingsPanel({
   customSubagents,
   description,
@@ -121,10 +136,12 @@ export function AgentsSettingsPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editState, setEditState] = useState<Partial<CustomSubagentInput> | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [pendingAction, setPendingAction] = useState<AgentPendingAction | null>(null);
 
   const selectedAgent = customSubagents.find((a) => a.id === selectedId);
+  const hasUnsavedChanges = editState !== null;
 
-  const handleCreate = async () => {
+  const createAgent = async () => {
     const input: CustomSubagentInput = {
       name: "New Agent",
       slug: `agent-${Date.now().toString(36)}`,
@@ -145,7 +162,7 @@ export function AgentsSettingsPanel({
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const deleteAgent = async (id: string) => {
     try {
       await customSubagentDelete(id);
       const updated = settingsStore.getState().customSubagents.filter((a) => a.id !== id);
@@ -157,6 +174,53 @@ export function AgentsSettingsPanel({
     } catch (error) {
       console.error("Failed to delete subagent", error);
     }
+  };
+
+  const performAction = (action: AgentPendingAction) => {
+    switch (action.type) {
+      case "select":
+        setSelectedId(action.id);
+        setEditState(null);
+        break;
+      case "collapse":
+        setSelectedId(null);
+        setEditState(null);
+        break;
+      case "create":
+        void createAgent();
+        break;
+      case "delete":
+        void deleteAgent(action.id);
+        break;
+    }
+  };
+
+  const requestAction = (action: AgentPendingAction) => {
+    if (hasUnsavedChanges) {
+      setPendingAction(action);
+      return;
+    }
+    performAction(action);
+  };
+
+  const handleCreate = () => {
+    requestAction({ type: "create" });
+  };
+
+  const handleDelete = (id: string) => {
+    requestAction({ type: "delete", id });
+  };
+
+  const handleAgentToggle = (id: string) => {
+    requestAction(selectedId === id ? { type: "collapse" } : { type: "select", id });
+  };
+
+  const handleDiscardChanges = () => {
+    const action = pendingAction;
+    if (!action) return;
+    setPendingAction(null);
+    setEditState(null);
+    performAction(action);
   };
 
   const handleSave = async () => {
@@ -200,6 +264,163 @@ export function AgentsSettingsPanel({
       ? current.filter((t) => t !== toolName)
       : [...current, toolName];
     updateField("allowedTools", next);
+  };
+
+  const renderAgentEditor = () => {
+    if (!selectedAgent) return null;
+
+    return (
+      <div
+        id={`agent-editor-${selectedAgent.id}`}
+        className="border-t border-app-border bg-app-surface-muted/40 px-4 py-4"
+      >
+        <div className="space-y-5 rounded-xl border border-app-border bg-app-surface/85 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-[15px] font-semibold text-app-foreground">{selectedAgent.name}</h3>
+                {hasUnsavedChanges ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-app-warning/30 bg-app-warning/10 px-2 py-0.5 text-[11px] font-medium text-app-warning">
+                    <AlertTriangle className="size-3" />
+                    Unsaved changes
+                  </span>
+                ) : (
+                  <span className="rounded-full border border-app-border bg-app-surface-muted px-2 py-0.5 text-[11px] font-medium text-app-subtle">
+                    Saved
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 text-[12px] leading-5 text-app-muted">
+                Configure how this custom agent appears, when it is used, and which tools it can call.
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSave}
+                disabled={!hasUnsavedChanges || isSaving}
+              >
+                {isSaving ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </div>
+
+          <FieldGroup title="Identity" description="Name the agent and define the tool identifier exposed to the main agent.">
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="space-y-1.5">
+                <span className="text-[12px] font-medium text-app-foreground">Name</span>
+                <Input
+                  type="text"
+                  value={(currentValue("name") as string) ?? ""}
+                  onChange={(event) => updateField("name", event.target.value)}
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-[12px] font-medium text-app-foreground">Slug</span>
+                <Input
+                  type="text"
+                  value={(currentValue("slug") as string) ?? ""}
+                  onChange={(event) =>
+                    updateField(
+                      "slug",
+                      event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+                    )
+                  }
+                  className="font-mono"
+                />
+                <span className="block truncate text-[11px] text-app-subtle">
+                  Tool name: agent_{(currentValue("slug") as string) ?? ""}
+                </span>
+              </label>
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-app-border bg-app-surface-muted px-3 py-2.5">
+              <label
+                htmlFor={`agent-enabled-${selectedAgent.id}`}
+                className="min-w-0 text-[13px] font-medium text-app-foreground"
+              >
+                Enabled
+                <span className="mt-0.5 block text-[12px] font-normal leading-5 text-app-muted">
+                  Disabled agents stay configured but are hidden from delegation.
+                </span>
+              </label>
+              <Switch
+                id={`agent-enabled-${selectedAgent.id}`}
+                size="sm"
+                checked={(currentValue("isEnabled") as boolean) ?? true}
+                onCheckedChange={(checked) => updateField("isEnabled", checked)}
+              />
+            </div>
+          </FieldGroup>
+
+          <Separator />
+
+          <FieldGroup title="Behavior" description="Describe when to call the agent and how it should behave once delegated.">
+            <label className="block space-y-1.5">
+              <span className="text-[12px] font-medium text-app-foreground">Invocation Description</span>
+              <Textarea
+                value={(currentValue("invocationDescription") as string) ?? ""}
+                onChange={(event) => updateField("invocationDescription", event.target.value)}
+                className="min-h-24"
+              />
+              <span className="block text-[11px] text-app-subtle">
+                This tells the main agent when this specialist should be used.
+              </span>
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-[12px] font-medium text-app-foreground">System Prompt</span>
+              <Textarea
+                value={(currentValue("systemPrompt") as string) ?? ""}
+                onChange={(event) => updateField("systemPrompt", event.target.value)}
+                className="h-56 min-h-56 resize-none overflow-y-auto font-mono [field-sizing:fixed]"
+              />
+            </label>
+          </FieldGroup>
+
+          <Separator />
+
+          <FieldGroup title="Allowed Tools" description="Choose the tools this agent may call during delegated work.">
+            <div className="space-y-4">
+              {TOOL_CATEGORIES.map((category) => (
+                <div key={category.label} className="space-y-2">
+                  <div className="flex items-center gap-2 text-[12px] font-medium text-app-muted">
+                    <Wrench className="size-3.5" />
+                    {category.label}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {category.tools.map((tool) => {
+                      const checked = ((currentValue("allowedTools") as string[]) ?? []).includes(tool);
+                      return (
+                        <label key={tool} className="cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleTool(tool)}
+                            className="peer sr-only"
+                          />
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-medium transition-colors",
+                              checked
+                                ? "border-app-info/40 bg-app-info/10 text-app-foreground"
+                                : "border-app-border bg-app-surface-muted text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                              "peer-focus-visible:ring-2 peer-focus-visible:ring-app-info/50",
+                            )}
+                          >
+                            <Code2 className="size-3.5" />
+                            <code>{tool}</code>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </FieldGroup>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -254,78 +475,80 @@ export function AgentsSettingsPanel({
           {customSubagents.length > 0 ? (
             customSubagents.map((agent) => {
               const isSelected = agent.id === selectedId;
+              const actionLabel = isSelected ? "Collapse" : "Edit";
               return (
                 <div
                   key={agent.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => {
-                    setSelectedId(agent.id);
-                    setEditState(null);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      setSelectedId(agent.id);
-                      setEditState(null);
-                    }
-                  }}
                   className={cn(
-                    "group flex cursor-pointer items-center justify-between gap-3 px-4 py-3 text-left transition-colors outline-none hover:bg-app-surface-hover focus-visible:bg-app-surface-hover",
-                    isSelected && "bg-app-surface-active shadow-[inset_3px_0_0_var(--app-info)]",
+                    "bg-app-surface transition-colors",
+                    isSelected && "bg-app-surface-active",
                   )}
                 >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span
-                      className={cn(
-                        "flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-muted",
-                        isSelected && "border-app-info/40 bg-app-info/10 text-app-info",
-                      )}
+                  <div className="group flex items-stretch transition-colors hover:bg-app-surface-hover">
+                    <button
+                      type="button"
+                      onClick={() => handleAgentToggle(agent.id)}
+                      className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left outline-none transition-colors focus-visible:bg-app-surface-hover"
+                      aria-expanded={isSelected}
+                      aria-controls={isSelected ? `agent-editor-${agent.id}` : undefined}
+                      aria-label={`${actionLabel} ${agent.name}`}
                     >
-                      <Bot className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p
-                          className={cn(
-                            "truncate text-[13px] font-medium text-app-foreground",
-                            !agent.isEnabled && "text-app-muted line-through",
-                          )}
-                        >
-                          {agent.name}
-                        </p>
-                        <span
-                          className={cn(
-                            "rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                            agent.isEnabled
-                              ? "border-app-info/30 bg-app-info/10 text-app-info"
-                              : "border-app-border bg-app-surface-muted text-app-subtle",
-                          )}
-                        >
-                          {agent.isEnabled ? "Enabled" : "Disabled"}
+                      <span
+                        className={cn(
+                          "flex size-8 shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface-muted text-app-muted",
+                          isSelected && "border-app-info/40 bg-app-info/10 text-app-info",
+                        )}
+                      >
+                        <Bot className="size-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={cn(
+                              "truncate text-[13px] font-medium text-app-foreground",
+                              !agent.isEnabled && "text-app-muted line-through",
+                            )}
+                          >
+                            {agent.name}
+                          </span>
+                          <span
+                            className={cn(
+                              "rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                              agent.isEnabled
+                                ? "border-app-info/30 bg-app-info/10 text-app-info"
+                                : "border-app-border bg-app-surface-muted text-app-subtle",
+                            )}
+                          >
+                            {agent.isEnabled ? "Enabled" : "Disabled"}
+                          </span>
+                          {isSelected && hasUnsavedChanges ? (
+                            <span className="rounded-full border border-app-warning/30 bg-app-warning/10 px-2 py-0.5 text-[11px] font-medium text-app-warning">
+                              Unsaved
+                            </span>
+                          ) : null}
                         </span>
-                      </div>
-                      <code className="mt-1 block truncate text-[12px] text-app-subtle">
-                        agent_{agent.slug}
-                      </code>
+                        <code className="mt-1 block truncate text-[12px] text-app-subtle">
+                          agent_{agent.slug}
+                        </code>
+                      </span>
+                    </button>
+
+                    <div className="flex shrink-0 items-center gap-1.5 px-4 py-3 pl-0">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => handleDelete(agent.id)}
+                        className="shrink-0 text-app-muted opacity-0 hover:bg-app-danger/10 hover:text-app-danger focus-visible:opacity-100 group-hover:opacity-100"
+                        title={`Delete ${agent.name}`}
+                        aria-label={`Delete ${agent.name}`}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
                     </div>
                   </div>
 
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleDelete(agent.id);
-                    }}
-                    onKeyDown={(event) => event.stopPropagation()}
-                    className="shrink-0 text-app-muted opacity-0 hover:bg-app-danger/10 hover:text-app-danger focus-visible:opacity-100 group-hover:opacity-100"
-                    title={`Delete ${agent.name}`}
-                    aria-label={`Delete ${agent.name}`}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
+                  {isSelected ? renderAgentEditor() : null}
                 </div>
               );
             })
@@ -345,153 +568,38 @@ export function AgentsSettingsPanel({
             </div>
           )}
         </div>
-
-        {customSubagents.length > 0 ? (
-          <>
-            <Separator />
-            {selectedAgent ? (
-              <div className="space-y-5 px-4 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 className="text-[15px] font-semibold text-app-foreground">{selectedAgent.name}</h3>
-                    <p className="mt-1 text-[12px] leading-5 text-app-muted">
-                      Configure how this custom agent appears, when it is used, and which tools it can call.
-                    </p>
-                  </div>
-                  {editState ? (
-                    <Button type="button" size="sm" onClick={handleSave} disabled={isSaving}>
-                      {isSaving ? "Saving..." : "Save Changes"}
-                    </Button>
-                  ) : null}
-                </div>
-
-                <FieldGroup title="Identity" description="Name the agent and define the tool identifier exposed to the main agent.">
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="space-y-1.5">
-                      <span className="text-[12px] font-medium text-app-foreground">Name</span>
-                      <Input
-                        type="text"
-                        value={(currentValue("name") as string) ?? ""}
-                        onChange={(event) => updateField("name", event.target.value)}
-                      />
-                    </label>
-                    <label className="space-y-1.5">
-                      <span className="text-[12px] font-medium text-app-foreground">Slug</span>
-                      <Input
-                        type="text"
-                        value={(currentValue("slug") as string) ?? ""}
-                        onChange={(event) =>
-                          updateField(
-                            "slug",
-                            event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
-                          )
-                        }
-                        className="font-mono"
-                      />
-                      <span className="block truncate text-[11px] text-app-subtle">
-                        Tool name: agent_{(currentValue("slug") as string) ?? ""}
-                      </span>
-                    </label>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 rounded-xl border border-app-border bg-app-surface-muted px-3 py-2.5">
-                    <label
-                      htmlFor={`agent-enabled-${selectedAgent.id}`}
-                      className="min-w-0 text-[13px] font-medium text-app-foreground"
-                    >
-                      Enabled
-                      <span className="mt-0.5 block text-[12px] font-normal leading-5 text-app-muted">
-                        Disabled agents stay configured but are hidden from delegation.
-                      </span>
-                    </label>
-                    <Switch
-                      id={`agent-enabled-${selectedAgent.id}`}
-                      size="sm"
-                      checked={(currentValue("isEnabled") as boolean) ?? true}
-                      onCheckedChange={(checked) => updateField("isEnabled", checked)}
-                    />
-                  </div>
-                </FieldGroup>
-
-                <Separator />
-
-                <FieldGroup title="Behavior" description="Describe when to call the agent and how it should behave once delegated.">
-                  <label className="block space-y-1.5">
-                    <span className="text-[12px] font-medium text-app-foreground">Invocation Description</span>
-                    <Textarea
-                      value={(currentValue("invocationDescription") as string) ?? ""}
-                      onChange={(event) => updateField("invocationDescription", event.target.value)}
-                      className="min-h-24"
-                    />
-                    <span className="block text-[11px] text-app-subtle">
-                      This tells the main agent when this specialist should be used.
-                    </span>
-                  </label>
-                  <label className="block space-y-1.5">
-                    <span className="text-[12px] font-medium text-app-foreground">System Prompt</span>
-                    <Textarea
-                      value={(currentValue("systemPrompt") as string) ?? ""}
-                      onChange={(event) => updateField("systemPrompt", event.target.value)}
-                      className="min-h-44 font-mono"
-                    />
-                  </label>
-                </FieldGroup>
-
-                <Separator />
-
-                <FieldGroup title="Allowed Tools" description="Choose the tools this agent may call during delegated work.">
-                  <div className="space-y-4">
-                    {TOOL_CATEGORIES.map((category) => (
-                      <div key={category.label} className="space-y-2">
-                        <div className="flex items-center gap-2 text-[12px] font-medium text-app-muted">
-                          <Wrench className="size-3.5" />
-                          {category.label}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {category.tools.map((tool) => {
-                            const checked = ((currentValue("allowedTools") as string[]) ?? []).includes(tool);
-                            return (
-                              <label key={tool} className="cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => toggleTool(tool)}
-                                  className="peer sr-only"
-                                />
-                                <span
-                                  className={cn(
-                                    "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-medium transition-colors",
-                                    checked
-                                      ? "border-app-info/40 bg-app-info/10 text-app-foreground"
-                                      : "border-app-border bg-app-surface-muted text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                                    "peer-focus-visible:ring-2 peer-focus-visible:ring-app-info/50",
-                                  )}
-                                >
-                                  <Code2 className="size-3.5" />
-                                  <code>{tool}</code>
-                                </span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </FieldGroup>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
-                <span className="flex size-11 items-center justify-center rounded-2xl border border-app-border bg-app-surface-muted text-app-muted">
-                  <Bot className="size-5" />
-                </span>
-                <h3 className="mt-3 text-[13px] font-medium text-app-foreground">Select an agent to edit</h3>
-                <p className="mt-1 max-w-sm text-[12px] leading-5 text-app-muted">
-                  Choose a custom agent above, or create a new one to define instructions and tool access.
-                </p>
-              </div>
-            )}
-          </>
-        ) : null}
       </SettingsPanelSection>
+
+      <Dialog
+        open={pendingAction !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingAction(null);
+        }}
+      >
+        <DialogContent className="border-app-border bg-app-surface text-app-foreground sm:max-w-md">
+          <DialogHeader>
+            <div className="flex items-start gap-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-app-warning/30 bg-app-warning/10 text-app-warning">
+                <AlertTriangle className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <DialogTitle>Discard unsaved agent changes?</DialogTitle>
+                <DialogDescription className="mt-2 text-[12px] leading-5 text-app-muted">
+                  You have unsaved edits in this custom agent. Discarding will lose those changes before continuing.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPendingAction(null)}>
+              Continue editing
+            </Button>
+            <Button type="button" variant="destructive" onClick={handleDiscardChanges}>
+              Discard changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

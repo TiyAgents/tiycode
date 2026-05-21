@@ -104,9 +104,18 @@ impl HelperAgentOrchestrator {
     }
 
     pub async fn run_helper(&self, request: HelperRunRequest) -> Result<HelperRunResult, AppError> {
-        let helper_profile = request
-            .helper_profile
-            .unwrap_or_else(|| request.tool.profile());
+        let helper_profile = match request.helper_profile.or_else(|| request.tool.profile()) {
+            Some(p) => p,
+            None => {
+                return Err(AppError::internal(
+                    crate::model::errors::ErrorSource::Tool,
+                    format!(
+                        "No helper profile resolved for tool '{}'",
+                        request.tool.tool_name()
+                    ),
+                ));
+            }
+        };
         let helper_id = uuid::Uuid::now_v7().to_string();
         let resolved_helper_kind = helper_profile.helper_kind().to_string();
         let escalation_summary = Arc::new(StdMutex::new(None::<String>));

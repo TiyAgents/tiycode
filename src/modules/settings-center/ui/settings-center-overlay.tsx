@@ -1277,6 +1277,13 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <div className="px-4 py-3">
+          <ProfileAgentAccess
+            profileId={activeProfile.id}
+            customSubagents={customSubagents}
+          />
+        </div>
+        <SectionDivider />
+        <div className="px-4 py-3">
           <div className="mb-1 text-[13px] font-medium leading-5 text-app-foreground">{t("settings.general.customInstructions")}</div>
           <p className="mb-3 text-[12px] leading-5 text-app-muted">
             {t("settings.general.customInstructionsDesc")}
@@ -1297,13 +1304,6 @@ function GeneralSettingsPanel({
             value={activeProfile.commitMessagePrompt}
             onChange={(event) => onUpdateAgentProfile(activeProfile.id, { commitMessagePrompt: event.target.value })}
             className="h-48 min-h-48 overflow-y-auto [field-sizing:fixed]"
-          />
-        </div>
-        <SectionDivider />
-        <div className="px-4 py-3">
-          <ProfileAgentAccess
-            profileId={activeProfile.id}
-            customSubagents={customSubagents}
           />
         </div>
       </SettingsSection>
