@@ -16,10 +16,13 @@ export function ProfileAgentAccess({
   customSubagents,
 }: ProfileAgentAccessProps) {
   const [accessIds, setAccessIds] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (customSubagents.length === 0) return;
+    if (customSubagents.length === 0) {
+      setIsLoading(false);
+      return;
+    }
     let cancelled = false;
     setIsLoading(true);
     profileSubagentAccessGet(profileId)

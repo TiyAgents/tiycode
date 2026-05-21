@@ -346,145 +346,151 @@ export function AgentsSettingsPanel({
           )}
         </div>
 
-        <Separator />
+        {customSubagents.length > 0 ? (
+          <>
+            <Separator />
+            {selectedAgent ? (
+              <div className="space-y-5 px-4 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-[15px] font-semibold text-app-foreground">{selectedAgent.name}</h3>
+                    <p className="mt-1 text-[12px] leading-5 text-app-muted">
+                      Configure how this custom agent appears, when it is used, and which tools it can call.
+                    </p>
+                  </div>
+                  {editState ? (
+                    <Button type="button" size="sm" onClick={handleSave} disabled={isSaving}>
+                      {isSaving ? "Saving..." : "Save Changes"}
+                    </Button>
+                  ) : null}
+                </div>
 
-        {selectedAgent ? (
-          <div className="space-y-5 px-4 py-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h3 className="text-[15px] font-semibold text-app-foreground">{selectedAgent.name}</h3>
-                <p className="mt-1 text-[12px] leading-5 text-app-muted">
-                  Configure how this custom agent appears, when it is used, and which tools it can call.
+                <FieldGroup title="Identity" description="Name the agent and define the tool identifier exposed to the main agent.">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="space-y-1.5">
+                      <span className="text-[12px] font-medium text-app-foreground">Name</span>
+                      <Input
+                        type="text"
+                        value={(currentValue("name") as string) ?? ""}
+                        onChange={(event) => updateField("name", event.target.value)}
+                      />
+                    </label>
+                    <label className="space-y-1.5">
+                      <span className="text-[12px] font-medium text-app-foreground">Slug</span>
+                      <Input
+                        type="text"
+                        value={(currentValue("slug") as string) ?? ""}
+                        onChange={(event) =>
+                          updateField(
+                            "slug",
+                            event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+                          )
+                        }
+                        className="font-mono"
+                      />
+                      <span className="block truncate text-[11px] text-app-subtle">
+                        Tool name: agent_{(currentValue("slug") as string) ?? ""}
+                      </span>
+                    </label>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-app-border bg-app-surface-muted px-3 py-2.5">
+                    <label
+                      htmlFor={`agent-enabled-${selectedAgent.id}`}
+                      className="min-w-0 text-[13px] font-medium text-app-foreground"
+                    >
+                      Enabled
+                      <span className="mt-0.5 block text-[12px] font-normal leading-5 text-app-muted">
+                        Disabled agents stay configured but are hidden from delegation.
+                      </span>
+                    </label>
+                    <Switch
+                      id={`agent-enabled-${selectedAgent.id}`}
+                      size="sm"
+                      checked={(currentValue("isEnabled") as boolean) ?? true}
+                      onCheckedChange={(checked) => updateField("isEnabled", checked)}
+                    />
+                  </div>
+                </FieldGroup>
+
+                <Separator />
+
+                <FieldGroup title="Behavior" description="Describe when to call the agent and how it should behave once delegated.">
+                  <label className="block space-y-1.5">
+                    <span className="text-[12px] font-medium text-app-foreground">Invocation Description</span>
+                    <Textarea
+                      value={(currentValue("invocationDescription") as string) ?? ""}
+                      onChange={(event) => updateField("invocationDescription", event.target.value)}
+                      className="min-h-24"
+                    />
+                    <span className="block text-[11px] text-app-subtle">
+                      This tells the main agent when this specialist should be used.
+                    </span>
+                  </label>
+                  <label className="block space-y-1.5">
+                    <span className="text-[12px] font-medium text-app-foreground">System Prompt</span>
+                    <Textarea
+                      value={(currentValue("systemPrompt") as string) ?? ""}
+                      onChange={(event) => updateField("systemPrompt", event.target.value)}
+                      className="min-h-44 font-mono"
+                    />
+                  </label>
+                </FieldGroup>
+
+                <Separator />
+
+                <FieldGroup title="Allowed Tools" description="Choose the tools this agent may call during delegated work.">
+                  <div className="space-y-4">
+                    {TOOL_CATEGORIES.map((category) => (
+                      <div key={category.label} className="space-y-2">
+                        <div className="flex items-center gap-2 text-[12px] font-medium text-app-muted">
+                          <Wrench className="size-3.5" />
+                          {category.label}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {category.tools.map((tool) => {
+                            const checked = ((currentValue("allowedTools") as string[]) ?? []).includes(tool);
+                            return (
+                              <label key={tool} className="cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleTool(tool)}
+                                  className="peer sr-only"
+                                />
+                                <span
+                                  className={cn(
+                                    "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-medium transition-colors",
+                                    checked
+                                      ? "border-app-info/40 bg-app-info/10 text-app-foreground"
+                                      : "border-app-border bg-app-surface-muted text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                                    "peer-focus-visible:ring-2 peer-focus-visible:ring-app-info/50",
+                                  )}
+                                >
+                                  <Code2 className="size-3.5" />
+                                  <code>{tool}</code>
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </FieldGroup>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
+                <span className="flex size-11 items-center justify-center rounded-2xl border border-app-border bg-app-surface-muted text-app-muted">
+                  <Bot className="size-5" />
+                </span>
+                <h3 className="mt-3 text-[13px] font-medium text-app-foreground">Select an agent to edit</h3>
+                <p className="mt-1 max-w-sm text-[12px] leading-5 text-app-muted">
+                  Choose a custom agent above, or create a new one to define instructions and tool access.
                 </p>
               </div>
-              {editState ? (
-                <Button type="button" size="sm" onClick={handleSave} disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save Changes"}
-                </Button>
-              ) : null}
-            </div>
-
-            <FieldGroup title="Identity" description="Name the agent and define the tool identifier exposed to the main agent.">
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="space-y-1.5">
-                  <span className="text-[12px] font-medium text-app-foreground">Name</span>
-                  <Input
-                    type="text"
-                    value={(currentValue("name") as string) ?? ""}
-                    onChange={(event) => updateField("name", event.target.value)}
-                  />
-                </label>
-                <label className="space-y-1.5">
-                  <span className="text-[12px] font-medium text-app-foreground">Slug</span>
-                  <Input
-                    type="text"
-                    value={(currentValue("slug") as string) ?? ""}
-                    onChange={(event) =>
-                      updateField("slug", event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                    }
-                    className="font-mono"
-                  />
-                  <span className="block truncate text-[11px] text-app-subtle">
-                    Tool name: agent_{(currentValue("slug") as string) ?? ""}
-                  </span>
-                </label>
-              </div>
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-app-border bg-app-surface-muted px-3 py-2.5">
-                <label
-                  htmlFor={`agent-enabled-${selectedAgent.id}`}
-                  className="min-w-0 text-[13px] font-medium text-app-foreground"
-                >
-                  Enabled
-                  <span className="mt-0.5 block text-[12px] font-normal leading-5 text-app-muted">
-                    Disabled agents stay configured but are hidden from delegation.
-                  </span>
-                </label>
-                <Switch
-                  id={`agent-enabled-${selectedAgent.id}`}
-                  size="sm"
-                  checked={(currentValue("isEnabled") as boolean) ?? true}
-                  onCheckedChange={(checked) => updateField("isEnabled", checked)}
-                />
-              </div>
-            </FieldGroup>
-
-            <Separator />
-
-            <FieldGroup title="Behavior" description="Describe when to call the agent and how it should behave once delegated.">
-              <label className="block space-y-1.5">
-                <span className="text-[12px] font-medium text-app-foreground">Invocation Description</span>
-                <Textarea
-                  value={(currentValue("invocationDescription") as string) ?? ""}
-                  onChange={(event) => updateField("invocationDescription", event.target.value)}
-                  className="min-h-24"
-                />
-                <span className="block text-[11px] text-app-subtle">
-                  This tells the main agent when this specialist should be used.
-                </span>
-              </label>
-              <label className="block space-y-1.5">
-                <span className="text-[12px] font-medium text-app-foreground">System Prompt</span>
-                <Textarea
-                  value={(currentValue("systemPrompt") as string) ?? ""}
-                  onChange={(event) => updateField("systemPrompt", event.target.value)}
-                  className="min-h-44 font-mono"
-                />
-              </label>
-            </FieldGroup>
-
-            <Separator />
-
-            <FieldGroup title="Allowed Tools" description="Choose the tools this agent may call during delegated work.">
-              <div className="space-y-4">
-                {TOOL_CATEGORIES.map((category) => (
-                  <div key={category.label} className="space-y-2">
-                    <div className="flex items-center gap-2 text-[12px] font-medium text-app-muted">
-                      <Wrench className="size-3.5" />
-                      {category.label}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {category.tools.map((tool) => {
-                        const checked = ((currentValue("allowedTools") as string[]) ?? []).includes(tool);
-                        return (
-                          <label key={tool} className="cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => toggleTool(tool)}
-                              className="peer sr-only"
-                            />
-                            <span
-                              className={cn(
-                                "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-medium transition-colors",
-                                checked
-                                  ? "border-app-info/40 bg-app-info/10 text-app-foreground"
-                                  : "border-app-border bg-app-surface-muted text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-                                "peer-focus-visible:ring-2 peer-focus-visible:ring-app-info/50",
-                              )}
-                            >
-                              <Code2 className="size-3.5" />
-                              <code>{tool}</code>
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </FieldGroup>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
-            <span className="flex size-11 items-center justify-center rounded-2xl border border-app-border bg-app-surface-muted text-app-muted">
-              <Bot className="size-5" />
-            </span>
-            <h3 className="mt-3 text-[13px] font-medium text-app-foreground">Select an agent to edit</h3>
-            <p className="mt-1 max-w-sm text-[12px] leading-5 text-app-muted">
-              Choose a custom agent above, or create a new one to define instructions and tool access.
-            </p>
-          </div>
-        )}
+            )}
+          </>
+        ) : null}
       </SettingsPanelSection>
     </div>
   );
