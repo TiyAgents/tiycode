@@ -278,6 +278,13 @@ pub fn run() {
             commands::settings::profile_create,
             commands::settings::profile_update,
             commands::settings::profile_delete,
+            // Custom Subagents
+            commands::settings::custom_subagent_list,
+            commands::settings::custom_subagent_create,
+            commands::settings::custom_subagent_update,
+            commands::settings::custom_subagent_delete,
+            commands::settings::profile_subagent_access_get,
+            commands::settings::profile_subagent_access_set,
             // Prompt Commands
             commands::prompts::prompt_command_list,
             commands::prompts::prompt_command_create,

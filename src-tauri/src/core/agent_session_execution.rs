@@ -18,6 +18,7 @@ use crate::core::plan_checkpoint::{
 };
 use crate::core::subagent::{
     extract_review_report, HelperRunRequest, ReviewRequest, RuntimeOrchestrationTool,
+    SubagentProfile,
 };
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGatewayResult,
@@ -399,7 +400,7 @@ impl AgentSession {
         let HelperToolTask {
             task,
             review_request,
-        } = match resolve_helper_tool_task(tool, tool_input) {
+        } = match resolve_helper_tool_task(tool.clone(), tool_input) {
             Ok(resolved) => resolved,
             Err(error) => {
                 tool_call_repo::update_result(
@@ -414,16 +415,37 @@ impl AgentSession {
             }
         };
 
-        let helper_role = resolve_helper_model_role(&self.spec.model_plan, tool);
-        let helper_profile = resolve_helper_profile(tool);
+        let helper_role = resolve_helper_model_role(&self.spec.model_plan, &tool);
+        let helper_profile = resolve_helper_profile(&tool);
+
+        // For custom subagents, resolve the profile from the session's custom subagent registry
+        let resolved_profile = if let RuntimeOrchestrationTool::Custom(ref slug) = tool {
+            match self.resolve_custom_subagent_profile(slug).await {
+                Some(profile) => Some(profile),
+                None => {
+                    let error = format!("Custom subagent 'agent_{slug}' not found or not enabled");
+                    tool_call_repo::update_result(
+                        &self.pool,
+                        tool_call_storage_id,
+                        &serde_json::json!({ "error": &error }).to_string(),
+                        "failed",
+                    )
+                    .await
+                    .ok();
+                    return agent_error_result(error);
+                }
+            }
+        } else {
+            helper_profile
+        };
 
         let result = self
             .helper_orchestrator
             .run_helper(HelperRunRequest {
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
-                tool,
-                helper_profile: Some(helper_profile),
+                tool: tool.clone(),
+                helper_profile: resolved_profile,
                 parent_tool_call_id: Some(tool_call_id.to_string()),
                 task: task.clone(),
                 model_role: helper_role,
@@ -481,6 +503,26 @@ impl AgentSession {
                 agent_error_result(error.to_string())
             }
         }
+    }
+
+    /// Resolve a custom subagent slug into a SubagentProfile by loading from the database.
+    async fn resolve_custom_subagent_profile(&self, slug: &str) -> Option<SubagentProfile> {
+        use crate::persistence::repo::custom_subagent_repo;
+
+        let record = custom_subagent_repo::get_by_slug(&self.pool, slug)
+            .await
+            .ok()
+            .flatten()?;
+
+        if !record.is_enabled {
+            return None;
+        }
+
+        Some(SubagentProfile::Custom {
+            slug: record.slug.clone(),
+            system_prompt: record.system_prompt.clone(),
+            allowed_tools: record.allowed_tools_vec(),
+        })
     }
 
     async fn execute_plan_checkpoint(&self, tool_input: &serde_json::Value) -> AgentToolResult {

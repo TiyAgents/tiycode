@@ -1600,12 +1600,12 @@ Used for prompt assembly coverage.
     #[test]
     fn helper_profiles_match_explore_and_review_tools() {
         assert_eq!(
-            resolve_helper_profile(RuntimeOrchestrationTool::Explore),
-            SubagentProfile::Explore,
+            resolve_helper_profile(&RuntimeOrchestrationTool::Explore),
+            Some(SubagentProfile::Explore),
         );
         assert_eq!(
-            resolve_helper_profile(RuntimeOrchestrationTool::Review),
-            SubagentProfile::Review,
+            resolve_helper_profile(&RuntimeOrchestrationTool::Review),
+            Some(SubagentProfile::Review),
         );
     }
 
@@ -1789,8 +1789,8 @@ Used for prompt assembly coverage.
             sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
 
         let explore_role =
-            resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Explore);
-        let review_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Review);
+            resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Explore);
+        let review_role = resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Review);
 
         assert_eq!(explore_role.model_id, "assistant-model");
         assert_eq!(review_role.model_id, "assistant-model");
@@ -1801,8 +1801,8 @@ Used for prompt assembly coverage.
         let model_plan = sample_resolved_runtime_model_plan(None);
 
         let explore_role =
-            resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Explore);
-        let review_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Review);
+            resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Explore);
+        let review_role = resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Review);
 
         assert_eq!(explore_role.model_id, "primary-model");
         assert_eq!(review_role.model_id, "primary-model");
@@ -2083,7 +2083,8 @@ Used for prompt assembly coverage.
         let mut model_plan = sample_resolved_runtime_model_plan(Some(auxiliary));
         model_plan.thinking_level = ThinkingLevel::Medium;
 
-        let helper_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Explore);
+        let helper_role =
+            resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Explore);
 
         assert_eq!(helper_role.model_id, "assistant-model");
         assert!(helper_role.model.reasoning);
@@ -2096,7 +2097,7 @@ Used for prompt assembly coverage.
         let mut model_plan = sample_resolved_runtime_model_plan(Some(auxiliary));
         model_plan.thinking_level = ThinkingLevel::Medium;
 
-        let helper_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Review);
+        let helper_role = resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Review);
 
         assert_eq!(helper_role.model_id, "assistant-model");
         assert!(!helper_role.model.reasoning);

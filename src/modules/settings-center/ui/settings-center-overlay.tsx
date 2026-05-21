@@ -2,11 +2,14 @@ import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, us
 import { createPortal } from "react-dom";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { AgentsSettingsPanel } from "@/modules/settings-center/ui/agents-settings-panel";
+import { ProfileAgentAccess } from "@/modules/settings-center/ui/profile-agent-access";
 import { useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n/locales/zh-CN";
 import { getEffectiveModelCapabilities, inferModelCapabilities } from "@/modules/settings-center/model/model-capabilities";
 import {
   ArrowLeft,
+  Bot,
   Brain,
   Check,
   ChevronDown,
@@ -62,6 +65,7 @@ import type {
   CommandEntry,
   CommandSettings,
   CustomProviderType,
+  CustomSubagent,
   GeneralPreferences,
   PatternEntry,
   PolicySettings,
@@ -126,6 +130,7 @@ type SettingsCenterOverlayProps = {
   activeAgentProfileId: string;
   contentRef: RefObject<HTMLDivElement | null>;
   configDiagnostics: ConfigDiagnostic[];
+  customSubagents: Array<CustomSubagent>;
   generalPreferences: GeneralPreferences;
   isCheckingUpdates: boolean;
   language: LanguagePreference;
@@ -219,6 +224,12 @@ function getCategoryMeta(t: TFunc) {
       icon: ShieldCheck,
     },
     {
+      key: "agents" as SettingsCategory,
+      title: "Agents",
+      description: "Create and manage custom sub-agents",
+      icon: Bot,
+    },
+    {
       key: "workspace" as SettingsCategory,
       title: t("settings.category.workspace"),
       description: t("settings.category.workspaceDesc"),
@@ -287,6 +298,7 @@ export function SettingsCenterOverlay({
   activeAgentProfileId,
   contentRef,
   configDiagnostics,
+  customSubagents,
   generalPreferences,
   isCheckingUpdates,
   language,
@@ -462,6 +474,7 @@ export function SettingsCenterOverlay({
                   <GeneralSettingsPanel
                     agentProfiles={agentProfiles}
                     activeAgentProfileId={activeAgentProfileId}
+                    customSubagents={customSubagents}
                     description={activeMeta.description}
                     generalPreferences={generalPreferences}
                     language={language}
@@ -536,6 +549,13 @@ export function SettingsCenterOverlay({
                     onUpdateDenyEntry={onUpdateDenyEntry}
                     onUpdatePolicySetting={onUpdatePolicySetting}
                     onUpdateWritableRoot={onUpdateWritableRoot}
+                  />
+                ) : null}
+
+                {activeCategory === "agents" ? (
+                  <AgentsSettingsPanel
+                    customSubagents={customSubagents}
+                    description={activeMeta.description}
                   />
                 ) : null}
 
@@ -976,6 +996,7 @@ function ProfilePicker({
 function GeneralSettingsPanel({
   agentProfiles,
   activeAgentProfileId,
+  customSubagents,
   description,
   generalPreferences,
   language,
@@ -992,6 +1013,7 @@ function GeneralSettingsPanel({
 }: {
   agentProfiles: Array<AgentProfile>;
   activeAgentProfileId: string;
+  customSubagents: Array<CustomSubagent>;
   description: string;
   generalPreferences: GeneralPreferences;
   language: LanguagePreference;
@@ -1275,6 +1297,13 @@ function GeneralSettingsPanel({
             value={activeProfile.commitMessagePrompt}
             onChange={(event) => onUpdateAgentProfile(activeProfile.id, { commitMessagePrompt: event.target.value })}
             className="h-48 min-h-48 overflow-y-auto [field-sizing:fixed]"
+          />
+        </div>
+        <SectionDivider />
+        <div className="px-4 py-3">
+          <ProfileAgentAccess
+            profileId={activeProfile.id}
+            customSubagents={customSubagents}
           />
         </div>
       </SettingsSection>

@@ -403,6 +403,30 @@ pub async fn build_session_spec(
     let extension_tools = ExtensionsManager::new(pool.clone())
         .list_runtime_agent_tools(Some(workspace_path))
         .await?;
+
+    // Load custom subagent tools for the active profile
+    let custom_subagent_tools = {
+        use crate::core::subagent::runtime_orchestration::custom_subagent_as_tool;
+        use crate::persistence::repo::{custom_subagent_repo, settings_repo};
+
+        let active_profile_id = settings_repo::get(pool, "active_profile_id")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str::<String>(&s.value_json).ok())
+            .unwrap_or_default();
+
+        if active_profile_id.is_empty() {
+            vec![]
+        } else {
+            custom_subagent_repo::list_for_profile(pool, &active_profile_id)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .map(|r| custom_subagent_as_tool(r))
+                .collect()
+        }
+    };
     let initial_context_calibration = build_initial_context_token_calibration(
         latest_historical_run.as_ref(),
         &history_messages,
@@ -417,9 +441,9 @@ pub async fn build_session_spec(
         workspace_path: workspace_path.to_string(),
         run_mode: run_mode.to_string(),
         tool_profile_name: tool_profile_name.clone(),
-        runtime_tools: runtime_tools_for_profile_with_extensions(
-            &tool_profile_name,
-            extension_tools,
+        runtime_tools: runtime_tools_with_custom_subagents(
+            runtime_tools_for_profile_with_extensions(&tool_profile_name, extension_tools),
+            custom_subagent_tools,
         ),
         system_prompt,
         history_messages,

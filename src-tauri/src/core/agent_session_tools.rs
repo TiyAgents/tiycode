@@ -545,6 +545,21 @@ pub(crate) fn runtime_tools_for_profile_with_extensions(
     tools
 }
 
+/// Extend the runtime tools with custom subagent tools for the active profile.
+pub(crate) fn runtime_tools_with_custom_subagents(
+    mut tools: Vec<AgentTool>,
+    custom_subagent_tools: Vec<AgentTool>,
+) -> Vec<AgentTool> {
+    let mut names: std::collections::HashSet<String> =
+        tools.iter().map(|t| t.name.clone()).collect();
+    for tool in custom_subagent_tools {
+        if names.insert(tool.name.clone()) {
+            tools.push(tool);
+        }
+    }
+    tools
+}
+
 pub(crate) fn resolve_tool_profile_name(raw_plan: &RuntimeModelPlan, run_mode: &str) -> String {
     if let Some(profile_name) = raw_plan
         .tool_profile_by_mode
@@ -562,19 +577,22 @@ pub(crate) fn resolve_tool_profile_name(raw_plan: &RuntimeModelPlan, run_mode: &
     }
 }
 
-pub(crate) fn resolve_helper_profile(tool: RuntimeOrchestrationTool) -> SubagentProfile {
+pub(crate) fn resolve_helper_profile(tool: &RuntimeOrchestrationTool) -> Option<SubagentProfile> {
     match tool {
-        RuntimeOrchestrationTool::Explore => SubagentProfile::Explore,
-        RuntimeOrchestrationTool::Review => SubagentProfile::Review,
+        RuntimeOrchestrationTool::Explore => Some(SubagentProfile::Explore),
+        RuntimeOrchestrationTool::Review => Some(SubagentProfile::Review),
+        RuntimeOrchestrationTool::Custom(_) => None, // Custom profiles are resolved externally
     }
 }
 
 pub(crate) fn resolve_helper_model_role(
     model_plan: &ResolvedRuntimeModelPlan,
-    tool: RuntimeOrchestrationTool,
+    tool: &RuntimeOrchestrationTool,
 ) -> ResolvedModelRole {
     match tool {
-        RuntimeOrchestrationTool::Explore | RuntimeOrchestrationTool::Review => model_plan
+        RuntimeOrchestrationTool::Explore
+        | RuntimeOrchestrationTool::Review
+        | RuntimeOrchestrationTool::Custom(_) => model_plan
             .auxiliary
             .clone()
             .unwrap_or_else(|| model_plan.primary.clone()),
