@@ -90,17 +90,17 @@ export function ProfileAgentAccess({
   }, [profileId, customSubagents.length]);
 
   const toggleAccess = async (subagentId: string) => {
-    setAccessIds((prev) => {
-      const before = prev;
-      const next = prev.includes(subagentId)
-        ? prev.filter((id) => id !== subagentId)
-        : [...prev, subagentId];
-      void profileSubagentAccessSet(profileId, next).catch((error) => {
-        console.error("Failed to update profile subagent access", error);
-        setAccessIds(before);
-      });
-      return next;
-    });
+    const before = accessIds;
+    const next = before.includes(subagentId)
+      ? before.filter((id) => id !== subagentId)
+      : [...before, subagentId];
+    setAccessIds(next);
+    try {
+      await profileSubagentAccessSet(profileId, next);
+    } catch (error) {
+      console.error("Failed to update profile subagent access", error);
+      setAccessIds(before);
+    }
   };
 
   const modelRoleLabel = (role: CustomSubagentModelRole | undefined) =>

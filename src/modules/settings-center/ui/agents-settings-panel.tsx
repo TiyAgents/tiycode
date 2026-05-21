@@ -187,7 +187,7 @@ export function AgentsSettingsPanel({
     } catch (error) {
       console.error("Failed to create subagent", error);
       setErrorMessage(
-        error instanceof Error ? error.message : String(error) || t("settings.agents.errorCreate"),
+        (error instanceof Error ? error.message : String(error)) || t("settings.agents.errorCreate"),
       );
     }
   };
@@ -204,7 +204,7 @@ export function AgentsSettingsPanel({
     } catch (error) {
       console.error("Failed to delete subagent", error);
       setErrorMessage(
-        error instanceof Error ? error.message : String(error) || t("settings.agents.errorDelete"),
+        (error instanceof Error ? error.message : String(error)) || t("settings.agents.errorDelete"),
       );
     }
   };
@@ -279,7 +279,7 @@ export function AgentsSettingsPanel({
     } catch (error) {
       console.error("Failed to update subagent", error);
       setErrorMessage(
-        error instanceof Error ? error.message : String(error) || t("settings.agents.errorSave"),
+        (error instanceof Error ? error.message : String(error)) || t("settings.agents.errorSave"),
       );
     } finally {
       setIsSaving(false);

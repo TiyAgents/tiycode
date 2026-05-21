@@ -524,8 +524,10 @@ impl AgentSession {
     }
 
     /// Resolve a custom subagent slug into a SubagentProfile by loading from the database.
+    /// Validates both that the subagent is enabled and that it is accessible from the
+    /// active agent profile via the `profile_subagent_access` table.
     async fn resolve_custom_subagent_profile(&self, slug: &str) -> Option<SubagentProfile> {
-        use crate::persistence::repo::custom_subagent_repo;
+        use crate::persistence::repo::{custom_subagent_repo, settings_repo};
 
         let record = custom_subagent_repo::get_by_slug(&self.pool, slug)
             .await
@@ -534,6 +536,24 @@ impl AgentSession {
 
         if !record.is_enabled {
             return None;
+        }
+
+        // Verify the active profile grants access to this subagent.
+        let active_profile_id = settings_repo::get(&self.pool, "active_profile_id")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str::<String>(&s.value_json).ok())
+            .unwrap_or_default();
+
+        if !active_profile_id.is_empty() {
+            let allowed_ids =
+                custom_subagent_repo::get_profile_access(&self.pool, &active_profile_id)
+                    .await
+                    .unwrap_or_default();
+            if !allowed_ids.contains(&record.id) {
+                return None;
+            }
         }
 
         Some(SubagentProfile::Custom {
