@@ -6,7 +6,8 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import type { CustomSubagent } from "@/modules/settings-center/model/types";
+import { useT, type TranslationKey } from "@/i18n";
+import type { CustomSubagent, CustomSubagentModelRole } from "@/modules/settings-center/model/types";
 import {
   profileSubagentAccessGet,
   profileSubagentAccessSet,
@@ -19,34 +20,49 @@ type ProfileAgentAccessProps = {
 };
 
 type BuiltInAgent = {
-  name: string;
-  description: string;
+  nameKey: TranslationKey;
+  descriptionKey: TranslationKey;
   icon: LucideIcon;
-  scope: string;
-  capabilities: string[];
+  scopeKey: TranslationKey;
+  capabilityKeys: TranslationKey[];
 };
 
 const BUILT_IN_AGENTS: BuiltInAgent[] = [
   {
-    name: "Explore",
-    description: "Maps files, dependencies, and current behavior before implementation decisions.",
+    nameKey: "settings.profileAgentAccess.builtIn.explore.name",
+    descriptionKey: "settings.profileAgentAccess.builtIn.explore.desc",
     icon: FileSearch,
-    scope: "Read-only research",
-    capabilities: ["File discovery", "Architecture notes", "Current-state summary"],
+    scopeKey: "settings.profileAgentAccess.builtIn.explore.scope",
+    capabilityKeys: [
+      "settings.profileAgentAccess.capability.fileDiscovery",
+      "settings.profileAgentAccess.capability.architectureNotes",
+      "settings.profileAgentAccess.capability.currentStateSummary",
+    ],
   },
   {
-    name: "Review",
-    description: "Reviews implemented changes, probes regressions, and reports verification status.",
+    nameKey: "settings.profileAgentAccess.builtIn.review.name",
+    descriptionKey: "settings.profileAgentAccess.builtIn.review.desc",
     icon: CheckCircle2,
-    scope: "Post-change review",
-    capabilities: ["Diff review", "Risk scan", "Verification report"],
+    scopeKey: "settings.profileAgentAccess.builtIn.review.scope",
+    capabilityKeys: [
+      "settings.profileAgentAccess.capability.diffReview",
+      "settings.profileAgentAccess.capability.riskScan",
+      "settings.profileAgentAccess.capability.verificationReport",
+    ],
   },
 ];
+
+const MODEL_ROLE_LABEL_KEYS: Record<CustomSubagentModelRole, TranslationKey> = {
+  primary: "settings.agents.modelRole.primary",
+  auxiliary: "settings.agents.modelRole.auxiliary",
+  lightweight: "settings.agents.modelRole.lightweight",
+};
 
 export function ProfileAgentAccess({
   profileId,
   customSubagents,
 }: ProfileAgentAccessProps) {
+  const t = useT();
   const [accessIds, setAccessIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -86,13 +102,18 @@ export function ProfileAgentAccess({
     }
   };
 
+  const modelRoleLabel = (role: CustomSubagentModelRole | undefined) =>
+    t(MODEL_ROLE_LABEL_KEYS[role ?? "auxiliary"]);
+
   return (
     <div className="space-y-4">
       <div className="flex min-w-0 items-start">
         <div className="min-w-0">
-          <h4 className="text-[13px] font-medium leading-5 text-app-foreground">Available Agents</h4>
+          <h4 className="text-[13px] font-medium leading-5 text-app-foreground">
+            {t("settings.profileAgentAccess.title")}
+          </h4>
           <p className="mt-1 max-w-2xl text-[12px] leading-5 text-app-muted">
-            Choose which custom agents this profile can delegate to. Built-in agents stay enabled for every profile.
+            {t("settings.profileAgentAccess.description")}
           </p>
         </div>
       </div>
@@ -100,9 +121,10 @@ export function ProfileAgentAccess({
       <div className="grid gap-2 md:grid-cols-2">
         {BUILT_IN_AGENTS.map((agent) => {
           const Icon = agent.icon;
+          const name = t(agent.nameKey);
           return (
             <div
-              key={agent.name}
+              key={agent.nameKey}
               className="rounded-xl border border-app-border bg-app-surface-muted p-3 shadow-sm"
             >
               <div className="flex items-start justify-between gap-3">
@@ -112,24 +134,24 @@ export function ProfileAgentAccess({
                   </span>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <p className="text-[13px] font-medium text-app-foreground">{agent.name}</p>
+                      <p className="text-[13px] font-medium text-app-foreground">{name}</p>
                       <span className="rounded-full border border-app-info/30 bg-app-info/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-app-info">
-                        Always on
+                        {t("settings.profileAgentAccess.alwaysOn")}
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-app-subtle">{agent.scope}</p>
+                    <p className="mt-0.5 text-[11px] text-app-subtle">{t(agent.scopeKey)}</p>
                   </div>
                 </div>
                 <LockKeyhole className="mt-1 size-3.5 shrink-0 text-app-subtle" />
               </div>
-              <p className="mt-3 text-[12px] leading-5 text-app-muted">{agent.description}</p>
+              <p className="mt-3 text-[12px] leading-5 text-app-muted">{t(agent.descriptionKey)}</p>
               <div className="mt-3 flex flex-wrap gap-1.5">
-                {agent.capabilities.map((capability) => (
+                {agent.capabilityKeys.map((capabilityKey) => (
                   <span
-                    key={capability}
+                    key={capabilityKey}
                     className="rounded-md border border-app-border bg-app-surface px-1.5 py-0.5 text-[11px] text-app-muted"
                   >
-                    {capability}
+                    {t(capabilityKey)}
                   </span>
                 ))}
               </div>
@@ -140,8 +162,12 @@ export function ProfileAgentAccess({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between px-0.5">
-          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">Custom Agents</p>
-          <p className="text-[11px] text-app-subtle">Profile-level access</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+            {t("settings.profileAgentAccess.customAgents")}
+          </p>
+          <p className="text-[11px] text-app-subtle">
+            {t("settings.profileAgentAccess.profileLevelAccess")}
+          </p>
         </div>
 
         {isLoading ? (
@@ -175,7 +201,7 @@ export function ProfileAgentAccess({
                     type="checkbox"
                     checked={isSelected}
                     onChange={() => toggleAccess(agent.id)}
-                    aria-label={`Toggle access for ${agent.name}`}
+                    aria-label={t("settings.profileAgentAccess.toggleAccess", { name: agent.name })}
                     className="absolute right-3 top-3 size-4 rounded border-app-border accent-app-info"
                   />
                   <span className="min-w-0 flex-1">
@@ -196,7 +222,7 @@ export function ProfileAgentAccess({
                             : "border-app-border bg-app-surface text-app-subtle",
                         )}
                       >
-                        {agent.isEnabled ? "Enabled" : "Disabled"}
+                        {agent.isEnabled ? t("settings.agents.enabled") : t("settings.agents.disabled")}
                       </span>
                       <span
                         className={cn(
@@ -206,19 +232,22 @@ export function ProfileAgentAccess({
                             : "border-app-border bg-app-surface text-app-subtle",
                         )}
                       >
-                        {isSelected ? "Allowed" : "Off"}
+                        {isSelected ? t("settings.profileAgentAccess.allowed") : t("settings.profileAgentAccess.off")}
+                      </span>
+                      <span className="rounded-full border border-app-border bg-app-surface px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-app-subtle">
+                        {modelRoleLabel(agent.modelRole)}
                       </span>
                     </span>
 
                     <code className="mt-1 block truncate text-[11px] text-app-subtle">agent_{agent.slug}</code>
                     <span className="mt-2 block text-[12px] leading-5 text-app-muted">
-                      {agent.invocationDescription.trim() || "No delegation description provided yet."}
+                      {agent.invocationDescription.trim() || t("settings.profileAgentAccess.noDescription")}
                     </span>
 
                     <span className="mt-3 flex flex-wrap items-center gap-1.5">
                       <span className="inline-flex items-center gap-1 rounded-md border border-app-border bg-app-surface px-1.5 py-0.5 text-[11px] text-app-muted">
                         <Wrench className="size-3" />
-                        {agent.allowedTools.length} tools
+                        {t("settings.profileAgentAccess.toolCount", { count: agent.allowedTools.length })}
                       </span>
                       {visibleTools.map((tool) => (
                         <code
@@ -241,9 +270,11 @@ export function ProfileAgentAccess({
           </div>
         ) : (
           <div className="rounded-xl border border-dashed border-app-border bg-app-surface-muted px-4 py-5 text-center">
-            <p className="text-[13px] font-medium text-app-foreground">No custom agents configured</p>
+            <p className="text-[13px] font-medium text-app-foreground">
+              {t("settings.profileAgentAccess.emptyTitle")}
+            </p>
             <p className="mt-1 text-[12px] leading-5 text-app-muted">
-              Go to Settings → Agents to create focused helpers with their own instructions and tools.
+              {t("settings.profileAgentAccess.emptyDesc")}
             </p>
           </div>
         )}

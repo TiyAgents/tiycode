@@ -2,6 +2,7 @@
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::str::FromStr;
+use tiycode_lib::model::subagent::{CustomSubagentInput, CustomSubagentModelRole};
 
 async fn setup_test_pool() -> SqlitePool {
     let options = SqliteConnectOptions::from_str("sqlite::memory:")
@@ -24,7 +25,6 @@ async fn setup_test_pool() -> SqlitePool {
 
 #[tokio::test]
 async fn custom_subagent_crud_lifecycle() {
-    use tiycode_lib::model::subagent::CustomSubagentInput;
     use tiycode_lib::persistence::repo::custom_subagent_repo;
 
     let pool = setup_test_pool().await;
@@ -36,6 +36,7 @@ async fn custom_subagent_crud_lifecycle() {
         system_prompt: "You are a refactoring helper.".to_string(),
         invocation_description: "Use when code needs refactoring.".to_string(),
         allowed_tools: vec!["read".to_string(), "edit".to_string(), "search".to_string()],
+        model_role: CustomSubagentModelRole::Primary,
         is_enabled: Some(true),
     };
     let created = custom_subagent_repo::create(&pool, &input)
@@ -43,6 +44,7 @@ async fn custom_subagent_crud_lifecycle() {
         .expect("create should succeed");
     assert_eq!(created.name, "Refactor Agent");
     assert_eq!(created.slug, "refactor");
+    assert_eq!(created.model_role, CustomSubagentModelRole::Primary);
     assert!(created.is_enabled);
 
     // Get by ID
@@ -51,6 +53,7 @@ async fn custom_subagent_crud_lifecycle() {
         .expect("get_by_id should succeed")
         .expect("should find created record");
     assert_eq!(found.slug, "refactor");
+    assert_eq!(found.model_role, CustomSubagentModelRole::Primary);
     assert_eq!(found.allowed_tools_vec(), vec!["read", "edit", "search"]);
 
     // Get by slug
@@ -73,12 +76,14 @@ async fn custom_subagent_crud_lifecycle() {
         system_prompt: "You are an improved refactoring helper.".to_string(),
         invocation_description: "Use when code needs refactoring (v2).".to_string(),
         allowed_tools: vec!["read".to_string(), "edit".to_string(), "write".to_string()],
+        model_role: CustomSubagentModelRole::Lightweight,
         is_enabled: Some(false),
     };
     let updated = custom_subagent_repo::update(&pool, &created.id, &update_input)
         .await
         .expect("update should succeed");
     assert_eq!(updated.name, "Refactor Agent V2");
+    assert_eq!(updated.model_role, CustomSubagentModelRole::Lightweight);
     assert!(!updated.is_enabled);
 
     // Delete
@@ -96,7 +101,6 @@ async fn custom_subagent_crud_lifecycle() {
 
 #[tokio::test]
 async fn slug_uniqueness_constraint() {
-    use tiycode_lib::model::subagent::CustomSubagentInput;
     use tiycode_lib::persistence::repo::custom_subagent_repo;
 
     let pool = setup_test_pool().await;
@@ -107,6 +111,7 @@ async fn slug_uniqueness_constraint() {
         system_prompt: "prompt".to_string(),
         invocation_description: "desc".to_string(),
         allowed_tools: vec![],
+        model_role: CustomSubagentModelRole::Auxiliary,
         is_enabled: Some(true),
     };
     custom_subagent_repo::create(&pool, &input)
@@ -123,7 +128,6 @@ async fn slug_uniqueness_constraint() {
 #[tokio::test]
 async fn profile_subagent_access_set_and_get() {
     use tiycode_lib::model::provider::AgentProfileRecord;
-    use tiycode_lib::model::subagent::CustomSubagentInput;
     use tiycode_lib::persistence::repo::{custom_subagent_repo, profile_repo};
 
     let pool = setup_test_pool().await;
@@ -159,6 +163,7 @@ async fn profile_subagent_access_set_and_get() {
         system_prompt: "A".to_string(),
         invocation_description: "A".to_string(),
         allowed_tools: vec!["read".to_string()],
+        model_role: CustomSubagentModelRole::Auxiliary,
         is_enabled: Some(true),
     };
     let input_b = CustomSubagentInput {
@@ -167,6 +172,7 @@ async fn profile_subagent_access_set_and_get() {
         system_prompt: "B".to_string(),
         invocation_description: "B".to_string(),
         allowed_tools: vec!["read".to_string()],
+        model_role: CustomSubagentModelRole::Auxiliary,
         is_enabled: Some(true),
     };
     let a = custom_subagent_repo::create(&pool, &input_a).await.unwrap();
@@ -194,6 +200,9 @@ async fn profile_subagent_access_set_and_get() {
         .await
         .expect("list_for_profile should succeed");
     assert_eq!(for_profile.len(), 2);
+    assert!(for_profile
+        .iter()
+        .all(|record| record.model_role == CustomSubagentModelRole::Auxiliary));
 
     // Update access (remove one)
     custom_subagent_repo::set_profile_access(&pool, "test-profile-1", &[a.id.clone()])
@@ -209,7 +218,6 @@ async fn profile_subagent_access_set_and_get() {
 #[tokio::test]
 async fn cascade_delete_subagent_removes_access() {
     use tiycode_lib::model::provider::AgentProfileRecord;
-    use tiycode_lib::model::subagent::CustomSubagentInput;
     use tiycode_lib::persistence::repo::{custom_subagent_repo, profile_repo};
 
     let pool = setup_test_pool().await;
@@ -242,6 +250,7 @@ async fn cascade_delete_subagent_removes_access() {
         system_prompt: "temp".to_string(),
         invocation_description: "temp".to_string(),
         allowed_tools: vec![],
+        model_role: CustomSubagentModelRole::Auxiliary,
         is_enabled: Some(true),
     };
     let agent = custom_subagent_repo::create(&pool, &input).await.unwrap();

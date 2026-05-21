@@ -11,6 +11,7 @@ use crate::core::subagent::{
     TERM_CLOSE_TOOL_DESCRIPTION, TERM_OUTPUT_TOOL_DESCRIPTION, TERM_RESTART_TOOL_DESCRIPTION,
     TERM_STATUS_TOOL_DESCRIPTION, TERM_WRITE_TOOL_DESCRIPTION,
 };
+use crate::model::subagent::CustomSubagentModelRole;
 
 use super::agent_session::{
     CLARIFY_TOOL_NAME, DEFAULT_FULL_TOOL_PROFILE, PLAN_MODE_MISSING_CHECKPOINT_ERROR,
@@ -588,13 +589,37 @@ pub(crate) fn resolve_helper_profile(tool: &RuntimeOrchestrationTool) -> Option<
 pub(crate) fn resolve_helper_model_role(
     model_plan: &ResolvedRuntimeModelPlan,
     tool: &RuntimeOrchestrationTool,
-) -> ResolvedModelRole {
+    helper_profile: Option<&SubagentProfile>,
+) -> Option<ResolvedModelRole> {
+    if let Some(SubagentProfile::Custom { model_role, .. }) = helper_profile {
+        return Some(resolve_custom_helper_model_role(model_plan, *model_role));
+    }
+
     match tool {
-        RuntimeOrchestrationTool::Explore
-        | RuntimeOrchestrationTool::Review
-        | RuntimeOrchestrationTool::Custom(_) => model_plan
+        RuntimeOrchestrationTool::Explore | RuntimeOrchestrationTool::Review => Some(
+            model_plan
+                .auxiliary
+                .clone()
+                .unwrap_or_else(|| model_plan.primary.clone()),
+        ),
+        RuntimeOrchestrationTool::Custom(_) => None,
+    }
+}
+
+fn resolve_custom_helper_model_role(
+    model_plan: &ResolvedRuntimeModelPlan,
+    model_role: CustomSubagentModelRole,
+) -> ResolvedModelRole {
+    match model_role {
+        CustomSubagentModelRole::Primary => model_plan.primary.clone(),
+        CustomSubagentModelRole::Auxiliary => model_plan
             .auxiliary
             .clone()
+            .unwrap_or_else(|| model_plan.primary.clone()),
+        CustomSubagentModelRole::Lightweight => model_plan
+            .lightweight
+            .clone()
+            .or_else(|| model_plan.auxiliary.clone())
             .unwrap_or_else(|| model_plan.primary.clone()),
     }
 }

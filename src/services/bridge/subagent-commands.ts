@@ -1,5 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import type { CustomSubagent } from "@/modules/settings-center/model/types";
+import type { CustomSubagent, CustomSubagentModelRole } from "@/modules/settings-center/model/types";
 
 const requireTauri = (cmd: string) => {
   if (!isTauri()) throw new Error(`${cmd} requires Tauri runtime`);
@@ -15,6 +15,7 @@ export type CustomSubagentInput = {
   systemPrompt: string;
   invocationDescription: string;
   allowedTools: string[];
+  modelRole?: CustomSubagentModelRole;
   isEnabled?: boolean;
 };
 

@@ -415,7 +415,6 @@ impl AgentSession {
             }
         };
 
-        let helper_role = resolve_helper_model_role(&self.spec.model_plan, &tool);
         let helper_profile = resolve_helper_profile(&tool);
 
         // For custom subagents, resolve the profile from the session's custom subagent registry
@@ -437,6 +436,25 @@ impl AgentSession {
             }
         } else {
             helper_profile
+        };
+        let helper_role = match resolve_helper_model_role(
+            &self.spec.model_plan,
+            &tool,
+            resolved_profile.as_ref(),
+        ) {
+            Some(role) => role,
+            None => {
+                let error = format!("No helper profile resolved for tool '{}'", tool.tool_name());
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_storage_id,
+                    &serde_json::json!({ "error": &error }).to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+                return agent_error_result(error);
+            }
         };
 
         let result = self
@@ -522,6 +540,7 @@ impl AgentSession {
             slug: record.slug.clone(),
             system_prompt: record.system_prompt.clone(),
             allowed_tools: record.allowed_tools_vec(),
+            model_role: record.model_role,
         })
     }
 

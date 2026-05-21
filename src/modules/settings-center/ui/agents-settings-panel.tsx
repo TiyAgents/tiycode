@@ -9,7 +9,11 @@ import {
   Trash2,
   Wrench,
 } from "lucide-react";
-import type { CustomSubagent } from "@/modules/settings-center/model/types";
+import { useT, type TranslationKey } from "@/i18n";
+import type {
+  CustomSubagent,
+  CustomSubagentModelRole,
+} from "@/modules/settings-center/model/types";
 import { settingsStore } from "@/modules/settings-center/model/settings-store";
 import {
   customSubagentCreate,
@@ -32,45 +36,63 @@ import { Separator } from "@/shared/ui/separator";
 import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
 
-// ---------------------------------------------------------------------------
-// Tool categories for the checkbox UI
-// ---------------------------------------------------------------------------
-
-const TOOL_CATEGORIES = [
+const TOOL_CATEGORIES: Array<{ labelKey: TranslationKey; tools: string[] }> = [
   {
-    label: "File System (Read)",
+    labelKey: "settings.agents.toolCategory.fileRead",
     tools: ["read", "list", "search", "find"],
   },
   {
-    label: "File System (Write)",
+    labelKey: "settings.agents.toolCategory.fileWrite",
     tools: ["edit", "write"],
   },
   {
-    label: "Terminal",
+    labelKey: "settings.agents.toolCategory.terminal",
     tools: ["shell", "term_status", "term_output", "term_write", "term_restart", "term_close"],
   },
   {
-    label: "Git",
+    labelKey: "settings.agents.toolCategory.git",
     tools: ["git_status", "git_diff", "git_log"],
   },
 ];
 
-const BUILT_IN_AGENTS = [
+const BUILT_IN_AGENTS: Array<{
+  nameKey: TranslationKey;
+  descriptionKey: TranslationKey;
+  icon: typeof FileSearch;
+}> = [
   {
-    name: "Explore",
-    description: "Read-only code investigation for mapping files, dependencies, and current behavior.",
+    nameKey: "settings.agents.builtIn.explore.name",
+    descriptionKey: "settings.agents.builtIn.explore.desc",
     icon: FileSearch,
   },
   {
-    name: "Review",
-    description: "Focused code review and verification after an implementation is complete.",
+    nameKey: "settings.agents.builtIn.review.name",
+    descriptionKey: "settings.agents.builtIn.review.desc",
     icon: CheckCircle2,
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Local layout helpers matching Settings Center conventions
-// ---------------------------------------------------------------------------
+const MODEL_ROLE_OPTIONS: Array<{
+  value: CustomSubagentModelRole;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
+}> = [
+  {
+    value: "primary",
+    labelKey: "settings.agents.modelRole.primary",
+    descriptionKey: "settings.agents.modelRole.primaryDesc",
+  },
+  {
+    value: "auxiliary",
+    labelKey: "settings.agents.modelRole.auxiliary",
+    descriptionKey: "settings.agents.modelRole.auxiliaryDesc",
+  },
+  {
+    value: "lightweight",
+    labelKey: "settings.agents.modelRole.lightweight",
+    descriptionKey: "settings.agents.modelRole.lightweightDesc",
+  },
+];
 
 function SettingsPanelSection({
   action,
@@ -114,10 +136,6 @@ function FieldGroup({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
 type AgentsSettingsPanelProps = {
   customSubagents: CustomSubagent[];
   description?: string;
@@ -133,6 +151,7 @@ export function AgentsSettingsPanel({
   customSubagents,
   description,
 }: AgentsSettingsPanelProps) {
+  const t = useT();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editState, setEditState] = useState<Partial<CustomSubagentInput> | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -141,13 +160,19 @@ export function AgentsSettingsPanel({
   const selectedAgent = customSubagents.find((a) => a.id === selectedId);
   const hasUnsavedChanges = editState !== null;
 
+  const modelRoleLabel = (role: CustomSubagentModelRole | undefined) => {
+    const option = MODEL_ROLE_OPTIONS.find((entry) => entry.value === (role ?? "auxiliary"));
+    return t(option?.labelKey ?? "settings.agents.modelRole.auxiliary");
+  };
+
   const createAgent = async () => {
     const input: CustomSubagentInput = {
-      name: "New Agent",
+      name: t("settings.agents.newAgentName"),
       slug: `agent-${Date.now().toString(36)}`,
-      systemPrompt: "You are a helpful assistant.",
-      invocationDescription: "Describe when the main agent should use this subagent.",
+      systemPrompt: t("settings.agents.defaultSystemPrompt"),
+      invocationDescription: t("settings.agents.defaultInvocationDescription"),
       allowedTools: ["read", "list", "search", "find"],
+      modelRole: "auxiliary",
       isEnabled: true,
     };
     try {
@@ -233,6 +258,7 @@ export function AgentsSettingsPanel({
         systemPrompt: editState.systemPrompt ?? selectedAgent.systemPrompt,
         invocationDescription: editState.invocationDescription ?? selectedAgent.invocationDescription,
         allowedTools: editState.allowedTools ?? selectedAgent.allowedTools,
+        modelRole: editState.modelRole ?? selectedAgent.modelRole ?? "auxiliary",
         isEnabled: editState.isEnabled ?? selectedAgent.isEnabled,
       };
       const updated = await customSubagentUpdate(selectedAgent.id, input);
@@ -261,13 +287,14 @@ export function AgentsSettingsPanel({
   const toggleTool = (toolName: string) => {
     const current = (currentValue("allowedTools") as string[]) ?? [];
     const next = current.includes(toolName)
-      ? current.filter((t) => t !== toolName)
+      ? current.filter((tool) => tool !== toolName)
       : [...current, toolName];
     updateField("allowedTools", next);
   };
 
   const renderAgentEditor = () => {
     if (!selectedAgent) return null;
+    const selectedModelRole = ((currentValue("modelRole") as CustomSubagentModelRole | undefined) ?? "auxiliary");
 
     return (
       <div
@@ -282,16 +309,16 @@ export function AgentsSettingsPanel({
                 {hasUnsavedChanges ? (
                   <span className="inline-flex items-center gap-1 rounded-full border border-app-warning/30 bg-app-warning/10 px-2 py-0.5 text-[11px] font-medium text-app-warning">
                     <AlertTriangle className="size-3" />
-                    Unsaved changes
+                    {t("settings.agents.unsavedChanges")}
                   </span>
                 ) : (
                   <span className="rounded-full border border-app-border bg-app-surface-muted px-2 py-0.5 text-[11px] font-medium text-app-subtle">
-                    Saved
+                    {t("settings.agents.saved")}
                   </span>
                 )}
               </div>
               <p className="mt-1 text-[12px] leading-5 text-app-muted">
-                Configure how this custom agent appears, when it is used, and which tools it can call.
+                {t("settings.agents.editorDescription")}
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -301,15 +328,18 @@ export function AgentsSettingsPanel({
                 onClick={handleSave}
                 disabled={!hasUnsavedChanges || isSaving}
               >
-                {isSaving ? "Saving..." : "Save Changes"}
+                {isSaving ? t("settings.agents.saving") : t("settings.agents.saveChanges")}
               </Button>
             </div>
           </div>
 
-          <FieldGroup title="Identity" description="Name the agent and define the tool identifier exposed to the main agent.">
+          <FieldGroup
+            title={t("settings.agents.identity")}
+            description={t("settings.agents.identityDesc")}
+          >
             <div className="grid gap-3 md:grid-cols-2">
               <label className="space-y-1.5">
-                <span className="text-[12px] font-medium text-app-foreground">Name</span>
+                <span className="text-[12px] font-medium text-app-foreground">{t("settings.agents.name")}</span>
                 <Input
                   type="text"
                   value={(currentValue("name") as string) ?? ""}
@@ -317,7 +347,7 @@ export function AgentsSettingsPanel({
                 />
               </label>
               <label className="space-y-1.5">
-                <span className="text-[12px] font-medium text-app-foreground">Slug</span>
+                <span className="text-[12px] font-medium text-app-foreground">{t("settings.agents.slug")}</span>
                 <Input
                   type="text"
                   value={(currentValue("slug") as string) ?? ""}
@@ -330,7 +360,7 @@ export function AgentsSettingsPanel({
                   className="font-mono"
                 />
                 <span className="block truncate text-[11px] text-app-subtle">
-                  Tool name: agent_{(currentValue("slug") as string) ?? ""}
+                  {t("settings.agents.toolName", { slug: (currentValue("slug") as string) ?? "" })}
                 </span>
               </label>
             </div>
@@ -339,9 +369,9 @@ export function AgentsSettingsPanel({
                 htmlFor={`agent-enabled-${selectedAgent.id}`}
                 className="min-w-0 text-[13px] font-medium text-app-foreground"
               >
-                Enabled
+                {t("settings.agents.enabled")}
                 <span className="mt-0.5 block text-[12px] font-normal leading-5 text-app-muted">
-                  Disabled agents stay configured but are hidden from delegation.
+                  {t("settings.agents.enabledDesc")}
                 </span>
               </label>
               <Switch
@@ -355,20 +385,54 @@ export function AgentsSettingsPanel({
 
           <Separator />
 
-          <FieldGroup title="Behavior" description="Describe when to call the agent and how it should behave once delegated.">
+          <FieldGroup
+            title={t("settings.agents.modelLevel")}
+            description={t("settings.agents.modelLevelDesc")}
+          >
+            <div className="grid gap-2 md:grid-cols-3">
+              {MODEL_ROLE_OPTIONS.map((option) => {
+                const isSelected = selectedModelRole === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => updateField("modelRole", option.value)}
+                    className={cn(
+                      "rounded-xl border p-3 text-left transition-colors",
+                      isSelected
+                        ? "border-app-info/40 bg-app-info/10 text-app-foreground"
+                        : "border-app-border bg-app-surface-muted text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
+                    )}
+                  >
+                    <span className="block text-[12px] font-medium">{t(option.labelKey)}</span>
+                    <span className="mt-1 block text-[11px] leading-5 text-app-muted">
+                      {t(option.descriptionKey)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </FieldGroup>
+
+          <Separator />
+
+          <FieldGroup
+            title={t("settings.agents.behavior")}
+            description={t("settings.agents.behaviorDesc")}
+          >
             <label className="block space-y-1.5">
-              <span className="text-[12px] font-medium text-app-foreground">Invocation Description</span>
+              <span className="text-[12px] font-medium text-app-foreground">{t("settings.agents.invocationDescription")}</span>
               <Textarea
                 value={(currentValue("invocationDescription") as string) ?? ""}
                 onChange={(event) => updateField("invocationDescription", event.target.value)}
                 className="min-h-24"
               />
               <span className="block text-[11px] text-app-subtle">
-                This tells the main agent when this specialist should be used.
+                {t("settings.agents.invocationDescriptionHint")}
               </span>
             </label>
             <label className="block space-y-1.5">
-              <span className="text-[12px] font-medium text-app-foreground">System Prompt</span>
+              <span className="text-[12px] font-medium text-app-foreground">{t("settings.agents.systemPrompt")}</span>
               <Textarea
                 value={(currentValue("systemPrompt") as string) ?? ""}
                 onChange={(event) => updateField("systemPrompt", event.target.value)}
@@ -379,13 +443,16 @@ export function AgentsSettingsPanel({
 
           <Separator />
 
-          <FieldGroup title="Allowed Tools" description="Choose the tools this agent may call during delegated work.">
+          <FieldGroup
+            title={t("settings.agents.allowedTools")}
+            description={t("settings.agents.allowedToolsDesc")}
+          >
             <div className="space-y-4">
               {TOOL_CATEGORIES.map((category) => (
-                <div key={category.label} className="space-y-2">
+                <div key={category.labelKey} className="space-y-2">
                   <div className="flex items-center gap-2 text-[12px] font-medium text-app-muted">
                     <Wrench className="size-3.5" />
-                    {category.label}
+                    {t(category.labelKey)}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {category.tools.map((tool) => {
@@ -426,19 +493,20 @@ export function AgentsSettingsPanel({
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-[19px] font-semibold text-app-foreground">Agents</h1>
+        <h1 className="text-[19px] font-semibold text-app-foreground">{t("settings.category.agents")}</h1>
         <p className="mt-1 text-[12px] leading-5 text-app-muted">
-          {description ?? "Create and manage custom sub-agents"}
+          {description ?? t("settings.category.agentsDesc")}
         </p>
       </div>
 
-      <SettingsPanelSection title="Built-in Agents">
+      <SettingsPanelSection title={t("settings.agents.builtInAgents")}>
         <div className="grid gap-3 p-3 md:grid-cols-2">
           {BUILT_IN_AGENTS.map((agent) => {
             const Icon = agent.icon;
+            const name = t(agent.nameKey);
             return (
               <div
-                key={agent.name}
+                key={agent.nameKey}
                 className="rounded-xl border border-app-border bg-app-surface-muted p-3"
               >
                 <div className="flex items-start justify-between gap-3">
@@ -447,15 +515,15 @@ export function AgentsSettingsPanel({
                       <Icon className="size-4" />
                     </span>
                     <div className="min-w-0">
-                      <p className="text-[13px] font-medium text-app-foreground">{agent.name}</p>
-                      <p className="mt-0.5 text-[11px] text-app-subtle">Always available</p>
+                      <p className="text-[13px] font-medium text-app-foreground">{name}</p>
+                      <p className="mt-0.5 text-[11px] text-app-subtle">{t("settings.agents.alwaysAvailable")}</p>
                     </div>
                   </div>
                   <span className="rounded-full border border-app-border bg-app-surface px-2 py-0.5 text-[11px] font-medium text-app-muted">
-                    Built-in
+                    {t("settings.agents.builtInBadge")}
                   </span>
                 </div>
-                <p className="mt-3 text-[12px] leading-5 text-app-muted">{agent.description}</p>
+                <p className="mt-3 text-[12px] leading-5 text-app-muted">{t(agent.descriptionKey)}</p>
               </div>
             );
           })}
@@ -463,11 +531,11 @@ export function AgentsSettingsPanel({
       </SettingsPanelSection>
 
       <SettingsPanelSection
-        title="Custom Agents"
+        title={t("settings.agents.customAgents")}
         action={
           <Button type="button" variant="outline" size="sm" onClick={handleCreate}>
             <Plus className="size-3.5" />
-            New Agent
+            {t("settings.agents.newAgent")}
           </Button>
         }
       >
@@ -475,7 +543,7 @@ export function AgentsSettingsPanel({
           {customSubagents.length > 0 ? (
             customSubagents.map((agent) => {
               const isSelected = agent.id === selectedId;
-              const actionLabel = isSelected ? "Collapse" : "Edit";
+              const actionLabel = isSelected ? t("settings.agents.collapse") : t("settings.agents.edit");
               return (
                 <div
                   key={agent.id}
@@ -519,11 +587,14 @@ export function AgentsSettingsPanel({
                                 : "border-app-border bg-app-surface-muted text-app-subtle",
                             )}
                           >
-                            {agent.isEnabled ? "Enabled" : "Disabled"}
+                            {agent.isEnabled ? t("settings.agents.enabled") : t("settings.agents.disabled")}
+                          </span>
+                          <span className="rounded-full border border-app-border bg-app-surface-muted px-2 py-0.5 text-[11px] font-medium text-app-subtle">
+                            {modelRoleLabel(agent.modelRole)}
                           </span>
                           {isSelected && hasUnsavedChanges ? (
                             <span className="rounded-full border border-app-warning/30 bg-app-warning/10 px-2 py-0.5 text-[11px] font-medium text-app-warning">
-                              Unsaved
+                              {t("settings.agents.unsaved")}
                             </span>
                           ) : null}
                         </span>
@@ -540,8 +611,8 @@ export function AgentsSettingsPanel({
                         size="icon-sm"
                         onClick={() => handleDelete(agent.id)}
                         className="shrink-0 text-app-muted opacity-0 hover:bg-app-danger/10 hover:text-app-danger focus-visible:opacity-100 group-hover:opacity-100"
-                        title={`Delete ${agent.name}`}
-                        aria-label={`Delete ${agent.name}`}
+                        title={t("settings.agents.deleteAgent", { name: agent.name })}
+                        aria-label={t("settings.agents.deleteAgent", { name: agent.name })}
                       >
                         <Trash2 className="size-4" />
                       </Button>
@@ -557,13 +628,13 @@ export function AgentsSettingsPanel({
               <span className="flex size-11 items-center justify-center rounded-2xl border border-app-border bg-app-surface-muted text-app-muted">
                 <Bot className="size-5" />
               </span>
-              <h3 className="mt-3 text-[13px] font-medium text-app-foreground">No custom agents yet</h3>
+              <h3 className="mt-3 text-[13px] font-medium text-app-foreground">{t("settings.agents.emptyTitle")}</h3>
               <p className="mt-1 max-w-sm text-[12px] leading-5 text-app-muted">
-                Create a focused helper with its own instructions and allowed tools.
+                {t("settings.agents.emptyDesc")}
               </p>
               <Button type="button" variant="outline" size="sm" onClick={handleCreate} className="mt-4">
                 <Plus className="size-3.5" />
-                Create Agent
+                {t("settings.agents.createAgent")}
               </Button>
             </div>
           )}
@@ -583,19 +654,19 @@ export function AgentsSettingsPanel({
                 <AlertTriangle className="size-4" />
               </span>
               <div className="min-w-0">
-                <DialogTitle>Discard unsaved agent changes?</DialogTitle>
+                <DialogTitle>{t("settings.agents.discardTitle")}</DialogTitle>
                 <DialogDescription className="mt-2 text-[12px] leading-5 text-app-muted">
-                  You have unsaved edits in this custom agent. Discarding will lose those changes before continuing.
+                  {t("settings.agents.discardDesc")}
                 </DialogDescription>
               </div>
             </div>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setPendingAction(null)}>
-              Continue editing
+              {t("settings.agents.continueEditing")}
             </Button>
             <Button type="button" variant="destructive" onClick={handleDiscardChanges}>
-              Discard changes
+              {t("settings.agents.discardChanges")}
             </Button>
           </DialogFooter>
         </DialogContent>

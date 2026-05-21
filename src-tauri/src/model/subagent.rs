@@ -1,6 +1,42 @@
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
+// Model role selection
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomSubagentModelRole {
+    Primary,
+    Auxiliary,
+    Lightweight,
+}
+
+impl Default for CustomSubagentModelRole {
+    fn default() -> Self {
+        Self::Auxiliary
+    }
+}
+
+impl CustomSubagentModelRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Auxiliary => "auxiliary",
+            Self::Lightweight => "lightweight",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "primary" => Self::Primary,
+            "lightweight" => Self::Lightweight,
+            _ => Self::Auxiliary,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Database row type
 // ---------------------------------------------------------------------------
 
@@ -12,6 +48,7 @@ pub struct CustomSubagentRecord {
     pub system_prompt: String,
     pub invocation_description: String,
     pub allowed_tools: String, // JSON array string, e.g. '["read","list","search"]'
+    pub model_role: CustomSubagentModelRole,
     pub is_enabled: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -37,6 +74,7 @@ pub struct CustomSubagentDto {
     pub system_prompt: String,
     pub invocation_description: String,
     pub allowed_tools: Vec<String>,
+    pub model_role: CustomSubagentModelRole,
     pub is_enabled: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -52,6 +90,7 @@ impl From<CustomSubagentRecord> for CustomSubagentDto {
             system_prompt: r.system_prompt,
             invocation_description: r.invocation_description,
             allowed_tools: tools,
+            model_role: r.model_role,
             is_enabled: r.is_enabled,
             created_at: r.created_at,
             updated_at: r.updated_at,
@@ -71,6 +110,8 @@ pub struct CustomSubagentInput {
     pub system_prompt: String,
     pub invocation_description: String,
     pub allowed_tools: Vec<String>,
+    #[serde(default)]
+    pub model_role: CustomSubagentModelRole,
     pub is_enabled: Option<bool>,
 }
 

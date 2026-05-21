@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::model::errors::{AppError, ErrorSource};
-use crate::model::subagent::{CustomSubagentInput, CustomSubagentRecord};
+use crate::model::subagent::{CustomSubagentInput, CustomSubagentModelRole, CustomSubagentRecord};
 
 // ---------------------------------------------------------------------------
 // Internal row type for sqlx mapping
@@ -17,6 +17,7 @@ struct SubagentRow {
     system_prompt: String,
     invocation_description: String,
     allowed_tools: String,
+    model_role: String,
     is_enabled: i32,
     created_at: String,
     updated_at: String,
@@ -31,6 +32,7 @@ impl SubagentRow {
             system_prompt: self.system_prompt,
             invocation_description: self.invocation_description,
             allowed_tools: self.allowed_tools,
+            model_role: CustomSubagentModelRole::from_db(&self.model_role),
             is_enabled: self.is_enabled != 0,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -38,14 +40,16 @@ impl SubagentRow {
     }
 }
 
+const SUBAGENT_COLUMNS: &str = "id, name, slug, system_prompt, invocation_description, allowed_tools, model_role, is_enabled, created_at, updated_at";
+
 // ---------------------------------------------------------------------------
 // CRUD operations
 // ---------------------------------------------------------------------------
 
 pub async fn list_all(pool: &SqlitePool) -> Result<Vec<CustomSubagentRecord>, AppError> {
-    let rows = sqlx::query_as::<_, SubagentRow>(
-        "SELECT id, name, slug, system_prompt, invocation_description, allowed_tools, is_enabled, created_at, updated_at FROM custom_subagents ORDER BY name ASC",
-    )
+    let rows = sqlx::query_as::<_, SubagentRow>(&format!(
+        "SELECT {SUBAGENT_COLUMNS} FROM custom_subagents ORDER BY name ASC"
+    ))
     .fetch_all(pool)
     .await
     .map_err(|e| AppError::internal(ErrorSource::Database, e.to_string()))?;
@@ -57,9 +61,9 @@ pub async fn get_by_id(
     pool: &SqlitePool,
     id: &str,
 ) -> Result<Option<CustomSubagentRecord>, AppError> {
-    let row = sqlx::query_as::<_, SubagentRow>(
-        "SELECT id, name, slug, system_prompt, invocation_description, allowed_tools, is_enabled, created_at, updated_at FROM custom_subagents WHERE id = ?",
-    )
+    let row = sqlx::query_as::<_, SubagentRow>(&format!(
+        "SELECT {SUBAGENT_COLUMNS} FROM custom_subagents WHERE id = ?"
+    ))
     .bind(id)
     .fetch_optional(pool)
     .await
@@ -72,9 +76,9 @@ pub async fn get_by_slug(
     pool: &SqlitePool,
     slug: &str,
 ) -> Result<Option<CustomSubagentRecord>, AppError> {
-    let row = sqlx::query_as::<_, SubagentRow>(
-        "SELECT id, name, slug, system_prompt, invocation_description, allowed_tools, is_enabled, created_at, updated_at FROM custom_subagents WHERE slug = ?",
-    )
+    let row = sqlx::query_as::<_, SubagentRow>(&format!(
+        "SELECT {SUBAGENT_COLUMNS} FROM custom_subagents WHERE slug = ?"
+    ))
     .bind(slug)
     .fetch_optional(pool)
     .await
@@ -98,7 +102,7 @@ pub async fn create(
         serde_json::to_string(&input.allowed_tools).unwrap_or_else(|_| "[]".to_string());
 
     sqlx::query(
-        "INSERT INTO custom_subagents (id, name, slug, system_prompt, invocation_description, allowed_tools, is_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO custom_subagents (id, name, slug, system_prompt, invocation_description, allowed_tools, model_role, is_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&input.name)
@@ -106,6 +110,7 @@ pub async fn create(
     .bind(&input.system_prompt)
     .bind(&input.invocation_description)
     .bind(&tools_json)
+    .bind(input.model_role.as_str())
     .bind(is_enabled)
     .bind(&now)
     .bind(&now)
@@ -130,6 +135,7 @@ pub async fn create(
         system_prompt: input.system_prompt.clone(),
         invocation_description: input.invocation_description.clone(),
         allowed_tools: tools_json,
+        model_role: input.model_role,
         is_enabled: is_enabled != 0,
         created_at: now.clone(),
         updated_at: now,
@@ -151,13 +157,14 @@ pub async fn update(
         serde_json::to_string(&input.allowed_tools).unwrap_or_else(|_| "[]".to_string());
 
     let result = sqlx::query(
-        "UPDATE custom_subagents SET name = ?, slug = ?, system_prompt = ?, invocation_description = ?, allowed_tools = ?, is_enabled = ?, updated_at = ? WHERE id = ?",
+        "UPDATE custom_subagents SET name = ?, slug = ?, system_prompt = ?, invocation_description = ?, allowed_tools = ?, model_role = ?, is_enabled = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&input.name)
     .bind(&input.slug)
     .bind(&input.system_prompt)
     .bind(&input.invocation_description)
     .bind(&tools_json)
+    .bind(input.model_role.as_str())
     .bind(is_enabled)
     .bind(&now)
     .bind(id)
@@ -184,14 +191,12 @@ pub async fn update(
     }
 
     // Re-fetch the full row to return accurate created_at
-    get_by_id(pool, id)
-        .await?
-        .ok_or_else(|| {
-            AppError::internal(
-                ErrorSource::Database,
-                "subagent disappeared after update".to_string(),
-            )
-        })
+    get_by_id(pool, id).await?.ok_or_else(|| {
+        AppError::internal(
+            ErrorSource::Database,
+            "subagent disappeared after update".to_string(),
+        )
+    })
 }
 
 pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
@@ -262,13 +267,13 @@ pub async fn list_for_profile(
     pool: &SqlitePool,
     profile_id: &str,
 ) -> Result<Vec<CustomSubagentRecord>, AppError> {
-    let rows = sqlx::query_as::<_, SubagentRow>(
-        "SELECT s.id, s.name, s.slug, s.system_prompt, s.invocation_description, s.allowed_tools, s.is_enabled, s.created_at, s.updated_at \
+    let rows = sqlx::query_as::<_, SubagentRow>(&format!(
+        "SELECT s.id, s.name, s.slug, s.system_prompt, s.invocation_description, s.allowed_tools, s.model_role, s.is_enabled, s.created_at, s.updated_at \
          FROM custom_subagents s \
          INNER JOIN profile_subagent_access a ON s.id = a.subagent_id \
          WHERE a.profile_id = ? AND s.is_enabled = 1 \
-         ORDER BY s.name ASC",
-    )
+         ORDER BY s.name ASC"
+    ))
     .bind(profile_id)
     .fetch_all(pool)
     .await

@@ -225,8 +225,8 @@ function getCategoryMeta(t: TFunc) {
     },
     {
       key: "agents" as SettingsCategory,
-      title: "Agents",
-      description: "Create and manage custom sub-agents",
+      title: t("settings.category.agents"),
+      description: t("settings.category.agentsDesc"),
       icon: Bot,
     },
     {

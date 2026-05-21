@@ -156,6 +156,8 @@ export type TerminalSettings = {
   termEnv: string;
 };
 
+export type CustomSubagentModelRole = "primary" | "auxiliary" | "lightweight";
+
 export type CustomSubagent = {
   id: string;
   name: string;
@@ -163,6 +165,7 @@ export type CustomSubagent = {
   systemPrompt: string;
   invocationDescription: string;
   allowedTools: string[];
+  modelRole: CustomSubagentModelRole;
   isEnabled: boolean;
   createdAt: string;
   updatedAt: string;

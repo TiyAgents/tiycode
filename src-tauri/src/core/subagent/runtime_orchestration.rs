@@ -1,3 +1,4 @@
+use crate::model::subagent::CustomSubagentModelRole;
 use tiycore::agent::AgentTool;
 
 pub const TERM_STATUS_TOOL_DESCRIPTION: &str =
@@ -28,6 +29,7 @@ pub enum SubagentProfile {
         slug: String,
         system_prompt: String,
         allowed_tools: Vec<String>,
+        model_role: CustomSubagentModelRole,
     },
 }
 
@@ -655,6 +657,7 @@ Return format:\n\
 #[cfg(test)]
 mod tests {
     use super::{runtime_orchestration_tools, RuntimeOrchestrationTool, SubagentProfile};
+    use crate::model::subagent::CustomSubagentModelRole;
 
     #[test]
     fn parses_runtime_orchestration_tools() {
@@ -782,6 +785,7 @@ mod tests {
             slug: "test".to_string(),
             system_prompt: "You are a test helper.".to_string(),
             allowed_tools: vec!["read".to_string(), "search".to_string()],
+            model_role: CustomSubagentModelRole::Auxiliary,
         };
         let tools = profile.helper_tools();
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
