@@ -1,12 +1,13 @@
 #[cfg(test)]
 pub(super) mod tests {
     use super::super::{
-        append_compact_instructions, await_summary_with_abort, build_compact_summary_messages,
-        build_compact_summary_system_prompt, build_implementation_handoff_prompt,
-        build_merge_summary_messages, build_merge_summary_system_prompt,
-        build_orphaned_run_terminal_event, build_title_model_candidates, build_title_prompt,
-        build_title_prompt_from_messages, collapse_whitespace, detect_prior_summary,
-        extract_context_summary_block, extract_run_model_refs, extract_run_string,
+        active_run_id_for_thread, append_compact_instructions, await_summary_with_abort,
+        build_compact_summary_messages, build_compact_summary_system_prompt,
+        build_implementation_handoff_prompt, build_merge_summary_messages,
+        build_merge_summary_system_prompt, build_orphaned_run_terminal_event,
+        build_title_model_candidates, build_title_prompt, build_title_prompt_from_messages,
+        collapse_whitespace, detect_prior_summary, extract_context_summary_block,
+        extract_run_model_refs, extract_run_string, inactive_thread_run_error,
         is_terminal_runtime_event, mark_thread_run_cancellation_requested, merge_json_value,
         normalize_compact_summary, normalize_generated_title, render_compact_summary_history,
         should_complete_reasoning_for_event, sidebar_status_for_runtime_event,
@@ -61,6 +62,51 @@ pub(super) mod tests {
         assert!(runs
             .get("run-1")
             .is_some_and(|run| run.cancellation_requested));
+    }
+
+    #[tokio::test]
+    async fn active_run_id_for_thread_returns_none_when_queue_command_thread_is_inactive() {
+        let active_runs = Mutex::new(HashMap::<String, ActiveRun>::new());
+
+        let run_id = active_run_id_for_thread(&active_runs, "thread-without-active-run").await;
+        let error = inactive_thread_run_error();
+
+        assert_eq!(run_id, None);
+        assert_eq!(error.error_code, "thread.run.not_active");
+        assert_eq!(
+            error.user_message,
+            "No active run is available for this thread"
+        );
+        assert!(error.retryable);
+    }
+
+    #[tokio::test]
+    async fn active_run_id_for_thread_returns_matching_run_without_mutating_cancellation() {
+        let (frontend_tx, _) = broadcast::channel::<ThreadStreamEvent>(1);
+        let active_runs = Mutex::new(HashMap::from([(
+            "run-queue".to_string(),
+            ActiveRun {
+                run_id: "run-queue".to_string(),
+                thread_id: "thread-queue".to_string(),
+                profile_id: None,
+                frontend_tx,
+                lightweight_model_role: None,
+                auxiliary_model_role: None,
+                primary_model_role: None,
+                streaming_message_id: None,
+                last_completed_message_id: None,
+                reasoning_message_id: None,
+                cancellation_requested: false,
+            },
+        )]));
+
+        let run_id = active_run_id_for_thread(&active_runs, "thread-queue").await;
+
+        assert_eq!(run_id.as_deref(), Some("run-queue"));
+        let runs = active_runs.lock().await;
+        assert!(runs
+            .get("run-queue")
+            .is_some_and(|run| !run.cancellation_requested));
     }
 
     // ------------------------------------------------------------------

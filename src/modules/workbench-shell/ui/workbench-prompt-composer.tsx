@@ -7,6 +7,8 @@ import {
   FileSearchIcon,
   FileTextIcon,
   ImageIcon,
+  ListEnd,
+  ListStart,
   LoaderCircle,
   PaperclipIcon,
   Settings,
@@ -34,6 +36,11 @@ import {
   PromptInputFooter,
   PromptInputHeader,
   type PromptInputMessage,
+  PromptInputSelect,
+  PromptInputSelectContent,
+  PromptInputSelectItem,
+  PromptInputSelectTrigger,
+  PromptInputSelectValue,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
@@ -61,7 +68,7 @@ import {
 import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
 import { sortAgentProfilesByName } from "@/modules/settings-center/model/profile-utils";
 import type { SkillRecord } from "@/shared/types/extensions";
-import type { RunMode } from "@/shared/types/api";
+import type { RunMode, RuntimeQueueMessageKind } from "@/shared/types/api";
 import { indexFilterFiles, type FileFilterMatch } from "@/services/bridge";
 import type { SerializableAttachment } from "@/modules/workbench-shell/model/composer-store";
 import { useT } from "@/i18n";
@@ -102,6 +109,7 @@ type WorkbenchPromptComposerProps = {
   agentProfiles: ReadonlyArray<AgentProfile>;
   allowMissingActiveProfile?: boolean;
   canSubmitWhenAttachmentsOnly?: boolean;
+  canSubmitWhileRunning?: boolean;
   className?: string;
   commands?: ReadonlyArray<CommandEntry>;
   composerShellClassName?: string;
@@ -109,11 +117,14 @@ type WorkbenchPromptComposerProps = {
   error?: string | null;
   onErrorMessageChange?: (message: string | null) => void;
   onOpenProfileSettings?: () => void;
+  onRuntimeQueueSubmitModeChange?: (mode: RuntimeQueueMessageKind) => void;
   onSelectAgentProfile: (id: string) => void;
   onStop: () => void;
   onSubmit: (submission: ComposerSubmission) => void | Promise<void>;
   placeholder: string;
   providers: ReadonlyArray<ProviderEntry>;
+  runtimeQueueSubmitMode?: RuntimeQueueMessageKind | null;
+  showRuntimeQueueSubmitMode?: boolean;
   status: ChatStatus;
   suggestions?: ReadonlyArray<string>;
   textareaClassName?: string;
@@ -996,6 +1007,7 @@ function hasNonWhitespace(s: string): boolean {
 function PromptInputSubmitButton({
   activeProfile,
   allowAttachmentsOnly,
+  canSubmitWhileRunning = false,
   composerValue,
   hasMissingActiveProfile = false,
   onStop,
@@ -1003,6 +1015,7 @@ function PromptInputSubmitButton({
 }: {
   activeProfile: AgentProfile | null;
   allowAttachmentsOnly: boolean;
+  canSubmitWhileRunning?: boolean;
   composerValue: string;
   hasMissingActiveProfile?: boolean;
   onStop: () => void;
@@ -1012,9 +1025,73 @@ function PromptInputSubmitButton({
   const hasText = hasNonWhitespace(composerValue);
   const hasAttachments = attachments.files.length > 0;
   const isStopping = status === "submitted" || status === "streaming";
-  const canSubmit = Boolean(activeProfile) && !hasMissingActiveProfile && (hasText || (allowAttachmentsOnly && hasAttachments));
+  const canSubmit = Boolean(activeProfile) && !hasMissingActiveProfile && (
+    canSubmitWhileRunning
+      ? hasText && !hasAttachments
+      : hasText || (allowAttachmentsOnly && hasAttachments)
+  );
+  const shouldSubmitWhileRunning = isStopping && canSubmitWhileRunning && hasText && !hasAttachments;
+  const effectiveStatus = shouldSubmitWhileRunning ? "ready" : status;
+  const isEffectiveStopping = effectiveStatus === "submitted" || effectiveStatus === "streaming";
 
-  return <PromptInputSubmit disabled={isStopping ? false : !canSubmit} onStop={onStop} status={status} />;
+  return <PromptInputSubmit disabled={isEffectiveStopping ? false : !canSubmit} onStop={onStop} status={effectiveStatus} />;
+}
+
+function RuntimeQueueModeSelect({
+  mode,
+  onModeChange,
+}: {
+  mode: RuntimeQueueMessageKind;
+  onModeChange: (mode: RuntimeQueueMessageKind) => void;
+}) {
+  const t = useT();
+  const isSteer = mode === "steer";
+
+  return (
+    <PromptInputSelect value={mode} onValueChange={(value) => onModeChange(value as RuntimeQueueMessageKind)}>
+      <PromptInputSelectTrigger
+        aria-label={t("composer.queueMode.ariaLabel")}
+        className={cn(
+          "h-8 rounded-full border-none bg-transparent px-1 text-xs shadow-none [&>svg:last-child]:hidden",
+          "hover:bg-app-surface-hover",
+          isSteer
+            ? "text-app-warning hover:text-app-warning aria-expanded:text-app-warning"
+            : "text-app-info hover:text-app-info aria-expanded:text-app-info",
+        )}
+        size="sm"
+        title={t("composer.queueMode.tooltip")}
+      >
+        <PromptInputSelectValue>
+          <span className="flex items-center">
+            {isSteer ? <ListStart className="size-3.5" /> : <ListEnd className="size-3.5" />}
+          </span>
+        </PromptInputSelectValue>
+      </PromptInputSelectTrigger>
+      <PromptInputSelectContent align="end" className="min-w-[260px]">
+        <div className="px-3 pb-1.5 pt-2">
+          <span className="text-xs font-medium text-app-subtle">{t("composer.queueMode.panelTitle")}</span>
+        </div>
+        <PromptInputSelectItem value="steer">
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="flex items-center gap-2 font-medium text-app-foreground">
+              <ListStart className="size-3.5 text-app-warning" />
+              {t("composer.queueMode.steerLabel")}
+            </span>
+            <span className="text-[11px] text-app-subtle">{t("composer.queueMode.steerDesc")}</span>
+          </span>
+        </PromptInputSelectItem>
+        <PromptInputSelectItem value="follow_up">
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="flex items-center gap-2 font-medium text-app-foreground">
+              <ListEnd className="size-3.5 text-app-info" />
+              {t("composer.queueMode.followUpLabel")}
+            </span>
+            <span className="text-[11px] text-app-subtle">{t("composer.queueMode.followUpDesc")}</span>
+          </span>
+        </PromptInputSelectItem>
+      </PromptInputSelectContent>
+    </PromptInputSelect>
+  );
 }
 
 function ProfileInlineIdentity({
@@ -1233,6 +1310,7 @@ export function WorkbenchPromptComposer({
   agentProfiles,
   allowMissingActiveProfile = false,
   canSubmitWhenAttachmentsOnly = true,
+  canSubmitWhileRunning = false,
   className,
   commands = [],
   composerShellClassName,
@@ -1240,11 +1318,14 @@ export function WorkbenchPromptComposer({
   error,
   onErrorMessageChange,
   onOpenProfileSettings,
+  onRuntimeQueueSubmitModeChange,
   onSelectAgentProfile,
   onStop,
   onSubmit,
   placeholder,
   providers,
+  runtimeQueueSubmitMode,
+  showRuntimeQueueSubmitMode = false,
   status,
   suggestions,
   textareaClassName,
@@ -1290,6 +1371,10 @@ export function WorkbenchPromptComposer({
   const hasMissingActiveProfile =
     allowMissingActiveProfile && Boolean(activeAgentProfileId) && activeProfile === null;
   const canSwitchProfiles = agentProfiles.length > 0;
+  const hasComposerText = hasNonWhitespace(value);
+  const shouldShowRuntimeQueueModeSelect =
+    showRuntimeQueueSubmitMode && hasComposerText && Boolean(onRuntimeQueueSubmitModeChange);
+  const selectedRuntimeQueueSubmitMode = runtimeQueueSubmitMode ?? "follow_up";
   const commandRegistry = useMemo(
     () => buildComposerCommandRegistry(commands),
     [commands],
@@ -2039,14 +2124,23 @@ export function WorkbenchPromptComposer({
               </div>
             </PromptInputTools>
 
-            <PromptInputSubmitButton
-              activeProfile={activeProfile}
-              allowAttachmentsOnly={canSubmitWhenAttachmentsOnly}
-              composerValue={value}
-              hasMissingActiveProfile={hasMissingActiveProfile}
-              onStop={onStop}
-              status={status}
-            />
+            <div className="flex items-center gap-2">
+              {shouldShowRuntimeQueueModeSelect && onRuntimeQueueSubmitModeChange ? (
+                <RuntimeQueueModeSelect
+                  mode={selectedRuntimeQueueSubmitMode}
+                  onModeChange={onRuntimeQueueSubmitModeChange}
+                />
+              ) : null}
+              <PromptInputSubmitButton
+                activeProfile={activeProfile}
+                allowAttachmentsOnly={canSubmitWhenAttachmentsOnly}
+                canSubmitWhileRunning={canSubmitWhileRunning}
+                composerValue={value}
+                hasMissingActiveProfile={hasMissingActiveProfile}
+                onStop={onStop}
+                status={status}
+              />
+            </div>
           </PromptInputFooter>
         </PromptInput>
       </div>

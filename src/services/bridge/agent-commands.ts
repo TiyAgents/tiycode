@@ -3,6 +3,8 @@ import type {
   MessageAttachmentDto,
   RunModelPlanDto,
   RunUsageDto,
+  RuntimeQueueMessageKind,
+  RuntimeQueueSnapshotDto,
   SubagentActivityStatus,
   SubagentProgressSnapshot,
   TaskBoardDto,
@@ -92,6 +94,13 @@ function readValue(
   snakeKey: string,
 ) {
   return event[camelKey] ?? event[snakeKey];
+}
+
+function readObjectMetadata(event: RawThreadStreamEvent): Record<string, unknown> | null {
+  const value = readValue(event, "metadata", "metadata");
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 function readNumberOrNull(
@@ -191,6 +200,70 @@ function readUsage(event: RawThreadStreamEvent): RunUsageDto {
   };
 }
 
+function readRuntimeQueueSnapshot(value: unknown): RuntimeQueueSnapshotDto {
+  const fallbackId = () => Math.random().toString(36).slice(2);
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const messages = Array.isArray(raw.messages) ? raw.messages : [];
+  const events = Array.isArray(raw.events) ? raw.events : [];
+
+  return {
+    steeringDepth: Number(raw.steeringDepth ?? raw.steering_depth ?? 0),
+    followUpDepth: Number(raw.followUpDepth ?? raw.follow_up_depth ?? 0),
+    isDeferringSteering: Boolean(raw.isDeferringSteering ?? raw.is_deferring_steering ?? false),
+    messages: messages
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map((entry) => ({
+        id: typeof entry.id === "string" ? entry.id : fallbackId(),
+        kind: entry.kind === "follow_up" ? "follow_up" : "steer",
+        content: typeof entry.content === "string" ? entry.content : "",
+        metadata: entry.metadata && typeof entry.metadata === "object" && !Array.isArray(entry.metadata)
+          ? entry.metadata as Record<string, unknown>
+          : null,
+        status:
+          entry.status === "consumed"
+          || entry.status === "cleared"
+          || entry.status === "cancelled"
+            ? entry.status
+            : "pending",
+        createdAt: typeof entry.createdAt === "string"
+          ? entry.createdAt
+          : typeof entry.created_at === "string"
+            ? entry.created_at
+            : new Date().toISOString(),
+        updatedAt: typeof entry.updatedAt === "string"
+          ? entry.updatedAt
+          : typeof entry.updated_at === "string"
+            ? entry.updated_at
+            : new Date().toISOString(),
+      })),
+    events: events
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map((entry) => ({
+        id: typeof entry.id === "string" ? entry.id : fallbackId(),
+        kind: entry.kind === "follow_up" ? "follow_up" : "steer",
+        action:
+          entry.action === "consumed"
+          || entry.action === "cleared"
+          || entry.action === "removed"
+            ? entry.action
+            : "enqueued",
+        count: Number(entry.count ?? 0),
+        queueDepth: entry.queueDepth !== undefined || entry.queue_depth !== undefined
+          ? Number(entry.queueDepth ?? entry.queue_depth)
+          : undefined,
+        remaining: entry.remaining !== undefined ? Number(entry.remaining) : undefined,
+        countDropped: entry.countDropped !== undefined || entry.count_dropped !== undefined
+          ? Number(entry.countDropped ?? entry.count_dropped)
+          : undefined,
+        createdAt: typeof entry.createdAt === "string"
+          ? entry.createdAt
+          : typeof entry.created_at === "string"
+            ? entry.created_at
+            : new Date().toISOString(),
+      })),
+  };
+}
+
 export function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): ThreadStreamEvent {
   switch (rawEvent.type) {
     case "run_started":
@@ -273,7 +346,16 @@ export function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): Thre
       return {
         type: rawEvent.type,
         runId: readRequiredString(rawEvent, "runId", "run_id"),
-        queue: readValue(rawEvent, "queue", "queue"),
+        queue: readRuntimeQueueSnapshot(readValue(rawEvent, "queue", "queue")),
+      };
+    case "user_message_recorded":
+      return {
+        type: rawEvent.type,
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        messageId: readRequiredString(rawEvent, "messageId", "message_id"),
+        content: readRequiredString(rawEvent, "content", "content"),
+        createdAt: readRequiredString(rawEvent, "createdAt", "created_at"),
+        metadata: readObjectMetadata(rawEvent),
       };
     case "subagent_started":
       return {
@@ -497,6 +579,43 @@ export async function threadExecuteApprovedPlan(
     action,
     onEvent: channel,
   });
+}
+
+export async function threadEnqueueQueueMessage(
+  threadId: string,
+  kind: RuntimeQueueMessageKind,
+  message: string,
+  metadata?: Record<string, unknown> | null,
+): Promise<RuntimeQueueSnapshotDto> {
+  requireTauri("thread_enqueue_queue_message");
+  return readRuntimeQueueSnapshot(await invoke("thread_enqueue_queue_message", {
+    threadId,
+    kind,
+    message,
+    metadata: metadata ?? null,
+  }));
+}
+
+export async function threadClearRuntimeQueue(
+  threadId: string,
+  kind?: RuntimeQueueMessageKind | null,
+): Promise<RuntimeQueueSnapshotDto> {
+  requireTauri("thread_clear_runtime_queue");
+  return readRuntimeQueueSnapshot(await invoke("thread_clear_runtime_queue", {
+    threadId,
+    kind: kind ?? null,
+  }));
+}
+
+export async function threadCancelRuntimeQueueMessage(
+  threadId: string,
+  messageId: string,
+): Promise<RuntimeQueueSnapshotDto> {
+  requireTauri("thread_cancel_runtime_queue_message");
+  return readRuntimeQueueSnapshot(await invoke("thread_cancel_runtime_queue_message", {
+    threadId,
+    messageId,
+  }));
 }
 
 export async function threadClearContext(threadId: string): Promise<void> {

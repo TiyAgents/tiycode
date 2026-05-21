@@ -237,6 +237,28 @@ export function mapSnapshotMessage(message: MessageDto): SurfaceMessage {
   };
 }
 
+export type RecordedUserMessageEvent = {
+  messageId: string;
+  content: string;
+  createdAt: string;
+  metadata?: Record<string, unknown> | null;
+};
+
+export function mapRecordedUserMessage(event: RecordedUserMessageEvent): SurfaceMessage {
+  return {
+    createdAt: event.createdAt,
+    id: event.messageId,
+    messageType: "plain_message",
+    metadata: event.metadata ?? null,
+    attachments: [],
+    role: "user",
+    runId: null,
+    content: event.content,
+    parts: [{ type: "text", text: event.content }],
+    status: "completed",
+  };
+}
+
 
 
 export function deriveSelectedRunMode(snapshot: ThreadSnapshotDto, currentMode: RunMode) {

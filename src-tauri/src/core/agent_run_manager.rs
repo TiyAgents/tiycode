@@ -11,6 +11,7 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::time::{sleep, Instant};
 
 use crate::core::agent_session::{build_session_spec, ResolvedModelRole};
+use crate::core::agent_session_types::{AgentQueueMessageKind, RuntimeQueueSnapshotDto};
 use crate::core::built_in_agent_runtime::{BuiltInAgentRuntime, RuntimeSessionFinishState};
 use crate::core::plan_checkpoint::{
     ApprovalPromptMetadata, PlanApprovalAction, PlanMessageMetadata,
@@ -76,7 +77,7 @@ struct ContextResetMessageBundle {
     persisted_messages: Vec<MessageRecord>,
 }
 
-async fn mark_thread_run_cancellation_requested(
+pub(crate) async fn mark_thread_run_cancellation_requested(
     active_runs: &Mutex<HashMap<String, ActiveRun>>,
     thread_id: &str,
 ) -> Option<String> {
@@ -84,6 +85,24 @@ async fn mark_thread_run_cancellation_requested(
     let run = runs.values_mut().find(|run| run.thread_id == thread_id)?;
     run.cancellation_requested = true;
     Some(run.run_id.clone())
+}
+
+pub(crate) fn inactive_thread_run_error() -> AppError {
+    AppError::recoverable(
+        ErrorSource::Thread,
+        "thread.run.not_active",
+        "No active run is available for this thread",
+    )
+}
+
+pub(crate) async fn active_run_id_for_thread(
+    active_runs: &Mutex<HashMap<String, ActiveRun>>,
+    thread_id: &str,
+) -> Option<String> {
+    let runs = active_runs.lock().await;
+    runs.values()
+        .find(|run| run.thread_id == thread_id)
+        .map(|run| run.run_id.clone())
 }
 
 pub struct AgentRunManager {
@@ -403,12 +422,24 @@ impl AgentRunManager {
         &self,
         thread_id: &str,
     ) -> Result<Option<(String, broadcast::Receiver<ThreadStreamEvent>)>, AppError> {
-        let runs = self.active_runs.lock().await;
-        let Some(run) = runs.values().find(|run| run.thread_id == thread_id) else {
-            return Ok(None);
+        let (run_id, frontend_tx) = {
+            let runs = self.active_runs.lock().await;
+            let Some(run) = runs.values().find(|run| run.thread_id == thread_id) else {
+                return Ok(None);
+            };
+            (run.run_id.clone(), run.frontend_tx.clone())
         };
 
-        Ok(Some((run.run_id.clone(), run.frontend_tx.subscribe())))
+        let event_rx = frontend_tx.subscribe();
+        if let Some(snapshot) = self.runtime.runtime_queue_snapshot(&run_id).await {
+            let queue = serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({}));
+            let _ = frontend_tx.send(ThreadStreamEvent::QueueUpdated {
+                run_id: run_id.clone(),
+                queue,
+            });
+        }
+
+        Ok(Some((run_id, event_rx)))
     }
 
     pub async fn cancel_run(&self, thread_id: &str) -> Result<bool, AppError> {
@@ -450,6 +481,71 @@ impl AgentRunManager {
 
         tracing::info!(run_id = %run_id, "run cancel requested");
         Ok(true)
+    }
+
+    pub async fn enqueue_queue_message(
+        &self,
+        thread_id: &str,
+        kind: AgentQueueMessageKind,
+        message: String,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<RuntimeQueueSnapshotDto, AppError> {
+        let Some(run_id) = active_run_id_for_thread(&self.active_runs, thread_id).await else {
+            return Err(inactive_thread_run_error());
+        };
+
+        self.runtime
+            .enqueue_queue_message(&run_id, kind, message, metadata)
+            .await?
+            .ok_or_else(|| {
+                AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.run.session_missing",
+                    "The active run session is no longer available",
+                )
+            })
+    }
+
+    pub async fn clear_runtime_queue(
+        &self,
+        thread_id: &str,
+        kind: Option<AgentQueueMessageKind>,
+    ) -> Result<RuntimeQueueSnapshotDto, AppError> {
+        let Some(run_id) = active_run_id_for_thread(&self.active_runs, thread_id).await else {
+            return Err(inactive_thread_run_error());
+        };
+
+        self.runtime
+            .clear_runtime_queue(&run_id, kind)
+            .await
+            .ok_or_else(|| {
+                AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.run.session_missing",
+                    "The active run session is no longer available",
+                )
+            })
+    }
+
+    pub async fn cancel_runtime_queue_message(
+        &self,
+        thread_id: &str,
+        message_id: &str,
+    ) -> Result<RuntimeQueueSnapshotDto, AppError> {
+        let Some(run_id) = active_run_id_for_thread(&self.active_runs, thread_id).await else {
+            return Err(inactive_thread_run_error());
+        };
+
+        self.runtime
+            .cancel_runtime_queue_message(&run_id, message_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.run.session_missing",
+                    "The active run session is no longer available",
+                )
+            })
     }
 
     pub async fn wait_until_thread_inactive(

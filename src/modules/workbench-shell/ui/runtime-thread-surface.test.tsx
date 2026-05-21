@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createMachine } from "@/shared/lib/create-machine";
 import { mapSnapshotToRunState, isTaskBoardTool, getDefaultToolOpenState } from "./runtime-thread-surface-logic";
 import { LongMessageBody, shouldRenderTextPartAsPlainText } from "./long-message-body";
-import { mapMessageParts, mapSnapshotMessage, mergeSnapshotMessages, mergeSnapshotTools } from "./runtime-thread-surface-state";
+import { mapMessageParts, mapRecordedUserMessage, mapSnapshotMessage, mergeSnapshotMessages, mergeSnapshotTools } from "./runtime-thread-surface-state";
 import type { SurfaceMessage } from "./runtime-thread-surface-state";
 import type { MessageDto, RunStatus, ThreadSnapshotDto } from "@/shared/types/api";
 
@@ -170,6 +170,55 @@ describe("mapSnapshotMessage", () => {
 
     expect(message.content).toBe("legacy body");
     expect(message.parts).toEqual([{ type: "text", text: "structured body" }]);
+  });
+});
+
+describe("mapRecordedUserMessage", () => {
+  it("maps a consumed queue event to a plain completed user message", () => {
+    expect(mapRecordedUserMessage({
+      messageId: "msg-user-1",
+      content: "Use the simpler approach",
+      createdAt: "2026-05-20T00:00:02Z",
+    })).toEqual({
+      createdAt: "2026-05-20T00:00:02Z",
+      id: "msg-user-1",
+      messageType: "plain_message",
+      metadata: null,
+      attachments: [],
+      role: "user",
+      runId: null,
+      content: "Use the simpler approach",
+      parts: [{ type: "text", text: "Use the simpler approach" }],
+      status: "completed",
+    });
+  });
+
+  it("preserves command metadata and display text for consumed slash commands", () => {
+    const metadata = {
+      composer: {
+        kind: "command",
+        displayText: "/init",
+        effectivePrompt: "Generate or update AGENTS.md",
+      },
+    };
+
+    expect(mapRecordedUserMessage({
+      messageId: "msg-user-2",
+      content: "/init",
+      createdAt: "2026-05-20T00:00:03Z",
+      metadata,
+    })).toEqual({
+      createdAt: "2026-05-20T00:00:03Z",
+      id: "msg-user-2",
+      messageType: "plain_message",
+      metadata,
+      attachments: [],
+      role: "user",
+      runId: null,
+      content: "/init",
+      parts: [{ type: "text", text: "/init" }],
+      status: "completed",
+    });
   });
 });
 

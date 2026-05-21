@@ -1,6 +1,7 @@
 use tauri::{ipc::Channel, State};
 use tokio::sync::broadcast;
 
+use crate::core::agent_session_types::{AgentQueueMessageKind, RuntimeQueueSnapshotDto};
 use crate::core::app_state::AppState;
 use crate::core::plan_checkpoint::PlanApprovalAction;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
@@ -161,6 +162,44 @@ pub async fn thread_execute_approved_plan(
 
     forward_thread_stream_events(run_id.clone(), event_rx, on_event);
     Ok(run_id)
+}
+
+#[tauri::command]
+pub async fn thread_enqueue_queue_message(
+    state: State<'_, AppState>,
+    thread_id: String,
+    kind: AgentQueueMessageKind,
+    message: String,
+    metadata: Option<serde_json::Value>,
+) -> Result<RuntimeQueueSnapshotDto, AppError> {
+    state
+        .agent_run_manager
+        .enqueue_queue_message(&thread_id, kind, message, metadata)
+        .await
+}
+
+#[tauri::command]
+pub async fn thread_clear_runtime_queue(
+    state: State<'_, AppState>,
+    thread_id: String,
+    kind: Option<AgentQueueMessageKind>,
+) -> Result<RuntimeQueueSnapshotDto, AppError> {
+    state
+        .agent_run_manager
+        .clear_runtime_queue(&thread_id, kind)
+        .await
+}
+
+#[tauri::command]
+pub async fn thread_cancel_runtime_queue_message(
+    state: State<'_, AppState>,
+    thread_id: String,
+    message_id: String,
+) -> Result<RuntimeQueueSnapshotDto, AppError> {
+    state
+        .agent_run_manager
+        .cancel_runtime_queue_message(&thread_id, &message_id)
+        .await
 }
 
 #[cfg(test)]

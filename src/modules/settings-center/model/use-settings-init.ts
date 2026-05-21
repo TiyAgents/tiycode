@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import {
+  GENERAL_DEFAULT_APPEND_MESSAGE_KIND_KEY,
   GENERAL_LAUNCH_AT_LOGIN_SETTING_KEY,
   GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY,
   GENERAL_PREVENT_SLEEP_WHILE_RUNNING_SETTING_KEY,
@@ -38,6 +39,10 @@ export function useSettingsInit(): void {
     settingsStore,
     (s) => s.general.minimizeToTray,
   );
+  const defaultAppendMessageKind = useStore(
+    settingsStore,
+    (s) => s.general.defaultAppendMessageKind,
+  );
   const hydrationPhase = useStore(settingsStore, (s) => s.hydrationPhase);
   const backendHydrated =
     hydrationPhase === "hydrated" || hydrationPhase === "phase1_ready";
@@ -58,8 +63,12 @@ export function useSettingsInit(): void {
         GENERAL_MINIMIZE_TO_TRAY_SETTING_KEY,
         JSON.stringify(minimizeToTray),
       ),
+      settingsSet(
+        GENERAL_DEFAULT_APPEND_MESSAGE_KIND_KEY,
+        JSON.stringify(defaultAppendMessageKind),
+      ),
     ]).catch((error) => {
       console.warn("Failed to sync general settings", error);
     });
-  }, [backendHydrated, launchAtLogin, preventSleep, minimizeToTray]);
+  }, [backendHydrated, launchAtLogin, preventSleep, minimizeToTray, defaultAppendMessageKind]);
 }

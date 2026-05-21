@@ -77,6 +77,81 @@ pub struct ResolvedRuntimeModelPlan {
     pub transport: Transport,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentQueueMessageKind {
+    Steer,
+    FollowUp,
+}
+
+impl AgentQueueMessageKind {
+    pub(crate) fn from_tiy_queue_kind(kind: tiycore::agent::QueueKind) -> Self {
+        match kind {
+            tiycore::agent::QueueKind::Steering => Self::Steer,
+            tiycore::agent::QueueKind::FollowUp => Self::FollowUp,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeQueueMessageStatus {
+    Pending,
+    Consumed,
+    Cleared,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeQueueEventAction {
+    Enqueued,
+    Consumed,
+    Cleared,
+    Removed,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeQueueMessageDto {
+    pub id: String,
+    pub kind: AgentQueueMessageKind,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+    pub status: RuntimeQueueMessageStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(skip)]
+    pub handle: Option<tiycore::agent::QueuedMessageHandle>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeQueueEventDto {
+    pub id: String,
+    pub kind: AgentQueueMessageKind,
+    pub action: RuntimeQueueEventAction,
+    pub count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_depth: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count_dropped: Option<usize>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeQueueSnapshotDto {
+    pub steering_depth: usize,
+    pub follow_up_depth: usize,
+    pub is_deferring_steering: bool,
+    pub messages: Vec<RuntimeQueueMessageDto>,
+    pub events: Vec<RuntimeQueueEventDto>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentSessionSpec {
     pub run_id: String,
