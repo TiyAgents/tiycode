@@ -3122,7 +3122,7 @@ export function RuntimeThreadSurface({
             error={composerError}
             onErrorMessageChange={setComposerError}
             onOpenProfileSettings={() => {
-              uiLayoutStore.setState({ activeOverlay: "settings" });
+              uiLayoutStore.setState({ activeOverlay: "settings", activeSettingsCategory: "profiles" });
             }}
             onRuntimeQueueSubmitModeChange={setRuntimeQueueSubmitMode}
             onSelectAgentProfile={async (profileId: string) => {

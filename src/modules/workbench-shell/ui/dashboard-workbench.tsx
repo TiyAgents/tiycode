@@ -976,7 +976,7 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                             enabledSkills={enabledSkillEntries}
                             error={composerError}
                             onErrorMessageChange={setComposerError}
-                            onOpenProfileSettings={() => handleOpenSettings("general")}
+                            onOpenProfileSettings={() => handleOpenSettings("profiles")}
                             onSelectAgentProfile={handleSelectAgentProfileForThread}
                             onStop={() => undefined}
                             onSubmit={handleComposerSubmit}

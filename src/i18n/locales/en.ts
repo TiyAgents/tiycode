@@ -303,7 +303,9 @@ const en: Record<TranslationKey, string> = {
   "settings.category.account": "Account",
   "settings.category.accountDesc": "Manage your local session, account identity, active plan, and available subscription tiers.",
   "settings.category.general": "General",
-  "settings.category.generalDesc": "Set app preferences and default agent behavior, including theme, language, startup, models, and instructions.",
+  "settings.category.generalDesc": "Set app-level preferences such as theme, language, startup behavior, and composer defaults.",
+  "settings.category.profiles": "Profiles",
+  "settings.category.profilesDesc": "Manage agent profiles, switch the active profile, route model tiers, and tune profile-level instructions.",
   "settings.category.providers": "Providers",
   "settings.category.providersDesc": "Configure model providers, API access, request settings, and the models available to your agent.",
   "settings.category.commands": "Commands",
@@ -376,6 +378,22 @@ const en: Record<TranslationKey, string> = {
   "settings.general.commitPromptDesc": "Prompt used by the Git panel when generating commit messages for the current profile.",
   "settings.general.notSet": "Not set",
   "settings.general.noModelsAvailable": "No models available. Enable providers and models first.",
+
+  // ── Settings: Profiles Panel ───────────────────────────────
+  "settings.profiles.newProfile": "New Profile",
+  "settings.profiles.addProfile": "Add Profile",
+  "settings.profiles.profileLibrary": "Profile Library",
+  "settings.profiles.profileLibraryDesc": "Choose the active profile, then tune the behavior, model routing, and instructions used by new agent runs.",
+  "settings.profiles.currentProfile": "Current profile",
+  "settings.profiles.activeBadge": "Active",
+  "settings.profiles.configuredModels": "Configured models",
+  "settings.profiles.configuredModelsCount": "{{count}} of 3 tiers configured",
+  "settings.profiles.behaviorSection": "Behavior",
+  "settings.profiles.behaviorSectionDesc": "Control how this profile responds and how much reasoning it should use.",
+  "settings.profiles.modelRoutingSection": "Model Routing",
+  "settings.profiles.modelRoutingSectionDesc": "Assign the primary, auxiliary, and lightweight model tiers used across the app.",
+  "settings.profiles.instructionsSection": "Instructions & Agent Access",
+  "settings.profiles.instructionsSectionDesc": "Limit delegated agents and define persistent instructions for this profile.",
 
   // ── Settings: Agents Panel ─────────────────────────────────
   "settings.agents.builtInAgents": "Built-in Agents",

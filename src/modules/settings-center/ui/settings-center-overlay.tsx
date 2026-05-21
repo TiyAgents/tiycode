@@ -37,6 +37,7 @@ import {
   Star,
   TerminalSquare,
   Trash2,
+  UserCog,
   Wrench,
   X,
   Zap,
@@ -198,6 +199,12 @@ function getCategoryMeta(t: TFunc) {
       title: t("settings.category.general"),
       description: t("settings.category.generalDesc"),
       icon: Monitor,
+    },
+    {
+      key: "profiles" as SettingsCategory,
+      title: t("settings.category.profiles"),
+      description: t("settings.category.profilesDesc"),
+      icon: UserCog,
     },
     {
       key: "providers" as SettingsCategory,
@@ -472,22 +479,28 @@ export function SettingsCenterOverlay({
 
                 {activeCategory === "general" ? (
                   <GeneralSettingsPanel
+                    description={activeMeta.description}
+                    generalPreferences={generalPreferences}
+                    language={language}
+                    theme={theme}
+                    onSelectLanguage={onSelectLanguage}
+                    onSelectTheme={onSelectTheme}
+                    onUpdateGeneralPreference={onUpdateGeneralPreference}
+                  />
+                ) : null}
+
+                {activeCategory === "profiles" ? (
+                  <ProfileSettingsPanel
                     agentProfiles={agentProfiles}
                     activeAgentProfileId={activeAgentProfileId}
                     customSubagents={customSubagents}
                     description={activeMeta.description}
-                    generalPreferences={generalPreferences}
-                    language={language}
                     providers={providers}
-                    theme={theme}
                     onAddAgentProfile={onAddAgentProfile}
                     onDuplicateAgentProfile={onDuplicateAgentProfile}
                     onRemoveAgentProfile={onRemoveAgentProfile}
-                    onSelectLanguage={onSelectLanguage}
-                    onSelectTheme={onSelectTheme}
                     onSetActiveAgentProfile={onSetActiveAgentProfile}
                     onUpdateAgentProfile={onUpdateAgentProfile}
-                    onUpdateGeneralPreference={onUpdateGeneralPreference}
                   />
                 ) : null}
 
@@ -994,95 +1007,23 @@ function ProfilePicker({
 }
 
 function GeneralSettingsPanel({
-  agentProfiles,
-  activeAgentProfileId,
-  customSubagents,
   description,
   generalPreferences,
   language,
-  providers,
   theme,
-  onAddAgentProfile,
-  onDuplicateAgentProfile,
-  onRemoveAgentProfile,
   onSelectLanguage,
   onSelectTheme,
-  onSetActiveAgentProfile,
-  onUpdateAgentProfile,
   onUpdateGeneralPreference,
 }: {
-  agentProfiles: Array<AgentProfile>;
-  activeAgentProfileId: string;
-  customSubagents: Array<CustomSubagent>;
   description: string;
   generalPreferences: GeneralPreferences;
   language: LanguagePreference;
-  providers: Array<ProviderEntry>;
   theme: ThemePreference;
-  onAddAgentProfile: (entry: Omit<AgentProfile, "id">) => void;
-  onDuplicateAgentProfile: (id: string) => void;
-  onRemoveAgentProfile: (id: string) => void;
   onSelectLanguage: (language: LanguagePreference) => void;
   onSelectTheme: (theme: ThemePreference) => void;
-  onSetActiveAgentProfile: (id: string) => void;
-  onUpdateAgentProfile: (id: string, patch: Partial<Omit<AgentProfile, "id">>) => void;
   onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
 }) {
   const t = useT();
-  const RESPONSE_STYLE_OPTIONS = useMemo(() => getResponseStyleOptions(t), [t]);
-  const THINKING_LEVEL_OPTIONS = useMemo(() => getThinkingLevelOptions(t), [t]);
-
-  const availableModels = useMemo(() => {
-    const models: Array<{
-      providerId: string;
-      providerName: string;
-      modelRecordId: string;
-      modelId: string;
-      displayName: string;
-    }> = [];
-    for (const provider of providers) {
-      if (!provider.enabled) continue;
-      for (const model of provider.models) {
-        if (!model.enabled) continue;
-        models.push({
-          providerId: provider.id,
-          modelRecordId: model.id,
-          modelId: model.modelId,
-          displayName: model.displayName || model.modelId,
-          providerName: provider.displayName,
-        });
-      }
-    }
-    return models.sort((a, b) => {
-      const providerCompare = a.providerName.localeCompare(b.providerName, undefined, { sensitivity: "base" });
-      if (providerCompare !== 0) return providerCompare;
-      const modelCompare = a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" });
-      if (modelCompare !== 0) return modelCompare;
-      return a.modelId.localeCompare(b.modelId, undefined, { sensitivity: "base" });
-    });
-  }, [providers]);
-
-  const activeProfile = agentProfiles.find((p) => p.id === activeAgentProfileId) ?? agentProfiles[0];
-  const selectedStyle = RESPONSE_STYLE_OPTIONS.find((option) => option.value === activeProfile.responseStyle) ?? RESPONSE_STYLE_OPTIONS[0];
-  const selectedThinking = THINKING_LEVEL_OPTIONS.find((option) => option.value === activeProfile.thinkingLevel) ?? THINKING_LEVEL_OPTIONS[0];
-
-  const handleAddProfile = () => {
-    onAddAgentProfile({
-      name: t("settings.general.newProfile"),
-      customInstructions: "",
-      commitMessagePrompt: activeProfile.commitMessagePrompt,
-      responseStyle: "balanced",
-      thinkingLevel: "off",
-      responseLanguage: "English",
-      commitMessageLanguage: "English",
-      primaryProviderId: "",
-      primaryModelId: "",
-      assistantProviderId: "",
-      assistantModelId: "",
-      liteProviderId: "",
-      liteModelId: "",
-    });
-  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -1164,9 +1105,104 @@ function GeneralSettingsPanel({
           }
         />
       </SettingsSection>
+    </div>
+  );
+}
+
+type AvailableProfileModel = {
+  providerId: string;
+  providerName: string;
+  modelRecordId: string;
+  modelId: string;
+  displayName: string;
+};
+
+function collectAvailableProfileModels(providers: Array<ProviderEntry>): Array<AvailableProfileModel> {
+  const models: Array<AvailableProfileModel> = [];
+  for (const provider of providers) {
+    if (!provider.enabled) continue;
+    for (const model of provider.models) {
+      if (!model.enabled) continue;
+      models.push({
+        providerId: provider.id,
+        modelRecordId: model.id,
+        modelId: model.modelId,
+        displayName: model.displayName || model.modelId,
+        providerName: provider.displayName,
+      });
+    }
+  }
+  return models.sort((a, b) => {
+    const providerCompare = a.providerName.localeCompare(b.providerName, undefined, { sensitivity: "base" });
+    if (providerCompare !== 0) return providerCompare;
+    const modelCompare = a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" });
+    if (modelCompare !== 0) return modelCompare;
+    return a.modelId.localeCompare(b.modelId, undefined, { sensitivity: "base" });
+  });
+}
+
+function countConfiguredProfileModels(profile: AgentProfile): number {
+  return [profile.primaryModelId, profile.assistantModelId, profile.liteModelId].filter(Boolean).length;
+}
+
+function ProfileSettingsPanel({
+  agentProfiles,
+  activeAgentProfileId,
+  customSubagents,
+  description,
+  providers,
+  onAddAgentProfile,
+  onDuplicateAgentProfile,
+  onRemoveAgentProfile,
+  onSetActiveAgentProfile,
+  onUpdateAgentProfile,
+}: {
+  agentProfiles: Array<AgentProfile>;
+  activeAgentProfileId: string;
+  customSubagents: Array<CustomSubagent>;
+  description: string;
+  providers: Array<ProviderEntry>;
+  onAddAgentProfile: (entry: Omit<AgentProfile, "id">) => void;
+  onDuplicateAgentProfile: (id: string) => void;
+  onRemoveAgentProfile: (id: string) => void;
+  onSetActiveAgentProfile: (id: string) => void;
+  onUpdateAgentProfile: (id: string, patch: Partial<Omit<AgentProfile, "id">>) => void;
+}) {
+  const t = useT();
+  const RESPONSE_STYLE_OPTIONS = useMemo(() => getResponseStyleOptions(t), [t]);
+  const THINKING_LEVEL_OPTIONS = useMemo(() => getThinkingLevelOptions(t), [t]);
+  const availableModels = useMemo(() => collectAvailableProfileModels(providers), [providers]);
+
+  const activeProfile = agentProfiles.find((p) => p.id === activeAgentProfileId) ?? agentProfiles[0];
+  const selectedStyle = RESPONSE_STYLE_OPTIONS.find((option) => option.value === activeProfile.responseStyle) ?? RESPONSE_STYLE_OPTIONS[0];
+  const selectedThinking = THINKING_LEVEL_OPTIONS.find((option) => option.value === activeProfile.thinkingLevel) ?? THINKING_LEVEL_OPTIONS[0];
+  const configuredModelsCount = countConfiguredProfileModels(activeProfile);
+
+  const handleAddProfile = () => {
+    onAddAgentProfile({
+      name: t("settings.profiles.newProfile"),
+      customInstructions: "",
+      commitMessagePrompt: activeProfile.commitMessagePrompt,
+      responseStyle: "balanced",
+      thinkingLevel: "off",
+      responseLanguage: "English",
+      commitMessageLanguage: "English",
+      primaryProviderId: "",
+      primaryModelId: "",
+      assistantProviderId: "",
+      assistantModelId: "",
+      liteProviderId: "",
+      liteModelId: "",
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHeading title={t("settings.category.profiles")} description={description} />
 
       <SettingsSection
-        title={t("settings.general.agentProfiles")}
+        title={t("settings.profiles.profileLibrary")}
+        headerClassName="flex-wrap gap-2"
         action={
           <div className="flex items-center gap-1.5">
             <ProfilePicker
@@ -1179,15 +1215,63 @@ function GeneralSettingsPanel({
             />
             <button
               type="button"
-              className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
+              className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
               onClick={handleAddProfile}
             >
               <Plus className="size-3" />
-              {t("settings.general.addProfile")}
+              {t("settings.profiles.addProfile")}
             </button>
           </div>
         }
       >
+        <div className="bg-app-surface px-4 py-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl border border-app-border bg-app-surface-muted text-app-subtle">
+                <CircleUserRound className="size-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+                  {t("settings.profiles.currentProfile")}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="truncate text-[15px] font-semibold text-app-foreground">{activeProfile.name}</p>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-app-border bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-app-subtle">
+                    <Check className="size-3" />
+                    {t("settings.profiles.activeBadge")}
+                  </span>
+                </div>
+                <p className="mt-1 max-w-2xl text-[12px] leading-5 text-app-muted">
+                  {t("settings.profiles.profileLibraryDesc")}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-2 sm:min-w-[190px]">
+              <div className="rounded-xl border border-app-border bg-app-surface-muted px-3 py-2">
+                <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+                  {t("settings.profiles.configuredModels")}
+                </p>
+                <p className="mt-1 text-[13px] font-medium text-app-foreground">
+                  {t("settings.profiles.configuredModelsCount", { count: configuredModelsCount })}
+                </p>
+              </div>
+              <div className="rounded-xl border border-app-border bg-app-surface-muted px-3 py-2">
+                <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+                  {t("settings.general.responseStyle")}
+                </p>
+                <p className="mt-1 truncate text-[13px] font-medium text-app-foreground">{selectedStyle.label}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title={t("settings.profiles.behaviorSection")}>
+        <div className="bg-app-surface px-4 py-3">
+          <p className="text-[12px] leading-5 text-app-muted">{t("settings.profiles.behaviorSectionDesc")}</p>
+        </div>
+        <SectionDivider />
         <SettingsRow
           label={t("settings.general.responseStyle")}
           description={selectedStyle.description}
@@ -1228,18 +1312,6 @@ function GeneralSettingsPanel({
           }
         />
         <SectionDivider />
-        <ModelSelectRow
-          label={t("settings.general.primaryModel")}
-          description={t("settings.general.primaryModelDesc")}
-          providerId={activeProfile.primaryProviderId}
-          modelRecordId={activeProfile.primaryModelId}
-          availableModels={availableModels}
-          onValueChange={(providerId, modelRecordId) => onUpdateAgentProfile(activeProfile.id, {
-            primaryProviderId: providerId,
-            primaryModelId: modelRecordId,
-          })}
-        />
-        <SectionDivider />
         <SettingsRow
           label={t("settings.general.thinkingLevel")}
           description={selectedThinking.description}
@@ -1250,6 +1322,24 @@ function GeneralSettingsPanel({
               onValueChange={(value) => onUpdateAgentProfile(activeProfile.id, { thinkingLevel: value as ThinkingLevel })}
             />
           }
+        />
+      </SettingsSection>
+
+      <SettingsSection title={t("settings.profiles.modelRoutingSection")}>
+        <div className="bg-app-surface px-4 py-3">
+          <p className="text-[12px] leading-5 text-app-muted">{t("settings.profiles.modelRoutingSectionDesc")}</p>
+        </div>
+        <SectionDivider />
+        <ModelSelectRow
+          label={t("settings.general.primaryModel")}
+          description={t("settings.general.primaryModelDesc")}
+          providerId={activeProfile.primaryProviderId}
+          modelRecordId={activeProfile.primaryModelId}
+          availableModels={availableModels}
+          onValueChange={(providerId, modelRecordId) => onUpdateAgentProfile(activeProfile.id, {
+            primaryProviderId: providerId,
+            primaryModelId: modelRecordId,
+          })}
         />
         <SectionDivider />
         <ModelSelectRow
@@ -1275,6 +1365,12 @@ function GeneralSettingsPanel({
             liteModelId: modelRecordId,
           })}
         />
+      </SettingsSection>
+
+      <SettingsSection title={t("settings.profiles.instructionsSection")}>
+        <div className="bg-app-surface px-4 py-3">
+          <p className="text-[12px] leading-5 text-app-muted">{t("settings.profiles.instructionsSectionDesc")}</p>
+        </div>
         <SectionDivider />
         <div className="px-4 py-3">
           <ProfileAgentAccess
@@ -3797,15 +3893,17 @@ function PageHeading({
 function SettingsSection({
   action,
   children,
+  headerClassName,
   title,
 }: {
   action?: ReactNode;
   children: ReactNode;
+  headerClassName?: string;
   title: string;
 }) {
   return (
     <section>
-      <div className="mb-2 flex items-center justify-between px-1">
+      <div className={cn("mb-2 flex items-center justify-between px-1", headerClassName)}>
         <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{title}</h2>
         {action ?? null}
       </div>

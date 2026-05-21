@@ -307,7 +307,10 @@ const zhCN = {
     "管理本地会话、账户身份、当前计划和可用订阅层级。",
   "settings.category.general": "通用配置",
   "settings.category.generalDesc":
-    "设置应用偏好和默认 Agent 行为，包括主题、语言、启动项、模型和指令。",
+    "设置主题、语言、启动行为和 composer 默认行为等应用级偏好。",
+  "settings.category.profiles": "Profile 配置",
+  "settings.category.profilesDesc":
+    "管理 Agent Profile、切换当前 Profile、配置模型分层和 Profile 级指令。",
   "settings.category.providers": "模型服务",
   "settings.category.providersDesc":
     "配置模型供应商、API 访问、请求设置以及 Agent 可用的模型。",
@@ -393,6 +396,22 @@ const zhCN = {
     "Git 面板为当前 Profile 生成 Commit 消息时使用的提示词。",
   "settings.general.notSet": "未设置",
   "settings.general.noModelsAvailable": "没有可用模型。请先启用供应商和模型。",
+
+  // ── Settings: Profiles Panel ───────────────────────────────
+  "settings.profiles.newProfile": "新 Profile",
+  "settings.profiles.addProfile": "添加 Profile",
+  "settings.profiles.profileLibrary": "Profile 库",
+  "settings.profiles.profileLibraryDesc": "选择当前 Profile，并配置新 Agent 运行时使用的行为、模型路由和指令。",
+  "settings.profiles.currentProfile": "当前 Profile",
+  "settings.profiles.activeBadge": "当前使用",
+  "settings.profiles.configuredModels": "已配置模型",
+  "settings.profiles.configuredModelsCount": "已配置 {{count}} / 3 个模型层级",
+  "settings.profiles.behaviorSection": "行为偏好",
+  "settings.profiles.behaviorSectionDesc": "控制此 Profile 的回复方式以及推理深度。",
+  "settings.profiles.modelRoutingSection": "模型路由",
+  "settings.profiles.modelRoutingSectionDesc": "分配应用中使用的主模型、辅助模型和轻量模型层级。",
+  "settings.profiles.instructionsSection": "指令与 Agent 访问",
+  "settings.profiles.instructionsSectionDesc": "限制可委派 Agent，并定义此 Profile 的常驻指令。",
 
   // ── Settings: Agents Panel ─────────────────────────────────
   "settings.agents.builtInAgents": "内置 Agent",
