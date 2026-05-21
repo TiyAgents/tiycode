@@ -433,6 +433,9 @@ const en: Record<TranslationKey, string> = {
   "settings.agents.discardDesc": "You have unsaved edits in this custom agent. Discarding will lose those changes before continuing.",
   "settings.agents.continueEditing": "Continue editing",
   "settings.agents.discardChanges": "Discard changes",
+  "settings.agents.errorCreate": "Failed to create agent",
+  "settings.agents.errorDelete": "Failed to delete agent",
+  "settings.agents.errorSave": "Failed to save agent",
 
   // ── Settings: Profile Agent Access ─────────────────────────
   "settings.profileAgentAccess.title": "Available Agents",

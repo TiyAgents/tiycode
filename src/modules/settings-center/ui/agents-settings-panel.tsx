@@ -8,6 +8,7 @@ import {
   Plus,
   Trash2,
   Wrench,
+  X,
 } from "lucide-react";
 import { useT, type TranslationKey } from "@/i18n";
 import type {
@@ -156,6 +157,7 @@ export function AgentsSettingsPanel({
   const [editState, setEditState] = useState<Partial<CustomSubagentInput> | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingAction, setPendingAction] = useState<AgentPendingAction | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const selectedAgent = customSubagents.find((a) => a.id === selectedId);
   const hasUnsavedChanges = editState !== null;
@@ -184,6 +186,9 @@ export function AgentsSettingsPanel({
       setEditState(null);
     } catch (error) {
       console.error("Failed to create subagent", error);
+      setErrorMessage(
+        error instanceof Error ? error.message : String(error) || t("settings.agents.errorCreate"),
+      );
     }
   };
 
@@ -198,10 +203,14 @@ export function AgentsSettingsPanel({
       }
     } catch (error) {
       console.error("Failed to delete subagent", error);
+      setErrorMessage(
+        error instanceof Error ? error.message : String(error) || t("settings.agents.errorDelete"),
+      );
     }
   };
 
   const performAction = (action: AgentPendingAction) => {
+    setErrorMessage(null);
     switch (action.type) {
       case "select":
         setSelectedId(action.id);
@@ -253,10 +262,10 @@ export function AgentsSettingsPanel({
     setIsSaving(true);
     try {
       const input: CustomSubagentInput = {
-        name: editState.name ?? selectedAgent.name,
-        slug: editState.slug ?? selectedAgent.slug,
-        systemPrompt: editState.systemPrompt ?? selectedAgent.systemPrompt,
-        invocationDescription: editState.invocationDescription ?? selectedAgent.invocationDescription,
+        name: editState.name !== undefined ? editState.name : selectedAgent.name,
+        slug: editState.slug !== undefined ? editState.slug : selectedAgent.slug,
+        systemPrompt: editState.systemPrompt !== undefined ? editState.systemPrompt : selectedAgent.systemPrompt,
+        invocationDescription: editState.invocationDescription !== undefined ? editState.invocationDescription : selectedAgent.invocationDescription,
         allowedTools: editState.allowedTools ?? selectedAgent.allowedTools,
         modelRole: editState.modelRole ?? selectedAgent.modelRole ?? "auxiliary",
         isEnabled: editState.isEnabled ?? selectedAgent.isEnabled,
@@ -269,6 +278,9 @@ export function AgentsSettingsPanel({
       setEditState(null);
     } catch (error) {
       console.error("Failed to update subagent", error);
+      setErrorMessage(
+        error instanceof Error ? error.message : String(error) || t("settings.agents.errorSave"),
+      );
     } finally {
       setIsSaving(false);
     }
@@ -498,6 +510,20 @@ export function AgentsSettingsPanel({
           {description ?? t("settings.category.agentsDesc")}
         </p>
       </div>
+
+      {errorMessage && (
+        <div className="flex items-center gap-2 rounded-lg border border-app-error/30 bg-app-error/10 px-3 py-2 text-[12px] text-app-error">
+          <AlertTriangle className="size-3.5 shrink-0" />
+          <span className="min-w-0">{errorMessage}</span>
+          <button
+            type="button"
+            className="ml-auto shrink-0 text-app-muted hover:text-app-foreground"
+            onClick={() => setErrorMessage(null)}
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
 
       <SettingsPanelSection title={t("settings.agents.builtInAgents")}>
         <div className="grid gap-3 p-3 md:grid-cols-2">

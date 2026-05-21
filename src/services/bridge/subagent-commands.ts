@@ -20,7 +20,7 @@ export type CustomSubagentInput = {
 };
 
 export async function customSubagentList(): Promise<CustomSubagent[]> {
-  requireTauri("custom_subagent_list");
+  if (!isTauri()) return [];
   return invoke<CustomSubagent[]>("custom_subagent_list");
 }
 
