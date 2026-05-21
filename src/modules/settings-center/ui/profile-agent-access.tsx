@@ -16,9 +16,10 @@ export function ProfileAgentAccess({
   customSubagents,
 }: ProfileAgentAccessProps) {
   const [accessIds, setAccessIds] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
+    if (customSubagents.length === 0) return;
     let cancelled = false;
     setIsLoading(true);
     profileSubagentAccessGet(profileId)
@@ -32,7 +33,7 @@ export function ProfileAgentAccess({
         if (!cancelled) setIsLoading(false);
       });
     return () => { cancelled = true; };
-  }, [profileId]);
+  }, [profileId, customSubagents.length]);
 
   const toggleAccess = async (subagentId: string) => {
     const next = accessIds.includes(subagentId)
@@ -43,43 +44,38 @@ export function ProfileAgentAccess({
       await profileSubagentAccessSet(profileId, next);
     } catch (error) {
       console.error("Failed to update profile subagent access", error);
-      // Revert optimistic update
       setAccessIds(accessIds);
     }
   };
 
-  if (customSubagents.length === 0) {
-    return null;
-  }
-
   return (
-    <div className="mt-6 border-t border-app-border pt-4">
-      <h4 className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+    <div>
+      <h4 className="mb-2 flex items-center gap-1.5 text-[13px] font-medium leading-5 text-app-foreground">
         <Bot className="size-4" />
         Available Agents
       </h4>
-      <p className="mb-3 text-xs text-app-foreground-muted">
-        Select which custom agents this profile can use. Built-in agents (Explore, Review) are always available.
+      <p className="mb-3 text-[12px] leading-5 text-app-muted">
+        Configure which agents this profile can delegate tasks to. Built-in agents are always available.
       </p>
 
-      {isLoading ? (
-        <p className="text-xs text-app-foreground-muted">Loading...</p>
-      ) : (
-        <div className="space-y-1.5">
-          {/* Built-in agents (always on) */}
-          <label className="flex items-center gap-2 text-sm opacity-60">
-            <input type="checkbox" checked disabled className="size-3.5 rounded" />
-            <span className="font-medium">Explore</span>
-            <span className="text-xs text-app-foreground-muted">(built-in, always available)</span>
-          </label>
-          <label className="flex items-center gap-2 text-sm opacity-60">
-            <input type="checkbox" checked disabled className="size-3.5 rounded" />
-            <span className="font-medium">Review</span>
-            <span className="text-xs text-app-foreground-muted">(built-in, always available)</span>
-          </label>
+      <div className="space-y-1.5">
+        {/* Built-in agents (always on) */}
+        <label className="flex items-center gap-2 text-sm opacity-60">
+          <input type="checkbox" checked disabled className="size-3.5 rounded" />
+          <span className="font-medium">Explore</span>
+          <span className="text-xs text-app-muted">(built-in)</span>
+        </label>
+        <label className="flex items-center gap-2 text-sm opacity-60">
+          <input type="checkbox" checked disabled className="size-3.5 rounded" />
+          <span className="font-medium">Review</span>
+          <span className="text-xs text-app-muted">(built-in)</span>
+        </label>
 
-          {/* Custom agents */}
-          {customSubagents.map((agent) => (
+        {/* Custom agents */}
+        {isLoading ? (
+          <p className="py-1 text-xs text-app-muted">Loading...</p>
+        ) : customSubagents.length > 0 ? (
+          customSubagents.map((agent) => (
             <label key={agent.id} className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -88,11 +84,16 @@ export function ProfileAgentAccess({
                 className="size-3.5 rounded border-app-border"
               />
               <span className="font-medium">{agent.name}</span>
-              <code className="text-xs text-app-foreground-muted">agent_{agent.slug}</code>
+              <code className="text-xs text-app-subtle">agent_{agent.slug}</code>
             </label>
-          ))}
-        </div>
-      )}
+          ))
+        ) : (
+          <p className="py-1 text-xs text-app-muted">
+            No custom agents configured. Go to Settings → Agents to create one.
+          </p>
+        )}
+      </div>
     </div>
   );
 }
+
