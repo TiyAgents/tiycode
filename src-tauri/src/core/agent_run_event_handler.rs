@@ -40,6 +40,7 @@ pub(crate) async fn persist_user_message_recorded(
     thread_id: &str,
     message_id: &str,
     content: &str,
+    created_at: &str,
     metadata: Option<&serde_json::Value>,
 ) -> Result<(), AppError> {
     message_repo::insert(
@@ -55,7 +56,7 @@ pub(crate) async fn persist_user_message_recorded(
             status: "completed".to_string(),
             metadata_json: metadata.map(|value| value.to_string()),
             attachments_json: None,
-            created_at: String::new(),
+            created_at: created_at.to_string(),
         },
     )
     .await
@@ -316,6 +317,7 @@ impl AgentRunManager {
             ThreadStreamEvent::UserMessageRecorded {
                 message_id,
                 content,
+                created_at,
                 metadata,
                 ..
             } => {
@@ -332,6 +334,7 @@ impl AgentRunManager {
                         &thread_id,
                         message_id,
                         content,
+                        created_at,
                         metadata.as_ref(),
                     )
                     .await?;
@@ -901,6 +904,7 @@ mod tests {
             "thread-1",
             "019e4470-0000-7000-8000-000000000001",
             "Use the simpler approach",
+            "2026-05-20T12:00:00.000Z",
             None,
         )
         .await
@@ -920,6 +924,7 @@ mod tests {
         assert_eq!(message.parts_json, None);
         assert_eq!(message.metadata_json, None);
         assert_eq!(message.attachments_json, None);
+        assert_eq!(message.created_at, "2026-05-20T12:00:00.000Z");
     }
 
     #[tokio::test]
@@ -939,6 +944,7 @@ mod tests {
             "thread-1",
             "019e4470-0000-7000-8000-000000000002",
             "/init",
+            "2026-05-20T13:00:00.000Z",
             Some(&metadata),
         )
         .await
@@ -955,6 +961,7 @@ mod tests {
             .expect("metadata json");
 
         assert_eq!(message.content_markdown, "/init");
+        assert_eq!(message.created_at, "2026-05-20T13:00:00.000Z");
         assert_eq!(
             persisted_metadata
                 .pointer("/composer/effectivePrompt")

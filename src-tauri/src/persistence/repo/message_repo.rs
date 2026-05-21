@@ -258,7 +258,7 @@ pub async fn insert(pool: &SqlitePool, record: &MessageRecord) -> Result<(), App
     sqlx::query(
         "INSERT INTO messages (id, thread_id, run_id, role, content_markdown,
                 parts_json, message_type, status, metadata_json, attachments_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))",
     )
     .bind(&record.id)
     .bind(&record.thread_id)
@@ -270,6 +270,7 @@ pub async fn insert(pool: &SqlitePool, record: &MessageRecord) -> Result<(), App
     .bind(&record.status)
     .bind(&record.metadata_json)
     .bind(&record.attachments_json)
+    .bind(&record.created_at)
     .execute(pool)
     .await?;
 

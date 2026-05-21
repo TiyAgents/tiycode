@@ -546,12 +546,18 @@ impl AgentSession {
             AgentQueueMessageKind::FollowUp => self.agent.follow_up(AgentMessage::from(text)),
         };
 
+        // Fetch queue stats BEFORE re-acquiring runtime_queue_state to avoid
+        // an ABBA deadlock: the on_queue_event callback runs inside the
+        // Agent's internal lock and acquires runtime_queue_state, while this
+        // path would otherwise hold runtime_queue_state and then acquire the
+        // Agent lock via queue_stats().
+        let stats = self.agent.queue_stats();
+
         let mut state = self
             .runtime_queue_state
             .lock()
             .expect("runtime queue state poisoned");
         attach_runtime_queue_message_handle(&mut state.messages, &message_id, handle);
-        let stats = self.agent.queue_stats();
         Ok(build_runtime_queue_snapshot(&stats, &state))
     }
 
@@ -596,6 +602,10 @@ impl AgentSession {
         }
 
         let now = runtime_queue_timestamp();
+        // Fetch queue stats BEFORE re-acquiring runtime_queue_state to avoid
+        // an ABBA deadlock (see enqueue_queue_message for details).
+        let stats = self.agent.queue_stats();
+
         let mut state = self
             .runtime_queue_state
             .lock()
@@ -606,7 +616,6 @@ impl AgentSession {
             RuntimeQueueMessageStatus::Cancelled,
             &now,
         );
-        let stats = self.agent.queue_stats();
         Ok(build_runtime_queue_snapshot(&stats, &state))
     }
 

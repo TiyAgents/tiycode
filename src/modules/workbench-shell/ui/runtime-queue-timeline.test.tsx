@@ -61,11 +61,21 @@ function findButton(element: ReactElement): ReactElement<ComponentProps<"button"
 }
 
 function findButtonOrNull(element: ReactElement): ReactElement<ComponentProps<"button">> | null {
-  if (element.type === "button") {
-    return element as ReactElement<ComponentProps<"button">>;
+  // Resolve function components into their rendered output so that
+  // `<RuntimeQueueMessageCard ... />` created via JSX can be traversed
+  // the same way as direct function calls.
+  let current: ReactElement = element;
+  while (typeof current.type === "function") {
+    const next = (current.type as (...args: unknown[]) => ReactElement)(current.props);
+    if (!next || typeof next !== "object" || !("type" in next)) return null;
+    current = next as ReactElement;
   }
 
-  const props = element.props as { children?: unknown };
+  if (current.type === "button") {
+    return current as ReactElement<ComponentProps<"button">>;
+  }
+
+  const props = current.props as { children?: unknown };
   const children = Array.isArray(props.children) ? props.children : [props.children];
 
   for (const child of children) {
@@ -166,11 +176,13 @@ describe("RuntimeQueueTimeline", () => {
   it("invokes the cancel handler with the message id and stops event propagation", () => {
     const onCancelMessage = vi.fn();
     const stopPropagation = vi.fn();
-    const card = RuntimeQueueMessageCard({
-      message: message({ id: "pending-message", status: "pending" }),
-      t,
-      onCancelMessage,
-    });
+    const card = (
+      <RuntimeQueueMessageCard
+        message={message({ id: "pending-message", status: "pending" })}
+        t={t}
+        onCancelMessage={onCancelMessage}
+      />
+    ) as ReactElement;
 
     const button = findButton(card);
     button.props.onClick?.({ stopPropagation } as never);
@@ -182,12 +194,14 @@ describe("RuntimeQueueTimeline", () => {
   it("disables the cancel button and ignores clicks while cancellation is in progress", () => {
     const onCancelMessage = vi.fn();
     const stopPropagation = vi.fn();
-    const card = RuntimeQueueMessageCard({
-      message: message({ id: "pending-message", status: "pending" }),
-      t,
-      onCancelMessage,
-      isCancelling: true,
-    });
+    const card = (
+      <RuntimeQueueMessageCard
+        message={message({ id: "pending-message", status: "pending" })}
+        t={t}
+        onCancelMessage={onCancelMessage}
+        isCancelling={true}
+      />
+    ) as ReactElement;
 
     const button = findButton(card);
     button.props.onClick?.({ stopPropagation } as never);
