@@ -125,10 +125,13 @@ export type CommandSettings = {
   commands: Array<CommandEntry>;
 };
 
+export type AppendMessageKind = "steer" | "follow_up";
+
 export type GeneralPreferences = {
   launchAtLogin: boolean;
   preventSleepWhileRunning: boolean;
   minimizeToTray: boolean;
+  defaultAppendMessageKind: AppendMessageKind;
 };
 
 export type PolicySettings = {

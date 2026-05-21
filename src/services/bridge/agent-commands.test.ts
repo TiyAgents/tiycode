@@ -107,6 +107,118 @@ describe("normalizeThreadStreamEvent artifact_updated", () => {
   });
 });
 
+describe("normalizeThreadStreamEvent queue_updated", () => {
+  it("normalizes a snake_case runtime queue snapshot", () => {
+    const result = normalizeThreadStreamEvent({
+      type: "queue_updated",
+      run_id: "run-1",
+      queue: {
+        steering_depth: 1,
+        follow_up_depth: 2,
+        is_deferring_steering: true,
+        messages: [
+          {
+            id: "q-1",
+            kind: "follow_up",
+            content: "Next step",
+            status: "pending",
+            created_at: "2026-05-20T00:00:00Z",
+            updated_at: "2026-05-20T00:00:01Z",
+          },
+        ],
+        events: [
+          {
+            id: "evt-1",
+            kind: "follow_up",
+            action: "enqueued",
+            count: 1,
+            queue_depth: 2,
+            created_at: "2026-05-20T00:00:01Z",
+          },
+        ],
+      },
+    }) as Extract<ThreadStreamEvent, { type: "queue_updated" }>;
+
+    expect(result.runId).toBe("run-1");
+    expect(result.queue).toEqual({
+      steeringDepth: 1,
+      followUpDepth: 2,
+      isDeferringSteering: true,
+      messages: [
+        {
+          id: "q-1",
+          kind: "follow_up",
+          content: "Next step",
+          metadata: null,
+          status: "pending",
+          createdAt: "2026-05-20T00:00:00Z",
+          updatedAt: "2026-05-20T00:00:01Z",
+        },
+      ],
+      events: [
+        {
+          id: "evt-1",
+          kind: "follow_up",
+          action: "enqueued",
+          count: 1,
+          queueDepth: 2,
+          remaining: undefined,
+          countDropped: undefined,
+          createdAt: "2026-05-20T00:00:01Z",
+        },
+      ],
+    });
+  });
+});
+
+describe("normalizeThreadStreamEvent user_message_recorded", () => {
+  it("normalizes a snake_case user message event", () => {
+    const result = normalizeThreadStreamEvent({
+      type: "user_message_recorded",
+      run_id: "run-1",
+      message_id: "msg-user-1",
+      content: "Use the simpler approach",
+      created_at: "2026-05-20T00:00:02Z",
+    }) as Extract<ThreadStreamEvent, { type: "user_message_recorded" }>;
+
+    expect(result).toEqual({
+      type: "user_message_recorded",
+      runId: "run-1",
+      messageId: "msg-user-1",
+      content: "Use the simpler approach",
+      createdAt: "2026-05-20T00:00:02Z",
+      metadata: null,
+    });
+  });
+
+  it("normalizes command metadata on a consumed queue user message event", () => {
+    const metadata = {
+      composer: {
+        kind: "command",
+        displayText: "/init",
+        effectivePrompt: "Generate or update AGENTS.md",
+      },
+    };
+    const result = normalizeThreadStreamEvent({
+      type: "user_message_recorded",
+      run_id: "run-1",
+      message_id: "msg-user-1",
+      content: "/init",
+      created_at: "2026-05-20T00:00:02Z",
+      metadata,
+    }) as Extract<ThreadStreamEvent, { type: "user_message_recorded" }>;
+
+    expect(result).toEqual({
+      type: "user_message_recorded",
+      runId: "run-1",
+      messageId: "msg-user-1",
+      content: "/init",
+      createdAt: "2026-05-20T00:00:02Z",
+      metadata,
+    });
+  });
+});
+
 describe("normalizeThreadStreamEvent request_retrying", () => {
   it("normalizes request_retrying with snake_case retry fields", () => {
     const result = normalizeThreadStreamEvent({

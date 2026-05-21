@@ -81,6 +81,7 @@ describe("ThreadStream event routing", () => {
     const onPlan = vi.fn();
     const onReasoning = vi.fn();
     const onQueue = vi.fn();
+    const onUserMessage = vi.fn();
     const onTaskBoard = vi.fn();
     const onThreadTitle = vi.fn();
     const onUsage = vi.fn();
@@ -90,6 +91,7 @@ describe("ThreadStream event routing", () => {
     stream.onPlan = onPlan;
     stream.onReasoning = onReasoning;
     stream.onQueue = onQueue;
+    stream.onUserMessage = onUserMessage;
     stream.onTaskBoard = onTaskBoard;
     stream.onThreadTitle = onThreadTitle;
     stream.onUsage = onUsage;
@@ -100,7 +102,31 @@ describe("ThreadStream event routing", () => {
       { type: "message_completed", runId: "run-1", messageId: "msg-1", content: "hi!" },
       { type: "plan_updated", runId: "run-1", plan: { steps: ["a"] } },
       { type: "reasoning_updated", runId: "run-1", messageId: "reason-1", reasoning: "thinking" },
-      { type: "queue_updated", runId: "run-1", queue: ["q"] },
+      {
+        type: "queue_updated",
+        runId: "run-1",
+        queue: {
+          steeringDepth: 1,
+          followUpDepth: 0,
+          isDeferringSteering: false,
+          messages: [],
+          events: [],
+        },
+      },
+      {
+        type: "user_message_recorded",
+        runId: "run-1",
+        messageId: "msg-user-1",
+        content: "/init",
+        createdAt: "2026-05-20T00:00:02Z",
+        metadata: {
+          composer: {
+            kind: "command",
+            displayText: "/init",
+            effectivePrompt: "Generate or update AGENTS.md",
+          },
+        },
+      },
       {
         type: "task_board_updated",
         runId: "run-1",
@@ -122,14 +148,36 @@ describe("ThreadStream event routing", () => {
 
     await expect(stream.startRun("thread-1", { prompt: "hi" })).resolves.toBe("run-1");
 
-    expect(onRawEvent).toHaveBeenCalledTimes(10);
+    expect(onRawEvent).toHaveBeenCalledTimes(11);
     expect(onRunStateChange).toHaveBeenCalledWith("running", "run-1");
     expect(onRunStateChange).toHaveBeenCalledWith("completed", "run-1");
     expect(onMessage).toHaveBeenCalledWith({ kind: "delta", runId: "run-1", messageId: "msg-1", delta: "hi" });
     expect(onMessage).toHaveBeenCalledWith({ kind: "completed", runId: "run-1", messageId: "msg-1", content: "hi!" });
     expect(onPlan).toHaveBeenCalledWith({ runId: "run-1", plan: { steps: ["a"] } });
     expect(onReasoning).toHaveBeenCalledWith({ runId: "run-1", messageId: "reason-1", reasoning: "thinking" });
-    expect(onQueue).toHaveBeenCalledWith({ runId: "run-1", queue: ["q"] });
+    expect(onQueue).toHaveBeenCalledWith({
+      runId: "run-1",
+      queue: {
+        steeringDepth: 1,
+        followUpDepth: 0,
+        isDeferringSteering: false,
+        messages: [],
+        events: [],
+      },
+    });
+    expect(onUserMessage).toHaveBeenCalledWith({
+      runId: "run-1",
+      messageId: "msg-user-1",
+      content: "/init",
+      createdAt: "2026-05-20T00:00:02Z",
+      metadata: {
+        composer: {
+          kind: "command",
+          displayText: "/init",
+          effectivePrompt: "Generate or update AGENTS.md",
+        },
+      },
+    });
     expect(onTaskBoard).toHaveBeenCalledWith({ taskBoard: expect.objectContaining({ id: "board-1" }) });
     expect(onThreadTitle).toHaveBeenCalledWith({ runId: "run-1", threadId: "thread-1", title: "New title" });
     expect(onUsage).toHaveBeenCalledWith({ runId: "run-1", modelDisplayName: "Model", contextWindow: "128k", usage });
@@ -289,6 +337,40 @@ describe("ThreadStream commands", () => {
 
     stream.reset();
     expect(stream.runId).toBeNull();
+  });
+
+  it("routes queue snapshots replayed during subscribe", async () => {
+    const replayedQueue = {
+      steeringDepth: 1,
+      followUpDepth: 1,
+      isDeferringSteering: false,
+      messages: [
+        {
+          id: "queue-message-1",
+          kind: "steer" as const,
+          content: "Keep it concise",
+          metadata: null,
+          status: "pending" as const,
+          createdAt: "2026-05-20T00:00:00Z",
+          updatedAt: "2026-05-20T00:00:00Z",
+        },
+      ],
+      events: [],
+    };
+    threadSubscribeRunMock.mockImplementationOnce((threadId: string, onEvent: (event: ThreadStreamEvent) => void) => {
+      expect(threadId).toBe("thread-1");
+      onEvent({ type: "queue_updated", runId: "run-sub", queue: replayedQueue });
+      return Promise.resolve("run-sub");
+    });
+
+    const stream = new ThreadStream();
+    const onQueue = vi.fn();
+    stream.onQueue = onQueue;
+
+    await expect(stream.subscribe("thread-1")).resolves.toBe("run-sub");
+
+    expect(onQueue).toHaveBeenCalledWith({ runId: "run-sub", queue: replayedQueue });
+    expect(stream.runId).toBe("run-sub");
   });
 
   it("responds to approval and clarify requests", async () => {

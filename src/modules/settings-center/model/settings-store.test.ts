@@ -34,6 +34,7 @@ describe("settingsStore", () => {
       expect(typeof general.launchAtLogin).toBe("boolean");
       expect(typeof general.preventSleepWhileRunning).toBe("boolean");
       expect(typeof general.minimizeToTray).toBe("boolean");
+      expect(general.defaultAppendMessageKind).toBe("follow_up");
     });
 
     it("has default terminal settings", () => {

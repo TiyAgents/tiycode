@@ -463,6 +463,39 @@ export interface SubagentProgressSnapshot {
   recentActions: string[];
 }
 
+export type RuntimeQueueMessageKind = "steer" | "follow_up";
+export type RuntimeQueueMessageStatus = "pending" | "consumed" | "cleared" | "cancelled";
+export type RuntimeQueueEventAction = "enqueued" | "consumed" | "cleared" | "removed";
+
+export interface RuntimeQueueMessageDto {
+  id: string;
+  kind: RuntimeQueueMessageKind;
+  content: string;
+  metadata?: Record<string, unknown> | null;
+  status: RuntimeQueueMessageStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RuntimeQueueEventDto {
+  id: string;
+  kind: RuntimeQueueMessageKind;
+  action: RuntimeQueueEventAction;
+  count: number;
+  queueDepth?: number;
+  remaining?: number;
+  countDropped?: number;
+  createdAt: string;
+}
+
+export interface RuntimeQueueSnapshotDto {
+  steeringDepth: number;
+  followUpDepth: number;
+  isDeferringSteering: boolean;
+  messages: RuntimeQueueMessageDto[];
+  events: RuntimeQueueEventDto[];
+}
+
 export type ThreadStreamEvent =
   | { type: "run_started"; runId: string; runMode: string }
   | { type: "stream_resync_required"; runId: string; droppedEvents: number }
@@ -508,7 +541,15 @@ export type ThreadStreamEvent =
     }
   | { type: "plan_updated"; runId: string; plan: unknown }
   | { type: "reasoning_updated"; runId: string; messageId: string; reasoning: string }
-  | { type: "queue_updated"; runId: string; queue: unknown }
+  | { type: "queue_updated"; runId: string; queue: RuntimeQueueSnapshotDto }
+  | {
+      type: "user_message_recorded";
+      runId: string;
+      messageId: string;
+      content: string;
+      createdAt: string;
+      metadata?: Record<string, unknown> | null;
+    }
   | {
       type: "subagent_started";
       runId: string;

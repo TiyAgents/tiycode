@@ -5,6 +5,7 @@ use sqlx::SqlitePool;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::core::agent_session::{AgentSession, AgentSessionSpec};
+use crate::core::agent_session_types::{AgentQueueMessageKind, RuntimeQueueSnapshotDto};
 use crate::core::subagent::HelperAgentOrchestrator;
 use crate::core::tool_gateway::ToolGateway;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
@@ -107,6 +108,60 @@ impl BuiltInAgentRuntime {
         } else {
             Ok(false)
         }
+    }
+
+    pub async fn enqueue_queue_message(
+        &self,
+        run_id: &str,
+        kind: AgentQueueMessageKind,
+        message: String,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<Option<RuntimeQueueSnapshotDto>, AppError> {
+        let session = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(run_id).map(|entry| Arc::clone(&entry.session))
+        };
+
+        session
+            .map(|session| session.enqueue_queue_message(kind, message, metadata))
+            .transpose()
+    }
+
+    pub async fn runtime_queue_snapshot(&self, run_id: &str) -> Option<RuntimeQueueSnapshotDto> {
+        let session = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(run_id).map(|entry| Arc::clone(&entry.session))
+        };
+
+        session.map(|session| session.runtime_queue_snapshot())
+    }
+
+    pub async fn clear_runtime_queue(
+        &self,
+        run_id: &str,
+        kind: Option<AgentQueueMessageKind>,
+    ) -> Option<RuntimeQueueSnapshotDto> {
+        let session = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(run_id).map(|entry| Arc::clone(&entry.session))
+        };
+
+        session.map(|session| session.clear_runtime_queue(kind))
+    }
+
+    pub async fn cancel_runtime_queue_message(
+        &self,
+        run_id: &str,
+        message_id: &str,
+    ) -> Result<Option<RuntimeQueueSnapshotDto>, AppError> {
+        let session = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(run_id).map(|entry| Arc::clone(&entry.session))
+        };
+
+        session
+            .map(|session| session.cancel_runtime_queue_message(message_id))
+            .transpose()
     }
 
     pub(crate) async fn session_state(&self, run_id: &str) -> RuntimeSessionState {

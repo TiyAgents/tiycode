@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SETTINGS_STORAGE_KEY, SETTINGS_STORAGE_SCHEMA_VERSION } from "@/modules/settings-center/model/defaults";
-import { readStoredLocalUiSettings } from "@/modules/settings-center/model/settings-storage";
+import { persistLocalUiSettings, readStoredLocalUiSettings } from "@/modules/settings-center/model/settings-storage";
 
 const LEGACY_SETTINGS_STORAGE_KEY = "tiy-agent-workbench-settings";
 
@@ -74,7 +74,7 @@ afterEach(() => {
 describe("readStoredLocalUiSettings", () => {
   it("prefers the current local UI settings key when it is valid", () => {
     setCurrentLocalUiSettings({
-      general: { minimizeToTray: false, launchAtLogin: true },
+      general: { minimizeToTray: false, launchAtLogin: true, defaultAppendMessageKind: "steer" },
       terminal: { fontSize: 16, cursorStyle: "underline" },
     });
     setLegacySettings({
@@ -86,6 +86,7 @@ describe("readStoredLocalUiSettings", () => {
 
     expect(result.general.launchAtLogin).toBe(true);
     expect(result.general.minimizeToTray).toBe(false);
+    expect(result.general.defaultAppendMessageKind).toBe("steer");
     expect(result.terminal.fontSize).toBe(16);
     expect(result.terminal.cursorStyle).toBe("underline");
   });
@@ -100,6 +101,7 @@ describe("readStoredLocalUiSettings", () => {
 
     expect(result.general.launchAtLogin).toBe(true);
     expect(result.general.minimizeToTray).toBe(false);
+    expect(result.general.defaultAppendMessageKind).toBe("follow_up");
     expect(result.terminal.fontSize).toBe(15);
     expect(result.terminal.cursorBlink).toBe(false);
 
@@ -118,6 +120,7 @@ describe("readStoredLocalUiSettings", () => {
     const result = readStoredLocalUiSettings();
 
     expect(result.general.launchAtLogin).toBe(false);
+    expect(result.general.defaultAppendMessageKind).toBe("follow_up");
     expect(result.terminal.fontSize).toBe(12);
     expect(localStorage().getItem(LEGACY_SETTINGS_STORAGE_KEY)).not.toBeNull();
   });
@@ -127,7 +130,45 @@ describe("readStoredLocalUiSettings", () => {
 
     expect(result.general.launchAtLogin).toBe(false);
     expect(result.general.minimizeToTray).toBe(true);
+    expect(result.general.defaultAppendMessageKind).toBe("follow_up");
     expect(result.terminal.fontSize).toBe(12);
     expect(result.terminal.cursorStyle).toBe("block");
+  });
+
+  it("falls back to the default append message kind when the stored value is invalid", () => {
+    setCurrentLocalUiSettings({
+      general: { defaultAppendMessageKind: "invalid" },
+    });
+
+    const result = readStoredLocalUiSettings();
+
+    expect(result.general.defaultAppendMessageKind).toBe("follow_up");
+  });
+
+  it("persists and restores the append message kind", () => {
+    persistLocalUiSettings({
+      general: {
+        launchAtLogin: false,
+        preventSleepWhileRunning: false,
+        minimizeToTray: true,
+        defaultAppendMessageKind: "steer",
+      },
+      terminal: {
+        shellPath: "",
+        shellArgs: "",
+        fontFamily: "monospace",
+        fontSize: 13,
+        lineHeight: 1.4,
+        cursorStyle: "bar",
+        cursorBlink: true,
+        scrollback: 1000,
+        copyOnSelect: true,
+        termEnv: "xterm-256color",
+      },
+    });
+
+    const result = readStoredLocalUiSettings();
+
+    expect(result.general.defaultAppendMessageKind).toBe("steer");
   });
 });
