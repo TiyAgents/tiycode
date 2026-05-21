@@ -7,9 +7,9 @@ pub(super) mod tests {
         build_merge_summary_system_prompt, build_orphaned_run_terminal_event,
         build_title_model_candidates, build_title_prompt, build_title_prompt_from_messages,
         collapse_whitespace, detect_prior_summary, extract_context_summary_block,
-        extract_run_model_refs, extract_run_string, is_terminal_runtime_event,
-        mark_thread_run_cancellation_requested, merge_json_value, normalize_compact_summary,
-        normalize_generated_title, render_compact_summary_history,
+        extract_run_model_refs, extract_run_string, inactive_thread_run_error,
+        is_terminal_runtime_event, mark_thread_run_cancellation_requested, merge_json_value,
+        normalize_compact_summary, normalize_generated_title, render_compact_summary_history,
         should_complete_reasoning_for_event, sidebar_status_for_runtime_event,
         summary_history_char_budget, terminal_event_status, truncate_chars,
         truncate_chars_keep_tail, truncate_tool_result_head_tail, ActiveRun,
@@ -62,6 +62,22 @@ pub(super) mod tests {
         assert!(runs
             .get("run-1")
             .is_some_and(|run| run.cancellation_requested));
+    }
+
+    #[tokio::test]
+    async fn active_run_id_for_thread_returns_none_when_queue_command_thread_is_inactive() {
+        let active_runs = Mutex::new(HashMap::<String, ActiveRun>::new());
+
+        let run_id = active_run_id_for_thread(&active_runs, "thread-without-active-run").await;
+        let error = inactive_thread_run_error();
+
+        assert_eq!(run_id, None);
+        assert_eq!(error.error_code, "thread.run.not_active");
+        assert_eq!(
+            error.user_message,
+            "No active run is available for this thread"
+        );
+        assert!(error.retryable);
     }
 
     #[tokio::test]

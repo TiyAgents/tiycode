@@ -318,6 +318,7 @@ export function RuntimeThreadSurface({
     if (prevThreadIdRef.current !== threadId) {
       prevThreadIdRef.current = threadId;
       setSelectedRunMode("default");
+      setRuntimeQueueSubmitMode(defaultAppendMessageKind);
       setRequestRetryEntries([]);
       setRequestRetryOpen({});
       setCancellingRuntimeQueueMessageIds(new Set());
@@ -326,7 +327,7 @@ export function RuntimeThreadSurface({
       setReasoningOpen({});
       userManuallyOpenedIds.current.clear();
     }
-  }, [threadId]);
+  }, [defaultAppendMessageKind, threadId]);
   const [thinkingPlaceholder, setThinkingPlaceholder] = useState<ThinkingPlaceholder | null>(null);
   const [tools, setTools] = useState<Array<SurfaceToolEntry>>([]);
   const [completedToolOpen, setCompletedToolOpen] = useState<Record<string, boolean>>({});

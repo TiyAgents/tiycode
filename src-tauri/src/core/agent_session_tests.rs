@@ -277,6 +277,82 @@ pub(super) mod tests {
         );
     }
 
+    fn sample_agent_session(
+        run_id: &str,
+        thread_id: &str,
+        pool: sqlx::SqlitePool,
+        tool_gateway: Arc<ToolGateway>,
+        helper_orchestrator: Arc<HelperAgentOrchestrator>,
+        event_tx: mpsc::UnboundedSender<ThreadStreamEvent>,
+        workspace_path: String,
+        active_runs: Arc<
+            tokio::sync::Mutex<
+                std::collections::HashMap<String, crate::core::agent_run_manager::ActiveRun>,
+            >,
+        >,
+    ) -> Arc<AgentSession> {
+        let spec = AgentSessionSpec {
+            run_id: run_id.to_string(),
+            thread_id: thread_id.to_string(),
+            workspace_path,
+            run_mode: "default".to_string(),
+            tool_profile_name: DEFAULT_FULL_TOOL_PROFILE.to_string(),
+            runtime_tools: Vec::new(),
+            system_prompt: "You are a test agent.".to_string(),
+            history_messages: Vec::new(),
+            history_tool_calls: Vec::new(),
+            model_plan: sample_resolved_runtime_model_plan(None),
+            initial_prompt: None,
+            initial_context_calibration: Default::default(),
+        };
+
+        AgentSession::new(
+            pool,
+            tool_gateway,
+            helper_orchestrator,
+            event_tx,
+            spec,
+            4,
+            active_runs,
+        )
+    }
+
+    #[tokio::test]
+    async fn agent_session_rejects_blank_runtime_queue_messages() {
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+        let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+        let tool_gateway = Arc::new(ToolGateway::new(pool.clone(), terminal_manager));
+        let helper_orchestrator = Arc::new(HelperAgentOrchestrator::new(
+            pool.clone(),
+            Arc::clone(&tool_gateway),
+        ));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
+        let active_runs = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let session = sample_agent_session(
+            "run-queue-validation",
+            "thread-queue-validation",
+            pool,
+            tool_gateway,
+            helper_orchestrator,
+            event_tx,
+            temp_dir.path().to_string_lossy().to_string(),
+            active_runs,
+        );
+
+        let error = session
+            .enqueue_queue_message(
+                AgentQueueMessageKind::FollowUp,
+                "  \n\t  ".to_string(),
+                None,
+            )
+            .expect_err("blank queue messages should be rejected");
+
+        assert_eq!(error.user_message, "Queue message cannot be empty");
+        assert!(session.runtime_queue_snapshot().messages.is_empty());
+    }
+
     #[tokio::test]
     async fn agent_session_runtime_queue_snapshot_returns_current_pending_messages() {
         let temp_dir = tempdir().expect("temp dir");

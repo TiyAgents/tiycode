@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ComponentProps } from "react";
-import { describe, expect, it } from "vitest";
+import type { ComponentProps, ReactElement } from "react";
+import { describe, expect, it, vi } from "vitest";
 
 import { LanguageProvider } from "@/app/providers/language-provider";
 import type { RuntimeQueueMessageDto, RuntimeQueueSnapshotDto } from "@/shared/types/api";
-import { RuntimeQueueTimeline } from "./runtime-queue-timeline";
+import { RuntimeQueueMessageCard, RuntimeQueueTimeline } from "./runtime-queue-timeline";
 
 function message(overrides: Partial<RuntimeQueueMessageDto> = {}): RuntimeQueueMessageDto {
   return {
@@ -38,6 +38,43 @@ function renderQueue(
       <RuntimeQueueTimeline queue={queue(messages)} {...props} />
     </LanguageProvider>,
   );
+}
+
+function t(key: string) {
+  const labels: Record<string, string> = {
+    "queue.cancelMessage": "Cancel queued message",
+    "queue.cancellingMessage": "Cancelling queued message",
+    "queue.followUp": "Follow-up",
+    "queue.steer": "Steering",
+    "queue.status.cancelled": "Cancelled",
+    "queue.status.cleared": "Cleared",
+    "queue.status.consumed": "Consumed",
+    "queue.status.pending": "Pending",
+  };
+  return labels[key] ?? key;
+}
+
+function findButton(element: ReactElement): ReactElement<ComponentProps<"button">> {
+  const found = findButtonOrNull(element);
+  if (!found) throw new Error("button not found");
+  return found;
+}
+
+function findButtonOrNull(element: ReactElement): ReactElement<ComponentProps<"button">> | null {
+  if (element.type === "button") {
+    return element as ReactElement<ComponentProps<"button">>;
+  }
+
+  const props = element.props as { children?: unknown };
+  const children = Array.isArray(props.children) ? props.children : [props.children];
+
+  for (const child of children) {
+    if (!child || typeof child !== "object" || !("type" in child)) continue;
+    const nested = findButtonOrNull(child as ReactElement);
+    if (nested) return nested;
+  }
+
+  return null;
 }
 
 describe("RuntimeQueueTimeline", () => {
@@ -124,5 +161,39 @@ describe("RuntimeQueueTimeline", () => {
     expect(pendingHtml).toMatch(/Cancel queued message|取消排队消息/);
     expect(consumedHtml).not.toMatch(/Cancel queued message|取消排队消息/);
     expect(noHandlerHtml).not.toMatch(/Cancel queued message|取消排队消息/);
+  });
+
+  it("invokes the cancel handler with the message id and stops event propagation", () => {
+    const onCancelMessage = vi.fn();
+    const stopPropagation = vi.fn();
+    const card = RuntimeQueueMessageCard({
+      message: message({ id: "pending-message", status: "pending" }),
+      t,
+      onCancelMessage,
+    });
+
+    const button = findButton(card);
+    button.props.onClick?.({ stopPropagation } as never);
+
+    expect(stopPropagation).toHaveBeenCalledOnce();
+    expect(onCancelMessage).toHaveBeenCalledWith("pending-message");
+  });
+
+  it("disables the cancel button and ignores clicks while cancellation is in progress", () => {
+    const onCancelMessage = vi.fn();
+    const stopPropagation = vi.fn();
+    const card = RuntimeQueueMessageCard({
+      message: message({ id: "pending-message", status: "pending" }),
+      t,
+      onCancelMessage,
+      isCancelling: true,
+    });
+
+    const button = findButton(card);
+    button.props.onClick?.({ stopPropagation } as never);
+
+    expect(button.props.disabled).toBe(true);
+    expect(stopPropagation).toHaveBeenCalledOnce();
+    expect(onCancelMessage).not.toHaveBeenCalled();
   });
 });

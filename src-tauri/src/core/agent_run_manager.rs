@@ -87,6 +87,14 @@ pub(crate) async fn mark_thread_run_cancellation_requested(
     Some(run.run_id.clone())
 }
 
+pub(crate) fn inactive_thread_run_error() -> AppError {
+    AppError::recoverable(
+        ErrorSource::Thread,
+        "thread.run.not_active",
+        "No active run is available for this thread",
+    )
+}
+
 pub(crate) async fn active_run_id_for_thread(
     active_runs: &Mutex<HashMap<String, ActiveRun>>,
     thread_id: &str,
@@ -483,11 +491,7 @@ impl AgentRunManager {
         metadata: Option<serde_json::Value>,
     ) -> Result<RuntimeQueueSnapshotDto, AppError> {
         let Some(run_id) = active_run_id_for_thread(&self.active_runs, thread_id).await else {
-            return Err(AppError::recoverable(
-                ErrorSource::Thread,
-                "thread.run.not_active",
-                "No active run is available for this thread",
-            ));
+            return Err(inactive_thread_run_error());
         };
 
         self.runtime
@@ -508,11 +512,7 @@ impl AgentRunManager {
         kind: Option<AgentQueueMessageKind>,
     ) -> Result<RuntimeQueueSnapshotDto, AppError> {
         let Some(run_id) = active_run_id_for_thread(&self.active_runs, thread_id).await else {
-            return Err(AppError::recoverable(
-                ErrorSource::Thread,
-                "thread.run.not_active",
-                "No active run is available for this thread",
-            ));
+            return Err(inactive_thread_run_error());
         };
 
         self.runtime
@@ -533,11 +533,7 @@ impl AgentRunManager {
         message_id: &str,
     ) -> Result<RuntimeQueueSnapshotDto, AppError> {
         let Some(run_id) = active_run_id_for_thread(&self.active_runs, thread_id).await else {
-            return Err(AppError::recoverable(
-                ErrorSource::Thread,
-                "thread.run.not_active",
-                "No active run is available for this thread",
-            ));
+            return Err(inactive_thread_run_error());
         };
 
         self.runtime

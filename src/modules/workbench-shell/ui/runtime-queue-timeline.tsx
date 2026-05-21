@@ -68,7 +68,7 @@ function statusLabel(message: RuntimeQueueMessageDto, t: ReturnType<typeof useT>
   return t("queue.status.pending");
 }
 
-function RuntimeQueueMessageCard({
+export function RuntimeQueueMessageCard({
   message,
   t,
   onCancelMessage,
