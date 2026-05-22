@@ -1,4 +1,4 @@
-export type SettingsCategory = "account" | "general" | "workspace" | "providers" | "commands" | "terminal" | "policy" | "about";
+export type SettingsCategory = "account" | "general" | "profiles" | "workspace" | "providers" | "commands" | "terminal" | "policy" | "agents" | "about";
 export type PromptResponseStyle = "balanced" | "concise" | "guide";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";
@@ -156,6 +156,21 @@ export type TerminalSettings = {
   termEnv: string;
 };
 
+export type CustomSubagentModelRole = "primary" | "auxiliary" | "lightweight";
+
+export type CustomSubagent = {
+  id: string;
+  name: string;
+  slug: string;
+  systemPrompt: string;
+  invocationDescription: string;
+  allowedTools: string[];
+  modelRole: CustomSubagentModelRole;
+  isEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type LocalUiSettingsState = {
   general: GeneralPreferences;
   terminal: TerminalSettings;
@@ -170,4 +185,5 @@ export type SettingsState = {
   policy: PolicySettings;
   agentProfiles: Array<AgentProfile>;
   activeAgentProfileId: string;
+  customSubagents: Array<CustomSubagent>;
 };

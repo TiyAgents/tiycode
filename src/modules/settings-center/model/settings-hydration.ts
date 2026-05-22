@@ -19,6 +19,7 @@ import {
   settingsSet,
   workspaceList,
 } from "@/services/bridge";
+import { customSubagentList } from "@/services/bridge/subagent-commands";
 import { waitForBackendReady } from "@/shared/lib/backend-ready";
 import { settingsStore } from "./settings-store";
 
@@ -367,12 +368,13 @@ async function hydrateSettings(): Promise<void> {
       try {
         settingsStore.setState({ hydrationPhase: "loading_phase2" });
 
-        const [catalog, policies, profiles, promptCommands] =
+        const [catalog, policies, profiles, promptCommands, customSubagents] =
           await Promise.all([
             providerCatalogList(),
             policyGetAll(),
             profileList(),
             promptCommandList(),
+            customSubagentList(),
           ]);
 
         const mappedCatalog = catalog.map((entry) => ({
@@ -474,6 +476,7 @@ async function hydrateSettings(): Promise<void> {
             ...promptCommands.map(mapPromptCommandDto),
             ...pendingCommands,
           ],
+          customSubagents: customSubagents ?? [],
           availableShells: shells,
           hydrationPhase: "hydrated",
         });

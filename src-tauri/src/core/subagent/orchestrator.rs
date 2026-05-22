@@ -104,9 +104,18 @@ impl HelperAgentOrchestrator {
     }
 
     pub async fn run_helper(&self, request: HelperRunRequest) -> Result<HelperRunResult, AppError> {
-        let helper_profile = request
-            .helper_profile
-            .unwrap_or_else(|| request.tool.profile());
+        let helper_profile = match request.helper_profile.or_else(|| request.tool.profile()) {
+            Some(p) => p,
+            None => {
+                return Err(AppError::internal(
+                    crate::model::errors::ErrorSource::Tool,
+                    format!(
+                        "No helper profile resolved for tool '{}'",
+                        request.tool.tool_name()
+                    ),
+                ));
+            }
+        };
         let helper_id = uuid::Uuid::now_v7().to_string();
         let resolved_helper_kind = helper_profile.helper_kind().to_string();
         let escalation_summary = Arc::new(StdMutex::new(None::<String>));
@@ -147,7 +156,7 @@ impl HelperAgentOrchestrator {
         agent.set_max_retries(Some(TIYCORE_REQUEST_MAX_RETRIES));
         agent.set_system_prompt(build_helper_system_prompt(
             &request.system_prompt,
-            helper_profile,
+            &helper_profile,
         ));
         agent.set_tools(helper_profile.helper_tools());
         agent.set_tool_execution(ToolExecutionMode::Sequential);
@@ -838,7 +847,7 @@ fn is_helper_inherited_section(title: &str) -> bool {
 
 fn build_helper_system_prompt(
     parent_system_prompt: &str,
-    helper_profile: SubagentProfile,
+    helper_profile: &SubagentProfile,
 ) -> String {
     let inherited_prompt = inherited_helper_prompt_sections(parent_system_prompt);
     let helper_shell_tooling_guide = helper_shell_tooling_guide(helper_profile);
@@ -855,6 +864,11 @@ Reference specific file paths and code locations where relevant. Skip preamble."
 Follow any response language instructions inherited above unless the parent explicitly overrides them. \
 If the inherited prompt specifies a response language, use that language in all natural-language JSON fields. \
 Follow the review helper's JSON contract exactly. Do not add markdown fences, headings, or prose outside the JSON object."
+        }
+        SubagentProfile::Custom { .. } => {
+            "Your output will be consumed by the parent agent, not the user. \
+Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
+Reference specific file paths and code locations where relevant. Skip preamble."
         }
     };
 
@@ -876,13 +890,16 @@ Follow the review helper's JSON contract exactly. Do not add markdown fences, he
     }
 }
 
-fn helper_shell_tooling_guide(helper_profile: SubagentProfile) -> &'static str {
+fn helper_shell_tooling_guide(helper_profile: &SubagentProfile) -> &'static str {
     match helper_profile {
         SubagentProfile::Explore => {
             "## Shell Tooling Guide\n- This helper does not have `shell`, `edit`, or Terminal panel control tools.\n- Use the workspace-aware tools you actually have: `read`, `list`, `find`, and `search`.\n- Prefer `find` to locate likely files, `search` to locate relevant text or symbols, and `read` to inspect exact implementation details.\n- `search` defaults to literal matching. Set `queryMode` to `regex` only when you intentionally need regular expressions."
         }
         SubagentProfile::Review => {
             "## Shell Tooling Guide\n- This helper may use `read`, `list`, `find`, `search`, `term_status`, `term_output`, and `shell`.\n- Use `shell` only for non-interactive diagnostic and verification commands in the workspace, such as type-checks, test suites, diffs, or other read-only inspection.\n- `term_status` and `term_output` refer only to the desktop app's embedded Terminal panel for the current thread.\n- This helper does not have `edit`, `term_write`, `term_restart`, or `term_close`."
+        }
+        SubagentProfile::Custom { .. } => {
+            "## Shell Tooling Guide\n- Use only the tools available to you as configured by the user.\n- Follow tool-use protocol strictly: verify required fields before calling."
         }
     }
 }
@@ -977,7 +994,7 @@ mod tests {
     fn helper_system_prompt_preserves_parent_language_instruction() {
         let prompt = build_helper_system_prompt(
             "## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.",
-            SubagentProfile::Explore,
+            &SubagentProfile::Explore,
         );
 
         assert!(prompt.contains("Respond in 简体中文"));
@@ -991,7 +1008,7 @@ mod tests {
     fn helper_system_prompt_inherits_only_allowed_sections() {
         let parent_prompt = "## Role\nYou are TiyCode.\n\n## Project Context (workspace instructions)\nFollow AGENTS.md.\n\n## Behavioral Guidelines\nUse clarify when needed.\n\n## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.\n\n## Sandbox & Permissions\n- Approval policy: auto.\n\n## Shell Tooling Guide\n- Generic shell guidance.\n\n## Final Response Structure\nUse structured markdown.";
 
-        let prompt = build_helper_system_prompt(parent_prompt, SubagentProfile::Explore);
+        let prompt = build_helper_system_prompt(parent_prompt, &SubagentProfile::Explore);
 
         assert!(prompt.contains("## Project Context (workspace instructions)"));
         assert!(prompt.contains("## Profile Instructions"));
@@ -1016,7 +1033,7 @@ mod tests {
 
     #[test]
     fn explore_helper_shell_guide_only_mentions_read_only_tools() {
-        let prompt = build_helper_system_prompt("", SubagentProfile::Explore);
+        let prompt = build_helper_system_prompt("", &SubagentProfile::Explore);
 
         assert!(prompt.contains(
             "This helper does not have `shell`, `edit`, or Terminal panel control tools."
@@ -1030,7 +1047,7 @@ mod tests {
 
     #[test]
     fn review_helper_shell_guide_matches_review_tool_whitelist() {
-        let prompt = build_helper_system_prompt("", SubagentProfile::Review);
+        let prompt = build_helper_system_prompt("", &SubagentProfile::Review);
 
         assert!(prompt.contains("`term_status`, `term_output`, and `shell`"));
         assert!(

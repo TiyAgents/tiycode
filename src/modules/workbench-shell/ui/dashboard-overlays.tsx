@@ -183,6 +183,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
   // ── Subscribe to settingsStore (replaces ~30 props) ─────────────
   const agentProfiles = useStore(settingsStore, (s) => s.agentProfiles, shallowEqual);
   const activeAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
+  const customSubagents = useStore(settingsStore, (s) => s.customSubagents, shallowEqual);
   const generalPreferences = useStore(settingsStore, (s) => s.general, shallowEqual);
   const policy = useStore(settingsStore, (s) => s.policy, shallowEqual);
   const terminal = useStore(settingsStore, (s) => s.terminal, shallowEqual);
@@ -261,6 +262,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
           activeAgentProfileId={activeAgentProfileId}
           contentRef={overlayContentRef}
           configDiagnostics={configDiagnostics}
+          customSubagents={customSubagents}
           generalPreferences={generalPreferences}
           isCheckingUpdates={isCheckingUpdates}
           language={language}

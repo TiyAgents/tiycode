@@ -44,6 +44,7 @@ pub(super) mod tests {
     use crate::core::tool_gateway::ToolGateway;
     use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::{AgentProfileRecord, ProviderKind, ProviderRecord};
+    use crate::model::subagent::CustomSubagentModelRole;
     use crate::model::thread::{MessageRecord, RunSummaryDto, RunUsageDto, ToolCallDto};
     use crate::persistence::init_database;
     use crate::persistence::repo::provider_repo;
@@ -162,11 +163,18 @@ pub(super) mod tests {
     fn sample_resolved_runtime_model_plan(
         auxiliary: Option<ResolvedModelRole>,
     ) -> ResolvedRuntimeModelPlan {
+        sample_resolved_runtime_model_plan_with_lightweight(auxiliary, None)
+    }
+
+    fn sample_resolved_runtime_model_plan_with_lightweight(
+        auxiliary: Option<ResolvedModelRole>,
+        lightweight: Option<ResolvedModelRole>,
+    ) -> ResolvedRuntimeModelPlan {
         ResolvedRuntimeModelPlan {
             raw: RuntimeModelPlan::default(),
             primary: sample_resolved_model_role("primary-model"),
             auxiliary,
-            lightweight: None,
+            lightweight,
             thinking_level: ThinkingLevel::Off,
             transport: tiycore::types::Transport::Sse,
         }
@@ -1600,12 +1608,12 @@ Used for prompt assembly coverage.
     #[test]
     fn helper_profiles_match_explore_and_review_tools() {
         assert_eq!(
-            resolve_helper_profile(RuntimeOrchestrationTool::Explore),
-            SubagentProfile::Explore,
+            resolve_helper_profile(&RuntimeOrchestrationTool::Explore),
+            Some(SubagentProfile::Explore),
         );
         assert_eq!(
-            resolve_helper_profile(RuntimeOrchestrationTool::Review),
-            SubagentProfile::Review,
+            resolve_helper_profile(&RuntimeOrchestrationTool::Review),
+            Some(SubagentProfile::Review),
         );
     }
 
@@ -1789,8 +1797,11 @@ Used for prompt assembly coverage.
             sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
 
         let explore_role =
-            resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Explore);
-        let review_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Review);
+            resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Explore, None)
+                .unwrap();
+        let review_role =
+            resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Review, None)
+                .unwrap();
 
         assert_eq!(explore_role.model_id, "assistant-model");
         assert_eq!(review_role.model_id, "assistant-model");
@@ -1801,11 +1812,101 @@ Used for prompt assembly coverage.
         let model_plan = sample_resolved_runtime_model_plan(None);
 
         let explore_role =
-            resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Explore);
-        let review_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Review);
+            resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Explore, None)
+                .unwrap();
+        let review_role =
+            resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Review, None)
+                .unwrap();
 
         assert_eq!(explore_role.model_id, "primary-model");
         assert_eq!(review_role.model_id, "primary-model");
+    }
+
+    #[test]
+    fn custom_helper_uses_configured_primary_model_role() {
+        let model_plan =
+            sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
+        let profile = SubagentProfile::Custom {
+            slug: "primary-agent".to_string(),
+            system_prompt: "Use primary.".to_string(),
+            allowed_tools: vec![],
+            model_role: CustomSubagentModelRole::Primary,
+        };
+
+        let helper_role = resolve_helper_model_role(
+            &model_plan,
+            &RuntimeOrchestrationTool::Custom("primary-agent".to_string()),
+            Some(&profile),
+        )
+        .unwrap();
+
+        assert_eq!(helper_role.model_id, "primary-model");
+    }
+
+    #[test]
+    fn custom_helper_uses_configured_lightweight_model_role() {
+        let model_plan = sample_resolved_runtime_model_plan_with_lightweight(
+            Some(sample_resolved_model_role("assistant-model")),
+            Some(sample_resolved_model_role("lightweight-model")),
+        );
+        let profile = SubagentProfile::Custom {
+            slug: "light-agent".to_string(),
+            system_prompt: "Use lightweight.".to_string(),
+            allowed_tools: vec![],
+            model_role: CustomSubagentModelRole::Lightweight,
+        };
+
+        let helper_role = resolve_helper_model_role(
+            &model_plan,
+            &RuntimeOrchestrationTool::Custom("light-agent".to_string()),
+            Some(&profile),
+        )
+        .unwrap();
+
+        assert_eq!(helper_role.model_id, "lightweight-model");
+    }
+
+    #[test]
+    fn custom_lightweight_helper_falls_back_to_auxiliary_then_primary() {
+        let profile = SubagentProfile::Custom {
+            slug: "fallback-agent".to_string(),
+            system_prompt: "Fallback.".to_string(),
+            allowed_tools: vec![],
+            model_role: CustomSubagentModelRole::Lightweight,
+        };
+
+        let with_auxiliary =
+            sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
+        let auxiliary_role = resolve_helper_model_role(
+            &with_auxiliary,
+            &RuntimeOrchestrationTool::Custom("fallback-agent".to_string()),
+            Some(&profile),
+        )
+        .unwrap();
+        assert_eq!(auxiliary_role.model_id, "assistant-model");
+
+        let primary_only = sample_resolved_runtime_model_plan(None);
+        let primary_role = resolve_helper_model_role(
+            &primary_only,
+            &RuntimeOrchestrationTool::Custom("fallback-agent".to_string()),
+            Some(&profile),
+        )
+        .unwrap();
+        assert_eq!(primary_role.model_id, "primary-model");
+    }
+
+    #[test]
+    fn custom_helper_without_resolved_profile_has_no_model_role() {
+        let model_plan =
+            sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
+
+        let helper_role = resolve_helper_model_role(
+            &model_plan,
+            &RuntimeOrchestrationTool::Custom("missing-profile".to_string()),
+            None,
+        );
+
+        assert!(helper_role.is_none());
     }
 
     #[tokio::test]
@@ -2083,7 +2184,9 @@ Used for prompt assembly coverage.
         let mut model_plan = sample_resolved_runtime_model_plan(Some(auxiliary));
         model_plan.thinking_level = ThinkingLevel::Medium;
 
-        let helper_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Explore);
+        let helper_role =
+            resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Explore, None)
+                .unwrap();
 
         assert_eq!(helper_role.model_id, "assistant-model");
         assert!(helper_role.model.reasoning);
@@ -2096,7 +2199,9 @@ Used for prompt assembly coverage.
         let mut model_plan = sample_resolved_runtime_model_plan(Some(auxiliary));
         model_plan.thinking_level = ThinkingLevel::Medium;
 
-        let helper_role = resolve_helper_model_role(&model_plan, RuntimeOrchestrationTool::Review);
+        let helper_role =
+            resolve_helper_model_role(&model_plan, &RuntimeOrchestrationTool::Review, None)
+                .unwrap();
 
         assert_eq!(helper_role.model_id, "assistant-model");
         assert!(!helper_role.model.reasoning);

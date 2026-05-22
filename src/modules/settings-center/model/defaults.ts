@@ -738,4 +738,5 @@ export const DEFAULT_SETTINGS: SettingsState = {
   policy: DEFAULT_POLICY_SETTINGS,
   agentProfiles: DEFAULT_AGENT_PROFILES,
   activeAgentProfileId: "default-profile",
+  customSubagents: [],
 };

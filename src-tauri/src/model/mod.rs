@@ -4,6 +4,7 @@ pub mod file;
 pub mod git;
 pub mod provider;
 pub mod settings;
+pub mod subagent;
 pub mod task_board;
 pub mod task_item;
 pub mod terminal;

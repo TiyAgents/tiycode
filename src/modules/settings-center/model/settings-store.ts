@@ -5,6 +5,7 @@ import {
 import type {
   AgentProfile,
   CommandEntry,
+  CustomSubagent,
   GeneralPreferences,
   PolicySettings,
   ProviderCatalogEntry,
@@ -36,6 +37,7 @@ export interface SettingsStoreState {
   terminal: TerminalSettings;
   policy: PolicySettings;
   commands: Array<CommandEntry>;
+  customSubagents: Array<CustomSubagent>;
   availableShells: Array<{ path: string; name: string }>;
   hydrationPhase: HydrationPhase;
 }
@@ -54,6 +56,7 @@ export const settingsStore = createStore<SettingsStoreState>({
   terminal: DEFAULT_SETTINGS.terminal,
   policy: DEFAULT_SETTINGS.policy,
   commands: DEFAULT_SETTINGS.commands.commands,
+  customSubagents: [],
   availableShells: [],
   hydrationPhase: "uninitialized",
 });

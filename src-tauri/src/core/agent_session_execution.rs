@@ -18,6 +18,7 @@ use crate::core::plan_checkpoint::{
 };
 use crate::core::subagent::{
     extract_review_report, HelperRunRequest, ReviewRequest, RuntimeOrchestrationTool,
+    SubagentProfile,
 };
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGatewayResult,
@@ -399,7 +400,7 @@ impl AgentSession {
         let HelperToolTask {
             task,
             review_request,
-        } = match resolve_helper_tool_task(tool, tool_input) {
+        } = match resolve_helper_tool_task(tool.clone(), tool_input) {
             Ok(resolved) => resolved,
             Err(error) => {
                 tool_call_repo::update_result(
@@ -414,16 +415,55 @@ impl AgentSession {
             }
         };
 
-        let helper_role = resolve_helper_model_role(&self.spec.model_plan, tool);
-        let helper_profile = resolve_helper_profile(tool);
+        let helper_profile = resolve_helper_profile(&tool);
+
+        // For custom subagents, resolve the profile from the session's custom subagent registry
+        let resolved_profile = if let RuntimeOrchestrationTool::Custom(ref slug) = tool {
+            match self.resolve_custom_subagent_profile(slug).await {
+                Some(profile) => Some(profile),
+                None => {
+                    let error = format!("Custom subagent 'agent_{slug}' not found or not enabled");
+                    tool_call_repo::update_result(
+                        &self.pool,
+                        tool_call_storage_id,
+                        &serde_json::json!({ "error": &error }).to_string(),
+                        "failed",
+                    )
+                    .await
+                    .ok();
+                    return agent_error_result(error);
+                }
+            }
+        } else {
+            helper_profile
+        };
+        let helper_role = match resolve_helper_model_role(
+            &self.spec.model_plan,
+            &tool,
+            resolved_profile.as_ref(),
+        ) {
+            Some(role) => role,
+            None => {
+                let error = format!("No helper profile resolved for tool '{}'", tool.tool_name());
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_storage_id,
+                    &serde_json::json!({ "error": &error }).to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+                return agent_error_result(error);
+            }
+        };
 
         let result = self
             .helper_orchestrator
             .run_helper(HelperRunRequest {
                 run_id: self.spec.run_id.clone(),
                 thread_id: self.spec.thread_id.clone(),
-                tool,
-                helper_profile: Some(helper_profile),
+                tool: tool.clone(),
+                helper_profile: resolved_profile,
                 parent_tool_call_id: Some(tool_call_id.to_string()),
                 task: task.clone(),
                 model_role: helper_role,
@@ -481,6 +521,50 @@ impl AgentSession {
                 agent_error_result(error.to_string())
             }
         }
+    }
+
+    /// Resolve a custom subagent slug into a SubagentProfile by loading from the database.
+    /// Validates both that the subagent is enabled and that it is accessible from the
+    /// active agent profile via the `profile_subagent_access` table.
+    async fn resolve_custom_subagent_profile(&self, slug: &str) -> Option<SubagentProfile> {
+        use crate::persistence::repo::{custom_subagent_repo, settings_repo};
+
+        let record = custom_subagent_repo::get_by_slug(&self.pool, slug)
+            .await
+            .ok()
+            .flatten()?;
+
+        if !record.is_enabled {
+            return None;
+        }
+
+        // Verify the active profile grants access to this subagent.
+        // If no active profile is set, custom subagents are not available — consistent
+        // with build_session_spec which injects no custom tools when profile_id is empty.
+        let active_profile_id = settings_repo::get(&self.pool, "active_profile_id")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str::<String>(&s.value_json).ok())
+            .unwrap_or_default();
+
+        if active_profile_id.is_empty() {
+            return None;
+        }
+
+        let allowed_ids = custom_subagent_repo::get_profile_access(&self.pool, &active_profile_id)
+            .await
+            .unwrap_or_default();
+        if !allowed_ids.contains(&record.id) {
+            return None;
+        }
+
+        Some(SubagentProfile::Custom {
+            slug: record.slug.clone(),
+            system_prompt: record.system_prompt.clone(),
+            allowed_tools: record.allowed_tools_vec(),
+            model_role: record.model_role,
+        })
     }
 
     async fn execute_plan_checkpoint(&self, tool_input: &serde_json::Value) -> AgentToolResult {

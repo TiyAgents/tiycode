@@ -16,6 +16,7 @@ use crate::model::provider::{
     ProviderModelConnectionTestResultDto, ProviderSettingsDto, ProviderSettingsUpdateInput,
 };
 use crate::model::settings::SettingDto;
+use crate::model::subagent::{CustomSubagentDto, CustomSubagentInput};
 
 // ---------------------------------------------------------------------------
 // Settings KV
@@ -267,4 +268,87 @@ pub async fn profile_update(
 #[tauri::command]
 pub async fn profile_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     state.settings_manager.delete_profile(&id).await
+}
+
+// ---------------------------------------------------------------------------
+// Custom Subagents
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn custom_subagent_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<CustomSubagentDto>, AppError> {
+    use crate::persistence::repo::custom_subagent_repo;
+    let records = custom_subagent_repo::list_all(&state.pool).await?;
+    Ok(records.into_iter().map(CustomSubagentDto::from).collect())
+}
+
+#[tauri::command]
+pub async fn custom_subagent_create(
+    state: State<'_, AppState>,
+    input: CustomSubagentInput,
+) -> Result<CustomSubagentDto, AppError> {
+    use crate::model::subagent::validate_slug;
+    use crate::persistence::repo::custom_subagent_repo;
+
+    validate_slug(&input.slug).map_err(|msg| {
+        AppError::recoverable(
+            crate::model::errors::ErrorSource::Settings,
+            "custom_subagent.invalid_slug",
+            msg,
+        )
+    })?;
+
+    let record = custom_subagent_repo::create(&state.pool, &input).await?;
+    Ok(CustomSubagentDto::from(record))
+}
+
+#[tauri::command]
+pub async fn custom_subagent_update(
+    state: State<'_, AppState>,
+    id: String,
+    input: CustomSubagentInput,
+) -> Result<CustomSubagentDto, AppError> {
+    use crate::model::subagent::validate_slug;
+    use crate::persistence::repo::custom_subagent_repo;
+
+    validate_slug(&input.slug).map_err(|msg| {
+        AppError::recoverable(
+            crate::model::errors::ErrorSource::Settings,
+            "custom_subagent.invalid_slug",
+            msg,
+        )
+    })?;
+
+    let record = custom_subagent_repo::update(&state.pool, &id, &input).await?;
+    Ok(CustomSubagentDto::from(record))
+}
+
+#[tauri::command]
+pub async fn custom_subagent_delete(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), AppError> {
+    use crate::persistence::repo::custom_subagent_repo;
+    custom_subagent_repo::delete(&state.pool, &id).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn profile_subagent_access_get(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<Vec<String>, AppError> {
+    use crate::persistence::repo::custom_subagent_repo;
+    custom_subagent_repo::get_profile_access(&state.pool, &profile_id).await
+}
+
+#[tauri::command]
+pub async fn profile_subagent_access_set(
+    state: State<'_, AppState>,
+    profile_id: String,
+    subagent_ids: Vec<String>,
+) -> Result<(), AppError> {
+    use crate::persistence::repo::custom_subagent_repo;
+    custom_subagent_repo::set_profile_access(&state.pool, &profile_id, &subagent_ids).await
 }

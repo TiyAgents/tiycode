@@ -1,3 +1,4 @@
+use crate::model::subagent::CustomSubagentModelRole;
 use tiycore::agent::AgentTool;
 
 pub const TERM_STATUS_TOOL_DESCRIPTION: &str =
@@ -13,27 +14,54 @@ pub const TERM_CLOSE_TOOL_DESCRIPTION: &str =
 pub const TERM_PANEL_USAGE_NOTE: &str =
     "term_status and term_output refer to the desktop app's embedded Terminal panel for the current thread. Use them only for that panel's session state and recent buffered output; they do not inspect your own runtime, CLI session, or host shell outside the panel.";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeOrchestrationTool {
     Explore,
     Review,
+    Custom(String), // slug of the custom subagent
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubagentProfile {
     Explore,
     Review,
+    Custom {
+        slug: String,
+        system_prompt: String,
+        allowed_tools: Vec<String>,
+        model_role: CustomSubagentModelRole,
+    },
 }
 
 pub fn runtime_orchestration_tools() -> Vec<AgentTool> {
-    RuntimeOrchestrationTool::all()
+    RuntimeOrchestrationTool::builtin_all()
         .into_iter()
         .map(RuntimeOrchestrationTool::as_agent_tool)
         .collect()
 }
 
+/// Convert a CustomSubagentRecord into an AgentTool for the main agent's tool set.
+pub fn custom_subagent_as_tool(record: &crate::model::subagent::CustomSubagentRecord) -> AgentTool {
+    let tool_name = format!("agent_{}", record.slug);
+    AgentTool::new(
+        &tool_name,
+        &record.name,
+        &record.invocation_description,
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "What task to delegate to this subagent. Be specific about goals, relevant files, and expected output format."
+                }
+            },
+            "required": ["task"]
+        }),
+    )
+}
+
 impl RuntimeOrchestrationTool {
-    pub fn all() -> [Self; 2] {
+    pub fn builtin_all() -> [Self; 2] {
         [Self::Explore, Self::Review]
     }
 
@@ -41,25 +69,39 @@ impl RuntimeOrchestrationTool {
         match tool_name {
             "agent_explore" => Some(Self::Explore),
             "agent_review" => Some(Self::Review),
-            _ => None,
+            _ => {
+                // Match custom subagent pattern: "agent_{slug}"
+                if let Some(slug) = tool_name.strip_prefix("agent_") {
+                    if !slug.is_empty() {
+                        return Some(Self::Custom(slug.to_string()));
+                    }
+                }
+                None
+            }
         }
     }
 
-    pub fn tool_name(self) -> &'static str {
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Self::Custom(_))
+    }
+
+    pub fn tool_name(&self) -> String {
         match self {
-            Self::Explore => "agent_explore",
-            Self::Review => "agent_review",
+            Self::Explore => "agent_explore".to_string(),
+            Self::Review => "agent_review".to_string(),
+            Self::Custom(slug) => format!("agent_{slug}"),
         }
     }
 
-    pub fn title(self) -> &'static str {
+    pub fn title(&self) -> String {
         match self {
-            Self::Explore => "Agent Explore",
-            Self::Review => "Agent Review",
+            Self::Explore => "Agent Explore".to_string(),
+            Self::Review => "Agent Review".to_string(),
+            Self::Custom(slug) => format!("Agent {slug}"),
         }
     }
 
-    pub fn description(self) -> &'static str {
+    pub fn description(&self) -> &str {
         match self {
             Self::Explore => {
                 "Explore unfamiliar or cross-file areas before acting. Use this for current-state analysis, fact-finding, code reading, architecture summaries, and evidence gathering, then return a concise summary to the parent agent."
@@ -67,18 +109,25 @@ impl RuntimeOrchestrationTool {
             Self::Review => {
                 "Review an implemented code change or diff, run the necessary type-check and test commands, and return risks, regressions, verification results, and concrete follow-ups. Use this after implementation to stress-test the work."
             }
+            Self::Custom(_) => {
+                // Custom subagents have their description set externally via custom_subagent_as_tool
+                "Custom subagent."
+            }
         }
     }
 
-    pub fn profile(self) -> SubagentProfile {
+    /// Returns the built-in profile for this tool, or `None` for custom subagents
+    /// (which must be resolved externally with full record data).
+    pub fn profile(&self) -> Option<SubagentProfile> {
         match self {
-            Self::Explore => SubagentProfile::Explore,
-            Self::Review => SubagentProfile::Review,
+            Self::Explore => Some(SubagentProfile::Explore),
+            Self::Review => Some(SubagentProfile::Review),
+            Self::Custom(_) => None,
         }
     }
 
     pub fn as_agent_tool(self) -> AgentTool {
-        let parameters = match self {
+        let parameters = match &self {
             Self::Explore => serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -133,26 +182,35 @@ impl RuntimeOrchestrationTool {
                 },
                 "required": ["task"]
             }),
+            Self::Custom(_) => serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "What task to delegate to this custom subagent."
+                    }
+                },
+                "required": ["task"]
+            }),
         };
 
-        AgentTool::new(
-            self.tool_name(),
-            self.title(),
-            self.description(),
-            parameters,
-        )
+        let name = self.tool_name();
+        let title = self.title();
+        let desc = self.description();
+        AgentTool::new(&name, &title, desc, parameters)
     }
 }
 
 impl SubagentProfile {
-    pub fn helper_kind(self) -> &'static str {
+    pub fn helper_kind(&self) -> String {
         match self {
-            Self::Explore => "helper_explore",
-            Self::Review => "helper_review",
+            Self::Explore => "helper_explore".to_string(),
+            Self::Review => "helper_review".to_string(),
+            Self::Custom { slug, .. } => format!("helper_custom_{slug}"),
         }
     }
 
-    pub fn system_prompt(self) -> String {
+    pub fn system_prompt(&self) -> String {
         match self {
             Self::Explore => {
                 "You are an internal explore helper. Your job is to investigate the workspace and gather context for the parent agent.\n\
@@ -214,10 +272,16 @@ Return format:\n\
 - Keep the JSON concise. The parent agent needs actionable signal, not exhaustive logs."
                     .to_string()
             }
+            Self::Custom { system_prompt, .. } => system_prompt.clone(),
         }
     }
 
-    pub fn helper_tools(self) -> Vec<AgentTool> {
+    pub fn helper_tools(&self) -> Vec<AgentTool> {
+        // For Custom profiles, dynamically resolve from allowed_tools
+        if let Self::Custom { allowed_tools, .. } = self {
+            return self.resolve_custom_tools(allowed_tools);
+        }
+
         let mut tools = vec![
             AgentTool::new(
                 "read",
@@ -318,7 +382,7 @@ Return format:\n\
             ),
         ];
 
-        if self == Self::Review {
+        if *self == Self::Review {
             tools.extend([
                 AgentTool::new(
                     "git_status",
@@ -403,11 +467,197 @@ Return format:\n\
 
         tools
     }
+
+    /// Build the tool list for a custom subagent based on its allowed_tools names.
+    /// Only includes tools from the full candidate set (no agent_* tools allowed).
+    fn resolve_custom_tools(&self, allowed_tools: &[String]) -> Vec<AgentTool> {
+        let all_candidate_tools = Self::all_candidate_tools();
+        all_candidate_tools
+            .into_iter()
+            .filter(|tool| allowed_tools.iter().any(|name| name == &tool.name))
+            .collect()
+    }
+
+    /// Returns the complete set of tools that a custom subagent may choose from.
+    /// Excludes agent_* orchestration tools to prevent recursive calls.
+    fn all_candidate_tools() -> Vec<AgentTool> {
+        let mut tools = vec![
+            AgentTool::new(
+                "read",
+                "Read File",
+                "Read a file inside the current workspace.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"]
+                }),
+            ),
+            AgentTool::new(
+                "list",
+                "List Directory",
+                "List files and folders inside the current workspace.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } }
+                }),
+            ),
+            AgentTool::new(
+                "find",
+                "Find Files",
+                "Search for files by glob pattern.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string" },
+                        "path": { "type": "string" }
+                    },
+                    "required": ["pattern"]
+                }),
+            ),
+            AgentTool::new(
+                "search",
+                "Search Repo",
+                "Search the current workspace with a built-in search engine.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "directory": { "type": "string" },
+                        "filePattern": { "type": "string" },
+                        "maxResults": { "type": "integer" },
+                        "queryMode": { "type": "string", "enum": ["literal", "regex"] },
+                        "caseInsensitive": { "type": "boolean" }
+                    },
+                    "required": ["query"]
+                }),
+            ),
+            AgentTool::new(
+                "edit",
+                "Edit File",
+                "Make a targeted edit to a file by specifying the exact text to find and its replacement.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "old_string": { "type": "string" },
+                        "new_string": { "type": "string" }
+                    },
+                    "required": ["path", "old_string", "new_string"]
+                }),
+            ),
+            AgentTool::new(
+                "write",
+                "Write File",
+                "Write or overwrite a file inside the current workspace.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "content": { "type": "string" }
+                    },
+                    "required": ["path", "content"]
+                }),
+            ),
+            AgentTool::new(
+                "shell",
+                "Run Command",
+                "Run a non-interactive shell command inside the current workspace.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" },
+                        "cwd": { "type": "string" },
+                        "timeout": { "type": "number" }
+                    },
+                    "required": ["command"]
+                }),
+            ),
+            AgentTool::new(
+                "git_status",
+                "Git Status",
+                "Inspect repository status.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    }
+                }),
+            ),
+            AgentTool::new(
+                "git_diff",
+                "Git Diff",
+                "Read the current Git diff.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "staged": { "type": "boolean" },
+                        "contextLines": { "type": "integer" }
+                    }
+                }),
+            ),
+            AgentTool::new(
+                "git_log",
+                "Git Log",
+                "Inspect recent Git history.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "limit": { "type": "integer" }
+                    }
+                }),
+            ),
+        ];
+        // Terminal tools
+        tools.push(AgentTool::new(
+            "term_status",
+            "Terminal Status",
+            TERM_STATUS_TOOL_DESCRIPTION,
+            serde_json::json!({ "type": "object", "properties": {} }),
+        ));
+        tools.push(AgentTool::new(
+            "term_output",
+            "Terminal Output",
+            TERM_OUTPUT_TOOL_DESCRIPTION,
+            serde_json::json!({ "type": "object", "properties": {} }),
+        ));
+        tools.push(AgentTool::new(
+            "term_write",
+            "Terminal Write",
+            TERM_WRITE_TOOL_DESCRIPTION,
+            serde_json::json!({
+                "type": "object",
+                "properties": { "data": { "type": "string" } },
+                "required": ["data"]
+            }),
+        ));
+        tools.push(AgentTool::new(
+            "term_restart",
+            "Terminal Restart",
+            TERM_RESTART_TOOL_DESCRIPTION,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "cols": { "type": "integer" },
+                    "rows": { "type": "integer" }
+                }
+            }),
+        ));
+        tools.push(AgentTool::new(
+            "term_close",
+            "Terminal Close",
+            TERM_CLOSE_TOOL_DESCRIPTION,
+            serde_json::json!({ "type": "object", "properties": {} }),
+        ));
+        tools
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{runtime_orchestration_tools, RuntimeOrchestrationTool, SubagentProfile};
+    use crate::model::subagent::CustomSubagentModelRole;
 
     #[test]
     fn parses_runtime_orchestration_tools() {
@@ -513,5 +763,35 @@ mod tests {
         assert!(prompt.contains("Return exactly one JSON object"));
         assert!(prompt.contains("globalFindings"));
         assert!(prompt.contains("followUp"));
+    }
+
+    #[test]
+    fn parses_custom_subagent_tool_names() {
+        assert_eq!(
+            RuntimeOrchestrationTool::parse("agent_refactor"),
+            Some(RuntimeOrchestrationTool::Custom("refactor".to_string()))
+        );
+        assert_eq!(
+            RuntimeOrchestrationTool::parse("agent_code-review"),
+            Some(RuntimeOrchestrationTool::Custom("code-review".to_string()))
+        );
+        // "agent_" alone (empty slug) should not match
+        assert_eq!(RuntimeOrchestrationTool::parse("agent_"), None);
+    }
+
+    #[test]
+    fn custom_profile_resolves_tools_from_allowlist() {
+        let profile = SubagentProfile::Custom {
+            slug: "test".to_string(),
+            system_prompt: "You are a test helper.".to_string(),
+            allowed_tools: vec!["read".to_string(), "search".to_string()],
+            model_role: CustomSubagentModelRole::Auxiliary,
+        };
+        let tools = profile.helper_tools();
+        let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(tool_names.contains(&"read"));
+        assert!(tool_names.contains(&"search"));
+        assert!(!tool_names.contains(&"edit"));
+        assert!(!tool_names.contains(&"shell"));
     }
 }
