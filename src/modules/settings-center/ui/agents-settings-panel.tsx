@@ -638,6 +638,11 @@ export function AgentsSettingsPanel({
                         <code className="mt-1 block truncate text-[12px] text-app-subtle">
                           agent_{agent.slug}
                         </code>
+                        {agent.invocationDescription ? (
+                          <p className="mt-1 truncate text-[12px] text-app-muted">
+                            {agent.invocationDescription}
+                          </p>
+                        ) : null}
                       </span>
                     </button>
 

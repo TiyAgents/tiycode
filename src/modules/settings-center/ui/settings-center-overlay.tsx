@@ -918,12 +918,17 @@ function ProfileLibraryActions({
   );
 }
 
+type ProfilePrimaryModelSummary = {
+  label: string;
+  iconDisplayName?: string;
+  iconModelId?: string;
+};
+
 function ProfileLibraryCard({
   profile,
   isActive,
   canDelete,
-  primaryModelLabel,
-  thinkingLevelLabel,
+  primaryModel,
   isEditing,
   editingName,
   onSelect,
@@ -937,8 +942,7 @@ function ProfileLibraryCard({
   profile: AgentProfile;
   isActive: boolean;
   canDelete: boolean;
-  primaryModelLabel: string;
-  thinkingLevelLabel: string;
+  primaryModel: ProfilePrimaryModelSummary;
   isEditing: boolean;
   editingName: string;
   onSelect: () => void;
@@ -950,6 +954,7 @@ function ProfileLibraryCard({
   onDelete: () => void;
 }) {
   const t = useT();
+  const [showActions, setShowActions] = useState(false);
 
   return (
     <div
@@ -957,12 +962,24 @@ function ProfileLibraryCard({
       tabIndex={0}
       aria-pressed={isActive}
       className={cn(
-        "group relative flex min-h-[132px] cursor-pointer flex-col rounded-2xl border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40",
+        "group relative flex min-h-[76px] cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40",
         isActive
-          ? "border-app-info/50 bg-app-info/10 shadow-sm"
-          : "border-app-border bg-app-surface-muted hover:border-app-border-strong hover:bg-app-surface-hover",
+          ? "border-app-info/45 bg-app-info/10 shadow-sm"
+          : "border-transparent bg-app-surface-muted hover:border-app-border hover:bg-app-surface-hover",
       )}
       onClick={onSelect}
+      onMouseEnter={() => setShowActions(true)}
+      onMouseLeave={(event) => {
+        if (!event.currentTarget.contains(document.activeElement)) {
+          setShowActions(false);
+        }
+      }}
+      onFocus={() => setShowActions(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setShowActions(false);
+        }
+      }}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
@@ -971,102 +988,102 @@ function ProfileLibraryCard({
         }
       }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <span
-            className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-xl border",
-              isActive
-                ? "border-app-info/30 bg-app-info/10 text-app-info"
-                : "border-app-border bg-app-surface text-app-subtle",
-            )}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "flex size-11 shrink-0 items-center justify-center rounded-2xl border",
+          isActive
+            ? "border-app-info/30 bg-app-info/10 text-app-info"
+            : "border-app-border bg-app-surface text-app-subtle",
+        )}
+      >
+        <CircleUserRound className="size-5" />
+      </span>
+
+      <div className={cn("min-w-0 flex-1", !isEditing && "pr-24")}>
+        {isEditing ? (
+          <input
+            autoFocus
+            className="h-8 w-full min-w-0 rounded-lg border border-app-accent bg-app-surface px-2 text-[15px] font-semibold text-app-foreground outline-none"
+            value={editingName}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => onEditingNameChange(event.target.value)}
+            onBlur={onCommitRename}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onCommitRename();
+              if (event.key === "Escape") onCancelRename();
+            }}
+          />
+        ) : (
+          <p className="truncate text-[16px] font-semibold leading-5 text-app-foreground">{profile.name}</p>
+        )}
+        <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[13px] leading-5 text-app-muted">
+          {primaryModel.iconModelId ? (
+            <ModelBrandIcon
+              className="size-5 shrink-0 text-[16px]"
+              displayName={primaryModel.iconDisplayName ?? primaryModel.label}
+              modelId={primaryModel.iconModelId}
+            />
+          ) : (
+            <Bot className="size-4 shrink-0 text-app-subtle" />
+          )}
+          <span className="truncate">{primaryModel.label}</span>
+        </div>
+      </div>
+
+      {isActive && (!showActions || isEditing) ? (
+        <span
+          className="absolute right-3 top-3 flex size-6 items-center justify-center rounded-full border border-app-info/30 bg-app-info/15 text-app-info shadow-sm"
+          title={t("settings.profiles.currentProfileLabel")}
+          aria-label={t("settings.profiles.currentProfileLabel")}
+        >
+          <Check className="size-3.5" />
+        </span>
+      ) : null}
+
+      {!isEditing && showActions ? (
+        <div className="absolute right-3 top-3 flex items-center gap-0.5 rounded-lg bg-app-surface-muted/90 p-0.5 shadow-sm backdrop-blur">
+          <button
+            type="button"
+            className="flex size-6 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
+            title={t("settings.profile.rename")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onStartRename();
+            }}
           >
-            <CircleUserRound className="size-4" />
-          </span>
-          <div className="min-w-0">
-            {isEditing ? (
-              <input
-                autoFocus
-                className="h-7 w-full min-w-0 rounded-lg border border-app-accent bg-app-surface px-2 text-[13px] font-medium text-app-foreground outline-none"
-                value={editingName}
-                onClick={(event) => event.stopPropagation()}
-                onChange={(event) => onEditingNameChange(event.target.value)}
-                onBlur={onCommitRename}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") onCommitRename();
-                  if (event.key === "Escape") onCancelRename();
-                }}
-              />
-            ) : (
-              <p className="truncate text-[14px] font-semibold text-app-foreground">{profile.name}</p>
+            <Pencil className="size-3" />
+          </button>
+          <button
+            type="button"
+            className="flex size-6 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
+            title={t("settings.profile.duplicate")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDuplicate();
+            }}
+          >
+            <Copy className="size-3" />
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "flex size-6 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40",
+              canDelete
+                ? "text-app-subtle hover:bg-app-canvas hover:text-red-500"
+                : "cursor-not-allowed text-app-subtle/40",
             )}
-            {isActive ? (
-              <p className="mt-0.5 text-[11px] font-medium text-app-info">{t("settings.profiles.currentProfileLabel")}</p>
-            ) : null}
-          </div>
+            title={t("settings.profile.delete")}
+            disabled={!canDelete}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (canDelete) onDelete();
+            }}
+          >
+            <Trash2 className="size-3" />
+          </button>
         </div>
-
-        <div className="flex shrink-0 items-center gap-1">
-          {!isEditing ? (
-            <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-              <button
-                type="button"
-                className="flex size-6 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
-                title={t("settings.profile.rename")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onStartRename();
-                }}
-              >
-                <Pencil className="size-3" />
-              </button>
-              <button
-                type="button"
-                className="flex size-6 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
-                title={t("settings.profile.duplicate")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDuplicate();
-                }}
-              >
-                <Copy className="size-3" />
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "flex size-6 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40",
-                  canDelete
-                    ? "text-app-subtle hover:bg-app-canvas hover:text-red-500"
-                    : "cursor-not-allowed text-app-subtle/40",
-                )}
-                title={t("settings.profile.delete")}
-                disabled={!canDelete}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (canDelete) onDelete();
-                }}
-              >
-                <Trash2 className="size-3" />
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="mt-auto grid grid-cols-2 gap-2 pt-4">
-        <div className="min-w-0 rounded-xl border border-app-border/70 bg-app-surface px-3 py-2">
-          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">
-            {t("settings.general.primaryModel")}
-          </p>
-          <p className="mt-1 truncate text-[12px] font-medium text-app-foreground">{primaryModelLabel}</p>
-        </div>
-        <div className="min-w-0 rounded-xl border border-app-border/70 bg-app-surface px-3 py-2">
-          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">
-            {t("settings.general.thinkingLevel")}
-          </p>
-          <p className="mt-1 truncate text-[12px] font-medium text-app-foreground">{thinkingLevelLabel}</p>
-        </div>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -1260,6 +1277,7 @@ function GeneralSettingsPanel({
         <SettingsRow
           label={t("settings.general.webSearchBaseUrlLabel")}
           description={t("settings.general.webSearchBaseUrlDesc")}
+          optional
           control={
             <Input
               value={webSearch.baseUrl ?? ""}
@@ -1373,16 +1391,25 @@ function ProfileSettingsPanel({
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [editingProfileName, setEditingProfileName] = useState("");
 
-  const getProfilePrimaryModelLabel = (profile: AgentProfile) => {
+  const getProfilePrimaryModelSummary = (profile: AgentProfile): ProfilePrimaryModelSummary => {
     const selectedModel = availableModels.find(
       (model) => model.providerId === profile.primaryProviderId && model.modelRecordId === profile.primaryModelId,
     );
-    if (selectedModel) return selectedModel.displayName;
-    return profile.primaryModelId || t("settings.general.notSet");
+    if (selectedModel) {
+      return {
+        label: `${selectedModel.providerName}: ${selectedModel.displayName}`,
+        iconDisplayName: selectedModel.displayName,
+        iconModelId: selectedModel.modelId,
+      };
+    }
+    if (profile.primaryModelId) {
+      return {
+        label: profile.primaryModelId,
+        iconModelId: profile.primaryModelId,
+      };
+    }
+    return { label: t("settings.general.notSet") };
   };
-
-  const getProfileThinkingLevelLabel = (profile: AgentProfile) =>
-    THINKING_LEVEL_OPTIONS.find((option) => option.value === profile.thinkingLevel)?.label ?? THINKING_LEVEL_OPTIONS[0].label;
 
   const handleStartRenameProfile = (profile: AgentProfile) => {
     setEditingProfileId(profile.id);
@@ -1437,15 +1464,14 @@ function ProfileSettingsPanel({
             {t("settings.profiles.profileLibraryDesc")}
           </p>
           <div className="max-h-[348px] overflow-y-auto pr-1 [scrollbar-width:thin]">
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-2.5 md:grid-cols-2">
               {sortedProfiles.map((profile) => (
                 <ProfileLibraryCard
                   key={profile.id}
                   profile={profile}
                   isActive={profile.id === activeProfile.id}
                   canDelete={agentProfiles.length > 1}
-                  primaryModelLabel={getProfilePrimaryModelLabel(profile)}
-                  thinkingLevelLabel={getProfileThinkingLevelLabel(profile)}
+                  primaryModel={getProfilePrimaryModelSummary(profile)}
                   isEditing={editingProfileId === profile.id}
                   editingName={editingProfileName}
                   onSelect={() => onSetActiveAgentProfile(profile.id)}
@@ -4120,15 +4146,25 @@ function SettingsRow({
   control,
   description,
   label,
+  optional,
 }: {
   control: ReactNode;
   description: string;
   label: string;
+  optional?: boolean;
 }) {
+  const t = useT();
   return (
     <div className="grid gap-3 bg-app-surface px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
       <div className="min-w-0">
-        <p className="text-[13px] font-medium text-app-foreground">{label}</p>
+        <p className="text-[13px] font-medium text-app-foreground">
+          {label}
+          {optional && (
+            <span className="ml-1.5 inline-flex items-center rounded-full border border-app-border bg-app-surface px-2 py-0.5 text-[11px] font-medium text-app-muted">
+              {t("settings.general.optionalBadge")}
+            </span>
+          )}
+        </p>
         <p className="mt-1 text-[12px] leading-5 text-app-muted">{description}</p>
       </div>
       <div className="min-w-0 md:justify-self-end">{control}</div>
