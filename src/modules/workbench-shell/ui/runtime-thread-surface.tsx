@@ -60,6 +60,7 @@ import {
 } from "@/modules/workbench-shell/model/run-event-dispatcher";
 import { composerStore, setDraft, getDraft, type SerializableAttachment } from "@/modules/workbench-shell/model/composer-store";
 import { settingsStore } from "@/modules/settings-center/model/settings-store";
+import { updateAgentProfile } from "@/modules/settings-center/model/settings-ipc-actions";
 import { threadUpdateProfile } from "@/services/bridge";
 import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { Button } from "@/shared/ui/button";
@@ -3147,6 +3148,7 @@ export function RuntimeThreadSurface({
               uiLayoutStore.setState({ activeOverlay: "settings", activeSettingsCategory: "profiles" });
             }}
             onRuntimeQueueSubmitModeChange={setRuntimeQueueSubmitMode}
+            onUpdateAgentProfile={updateAgentProfile}
             onSelectAgentProfile={async (profileId: string) => {
               // In new-thread mode, just update the global active profile.
               if (isNewThreadMode || !threadId) {

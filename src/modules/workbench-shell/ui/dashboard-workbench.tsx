@@ -25,7 +25,7 @@ import type { ComposerSubmission } from "@/modules/workbench-shell/model/compose
 import { useSettingsInit } from "@/modules/settings-center/model/use-settings-init";
 import { settingsStore } from "@/modules/settings-center/model/settings-store";
 import type { SettingsCategory } from "@/modules/settings-center/model/types";
-import { setActiveAgentProfile } from "@/modules/settings-center/model/settings-ipc-actions";
+import { setActiveAgentProfile, updateAgentProfile } from "@/modules/settings-center/model/settings-ipc-actions";
 import { useAppUpdater } from "@/modules/workbench-shell/hooks/use-app-updater";
 import {
   DEFAULT_TERMINAL_COLLAPSED,
@@ -980,6 +980,7 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                             onErrorMessageChange={setComposerError}
                             onOpenProfileSettings={() => handleOpenSettings("profiles")}
                             onSelectAgentProfile={handleSelectAgentProfileForThread}
+                            onUpdateAgentProfile={updateAgentProfile}
                             onStop={() => undefined}
                             onSubmit={handleComposerSubmit}
                             placeholder={t("composer.placeholder")}
