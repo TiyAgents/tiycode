@@ -62,11 +62,12 @@ describe("isDefaultCollapsedTool", () => {
     }
   });
 
-  it("includes task board tools and render", () => {
+  it("includes task board tools, render, and web_search", () => {
     expect(isDefaultCollapsedTool("create_task")).toBe(true);
     expect(isDefaultCollapsedTool("update_task")).toBe(true);
     expect(isDefaultCollapsedTool("query_task")).toBe(true);
     expect(isDefaultCollapsedTool("render")).toBe(true);
+    expect(isDefaultCollapsedTool("web_search")).toBe(true);
   });
 
   it("returns false for non-collapsed tool names", () => {

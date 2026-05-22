@@ -22,6 +22,7 @@ import {
   customSubagentUpdate,
   type CustomSubagentInput,
 } from "@/services/bridge/subagent-commands";
+import { getInvokeErrorMessage, formatInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import {
@@ -41,6 +42,10 @@ const TOOL_CATEGORIES: Array<{ labelKey: TranslationKey; tools: string[] }> = [
   {
     labelKey: "settings.agents.toolCategory.fileRead",
     tools: ["read", "list", "search", "find"],
+  },
+  {
+    labelKey: "settings.agents.toolCategory.web",
+    tools: ["web_search"],
   },
   {
     labelKey: "settings.agents.toolCategory.fileWrite",
@@ -159,7 +164,8 @@ export function AgentsSettingsPanel({
   const [editState, setEditState] = useState<Partial<CustomSubagentInput> | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingAction, setPendingAction] = useState<AgentPendingAction | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [pageErrorMessage, setPageErrorMessage] = useState<string | null>(null);
+  const [editorErrorMessage, setEditorErrorMessage] = useState<string | null>(null);
 
   const selectedAgent = customSubagents.find((a) => a.id === selectedId);
   const hasUnsavedChanges = editState !== null;
@@ -172,6 +178,15 @@ export function AgentsSettingsPanel({
   const modelRoleLabel = (role: CustomSubagentModelRole | undefined) => {
     const option = MODEL_ROLE_OPTIONS.find((entry) => entry.value === (role ?? "auxiliary"));
     return t(option?.labelKey ?? "settings.agents.modelRole.auxiliary");
+  };
+
+  const getSubagentErrorMessage = (error: unknown, fallback: string, slug?: string) => {
+    const errorCode =
+      typeof error === "object" && error !== null ? Reflect.get(error, "errorCode") : null;
+    if (errorCode === "custom_subagent.slug_conflict") {
+      return t("settings.agents.errorSlugConflict", { slug: slug ?? "" });
+    }
+    return formatInvokeErrorMessage(error) ?? fallback;
   };
 
   const createAgent = async () => {
@@ -193,9 +208,7 @@ export function AgentsSettingsPanel({
       setEditState(null);
     } catch (error) {
       console.error("Failed to create subagent", error);
-      setErrorMessage(
-        (error instanceof Error ? error.message : String(error)) || t("settings.agents.errorCreate"),
-      );
+      setPageErrorMessage(getSubagentErrorMessage(error, t("settings.agents.errorCreate"), input.slug));
     }
   };
 
@@ -210,14 +223,13 @@ export function AgentsSettingsPanel({
       }
     } catch (error) {
       console.error("Failed to delete subagent", error);
-      setErrorMessage(
-        (error instanceof Error ? error.message : String(error)) || t("settings.agents.errorDelete"),
-      );
+      setPageErrorMessage(getInvokeErrorMessage(error, t("settings.agents.errorDelete")));
     }
   };
 
   const performAction = (action: AgentPendingAction) => {
-    setErrorMessage(null);
+    setPageErrorMessage(null);
+    setEditorErrorMessage(null);
     switch (action.type) {
       case "select":
         setSelectedId(action.id);
@@ -266,17 +278,18 @@ export function AgentsSettingsPanel({
 
   const handleSave = async () => {
     if (!selectedAgent || !editState) return;
+    const input: CustomSubagentInput = {
+      name: editState.name !== undefined ? editState.name : selectedAgent.name,
+      slug: editState.slug !== undefined ? editState.slug : selectedAgent.slug,
+      systemPrompt: editState.systemPrompt !== undefined ? editState.systemPrompt : selectedAgent.systemPrompt,
+      invocationDescription: editState.invocationDescription !== undefined ? editState.invocationDescription : selectedAgent.invocationDescription,
+      allowedTools: editState.allowedTools ?? selectedAgent.allowedTools,
+      modelRole: editState.modelRole ?? selectedAgent.modelRole ?? "auxiliary",
+      isEnabled: editState.isEnabled ?? selectedAgent.isEnabled,
+    };
+    setEditorErrorMessage(null);
     setIsSaving(true);
     try {
-      const input: CustomSubagentInput = {
-        name: editState.name !== undefined ? editState.name : selectedAgent.name,
-        slug: editState.slug !== undefined ? editState.slug : selectedAgent.slug,
-        systemPrompt: editState.systemPrompt !== undefined ? editState.systemPrompt : selectedAgent.systemPrompt,
-        invocationDescription: editState.invocationDescription !== undefined ? editState.invocationDescription : selectedAgent.invocationDescription,
-        allowedTools: editState.allowedTools ?? selectedAgent.allowedTools,
-        modelRole: editState.modelRole ?? selectedAgent.modelRole ?? "auxiliary",
-        isEnabled: editState.isEnabled ?? selectedAgent.isEnabled,
-      };
       const updated = await customSubagentUpdate(selectedAgent.id, input);
       const agents = settingsStore.getState().customSubagents.map((a) =>
         a.id === updated.id ? updated : a,
@@ -285,9 +298,7 @@ export function AgentsSettingsPanel({
       setEditState(null);
     } catch (error) {
       console.error("Failed to update subagent", error);
-      setErrorMessage(
-        (error instanceof Error ? error.message : String(error)) || t("settings.agents.errorSave"),
-      );
+      setEditorErrorMessage(getSubagentErrorMessage(error, t("settings.agents.errorSave"), input.slug));
     } finally {
       setIsSaving(false);
     }
@@ -300,6 +311,7 @@ export function AgentsSettingsPanel({
   };
 
   const updateField = (key: keyof CustomSubagentInput, value: unknown) => {
+    setEditorErrorMessage(null);
     setEditState((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -321,35 +333,53 @@ export function AgentsSettingsPanel({
         className="border-t border-app-border bg-app-surface-muted/40 px-4 py-4"
       >
         <div className="space-y-5 rounded-xl border border-app-border bg-app-surface/85 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-[15px] font-semibold text-app-foreground">{selectedAgent.name}</h3>
-                {hasUnsavedChanges ? (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-app-warning/30 bg-app-warning/10 px-2 py-0.5 text-[11px] font-medium text-app-warning">
-                    <AlertTriangle className="size-3" />
-                    {t("settings.agents.unsavedChanges")}
-                  </span>
-                ) : (
-                  <span className="rounded-full border border-app-border bg-app-surface-muted px-2 py-0.5 text-[11px] font-medium text-app-subtle">
-                    {t("settings.agents.saved")}
-                  </span>
-                )}
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex min-w-0 flex-1 flex-wrap items-start gap-3">
+                <div className="min-w-0 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-[15px] font-semibold text-app-foreground">{selectedAgent.name}</h3>
+                    {hasUnsavedChanges ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-app-warning/30 bg-app-warning/10 px-2 py-0.5 text-[11px] font-medium text-app-warning">
+                        <AlertTriangle className="size-3" />
+                        {t("settings.agents.unsavedChanges")}
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-app-border bg-app-surface-muted px-2 py-0.5 text-[11px] font-medium text-app-subtle">
+                        {t("settings.agents.saved")}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {editorErrorMessage ? (
+                  <div className="flex min-w-[240px] flex-1 items-center gap-2 py-0.5 text-[14px] font-semibold text-app-error">
+                    <AlertTriangle className="size-4 shrink-0" />
+                    <span className="min-w-0 truncate">{editorErrorMessage}</span>
+                    <button
+                      type="button"
+                      aria-label={t("topBar.close")}
+                      className="ml-auto shrink-0 text-app-error/70 hover:text-app-error"
+                      onClick={() => setEditorErrorMessage(null)}
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                ) : null}
               </div>
-              <p className="mt-1 text-[12px] leading-5 text-app-muted">
-                {t("settings.agents.editorDescription")}
-              </p>
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleSave}
+                  disabled={!hasUnsavedChanges || isSaving}
+                >
+                  {isSaving ? t("settings.agents.saving") : t("settings.agents.saveChanges")}
+                </Button>
+              </div>
             </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleSave}
-                disabled={!hasUnsavedChanges || isSaving}
-              >
-                {isSaving ? t("settings.agents.saving") : t("settings.agents.saveChanges")}
-              </Button>
-            </div>
+            <p className="text-[12px] leading-5 text-app-muted">
+              {t("settings.agents.editorDescription")}
+            </p>
           </div>
 
           <FieldGroup
@@ -518,14 +548,15 @@ export function AgentsSettingsPanel({
         </p>
       </div>
 
-      {errorMessage && (
+      {pageErrorMessage && (
         <div className="flex items-center gap-2 rounded-lg border border-app-error/30 bg-app-error/10 px-3 py-2 text-[12px] text-app-error">
           <AlertTriangle className="size-3.5 shrink-0" />
-          <span className="min-w-0">{errorMessage}</span>
+          <span className="min-w-0">{pageErrorMessage}</span>
           <button
             type="button"
+            aria-label={t("topBar.close")}
             className="ml-auto shrink-0 text-app-muted hover:text-app-foreground"
-            onClick={() => setErrorMessage(null)}
+            onClick={() => setPageErrorMessage(null)}
           >
             <X className="size-3.5" />
           </button>
@@ -634,6 +665,11 @@ export function AgentsSettingsPanel({
                         <code className="mt-1 block truncate text-[12px] text-app-subtle">
                           agent_{agent.slug}
                         </code>
+                        {agent.invocationDescription ? (
+                          <p className="mt-1 truncate text-[12px] text-app-muted">
+                            {agent.invocationDescription}
+                          </p>
+                        ) : null}
                       </span>
                     </button>
 

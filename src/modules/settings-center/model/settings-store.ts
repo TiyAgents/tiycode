@@ -11,6 +11,7 @@ import type {
   ProviderCatalogEntry,
   ProviderEntry,
   TerminalSettings,
+  WebSearchSettings,
   WorkspaceEntry,
 } from "@/modules/settings-center/model/types";
 
@@ -38,6 +39,7 @@ export interface SettingsStoreState {
   policy: PolicySettings;
   commands: Array<CommandEntry>;
   customSubagents: Array<CustomSubagent>;
+  webSearch: WebSearchSettings;
   availableShells: Array<{ path: string; name: string }>;
   hydrationPhase: HydrationPhase;
 }
@@ -57,6 +59,7 @@ export const settingsStore = createStore<SettingsStoreState>({
   policy: DEFAULT_SETTINGS.policy,
   commands: DEFAULT_SETTINGS.commands.commands,
   customSubagents: [],
+  webSearch: DEFAULT_SETTINGS.webSearch,
   availableShells: [],
   hydrationPhase: "uninitialized",
 });

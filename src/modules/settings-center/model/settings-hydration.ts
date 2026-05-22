@@ -22,6 +22,10 @@ import {
 import { customSubagentList } from "@/services/bridge/subagent-commands";
 import { waitForBackendReady } from "@/shared/lib/backend-ready";
 import { settingsStore } from "./settings-store";
+import {
+  mapPersistedWebSearchSettings,
+  WEB_SEARCH_SETTINGS_KEY,
+} from "./web-search-settings";
 
 import type { AgentProfile, PolicySettings } from "@/modules/settings-center/model/types";
 
@@ -368,13 +372,17 @@ async function hydrateSettings(): Promise<void> {
       try {
         settingsStore.setState({ hydrationPhase: "loading_phase2" });
 
-        const [catalog, policies, profiles, promptCommands, customSubagents] =
+        const [catalog, policies, profiles, promptCommands, customSubagents, webSearchSetting] =
           await Promise.all([
             providerCatalogList(),
             policyGetAll(),
             profileList(),
             promptCommandList(),
             customSubagentList(),
+            settingsGet(WEB_SEARCH_SETTINGS_KEY).catch((error) => {
+              console.warn("Failed to hydrate Web Search settings", error);
+              return null;
+            }),
           ]);
 
         const mappedCatalog = catalog.map((entry) => ({
@@ -477,6 +485,7 @@ async function hydrateSettings(): Promise<void> {
             ...pendingCommands,
           ],
           customSubagents: customSubagents ?? [],
+          webSearch: mapPersistedWebSearchSettings(webSearchSetting?.value),
           availableShells: shells,
           hydrationPhase: "hydrated",
         });

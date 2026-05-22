@@ -427,6 +427,10 @@ pub async fn build_session_spec(
                 .collect()
         }
     };
+    let web_search_enabled = crate::core::web_search_settings::load_web_search_settings(pool)
+        .await
+        .map(|settings| settings.is_ready())
+        .unwrap_or(false);
     let initial_context_calibration = build_initial_context_token_calibration(
         latest_historical_run.as_ref(),
         &history_messages,
@@ -442,7 +446,11 @@ pub async fn build_session_spec(
         run_mode: run_mode.to_string(),
         tool_profile_name: tool_profile_name.clone(),
         runtime_tools: runtime_tools_with_custom_subagents(
-            runtime_tools_for_profile_with_extensions(&tool_profile_name, extension_tools),
+            runtime_tools_with_web_search(
+                runtime_tools_for_profile_with_extensions(&tool_profile_name, extension_tools),
+                &tool_profile_name,
+                web_search_enabled,
+            ),
             custom_subagent_tools,
         ),
         system_prompt,

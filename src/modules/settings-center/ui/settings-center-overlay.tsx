@@ -15,6 +15,7 @@ import { ProfileAgentAccess } from "@/modules/settings-center/ui/profile-agent-a
 import { useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n/locales/zh-CN";
 import { getEffectiveModelCapabilities, inferModelCapabilities } from "@/modules/settings-center/model/model-capabilities";
+import type { WebSearchSettingsPatch } from "@/modules/settings-center/model/web-search-settings";
 import {
   ArrowLeft,
   Bot,
@@ -87,6 +88,8 @@ import type {
   SettingsCategory,
   TerminalCursorStyle,
   TerminalSettings,
+  WebSearchEngine,
+  WebSearchSettings,
   WorkspaceEntry,
   WritableRootEntry,
 } from "@/modules/settings-center/model/types";
@@ -141,6 +144,7 @@ type SettingsCenterOverlayProps = {
   configDiagnostics: ConfigDiagnostic[];
   customSubagents: Array<CustomSubagent>;
   generalPreferences: GeneralPreferences;
+  webSearch: WebSearchSettings;
   isCheckingUpdates: boolean;
   language: LanguagePreference;
   commands: CommandSettings;
@@ -181,6 +185,7 @@ type SettingsCenterOverlayProps = {
   onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
   onUpdateDenyEntry: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
   onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
+  onUpdateWebSearchSettings: (patch: WebSearchSettingsPatch) => Promise<WebSearchSettings>;
   onUpdatePolicySetting: <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => void;
   onFetchProviderModels: (id: string) => Promise<void>;
   onTestProviderModelConnection: (
@@ -315,6 +320,7 @@ export function SettingsCenterOverlay({
   configDiagnostics,
   customSubagents,
   generalPreferences,
+  webSearch,
   isCheckingUpdates,
   language,
   commands,
@@ -355,6 +361,7 @@ export function SettingsCenterOverlay({
   onUpdateCommand,
   onUpdateDenyEntry,
   onUpdateGeneralPreference,
+  onUpdateWebSearchSettings,
   onUpdatePolicySetting,
   onFetchProviderModels,
   onTestProviderModelConnection,
@@ -521,11 +528,13 @@ export function SettingsCenterOverlay({
                   <GeneralSettingsPanel
                     description={activeMeta.description}
                     generalPreferences={generalPreferences}
+                    webSearch={webSearch}
                     language={language}
                     theme={theme}
                     onSelectLanguage={onSelectLanguage}
                     onSelectTheme={onSelectTheme}
                     onUpdateGeneralPreference={onUpdateGeneralPreference}
+                    onUpdateWebSearchSettings={onUpdateWebSearchSettings}
                   />
                 ) : null}
 
@@ -909,12 +918,17 @@ function ProfileLibraryActions({
   );
 }
 
+type ProfilePrimaryModelSummary = {
+  label: string;
+  iconDisplayName?: string;
+  iconModelId?: string;
+};
+
 function ProfileLibraryCard({
   profile,
   isActive,
   canDelete,
-  primaryModelLabel,
-  thinkingLevelLabel,
+  primaryModel,
   isEditing,
   editingName,
   onSelect,
@@ -928,8 +942,7 @@ function ProfileLibraryCard({
   profile: AgentProfile;
   isActive: boolean;
   canDelete: boolean;
-  primaryModelLabel: string;
-  thinkingLevelLabel: string;
+  primaryModel: ProfilePrimaryModelSummary;
   isEditing: boolean;
   editingName: string;
   onSelect: () => void;
@@ -941,6 +954,7 @@ function ProfileLibraryCard({
   onDelete: () => void;
 }) {
   const t = useT();
+  const [showActions, setShowActions] = useState(false);
 
   return (
     <div
@@ -948,12 +962,24 @@ function ProfileLibraryCard({
       tabIndex={0}
       aria-pressed={isActive}
       className={cn(
-        "group relative flex min-h-[132px] cursor-pointer flex-col rounded-2xl border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40",
+        "group relative flex min-h-[76px] cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40",
         isActive
-          ? "border-app-info/50 bg-app-info/10 shadow-sm"
-          : "border-app-border bg-app-surface-muted hover:border-app-border-strong hover:bg-app-surface-hover",
+          ? "border-app-info/45 bg-app-info/10 shadow-sm"
+          : "border-transparent bg-app-surface-muted hover:border-app-border hover:bg-app-surface-hover",
       )}
       onClick={onSelect}
+      onMouseEnter={() => setShowActions(true)}
+      onMouseLeave={(event) => {
+        if (!event.currentTarget.contains(document.activeElement)) {
+          setShowActions(false);
+        }
+      }}
+      onFocus={() => setShowActions(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setShowActions(false);
+        }
+      }}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
@@ -962,102 +988,108 @@ function ProfileLibraryCard({
         }
       }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <span
-            className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-xl border",
-              isActive
-                ? "border-app-info/30 bg-app-info/10 text-app-info"
-                : "border-app-border bg-app-surface text-app-subtle",
-            )}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "flex size-11 shrink-0 items-center justify-center rounded-2xl border",
+          isActive
+            ? "border-app-info/30 bg-app-info/10 text-app-info"
+            : "border-app-border bg-app-surface text-app-subtle",
+        )}
+      >
+        <CircleUserRound className="size-5" />
+      </span>
+
+      <div
+        className={cn(
+          "min-w-0 flex-1",
+          !isEditing && showActions && "pr-24",
+          !isEditing && isActive && !showActions && "pr-10",
+        )}
+      >
+        {isEditing ? (
+          <input
+            autoFocus
+            className="h-7 w-full min-w-0 rounded-lg border border-app-accent bg-app-surface px-2 text-[13px] font-medium text-app-foreground outline-none"
+            value={editingName}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => onEditingNameChange(event.target.value)}
+            onBlur={onCommitRename}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onCommitRename();
+              if (event.key === "Escape") onCancelRename();
+            }}
+          />
+        ) : (
+          <p className="truncate text-[13px] font-medium leading-5 text-app-foreground">{profile.name}</p>
+        )}
+        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-app-muted">
+          {primaryModel.iconModelId ? (
+            <ModelBrandIcon
+              className="size-4 shrink-0 text-[13px]"
+              displayName={primaryModel.iconDisplayName ?? primaryModel.label}
+              modelId={primaryModel.iconModelId}
+            />
+          ) : (
+            <Bot className="size-4 shrink-0 text-app-subtle" />
+          )}
+          <span className="min-w-0 flex-1 truncate">{primaryModel.label}</span>
+        </div>
+      </div>
+
+      {isActive && !isEditing && !showActions ? (
+        <span
+          className="absolute right-3 top-3 flex size-6 items-center justify-center rounded-full border border-app-info/30 bg-app-info/15 text-app-info shadow-sm"
+          title={t("settings.profiles.currentProfileLabel")}
+          aria-label={t("settings.profiles.currentProfileLabel")}
+        >
+          <Check className="size-3.5" />
+        </span>
+      ) : null}
+
+      {!isEditing && showActions ? (
+        <div className="absolute right-3 top-3 flex items-center gap-0.5 rounded-lg bg-app-surface-muted/90 p-0.5 shadow-sm backdrop-blur">
+          <button
+            type="button"
+            className="flex size-6 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
+            title={t("settings.profile.rename")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onStartRename();
+            }}
           >
-            <CircleUserRound className="size-4" />
-          </span>
-          <div className="min-w-0">
-            {isEditing ? (
-              <input
-                autoFocus
-                className="h-7 w-full min-w-0 rounded-lg border border-app-accent bg-app-surface px-2 text-[13px] font-medium text-app-foreground outline-none"
-                value={editingName}
-                onClick={(event) => event.stopPropagation()}
-                onChange={(event) => onEditingNameChange(event.target.value)}
-                onBlur={onCommitRename}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") onCommitRename();
-                  if (event.key === "Escape") onCancelRename();
-                }}
-              />
-            ) : (
-              <p className="truncate text-[14px] font-semibold text-app-foreground">{profile.name}</p>
+            <Pencil className="size-3" />
+          </button>
+          <button
+            type="button"
+            className="flex size-6 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
+            title={t("settings.profile.duplicate")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDuplicate();
+            }}
+          >
+            <Copy className="size-3" />
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "flex size-6 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40",
+              canDelete
+                ? "text-app-subtle hover:bg-app-canvas hover:text-red-500"
+                : "cursor-not-allowed text-app-subtle/40",
             )}
-            {isActive ? (
-              <p className="mt-0.5 text-[11px] font-medium text-app-info">{t("settings.profiles.currentProfileLabel")}</p>
-            ) : null}
-          </div>
+            title={t("settings.profile.delete")}
+            disabled={!canDelete}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (canDelete) onDelete();
+            }}
+          >
+            <Trash2 className="size-3" />
+          </button>
         </div>
-
-        <div className="flex shrink-0 items-center gap-1">
-          {!isEditing ? (
-            <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-              <button
-                type="button"
-                className="flex size-6 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
-                title={t("settings.profile.rename")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onStartRename();
-                }}
-              >
-                <Pencil className="size-3" />
-              </button>
-              <button
-                type="button"
-                className="flex size-6 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
-                title={t("settings.profile.duplicate")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDuplicate();
-                }}
-              >
-                <Copy className="size-3" />
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "flex size-6 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40",
-                  canDelete
-                    ? "text-app-subtle hover:bg-app-canvas hover:text-red-500"
-                    : "cursor-not-allowed text-app-subtle/40",
-                )}
-                title={t("settings.profile.delete")}
-                disabled={!canDelete}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (canDelete) onDelete();
-                }}
-              >
-                <Trash2 className="size-3" />
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="mt-auto grid grid-cols-2 gap-2 pt-4">
-        <div className="min-w-0 rounded-xl border border-app-border/70 bg-app-surface px-3 py-2">
-          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">
-            {t("settings.general.primaryModel")}
-          </p>
-          <p className="mt-1 truncate text-[12px] font-medium text-app-foreground">{primaryModelLabel}</p>
-        </div>
-        <div className="min-w-0 rounded-xl border border-app-border/70 bg-app-surface px-3 py-2">
-          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">
-            {t("settings.general.thinkingLevel")}
-          </p>
-          <p className="mt-1 truncate text-[12px] font-medium text-app-foreground">{thinkingLevelLabel}</p>
-        </div>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -1065,21 +1097,71 @@ function ProfileLibraryCard({
 function GeneralSettingsPanel({
   description,
   generalPreferences,
+  webSearch,
   language,
   theme,
   onSelectLanguage,
   onSelectTheme,
   onUpdateGeneralPreference,
+  onUpdateWebSearchSettings,
 }: {
   description: string;
   generalPreferences: GeneralPreferences;
+  webSearch: WebSearchSettings;
   language: LanguagePreference;
   theme: ThemePreference;
   onSelectLanguage: (language: LanguagePreference) => void;
   onSelectTheme: (theme: ThemePreference) => void;
   onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
+  onUpdateWebSearchSettings: (patch: WebSearchSettingsPatch) => Promise<WebSearchSettings>;
 }) {
   const t = useT();
+  const [webSearchApiKey, setWebSearchApiKey] = useState("");
+  const [webSearchBaseUrl, setWebSearchBaseUrl] = useState(webSearch.baseUrl ?? "");
+  const [webSearchMaxResults, setWebSearchMaxResults] = useState<number | "">(webSearch.maxResults);
+  const [isSavingWebSearchKey, setIsSavingWebSearchKey] = useState(false);
+  const [webSearchApiKeyError, setWebSearchApiKeyError] = useState<string | null>(null);
+  const webSearchEngineOptions = useMemo(
+    () => [
+      { label: "Tavily", value: "tavily" as WebSearchEngine },
+      { label: "Brave", value: "brave" as WebSearchEngine },
+      { label: "Exa", value: "exa" as WebSearchEngine },
+      { label: "Firecrawl", value: "firecrawl" as WebSearchEngine },
+    ],
+    [],
+  );
+
+  const handleSaveWebSearchApiKey = async () => {
+    setWebSearchApiKeyError(null);
+    setIsSavingWebSearchKey(true);
+    try {
+      await onUpdateWebSearchSettings({ apiKey: webSearchApiKey });
+      setWebSearchApiKey("");
+    } catch (error) {
+      setWebSearchApiKeyError(
+        getInvokeErrorMessage(error, t("settings.general.webSearchApiKeySaveError")),
+      );
+    } finally {
+      setIsSavingWebSearchKey(false);
+    }
+  };
+
+  const isClearingWebSearchApiKey = webSearch.hasApiKey && !webSearchApiKey.trim();
+
+  useEffect(() => {
+    setWebSearchApiKey("");
+    setWebSearchApiKeyError(null);
+  }, [webSearch.engine]);
+
+  useEffect(() => {
+    setWebSearchBaseUrl(webSearch.baseUrl ?? "");
+  }, [webSearch.baseUrl]);
+
+  useEffect(() => {
+    setWebSearchMaxResults(webSearch.maxResults);
+  }, [webSearch.maxResults]);
+
+  const clampWebSearchMaxResults = (value: number) => Math.min(20, Math.max(1, Math.round(value)));
 
   return (
     <div className="flex flex-col gap-6">
@@ -1161,6 +1243,135 @@ function GeneralSettingsPanel({
           }
         />
       </SettingsSection>
+
+      <SettingsSection title={t("settings.general.webSearchTitle")}>
+        <SettingsRow
+          label={t("settings.general.webSearchEnabledLabel")}
+          description={t("settings.general.webSearchEnabledDesc")}
+          control={
+            <Switch
+              size="sm"
+              checked={webSearch.enabled}
+              onCheckedChange={(checked) => void onUpdateWebSearchSettings({ enabled: checked })}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchEngineLabel")}
+          description={t("settings.general.webSearchEngineDesc")}
+          control={
+            <ChoiceGroup
+              options={webSearchEngineOptions}
+              value={webSearch.engine}
+              onValueChange={(value) => void onUpdateWebSearchSettings({ engine: value })}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchApiKeyLabel")}
+          description={
+            webSearch.hasApiKey
+              ? t("settings.general.webSearchApiKeyConfiguredDesc")
+              : t("settings.general.webSearchApiKeyDesc")
+          }
+          control={
+            <div className="flex w-full flex-col gap-2 md:w-[360px]">
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  value={webSearchApiKey}
+                  placeholder={webSearch.hasApiKey ? "••••••••••••" : t("settings.general.webSearchApiKeyPlaceholder")}
+                  onChange={(event) => {
+                    setWebSearchApiKey(event.target.value);
+                    setWebSearchApiKeyError(null);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={(!webSearchApiKey.trim() && !webSearch.hasApiKey) || isSavingWebSearchKey}
+                  onClick={() => void handleSaveWebSearchApiKey()}
+                >
+                  {isClearingWebSearchApiKey
+                    ? t("settings.general.webSearchApiKeyClear")
+                    : t("settings.general.webSearchApiKeySave")}
+                </Button>
+              </div>
+              {webSearchApiKeyError ? (
+                <p className="text-[11px] font-medium text-app-error">{webSearchApiKeyError}</p>
+              ) : null}
+            </div>
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchBaseUrlLabel")}
+          description={t("settings.general.webSearchBaseUrlDesc")}
+          optional
+          control={
+            <Input
+              value={webSearchBaseUrl}
+              placeholder={t("settings.general.webSearchBaseUrlPlaceholder")}
+              className="w-full md:w-[360px]"
+              onChange={(event) => setWebSearchBaseUrl(event.target.value)}
+              onBlur={() => {
+                const trimmed = webSearchBaseUrl.trim();
+                if (trimmed !== (webSearch.baseUrl ?? "")) {
+                  void onUpdateWebSearchSettings({ baseUrl: trimmed });
+                }
+              }}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchMaxResultsLabel")}
+          description={t("settings.general.webSearchMaxResultsDesc")}
+          control={
+            <Input
+              type="number"
+              min={1}
+              max={20}
+              className="w-24"
+              value={webSearchMaxResults}
+              onChange={(event) => {
+                const { value } = event.target;
+                if (value === "") {
+                  setWebSearchMaxResults("");
+                  return;
+                }
+                const nextValue = Number(value);
+                if (Number.isFinite(nextValue)) {
+                  setWebSearchMaxResults(nextValue);
+                }
+              }}
+              onBlur={() => {
+                const draftValue = webSearchMaxResults === "" ? webSearch.maxResults : webSearchMaxResults;
+                const clamped = clampWebSearchMaxResults(draftValue);
+                setWebSearchMaxResults(clamped);
+                if (clamped !== webSearch.maxResults) {
+                  void onUpdateWebSearchSettings({ maxResults: clamped });
+                }
+              }}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchRawContentLabel")}
+          description={t("settings.general.webSearchRawContentDesc")}
+          control={
+            <Switch
+              size="sm"
+              checked={webSearch.includeRawContent}
+              onCheckedChange={(checked) => void onUpdateWebSearchSettings({ includeRawContent: checked })}
+            />
+          }
+        />
+      </SettingsSection>
     </div>
   );
 }
@@ -1232,16 +1443,25 @@ function ProfileSettingsPanel({
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [editingProfileName, setEditingProfileName] = useState("");
 
-  const getProfilePrimaryModelLabel = (profile: AgentProfile) => {
+  const getProfilePrimaryModelSummary = (profile: AgentProfile): ProfilePrimaryModelSummary => {
     const selectedModel = availableModels.find(
       (model) => model.providerId === profile.primaryProviderId && model.modelRecordId === profile.primaryModelId,
     );
-    if (selectedModel) return selectedModel.displayName;
-    return profile.primaryModelId || t("settings.general.notSet");
+    if (selectedModel) {
+      return {
+        label: selectedModel.displayName,
+        iconDisplayName: selectedModel.displayName,
+        iconModelId: selectedModel.modelId,
+      };
+    }
+    if (profile.primaryModelId) {
+      return {
+        label: profile.primaryModelId,
+        iconModelId: profile.primaryModelId,
+      };
+    }
+    return { label: t("settings.general.notSet") };
   };
-
-  const getProfileThinkingLevelLabel = (profile: AgentProfile) =>
-    THINKING_LEVEL_OPTIONS.find((option) => option.value === profile.thinkingLevel)?.label ?? THINKING_LEVEL_OPTIONS[0].label;
 
   const handleStartRenameProfile = (profile: AgentProfile) => {
     setEditingProfileId(profile.id);
@@ -1295,16 +1515,15 @@ function ProfileSettingsPanel({
           <p className="max-w-2xl text-[12px] leading-5 text-app-muted">
             {t("settings.profiles.profileLibraryDesc")}
           </p>
-          <div className="max-h-[348px] overflow-y-auto pr-1 [scrollbar-width:thin]">
-            <div className="grid gap-3 md:grid-cols-2">
+          <div className="max-h-[210px] overflow-y-auto pr-1 [scrollbar-width:thin]">
+            <div className="grid gap-2.5 md:grid-cols-2">
               {sortedProfiles.map((profile) => (
                 <ProfileLibraryCard
                   key={profile.id}
                   profile={profile}
                   isActive={profile.id === activeProfile.id}
                   canDelete={agentProfiles.length > 1}
-                  primaryModelLabel={getProfilePrimaryModelLabel(profile)}
-                  thinkingLevelLabel={getProfileThinkingLevelLabel(profile)}
+                  primaryModel={getProfilePrimaryModelSummary(profile)}
                   isEditing={editingProfileId === profile.id}
                   editingName={editingProfileName}
                   onSelect={() => onSetActiveAgentProfile(profile.id)}
@@ -3979,15 +4198,25 @@ function SettingsRow({
   control,
   description,
   label,
+  optional,
 }: {
   control: ReactNode;
   description: string;
   label: string;
+  optional?: boolean;
 }) {
+  const t = useT();
   return (
     <div className="grid gap-3 bg-app-surface px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
       <div className="min-w-0">
-        <p className="text-[13px] font-medium text-app-foreground">{label}</p>
+        <p className="text-[13px] font-medium text-app-foreground">
+          {label}
+          {optional && (
+            <span className="ml-1.5 inline-flex items-center rounded-full border border-app-border bg-app-surface px-2 py-0.5 text-[11px] font-medium text-app-muted">
+              {t("settings.general.optionalBadge")}
+            </span>
+          )}
+        </p>
         <p className="mt-1 text-[12px] leading-5 text-app-muted">{description}</p>
       </div>
       <div className="min-w-0 md:justify-self-end">{control}</div>

@@ -10,6 +10,7 @@ import type {
   PolicySettings,
   ProviderEntry,
   TerminalSettings,
+  WebSearchSettings,
   WorkspaceEntry,
   WritableRootEntry,
 } from "@/modules/settings-center/model/types";
@@ -32,12 +33,23 @@ import {
   providerSettingsFetchModels,
   providerSettingsUpdateCustom,
   providerSettingsUpsertBuiltin,
+  settingsGet,
   settingsSet,
   workspaceAdd,
   workspaceRemove,
   workspaceSetDefault,
 } from "@/services/bridge";
+import {
+  profileSubagentAccessGet,
+  profileSubagentAccessSet,
+} from "@/services/bridge/subagent-commands";
 import { settingsStore } from "./settings-store";
+import {
+  buildPersistedWebSearchSettings,
+  mapPersistedWebSearchSettings,
+  WEB_SEARCH_SETTINGS_KEY,
+  type WebSearchSettingsPatch,
+} from "./web-search-settings";
 import { syncToBackend, SyncError } from "@/shared/lib/ipc-sync";
 
 const ACTIVE_AGENT_PROFILE_SETTING_KEY = "active_profile_id";
@@ -267,6 +279,48 @@ export function updateTerminalSetting<Key extends keyof TerminalSettings>(
   settingsStore.setState((prev) => ({
     terminal: { ...prev.terminal, [key]: value },
   }));
+}
+
+export async function updateWebSearchSettings(patch: WebSearchSettingsPatch) {
+  const current = settingsStore.getState().webSearch;
+  const hasApiKeyPatch = Object.prototype.hasOwnProperty.call(patch, "apiKey");
+  const changesEngine = patch.engine !== undefined && patch.engine !== current.engine;
+  const optimistic: WebSearchSettings = {
+    ...current,
+    ...patch,
+    hasApiKey: hasApiKeyPatch
+      ? typeof patch.apiKey === "string" && patch.apiKey.trim().length > 0
+      : changesEngine
+        ? false
+        : current.hasApiKey,
+    baseUrl: changesEngine && !Object.prototype.hasOwnProperty.call(patch, "baseUrl")
+      ? undefined
+      : patch.baseUrl ?? current.baseUrl,
+  };
+  delete (optimistic as { apiKey?: string }).apiKey;
+
+  settingsStore.setState({ webSearch: optimistic });
+
+  if (!isTauri()) {
+    return optimistic;
+  }
+
+  try {
+    const existing = await settingsGet(WEB_SEARCH_SETTINGS_KEY);
+    const persisted = buildPersistedWebSearchSettings(
+      current,
+      existing?.value,
+      patch,
+    );
+    await settingsSet(WEB_SEARCH_SETTINGS_KEY, JSON.stringify(persisted));
+    const mapped = mapPersistedWebSearchSettings(persisted);
+    settingsStore.setState({ webSearch: mapped });
+    return mapped;
+  } catch (error) {
+    settingsStore.setState({ webSearch: current });
+    console.warn("Failed to update Web Search settings", error);
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -505,6 +559,12 @@ export function duplicateAgentProfile(id: string) {
   )
     .then(async (profile) => {
       const mapped = mapProfileDto(profile);
+      try {
+        const subagentAccessIds = await profileSubagentAccessGet(source.id);
+        await profileSubagentAccessSet(mapped.id, subagentAccessIds);
+      } catch (accessError) {
+        console.warn("Failed to copy profile subagent access", accessError);
+      }
       await settingsSet(
         ACTIVE_AGENT_PROFILE_SETTING_KEY,
         JSON.stringify(mapped.id),

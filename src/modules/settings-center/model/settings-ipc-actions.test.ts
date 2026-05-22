@@ -27,6 +27,29 @@ function makeAgentProfile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   };
 }
 
+function makeProfileDto(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "profile-dto-1",
+    name: "Profile DTO",
+    customInstructions: "",
+    commitMessagePrompt: "",
+    responseStyle: "balanced",
+    thinkingLevel: "medium",
+    responseLanguage: "zh-CN",
+    commitMessageLanguage: "en-US",
+    primaryProviderId: null,
+    primaryModelId: null,
+    auxiliaryProviderId: null,
+    auxiliaryModelId: null,
+    lightweightProviderId: null,
+    lightweightModelId: null,
+    isDefault: false,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
 function makeCommandEntry(
   overrides: Partial<CommandEntry> = {},
 ): CommandEntry {
@@ -52,6 +75,7 @@ const {
   mockProfileCreate,
   mockProfileDelete,
   mockProfileUpdate,
+  mockSettingsGet,
   mockSettingsSet,
   mockProviderSettingsCreateCustom,
   mockProviderSettingsDeleteCustom,
@@ -62,11 +86,14 @@ const {
   mockPromptCommandDelete,
   mockPromptCommandUpdate,
   mockSyncToBackend,
+  mockProfileSubagentAccessGet,
+  mockProfileSubagentAccessSet,
 } = vi.hoisted(() => ({
   mockIsTauri: vi.fn(() => true),
   mockProfileCreate: vi.fn(),
   mockProfileDelete: vi.fn(),
   mockProfileUpdate: vi.fn(),
+  mockSettingsGet: vi.fn(),
   mockSettingsSet: vi.fn(),
   mockProviderSettingsCreateCustom: vi.fn(),
   mockProviderSettingsDeleteCustom: vi.fn(),
@@ -77,6 +104,8 @@ const {
   mockPromptCommandDelete: vi.fn(),
   mockPromptCommandUpdate: vi.fn(),
   mockSyncToBackend: vi.fn(),
+  mockProfileSubagentAccessGet: vi.fn(),
+  mockProfileSubagentAccessSet: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -88,6 +117,7 @@ vi.mock("@/services/bridge", () => ({
   profileCreate: (...args: unknown[]) => mockProfileCreate(...args),
   profileDelete: (...args: unknown[]) => mockProfileDelete(...args),
   profileUpdate: (...args: unknown[]) => mockProfileUpdate(...args),
+  settingsGet: (...args: unknown[]) => mockSettingsGet(...args),
   settingsSet: (...args: unknown[]) => mockSettingsSet(...args),
   providerSettingsCreateCustom: (...args: unknown[]) => mockProviderSettingsCreateCustom(...args),
   providerSettingsDeleteCustom: (...args: unknown[]) => mockProviderSettingsDeleteCustom(...args),
@@ -102,6 +132,11 @@ vi.mock("@/services/bridge", () => ({
   workspaceAdd: vi.fn(),
   workspaceRemove: vi.fn(),
   workspaceSetDefault: vi.fn(),
+}));
+
+vi.mock("@/services/bridge/subagent-commands", () => ({
+  profileSubagentAccessGet: (...args: unknown[]) => mockProfileSubagentAccessGet(...args),
+  profileSubagentAccessSet: (...args: unknown[]) => mockProfileSubagentAccessSet(...args),
 }));
 
 // Only mock syncToBackend — NOT SyncError, so we keep the real class for instanceof checks.
@@ -142,6 +177,9 @@ beforeEach(() => {
   mockPolicySet.mockResolvedValue(undefined);
   mockSettingsSet.mockResolvedValue(undefined);
   mockProfileDelete.mockResolvedValue(undefined);
+  mockProfileSubagentAccessGet.mockResolvedValue([]);
+  mockProfileSubagentAccessSet.mockResolvedValue(undefined);
+  mockSettingsGet.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -428,6 +466,82 @@ describe("duplicateAgentProfile", () => {
     expect(copy!.name).toBe("Original Copy");
     expect(state.activeAgentProfileId).toBe(copy!.id);
     expect(copy!.id).not.toBe("p1");
+  });
+
+  it("Tauri: copies custom subagent access to the duplicated profile", async () => {
+    mockIsTauri.mockReturnValue(true);
+    const source = makeAgentProfile({
+      id: "p1",
+      name: "Original",
+      customInstructions: "Follow me",
+      responseStyle: "guide",
+      thinkingLevel: "high",
+      primaryProviderId: "provider-1",
+      primaryModelId: "model-1",
+    });
+    settingsStore.setState({ agentProfiles: [source], activeAgentProfileId: "p1" });
+    mockProfileCreate.mockResolvedValue(
+      makeProfileDto({
+        id: "copy-id",
+        name: "Original Copy",
+        customInstructions: "Follow me",
+        responseStyle: "guide",
+        thinkingLevel: "high",
+        primaryProviderId: "provider-1",
+        primaryModelId: "model-1",
+      }),
+    );
+    mockProfileSubagentAccessGet.mockResolvedValue(["agent-a", "agent-b"]);
+    vi.clearAllMocks();
+
+    duplicateAgentProfile("p1");
+    await vi.runAllTimersAsync();
+
+    expect(mockProfileCreate).toHaveBeenCalledTimes(1);
+    expect(mockProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Original Copy",
+        customInstructions: "Follow me",
+        responseStyle: "guide",
+        thinkingLevel: "high",
+        primaryProviderId: "provider-1",
+        primaryModelId: "model-1",
+      }),
+    );
+    expect(mockProfileSubagentAccessGet).toHaveBeenCalledWith("p1");
+    expect(mockProfileSubagentAccessSet).toHaveBeenCalledWith("copy-id", [
+      "agent-a",
+      "agent-b",
+    ]);
+    expect(mockSettingsSet).toHaveBeenCalledWith("active_profile_id", '"copy-id"');
+
+    const state = settingsStore.getState();
+    expect(state.agentProfiles.map((profile) => profile.id)).toEqual(["p1", "copy-id"]);
+    expect(state.activeAgentProfileId).toBe("copy-id");
+  });
+
+  it("Tauri: keeps the duplicated profile when subagent access copy fails", async () => {
+    mockIsTauri.mockReturnValue(true);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const source = makeAgentProfile({ id: "p1", name: "Original" });
+    settingsStore.setState({ agentProfiles: [source], activeAgentProfileId: "p1" });
+    mockProfileCreate.mockResolvedValue(
+      makeProfileDto({ id: "copy-id", name: "Original Copy" }),
+    );
+    mockProfileSubagentAccessGet.mockRejectedValue(new Error("access failed"));
+    vi.clearAllMocks();
+
+    duplicateAgentProfile("p1");
+    await vi.runAllTimersAsync();
+
+    expect(mockProfileSubagentAccessGet).toHaveBeenCalledWith("p1");
+    expect(mockProfileSubagentAccessSet).not.toHaveBeenCalled();
+    expect(mockSettingsSet).toHaveBeenCalledWith("active_profile_id", '"copy-id"');
+
+    const state = settingsStore.getState();
+    expect(state.agentProfiles.map((profile) => profile.id)).toEqual(["p1", "copy-id"]);
+    expect(state.activeAgentProfileId).toBe("copy-id");
+    warnSpy.mockRestore();
   });
 
   it("non-Tauri: no-op when source not found", () => {
@@ -1102,5 +1216,253 @@ describe("commitNewCommand", () => {
     ).toBeUndefined();
 
     warnSpy.mockRestore();
+  });
+});
+
+describe("updateWebSearchSettings", () => {
+  let updateWebSearchSettings: typeof import("./settings-ipc-actions").updateWebSearchSettings;
+
+  beforeAll(async () => {
+    updateWebSearchSettings = (await import("./settings-ipc-actions")).updateWebSearchSettings;
+  });
+
+  it("Tauri: persists API key per engine to backend settings and keeps only hasApiKey in store", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", apiKeys: { tavily: "old-key" }, maxResults: 5 },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ apiKey: "new-key", enabled: true, engine: "exa" });
+
+    expect(mockSettingsSet).toHaveBeenCalledTimes(1);
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.apiKeys).toEqual({ tavily: "old-key", exa: "new-key" });
+    expect(persisted.apiKey).toBeUndefined();
+    const state = settingsStore.getState().webSearch;
+    expect(state.hasApiKey).toBe(true);
+    expect("apiKey" in (state as Record<string, unknown>)).toBe(false);
+    expect(state.engine).toBe("exa");
+  });
+
+  it("Tauri: keeps other engine API keys when switching engines", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", apiKeys: { tavily: "tavily-key" }, maxResults: 5 },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ engine: "brave" });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.apiKeys).toEqual({ tavily: "tavily-key" });
+    expect(settingsStore.getState().webSearch.hasApiKey).toBe(false);
+    expect(settingsStore.getState().webSearch.engine).toBe("brave");
+  });
+
+  it("Tauri: clears current engine API key when saving an empty API key", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    settingsStore.setState({
+      webSearch: {
+        enabled: true,
+        engine: "tavily",
+        hasApiKey: true,
+        maxResults: 5,
+        includeRawContent: false,
+      },
+    });
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: {
+        enabled: true,
+        engine: "tavily",
+        apiKeys: { tavily: "old-key", brave: "brave-key" },
+        maxResults: 5,
+      },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ apiKey: "" });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.apiKeys).toEqual({ brave: "brave-key" });
+    expect(settingsStore.getState().webSearch.hasApiKey).toBe(false);
+  });
+
+  it("Tauri: migrates legacy API key into apiKeys for the persisted engine", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", apiKey: "legacy-key", maxResults: 5 },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ engine: "brave", maxResults: 8 });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.apiKeys).toEqual({ tavily: "legacy-key" });
+    expect(persisted.apiKey).toBeUndefined();
+    expect(settingsStore.getState().webSearch.hasApiKey).toBe(false);
+    expect(settingsStore.getState().webSearch.engine).toBe("brave");
+  });
+
+  it("Tauri: persists Base URL per engine and keeps other engine URLs", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: {
+        enabled: true,
+        engine: "tavily",
+        baseUrls: { tavily: "https://tavily.example" },
+        maxResults: 5,
+      },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ engine: "brave", baseUrl: " https://brave.example/search " });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.baseUrls).toEqual({
+      tavily: "https://tavily.example",
+      brave: "https://brave.example/search",
+    });
+    expect(persisted.baseUrl).toBeUndefined();
+    expect(settingsStore.getState().webSearch.baseUrl).toBe("https://brave.example/search");
+  });
+
+  it("Tauri: clears current engine Base URL when saving an empty Base URL", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    settingsStore.setState({
+      webSearch: {
+        enabled: true,
+        engine: "tavily",
+        hasApiKey: false,
+        baseUrl: "https://tavily.example",
+        maxResults: 5,
+        includeRawContent: true,
+      },
+    });
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: {
+        enabled: true,
+        engine: "tavily",
+        baseUrls: { tavily: "https://tavily.example", brave: "https://brave.example" },
+        maxResults: 5,
+      },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ baseUrl: "" });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.baseUrls).toEqual({ brave: "https://brave.example" });
+    expect(settingsStore.getState().webSearch.baseUrl).toBeUndefined();
+  });
+
+  it("Tauri: migrates legacy Base URL into baseUrls for the persisted engine", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", baseUrl: "https://legacy.example", maxResults: 5 },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ engine: "brave", maxResults: 8 });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.baseUrls).toEqual({ tavily: "https://legacy.example" });
+    expect(persisted.baseUrl).toBeUndefined();
+    expect(settingsStore.getState().webSearch.baseUrl).toBeUndefined();
+  });
+
+  it("Tauri: rejects and rolls back when reading persisted settings fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = new Error("read failed");
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    const current = {
+      enabled: true,
+      engine: "tavily" as const,
+      hasApiKey: false,
+      maxResults: 5,
+      includeRawContent: true,
+    };
+    settingsStore.setState({ webSearch: current });
+    mockSettingsGet.mockRejectedValue(error);
+
+    await expect(updateWebSearchSettings({ apiKey: "new-key" })).rejects.toBe(error);
+
+    expect(settingsStore.getState().webSearch).toEqual(current);
+    expect(mockSettingsSet).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith("Failed to update Web Search settings", error);
+    warnSpy.mockRestore();
+  });
+
+  it("Tauri: rejects and rolls back when writing persisted settings fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = new Error("write failed");
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    const current = {
+      enabled: true,
+      engine: "tavily" as const,
+      hasApiKey: true,
+      baseUrl: "https://tavily.example",
+      maxResults: 5,
+      includeRawContent: false,
+    };
+    settingsStore.setState({ webSearch: current });
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", apiKeys: { tavily: "old-key" } },
+      updatedAt: "now",
+    });
+    mockSettingsSet.mockRejectedValue(error);
+
+    await expect(updateWebSearchSettings({ apiKey: "new-key" })).rejects.toBe(error);
+
+    expect(settingsStore.getState().webSearch).toEqual(current);
+    expect(warnSpy).toHaveBeenCalledWith("Failed to update Web Search settings", error);
+    warnSpy.mockRestore();
+  });
+
+  it("Web: clears optimistic API key status when switching engines", async () => {
+    mockIsTauri.mockReturnValue(false);
+    setupStore();
+    settingsStore.setState({
+      webSearch: {
+        enabled: true,
+        engine: "tavily",
+        hasApiKey: true,
+        baseUrl: "https://tavily.example",
+        maxResults: 5,
+        includeRawContent: true,
+      },
+    });
+
+    const updated = await updateWebSearchSettings({ engine: "brave" });
+
+    expect(updated).toMatchObject({
+      engine: "brave",
+      hasApiKey: false,
+      baseUrl: undefined,
+    });
+    expect(settingsStore.getState().webSearch).toMatchObject({
+      engine: "brave",
+      hasApiKey: false,
+      baseUrl: undefined,
+    });
+    expect(mockSettingsGet).not.toHaveBeenCalled();
+    expect(mockSettingsSet).not.toHaveBeenCalled();
   });
 });

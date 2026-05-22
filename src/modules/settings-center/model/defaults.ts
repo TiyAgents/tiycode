@@ -6,8 +6,10 @@ import type {
   ProviderEntry,
   SettingsState,
   TerminalSettings,
+  WebSearchSettings,
   WorkspaceEntry,
 } from "@/modules/settings-center/model/types";
+import { DEFAULT_WEB_SEARCH_SETTINGS } from "@/modules/settings-center/model/web-search-settings";
 
 export const SETTINGS_STORAGE_KEY = "tiy-agent-local-ui-settings";
 export const SETTINGS_STORAGE_SCHEMA_VERSION = 3;
@@ -706,6 +708,8 @@ export const DEFAULT_GENERAL_PREFERENCES: GeneralPreferences = {
   defaultAppendMessageKind: "follow_up",
 };
 
+export const DEFAULT_WEB_SEARCH_PREFERENCES: WebSearchSettings = DEFAULT_WEB_SEARCH_SETTINGS;
+
 export const DEFAULT_POLICY_SETTINGS: PolicySettings = {
   approvalPolicy: "on-request",
   allowList: [],
@@ -739,4 +743,5 @@ export const DEFAULT_SETTINGS: SettingsState = {
   agentProfiles: DEFAULT_AGENT_PROFILES,
   activeAgentProfileId: "default-profile",
   customSubagents: [],
+  webSearch: DEFAULT_WEB_SEARCH_PREFERENCES,
 };
