@@ -1366,39 +1366,58 @@ function QuickThinkingLevelControl({
   value,
 }: QuickThinkingLevelControlProps) {
   const t = useT();
+  const selectedIndex = THINKING_LEVEL_OPTIONS.indexOf(value);
 
   return (
     <div className="rounded-xl border border-app-border/65 bg-app-surface-muted/55 px-3 py-2.5">
-      <div className="flex min-w-0 items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <Brain className="size-3.5 shrink-0 text-app-info" />
           <span className="truncate text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">
             {t("composer.profileThinkingLevel")}
           </span>
         </div>
-        {isPending ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-app-subtle" /> : null}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {isPending ? <LoaderCircle className="size-3.5 animate-spin text-app-subtle" /> : null}
+          <span className="max-w-32 truncate text-[11px] font-semibold text-app-info">
+            {getThinkingLevelLabel(value, t)}
+          </span>
+        </div>
       </div>
-      <div className="mt-2 grid grid-cols-3 gap-1.5">
-        {THINKING_LEVEL_OPTIONS.map((option) => {
-          const isSelected = option === value;
-          return (
-            <button
-              className={cn(
-                "rounded-lg border px-2 py-1.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-info/45 disabled:cursor-not-allowed disabled:opacity-60",
-                isSelected
-                  ? "border-app-info/55 bg-app-info/12 text-app-info"
-                  : "border-app-border/60 bg-app-surface/55 text-app-muted hover:bg-app-surface-hover hover:text-app-foreground",
-              )}
-              disabled={disabled || isPending || isSelected}
-              key={option}
-              onClick={() => onChange(option)}
-              title={getThinkingLevelDescription(option, t)}
-              type="button"
-            >
-              {getThinkingLevelLabel(option, t)}
-            </button>
-          );
-        })}
+      <div className="relative mt-4 px-1">
+        <div className="absolute left-4 right-4 top-2 h-px bg-app-border/70" />
+        <div
+          className="absolute left-4 top-2 h-px bg-app-info/70 transition-all"
+          style={{ width: selectedIndex > 0 ? `calc((100% - 2rem) * ${selectedIndex / (THINKING_LEVEL_OPTIONS.length - 1)})` : 0 }}
+        />
+        <div className="relative grid grid-cols-6 gap-1">
+          {THINKING_LEVEL_OPTIONS.map((option) => {
+            const isSelected = option === value;
+            return (
+              <button
+                aria-label={`${t("composer.profileThinkingLevel")}: ${getThinkingLevelLabel(option, t)}`}
+                className="group flex min-w-0 flex-col items-center gap-1 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={disabled || isPending || isSelected}
+                key={option}
+                onClick={() => onChange(option)}
+                title={getThinkingLevelDescription(option, t)}
+                type="button"
+              >
+                <span
+                  className={cn(
+                    "relative z-10 size-4 rounded-full border bg-app-surface transition-all group-hover:border-app-info/55 group-hover:bg-app-info/12",
+                    isSelected
+                      ? "scale-110 border-app-info bg-app-info shadow-[0_0_0_4px_rgba(59,130,246,0.14)]"
+                      : "border-app-border",
+                  )}
+                />
+                <span className={cn("truncate text-[10px] leading-4", isSelected ? "font-semibold text-app-info" : "text-app-subtle")}>
+                  {getThinkingLevelLabel(option, t)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
       <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-app-muted">
         {getThinkingLevelDescription(value, t)}
@@ -1449,9 +1468,14 @@ function QuickTierModelSelect({
 
   return (
     <div className="rounded-xl border border-app-border/65 bg-app-surface-muted/55 px-3 py-2.5">
-      <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-3">
         <span className="truncate text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">{label}</span>
-        {isPending ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-app-subtle" /> : null}
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5">
+          {isPending ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-app-subtle" /> : null}
+          {selectedModel ? (
+            <span className="max-w-36 truncate text-[11px] font-medium text-app-muted">{selectedModel.providerName}</span>
+          ) : null}
+        </div>
       </div>
       <PromptInputSelect
         disabled={disabled || isPending}
@@ -1513,9 +1537,7 @@ function QuickTierModelSelect({
           ) : null}
         </PromptInputSelectContent>
       </PromptInputSelect>
-      {selectedModel ? (
-        <p className="mt-1.5 truncate text-[11px] text-app-muted">{selectedModel.providerName}</p>
-      ) : models.length === 0 ? (
+      {models.length === 0 ? (
         <p className="mt-1.5 text-[11px] text-app-muted">{t("settings.general.noModelsAvailable")}</p>
       ) : null}
     </div>
