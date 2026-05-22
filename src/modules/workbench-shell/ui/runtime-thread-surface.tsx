@@ -1824,6 +1824,7 @@ export function RuntimeThreadSurface({
       setFixedBottomPanelsHeight(0);
       return;
     }
+    if (typeof ResizeObserver === "undefined") return;
     const el = fixedBottomPanelsRef.current;
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
