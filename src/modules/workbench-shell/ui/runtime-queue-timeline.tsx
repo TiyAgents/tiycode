@@ -30,10 +30,13 @@ import {
 } from "@/shared/ui/collapsible";
 import { parseCommandComposerMetadata } from "./runtime-thread-surface-metadata";
 
+type RuntimeQueueTimelineVariant = "default" | "compact";
+
 export type RuntimeQueueTimelineProps = ComponentProps<"div"> & {
   queue: RuntimeQueueSnapshotDto | null;
   onCancelMessage?: (messageId: string) => void;
   cancellingMessageIds?: ReadonlySet<string>;
+  variant?: RuntimeQueueTimelineVariant;
 };
 
 function kindLabel(kind: RuntimeQueueMessageKind, t: ReturnType<typeof useT>) {
@@ -73,11 +76,13 @@ export function RuntimeQueueMessageCard({
   t,
   onCancelMessage,
   isCancelling,
+  variant = "default",
 }: {
   message: RuntimeQueueMessageDto;
   t: ReturnType<typeof useT>;
   onCancelMessage?: (messageId: string) => void;
   isCancelling?: boolean;
+  variant?: RuntimeQueueTimelineVariant;
 }) {
   const commandComposer = parseCommandComposerMetadata(message.metadata);
   const commandDisplayText = commandComposer?.kind === "command"
@@ -92,29 +97,31 @@ export function RuntimeQueueMessageCard({
   );
   const canCancel = message.status === "pending" && Boolean(onCancelMessage);
   const cancelLabel = isCancelling ? t("queue.cancellingMessage") : t("queue.cancelMessage");
+  const isCompact = variant === "compact";
 
   return (
     <div
       className={cn(
-        "group/queue-card rounded-lg border border-app-border/30 bg-app-surface/30 p-3",
+        "group/queue-card rounded-lg border border-app-border/30 bg-app-surface/30",
+        isCompact ? "px-2.5 py-2" : "p-3",
         message.kind === "steer" && message.status === "pending" && "border-app-warning/20 bg-app-warning/5",
         message.kind === "follow_up" && message.status === "pending" && "border-app-info/20 bg-app-info/5",
       )}
     >
-      <div className="flex items-start gap-2">
-        <div className="mt-0.5 flex-shrink-0">{statusIcon(message)}</div>
+      <div className={cn("flex items-start", isCompact ? "gap-1.5" : "gap-2")}>
+        <div className={cn("flex-shrink-0", isCompact ? "mt-0.5 [&_svg]:size-3" : "mt-0.5")}>{statusIcon(message)}</div>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-app-subtle">
+          <div className={cn("flex flex-wrap items-center text-app-subtle", isCompact ? "gap-1.5 text-[11px]" : "gap-2 text-xs")}>
             <span className="font-medium text-app-foreground">{kindLabel(message.kind, t)}</span>
-            <span className="rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px]">
+            <span className={cn("rounded-md bg-app-surface-muted", isCompact ? "px-1 py-0.5 text-[10px]" : "px-1.5 py-0.5 text-[11px]")}>
               {statusLabel(message, t)}
             </span>
           </div>
-          <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-app-muted">
+          <p className={cn("mt-1 whitespace-pre-wrap break-words text-app-muted", isCompact ? "text-xs leading-5" : "text-sm leading-6")}>
             {displayText}
           </p>
           {shouldShowExpandedPrompt ? (
-            <CompactCollapsible className="mt-2" defaultOpen={false}>
+            <CompactCollapsible className={isCompact ? "mt-1.5" : "mt-2"} defaultOpen={false}>
               <CompactCollapsibleHeader className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground">
                 <div className="min-w-0">
                   <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-app-subtle">
@@ -126,7 +133,7 @@ export function RuntimeQueueMessageCard({
                 </div>
               </CompactCollapsibleHeader>
               <CompactCollapsibleContent className="pl-0">
-                <div className="whitespace-pre-wrap rounded-xl border border-app-border/25 bg-app-surface/35 px-3 py-2 text-xs leading-5 text-app-muted">
+                <div className={cn("whitespace-pre-wrap rounded-xl border border-app-border/25 bg-app-surface/35 text-xs text-app-muted", isCompact ? "px-2 py-1.5 leading-5" : "px-3 py-2 leading-5")}>
                   {expandedPrompt}
                 </div>
               </CompactCollapsibleContent>
@@ -140,7 +147,8 @@ export function RuntimeQueueMessageCard({
             title={cancelLabel}
             disabled={isCancelling}
             className={cn(
-              "-mr-1 -mt-1 flex size-7 flex-shrink-0 items-center justify-center rounded-full text-app-subtle opacity-70 transition-all hover:bg-app-surface-hover hover:text-app-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-primary/40 disabled:cursor-not-allowed disabled:opacity-50 sm:opacity-0 sm:group-hover/queue-card:opacity-100",
+              "-mr-1 -mt-1 flex flex-shrink-0 items-center justify-center rounded-full text-app-subtle opacity-70 transition-all hover:bg-app-surface-hover hover:text-app-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-primary/40 disabled:cursor-not-allowed disabled:opacity-50 sm:opacity-0 sm:group-hover/queue-card:opacity-100",
+              isCompact ? "size-6" : "size-7",
               isCancelling && "opacity-100 sm:opacity-100",
             )}
             onClick={(event) => {
@@ -163,6 +171,7 @@ export const RuntimeQueueTimeline = ({
   onCancelMessage,
   cancellingMessageIds,
   className,
+  variant = "default",
   ...props
 }: RuntimeQueueTimelineProps) => {
   const t = useT();
@@ -180,29 +189,30 @@ export const RuntimeQueueTimeline = ({
   const pendingCount = pendingMessages.length;
   const steeringMessages = pendingMessages.filter((message) => message.kind === "steer");
   const followUpMessages = pendingMessages.filter((message) => message.kind === "follow_up");
+  const isCompact = variant === "compact";
 
   return (
-    <div className={cn("space-y-2", className)} {...props}>
+    <div className={cn(isCompact ? "space-y-1.5" : "space-y-2", className)} {...props}>
       <Collapsible defaultOpen>
-        <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground">
-          <div className="flex items-center gap-2">
-            <ListPlusIcon className="size-3" />
+        <CollapsibleTrigger className={cn("group flex w-full items-center justify-between rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground", isCompact ? "gap-1.5 py-0.5" : "gap-2")}>
+          <div className={cn("flex items-center", isCompact ? "gap-1.5" : "gap-2")}>
+            <ListPlusIcon className={isCompact ? "size-2.5" : "size-3"} />
             <span>{t("queue.title")}</span>
-            <span className="rounded-md bg-app-surface-muted px-1.5 py-0.5 text-[11px] text-app-subtle">
+            <span className={cn("rounded-md bg-app-surface-muted text-app-subtle", isCompact ? "px-1 py-0.5 text-[10px]" : "px-1.5 py-0.5 text-[11px]")}>
               {t("queue.pendingCount", { count: pendingCount })}
             </span>
             {queue.isDeferringSteering ? (
-              <span className="rounded-md bg-app-warning/10 px-1.5 py-0.5 text-[11px] text-app-warning">
+              <span className={cn("rounded-md bg-app-warning/10 text-app-warning", isCompact ? "px-1 py-0.5 text-[10px]" : "px-1.5 py-0.5 text-[11px]")}>
                 {t("queue.deferringSteer")}
               </span>
             ) : null}
           </div>
           <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" />
         </CollapsibleTrigger>
-        <CollapsibleContent className="space-y-3 pt-2 outline-none data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 data-[state=closed]:animate-out data-[state=open]:animate-in">
+        <CollapsibleContent className={cn("outline-none data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 data-[state=closed]:animate-out data-[state=open]:animate-in", isCompact ? "space-y-2 pt-1.5" : "space-y-3 pt-2")}>
           {steeringMessages.length > 0 ? (
-            <div className="flex flex-col gap-2">
-              <div className="text-[11px] font-medium uppercase tracking-wide text-app-subtle">
+            <div className={cn("flex flex-col", isCompact ? "gap-1.5" : "gap-2")}>
+              <div className={cn("font-medium uppercase tracking-wide text-app-subtle", isCompact ? "text-[10px]" : "text-[11px]")}>
                 {t("queue.steeringQueued", { count: steeringMessages.length })}
               </div>
               {steeringMessages.map((message) => (
@@ -212,13 +222,14 @@ export const RuntimeQueueTimeline = ({
                   t={t}
                   onCancelMessage={onCancelMessage}
                   isCancelling={cancellingMessageIds?.has(message.id)}
+                  variant={variant}
                 />
               ))}
             </div>
           ) : null}
           {followUpMessages.length > 0 ? (
-            <div className="flex flex-col gap-2">
-              <div className="text-[11px] font-medium uppercase tracking-wide text-app-subtle">
+            <div className={cn("flex flex-col", isCompact ? "gap-1.5" : "gap-2")}>
+              <div className={cn("font-medium uppercase tracking-wide text-app-subtle", isCompact ? "text-[10px]" : "text-[11px]")}>
                 {t("queue.followUpQueued", { count: followUpMessages.length })}
               </div>
               {followUpMessages.map((message) => (
@@ -228,6 +239,7 @@ export const RuntimeQueueTimeline = ({
                   t={t}
                   onCancelMessage={onCancelMessage}
                   isCancelling={cancellingMessageIds?.has(message.id)}
+                  variant={variant}
                 />
               ))}
             </div>

@@ -1696,7 +1696,7 @@ export function RuntimeThreadSurface({
   );
   const hasTaskHistoryTimeline = taskBoards.boards.some((board) => board.status !== "active");
   // Keep empty-state suppression aligned with panels that are actually visible:
-  // the fixed queue panel only renders pending messages.
+  // the composer-adjacent queue panel only renders pending messages.
   const hasRuntimeArtifacts =
     Boolean(runtimeError)
     || hasPendingRuntimeQueue
@@ -1812,32 +1812,12 @@ export function RuntimeThreadSurface({
 
   const thinkingIndicatorPreviousRole: TimelineRole | null =
     showThinkingIndicator ? lastPresentationRole : null;
-  const hasFixedBottomPanels = hasPendingRuntimeQueue || hasTaskHistoryTimeline;
   const runtimeErrorPreviousRole: TimelineRole | null = showThinkingIndicator
     ? "assistant"
     : lastPresentationRole;
 
-  const fixedBottomPanelsRef = useRef<HTMLDivElement>(null);
-  const [fixedBottomPanelsHeight, setFixedBottomPanelsHeight] = useState(0);
-  useEffect(() => {
-    if (!hasFixedBottomPanels) {
-      setFixedBottomPanelsHeight(0);
-      return;
-    }
-    if (typeof ResizeObserver === "undefined") return;
-    const el = fixedBottomPanelsRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setFixedBottomPanelsHeight(entry.target.getBoundingClientRect().height);
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [hasFixedBottomPanels]);
-
-  const conversationBottomPadding = BASE_CONVERSATION_BOTTOM_PADDING
-    + (hasFixedBottomPanels ? fixedBottomPanelsHeight : 0);
+  const hasComposerStatusPanel = hasPendingRuntimeQueue || hasTaskHistoryTimeline;
+  const conversationBottomPadding = BASE_CONVERSATION_BOTTOM_PADDING;
 
   useEffect(() => {
     const previousToolStates = previousToolStatesRef.current;
@@ -3089,37 +3069,35 @@ export function RuntimeThreadSurface({
               </div>
             ) : null}
           </ConversationContent>
-          {hasFixedBottomPanels ? (
-            <div ref={fixedBottomPanelsRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-0 pb-4">
-              <ConversationScrollButton className="pointer-events-auto bottom-auto -top-10 left-1/2 -translate-x-1/2" />
-              <div className="mx-auto w-full max-w-4xl px-6">
-                <div className="pointer-events-auto max-h-[min(36vh,320px)] overflow-y-auto rounded-2xl border border-app-border/70 bg-app-menu/96 px-4 py-3 shadow-[0_24px_60px_-36px_rgba(15,23,42,0.48)] backdrop-blur-xl">
-                  <div className="flex flex-col gap-3">
-                    {hasPendingRuntimeQueue ? (
-                      <RuntimeQueueTimeline
-                        queue={runtimeQueue}
-                        onCancelMessage={cancelRuntimeQueueMessage}
-                        cancellingMessageIds={cancellingRuntimeQueueMessageIds}
-                      />
-                    ) : null}
-                    {hasTaskHistoryTimeline ? (
-                      <TaskHistoryTimeline boards={taskBoards.boards} />
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <ConversationScrollButton />
-          )}
+          <ConversationScrollButton />
         </Conversation>
       </div>
 
       <div className="shrink-0 px-6 pb-6 pt-4">
         <div className="mx-auto flex w-full max-w-4xl flex-col gap-0">
+          {hasComposerStatusPanel ? (
+            <div className="min-h-0 max-h-[min(24vh,220px)] overflow-y-auto rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu/96 px-3 py-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl">
+              <div className="flex flex-col gap-2">
+                {hasPendingRuntimeQueue ? (
+                  <RuntimeQueueTimeline
+                    queue={runtimeQueue}
+                    variant="compact"
+                    onCancelMessage={cancelRuntimeQueueMessage}
+                    cancellingMessageIds={cancellingRuntimeQueueMessageIds}
+                  />
+                ) : null}
+                {hasTaskHistoryTimeline ? (
+                  <TaskHistoryTimeline boards={taskBoards.boards} />
+                ) : null}
+              </div>
+            </div>
+          ) : null}
           {taskBoards.activeBoard ? (
             <div
-              className="min-h-0 max-h-[min(36vh,320px)] overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu/96 px-2 pb-0 pt-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl"
+              className={cn(
+                "min-h-0 max-h-[min(36vh,320px)] overflow-hidden border border-b-0 border-app-border/80 bg-app-menu/96 px-2 pb-0 pt-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl",
+                hasComposerStatusPanel ? "rounded-none" : "rounded-t-[24px] rounded-b-none",
+              )}
             >
               <TaskBoardCard
                 board={taskBoards.activeBoard}
@@ -3138,7 +3116,7 @@ export function RuntimeThreadSurface({
             className="w-full max-w-none gap-0"
             commands={commands}
             customSubagents={customSubagents}
-            composerShellClassName={taskBoards.activeBoard
+            composerShellClassName={taskBoards.activeBoard || hasComposerStatusPanel
               ? "rounded-t-none border-t-0"
               : undefined}
             enabledSkills={enabledSkills}
