@@ -227,6 +227,7 @@ function renderPlanProseSection(title: string, content: string) {
 
 
 const BASE_CONVERSATION_BOTTOM_PADDING = 40;
+const FIXED_BOTTOM_PANELS_CONVERSATION_PADDING = 120;
 type RuntimeQueueSubmitMode = RuntimeQueueMessageKind;
 const THREAD_AUTO_COLLAPSE_DELAY_MS = 8000;
 
@@ -1691,9 +1692,16 @@ export function RuntimeThreadSurface({
       ) ?? null,
     [tools],
   );
+  const hasPendingRuntimeQueue = Boolean(
+    runtimeQueue?.messages.some((message) => message.status === "pending"),
+  );
+  const hasTaskHistoryTimeline = taskBoards.boards.some((board) => board.status !== "active");
+  // Keep empty-state suppression aligned with panels that are actually visible:
+  // the fixed queue panel only renders pending messages.
   const hasRuntimeArtifacts =
     Boolean(runtimeError)
-    || Boolean(runtimeQueue)
+    || hasPendingRuntimeQueue
+    || hasTaskHistoryTimeline
     || requestRetryEntries.length > 0
     || helpers.length > 0
     || visibleTools.length > 0
@@ -1805,17 +1813,13 @@ export function RuntimeThreadSurface({
 
   const thinkingIndicatorPreviousRole: TimelineRole | null =
     showThinkingIndicator ? lastPresentationRole : null;
-  const queuePreviousRole: TimelineRole | null =
-    showThinkingIndicator ? "assistant" : lastPresentationRole;
-  const hasTaskHistoryTimeline = taskBoards.boards.some((board) => board.status !== "active");
-  const historyPreviousRole: TimelineRole | null = runtimeQueue ? "assistant" : lastPresentationRole;
-  const runtimeErrorPreviousRole: TimelineRole | null = hasTaskHistoryTimeline
+  const hasFixedBottomPanels = hasPendingRuntimeQueue || hasTaskHistoryTimeline;
+  const runtimeErrorPreviousRole: TimelineRole | null = showThinkingIndicator
     ? "assistant"
-    : runtimeQueue || showThinkingIndicator
-      ? "assistant"
-      : lastPresentationRole;
+    : lastPresentationRole;
 
-  const conversationBottomPadding = BASE_CONVERSATION_BOTTOM_PADDING;
+  const conversationBottomPadding = BASE_CONVERSATION_BOTTOM_PADDING
+    + (hasFixedBottomPanels ? FIXED_BOTTOM_PANELS_CONVERSATION_PADDING : 0);
 
   useEffect(() => {
     const previousToolStates = previousToolStatesRef.current;
@@ -3041,49 +3045,6 @@ export function RuntimeThreadSurface({
               </div>
             </div>
 
-            {/* Runtime Queue — always in DOM; height transitions smoothly via
-                grid-rows to avoid layout jumps during streaming. */}
-            <div
-              className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
-                runtimeQueue
-                  ? "grid-rows-[1fr] opacity-100"
-                  : "grid-rows-[0fr] opacity-0"
-              }`}
-            >
-              <div className="overflow-hidden">
-                <div className={getRoleSpacingClass(queuePreviousRole, "assistant")}>
-                  <Message className="max-w-full" from="assistant">
-                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                      <RuntimeQueueTimeline
-                        queue={runtimeQueue}
-                        onCancelMessage={cancelRuntimeQueueMessage}
-                        cancellingMessageIds={cancellingRuntimeQueueMessageIds}
-                      />
-                    </MessageContent>
-                  </Message>
-                </div>
-              </div>
-            </div>
-
-            {/* Task History — same smooth transition pattern. */}
-            <div
-              className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
-                hasTaskHistoryTimeline
-                  ? "grid-rows-[1fr] opacity-100"
-                  : "grid-rows-[0fr] opacity-0"
-              }`}
-            >
-              <div className="overflow-hidden">
-                <div className={getRoleSpacingClass(historyPreviousRole, "assistant")}>
-                  <Message className="max-w-full" from="assistant">
-                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                      <TaskHistoryTimeline boards={taskBoards.boards} />
-                    </MessageContent>
-                  </Message>
-                </div>
-              </div>
-            </div>
-
             {runtimeError ? (
               <div className={getRoleSpacingClass(runtimeErrorPreviousRole, "assistant")}>
                 <Message className="max-w-full" from="assistant">
@@ -3110,7 +3071,27 @@ export function RuntimeThreadSurface({
               </div>
             ) : null}
           </ConversationContent>
-          <ConversationScrollButton className="bottom-4" />
+          {hasFixedBottomPanels ? (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-0 pb-4">
+              <div className="mx-auto w-full max-w-4xl px-6">
+                <div className="pointer-events-auto max-h-[min(36vh,320px)] overflow-y-auto rounded-2xl border border-app-border/70 bg-app-menu/96 px-4 py-3 shadow-[0_24px_60px_-36px_rgba(15,23,42,0.48)] backdrop-blur-xl">
+                  <div className="flex flex-col gap-3">
+                    {hasPendingRuntimeQueue ? (
+                      <RuntimeQueueTimeline
+                        queue={runtimeQueue}
+                        onCancelMessage={cancelRuntimeQueueMessage}
+                        cancellingMessageIds={cancellingRuntimeQueueMessageIds}
+                      />
+                    ) : null}
+                    {hasTaskHistoryTimeline ? (
+                      <TaskHistoryTimeline boards={taskBoards.boards} />
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <ConversationScrollButton className={cn("z-20", hasFixedBottomPanels ? "bottom-[calc(min(36vh,320px)_+_2rem)]" : "bottom-4")} />
         </Conversation>
       </div>
 
