@@ -379,7 +379,10 @@ async function hydrateSettings(): Promise<void> {
             profileList(),
             promptCommandList(),
             customSubagentList(),
-            settingsGet(WEB_SEARCH_SETTINGS_KEY),
+            settingsGet(WEB_SEARCH_SETTINGS_KEY).catch((error) => {
+              console.warn("Failed to hydrate Web Search settings", error);
+              return null;
+            }),
           ]);
 
         const mappedCatalog = catalog.map((entry) => ({

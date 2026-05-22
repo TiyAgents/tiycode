@@ -319,6 +319,85 @@ describe("hydrateSettingsOnce", () => {
       expect(state.agentProfiles.length).toBe(1);
     });
 
+    it("keeps phase-2 data when Web Search settings hydration fails", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const webSearchError = new Error("web search setting unavailable");
+        mockSettingsGet.mockImplementation((key: string) => {
+          if (key === "web_search.settings") {
+            return Promise.reject(webSearchError);
+          }
+          return Promise.resolve(makeSettingDto("active_profile_id", "profile-1"));
+        });
+        mockProviderCatalogList.mockResolvedValue([
+          {
+            providerKey: "openai",
+            providerType: "openai",
+            displayName: "OpenAI",
+            builtin: true,
+            supportsCustom: false,
+            defaultBaseUrl: "https://api.openai.com",
+          },
+        ]);
+        mockProfileList.mockResolvedValue([
+          {
+            id: "profile-1",
+            name: "Default",
+            customInstructions: "",
+            commitMessagePrompt: "",
+            responseStyle: "balanced" as const,
+            thinkingLevel: "medium" as const,
+            responseLanguage: "",
+            commitMessageLanguage: "",
+            primaryProviderId: "",
+            primaryModelId: "",
+            auxiliaryProviderId: "",
+            auxiliaryModelId: "",
+            lightweightProviderId: "",
+            lightweightModelId: "",
+          },
+        ]);
+        mockPromptCommandList.mockResolvedValue([
+          {
+            id: "cmd-1",
+            name: "Command",
+            path: "/cmd",
+            argumentHint: "",
+            description: "",
+            prompt: "echo hi",
+            source: "user",
+            enabled: true,
+            version: 1,
+            fileName: "cmd.md",
+          },
+        ]);
+
+        const p = hydrateSettingsOnce();
+        await vi.runAllTimersAsync();
+        await p;
+
+        const state = settingsStore.getState();
+        expect(state.hydrationPhase).toBe("hydrated");
+        expect(state.providerCatalog).toHaveLength(1);
+        expect(state.agentProfiles).toHaveLength(1);
+        expect(state.commands).toHaveLength(1);
+        expect(state.customSubagents).toEqual([]);
+        expect(state.webSearch).toMatchObject({
+          enabled: false,
+          engine: "tavily",
+          hasApiKey: false,
+          maxResults: 5,
+          includeRawContent: true,
+        });
+        expect(warnSpy).toHaveBeenCalledWith(
+          "Failed to hydrate Web Search settings",
+          webSearchError,
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     it("marks hydrated even when phase-2 fails (downgrade)", async () => {
       mockProviderCatalogList.mockRejectedValue(
         new Error("catalog unavailable"),

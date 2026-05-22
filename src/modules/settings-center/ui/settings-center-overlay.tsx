@@ -1118,7 +1118,7 @@ function GeneralSettingsPanel({
   const t = useT();
   const [webSearchApiKey, setWebSearchApiKey] = useState("");
   const [webSearchBaseUrl, setWebSearchBaseUrl] = useState(webSearch.baseUrl ?? "");
-  const [webSearchMaxResults, setWebSearchMaxResults] = useState(webSearch.maxResults);
+  const [webSearchMaxResults, setWebSearchMaxResults] = useState<number | "">(webSearch.maxResults);
   const [isSavingWebSearchKey, setIsSavingWebSearchKey] = useState(false);
   const [webSearchApiKeyError, setWebSearchApiKeyError] = useState<string | null>(null);
   const webSearchEngineOptions = useMemo(
@@ -1151,9 +1151,15 @@ function GeneralSettingsPanel({
   useEffect(() => {
     setWebSearchApiKey("");
     setWebSearchApiKeyError(null);
-    setWebSearchBaseUrl(webSearch.baseUrl ?? "");
-    setWebSearchMaxResults(webSearch.maxResults);
   }, [webSearch.engine]);
+
+  useEffect(() => {
+    setWebSearchBaseUrl(webSearch.baseUrl ?? "");
+  }, [webSearch.baseUrl]);
+
+  useEffect(() => {
+    setWebSearchMaxResults(webSearch.maxResults);
+  }, [webSearch.maxResults]);
 
   const clampWebSearchMaxResults = (value: number) => Math.min(20, Math.max(1, Math.round(value)));
 
@@ -1332,13 +1338,19 @@ function GeneralSettingsPanel({
               className="w-24"
               value={webSearchMaxResults}
               onChange={(event) => {
-                const nextValue = Number(event.target.value);
+                const { value } = event.target;
+                if (value === "") {
+                  setWebSearchMaxResults("");
+                  return;
+                }
+                const nextValue = Number(value);
                 if (Number.isFinite(nextValue)) {
-                  setWebSearchMaxResults(clampWebSearchMaxResults(nextValue));
+                  setWebSearchMaxResults(nextValue);
                 }
               }}
               onBlur={() => {
-                const clamped = clampWebSearchMaxResults(webSearchMaxResults);
+                const draftValue = webSearchMaxResults === "" ? webSearch.maxResults : webSearchMaxResults;
+                const clamped = clampWebSearchMaxResults(draftValue);
                 setWebSearchMaxResults(clamped);
                 if (clamped !== webSearch.maxResults) {
                   void onUpdateWebSearchSettings({ maxResults: clamped });
