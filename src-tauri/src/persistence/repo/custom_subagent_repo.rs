@@ -91,6 +91,10 @@ pub async fn create(
     pool: &SqlitePool,
     input: &CustomSubagentInput,
 ) -> Result<CustomSubagentRecord, AppError> {
+    crate::model::subagent::validate_slug(&input.slug).map_err(|msg| {
+        AppError::recoverable(ErrorSource::Settings, "custom_subagent.invalid_slug", msg)
+    })?;
+
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let is_enabled: i32 = if input.is_enabled.unwrap_or(true) {
@@ -150,10 +154,19 @@ pub async fn update(
     let now = Utc::now().to_rfc3339();
     // Preserve the existing is_enabled value when the input omits it,
     // preventing accidental re-enabling of disabled subagents.
-    let existing = get_by_id(pool, id).await?;
-    let is_enabled_val = input
-        .is_enabled
-        .unwrap_or_else(|| existing.as_ref().map_or(true, |r| r.is_enabled));
+    let existing = get_by_id(pool, id).await?.ok_or_else(|| {
+        AppError::recoverable(
+            ErrorSource::Settings,
+            "custom_subagent.not_found",
+            "custom subagent not found",
+        )
+    })?;
+
+    crate::model::subagent::validate_slug(&input.slug).map_err(|msg| {
+        AppError::recoverable(ErrorSource::Settings, "custom_subagent.invalid_slug", msg)
+    })?;
+
+    let is_enabled_val = input.is_enabled.unwrap_or_else(|| existing.is_enabled);
     let is_enabled: i32 = if is_enabled_val { 1 } else { 0 };
     let tools_json =
         serde_json::to_string(&input.allowed_tools).unwrap_or_else(|_| "[]".to_string());
@@ -184,20 +197,18 @@ pub async fn update(
         }
     })?;
 
-    if result.rows_affected() == 0 {
-        return Err(AppError::recoverable(
-            ErrorSource::Settings,
-            "custom_subagent.not_found",
-            "custom subagent not found",
-        ));
-    }
-
-    // Re-fetch the full row to return accurate created_at
-    get_by_id(pool, id).await?.ok_or_else(|| {
-        AppError::internal(
-            ErrorSource::Database,
-            "subagent disappeared after update".to_string(),
-        )
+    // Construct the updated record from known inputs and cached created_at
+    Ok(CustomSubagentRecord {
+        id: id.to_string(),
+        name: input.name.clone(),
+        slug: input.slug.clone(),
+        system_prompt: input.system_prompt.clone(),
+        invocation_description: input.invocation_description.clone(),
+        allowed_tools: tools_json,
+        model_role: input.model_role,
+        is_enabled: is_enabled_val,
+        created_at: existing.created_at.clone(),
+        updated_at: now,
     })
 }
 

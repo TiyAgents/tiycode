@@ -2,6 +2,14 @@ import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, us
 import { createPortal } from "react-dom";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
 import { AgentsSettingsPanel } from "@/modules/settings-center/ui/agents-settings-panel";
 import { ProfileAgentAccess } from "@/modules/settings-center/ui/profile-agent-access";
 import { useT } from "@/i18n";
@@ -359,6 +367,24 @@ export function SettingsCenterOverlay({
   const VISIBLE_CATEGORY_META = useMemo(() => CATEGORY_META.filter((category) => category.key !== "account"), [CATEGORY_META]);
   const activeMeta = CATEGORY_META.find((category) => category.key === activeCategory) ?? CATEGORY_META[0];
   const isAboutCategory = activeCategory === "about";
+  const [agentsUnsavedChanges, setAgentsUnsavedChanges] = useState(false);
+  const [pendingCategory, setPendingCategory] = useState<SettingsCategory | null>(null);
+
+  const handleSelectCategory = (category: SettingsCategory) => {
+    if (agentsUnsavedChanges && activeCategory === "agents" && category !== activeCategory) {
+      setPendingCategory(category);
+      return;
+    }
+    onSelectCategory(category);
+  };
+
+  const handleDiscardAgentsChanges = () => {
+    setPendingCategory(null);
+    setAgentsUnsavedChanges(false);
+    if (pendingCategory) {
+      onSelectCategory(pendingCategory);
+    }
+  };
 
   return (
     <div className="fixed inset-x-0 bottom-0 top-9 z-[60] bg-app-canvas text-app-foreground">
@@ -389,7 +415,7 @@ export function SettingsCenterOverlay({
                         ? "border-app-border-strong bg-app-surface-active text-app-foreground shadow-[0_4px_14px_rgba(15,23,42,0.08)]"
                         : "border-transparent bg-transparent text-app-muted hover:border-app-border hover:bg-app-surface-hover hover:text-app-foreground hover:shadow-[0_4px_14px_rgba(15,23,42,0.08)]",
                     )}
-                    onClick={() => onSelectCategory(category.key)}
+                    onClick={() => handleSelectCategory(category.key)}
                   >
                     <Icon
                       className={cn(
@@ -434,7 +460,7 @@ export function SettingsCenterOverlay({
                         ? "border-app-border-strong text-app-foreground"
                         : "border-transparent text-app-muted hover:text-app-foreground",
                     )}
-                    onClick={() => onSelectCategory(category.key)}
+                    onClick={() => handleSelectCategory(category.key)}
                   >
                     {category.title}
                   </button>
@@ -569,6 +595,7 @@ export function SettingsCenterOverlay({
                   <AgentsSettingsPanel
                     customSubagents={customSubagents}
                     description={activeMeta.description}
+                    onUnsavedChangesChange={setAgentsUnsavedChanges}
                   />
                 ) : null}
 
@@ -587,6 +614,23 @@ export function SettingsCenterOverlay({
         </div>
         </section>
       </div>
+
+      <Dialog open={pendingCategory !== null} onOpenChange={(open) => { if (!open) setPendingCategory(null); }}>
+        <DialogContent className="max-w-md border-app-border bg-app-canvas">
+          <DialogHeader>
+            <DialogTitle>{t("settings.agents.unsavedChangesTitle")}</DialogTitle>
+            <DialogDescription>{t("settings.agents.unsavedChangesLeaveDesc")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" onClick={() => setPendingCategory(null)}>
+              {t("settings.agents.continueEditing")}
+            </Button>
+            <Button type="button" variant="destructive" onClick={handleDiscardAgentsChanges}>
+              {t("settings.agents.discardChanges")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

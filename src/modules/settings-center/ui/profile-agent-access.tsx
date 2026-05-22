@@ -200,8 +200,8 @@ export function ProfileAgentAccess({
           <div className="grid gap-2 md:grid-cols-2">
             {customSubagents.map((agent) => {
               const isSelected = accessIds.includes(agent.id);
-              const visibleTools = agent.allowedTools.slice(0, 4);
-              const extraToolCount = agent.allowedTools.length - visibleTools.length;
+              const visibleTools = (agent.allowedTools ?? []).slice(0, 4);
+              const extraToolCount = (agent.allowedTools ?? []).length - visibleTools.length;
 
               return (
                 <label

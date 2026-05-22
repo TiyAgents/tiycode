@@ -1307,7 +1307,7 @@ function AgentTeamSection({
     return () => {
       cancelled = true;
     };
-  }, [profileId, customSubagents]);
+  }, [profileId, customSubagents.length]);
 
   const allowedCustomAgents = customSubagents.filter((agent) => agent.isEnabled && accessIds.includes(agent.id));
 

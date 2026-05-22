@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -140,6 +140,7 @@ function FieldGroup({
 type AgentsSettingsPanelProps = {
   customSubagents: CustomSubagent[];
   description?: string;
+  onUnsavedChangesChange?: (dirty: boolean) => void;
 };
 
 type AgentPendingAction =
@@ -151,6 +152,7 @@ type AgentPendingAction =
 export function AgentsSettingsPanel({
   customSubagents,
   description,
+  onUnsavedChangesChange,
 }: AgentsSettingsPanelProps) {
   const t = useT();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -161,6 +163,11 @@ export function AgentsSettingsPanel({
 
   const selectedAgent = customSubagents.find((a) => a.id === selectedId);
   const hasUnsavedChanges = editState !== null;
+
+  // Notify parent when unsaved-changes state changes so it can block navigation.
+  useEffect(() => {
+    onUnsavedChangesChange?.(hasUnsavedChanges);
+  }, [hasUnsavedChanges, onUnsavedChangesChange]);
 
   const modelRoleLabel = (role: CustomSubagentModelRole | undefined) => {
     const option = MODEL_ROLE_OPTIONS.find((entry) => entry.value === (role ?? "auxiliary"));

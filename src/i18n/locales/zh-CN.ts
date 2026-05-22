@@ -476,6 +476,8 @@ const zhCN = {
   "settings.agents.discardDesc": "此自定义 Agent 中存在未保存编辑。继续前丢弃会导致这些修改丢失。",
   "settings.agents.continueEditing": "继续编辑",
   "settings.agents.discardChanges": "丢弃修改",
+"settings.agents.unsavedChangesTitle": "不保存就离开？",
+"settings.agents.unsavedChangesLeaveDesc": "你有未保存的自定义 Agent 修改。离开将丢弃这些更改。",
   "settings.agents.errorCreate": "创建 Agent 失败",
   "settings.agents.errorDelete": "删除 Agent 失败",
   "settings.agents.errorSave": "保存 Agent 失败",

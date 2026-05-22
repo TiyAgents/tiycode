@@ -458,6 +458,8 @@ const en: Record<TranslationKey, string> = {
   "settings.agents.discardDesc": "You have unsaved edits in this custom agent. Discarding will lose those changes before continuing.",
   "settings.agents.continueEditing": "Continue editing",
   "settings.agents.discardChanges": "Discard changes",
+"settings.agents.unsavedChangesTitle": "Leave without saving?",
+"settings.agents.unsavedChangesLeaveDesc": "You have unsaved changes to a custom agent. Leaving will discard those changes.",
   "settings.agents.errorCreate": "Failed to create agent",
   "settings.agents.errorDelete": "Failed to delete agent",
   "settings.agents.errorSave": "Failed to save agent",
