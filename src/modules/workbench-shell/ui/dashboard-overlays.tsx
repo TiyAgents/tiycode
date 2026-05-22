@@ -56,6 +56,7 @@ import {
   updateCommand,
   updateDenyEntry,
   updateGeneralPreference,
+  updateWebSearchSettings,
   updatePolicySetting,
   updateProvider,
   updateTerminalSetting,
@@ -185,6 +186,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
   const activeAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
   const customSubagents = useStore(settingsStore, (s) => s.customSubagents, shallowEqual);
   const generalPreferences = useStore(settingsStore, (s) => s.general, shallowEqual);
+  const webSearch = useStore(settingsStore, (s) => s.webSearch, shallowEqual);
   const policy = useStore(settingsStore, (s) => s.policy, shallowEqual);
   const terminal = useStore(settingsStore, (s) => s.terminal, shallowEqual);
   const availableShells = useStore(settingsStore, (s) => s.availableShells, shallowEqual);
@@ -264,6 +266,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
           configDiagnostics={configDiagnostics}
           customSubagents={customSubagents}
           generalPreferences={generalPreferences}
+          webSearch={webSearch}
           isCheckingUpdates={isCheckingUpdates}
           language={language}
           policy={policy}
@@ -304,6 +307,7 @@ export function DashboardOverlays(props: DashboardOverlaysProps) {
           onUpdateCommand={updateCommand}
           onUpdateDenyEntry={updateDenyEntry}
           onUpdateGeneralPreference={updateGeneralPreference}
+          onUpdateWebSearchSettings={updateWebSearchSettings}
           onUpdatePolicySetting={updatePolicySetting}
           onUpdateProvider={updateProvider}
           onUpdateTerminalSetting={updateTerminalSetting}

@@ -1,3 +1,4 @@
+use crate::core::agent_session_tools::web_search_agent_tool;
 use crate::model::subagent::CustomSubagentModelRole;
 use tiycore::agent::AgentTool;
 
@@ -276,7 +277,7 @@ Return format:\n\
         }
     }
 
-    pub fn helper_tools(&self) -> Vec<AgentTool> {
+    pub fn helper_tools(&self, web_search_enabled: bool) -> Vec<AgentTool> {
         // For Custom profiles, dynamically resolve from allowed_tools
         if let Self::Custom { allowed_tools, .. } = self {
             return self.resolve_custom_tools(allowed_tools);
@@ -381,6 +382,10 @@ Return format:\n\
                 }),
             ),
         ];
+
+        if web_search_enabled {
+            tools.push(web_search_agent_tool());
+        }
 
         if *self == Self::Review {
             tools.extend([
@@ -531,6 +536,7 @@ Return format:\n\
                     "required": ["query"]
                 }),
             ),
+            web_search_agent_tool(),
             AgentTool::new(
                 "edit",
                 "Edit File",
@@ -674,7 +680,7 @@ mod tests {
 
     #[test]
     fn reviewer_profile_includes_terminal_tools() {
-        let tools = SubagentProfile::Review.helper_tools();
+        let tools = SubagentProfile::Review.helper_tools(false);
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
         assert!(tool_names.contains(&"git_status"));
@@ -682,11 +688,21 @@ mod tests {
         assert!(tool_names.contains(&"git_log"));
         assert!(tool_names.contains(&"term_status"));
         assert!(tool_names.contains(&"term_output"));
+        assert!(!tool_names.contains(&"web_search"));
+    }
+
+    #[test]
+    fn reviewer_profile_includes_web_search_when_enabled() {
+        let tools = SubagentProfile::Review.helper_tools(true);
+        let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+
+        assert!(tool_names.contains(&"web_search"));
+        assert!(tool_names.contains(&"git_status"));
     }
 
     #[test]
     fn reviewer_terminal_tool_descriptions_clarify_terminal_panel_scope() {
-        let tools = SubagentProfile::Review.helper_tools();
+        let tools = SubagentProfile::Review.helper_tools(false);
         let status_tool = tools
             .iter()
             .find(|tool| tool.name == "term_status")
@@ -732,7 +748,7 @@ mod tests {
 
     #[test]
     fn review_git_tool_schema_exposes_numeric_safety_bounds() {
-        let tools = SubagentProfile::Review.helper_tools();
+        let tools = SubagentProfile::Review.helper_tools(false);
         let git_diff = tools
             .iter()
             .find(|tool| tool.name == "git_diff")
@@ -787,11 +803,26 @@ mod tests {
             allowed_tools: vec!["read".to_string(), "search".to_string()],
             model_role: CustomSubagentModelRole::Auxiliary,
         };
-        let tools = profile.helper_tools();
+        let tools = profile.helper_tools(false);
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"read"));
         assert!(tool_names.contains(&"search"));
+        assert!(!tool_names.contains(&"web_search"));
         assert!(!tool_names.contains(&"edit"));
         assert!(!tool_names.contains(&"shell"));
+    }
+
+    #[test]
+    fn custom_profile_can_allow_web_search_tool() {
+        let profile = SubagentProfile::Custom {
+            slug: "test".to_string(),
+            system_prompt: "You are a test helper.".to_string(),
+            allowed_tools: vec!["web_search".to_string()],
+            model_role: CustomSubagentModelRole::Auxiliary,
+        };
+        let tools = profile.helper_tools(false);
+        let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(tool_names.contains(&"web_search"));
+        assert!(!tool_names.contains(&"read"));
     }
 }

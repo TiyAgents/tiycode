@@ -171,7 +171,7 @@ pub async fn update(
     let tools_json =
         serde_json::to_string(&input.allowed_tools).unwrap_or_else(|_| "[]".to_string());
 
-    let result = sqlx::query(
+    sqlx::query(
         "UPDATE custom_subagents SET name = ?, slug = ?, system_prompt = ?, invocation_description = ?, allowed_tools = ?, model_role = ?, is_enabled = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&input.name)

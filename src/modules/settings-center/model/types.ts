@@ -126,6 +126,16 @@ export type CommandSettings = {
 };
 
 export type AppendMessageKind = "steer" | "follow_up";
+export type WebSearchEngine = "tavily" | "brave" | "exa" | "firecrawl";
+
+export type WebSearchSettings = {
+  enabled: boolean;
+  engine: WebSearchEngine;
+  hasApiKey: boolean;
+  baseUrl?: string;
+  maxResults: number;
+  includeRawContent: boolean;
+};
 
 export type GeneralPreferences = {
   launchAtLogin: boolean;
@@ -186,4 +196,5 @@ export type SettingsState = {
   agentProfiles: Array<AgentProfile>;
   activeAgentProfileId: string;
   customSubagents: Array<CustomSubagent>;
+  webSearch: WebSearchSettings;
 };
