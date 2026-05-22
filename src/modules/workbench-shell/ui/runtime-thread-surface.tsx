@@ -3039,29 +3039,48 @@ export function RuntimeThreadSurface({
               </div>
             </div>
 
-            {runtimeQueue ? (
-              <div className={getRoleSpacingClass(queuePreviousRole, "assistant")}>
-                <Message className="max-w-full" from="assistant">
-                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                    <RuntimeQueueTimeline
-                      queue={runtimeQueue}
-                      onCancelMessage={cancelRuntimeQueueMessage}
-                      cancellingMessageIds={cancellingRuntimeQueueMessageIds}
-                    />
-                  </MessageContent>
-                </Message>
+            {/* Runtime Queue — always in DOM; height transitions smoothly via
+                grid-rows to avoid layout jumps during streaming. */}
+            <div
+              className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
+                runtimeQueue
+                  ? "grid-rows-[1fr] opacity-100"
+                  : "grid-rows-[0fr] opacity-0"
+              }`}
+            >
+              <div className="overflow-hidden">
+                <div className={getRoleSpacingClass(queuePreviousRole, "assistant")}>
+                  <Message className="max-w-full" from="assistant">
+                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                      <RuntimeQueueTimeline
+                        queue={runtimeQueue}
+                        onCancelMessage={cancelRuntimeQueueMessage}
+                        cancellingMessageIds={cancellingRuntimeQueueMessageIds}
+                      />
+                    </MessageContent>
+                  </Message>
+                </div>
               </div>
-            ) : null}
+            </div>
 
-            {hasTaskHistoryTimeline ? (
-              <div className={getRoleSpacingClass(historyPreviousRole, "assistant")}>
-                <Message className="max-w-full" from="assistant">
-                  <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                    <TaskHistoryTimeline boards={taskBoards.boards} />
-                  </MessageContent>
-                </Message>
+            {/* Task History — same smooth transition pattern. */}
+            <div
+              className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
+                hasTaskHistoryTimeline
+                  ? "grid-rows-[1fr] opacity-100"
+                  : "grid-rows-[0fr] opacity-0"
+              }`}
+            >
+              <div className="overflow-hidden">
+                <div className={getRoleSpacingClass(historyPreviousRole, "assistant")}>
+                  <Message className="max-w-full" from="assistant">
+                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
+                      <TaskHistoryTimeline boards={taskBoards.boards} />
+                    </MessageContent>
+                  </Message>
+                </div>
               </div>
-            ) : null}
+            </div>
 
             {runtimeError ? (
               <div className={getRoleSpacingClass(runtimeErrorPreviousRole, "assistant")}>
