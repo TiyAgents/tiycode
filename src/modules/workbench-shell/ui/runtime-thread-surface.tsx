@@ -227,7 +227,6 @@ function renderPlanProseSection(title: string, content: string) {
 
 
 const BASE_CONVERSATION_BOTTOM_PADDING = 40;
-const FIXED_BOTTOM_PANELS_CONVERSATION_PADDING = 120;
 type RuntimeQueueSubmitMode = RuntimeQueueMessageKind;
 const THREAD_AUTO_COLLAPSE_DELAY_MS = 8000;
 
@@ -1818,8 +1817,26 @@ export function RuntimeThreadSurface({
     ? "assistant"
     : lastPresentationRole;
 
+  const fixedBottomPanelsRef = useRef<HTMLDivElement>(null);
+  const [fixedBottomPanelsHeight, setFixedBottomPanelsHeight] = useState(0);
+  useEffect(() => {
+    if (!hasFixedBottomPanels) {
+      setFixedBottomPanelsHeight(0);
+      return;
+    }
+    const el = fixedBottomPanelsRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setFixedBottomPanelsHeight(entry.target.getBoundingClientRect().height);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasFixedBottomPanels]);
+
   const conversationBottomPadding = BASE_CONVERSATION_BOTTOM_PADDING
-    + (hasFixedBottomPanels ? FIXED_BOTTOM_PANELS_CONVERSATION_PADDING : 0);
+    + (hasFixedBottomPanels ? fixedBottomPanelsHeight : 0);
 
   useEffect(() => {
     const previousToolStates = previousToolStatesRef.current;
@@ -3072,7 +3089,7 @@ export function RuntimeThreadSurface({
             ) : null}
           </ConversationContent>
           {hasFixedBottomPanels ? (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-0 pb-4">
+            <div ref={fixedBottomPanelsRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-0 pb-4">
               <ConversationScrollButton className="pointer-events-auto bottom-auto -top-10 left-1/2 -translate-x-1/2" />
               <div className="mx-auto w-full max-w-4xl px-6">
                 <div className="pointer-events-auto max-h-[min(36vh,320px)] overflow-y-auto rounded-2xl border border-app-border/70 bg-app-menu/96 px-4 py-3 shadow-[0_24px_60px_-36px_rgba(15,23,42,0.48)] backdrop-blur-xl">
