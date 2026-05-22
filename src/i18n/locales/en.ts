@@ -483,6 +483,7 @@ const en: Record<TranslationKey, string> = {
   "settings.agents.errorCreate": "Failed to create agent",
   "settings.agents.errorDelete": "Failed to delete agent",
   "settings.agents.errorSave": "Failed to save agent",
+  "settings.agents.errorSlugConflict": "A custom agent with slug \"{{slug}}\" already exists",
 
   // ── Settings: Profile Agent Access ─────────────────────────
   "settings.profileAgentAccess.title": "Available Agents",

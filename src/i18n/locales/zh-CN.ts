@@ -501,6 +501,7 @@ const zhCN = {
   "settings.agents.errorCreate": "创建 Agent 失败",
   "settings.agents.errorDelete": "删除 Agent 失败",
   "settings.agents.errorSave": "保存 Agent 失败",
+  "settings.agents.errorSlugConflict": "Slug 为“{{slug}}”的自定义 Agent 已存在",
 
   // ── Settings: Profile Agent Access ─────────────────────────
   "settings.profileAgentAccess.title": "可用 Agent",
