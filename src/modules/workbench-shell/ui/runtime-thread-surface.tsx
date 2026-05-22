@@ -3073,6 +3073,7 @@ export function RuntimeThreadSurface({
           </ConversationContent>
           {hasFixedBottomPanels ? (
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-0 pb-4">
+              <ConversationScrollButton className="pointer-events-auto bottom-auto -top-10 left-1/2 -translate-x-1/2" />
               <div className="mx-auto w-full max-w-4xl px-6">
                 <div className="pointer-events-auto max-h-[min(36vh,320px)] overflow-y-auto rounded-2xl border border-app-border/70 bg-app-menu/96 px-4 py-3 shadow-[0_24px_60px_-36px_rgba(15,23,42,0.48)] backdrop-blur-xl">
                   <div className="flex flex-col gap-3">
@@ -3090,8 +3091,9 @@ export function RuntimeThreadSurface({
                 </div>
               </div>
             </div>
-          ) : null}
-          <ConversationScrollButton className={cn("z-20", hasFixedBottomPanels ? "bottom-[calc(min(36vh,320px)_+_2rem)]" : "bottom-4")} />
+          ) : (
+            <ConversationScrollButton />
+          )}
         </Conversation>
       </div>
 
