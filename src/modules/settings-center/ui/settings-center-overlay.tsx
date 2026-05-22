@@ -369,6 +369,7 @@ export function SettingsCenterOverlay({
   const isAboutCategory = activeCategory === "about";
   const [agentsUnsavedChanges, setAgentsUnsavedChanges] = useState(false);
   const [pendingCategory, setPendingCategory] = useState<SettingsCategory | null>(null);
+  const [pendingClose, setPendingClose] = useState(false);
 
   const handleSelectCategory = (category: SettingsCategory) => {
     if (agentsUnsavedChanges && activeCategory === "agents" && category !== activeCategory) {
@@ -378,11 +379,24 @@ export function SettingsCenterOverlay({
     onSelectCategory(category);
   };
 
+  const handleCloseWithGuard = () => {
+    if (agentsUnsavedChanges && activeCategory === "agents") {
+      setPendingClose(true);
+    } else {
+      onClose();
+    }
+  };
+
   const handleDiscardAgentsChanges = () => {
+    const wasPendingClose = pendingClose;
+    const nextCategory = pendingCategory;
     setPendingCategory(null);
+    setPendingClose(false);
     setAgentsUnsavedChanges(false);
-    if (pendingCategory) {
-      onSelectCategory(pendingCategory);
+    if (wasPendingClose) {
+      onClose();
+    } else if (nextCategory) {
+      onSelectCategory(nextCategory);
     }
   };
 
@@ -394,7 +408,7 @@ export function SettingsCenterOverlay({
             <button
               type="button"
               className="inline-flex items-center gap-2 px-3 py-1 text-[12px] text-app-muted transition-colors hover:text-app-foreground"
-              onClick={onClose}
+              onClick={handleCloseWithGuard}
             >
               <ArrowLeft className="size-3.5" />
               <span>{t("settings.backToApp")}</span>
@@ -437,7 +451,7 @@ export function SettingsCenterOverlay({
             <button
               type="button"
               className="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-app-muted transition-colors hover:bg-app-surface-hover hover:text-app-foreground"
-              onClick={onClose}
+              onClick={handleCloseWithGuard}
             >
               <ArrowLeft className="size-3.5" />
               <span>{t("settings.backToApp")}</span>
@@ -615,7 +629,7 @@ export function SettingsCenterOverlay({
         </section>
       </div>
 
-      <Dialog open={pendingCategory !== null} onOpenChange={(open) => { if (!open) setPendingCategory(null); }}>
+      <Dialog open={pendingCategory !== null || pendingClose} onOpenChange={(open) => { if (!open) { setPendingCategory(null); setPendingClose(false); } }}>
         <DialogContent className="max-w-md border-app-border bg-app-canvas">
           <DialogHeader>
             <DialogTitle>{t("settings.agents.unsavedChangesTitle")}</DialogTitle>
