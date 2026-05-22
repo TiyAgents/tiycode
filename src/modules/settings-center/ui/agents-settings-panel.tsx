@@ -43,6 +43,10 @@ const TOOL_CATEGORIES: Array<{ labelKey: TranslationKey; tools: string[] }> = [
     tools: ["read", "list", "search", "find"],
   },
   {
+    labelKey: "settings.agents.toolCategory.web",
+    tools: ["web_search"],
+  },
+  {
     labelKey: "settings.agents.toolCategory.fileWrite",
     tools: ["edit", "write"],
   },

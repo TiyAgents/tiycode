@@ -33,6 +33,7 @@ pub mod task_board_manager;
 pub mod terminal_manager;
 pub mod thread_manager;
 pub mod tool_gateway;
+pub mod web_search_settings;
 pub mod windows_process;
 pub mod workspace_manager;
 pub mod workspace_paths;

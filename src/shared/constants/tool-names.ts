@@ -22,6 +22,7 @@ export const TASK_BOARD_TOOLS = [
 export const DEFAULT_COLLAPSED_TOOLS = [
   ...TASK_BOARD_TOOLS,
   "render",
+  "web_search",
 ] as const;
 
 export function isRuntimeOrchestrationToolName(toolName: string): boolean {

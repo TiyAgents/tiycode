@@ -1,3 +1,4 @@
+use crate::core::agent_session_tools::web_search_agent_tool;
 use crate::model::subagent::CustomSubagentModelRole;
 use tiycore::agent::AgentTool;
 
@@ -531,6 +532,7 @@ Return format:\n\
                     "required": ["query"]
                 }),
             ),
+            web_search_agent_tool(),
             AgentTool::new(
                 "edit",
                 "Edit File",
@@ -791,7 +793,22 @@ mod tests {
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"read"));
         assert!(tool_names.contains(&"search"));
+        assert!(!tool_names.contains(&"web_search"));
         assert!(!tool_names.contains(&"edit"));
         assert!(!tool_names.contains(&"shell"));
+    }
+
+    #[test]
+    fn custom_profile_can_allow_web_search_tool() {
+        let profile = SubagentProfile::Custom {
+            slug: "test".to_string(),
+            system_prompt: "You are a test helper.".to_string(),
+            allowed_tools: vec!["web_search".to_string()],
+            model_role: CustomSubagentModelRole::Auxiliary,
+        };
+        let tools = profile.helper_tools();
+        let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(tool_names.contains(&"web_search"));
+        assert!(!tool_names.contains(&"read"));
     }
 }

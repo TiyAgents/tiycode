@@ -52,6 +52,7 @@ const {
   mockProfileCreate,
   mockProfileDelete,
   mockProfileUpdate,
+  mockSettingsGet,
   mockSettingsSet,
   mockProviderSettingsCreateCustom,
   mockProviderSettingsDeleteCustom,
@@ -67,6 +68,7 @@ const {
   mockProfileCreate: vi.fn(),
   mockProfileDelete: vi.fn(),
   mockProfileUpdate: vi.fn(),
+  mockSettingsGet: vi.fn(),
   mockSettingsSet: vi.fn(),
   mockProviderSettingsCreateCustom: vi.fn(),
   mockProviderSettingsDeleteCustom: vi.fn(),
@@ -88,6 +90,7 @@ vi.mock("@/services/bridge", () => ({
   profileCreate: (...args: unknown[]) => mockProfileCreate(...args),
   profileDelete: (...args: unknown[]) => mockProfileDelete(...args),
   profileUpdate: (...args: unknown[]) => mockProfileUpdate(...args),
+  settingsGet: (...args: unknown[]) => mockSettingsGet(...args),
   settingsSet: (...args: unknown[]) => mockSettingsSet(...args),
   providerSettingsCreateCustom: (...args: unknown[]) => mockProviderSettingsCreateCustom(...args),
   providerSettingsDeleteCustom: (...args: unknown[]) => mockProviderSettingsDeleteCustom(...args),
@@ -142,6 +145,7 @@ beforeEach(() => {
   mockPolicySet.mockResolvedValue(undefined);
   mockSettingsSet.mockResolvedValue(undefined);
   mockProfileDelete.mockResolvedValue(undefined);
+  mockSettingsGet.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -1102,5 +1106,59 @@ describe("commitNewCommand", () => {
     ).toBeUndefined();
 
     warnSpy.mockRestore();
+  });
+});
+
+describe("updateWebSearchSettings", () => {
+  let updateWebSearchSettings: typeof import("./settings-ipc-actions").updateWebSearchSettings;
+
+  beforeAll(async () => {
+    updateWebSearchSettings = (await import("./settings-ipc-actions")).updateWebSearchSettings;
+  });
+
+  it("Tauri: persists API key to backend settings and keeps only hasApiKey in store", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", apiKey: "old-key", maxResults: 5 },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ apiKey: "new-key", enabled: true, engine: "exa" });
+
+    expect(mockSettingsSet).toHaveBeenCalledWith(
+      "web_search.settings",
+      expect.stringContaining("new-key"),
+    );
+    const state = settingsStore.getState().webSearch;
+    expect(state.hasApiKey).toBe(true);
+    expect("apiKey" in (state as Record<string, unknown>)).toBe(false);
+    expect(state.engine).toBe("exa");
+  });
+
+  it("Tauri: clears saved API key when requested", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    settingsStore.setState({
+      webSearch: {
+        enabled: true,
+        engine: "tavily",
+        hasApiKey: true,
+        maxResults: 5,
+        includeRawContent: false,
+      },
+    });
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", apiKey: "old-key", maxResults: 5 },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ clearApiKey: true });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.apiKey).toBeUndefined();
+    expect(settingsStore.getState().webSearch.hasApiKey).toBe(false);
   });
 });

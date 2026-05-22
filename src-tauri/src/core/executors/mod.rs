@@ -7,11 +7,14 @@ pub mod search;
 pub mod terminal;
 pub mod truncation;
 
+pub mod web_search;
+
 use serde_json::Value;
 use std::sync::Arc;
 
 use crate::core::terminal_manager::TerminalManager;
 use crate::model::errors::AppError;
+use sqlx::SqlitePool;
 
 /// Result of a tool execution.
 pub struct ToolOutput {
@@ -27,6 +30,7 @@ pub async fn execute_tool(
     writable_roots: &[String],
     thread_id: &str,
     terminal_manager: Option<&Arc<TerminalManager>>,
+    pool: &SqlitePool,
 ) -> Result<ToolOutput, AppError> {
     match tool_name {
         "read" => filesystem::read_file(input, workspace_path, writable_roots).await,
@@ -34,6 +38,7 @@ pub async fn execute_tool(
         "list" => filesystem::list_dir(input, workspace_path, writable_roots).await,
         "find" => filesystem::find_files(input, workspace_path, writable_roots).await,
         "search" => search::search_repo(input, workspace_path, writable_roots).await,
+        "web_search" => web_search::execute(input, pool).await,
         "edit" => edit::edit_file(input, workspace_path, writable_roots).await,
         "patch" => edit::edit_file(input, workspace_path, writable_roots).await,
         "shell" => process::run_command(input, workspace_path).await,

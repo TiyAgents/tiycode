@@ -632,6 +632,7 @@ impl ToolGateway {
                 &writable_roots,
                 &request.thread_id,
                 Some(&self.terminal_manager),
+                &self.pool,
             )
             .await
         } {

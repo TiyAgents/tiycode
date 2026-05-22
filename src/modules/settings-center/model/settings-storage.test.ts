@@ -171,4 +171,32 @@ describe("readStoredLocalUiSettings", () => {
 
     expect(result.general.defaultAppendMessageKind).toBe("steer");
   });
+
+  it("does not persist Web Search settings in the local UI payload", () => {
+    persistLocalUiSettings({
+      general: {
+        launchAtLogin: false,
+        preventSleepWhileRunning: false,
+        minimizeToTray: true,
+        defaultAppendMessageKind: "follow_up",
+      },
+      terminal: {
+        shellPath: "",
+        shellArgs: "",
+        fontFamily: "monospace",
+        fontSize: 13,
+        lineHeight: 1.4,
+        cursorStyle: "block",
+        cursorBlink: true,
+        scrollback: 1000,
+        copyOnSelect: false,
+        termEnv: "xterm-256color",
+      },
+    });
+
+    const stored = JSON.parse(localStorage().getItem(SETTINGS_STORAGE_KEY) ?? "{}");
+
+    expect(stored.webSearch).toBeUndefined();
+    expect(stored.apiKey).toBeUndefined();
+  });
 });

@@ -10,6 +10,7 @@ import type {
   PolicySettings,
   ProviderEntry,
   TerminalSettings,
+  WebSearchSettings,
   WorkspaceEntry,
   WritableRootEntry,
 } from "@/modules/settings-center/model/types";
@@ -32,12 +33,19 @@ import {
   providerSettingsFetchModels,
   providerSettingsUpdateCustom,
   providerSettingsUpsertBuiltin,
+  settingsGet,
   settingsSet,
   workspaceAdd,
   workspaceRemove,
   workspaceSetDefault,
 } from "@/services/bridge";
 import { settingsStore } from "./settings-store";
+import {
+  buildPersistedWebSearchSettings,
+  mapPersistedWebSearchSettings,
+  WEB_SEARCH_SETTINGS_KEY,
+  type WebSearchSettingsPatch,
+} from "./web-search-settings";
 import { syncToBackend, SyncError } from "@/shared/lib/ipc-sync";
 
 const ACTIVE_AGENT_PROFILE_SETTING_KEY = "active_profile_id";
@@ -267,6 +275,44 @@ export function updateTerminalSetting<Key extends keyof TerminalSettings>(
   settingsStore.setState((prev) => ({
     terminal: { ...prev.terminal, [key]: value },
   }));
+}
+
+export async function updateWebSearchSettings(patch: WebSearchSettingsPatch) {
+  const current = settingsStore.getState().webSearch;
+  const optimistic: WebSearchSettings = {
+    ...current,
+    ...patch,
+    hasApiKey: patch.clearApiKey
+      ? false
+      : typeof patch.apiKey === "string" && patch.apiKey.trim().length > 0
+        ? true
+        : current.hasApiKey,
+  };
+  delete (optimistic as { apiKey?: string }).apiKey;
+  delete (optimistic as { clearApiKey?: boolean }).clearApiKey;
+
+  settingsStore.setState({ webSearch: optimistic });
+
+  if (!isTauri()) {
+    return optimistic;
+  }
+
+  try {
+    const existing = await settingsGet(WEB_SEARCH_SETTINGS_KEY);
+    const persisted = buildPersistedWebSearchSettings(
+      current,
+      existing?.value,
+      patch,
+    );
+    await settingsSet(WEB_SEARCH_SETTINGS_KEY, JSON.stringify(persisted));
+    const mapped = mapPersistedWebSearchSettings(persisted);
+    settingsStore.setState({ webSearch: mapped });
+    return mapped;
+  } catch (error) {
+    settingsStore.setState({ webSearch: current });
+    console.warn("Failed to update Web Search settings", error);
+    return current;
+  }
 }
 
 // ---------------------------------------------------------------------------

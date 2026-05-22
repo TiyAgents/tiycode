@@ -15,6 +15,7 @@ import { ProfileAgentAccess } from "@/modules/settings-center/ui/profile-agent-a
 import { useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n/locales/zh-CN";
 import { getEffectiveModelCapabilities, inferModelCapabilities } from "@/modules/settings-center/model/model-capabilities";
+import type { WebSearchSettingsPatch } from "@/modules/settings-center/model/web-search-settings";
 import {
   ArrowLeft,
   Bot,
@@ -87,6 +88,8 @@ import type {
   SettingsCategory,
   TerminalCursorStyle,
   TerminalSettings,
+  WebSearchEngine,
+  WebSearchSettings,
   WorkspaceEntry,
   WritableRootEntry,
 } from "@/modules/settings-center/model/types";
@@ -141,6 +144,7 @@ type SettingsCenterOverlayProps = {
   configDiagnostics: ConfigDiagnostic[];
   customSubagents: Array<CustomSubagent>;
   generalPreferences: GeneralPreferences;
+  webSearch: WebSearchSettings;
   isCheckingUpdates: boolean;
   language: LanguagePreference;
   commands: CommandSettings;
@@ -181,6 +185,7 @@ type SettingsCenterOverlayProps = {
   onUpdateCommand: (id: string, patch: Partial<Omit<CommandEntry, "id">>) => void;
   onUpdateDenyEntry: (id: string, patch: Partial<Omit<PatternEntry, "id">>) => void;
   onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
+  onUpdateWebSearchSettings: (patch: WebSearchSettingsPatch) => Promise<WebSearchSettings>;
   onUpdatePolicySetting: <Key extends keyof PolicySettings>(key: Key, value: PolicySettings[Key]) => void;
   onFetchProviderModels: (id: string) => Promise<void>;
   onTestProviderModelConnection: (
@@ -315,6 +320,7 @@ export function SettingsCenterOverlay({
   configDiagnostics,
   customSubagents,
   generalPreferences,
+  webSearch,
   isCheckingUpdates,
   language,
   commands,
@@ -355,6 +361,7 @@ export function SettingsCenterOverlay({
   onUpdateCommand,
   onUpdateDenyEntry,
   onUpdateGeneralPreference,
+  onUpdateWebSearchSettings,
   onUpdatePolicySetting,
   onFetchProviderModels,
   onTestProviderModelConnection,
@@ -521,11 +528,13 @@ export function SettingsCenterOverlay({
                   <GeneralSettingsPanel
                     description={activeMeta.description}
                     generalPreferences={generalPreferences}
+                    webSearch={webSearch}
                     language={language}
                     theme={theme}
                     onSelectLanguage={onSelectLanguage}
                     onSelectTheme={onSelectTheme}
                     onUpdateGeneralPreference={onUpdateGeneralPreference}
+                    onUpdateWebSearchSettings={onUpdateWebSearchSettings}
                   />
                 ) : null}
 
@@ -1065,21 +1074,60 @@ function ProfileLibraryCard({
 function GeneralSettingsPanel({
   description,
   generalPreferences,
+  webSearch,
   language,
   theme,
   onSelectLanguage,
   onSelectTheme,
   onUpdateGeneralPreference,
+  onUpdateWebSearchSettings,
 }: {
   description: string;
   generalPreferences: GeneralPreferences;
+  webSearch: WebSearchSettings;
   language: LanguagePreference;
   theme: ThemePreference;
   onSelectLanguage: (language: LanguagePreference) => void;
   onSelectTheme: (theme: ThemePreference) => void;
   onUpdateGeneralPreference: <Key extends keyof GeneralPreferences>(key: Key, value: GeneralPreferences[Key]) => void;
+  onUpdateWebSearchSettings: (patch: WebSearchSettingsPatch) => Promise<WebSearchSettings>;
 }) {
   const t = useT();
+  const [webSearchApiKey, setWebSearchApiKey] = useState("");
+  const [isSavingWebSearchKey, setIsSavingWebSearchKey] = useState(false);
+  const webSearchEngineOptions = useMemo(
+    () => [
+      { label: "Tavily", value: "tavily" as WebSearchEngine },
+      { label: "Brave", value: "brave" as WebSearchEngine },
+      { label: "Exa", value: "exa" as WebSearchEngine },
+      { label: "Firecrawl", value: "firecrawl" as WebSearchEngine },
+    ],
+    [],
+  );
+
+  const handleSaveWebSearchApiKey = async () => {
+    const nextKey = webSearchApiKey.trim();
+    if (!nextKey) return;
+    setIsSavingWebSearchKey(true);
+    try {
+      await onUpdateWebSearchSettings({ apiKey: nextKey });
+      setWebSearchApiKey("");
+    } finally {
+      setIsSavingWebSearchKey(false);
+    }
+  };
+
+  const handleClearWebSearchApiKey = async () => {
+    setIsSavingWebSearchKey(true);
+    try {
+      await onUpdateWebSearchSettings({ clearApiKey: true });
+      setWebSearchApiKey("");
+    } finally {
+      setIsSavingWebSearchKey(false);
+    }
+  };
+
+  const clampWebSearchMaxResults = (value: number) => Math.min(20, Math.max(1, Math.round(value)));
 
   return (
     <div className="flex flex-col gap-6">
@@ -1157,6 +1205,119 @@ function GeneralSettingsPanel({
               ]}
               value={generalPreferences.defaultAppendMessageKind}
               onValueChange={(value) => onUpdateGeneralPreference("defaultAppendMessageKind", value)}
+            />
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection title={t("settings.general.webSearchTitle")}>
+        <SettingsRow
+          label={t("settings.general.webSearchEnabledLabel")}
+          description={t("settings.general.webSearchEnabledDesc")}
+          control={
+            <Switch
+              size="sm"
+              checked={webSearch.enabled}
+              onCheckedChange={(checked) => void onUpdateWebSearchSettings({ enabled: checked })}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchEngineLabel")}
+          description={t("settings.general.webSearchEngineDesc")}
+          control={
+            <ChoiceGroup
+              options={webSearchEngineOptions}
+              value={webSearch.engine}
+              onValueChange={(value) => void onUpdateWebSearchSettings({ engine: value })}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchBaseUrlLabel")}
+          description={t("settings.general.webSearchBaseUrlDesc")}
+          control={
+            <Input
+              value={webSearch.baseUrl ?? ""}
+              placeholder={t("settings.general.webSearchBaseUrlPlaceholder")}
+              className="w-full md:w-[360px]"
+              onChange={(event) => void onUpdateWebSearchSettings({ baseUrl: event.target.value })}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchApiKeyLabel")}
+          description={
+            webSearch.hasApiKey
+              ? t("settings.general.webSearchApiKeyConfiguredDesc")
+              : t("settings.general.webSearchApiKeyDesc")
+          }
+          control={
+            <div className="flex w-full flex-col gap-2 md:w-[360px]">
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  value={webSearchApiKey}
+                  placeholder={webSearch.hasApiKey ? "••••••••••••" : t("settings.general.webSearchApiKeyPlaceholder")}
+                  onChange={(event) => setWebSearchApiKey(event.target.value)}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={!webSearchApiKey.trim() || isSavingWebSearchKey}
+                  onClick={() => void handleSaveWebSearchApiKey()}
+                >
+                  {t("settings.general.webSearchApiKeySave")}
+                </Button>
+              </div>
+              {webSearch.hasApiKey ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="self-start px-0 text-app-muted hover:text-app-foreground"
+                  disabled={isSavingWebSearchKey}
+                  onClick={() => void handleClearWebSearchApiKey()}
+                >
+                  {t("settings.general.webSearchApiKeyClear")}
+                </Button>
+              ) : null}
+            </div>
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchMaxResultsLabel")}
+          description={t("settings.general.webSearchMaxResultsDesc")}
+          control={
+            <Input
+              type="number"
+              min={1}
+              max={20}
+              className="w-24"
+              value={webSearch.maxResults}
+              onChange={(event) => {
+                const nextValue = Number(event.target.value);
+                if (Number.isFinite(nextValue)) {
+                  void onUpdateWebSearchSettings({ maxResults: clampWebSearchMaxResults(nextValue) });
+                }
+              }}
+            />
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchRawContentLabel")}
+          description={t("settings.general.webSearchRawContentDesc")}
+          control={
+            <Switch
+              size="sm"
+              checked={webSearch.includeRawContent}
+              onCheckedChange={(checked) => void onUpdateWebSearchSettings({ includeRawContent: checked })}
             />
           }
         />

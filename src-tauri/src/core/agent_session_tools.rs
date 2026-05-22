@@ -18,6 +18,62 @@ use super::agent_session::{
     PLAN_READ_ONLY_TOOL_PROFILE,
 };
 
+pub(crate) const WEB_SEARCH_TOOL_NAME: &str = "web_search";
+
+pub(crate) fn web_search_agent_tool() -> AgentTool {
+    AgentTool::new(
+        WEB_SEARCH_TOOL_NAME,
+        "Web Search",
+        "Search the public web using the app-configured Web Search engine. Returns standardized results with titles, URLs, snippets, optional content, and source metadata. Use this for up-to-date information beyond the local workspace.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The web search query to execute."
+                },
+                "maxResults": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Optional maximum number of results to return. Defaults to the app setting."
+                },
+                "timeRange": {
+                    "type": "string",
+                    "enum": ["day", "week", "month", "year"],
+                    "description": "Optional freshness filter when supported by the configured search engine."
+                },
+                "includeRawContent": {
+                    "type": "boolean",
+                    "description": "Request longer page content when supported by the configured search engine. Defaults to the app setting."
+                },
+                "includeDomains": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional domains to include when supported."
+                },
+                "excludeDomains": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional domains to exclude when supported."
+                },
+                "country": {
+                    "type": "string",
+                    "description": "Optional country or region hint when supported."
+                }
+            },
+            "required": ["query"]
+        }),
+    )
+}
+
+pub(crate) fn tool_profile_allows_web_search(profile_name: &str) -> bool {
+    matches!(
+        profile_name,
+        DEFAULT_FULL_TOOL_PROFILE | PLAN_READ_ONLY_TOOL_PROFILE
+    )
+}
+
 pub(crate) fn runtime_tools_for_profile(profile_name: &str) -> Vec<AgentTool> {
     let mut tools = vec![
         AgentTool::new(
@@ -546,6 +602,21 @@ pub(crate) fn runtime_tools_for_profile_with_extensions(
     tools
 }
 
+pub(crate) fn runtime_tools_with_web_search(
+    mut tools: Vec<AgentTool>,
+    profile_name: &str,
+    web_search_enabled: bool,
+) -> Vec<AgentTool> {
+    if web_search_enabled
+        && tool_profile_allows_web_search(profile_name)
+        && !tools.iter().any(|tool| tool.name == WEB_SEARCH_TOOL_NAME)
+    {
+        tools.push(web_search_agent_tool());
+    }
+
+    tools
+}
+
 /// Extend the runtime tools with custom subagent tools for the active profile.
 pub(crate) fn runtime_tools_with_custom_subagents(
     mut tools: Vec<AgentTool>,
@@ -794,5 +865,39 @@ pub(crate) fn plan_mode_missing_checkpoint_error(
         Some(PLAN_MODE_MISSING_CHECKPOINT_ERROR)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_search_is_conditionally_added_for_default_profiles() {
+        let base_tools = runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE);
+        assert!(!base_tools
+            .iter()
+            .any(|tool| tool.name == WEB_SEARCH_TOOL_NAME));
+
+        let with_web_search =
+            runtime_tools_with_web_search(base_tools, DEFAULT_FULL_TOOL_PROFILE, true);
+        assert!(with_web_search
+            .iter()
+            .any(|tool| tool.name == WEB_SEARCH_TOOL_NAME));
+
+        let disabled = runtime_tools_with_web_search(
+            runtime_tools_for_profile(DEFAULT_FULL_TOOL_PROFILE),
+            DEFAULT_FULL_TOOL_PROFILE,
+            false,
+        );
+        assert!(!disabled
+            .iter()
+            .any(|tool| tool.name == WEB_SEARCH_TOOL_NAME));
+    }
+
+    #[test]
+    fn web_search_is_not_added_for_unknown_profiles() {
+        let tools = runtime_tools_with_web_search(Vec::new(), "custom", true);
+        assert!(tools.is_empty());
     }
 }
