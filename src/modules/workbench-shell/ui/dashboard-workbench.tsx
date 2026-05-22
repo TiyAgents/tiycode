@@ -241,6 +241,7 @@ export function DashboardWorkbench() {
   const commandEntries = useStore(settingsStore, (s) => s.commands, shallowEqual);
   const terminal = useStore(settingsStore, (s) => s.terminal, shallowEqual);
   const agentProfiles = useStore(settingsStore, (s) => s.agentProfiles, shallowEqual);
+  const customSubagents = useStore(settingsStore, (s) => s.customSubagents, shallowEqual);
   const activeAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
 
   // ── Phase 1: threadStore subscriptions (replaces 9 useState + 3 useRef) ──
@@ -973,6 +974,7 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                             agentProfiles={agentProfiles}
                             canSubmitWhenAttachmentsOnly={false}
                             commands={composerCommands}
+                            customSubagents={customSubagents}
                             enabledSkills={enabledSkillEntries}
                             error={composerError}
                             onErrorMessageChange={setComposerError}

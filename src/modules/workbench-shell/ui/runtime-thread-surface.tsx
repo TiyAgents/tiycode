@@ -42,6 +42,7 @@ import { cn } from "@/shared/lib/utils";
 import {
   threadStore,
   useStore,
+  shallowEqual,
   isPendingRunHandled,
   markPendingRunHandled,
 } from "@/modules/workbench-shell/model/thread-store";
@@ -244,6 +245,7 @@ export function RuntimeThreadSurface({
   const t = useT();
   const globalAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
   const agentProfiles = useStore(settingsStore, (s) => s.agentProfiles);
+  const customSubagents = useStore(settingsStore, (s) => s.customSubagents, shallowEqual);
   const providers = useStore(settingsStore, (s) => s.providers);
   const defaultAppendMessageKind = useStore(settingsStore, (s) => s.general.defaultAppendMessageKind);
   const isNewThreadMode = useStore(threadStore, (s) => s.isNewThreadMode);
@@ -3115,6 +3117,7 @@ export function RuntimeThreadSurface({
             canSubmitWhileRunning={runState === "running" && Boolean(streamRef.current?.runId)}
             className="w-full max-w-none gap-0"
             commands={commands}
+            customSubagents={customSubagents}
             composerShellClassName={taskBoards.activeBoard
               ? "rounded-t-none border-t-0"
               : undefined}

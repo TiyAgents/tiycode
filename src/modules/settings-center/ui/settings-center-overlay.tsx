@@ -201,34 +201,16 @@ function getCategoryMeta(t: TFunc) {
       icon: Monitor,
     },
     {
-      key: "profiles" as SettingsCategory,
-      title: t("settings.category.profiles"),
-      description: t("settings.category.profilesDesc"),
-      icon: UserCog,
-    },
-    {
       key: "providers" as SettingsCategory,
       title: t("settings.category.providers"),
       description: t("settings.category.providersDesc"),
       icon: Server,
     },
     {
-      key: "commands" as SettingsCategory,
-      title: t("settings.category.commands"),
-      description: t("settings.category.commandsDesc"),
-      icon: Zap,
-    },
-    {
-      key: "terminal" as SettingsCategory,
-      title: t("settings.category.terminal"),
-      description: t("settings.category.terminalDesc"),
-      icon: TerminalSquare,
-    },
-    {
-      key: "policy" as SettingsCategory,
-      title: t("settings.category.permissions"),
-      description: t("settings.category.permissionsDesc"),
-      icon: ShieldCheck,
+      key: "profiles" as SettingsCategory,
+      title: t("settings.category.profiles"),
+      description: t("settings.category.profilesDesc"),
+      icon: UserCog,
     },
     {
       key: "agents" as SettingsCategory,
@@ -237,10 +219,28 @@ function getCategoryMeta(t: TFunc) {
       icon: Bot,
     },
     {
+      key: "commands" as SettingsCategory,
+      title: t("settings.category.commands"),
+      description: t("settings.category.commandsDesc"),
+      icon: Zap,
+    },
+    {
+      key: "policy" as SettingsCategory,
+      title: t("settings.category.permissions"),
+      description: t("settings.category.permissionsDesc"),
+      icon: ShieldCheck,
+    },
+    {
       key: "workspace" as SettingsCategory,
       title: t("settings.category.workspace"),
       description: t("settings.category.workspaceDesc"),
       icon: FolderOpen,
+    },
+    {
+      key: "terminal" as SettingsCategory,
+      title: t("settings.category.terminal"),
+      description: t("settings.category.terminalDesc"),
+      icon: TerminalSquare,
     },
     {
       key: "about" as SettingsCategory,
@@ -832,177 +832,175 @@ function AccountSettingsPanel({
   );
 }
 
-function ProfilePicker({
-  profiles,
-  activeProfileId,
+function ProfileLibraryActions({
+  onAddProfile,
+}: {
+  onAddProfile: () => void;
+}) {
+  const t = useT();
+
+  return (
+    <button
+      type="button"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-app-border bg-app-surface px-3 py-1.5 text-[12px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
+      onClick={onAddProfile}
+    >
+      <Plus className="size-3.5" />
+      <span>{t("settings.profiles.addProfile")}</span>
+    </button>
+  );
+}
+
+function ProfileLibraryCard({
+  profile,
+  isActive,
+  canDelete,
+  primaryModelLabel,
+  thinkingLevelLabel,
+  isEditing,
+  editingName,
   onSelect,
-  onRename,
+  onStartRename,
+  onEditingNameChange,
+  onCommitRename,
+  onCancelRename,
   onDuplicate,
   onDelete,
 }: {
-  profiles: Array<AgentProfile>;
-  activeProfileId: string;
-  onSelect: (id: string) => void;
-  onRename: (id: string, name: string) => void;
-  onDuplicate: (id: string) => void;
-  onDelete: (id: string) => void;
+  profile: AgentProfile;
+  isActive: boolean;
+  canDelete: boolean;
+  primaryModelLabel: string;
+  thinkingLevelLabel: string;
+  isEditing: boolean;
+  editingName: string;
+  onSelect: () => void;
+  onStartRename: () => void;
+  onEditingNameChange: (name: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
 }) {
   const t = useT();
-  const [isOpen, setIsOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState("");
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
-
-  const sortedProfiles = useMemo(() => sortAgentProfilesByName(profiles), [profiles]);
-  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? sortedProfiles[0];
-
-  useLayoutEffect(() => {
-    if (!isOpen || !triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    const dropdownMaxH = 300;
-    const spaceBelow = window.innerHeight - rect.bottom - 8;
-    const placeAbove = spaceBelow < dropdownMaxH && rect.top > spaceBelow;
-    setDropdownStyle({
-      position: "fixed",
-      right: window.innerWidth - rect.right,
-      minWidth: Math.max(rect.width, 240),
-      maxHeight: dropdownMaxH,
-      ...(placeAbove
-        ? { bottom: window.innerHeight - rect.top + 4 }
-        : { top: rect.bottom + 4 }),
-    });
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (triggerRef.current?.contains(target) || dropdownRef.current?.contains(target)) return;
-      setIsOpen(false);
-      setEditingId(null);
-    };
-    document.addEventListener("pointerdown", handleClickOutside);
-    return () => document.removeEventListener("pointerdown", handleClickOutside);
-  }, [isOpen]);
-
-  const handleStartRename = (profile: AgentProfile) => {
-    setEditingId(profile.id);
-    setEditingName(profile.name);
-  };
-
-  const handleCommitRename = () => {
-    if (editingId && editingName.trim()) {
-      onRename(editingId, editingName.trim());
-    }
-    setEditingId(null);
-  };
 
   return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        className="flex h-6 items-center gap-1 rounded-md border border-app-border bg-app-surface px-2 text-[11px] font-medium text-app-foreground transition-colors hover:bg-app-surface-hover"
-        onClick={() => setIsOpen((prev) => !prev)}
-      >
-        <span className="shrink-0 text-app-subtle">{t("settings.profile.currentProfile")}</span>
-        <span className="max-w-[120px] truncate">{activeProfile.name}</span>
-        <ChevronDown className="size-3 text-app-subtle" />
-      </button>
-      {isOpen
-        ? createPortal(
-            <div
-              ref={dropdownRef}
-              style={dropdownStyle}
-              className="z-[100] overflow-y-auto rounded-xl border border-app-border bg-app-surface p-1 shadow-lg"
-            >
-              {sortedProfiles.map((profile) => (
-                <div
-                  key={profile.id}
-                  className={cn(
-                    "group flex items-center gap-1.5 rounded-lg px-2 py-1.5 transition-colors",
-                    profile.id === activeProfileId ? "bg-app-surface-hover" : "hover:bg-app-surface-hover",
-                  )}
-                >
-                  {editingId === profile.id ? (
-                    <input
-                      autoFocus
-                      className="min-w-0 flex-1 rounded bg-transparent px-0.5 text-[13px] leading-5 text-app-foreground outline-none ring-1 ring-app-border focus:ring-app-accent"
-                      value={editingName}
-                      onChange={(e) => setEditingName(e.target.value)}
-                      onBlur={handleCommitRename}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleCommitRename();
-                        if (e.key === "Escape") setEditingId(null);
-                      }}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      className="min-w-0 flex-1 truncate text-left text-[13px] leading-5 text-app-foreground"
-                      onClick={() => {
-                        onSelect(profile.id);
-                        setIsOpen(false);
-                      }}
-                    >
-                      {profile.name}
-                    </button>
-                  )}
-                  {editingId !== profile.id ? (
-                    <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                      <button
-                        type="button"
-                        className="flex size-5 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground"
-                        title={t("settings.profile.rename")}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleStartRename(profile);
-                        }}
-                      >
-                        <Pencil className="size-3" />
-                      </button>
-                      <button
-                        type="button"
-                        className="flex size-5 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground"
-                        title={t("settings.profile.duplicate")}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDuplicate(profile.id);
-                          setIsOpen(false);
-                        }}
-                      >
-                        <Copy className="size-3" />
-                      </button>
-                      <button
-                        type="button"
-                        className={cn(
-                          "flex size-5 items-center justify-center rounded",
-                          profiles.length <= 1
-                            ? "cursor-not-allowed text-app-subtle/40"
-                            : "text-app-subtle hover:bg-app-canvas hover:text-red-500",
-                        )}
-                        title={t("settings.profile.delete")}
-                        disabled={profiles.length <= 1}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (profiles.length > 1) {
-                            onDelete(profile.id);
-                          }
-                        }}
-                      >
-                        <Trash2 className="size-3" />
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>,
-            document.body,
-          )
-        : null}
-    </>
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={isActive}
+      className={cn(
+        "group relative flex min-h-[132px] cursor-pointer flex-col rounded-2xl border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40",
+        isActive
+          ? "border-app-info/50 bg-app-info/10 shadow-sm"
+          : "border-app-border bg-app-surface-muted hover:border-app-border-strong hover:bg-app-surface-hover",
+      )}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span
+            className={cn(
+              "flex size-8 shrink-0 items-center justify-center rounded-xl border",
+              isActive
+                ? "border-app-info/30 bg-app-info/10 text-app-info"
+                : "border-app-border bg-app-surface text-app-subtle",
+            )}
+          >
+            <CircleUserRound className="size-4" />
+          </span>
+          <div className="min-w-0">
+            {isEditing ? (
+              <input
+                autoFocus
+                className="h-7 w-full min-w-0 rounded-lg border border-app-accent bg-app-surface px-2 text-[13px] font-medium text-app-foreground outline-none"
+                value={editingName}
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => onEditingNameChange(event.target.value)}
+                onBlur={onCommitRename}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") onCommitRename();
+                  if (event.key === "Escape") onCancelRename();
+                }}
+              />
+            ) : (
+              <p className="truncate text-[14px] font-semibold text-app-foreground">{profile.name}</p>
+            )}
+            {isActive ? (
+              <p className="mt-0.5 text-[11px] font-medium text-app-info">{t("settings.profiles.currentProfileLabel")}</p>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1">
+          {!isEditing ? (
+            <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+              <button
+                type="button"
+                className="flex size-6 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
+                title={t("settings.profile.rename")}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onStartRename();
+                }}
+              >
+                <Pencil className="size-3" />
+              </button>
+              <button
+                type="button"
+                className="flex size-6 items-center justify-center rounded text-app-subtle hover:bg-app-canvas hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
+                title={t("settings.profile.duplicate")}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDuplicate();
+                }}
+              >
+                <Copy className="size-3" />
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "flex size-6 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40",
+                  canDelete
+                    ? "text-app-subtle hover:bg-app-canvas hover:text-red-500"
+                    : "cursor-not-allowed text-app-subtle/40",
+                )}
+                title={t("settings.profile.delete")}
+                disabled={!canDelete}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (canDelete) onDelete();
+                }}
+              >
+                <Trash2 className="size-3" />
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-auto grid grid-cols-2 gap-2 pt-4">
+        <div className="min-w-0 rounded-xl border border-app-border/70 bg-app-surface px-3 py-2">
+          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+            {t("settings.general.primaryModel")}
+          </p>
+          <p className="mt-1 truncate text-[12px] font-medium text-app-foreground">{primaryModelLabel}</p>
+        </div>
+        <div className="min-w-0 rounded-xl border border-app-border/70 bg-app-surface px-3 py-2">
+          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+            {t("settings.general.thinkingLevel")}
+          </p>
+          <p className="mt-1 truncate text-[12px] font-medium text-app-foreground">{thinkingLevelLabel}</p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1141,10 +1139,6 @@ function collectAvailableProfileModels(providers: Array<ProviderEntry>): Array<A
   });
 }
 
-function countConfiguredProfileModels(profile: AgentProfile): number {
-  return [profile.primaryModelId, profile.assistantModelId, profile.liteModelId].filter(Boolean).length;
-}
-
 function ProfileSettingsPanel({
   agentProfiles,
   activeAgentProfileId,
@@ -1174,9 +1168,39 @@ function ProfileSettingsPanel({
   const availableModels = useMemo(() => collectAvailableProfileModels(providers), [providers]);
 
   const activeProfile = agentProfiles.find((p) => p.id === activeAgentProfileId) ?? agentProfiles[0];
+  const sortedProfiles = useMemo(() => sortAgentProfilesByName(agentProfiles), [agentProfiles]);
   const selectedStyle = RESPONSE_STYLE_OPTIONS.find((option) => option.value === activeProfile.responseStyle) ?? RESPONSE_STYLE_OPTIONS[0];
   const selectedThinking = THINKING_LEVEL_OPTIONS.find((option) => option.value === activeProfile.thinkingLevel) ?? THINKING_LEVEL_OPTIONS[0];
-  const configuredModelsCount = countConfiguredProfileModels(activeProfile);
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [editingProfileName, setEditingProfileName] = useState("");
+
+  const getProfilePrimaryModelLabel = (profile: AgentProfile) => {
+    const selectedModel = availableModels.find(
+      (model) => model.providerId === profile.primaryProviderId && model.modelRecordId === profile.primaryModelId,
+    );
+    if (selectedModel) return selectedModel.displayName;
+    return profile.primaryModelId || t("settings.general.notSet");
+  };
+
+  const getProfileThinkingLevelLabel = (profile: AgentProfile) =>
+    THINKING_LEVEL_OPTIONS.find((option) => option.value === profile.thinkingLevel)?.label ?? THINKING_LEVEL_OPTIONS[0].label;
+
+  const handleStartRenameProfile = (profile: AgentProfile) => {
+    setEditingProfileId(profile.id);
+    setEditingProfileName(profile.name);
+  };
+
+  const handleCommitRenameProfile = () => {
+    if (editingProfileId && editingProfileName.trim()) {
+      onUpdateAgentProfile(editingProfileId, { name: editingProfileName.trim() });
+    }
+    setEditingProfileId(null);
+  };
+
+  const handleCancelRenameProfile = () => {
+    setEditingProfileId(null);
+    setEditingProfileName("");
+  };
 
   const handleAddProfile = () => {
     onAddAgentProfile({
@@ -1204,64 +1228,39 @@ function ProfileSettingsPanel({
         title={t("settings.profiles.profileLibrary")}
         headerClassName="flex-wrap gap-2"
         action={
-          <div className="flex items-center gap-1.5">
-            <ProfilePicker
-              profiles={agentProfiles}
-              activeProfileId={activeProfile.id}
-              onSelect={onSetActiveAgentProfile}
-              onRename={(id, name) => onUpdateAgentProfile(id, { name })}
-              onDuplicate={onDuplicateAgentProfile}
-              onDelete={onRemoveAgentProfile}
-            />
-            <button
-              type="button"
-              className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-app-subtle transition-colors hover:bg-app-surface-hover hover:text-app-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-accent/40"
-              onClick={handleAddProfile}
-            >
-              <Plus className="size-3" />
-              {t("settings.profiles.addProfile")}
-            </button>
-          </div>
+          <ProfileLibraryActions
+            onAddProfile={handleAddProfile}
+          />
         }
       >
-        <div className="bg-app-surface px-4 py-4">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex min-w-0 items-start gap-3">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl border border-app-border bg-app-surface-muted text-app-subtle">
-                <CircleUserRound className="size-5" />
-              </div>
-              <div className="min-w-0">
-                <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
-                  {t("settings.profiles.currentProfile")}
-                </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="truncate text-[15px] font-semibold text-app-foreground">{activeProfile.name}</p>
-                  <span className="inline-flex items-center gap-1 rounded-full border border-app-border bg-app-surface-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-app-subtle">
-                    <Check className="size-3" />
-                    {t("settings.profiles.activeBadge")}
-                  </span>
-                </div>
-                <p className="mt-1 max-w-2xl text-[12px] leading-5 text-app-muted">
-                  {t("settings.profiles.profileLibraryDesc")}
-                </p>
-              </div>
-            </div>
-
-            <div className="grid gap-2 sm:min-w-[190px]">
-              <div className="rounded-xl border border-app-border bg-app-surface-muted px-3 py-2">
-                <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
-                  {t("settings.profiles.configuredModels")}
-                </p>
-                <p className="mt-1 text-[13px] font-medium text-app-foreground">
-                  {t("settings.profiles.configuredModelsCount", { count: configuredModelsCount })}
-                </p>
-              </div>
-              <div className="rounded-xl border border-app-border bg-app-surface-muted px-3 py-2">
-                <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
-                  {t("settings.general.responseStyle")}
-                </p>
-                <p className="mt-1 truncate text-[13px] font-medium text-app-foreground">{selectedStyle.label}</p>
-              </div>
+        <div className="space-y-4 bg-app-surface px-4 py-4">
+          <p className="max-w-2xl text-[12px] leading-5 text-app-muted">
+            {t("settings.profiles.profileLibraryDesc")}
+          </p>
+          <div className="max-h-[348px] overflow-y-auto pr-1 [scrollbar-width:thin]">
+            <div className="grid gap-3 md:grid-cols-2">
+              {sortedProfiles.map((profile) => (
+                <ProfileLibraryCard
+                  key={profile.id}
+                  profile={profile}
+                  isActive={profile.id === activeProfile.id}
+                  canDelete={agentProfiles.length > 1}
+                  primaryModelLabel={getProfilePrimaryModelLabel(profile)}
+                  thinkingLevelLabel={getProfileThinkingLevelLabel(profile)}
+                  isEditing={editingProfileId === profile.id}
+                  editingName={editingProfileName}
+                  onSelect={() => onSetActiveAgentProfile(profile.id)}
+                  onStartRename={() => handleStartRenameProfile(profile)}
+                  onEditingNameChange={setEditingProfileName}
+                  onCommitRename={handleCommitRenameProfile}
+                  onCancelRename={handleCancelRenameProfile}
+                  onDuplicate={() => onDuplicateAgentProfile(profile.id)}
+                  onDelete={() => {
+                    setEditingProfileId(null);
+                    onRemoveAgentProfile(profile.id);
+                  }}
+                />
+              ))}
             </div>
           </div>
         </div>
@@ -1296,21 +1295,12 @@ function ProfileSettingsPanel({
             />
           }
         />
-        <SectionDivider />
-        <SettingsRow
-          label={t("settings.general.commitLanguage")}
-          description={t("settings.general.commitLanguageDesc")}
-          control={
-            <Input
-              value={activeProfile.commitMessageLanguage}
-              onChange={(event) => onUpdateAgentProfile(activeProfile.id, {
-                commitMessageLanguage: event.target.value,
-              })}
-              className="w-40 text-[13px]"
-              placeholder="English"
-            />
-          }
-        />
+      </SettingsSection>
+
+      <SettingsSection title={t("settings.profiles.modelRoutingSection")}>
+        <div className="bg-app-surface px-4 py-3">
+          <p className="text-[12px] leading-5 text-app-muted">{t("settings.profiles.modelRoutingSectionDesc")}</p>
+        </div>
         <SectionDivider />
         <SettingsRow
           label={t("settings.general.thinkingLevel")}
@@ -1323,12 +1313,6 @@ function ProfileSettingsPanel({
             />
           }
         />
-      </SettingsSection>
-
-      <SettingsSection title={t("settings.profiles.modelRoutingSection")}>
-        <div className="bg-app-surface px-4 py-3">
-          <p className="text-[12px] leading-5 text-app-muted">{t("settings.profiles.modelRoutingSectionDesc")}</p>
-        </div>
         <SectionDivider />
         <ModelSelectRow
           label={t("settings.general.primaryModel")}
@@ -1367,9 +1351,9 @@ function ProfileSettingsPanel({
         />
       </SettingsSection>
 
-      <SettingsSection title={t("settings.profiles.instructionsSection")}>
+      <SettingsSection title={t("settings.profiles.agentAccessSection")}>
         <div className="bg-app-surface px-4 py-3">
-          <p className="text-[12px] leading-5 text-app-muted">{t("settings.profiles.instructionsSectionDesc")}</p>
+          <p className="text-[12px] leading-5 text-app-muted">{t("settings.profiles.agentAccessSectionDesc")}</p>
         </div>
         <SectionDivider />
         <div className="px-4 py-3">
@@ -1377,6 +1361,12 @@ function ProfileSettingsPanel({
             profileId={activeProfile.id}
             customSubagents={customSubagents}
           />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title={t("settings.profiles.instructionsSection")}>
+        <div className="bg-app-surface px-4 py-3">
+          <p className="text-[12px] leading-5 text-app-muted">{t("settings.profiles.instructionsSectionDesc")}</p>
         </div>
         <SectionDivider />
         <div className="px-4 py-3">
@@ -1390,6 +1380,21 @@ function ProfileSettingsPanel({
             className="min-h-36"
           />
         </div>
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.commitLanguage")}
+          description={t("settings.general.commitLanguageDesc")}
+          control={
+            <Input
+              value={activeProfile.commitMessageLanguage}
+              onChange={(event) => onUpdateAgentProfile(activeProfile.id, {
+                commitMessageLanguage: event.target.value,
+              })}
+              className="w-40 text-[13px]"
+              placeholder="English"
+            />
+          }
+        />
         <SectionDivider />
         <div className="px-4 py-3">
           <div className="mb-1 text-[13px] font-medium leading-5 text-app-foreground">{t("settings.general.commitPrompt")}</div>

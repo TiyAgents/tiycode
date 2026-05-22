@@ -1,6 +1,9 @@
 import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai";
 import {
+  Brain,
   BracesIcon,
+  Bot,
+  CheckCircle2,
   CheckIcon,
   FileCodeIcon,
   FileIcon,
@@ -15,7 +18,7 @@ import {
   UserStar,
   XIcon,
 } from "lucide-react";
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import {
   ModelSelector,
   ModelSelectorContent,
@@ -65,8 +68,9 @@ import {
   getProfilePrimaryModelLabel,
   resolveProfileModelByTier,
 } from "@/modules/workbench-shell/model/ai-elements-task-demo";
-import type { AgentProfile, CommandEntry, ProviderEntry } from "@/modules/settings-center/model/types";
+import type { AgentProfile, CommandEntry, CustomSubagent, ProviderEntry } from "@/modules/settings-center/model/types";
 import { sortAgentProfilesByName } from "@/modules/settings-center/model/profile-utils";
+import { profileSubagentAccessGet } from "@/services/bridge/subagent-commands";
 import type { SkillRecord } from "@/shared/types/extensions";
 import type { RunMode, RuntimeQueueMessageKind } from "@/shared/types/api";
 import { indexFilterFiles, type FileFilterMatch } from "@/services/bridge";
@@ -113,6 +117,7 @@ type WorkbenchPromptComposerProps = {
   className?: string;
   commands?: ReadonlyArray<CommandEntry>;
   composerShellClassName?: string;
+  customSubagents?: ReadonlyArray<CustomSubagent>;
   enabledSkills?: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "scope" | "source" | "tags" | "triggers" | "contentPreview">>;
   error?: string | null;
   onErrorMessageChange?: (message: string | null) => void;
@@ -1204,32 +1209,187 @@ function getResponseStyleLabel(responseStyle: AgentProfile["responseStyle"], t: 
   return t("composer.responseStyle.balanced");
 }
 
-function ProfileDetailRow({
+function getThinkingLevelLabel(thinkingLevel: AgentProfile["thinkingLevel"], t: ReturnType<typeof useT>) {
+  if (thinkingLevel === "minimal") return t("settings.thinkingLevel.minimal");
+  if (thinkingLevel === "low") return t("settings.thinkingLevel.low");
+  if (thinkingLevel === "medium") return t("settings.thinkingLevel.medium");
+  if (thinkingLevel === "high") return t("settings.thinkingLevel.high");
+  if (thinkingLevel === "xhigh") return t("settings.thinkingLevel.xhigh");
+  return t("settings.thinkingLevel.off");
+}
+
+function getThinkingLevelDescription(thinkingLevel: AgentProfile["thinkingLevel"], t: ReturnType<typeof useT>) {
+  if (thinkingLevel === "minimal") return t("settings.thinkingLevel.minimalDesc");
+  if (thinkingLevel === "low") return t("settings.thinkingLevel.lowDesc");
+  if (thinkingLevel === "medium") return t("settings.thinkingLevel.mediumDesc");
+  if (thinkingLevel === "high") return t("settings.thinkingLevel.highDesc");
+  if (thinkingLevel === "xhigh") return t("settings.thinkingLevel.xhighDesc");
+  return t("settings.thinkingLevel.offDesc");
+}
+
+function ProfileDetailCard({
+  className,
+  icon,
   label,
   value,
+  description,
 }: {
+  className?: string;
+  icon?: ReactNode;
   label: string;
   value: string;
+  description?: string;
 }) {
   return (
-    <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-2 text-[11px] leading-5">
-      <span className="text-app-subtle">{label}</span>
-      <span className="min-w-0 truncate text-app-foreground/90">{value}</span>
+    <div className={cn("min-w-0 rounded-xl border border-app-border/65 bg-app-surface-muted/55 px-3 py-2.5", className)}>
+      <div className="flex min-w-0 items-center gap-2">
+        {icon ? <span className="shrink-0 text-app-info">{icon}</span> : null}
+        <span className="truncate text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">{label}</span>
+      </div>
+      <p className="mt-1 truncate text-[12px] font-semibold text-app-foreground">{value}</p>
+      {description ? (
+        <p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-app-muted">{description}</p>
+      ) : null}
+    </div>
+  );
+}
+
+const BUILT_IN_PROFILE_AGENTS = [
+  {
+    id: "builtin-explore",
+    icon: FileSearchIcon,
+    nameKey: "settings.profileAgentAccess.builtIn.explore.name",
+  },
+  {
+    id: "builtin-review",
+    icon: CheckCircle2,
+    nameKey: "settings.profileAgentAccess.builtIn.review.name",
+  },
+] as const;
+
+function AgentTeamSection({
+  customSubagents,
+  profileId,
+}: {
+  customSubagents: ReadonlyArray<CustomSubagent>;
+  profileId: string;
+}) {
+  const t = useT();
+  const [accessIds, setAccessIds] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(customSubagents.length > 0);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    if (customSubagents.length === 0) {
+      setAccessIds([]);
+      setIsLoading(false);
+      setHasError(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoading(true);
+    setHasError(false);
+
+    profileSubagentAccessGet(profileId)
+      .then((ids) => {
+        if (cancelled) return;
+        setAccessIds(ids);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAccessIds([]);
+        setHasError(true);
+        setIsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId, customSubagents]);
+
+  const allowedCustomAgents = customSubagents.filter((agent) => agent.isEnabled && accessIds.includes(agent.id));
+
+  return (
+    <div className="rounded-2xl border border-app-border/65 bg-app-surface/55 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-app-info/25 bg-app-info/10 text-app-info">
+            <Bot className="size-3.5" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[12px] font-semibold text-app-foreground">{t("composer.profileAgentTeam")}</p>
+            <p className="text-[11px] text-app-muted">{t("composer.profileAgentTeamDesc")}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div>
+          <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+            {t("composer.profileAgentTeamBuiltIn")}
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {BUILT_IN_PROFILE_AGENTS.map((agent) => {
+              const Icon = agent.icon;
+              return (
+                <span
+                  key={agent.id}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-app-info/25 bg-app-info/10 px-2 py-1 text-[11px] font-medium text-app-info"
+                >
+                  <Icon className="size-3" />
+                  {t(agent.nameKey)}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+            {t("composer.profileAgentTeamCustom")}
+          </p>
+          {isLoading ? (
+            <p className="rounded-lg border border-app-border/60 bg-app-surface-muted/45 px-2 py-1.5 text-[11px] text-app-muted">
+              {t("composer.profileAgentTeamLoading")}
+            </p>
+          ) : allowedCustomAgents.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {allowedCustomAgents.map((agent) => (
+                <span
+                  key={agent.id}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-app-border/70 bg-app-surface-muted px-2 py-1 text-[11px] font-medium text-app-foreground"
+                >
+                  <Bot className="size-3 shrink-0 text-app-subtle" />
+                  <span className="truncate">{agent.name}</span>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed border-app-border/60 bg-app-surface-muted/35 px-2 py-1.5 text-[11px] text-app-muted">
+              {hasError ? t("composer.profileAgentTeamUnavailable") : t("composer.profileAgentTeamEmpty")}
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
 function ProfileDetailsPanel({
+  customSubagents,
   profile,
   providers,
 }: {
+  customSubagents: ReadonlyArray<CustomSubagent>;
   profile: AgentProfile | null;
   providers: ReadonlyArray<ProviderEntry>;
 }) {
   const t = useT();
 
   if (!profile) {
-    return <p className="text-[11px] text-app-muted">{t("composer.noProfileAvailable")}</p>;
+    return <p className="px-3 pb-3 pt-2 text-[11px] text-app-muted">{t("composer.noProfileAvailable")}</p>;
   }
 
   const tiers: Array<{ label: string; tier: ProfileModelTier }> = [
@@ -1239,25 +1399,50 @@ function ProfileDetailsPanel({
   ];
 
   return (
-    <div className="px-3 pb-3 pt-2">
-      <p className="mb-1.5 text-[11px] font-medium text-app-muted">{t("composer.profileDetailsTitle")}</p>
-      <div className="space-y-0.5">
+    <div className="max-h-[430px] space-y-3 overflow-y-auto rounded-2xl border border-app-border/65 bg-app-surface/45 p-3 [scrollbar-width:thin]">
+      <div>
+        <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+          {t("composer.profileDetailsTitle")}
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <ProfileDetailCard
+            label={t("composer.profileResponseStyle")}
+            value={getResponseStyleLabel(profile.responseStyle, t)}
+          />
+          <ProfileDetailCard
+            label={t("composer.profileResponseLanguage")}
+            value={profile.responseLanguage || t("composer.profileTier.notConfigured")}
+          />
+          <ProfileDetailCard
+            className="sm:col-span-2"
+            icon={<Brain className="size-3.5" />}
+            label={t("composer.profileThinkingLevel")}
+            value={getThinkingLevelLabel(profile.thinkingLevel, t)}
+            description={getThinkingLevelDescription(profile.thinkingLevel, t)}
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-2">
         {tiers.map(({ label, tier }) => {
           const providerId = getProfileTierProviderId(profile, tier);
           const provider = providers.find((candidate) => candidate.id === providerId) ?? null;
           const model = resolveProfileModelByTier(tier, profile, providers);
-          const value = model
-            ? `${(provider?.displayName ?? providerId) || t("composer.profileTier.notConfigured")} · ${model.displayName}`
-            : t("composer.profileTier.notConfigured");
+          const value = model ? model.displayName : t("composer.profileTier.notConfigured");
+          const description = model ? (provider?.displayName ?? providerId) || undefined : undefined;
 
-          return <ProfileDetailRow key={tier} label={label} value={value} />;
+          return (
+            <ProfileDetailCard
+              key={tier}
+              label={label}
+              value={value}
+              description={description}
+            />
+          );
         })}
-        <ProfileDetailRow label={t("composer.profileResponseStyle")} value={getResponseStyleLabel(profile.responseStyle, t)} />
-        <ProfileDetailRow
-          label={t("composer.profileResponseLanguage")}
-          value={profile.responseLanguage || t("composer.profileTier.notConfigured")}
-        />
       </div>
+
+      <AgentTeamSection customSubagents={customSubagents} profileId={profile.id} />
     </div>
   );
 }
@@ -1314,6 +1499,7 @@ export function WorkbenchPromptComposer({
   className,
   commands = [],
   composerShellClassName,
+  customSubagents = [],
   enabledSkills = [],
   error,
   onErrorMessageChange,
@@ -2062,13 +2248,16 @@ export function WorkbenchPromptComposer({
                       </PromptInputButton>
                     </ModelSelectorTrigger>
                     <ModelSelectorContent
-                      className="sm:max-w-[340px]"
+                      className="sm:max-w-[760px]"
                       commandProps={{ value: activeAgentProfileId ?? undefined }}
                       showCloseButton={false}
                       title={t("composer.agentProfilesTitle")}
                     >
-                      <div className="flex items-center justify-between gap-3 border-b border-app-border/55 px-3 py-2">
-                        <p className="text-[11px] font-medium text-app-muted">{t("composer.agentProfilesTitle")}</p>
+                      <div className="flex items-center justify-between gap-3 border-b border-app-border/55 px-4 py-2.5">
+                        <div className="min-w-0">
+                          <p className="text-[12px] font-semibold text-app-foreground">{t("composer.agentProfilesTitle")}</p>
+                          <p className="mt-0.5 text-[11px] text-app-muted">{t("composer.profileSelectLabel")}</p>
+                        </div>
                         <Button
                           aria-label={t("composer.editProfiles")}
                           className="size-7 shrink-0 rounded-full text-app-muted hover:text-app-foreground"
@@ -2085,8 +2274,8 @@ export function WorkbenchPromptComposer({
                           <Settings className="size-3.5" />
                         </Button>
                       </div>
-                      <div className="px-3 pb-2 pt-2">
-                        <ModelSelectorList className="max-h-[150px] rounded-lg border border-app-border/55 bg-app-surface/45 p-1">
+                      <div className="grid gap-3 p-3 md:grid-cols-[minmax(220px,0.85fr)_minmax(0,1.35fr)] md:items-start">
+                        <ModelSelectorList className="max-h-[430px] rounded-2xl border border-app-border/55 bg-app-surface/45 p-1.5 [scrollbar-width:thin]">
                           <ModelSelectorEmpty>{t("composer.noProfileAvailable")}</ModelSelectorEmpty>
                           <ModelSelectorGroup className="p-0">
                             {sortedAgentProfiles.map((profile) => (
@@ -2102,9 +2291,8 @@ export function WorkbenchPromptComposer({
                             ))}
                           </ModelSelectorGroup>
                         </ModelSelectorList>
+                        <ProfileDetailsPanel customSubagents={customSubagents} profile={activeProfile} providers={providers} />
                       </div>
-                      <div className="mx-3 h-px bg-app-border/55" />
-                      <ProfileDetailsPanel profile={activeProfile} providers={providers} />
                     </ModelSelectorContent>
                   </ModelSelector>
                 ) : (
