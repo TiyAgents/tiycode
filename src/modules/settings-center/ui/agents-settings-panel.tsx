@@ -22,6 +22,7 @@ import {
   customSubagentUpdate,
   type CustomSubagentInput,
 } from "@/services/bridge/subagent-commands";
+import { getInvokeErrorMessage } from "@/shared/lib/invoke-error";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import {
@@ -197,9 +198,7 @@ export function AgentsSettingsPanel({
       setEditState(null);
     } catch (error) {
       console.error("Failed to create subagent", error);
-      setErrorMessage(
-        (error instanceof Error ? error.message : String(error)) || t("settings.agents.errorCreate"),
-      );
+      setErrorMessage(getInvokeErrorMessage(error, t("settings.agents.errorCreate")));
     }
   };
 
@@ -214,9 +213,7 @@ export function AgentsSettingsPanel({
       }
     } catch (error) {
       console.error("Failed to delete subagent", error);
-      setErrorMessage(
-        (error instanceof Error ? error.message : String(error)) || t("settings.agents.errorDelete"),
-      );
+      setErrorMessage(getInvokeErrorMessage(error, t("settings.agents.errorDelete")));
     }
   };
 
@@ -289,9 +286,7 @@ export function AgentsSettingsPanel({
       setEditState(null);
     } catch (error) {
       console.error("Failed to update subagent", error);
-      setErrorMessage(
-        (error instanceof Error ? error.message : String(error)) || t("settings.agents.errorSave"),
-      );
+      setErrorMessage(getInvokeErrorMessage(error, t("settings.agents.errorSave")));
     } finally {
       setIsSaving(false);
     }

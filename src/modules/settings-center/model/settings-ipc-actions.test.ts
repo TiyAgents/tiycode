@@ -27,6 +27,29 @@ function makeAgentProfile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   };
 }
 
+function makeProfileDto(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "profile-dto-1",
+    name: "Profile DTO",
+    customInstructions: "",
+    commitMessagePrompt: "",
+    responseStyle: "balanced",
+    thinkingLevel: "medium",
+    responseLanguage: "zh-CN",
+    commitMessageLanguage: "en-US",
+    primaryProviderId: null,
+    primaryModelId: null,
+    auxiliaryProviderId: null,
+    auxiliaryModelId: null,
+    lightweightProviderId: null,
+    lightweightModelId: null,
+    isDefault: false,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
 function makeCommandEntry(
   overrides: Partial<CommandEntry> = {},
 ): CommandEntry {
@@ -63,6 +86,8 @@ const {
   mockPromptCommandDelete,
   mockPromptCommandUpdate,
   mockSyncToBackend,
+  mockProfileSubagentAccessGet,
+  mockProfileSubagentAccessSet,
 } = vi.hoisted(() => ({
   mockIsTauri: vi.fn(() => true),
   mockProfileCreate: vi.fn(),
@@ -79,6 +104,8 @@ const {
   mockPromptCommandDelete: vi.fn(),
   mockPromptCommandUpdate: vi.fn(),
   mockSyncToBackend: vi.fn(),
+  mockProfileSubagentAccessGet: vi.fn(),
+  mockProfileSubagentAccessSet: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -105,6 +132,11 @@ vi.mock("@/services/bridge", () => ({
   workspaceAdd: vi.fn(),
   workspaceRemove: vi.fn(),
   workspaceSetDefault: vi.fn(),
+}));
+
+vi.mock("@/services/bridge/subagent-commands", () => ({
+  profileSubagentAccessGet: (...args: unknown[]) => mockProfileSubagentAccessGet(...args),
+  profileSubagentAccessSet: (...args: unknown[]) => mockProfileSubagentAccessSet(...args),
 }));
 
 // Only mock syncToBackend — NOT SyncError, so we keep the real class for instanceof checks.
@@ -145,6 +177,8 @@ beforeEach(() => {
   mockPolicySet.mockResolvedValue(undefined);
   mockSettingsSet.mockResolvedValue(undefined);
   mockProfileDelete.mockResolvedValue(undefined);
+  mockProfileSubagentAccessGet.mockResolvedValue([]);
+  mockProfileSubagentAccessSet.mockResolvedValue(undefined);
   mockSettingsGet.mockResolvedValue(null);
 });
 
@@ -432,6 +466,82 @@ describe("duplicateAgentProfile", () => {
     expect(copy!.name).toBe("Original Copy");
     expect(state.activeAgentProfileId).toBe(copy!.id);
     expect(copy!.id).not.toBe("p1");
+  });
+
+  it("Tauri: copies custom subagent access to the duplicated profile", async () => {
+    mockIsTauri.mockReturnValue(true);
+    const source = makeAgentProfile({
+      id: "p1",
+      name: "Original",
+      customInstructions: "Follow me",
+      responseStyle: "guide",
+      thinkingLevel: "high",
+      primaryProviderId: "provider-1",
+      primaryModelId: "model-1",
+    });
+    settingsStore.setState({ agentProfiles: [source], activeAgentProfileId: "p1" });
+    mockProfileCreate.mockResolvedValue(
+      makeProfileDto({
+        id: "copy-id",
+        name: "Original Copy",
+        customInstructions: "Follow me",
+        responseStyle: "guide",
+        thinkingLevel: "high",
+        primaryProviderId: "provider-1",
+        primaryModelId: "model-1",
+      }),
+    );
+    mockProfileSubagentAccessGet.mockResolvedValue(["agent-a", "agent-b"]);
+    vi.clearAllMocks();
+
+    duplicateAgentProfile("p1");
+    await vi.runAllTimersAsync();
+
+    expect(mockProfileCreate).toHaveBeenCalledTimes(1);
+    expect(mockProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Original Copy",
+        customInstructions: "Follow me",
+        responseStyle: "guide",
+        thinkingLevel: "high",
+        primaryProviderId: "provider-1",
+        primaryModelId: "model-1",
+      }),
+    );
+    expect(mockProfileSubagentAccessGet).toHaveBeenCalledWith("p1");
+    expect(mockProfileSubagentAccessSet).toHaveBeenCalledWith("copy-id", [
+      "agent-a",
+      "agent-b",
+    ]);
+    expect(mockSettingsSet).toHaveBeenCalledWith("active_profile_id", '"copy-id"');
+
+    const state = settingsStore.getState();
+    expect(state.agentProfiles.map((profile) => profile.id)).toEqual(["p1", "copy-id"]);
+    expect(state.activeAgentProfileId).toBe("copy-id");
+  });
+
+  it("Tauri: keeps the duplicated profile when subagent access copy fails", async () => {
+    mockIsTauri.mockReturnValue(true);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const source = makeAgentProfile({ id: "p1", name: "Original" });
+    settingsStore.setState({ agentProfiles: [source], activeAgentProfileId: "p1" });
+    mockProfileCreate.mockResolvedValue(
+      makeProfileDto({ id: "copy-id", name: "Original Copy" }),
+    );
+    mockProfileSubagentAccessGet.mockRejectedValue(new Error("access failed"));
+    vi.clearAllMocks();
+
+    duplicateAgentProfile("p1");
+    await vi.runAllTimersAsync();
+
+    expect(mockProfileSubagentAccessGet).toHaveBeenCalledWith("p1");
+    expect(mockProfileSubagentAccessSet).not.toHaveBeenCalled();
+    expect(mockSettingsSet).toHaveBeenCalledWith("active_profile_id", '"copy-id"');
+
+    const state = settingsStore.getState();
+    expect(state.agentProfiles.map((profile) => profile.id)).toEqual(["p1", "copy-id"]);
+    expect(state.activeAgentProfileId).toBe("copy-id");
+    warnSpy.mockRestore();
   });
 
   it("non-Tauri: no-op when source not found", () => {

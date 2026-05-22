@@ -39,6 +39,10 @@ import {
   workspaceRemove,
   workspaceSetDefault,
 } from "@/services/bridge";
+import {
+  profileSubagentAccessGet,
+  profileSubagentAccessSet,
+} from "@/services/bridge/subagent-commands";
 import { settingsStore } from "./settings-store";
 import {
   buildPersistedWebSearchSettings,
@@ -548,6 +552,12 @@ export function duplicateAgentProfile(id: string) {
   )
     .then(async (profile) => {
       const mapped = mapProfileDto(profile);
+      try {
+        const subagentAccessIds = await profileSubagentAccessGet(source.id);
+        await profileSubagentAccessSet(mapped.id, subagentAccessIds);
+      } catch (accessError) {
+        console.warn("Failed to copy profile subagent access", accessError);
+      }
       await settingsSet(
         ACTIVE_AGENT_PROFILE_SETTING_KEY,
         JSON.stringify(mapped.id),
