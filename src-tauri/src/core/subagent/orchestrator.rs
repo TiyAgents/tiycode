@@ -158,7 +158,12 @@ impl HelperAgentOrchestrator {
             &request.system_prompt,
             &helper_profile,
         ));
-        agent.set_tools(helper_profile.helper_tools());
+        let web_search_enabled =
+            crate::core::web_search_settings::load_web_search_settings(&self.pool)
+                .await
+                .map(|s| s.is_ready())
+                .unwrap_or(false);
+        agent.set_tools(helper_profile.helper_tools(web_search_enabled));
         agent.set_tool_execution(ToolExecutionMode::Sequential);
 
         // Propagate thinking level from the parent session so that the helper

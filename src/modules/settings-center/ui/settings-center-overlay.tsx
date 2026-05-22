@@ -1000,11 +1000,17 @@ function ProfileLibraryCard({
         <CircleUserRound className="size-5" />
       </span>
 
-      <div className={cn("min-w-0 flex-1", !isEditing && "pr-24")}>
+      <div
+        className={cn(
+          "min-w-0 flex-1",
+          !isEditing && showActions && "pr-24",
+          !isEditing && isActive && !showActions && "pr-10",
+        )}
+      >
         {isEditing ? (
           <input
             autoFocus
-            className="h-8 w-full min-w-0 rounded-lg border border-app-accent bg-app-surface px-2 text-[15px] font-semibold text-app-foreground outline-none"
+            className="h-7 w-full min-w-0 rounded-lg border border-app-accent bg-app-surface px-2 text-[13px] font-medium text-app-foreground outline-none"
             value={editingName}
             onClick={(event) => event.stopPropagation()}
             onChange={(event) => onEditingNameChange(event.target.value)}
@@ -1015,23 +1021,23 @@ function ProfileLibraryCard({
             }}
           />
         ) : (
-          <p className="truncate text-[16px] font-semibold leading-5 text-app-foreground">{profile.name}</p>
+          <p className="truncate text-[13px] font-medium leading-5 text-app-foreground">{profile.name}</p>
         )}
-        <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[13px] leading-5 text-app-muted">
+        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-app-muted">
           {primaryModel.iconModelId ? (
             <ModelBrandIcon
-              className="size-5 shrink-0 text-[16px]"
+              className="size-4 shrink-0 text-[13px]"
               displayName={primaryModel.iconDisplayName ?? primaryModel.label}
               modelId={primaryModel.iconModelId}
             />
           ) : (
             <Bot className="size-4 shrink-0 text-app-subtle" />
           )}
-          <span className="truncate">{primaryModel.label}</span>
+          <span className="min-w-0 flex-1 truncate">{primaryModel.label}</span>
         </div>
       </div>
 
-      {isActive && (!showActions || isEditing) ? (
+      {isActive && !isEditing && !showActions ? (
         <span
           className="absolute right-3 top-3 flex size-6 items-center justify-center rounded-full border border-app-info/30 bg-app-info/15 text-app-info shadow-sm"
           title={t("settings.profiles.currentProfileLabel")}
@@ -1111,6 +1117,7 @@ function GeneralSettingsPanel({
 }) {
   const t = useT();
   const [webSearchApiKey, setWebSearchApiKey] = useState("");
+  const [webSearchBaseUrl, setWebSearchBaseUrl] = useState(webSearch.baseUrl ?? "");
   const [isSavingWebSearchKey, setIsSavingWebSearchKey] = useState(false);
   const webSearchEngineOptions = useMemo(
     () => [
@@ -1134,6 +1141,7 @@ function GeneralSettingsPanel({
 
   useEffect(() => {
     setWebSearchApiKey("");
+    setWebSearchBaseUrl(webSearch.baseUrl ?? "");
   }, [webSearch.engine]);
 
   const clampWebSearchMaxResults = (value: number) => Math.min(20, Math.max(1, Math.round(value)));
@@ -1280,10 +1288,16 @@ function GeneralSettingsPanel({
           optional
           control={
             <Input
-              value={webSearch.baseUrl ?? ""}
+              value={webSearchBaseUrl}
               placeholder={t("settings.general.webSearchBaseUrlPlaceholder")}
               className="w-full md:w-[360px]"
-              onChange={(event) => void onUpdateWebSearchSettings({ baseUrl: event.target.value })}
+              onChange={(event) => setWebSearchBaseUrl(event.target.value)}
+              onBlur={() => {
+                const trimmed = webSearchBaseUrl.trim();
+                if (trimmed !== (webSearch.baseUrl ?? "")) {
+                  void onUpdateWebSearchSettings({ baseUrl: trimmed });
+                }
+              }}
             />
           }
         />
@@ -1397,7 +1411,7 @@ function ProfileSettingsPanel({
     );
     if (selectedModel) {
       return {
-        label: `${selectedModel.providerName}: ${selectedModel.displayName}`,
+        label: selectedModel.displayName,
         iconDisplayName: selectedModel.displayName,
         iconModelId: selectedModel.modelId,
       };
@@ -1463,7 +1477,7 @@ function ProfileSettingsPanel({
           <p className="max-w-2xl text-[12px] leading-5 text-app-muted">
             {t("settings.profiles.profileLibraryDesc")}
           </p>
-          <div className="max-h-[348px] overflow-y-auto pr-1 [scrollbar-width:thin]">
+          <div className="max-h-[210px] overflow-y-auto pr-1 [scrollbar-width:thin]">
             <div className="grid gap-2.5 md:grid-cols-2">
               {sortedProfiles.map((profile) => (
                 <ProfileLibraryCard

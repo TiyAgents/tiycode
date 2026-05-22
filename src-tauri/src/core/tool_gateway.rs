@@ -625,16 +625,14 @@ impl ToolGateway {
                 )
                 .await
         } else {
-            executors::execute_tool(
-                &request.tool_name,
-                &request.tool_input,
-                &request.workspace_path,
-                &writable_roots,
-                &request.thread_id,
-                Some(&self.terminal_manager),
-                &self.pool,
-            )
-            .await
+            let ctx = executors::ToolContext {
+                workspace_path: &request.workspace_path,
+                writable_roots: &writable_roots,
+                thread_id: &request.thread_id,
+                terminal_manager: Some(&self.terminal_manager),
+                pool: &self.pool,
+            };
+            executors::execute_tool(&request.tool_name, &request.tool_input, &ctx).await
         } {
             Ok(output) => output,
             Err(error) => {

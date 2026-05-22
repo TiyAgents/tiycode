@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
@@ -13,6 +14,17 @@ use crate::core::web_search_settings::{
 use crate::model::errors::{AppError, ErrorSource};
 
 const HTTP_TIMEOUT_SECS: u64 = 30;
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .build()
+            .expect("failed to build HTTP client")
+    })
+}
 
 #[derive(Debug, Clone)]
 struct WebSearchInput {
@@ -51,10 +63,7 @@ pub async fn execute(input: &Value, pool: &SqlitePool) -> Result<ToolOutput, App
     };
 
     let search_input = parse_input(input, &settings)?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
-        .build()
-        .map_err(|error| AppError::internal(ErrorSource::Tool, error.to_string()))?;
+    let client = http_client();
 
     match settings.engine {
         WebSearchEngine::Tavily => search_tavily(&client, &settings, api_key, &search_input).await,
@@ -167,7 +176,6 @@ async fn search_tavily(
             .and_then(Value::as_str)
             .map(ToString::to_string),
         results,
-        Some(value),
     ))
 }
 
@@ -212,7 +220,6 @@ async fn search_brave(
         &input.query,
         None,
         results,
-        Some(value),
     ))
 }
 
@@ -269,7 +276,6 @@ async fn search_exa(
         &input.query,
         answer,
         results,
-        Some(value),
     ))
 }
 
@@ -313,7 +319,6 @@ async fn search_firecrawl(
         &input.query,
         None,
         results,
-        Some(value),
     ))
 }
 
@@ -369,7 +374,6 @@ fn success_output(
     query: &str,
     answer: Option<String>,
     results: Vec<StandardSearchResult>,
-    raw: Option<Value>,
 ) -> ToolOutput {
     let sources: Vec<Value> = results
         .iter()
@@ -406,9 +410,6 @@ fn success_output(
         "sources": sources,
     });
     insert_optional(&mut output, "answer", answer);
-    if let Some(raw) = raw {
-        output["providerResponse"] = raw;
-    }
 
     ToolOutput {
         success: true,
@@ -566,7 +567,7 @@ fn exa_published_date_range(time_range: Option<&str>) -> Option<(String, String)
 
 fn topic_from_time_range(time_range: Option<&str>) -> Option<String> {
     match time_range {
-        Some("day" | "week" | "month" | "year") => Some("news".to_string()),
+        Some("day" | "week") => Some("news".to_string()),
         _ => None,
     }
 }
@@ -670,7 +671,6 @@ mod tests {
                 published_at: None,
                 score: Some(0.9),
             }],
-            None,
         );
 
         assert!(output.success);
