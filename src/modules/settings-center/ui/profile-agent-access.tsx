@@ -1,11 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  CheckCircle2,
-  FileSearch,
-  LockKeyhole,
-  Wrench,
-  type LucideIcon,
-} from "lucide-react";
+import { CheckCircle2, FileSearch, Wrench, type LucideIcon } from "lucide-react";
 import { useT, type TranslationKey } from "@/i18n";
 import type { CustomSubagent, CustomSubagentModelRole } from "@/modules/settings-center/model/types";
 import {
@@ -152,16 +146,25 @@ export function ProfileAgentAccess({
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <p className="text-[13px] font-medium text-app-foreground">{name}</p>
-                      <span className="rounded-full border border-app-info/30 bg-app-info/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-app-info">
-                        {t("settings.profileAgentAccess.alwaysOn")}
+                      <span className="rounded-full border border-app-success/30 bg-app-success/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-app-success">
+                        {t("settings.profileAgentAccess.allowed")}
                       </span>
                     </div>
                     <p className="mt-0.5 text-[11px] text-app-subtle">{t(agent.scopeKey)}</p>
                   </div>
                 </div>
-                <LockKeyhole className="mt-1 size-3.5 shrink-0 text-app-subtle" />
+                <input
+                  type="checkbox"
+                  checked
+                  readOnly
+                  tabIndex={-1}
+                  aria-label={`${name} ${t("settings.profileAgentAccess.allowed")}`}
+                  className="pointer-events-none mt-1 size-4 shrink-0 rounded border-app-border accent-app-info"
+                />
               </div>
-              <p className="mt-3 text-[12px] leading-5 text-app-muted">{t(agent.descriptionKey)}</p>
+              <p className="mt-3 line-clamp-2 text-[12px] leading-5 text-app-muted" title={t(agent.descriptionKey)}>
+                {t(agent.descriptionKey)}
+              </p>
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {agent.capabilityKeys.map((capabilityKey) => (
                   <span
@@ -242,23 +245,21 @@ export function ProfileAgentAccess({
                       >
                         {agent.isEnabled ? t("settings.agents.enabled") : t("settings.agents.disabled")}
                       </span>
-                      <span
-                        className={cn(
-                          "rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]",
-                          isSelected
-                            ? "border-app-success/30 bg-app-success/10 text-app-success"
-                            : "border-app-border bg-app-surface text-app-subtle",
-                        )}
-                      >
-                        {isSelected ? t("settings.profileAgentAccess.allowed") : t("settings.profileAgentAccess.off")}
-                      </span>
+                      {isSelected ? (
+                        <span className="rounded-full border border-app-success/30 bg-app-success/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-app-success">
+                          {t("settings.profileAgentAccess.allowed")}
+                        </span>
+                      ) : null}
                       <span className="rounded-full border border-app-border bg-app-surface px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-app-subtle">
                         {modelRoleLabel(agent.modelRole)}
                       </span>
                     </span>
 
                     <code className="mt-1 block truncate text-[11px] text-app-subtle">agent_{agent.slug}</code>
-                    <span className="mt-2 block text-[12px] leading-5 text-app-muted">
+                    <span
+                      className="mt-2 line-clamp-2 text-[12px] leading-5 text-app-muted"
+                      title={agent.invocationDescription.trim() || t("settings.profileAgentAccess.noDescription")}
+                    >
                       {agent.invocationDescription.trim() || t("settings.profileAgentAccess.noDescription")}
                     </span>
 

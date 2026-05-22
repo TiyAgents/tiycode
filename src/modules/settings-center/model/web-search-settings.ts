@@ -14,13 +14,15 @@ export const DEFAULT_WEB_SEARCH_SETTINGS: WebSearchSettings = {
   engine: "tavily",
   hasApiKey: false,
   maxResults: 5,
-  includeRawContent: false,
+  includeRawContent: true,
 };
 
 export type PersistedWebSearchSettings = {
   enabled?: unknown;
   engine?: unknown;
+  apiKeys?: unknown;
   apiKey?: unknown;
+  baseUrls?: unknown;
   baseUrl?: unknown;
   maxResults?: unknown;
   includeRawContent?: unknown;
@@ -30,7 +32,6 @@ export type WebSearchSettingsPatch = Partial<
   Omit<WebSearchSettings, "hasApiKey">
 > & {
   apiKey?: string;
-  clearApiKey?: boolean;
 };
 
 export function isWebSearchEngine(value: unknown): value is WebSearchEngine {
@@ -44,6 +45,52 @@ function normalizeMaxResults(value: unknown): number {
   return Math.min(20, Math.max(1, Math.round(value)));
 }
 
+function normalizeStringMap(value: unknown): Partial<Record<WebSearchEngine, string>> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const record = value as Record<string, unknown>;
+  return WEB_SEARCH_ENGINES.reduce<Partial<Record<WebSearchEngine, string>>>((acc, engine) => {
+    const entry = record[engine];
+    if (typeof entry === "string" && entry.trim().length > 0) {
+      acc[engine] = entry.trim();
+    }
+    return acc;
+  }, {});
+}
+
+function normalizeApiKeys(value: unknown): Partial<Record<WebSearchEngine, string>> {
+  return normalizeStringMap(value);
+}
+
+function normalizeBaseUrls(value: unknown): Partial<Record<WebSearchEngine, string>> {
+  return normalizeStringMap(value);
+}
+
+function hasApiKeyForEngine(raw: PersistedWebSearchSettings, engine: WebSearchEngine): boolean {
+  const apiKeys = normalizeApiKeys(raw.apiKeys);
+  if (apiKeys[engine]) {
+    return true;
+  }
+  return (
+    (isWebSearchEngine(raw.engine) ? raw.engine : DEFAULT_WEB_SEARCH_SETTINGS.engine) === engine
+    && typeof raw.apiKey === "string"
+    && raw.apiKey.trim().length > 0
+  );
+}
+
+function baseUrlForEngine(raw: PersistedWebSearchSettings, engine: WebSearchEngine): string | undefined {
+  const baseUrls = normalizeBaseUrls(raw.baseUrls);
+  if (baseUrls[engine]) {
+    return baseUrls[engine];
+  }
+  return (isWebSearchEngine(raw.engine) ? raw.engine : DEFAULT_WEB_SEARCH_SETTINGS.engine) === engine
+    && typeof raw.baseUrl === "string"
+    && raw.baseUrl.trim().length > 0
+    ? raw.baseUrl.trim()
+    : undefined;
+}
+
 export function mapPersistedWebSearchSettings(
   value: unknown,
 ): WebSearchSettings {
@@ -52,13 +99,12 @@ export function mapPersistedWebSearchSettings(
   }
 
   const raw = value as PersistedWebSearchSettings;
+  const engine = isWebSearchEngine(raw.engine) ? raw.engine : DEFAULT_WEB_SEARCH_SETTINGS.engine;
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_WEB_SEARCH_SETTINGS.enabled,
-    engine: isWebSearchEngine(raw.engine) ? raw.engine : DEFAULT_WEB_SEARCH_SETTINGS.engine,
-    hasApiKey: typeof raw.apiKey === "string" && raw.apiKey.trim().length > 0,
-    baseUrl: typeof raw.baseUrl === "string" && raw.baseUrl.trim().length > 0
-      ? raw.baseUrl.trim()
-      : undefined,
+    engine,
+    hasApiKey: hasApiKeyForEngine(raw, engine),
+    baseUrl: baseUrlForEngine(raw, engine),
     maxResults: normalizeMaxResults(raw.maxResults),
     includeRawContent:
       typeof raw.includeRawContent === "boolean"
@@ -77,20 +123,42 @@ export function buildPersistedWebSearchSettings(
     : {};
 
   const nextEngine = patch.engine ?? current.engine;
-  const nextBaseUrl = patch.baseUrl ?? current.baseUrl;
-  const nextApiKey = patch.clearApiKey
-    ? undefined
-    : typeof patch.apiKey === "string" && patch.apiKey.trim().length > 0
-      ? patch.apiKey.trim()
-      : typeof existingRecord.apiKey === "string"
-        ? existingRecord.apiKey
-        : undefined;
+  const nextBaseUrls = normalizeBaseUrls(existingRecord.baseUrls);
+  if (typeof existingRecord.baseUrl === "string" && existingRecord.baseUrl.trim().length > 0) {
+    const legacyBaseUrlEngine = isWebSearchEngine(existingRecord.engine)
+      ? existingRecord.engine
+      : current.engine;
+    nextBaseUrls[legacyBaseUrlEngine] ??= existingRecord.baseUrl.trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "baseUrl")) {
+    const nextBaseUrl = patch.baseUrl?.trim() ?? "";
+    if (nextBaseUrl) {
+      nextBaseUrls[nextEngine] = nextBaseUrl;
+    } else {
+      delete nextBaseUrls[nextEngine];
+    }
+  }
+  const nextApiKeys = normalizeApiKeys(existingRecord.apiKeys);
+  if (typeof existingRecord.apiKey === "string" && existingRecord.apiKey.trim().length > 0) {
+    const legacyApiKeyEngine = isWebSearchEngine(existingRecord.engine)
+      ? existingRecord.engine
+      : current.engine;
+    nextApiKeys[legacyApiKeyEngine] ??= existingRecord.apiKey.trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "apiKey")) {
+    const nextApiKey = patch.apiKey?.trim() ?? "";
+    if (nextApiKey) {
+      nextApiKeys[nextEngine] = nextApiKey;
+    } else {
+      delete nextApiKeys[nextEngine];
+    }
+  }
 
   return {
     enabled: patch.enabled ?? current.enabled,
     engine: nextEngine,
-    ...(nextApiKey ? { apiKey: nextApiKey } : {}),
-    ...(nextBaseUrl && nextBaseUrl.trim().length > 0 ? { baseUrl: nextBaseUrl.trim() } : {}),
+    ...(Object.keys(nextApiKeys).length > 0 ? { apiKeys: nextApiKeys } : {}),
+    ...(Object.keys(nextBaseUrls).length > 0 ? { baseUrls: nextBaseUrls } : {}),
     maxResults: normalizeMaxResults(patch.maxResults ?? current.maxResults),
     includeRawContent: patch.includeRawContent ?? current.includeRawContent,
   };

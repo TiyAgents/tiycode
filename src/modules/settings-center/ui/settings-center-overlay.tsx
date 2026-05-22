@@ -1106,26 +1106,18 @@ function GeneralSettingsPanel({
   );
 
   const handleSaveWebSearchApiKey = async () => {
-    const nextKey = webSearchApiKey.trim();
-    if (!nextKey) return;
     setIsSavingWebSearchKey(true);
     try {
-      await onUpdateWebSearchSettings({ apiKey: nextKey });
+      await onUpdateWebSearchSettings({ apiKey: webSearchApiKey });
       setWebSearchApiKey("");
     } finally {
       setIsSavingWebSearchKey(false);
     }
   };
 
-  const handleClearWebSearchApiKey = async () => {
-    setIsSavingWebSearchKey(true);
-    try {
-      await onUpdateWebSearchSettings({ clearApiKey: true });
-      setWebSearchApiKey("");
-    } finally {
-      setIsSavingWebSearchKey(false);
-    }
-  };
+  useEffect(() => {
+    setWebSearchApiKey("");
+  }, [webSearch.engine]);
 
   const clampWebSearchMaxResults = (value: number) => Math.min(20, Math.max(1, Math.round(value)));
 
@@ -1236,19 +1228,6 @@ function GeneralSettingsPanel({
         />
         <SectionDivider />
         <SettingsRow
-          label={t("settings.general.webSearchBaseUrlLabel")}
-          description={t("settings.general.webSearchBaseUrlDesc")}
-          control={
-            <Input
-              value={webSearch.baseUrl ?? ""}
-              placeholder={t("settings.general.webSearchBaseUrlPlaceholder")}
-              className="w-full md:w-[360px]"
-              onChange={(event) => void onUpdateWebSearchSettings({ baseUrl: event.target.value })}
-            />
-          }
-        />
-        <SectionDivider />
-        <SettingsRow
           label={t("settings.general.webSearchApiKeyLabel")}
           description={
             webSearch.hasApiKey
@@ -1268,25 +1247,26 @@ function GeneralSettingsPanel({
                   type="button"
                   variant="secondary"
                   size="sm"
-                  disabled={!webSearchApiKey.trim() || isSavingWebSearchKey}
+                  disabled={(!webSearchApiKey.trim() && !webSearch.hasApiKey) || isSavingWebSearchKey}
                   onClick={() => void handleSaveWebSearchApiKey()}
                 >
                   {t("settings.general.webSearchApiKeySave")}
                 </Button>
               </div>
-              {webSearch.hasApiKey ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="self-start px-0 text-app-muted hover:text-app-foreground"
-                  disabled={isSavingWebSearchKey}
-                  onClick={() => void handleClearWebSearchApiKey()}
-                >
-                  {t("settings.general.webSearchApiKeyClear")}
-                </Button>
-              ) : null}
             </div>
+          }
+        />
+        <SectionDivider />
+        <SettingsRow
+          label={t("settings.general.webSearchBaseUrlLabel")}
+          description={t("settings.general.webSearchBaseUrlDesc")}
+          control={
+            <Input
+              value={webSearch.baseUrl ?? ""}
+              placeholder={t("settings.general.webSearchBaseUrlPlaceholder")}
+              className="w-full md:w-[360px]"
+              onChange={(event) => void onUpdateWebSearchSettings({ baseUrl: event.target.value })}
+            />
           }
         />
         <SectionDivider />

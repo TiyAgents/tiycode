@@ -1116,28 +1116,45 @@ describe("updateWebSearchSettings", () => {
     updateWebSearchSettings = (await import("./settings-ipc-actions")).updateWebSearchSettings;
   });
 
-  it("Tauri: persists API key to backend settings and keeps only hasApiKey in store", async () => {
+  it("Tauri: persists API key per engine to backend settings and keeps only hasApiKey in store", async () => {
     mockIsTauri.mockReturnValue(true);
     setupStore();
     mockSettingsGet.mockResolvedValue({
       key: "web_search.settings",
-      value: { enabled: true, engine: "tavily", apiKey: "old-key", maxResults: 5 },
+      value: { enabled: true, engine: "tavily", apiKeys: { tavily: "old-key" }, maxResults: 5 },
       updatedAt: "now",
     });
 
     await updateWebSearchSettings({ apiKey: "new-key", enabled: true, engine: "exa" });
 
-    expect(mockSettingsSet).toHaveBeenCalledWith(
-      "web_search.settings",
-      expect.stringContaining("new-key"),
-    );
+    expect(mockSettingsSet).toHaveBeenCalledTimes(1);
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.apiKeys).toEqual({ tavily: "old-key", exa: "new-key" });
+    expect(persisted.apiKey).toBeUndefined();
     const state = settingsStore.getState().webSearch;
     expect(state.hasApiKey).toBe(true);
     expect("apiKey" in (state as Record<string, unknown>)).toBe(false);
     expect(state.engine).toBe("exa");
   });
 
-  it("Tauri: clears saved API key when requested", async () => {
+  it("Tauri: keeps other engine API keys when switching engines", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", apiKeys: { tavily: "tavily-key" }, maxResults: 5 },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ engine: "brave" });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.apiKeys).toEqual({ tavily: "tavily-key" });
+    expect(settingsStore.getState().webSearch.hasApiKey).toBe(false);
+    expect(settingsStore.getState().webSearch.engine).toBe("brave");
+  });
+
+  it("Tauri: clears current engine API key when saving an empty API key", async () => {
     mockIsTauri.mockReturnValue(true);
     setupStore();
     settingsStore.setState({
@@ -1151,14 +1168,110 @@ describe("updateWebSearchSettings", () => {
     });
     mockSettingsGet.mockResolvedValue({
       key: "web_search.settings",
-      value: { enabled: true, engine: "tavily", apiKey: "old-key", maxResults: 5 },
+      value: {
+        enabled: true,
+        engine: "tavily",
+        apiKeys: { tavily: "old-key", brave: "brave-key" },
+        maxResults: 5,
+      },
       updatedAt: "now",
     });
 
-    await updateWebSearchSettings({ clearApiKey: true });
+    await updateWebSearchSettings({ apiKey: "" });
 
     const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.apiKeys).toEqual({ brave: "brave-key" });
+    expect(settingsStore.getState().webSearch.hasApiKey).toBe(false);
+  });
+
+  it("Tauri: migrates legacy API key into apiKeys for the persisted engine", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", apiKey: "legacy-key", maxResults: 5 },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ engine: "brave", maxResults: 8 });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.apiKeys).toEqual({ tavily: "legacy-key" });
     expect(persisted.apiKey).toBeUndefined();
     expect(settingsStore.getState().webSearch.hasApiKey).toBe(false);
+    expect(settingsStore.getState().webSearch.engine).toBe("brave");
+  });
+
+  it("Tauri: persists Base URL per engine and keeps other engine URLs", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: {
+        enabled: true,
+        engine: "tavily",
+        baseUrls: { tavily: "https://tavily.example" },
+        maxResults: 5,
+      },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ engine: "brave", baseUrl: " https://brave.example/search " });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.baseUrls).toEqual({
+      tavily: "https://tavily.example",
+      brave: "https://brave.example/search",
+    });
+    expect(persisted.baseUrl).toBeUndefined();
+    expect(settingsStore.getState().webSearch.baseUrl).toBe("https://brave.example/search");
+  });
+
+  it("Tauri: clears current engine Base URL when saving an empty Base URL", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    settingsStore.setState({
+      webSearch: {
+        enabled: true,
+        engine: "tavily",
+        hasApiKey: false,
+        baseUrl: "https://tavily.example",
+        maxResults: 5,
+        includeRawContent: true,
+      },
+    });
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: {
+        enabled: true,
+        engine: "tavily",
+        baseUrls: { tavily: "https://tavily.example", brave: "https://brave.example" },
+        maxResults: 5,
+      },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ baseUrl: "" });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.baseUrls).toEqual({ brave: "https://brave.example" });
+    expect(settingsStore.getState().webSearch.baseUrl).toBeUndefined();
+  });
+
+  it("Tauri: migrates legacy Base URL into baseUrls for the persisted engine", async () => {
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", baseUrl: "https://legacy.example", maxResults: 5 },
+      updatedAt: "now",
+    });
+
+    await updateWebSearchSettings({ engine: "brave", maxResults: 8 });
+
+    const persisted = JSON.parse(mockSettingsSet.mock.calls[0][1] as string);
+    expect(persisted.baseUrls).toEqual({ tavily: "https://legacy.example" });
+    expect(persisted.baseUrl).toBeUndefined();
+    expect(settingsStore.getState().webSearch.baseUrl).toBeUndefined();
   });
 });

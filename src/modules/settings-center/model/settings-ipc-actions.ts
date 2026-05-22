@@ -282,14 +282,11 @@ export async function updateWebSearchSettings(patch: WebSearchSettingsPatch) {
   const optimistic: WebSearchSettings = {
     ...current,
     ...patch,
-    hasApiKey: patch.clearApiKey
-      ? false
-      : typeof patch.apiKey === "string" && patch.apiKey.trim().length > 0
-        ? true
-        : current.hasApiKey,
+    hasApiKey: Object.prototype.hasOwnProperty.call(patch, "apiKey")
+      ? typeof patch.apiKey === "string" && patch.apiKey.trim().length > 0
+      : current.hasApiKey,
   };
   delete (optimistic as { apiKey?: string }).apiKey;
-  delete (optimistic as { clearApiKey?: boolean }).clearApiKey;
 
   settingsStore.setState({ webSearch: optimistic });
 

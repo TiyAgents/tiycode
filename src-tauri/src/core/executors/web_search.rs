@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
@@ -41,14 +43,11 @@ pub async fn execute(input: &Value, pool: &SqlitePool) -> Result<ToolOutput, App
         ));
     }
 
-    let Some(api_key) = settings
-        .api_key
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(config_error(
-            "Web Search API key is not configured in Settings / General.",
-        ));
+    let Some(api_key) = settings.api_key_for_active_engine() else {
+        return Ok(config_error(&format!(
+            "Web Search API key for {} is not configured in Settings / General.",
+            settings.engine.as_str()
+        )));
     };
 
     let search_input = parse_input(input, &settings)?;
@@ -88,17 +87,8 @@ fn parse_input(input: &Value, settings: &WebSearchSettings) -> Result<WebSearchI
         })?
         .to_string();
 
-    let max_results = input
-        .get("maxResults")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize)
-        .unwrap_or(settings.max_results)
-        .clamp(1, 20);
-
-    let include_raw_content = input
-        .get("includeRawContent")
-        .and_then(Value::as_bool)
-        .unwrap_or(settings.include_raw_content);
+    let max_results = settings.max_results.clamp(1, 20);
+    let include_raw_content = settings.include_raw_content;
 
     Ok(WebSearchInput {
         query,
@@ -143,8 +133,7 @@ async fn search_tavily(
     input: &WebSearchInput,
 ) -> Result<ToolOutput, AppError> {
     let endpoint = settings
-        .base_url
-        .as_deref()
+        .base_url_for_active_engine()
         .unwrap_or("https://api.tavily.com/search");
     let mut body = json!({
         "query": input.query,
@@ -189,11 +178,13 @@ async fn search_brave(
     input: &WebSearchInput,
 ) -> Result<ToolOutput, AppError> {
     let endpoint = settings
-        .base_url
-        .as_deref()
+        .base_url_for_active_engine()
         .unwrap_or("https://api.search.brave.com/res/v1/web/search");
     let mut query = vec![
-        ("q", input.query.clone()),
+        (
+            "q",
+            brave_query(&input.query, &input.include_domains, &input.exclude_domains),
+        ),
         ("count", input.max_results.to_string()),
         ("extra_snippets", "true".to_string()),
     ];
@@ -232,8 +223,7 @@ async fn search_exa(
     input: &WebSearchInput,
 ) -> Result<ToolOutput, AppError> {
     let endpoint = settings
-        .base_url
-        .as_deref()
+        .base_url_for_active_engine()
         .unwrap_or("https://api.exa.ai/search");
     let mut contents = json!({
         "highlights": true,
@@ -250,6 +240,10 @@ async fn search_exa(
     });
     insert_string_array(&mut body, "includeDomains", &input.include_domains);
     insert_string_array(&mut body, "excludeDomains", &input.exclude_domains);
+    if let Some((start, end)) = exa_published_date_range(input.time_range.as_deref()) {
+        insert_string(&mut body, "startPublishedDate", &start);
+        insert_string(&mut body, "endPublishedDate", &end);
+    }
     if let Some(country) = input.country.as_deref() {
         insert_string(&mut body, "userLocation", country);
     }
@@ -286,8 +280,7 @@ async fn search_firecrawl(
     input: &WebSearchInput,
 ) -> Result<ToolOutput, AppError> {
     let endpoint = settings
-        .base_url
-        .as_deref()
+        .base_url_for_active_engine()
         .unwrap_or("https://api.firecrawl.dev/v2/search");
     let mut body = json!({
         "query": input.query,
@@ -535,6 +528,42 @@ fn insert_string_array(target: &mut Value, key: &str, values: &[String]) {
     }
 }
 
+fn brave_query(query: &str, include_domains: &[String], exclude_domains: &[String]) -> String {
+    let mut parts = vec![query.trim().to_string()];
+    parts.extend(
+        include_domains
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|domain| !domain.is_empty())
+            .map(|domain| format!("site:{domain}")),
+    );
+    parts.extend(
+        exclude_domains
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|domain| !domain.is_empty())
+            .map(|domain| format!("-site:{domain}")),
+    );
+    parts.join(" ")
+}
+
+fn exa_published_date_range(time_range: Option<&str>) -> Option<(String, String)> {
+    let now = Utc::now();
+    let start = match time_range {
+        Some("day") => now - ChronoDuration::days(1),
+        Some("week") => now - ChronoDuration::weeks(1),
+        Some("month") => now - ChronoDuration::days(31),
+        Some("year") => now - ChronoDuration::days(366),
+        _ => return None,
+    };
+    Some((
+        start.to_rfc3339_opts(SecondsFormat::Secs, true),
+        now.to_rfc3339_opts(SecondsFormat::Secs, true),
+    ))
+}
+
 fn topic_from_time_range(time_range: Option<&str>) -> Option<String> {
     match time_range {
         Some("day" | "week" | "month" | "year") => Some("news".to_string()),
@@ -565,6 +594,52 @@ fn firecrawl_tbs(time_range: Option<&str>) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_input_uses_settings_for_result_limit_and_raw_content() {
+        let settings = WebSearchSettings {
+            max_results: 5,
+            include_raw_content: false,
+            ..WebSearchSettings::default()
+        };
+        let input = parse_input(
+            &json!({
+                "query": "rust news",
+                "maxResults": 10,
+                "includeRawContent": true
+            }),
+            &settings,
+        )
+        .expect("valid input");
+
+        assert_eq!(input.max_results, 5);
+        assert!(!input.include_raw_content);
+    }
+
+    #[test]
+    fn brave_query_applies_domain_filters() {
+        let query = brave_query(
+            "rust async",
+            &["example.com".to_string(), " docs.rs ".to_string()],
+            &["spam.test".to_string()],
+        );
+
+        assert_eq!(
+            query,
+            "rust async site:example.com site:docs.rs -site:spam.test"
+        );
+    }
+
+    #[test]
+    fn exa_date_range_maps_supported_time_ranges() {
+        let Some((start, end)) = exa_published_date_range(Some("week")) else {
+            panic!("expected date range");
+        };
+
+        assert!(start.ends_with('Z'));
+        assert!(end.ends_with('Z'));
+        assert!(exa_published_date_range(Some("invalid")).is_none());
+    }
 
     #[test]
     fn maps_brave_result_with_extra_snippets() {

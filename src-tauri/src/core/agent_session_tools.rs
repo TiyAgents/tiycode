@@ -24,28 +24,18 @@ pub(crate) fn web_search_agent_tool() -> AgentTool {
     AgentTool::new(
         WEB_SEARCH_TOOL_NAME,
         "Web Search",
-        "Search the public web using the app-configured Web Search engine. Returns standardized results with titles, URLs, snippets, optional content, and source metadata. Use this for up-to-date information beyond the local workspace.",
+        "Search the public web using the app-configured Web Search engine. Returns standardized results with titles, URLs, snippets, optional content, and source metadata. Result count and raw-content behavior are controlled by app settings. Prefer the timeRange parameter for relative freshness filters such as today, this week, this month, or this year; avoid adding relative time keywords to the query unless the task asks for a specific date or time.",
         serde_json::json!({
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The web search query to execute."
-                },
-                "maxResults": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 20,
-                    "description": "Optional maximum number of results to return. Defaults to the app setting."
+                    "description": "The web search query to execute. Keep the query focused on search terms; use timeRange for relative freshness instead of adding time keywords, unless the task asks for a specific date or time."
                 },
                 "timeRange": {
                     "type": "string",
                     "enum": ["day", "week", "month", "year"],
-                    "description": "Optional freshness filter when supported by the configured search engine."
-                },
-                "includeRawContent": {
-                    "type": "boolean",
-                    "description": "Request longer page content when supported by the configured search engine. Defaults to the app setting."
+                    "description": "Optional freshness filter when supported by the configured search engine. Prefer this for relative recency ranges instead of putting time words in query."
                 },
                 "includeDomains": {
                     "type": "array",
