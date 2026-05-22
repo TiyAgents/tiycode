@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
   FileSearch,
@@ -65,6 +65,10 @@ export function ProfileAgentAccess({
   const t = useT();
   const [accessIds, setAccessIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isToggling, setIsToggling] = useState(false);
+  // Track latest accessIds via ref so async handlers always read current state
+  const accessIdsRef = useRef<string[]>([]);
+  accessIdsRef.current = accessIds;
 
   useEffect(() => {
     if (customSubagents.length === 0) {
@@ -81,8 +85,11 @@ export function ProfileAgentAccess({
           setIsLoading(false);
         }
       })
-      .catch(() => {
-        if (!cancelled) setIsLoading(false);
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("Failed to load profile subagent access", error);
+          setIsLoading(false);
+        }
       });
     return () => {
       cancelled = true;
@@ -90,16 +97,25 @@ export function ProfileAgentAccess({
   }, [profileId, customSubagents.length]);
 
   const toggleAccess = async (subagentId: string) => {
-    const before = accessIds;
-    const next = before.includes(subagentId)
-      ? before.filter((id) => id !== subagentId)
-      : [...before, subagentId];
-    setAccessIds(next);
+    const prev = accessIdsRef.current;
+    const isSelected = prev.includes(subagentId);
+    const nextIds = isSelected
+      ? prev.filter((id) => id !== subagentId)
+      : [...prev, subagentId];
+
+    setAccessIds(nextIds);
+    accessIdsRef.current = nextIds;
+
+    setIsToggling(true);
     try {
-      await profileSubagentAccessSet(profileId, next);
+      await profileSubagentAccessSet(profileId, nextIds);
     } catch (error) {
       console.error("Failed to update profile subagent access", error);
-      setAccessIds(before);
+      // Revert to the previous state
+      setAccessIds(prev);
+      accessIdsRef.current = prev;
+    } finally {
+      setIsToggling(false);
     }
   };
 
@@ -202,6 +218,7 @@ export function ProfileAgentAccess({
                     type="checkbox"
                     checked={isSelected}
                     onChange={() => toggleAccess(agent.id)}
+                    disabled={isToggling}
                     aria-label={t("settings.profileAgentAccess.toggleAccess", { name: agent.name })}
                     className="absolute right-3 top-3 size-4 rounded border-app-border accent-app-info"
                   />

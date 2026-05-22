@@ -148,11 +148,13 @@ pub async fn update(
     input: &CustomSubagentInput,
 ) -> Result<CustomSubagentRecord, AppError> {
     let now = Utc::now().to_rfc3339();
-    let is_enabled: i32 = if input.is_enabled.unwrap_or(true) {
-        1
-    } else {
-        0
-    };
+    // Preserve the existing is_enabled value when the input omits it,
+    // preventing accidental re-enabling of disabled subagents.
+    let existing = get_by_id(pool, id).await?;
+    let is_enabled_val = input
+        .is_enabled
+        .unwrap_or_else(|| existing.as_ref().map_or(true, |r| r.is_enabled));
+    let is_enabled: i32 = if is_enabled_val { 1 } else { 0 };
     let tools_json =
         serde_json::to_string(&input.allowed_tools).unwrap_or_else(|_| "[]".to_string());
 

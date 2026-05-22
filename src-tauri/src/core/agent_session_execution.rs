@@ -552,10 +552,9 @@ impl AgentSession {
             return None;
         }
 
-        let allowed_ids =
-            custom_subagent_repo::get_profile_access(&self.pool, &active_profile_id)
-                .await
-                .unwrap_or_default();
+        let allowed_ids = custom_subagent_repo::get_profile_access(&self.pool, &active_profile_id)
+            .await
+            .unwrap_or_default();
         if !allowed_ids.contains(&record.id) {
             return None;
         }
