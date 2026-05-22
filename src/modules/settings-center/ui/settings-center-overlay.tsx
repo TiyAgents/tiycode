@@ -1118,6 +1118,7 @@ function GeneralSettingsPanel({
   const t = useT();
   const [webSearchApiKey, setWebSearchApiKey] = useState("");
   const [webSearchBaseUrl, setWebSearchBaseUrl] = useState(webSearch.baseUrl ?? "");
+  const [webSearchMaxResults, setWebSearchMaxResults] = useState(webSearch.maxResults);
   const [isSavingWebSearchKey, setIsSavingWebSearchKey] = useState(false);
   const webSearchEngineOptions = useMemo(
     () => [
@@ -1142,6 +1143,7 @@ function GeneralSettingsPanel({
   useEffect(() => {
     setWebSearchApiKey("");
     setWebSearchBaseUrl(webSearch.baseUrl ?? "");
+    setWebSearchMaxResults(webSearch.maxResults);
   }, [webSearch.engine]);
 
   const clampWebSearchMaxResults = (value: number) => Math.min(20, Math.max(1, Math.round(value)));
@@ -1311,11 +1313,18 @@ function GeneralSettingsPanel({
               min={1}
               max={20}
               className="w-24"
-              value={webSearch.maxResults}
+              value={webSearchMaxResults}
               onChange={(event) => {
                 const nextValue = Number(event.target.value);
                 if (Number.isFinite(nextValue)) {
-                  void onUpdateWebSearchSettings({ maxResults: clampWebSearchMaxResults(nextValue) });
+                  setWebSearchMaxResults(clampWebSearchMaxResults(nextValue));
+                }
+              }}
+              onBlur={() => {
+                const clamped = clampWebSearchMaxResults(webSearchMaxResults);
+                setWebSearchMaxResults(clamped);
+                if (clamped !== webSearch.maxResults) {
+                  void onUpdateWebSearchSettings({ maxResults: clamped });
                 }
               }}
             />

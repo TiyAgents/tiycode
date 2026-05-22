@@ -14,6 +14,8 @@ use crate::core::web_search_settings::{
 use crate::model::errors::{AppError, ErrorSource};
 
 const HTTP_TIMEOUT_SECS: u64 = 30;
+const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024; // 5 MB
+const MAX_QUERY_CHARS: usize = 500;
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -96,6 +98,13 @@ fn parse_input(input: &Value, settings: &WebSearchSettings) -> Result<WebSearchI
         })?
         .to_string();
 
+    if query.chars().count() > MAX_QUERY_CHARS {
+        return Err(AppError::validation(
+            ErrorSource::Tool,
+            &format!("web_search query exceeds maximum length of {MAX_QUERY_CHARS} characters"),
+        ));
+    }
+
     let max_results = settings.max_results.clamp(1, 20);
     let include_raw_content = settings.include_raw_content;
 
@@ -161,8 +170,9 @@ async fn search_tavily(
     if let Some(country) = input.country.as_deref() {
         insert_string(&mut body, "country", country);
     }
+    insert_string(&mut body, "api_key", api_key);
 
-    let value = post_json(client.post(endpoint).bearer_auth(api_key).json(&body)).await?;
+    let value = post_json(client.post(endpoint).json(&body)).await?;
     let results = value
         .get("results")
         .and_then(Value::as_array)
@@ -341,15 +351,26 @@ async fn response_json(
         )
     })?;
     let status = response.status();
-    let body = response.text().await.map_err(|error| {
+    let raw_body = response.bytes().await.map_err(|error| {
         AppError::recoverable(
             ErrorSource::Tool,
             "tool.web_search.response_failed",
             format!("Failed to read Web Search response: {error}"),
         )
     })?;
+    if raw_body.len() > MAX_RESPONSE_BYTES {
+        return Err(AppError::recoverable(
+            ErrorSource::Tool,
+            "tool.web_search.response_too_large",
+            format!(
+                "Web Search response exceeded size limit ({} bytes)",
+                MAX_RESPONSE_BYTES
+            ),
+        ));
+    }
+    let body = String::from_utf8_lossy(&raw_body);
     if !status.is_success() {
-        return Err(http_error(status, body));
+        return Err(http_error(status, &body));
     }
     serde_json::from_str::<Value>(&body).map_err(|error| {
         AppError::recoverable(
@@ -360,7 +381,7 @@ async fn response_json(
     })
 }
 
-fn http_error(status: StatusCode, body: String) -> AppError {
+fn http_error(status: StatusCode, body: &str) -> AppError {
     let preview: String = body.chars().take(500).collect();
     AppError::recoverable(
         ErrorSource::Tool,
