@@ -351,23 +351,7 @@ async fn response_json(
         )
     })?;
     let status = response.status();
-    let raw_body = response.bytes().await.map_err(|error| {
-        AppError::recoverable(
-            ErrorSource::Tool,
-            "tool.web_search.response_failed",
-            format!("Failed to read Web Search response: {error}"),
-        )
-    })?;
-    if raw_body.len() > MAX_RESPONSE_BYTES {
-        return Err(AppError::recoverable(
-            ErrorSource::Tool,
-            "tool.web_search.response_too_large",
-            format!(
-                "Web Search response exceeded size limit ({} bytes)",
-                MAX_RESPONSE_BYTES
-            ),
-        ));
-    }
+    let raw_body = read_limited_response_body(response).await?;
     let body = String::from_utf8_lossy(&raw_body);
     if !status.is_success() {
         return Err(http_error(status, &body));
@@ -379,6 +363,41 @@ async fn response_json(
             format!("Web Search returned invalid JSON: {error}"),
         )
     })
+}
+
+async fn read_limited_response_body(mut response: reqwest::Response) -> Result<Vec<u8>, AppError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(response_too_large_error());
+    }
+
+    let mut raw_body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        AppError::recoverable(
+            ErrorSource::Tool,
+            "tool.web_search.response_failed",
+            format!("Failed to read Web Search response: {error}"),
+        )
+    })? {
+        if raw_body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            return Err(response_too_large_error());
+        }
+        raw_body.extend_from_slice(&chunk);
+    }
+    Ok(raw_body)
+}
+
+fn response_too_large_error() -> AppError {
+    AppError::recoverable(
+        ErrorSource::Tool,
+        "tool.web_search.response_too_large",
+        format!(
+            "Web Search response exceeded size limit ({} bytes)",
+            MAX_RESPONSE_BYTES
+        ),
+    )
 }
 
 fn http_error(status: StatusCode, body: &str) -> AppError {
@@ -555,20 +574,48 @@ fn brave_query(query: &str, include_domains: &[String], exclude_domains: &[Strin
     parts.extend(
         include_domains
             .iter()
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|domain| !domain.is_empty())
+            .filter_map(|domain| sanitize_domain_filter(domain))
             .map(|domain| format!("site:{domain}")),
     );
     parts.extend(
         exclude_domains
             .iter()
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|domain| !domain.is_empty())
+            .filter_map(|domain| sanitize_domain_filter(domain))
             .map(|domain| format!("-site:{domain}")),
     );
     parts.join(" ")
+}
+
+fn sanitize_domain_filter(value: &str) -> Option<String> {
+    let mut domain = value.trim();
+    if domain.is_empty() || domain.chars().any(char::is_whitespace) {
+        return None;
+    }
+    if let Some((_, rest)) = domain.split_once("://") {
+        domain = rest;
+    }
+    domain = domain
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim_matches('.');
+    if let Some((host, port)) = domain.rsplit_once(':') {
+        if !host.contains(':') && port.chars().all(|ch| ch.is_ascii_digit()) {
+            domain = host;
+        }
+    }
+    if domain.is_empty()
+        || domain.len() > 253
+        || !domain
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-')
+    {
+        return None;
+    }
+    let labels_are_valid = domain.split('.').all(|label| {
+        !label.is_empty() && label.len() <= 63 && !label.starts_with('-') && !label.ends_with('-')
+    });
+    labels_are_valid.then(|| domain.to_ascii_lowercase())
 }
 
 fn exa_published_date_range(time_range: Option<&str>) -> Option<(String, String)> {
@@ -639,16 +686,25 @@ mod tests {
     }
 
     #[test]
-    fn brave_query_applies_domain_filters() {
+    fn brave_query_applies_sanitized_domain_filters() {
         let query = brave_query(
             "rust async",
-            &["example.com".to_string(), " docs.rs ".to_string()],
-            &["spam.test".to_string()],
+            &[
+                "example.com".to_string(),
+                " https://Docs.RS/std ".to_string(),
+                "bad domain.com".to_string(),
+                "example.com OR site:evil.test".to_string(),
+            ],
+            &[
+                "spam.test".to_string(),
+                "https://Ads.Example:443/path".to_string(),
+                "-invalid.example".to_string(),
+            ],
         );
 
         assert_eq!(
             query,
-            "rust async site:example.com site:docs.rs -site:spam.test"
+            "rust async site:example.com site:docs.rs -site:spam.test -site:ads.example"
         );
     }
 

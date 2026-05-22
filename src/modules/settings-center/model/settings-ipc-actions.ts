@@ -283,12 +283,19 @@ export function updateTerminalSetting<Key extends keyof TerminalSettings>(
 
 export async function updateWebSearchSettings(patch: WebSearchSettingsPatch) {
   const current = settingsStore.getState().webSearch;
+  const hasApiKeyPatch = Object.prototype.hasOwnProperty.call(patch, "apiKey");
+  const changesEngine = patch.engine !== undefined && patch.engine !== current.engine;
   const optimistic: WebSearchSettings = {
     ...current,
     ...patch,
-    hasApiKey: Object.prototype.hasOwnProperty.call(patch, "apiKey")
+    hasApiKey: hasApiKeyPatch
       ? typeof patch.apiKey === "string" && patch.apiKey.trim().length > 0
-      : current.hasApiKey,
+      : changesEngine
+        ? false
+        : current.hasApiKey,
+    baseUrl: changesEngine && !Object.prototype.hasOwnProperty.call(patch, "baseUrl")
+      ? undefined
+      : patch.baseUrl ?? current.baseUrl,
   };
   delete (optimistic as { apiKey?: string }).apiKey;
 
@@ -312,7 +319,7 @@ export async function updateWebSearchSettings(patch: WebSearchSettingsPatch) {
   } catch (error) {
     settingsStore.setState({ webSearch: current });
     console.warn("Failed to update Web Search settings", error);
-    return current;
+    throw error;
   }
 }
 

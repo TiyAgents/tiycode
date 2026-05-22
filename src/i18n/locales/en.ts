@@ -380,6 +380,7 @@ const en: Record<TranslationKey, string> = {
   "settings.general.webSearchApiKeyPlaceholder": "Enter API key",
   "settings.general.webSearchApiKeySave": "Save",
   "settings.general.webSearchApiKeyClear": "Clear saved key",
+  "settings.general.webSearchApiKeySaveError": "Failed to save Web Search API key",
   "settings.general.webSearchMaxResultsLabel": "Default result count",
   "settings.general.webSearchMaxResultsDesc": "Limit how many results are returned to the model per search, from 1 to 20.",
   "settings.general.webSearchRawContentLabel": "Include page content",

@@ -1384,4 +1384,85 @@ describe("updateWebSearchSettings", () => {
     expect(persisted.baseUrl).toBeUndefined();
     expect(settingsStore.getState().webSearch.baseUrl).toBeUndefined();
   });
+
+  it("Tauri: rejects and rolls back when reading persisted settings fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = new Error("read failed");
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    const current = {
+      enabled: true,
+      engine: "tavily" as const,
+      hasApiKey: false,
+      maxResults: 5,
+      includeRawContent: true,
+    };
+    settingsStore.setState({ webSearch: current });
+    mockSettingsGet.mockRejectedValue(error);
+
+    await expect(updateWebSearchSettings({ apiKey: "new-key" })).rejects.toBe(error);
+
+    expect(settingsStore.getState().webSearch).toEqual(current);
+    expect(mockSettingsSet).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith("Failed to update Web Search settings", error);
+    warnSpy.mockRestore();
+  });
+
+  it("Tauri: rejects and rolls back when writing persisted settings fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = new Error("write failed");
+    mockIsTauri.mockReturnValue(true);
+    setupStore();
+    const current = {
+      enabled: true,
+      engine: "tavily" as const,
+      hasApiKey: true,
+      baseUrl: "https://tavily.example",
+      maxResults: 5,
+      includeRawContent: false,
+    };
+    settingsStore.setState({ webSearch: current });
+    mockSettingsGet.mockResolvedValue({
+      key: "web_search.settings",
+      value: { enabled: true, engine: "tavily", apiKeys: { tavily: "old-key" } },
+      updatedAt: "now",
+    });
+    mockSettingsSet.mockRejectedValue(error);
+
+    await expect(updateWebSearchSettings({ apiKey: "new-key" })).rejects.toBe(error);
+
+    expect(settingsStore.getState().webSearch).toEqual(current);
+    expect(warnSpy).toHaveBeenCalledWith("Failed to update Web Search settings", error);
+    warnSpy.mockRestore();
+  });
+
+  it("Web: clears optimistic API key status when switching engines", async () => {
+    mockIsTauri.mockReturnValue(false);
+    setupStore();
+    settingsStore.setState({
+      webSearch: {
+        enabled: true,
+        engine: "tavily",
+        hasApiKey: true,
+        baseUrl: "https://tavily.example",
+        maxResults: 5,
+        includeRawContent: true,
+      },
+    });
+
+    const updated = await updateWebSearchSettings({ engine: "brave" });
+
+    expect(updated).toMatchObject({
+      engine: "brave",
+      hasApiKey: false,
+      baseUrl: undefined,
+    });
+    expect(settingsStore.getState().webSearch).toMatchObject({
+      engine: "brave",
+      hasApiKey: false,
+      baseUrl: undefined,
+    });
+    expect(mockSettingsGet).not.toHaveBeenCalled();
+    expect(mockSettingsSet).not.toHaveBeenCalled();
+  });
 });

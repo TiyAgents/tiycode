@@ -393,6 +393,7 @@ const zhCN = {
   "settings.general.webSearchApiKeyPlaceholder": "输入 API Key",
   "settings.general.webSearchApiKeySave": "保存",
   "settings.general.webSearchApiKeyClear": "清除已保存密钥",
+  "settings.general.webSearchApiKeySaveError": "保存 Web Search API Key 失败",
   "settings.general.webSearchMaxResultsLabel": "默认结果数量",
   "settings.general.webSearchMaxResultsDesc": "限制每次搜索返回给模型的结果数量，范围为 1 到 20。",
   "settings.general.webSearchRawContentLabel": "包含正文内容",

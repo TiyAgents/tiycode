@@ -1120,6 +1120,7 @@ function GeneralSettingsPanel({
   const [webSearchBaseUrl, setWebSearchBaseUrl] = useState(webSearch.baseUrl ?? "");
   const [webSearchMaxResults, setWebSearchMaxResults] = useState(webSearch.maxResults);
   const [isSavingWebSearchKey, setIsSavingWebSearchKey] = useState(false);
+  const [webSearchApiKeyError, setWebSearchApiKeyError] = useState<string | null>(null);
   const webSearchEngineOptions = useMemo(
     () => [
       { label: "Tavily", value: "tavily" as WebSearchEngine },
@@ -1131,17 +1132,25 @@ function GeneralSettingsPanel({
   );
 
   const handleSaveWebSearchApiKey = async () => {
+    setWebSearchApiKeyError(null);
     setIsSavingWebSearchKey(true);
     try {
       await onUpdateWebSearchSettings({ apiKey: webSearchApiKey });
       setWebSearchApiKey("");
+    } catch (error) {
+      setWebSearchApiKeyError(
+        getInvokeErrorMessage(error, t("settings.general.webSearchApiKeySaveError")),
+      );
     } finally {
       setIsSavingWebSearchKey(false);
     }
   };
 
+  const isClearingWebSearchApiKey = webSearch.hasApiKey && !webSearchApiKey.trim();
+
   useEffect(() => {
     setWebSearchApiKey("");
+    setWebSearchApiKeyError(null);
     setWebSearchBaseUrl(webSearch.baseUrl ?? "");
     setWebSearchMaxResults(webSearch.maxResults);
   }, [webSearch.engine]);
@@ -1268,7 +1277,10 @@ function GeneralSettingsPanel({
                   type="password"
                   value={webSearchApiKey}
                   placeholder={webSearch.hasApiKey ? "••••••••••••" : t("settings.general.webSearchApiKeyPlaceholder")}
-                  onChange={(event) => setWebSearchApiKey(event.target.value)}
+                  onChange={(event) => {
+                    setWebSearchApiKey(event.target.value);
+                    setWebSearchApiKeyError(null);
+                  }}
                 />
                 <Button
                   type="button"
@@ -1277,9 +1289,14 @@ function GeneralSettingsPanel({
                   disabled={(!webSearchApiKey.trim() && !webSearch.hasApiKey) || isSavingWebSearchKey}
                   onClick={() => void handleSaveWebSearchApiKey()}
                 >
-                  {t("settings.general.webSearchApiKeySave")}
+                  {isClearingWebSearchApiKey
+                    ? t("settings.general.webSearchApiKeyClear")
+                    : t("settings.general.webSearchApiKeySave")}
                 </Button>
               </div>
+              {webSearchApiKeyError ? (
+                <p className="text-[11px] font-medium text-app-error">{webSearchApiKeyError}</p>
+              ) : null}
             </div>
           }
         />
