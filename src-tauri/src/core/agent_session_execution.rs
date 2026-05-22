@@ -539,6 +539,8 @@ impl AgentSession {
         }
 
         // Verify the active profile grants access to this subagent.
+        // If no active profile is set, custom subagents are not available — consistent
+        // with build_session_spec which injects no custom tools when profile_id is empty.
         let active_profile_id = settings_repo::get(&self.pool, "active_profile_id")
             .await
             .ok()
@@ -546,14 +548,16 @@ impl AgentSession {
             .and_then(|s| serde_json::from_str::<String>(&s.value_json).ok())
             .unwrap_or_default();
 
-        if !active_profile_id.is_empty() {
-            let allowed_ids =
-                custom_subagent_repo::get_profile_access(&self.pool, &active_profile_id)
-                    .await
-                    .unwrap_or_default();
-            if !allowed_ids.contains(&record.id) {
-                return None;
-            }
+        if active_profile_id.is_empty() {
+            return None;
+        }
+
+        let allowed_ids =
+            custom_subagent_repo::get_profile_access(&self.pool, &active_profile_id)
+                .await
+                .unwrap_or_default();
+        if !allowed_ids.contains(&record.id) {
+            return None;
         }
 
         Some(SubagentProfile::Custom {
