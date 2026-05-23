@@ -1384,13 +1384,13 @@ function QuickThinkingLevelControl({
           </span>
         </div>
       </div>
-      <div className="relative mt-4 px-1">
-        <div className="absolute left-4 right-4 top-2 h-px bg-app-border/70" />
+      <div className="relative mt-4">
+        <div className="absolute left-[8.333333%] right-[8.333333%] top-2 h-px bg-app-border/70" />
         <div
-          className="absolute left-4 top-2 h-px bg-app-info/70 transition-all"
-          style={{ width: selectedIndex > 0 ? `calc((100% - 2rem) * ${selectedIndex / (THINKING_LEVEL_OPTIONS.length - 1)})` : 0 }}
+          className="absolute left-[8.333333%] top-2 h-px bg-app-info/70 transition-all"
+          style={{ width: selectedIndex > 0 ? `calc((100% - 16.666667%) * ${selectedIndex / (THINKING_LEVEL_OPTIONS.length - 1)})` : 0 }}
         />
-        <div className="relative grid grid-cols-6 gap-1">
+        <div className="relative grid grid-cols-6">
           {THINKING_LEVEL_OPTIONS.map((option) => {
             const isSelected = option === value;
             return (
