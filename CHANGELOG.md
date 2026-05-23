@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.16] - 2026-05-23
+### :sparkles: New Features
+- [`1473503`](https://github.com/tiylabs/tiycode/commit/1473503734a9e1e73c50c4720d22993fb688933b) - **agent**: ✨ Add tiycore request retry handling *(PR [#190](https://github.com/tiylabs/tiycode/pull/190) by [@jorben](https://github.com/jorben))*
+- [`4083791`](https://github.com/tiylabs/tiycode/commit/40837915ebdf8f6e116ee19f5e28a814e233e8b2) - **runtime-queue**: ✨ Add steer and follow-up queue *(PR [#193](https://github.com/tiylabs/tiycode/pull/193) by [@jorben](https://github.com/jorben))*
+- [`ddae041`](https://github.com/tiylabs/tiycode/commit/ddae041ac8cfb784694b68768f821670fa1a17e6) - **ui**: ✨ clear request retry entries on run messages and completion *(PR [#194](https://github.com/tiylabs/tiycode/pull/194) by [@jorben](https://github.com/jorben))*
+- [`b900b4e`](https://github.com/tiylabs/tiycode/commit/b900b4e6bc66c1149b83dd675bdce044a9372c8f) - **agents**: ✨ Add custom subagents with CRUD, profile access, model roles, and settings UI *(PR [#195](https://github.com/tiylabs/tiycode/pull/195) by [@jorben](https://github.com/jorben))*
+- [`c16f62b`](https://github.com/tiylabs/tiycode/commit/c16f62b1527da02815df34e8eef4fad13be184b0) - **web-search**: ✨ add web search tool with multi-engine support *(PR [#197](https://github.com/tiylabs/tiycode/pull/197) by [@jorben](https://github.com/jorben))*
+- [`64c5966`](https://github.com/tiylabs/tiycode/commit/64c5966d55a9fdcc1f7b8d11ab35f930fc4e4b09) - **composer**: ✨ Add profile quick edit controls *(PR [#199](https://github.com/tiylabs/tiycode/pull/199) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`7aedaac`](https://github.com/tiylabs/tiycode/commit/7aedaac82c49c776be8d49927c4a10816f894304) - **prompt-input**: 🐛 Deduplicate pasted image attachments *(PR [#192](https://github.com/tiylabs/tiycode/pull/192) by [@jorben](https://github.com/jorben))*
+
+### :recycle: Refactors
+- [`a59ef2d`](https://github.com/tiylabs/tiycode/commit/a59ef2df093a412bbfb591b97bcd2e4207c4cab4) - **thread**: ♻️ Use delayed timeline auto-collapse *(PR [#191](https://github.com/tiylabs/tiycode/pull/191) by [@jorben](https://github.com/jorben))*
+- [`3e5507b`](https://github.com/tiylabs/tiycode/commit/3e5507b5a6c6ee011120efffd67c7e526bde5277) - **ui**: ♻️ smooth runtime queue and history visibility transitions *(PR [#196](https://github.com/tiylabs/tiycode/pull/196) by [@jorben](https://github.com/jorben))*
+- [`ebeb9c1`](https://github.com/tiylabs/tiycode/commit/ebeb9c16aa1052b7b1108b244e2fbe54d2aed320) - **ui**: ♻️ move runtime queue and task history to fixed bottom panel *(PR [#198](https://github.com/tiylabs/tiycode/pull/198) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.3.15] - 2026-05-18
 ### :boom: BREAKING CHANGES
 - due to [`9e0b7e5`](https://github.com/tiylabs/tiycode/commit/9e0b7e529fb27a3ebf6694ab3c3f4e131bfda6b8) - ✨ Add local image resolution for markdown preview *(PR [#187](https://github.com/tiylabs/tiycode/pull/187) by [@HayWolf](https://github.com/HayWolf))*:
@@ -769,3 +787,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.13]: https://github.com/TiyAgents/tiycode/compare/0.3.12...0.3.13
 [0.3.14]: https://github.com/tiylabs/tiycode/compare/0.3.13...0.3.14
 [0.3.15]: https://github.com/tiylabs/tiycode/compare/0.3.14...0.3.15
+[0.3.16]: https://github.com/tiylabs/tiycode/compare/0.3.15...0.3.16
