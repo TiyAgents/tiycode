@@ -1105,16 +1105,17 @@ function ProfileInlineIdentity({
   muted = false,
   profile,
   providers,
-  showModel = true,
 }: {
   badge?: boolean;
   muted?: boolean;
   profile: AgentProfile;
   providers: ReadonlyArray<ProviderEntry>;
-  showModel?: boolean;
 }) {
+  const t = useT();
   const modelId = getProfilePrimaryModelId(profile, providers) || profile.name;
   const modelLabel = getProfilePrimaryModelLabel(profile, providers);
+  const displayModelLabel = modelLabel || modelId || profile.name;
+  const thinkingLevelLabel = getThinkingLevelLabel(profile.thinkingLevel, t);
 
   return (
     <div className="flex min-w-0 items-center gap-2">
@@ -1122,29 +1123,31 @@ function ProfileInlineIdentity({
         className={cn(
           "flex shrink-0 items-center justify-center",
           badge ? "size-6 rounded-lg bg-app-surface-muted/75 ring-1 ring-app-border/45" : "size-4 rounded-none bg-transparent ring-0",
-          muted ? "text-app-muted" : "text-app-foreground",
+          muted && "opacity-80",
         )}
       >
-        <UserStar className="size-3.5" />
+        <ModelBrandIcon
+          className={cn("size-3.5 shrink-0", muted ? "text-app-muted" : "text-app-foreground")}
+          displayName={displayModelLabel}
+          modelId={modelId}
+        />
       </span>
-      <span className={cn("shrink-0 text-sm font-medium", muted ? "text-app-foreground/88" : "text-app-foreground")}>
-        {profile.name}
+      <span className="flex min-w-0 flex-col items-start gap-0.5">
+        <span
+          className={cn("min-w-0 max-w-full truncate text-sm font-semibold leading-none", muted ? "text-app-foreground/78" : "text-app-foreground")}
+          title={profile.name}
+        >
+          {profile.name}
+        </span>
+        <span
+          className={cn("inline-flex max-w-full items-center gap-1 text-[11px] font-normal leading-none", muted ? "text-app-subtle" : "text-app-muted")}
+          title={`${displayModelLabel} · ${thinkingLevelLabel}`}
+        >
+          <span className="min-w-0 truncate">{displayModelLabel}</span>
+          <span aria-hidden="true" className="shrink-0 text-app-subtle">·</span>
+          <span className="shrink-0">{thinkingLevelLabel}</span>
+        </span>
       </span>
-      {showModel ? (
-        <>
-          <span aria-hidden="true" className="shrink-0 text-app-subtle">
-            {" · "}
-          </span>
-          <ModelBrandIcon
-            className={cn("size-4 shrink-0", muted ? "text-app-muted" : "text-app-foreground")}
-            displayName={modelLabel}
-            modelId={modelId}
-          />
-          <span className={cn("min-w-0 truncate text-xs", muted ? "text-muted-foreground" : "text-app-muted")}>
-            {modelLabel}
-          </span>
-        </>
-      ) : null}
     </div>
   );
 }
@@ -1162,6 +1165,7 @@ function ProfileSelectorItem({
 }) {
   const primaryModelId = getProfilePrimaryModelId(profile, providers) || profile.name;
   const primaryModelLabel = getProfilePrimaryModelLabel(profile, providers);
+  const displayPrimaryModelLabel = primaryModelLabel || primaryModelId || profile.name;
 
   return (
     <ModelSelectorItem
@@ -1177,10 +1181,10 @@ function ProfileSelectorItem({
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-app-muted">
           <ModelBrandIcon
             className="size-3.5 shrink-0 text-app-muted"
-            displayName={primaryModelLabel}
+            displayName={displayPrimaryModelLabel}
             modelId={primaryModelId}
           />
-          <span className="min-w-0 truncate">{primaryModelLabel}</span>
+          <span className="min-w-0 truncate">{displayPrimaryModelLabel}</span>
         </div>
       </div>
       {isActive ? <CheckIcon className="size-4 shrink-0 text-app-info" /> : <span className="size-4 shrink-0" />}
@@ -2589,9 +2593,9 @@ export function WorkbenchPromptComposer({
                 {canSwitchProfiles ? (
                   <ModelSelector onOpenChange={setProfileSelectorOpen} open={isProfileSelectorOpen}>
                     <ModelSelectorTrigger asChild>
-                      <PromptInputButton className="h-auto max-w-[260px] justify-start gap-3 px-3 py-2" size="sm">
+                      <PromptInputButton className="h-auto min-w-0 max-w-[360px] justify-start gap-3 px-3 py-2" size="sm">
                         {activeProfile ? (
-                          <ProfileInlineIdentity badge={false} profile={activeProfile} providers={providers} showModel={false} />
+                          <ProfileInlineIdentity badge={false} profile={activeProfile} providers={providers} />
                         ) : (
                           <div className="flex min-w-0 items-center gap-2 text-app-danger">
                             <UserStar className="size-4 shrink-0" />
@@ -2654,9 +2658,9 @@ export function WorkbenchPromptComposer({
                     </ModelSelectorContent>
                   </ModelSelector>
                 ) : (
-                  <PromptInputButton className="h-auto max-w-[360px] justify-start gap-3 px-3 py-2" disabled size="sm">
+                  <PromptInputButton className="h-auto min-w-0 max-w-[360px] justify-start gap-3 px-3 py-2" disabled size="sm">
                     {activeProfile ? (
-                      <ProfileInlineIdentity badge={false} muted profile={activeProfile} providers={providers} showModel={false} />
+                      <ProfileInlineIdentity badge={false} muted profile={activeProfile} providers={providers} />
                     ) : (
                       <div className="flex min-w-0 items-center gap-2 text-app-danger/80">
                         <UserStar className="size-4 shrink-0" />
