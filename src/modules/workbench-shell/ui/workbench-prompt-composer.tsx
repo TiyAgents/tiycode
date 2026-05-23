@@ -1697,6 +1697,7 @@ function ProfileDetailsPanel({
   }
 
   const canQuickEdit = Boolean(onUpdateAgentProfile);
+  const isQuickEditDisabled = !canQuickEdit || Boolean(pendingProfilePatchKey);
   const tiers: Array<{ label: string; tier: ProfileModelTier }> = [
     { label: t("composer.profileTier.primary"), tier: "primary" },
     { label: t("composer.profileTier.auxiliary"), tier: "assistant" },
@@ -1745,7 +1746,7 @@ function ProfileDetailsPanel({
           />
           <div className="sm:col-span-2">
             <QuickThinkingLevelControl
-              disabled={!canQuickEdit}
+              disabled={isQuickEditDisabled}
               isPending={pendingProfilePatchKey === "thinkingLevel"}
               onChange={(thinkingLevel) => {
                 void runQuickEdit("thinkingLevel", { thinkingLevel });
@@ -1763,7 +1764,7 @@ function ProfileDetailsPanel({
 
           return (
             <QuickTierModelSelect
-              disabled={!canQuickEdit}
+              disabled={isQuickEditDisabled}
               isPending={pendingProfilePatchKey === `model:${tier}`}
               key={tier}
               label={label}
