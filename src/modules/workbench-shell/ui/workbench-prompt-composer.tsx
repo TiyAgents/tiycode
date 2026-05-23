@@ -1395,11 +1395,16 @@ function QuickThinkingLevelControl({
             const isSelected = option === value;
             return (
               <button
+                aria-current={isSelected ? "true" : undefined}
                 aria-label={`${t("composer.profileThinkingLevel")}: ${getThinkingLevelLabel(option, t)}`}
                 className="group flex min-w-0 flex-col items-center gap-1 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={disabled || isPending || isSelected}
+                disabled={disabled || isPending}
                 key={option}
-                onClick={() => onChange(option)}
+                onClick={() => {
+                  if (!isSelected) {
+                    onChange(option);
+                  }
+                }}
                 title={getThinkingLevelDescription(option, t)}
                 type="button"
               >
@@ -1718,7 +1723,7 @@ function ProfileDetailsPanel({
       await onUpdateAgentProfile(targetProfileId, patch);
     } catch (error) {
       if (activeProfileIdRef.current === targetProfileId && quickEditRequestIdRef.current === requestId) {
-        setQuickEditError(error instanceof Error ? error.message : t("sourceControl.requestFailed"));
+        setQuickEditError(error instanceof Error ? error.message : t("composer.profileQuickEditFailed"));
       }
     } finally {
       if (activeProfileIdRef.current === targetProfileId && quickEditRequestIdRef.current === requestId) {

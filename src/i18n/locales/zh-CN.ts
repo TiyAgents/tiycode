@@ -76,6 +76,7 @@ const zhCN = {
   "composer.activeProfileLabel": "当前 Profile",
   "composer.editProfiles": "在设置中编辑 Profile",
   "composer.profileDetailsTitle": "Profile 详情",
+  "composer.profileQuickEditFailed": "更新 Profile 失败。",
   "composer.profileThinkingLevel": "推理级别",
   "composer.profileAgentTeam": "Agent 团队",
   "composer.profileAgentTeamDesc": "此 Profile 可以委派工作的 Agent。",
