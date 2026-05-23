@@ -1691,9 +1691,16 @@ export function RuntimeThreadSurface({
       ) ?? null,
     [tools],
   );
+  const hasPendingRuntimeQueue = Boolean(
+    runtimeQueue?.messages.some((message) => message.status === "pending"),
+  );
+  const hasTaskHistoryTimeline = taskBoards.boards.some((board) => board.status !== "active");
+  // Keep empty-state suppression aligned with panels that are actually visible:
+  // the composer-adjacent queue panel only renders pending messages.
   const hasRuntimeArtifacts =
     Boolean(runtimeError)
-    || Boolean(runtimeQueue)
+    || hasPendingRuntimeQueue
+    || hasTaskHistoryTimeline
     || requestRetryEntries.length > 0
     || helpers.length > 0
     || visibleTools.length > 0
@@ -1805,16 +1812,11 @@ export function RuntimeThreadSurface({
 
   const thinkingIndicatorPreviousRole: TimelineRole | null =
     showThinkingIndicator ? lastPresentationRole : null;
-  const queuePreviousRole: TimelineRole | null =
-    showThinkingIndicator ? "assistant" : lastPresentationRole;
-  const hasTaskHistoryTimeline = taskBoards.boards.some((board) => board.status !== "active");
-  const historyPreviousRole: TimelineRole | null = runtimeQueue ? "assistant" : lastPresentationRole;
-  const runtimeErrorPreviousRole: TimelineRole | null = hasTaskHistoryTimeline
+  const runtimeErrorPreviousRole: TimelineRole | null = showThinkingIndicator
     ? "assistant"
-    : runtimeQueue || showThinkingIndicator
-      ? "assistant"
-      : lastPresentationRole;
+    : lastPresentationRole;
 
+  const hasComposerStatusPanel = hasPendingRuntimeQueue || hasTaskHistoryTimeline;
   const conversationBottomPadding = BASE_CONVERSATION_BOTTOM_PADDING;
 
   useEffect(() => {
@@ -3041,49 +3043,6 @@ export function RuntimeThreadSurface({
               </div>
             </div>
 
-            {/* Runtime Queue — always in DOM; height transitions smoothly via
-                grid-rows to avoid layout jumps during streaming. */}
-            <div
-              className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
-                runtimeQueue
-                  ? "grid-rows-[1fr] opacity-100"
-                  : "grid-rows-[0fr] opacity-0"
-              }`}
-            >
-              <div className="overflow-hidden">
-                <div className={getRoleSpacingClass(queuePreviousRole, "assistant")}>
-                  <Message className="max-w-full" from="assistant">
-                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                      <RuntimeQueueTimeline
-                        queue={runtimeQueue}
-                        onCancelMessage={cancelRuntimeQueueMessage}
-                        cancellingMessageIds={cancellingRuntimeQueueMessageIds}
-                      />
-                    </MessageContent>
-                  </Message>
-                </div>
-              </div>
-            </div>
-
-            {/* Task History — same smooth transition pattern. */}
-            <div
-              className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out ${
-                hasTaskHistoryTimeline
-                  ? "grid-rows-[1fr] opacity-100"
-                  : "grid-rows-[0fr] opacity-0"
-              }`}
-            >
-              <div className="overflow-hidden">
-                <div className={getRoleSpacingClass(historyPreviousRole, "assistant")}>
-                  <Message className="max-w-full" from="assistant">
-                    <MessageContent className="w-full max-w-full bg-transparent px-0 py-0 shadow-none">
-                      <TaskHistoryTimeline boards={taskBoards.boards} />
-                    </MessageContent>
-                  </Message>
-                </div>
-              </div>
-            </div>
-
             {runtimeError ? (
               <div className={getRoleSpacingClass(runtimeErrorPreviousRole, "assistant")}>
                 <Message className="max-w-full" from="assistant">
@@ -3110,15 +3069,35 @@ export function RuntimeThreadSurface({
               </div>
             ) : null}
           </ConversationContent>
-          <ConversationScrollButton className="bottom-4" />
+          <ConversationScrollButton />
         </Conversation>
       </div>
 
       <div className="shrink-0 px-6 pb-6 pt-4">
         <div className="mx-auto flex w-full max-w-4xl flex-col gap-0">
+          {hasComposerStatusPanel ? (
+            <div className="min-h-0 max-h-[min(24vh,220px)] overflow-y-auto rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu/96 px-3 py-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl">
+              <div className="flex flex-col gap-2">
+                {hasPendingRuntimeQueue ? (
+                  <RuntimeQueueTimeline
+                    queue={runtimeQueue}
+                    variant="compact"
+                    onCancelMessage={cancelRuntimeQueueMessage}
+                    cancellingMessageIds={cancellingRuntimeQueueMessageIds}
+                  />
+                ) : null}
+                {hasTaskHistoryTimeline ? (
+                  <TaskHistoryTimeline boards={taskBoards.boards} />
+                ) : null}
+              </div>
+            </div>
+          ) : null}
           {taskBoards.activeBoard ? (
             <div
-              className="min-h-0 max-h-[min(36vh,320px)] overflow-hidden rounded-t-[24px] rounded-b-none border border-b-0 border-app-border/80 bg-app-menu/96 px-2 pb-0 pt-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl"
+              className={cn(
+                "min-h-0 max-h-[min(36vh,320px)] overflow-hidden border border-b-0 border-app-border/80 bg-app-menu/96 px-2 pb-0 pt-2 shadow-[0_26px_70px_-42px_rgba(15,23,42,0.45)] backdrop-blur-xl",
+                hasComposerStatusPanel ? "rounded-none" : "rounded-t-[24px] rounded-b-none",
+              )}
             >
               <TaskBoardCard
                 board={taskBoards.activeBoard}
@@ -3137,7 +3116,7 @@ export function RuntimeThreadSurface({
             className="w-full max-w-none gap-0"
             commands={commands}
             customSubagents={customSubagents}
-            composerShellClassName={taskBoards.activeBoard
+            composerShellClassName={taskBoards.activeBoard || hasComposerStatusPanel
               ? "rounded-t-none border-t-0"
               : undefined}
             enabledSkills={enabledSkills}
