@@ -66,9 +66,9 @@ import {
 import {
   getProfilePrimaryModelId,
   getProfilePrimaryModelLabel,
-  resolveProfileModelByTier,
 } from "@/modules/workbench-shell/model/ai-elements-task-demo";
 import type { AgentProfile, CommandEntry, CustomSubagent, ProviderEntry } from "@/modules/settings-center/model/types";
+import type { updateAgentProfile as updateAgentProfileAction } from "@/modules/settings-center/model/settings-ipc-actions";
 import { sortAgentProfilesByName } from "@/modules/settings-center/model/profile-utils";
 import { profileSubagentAccessGet } from "@/services/bridge/subagent-commands";
 import type { SkillRecord } from "@/shared/types/extensions";
@@ -124,6 +124,7 @@ type WorkbenchPromptComposerProps = {
   onOpenProfileSettings?: () => void;
   onRuntimeQueueSubmitModeChange?: (mode: RuntimeQueueMessageKind) => void;
   onSelectAgentProfile: (id: string) => void;
+  onUpdateAgentProfile?: typeof updateAgentProfileAction;
   onStop: () => void;
   onSubmit: (submission: ComposerSubmission) => void | Promise<void>;
   placeholder: string;
@@ -1187,7 +1188,24 @@ function ProfileSelectorItem({
   );
 }
 
-type ProfileModelTier = "primary" | "assistant" | "lite";
+export type ProfileModelTier = "primary" | "assistant" | "lite";
+type ProfileQuickEditPatch = Parameters<typeof updateAgentProfileAction>[1];
+export type AvailableProfileModelOption = {
+  providerId: string;
+  providerName: string;
+  modelRecordId: string;
+  modelId: string;
+  displayName: string;
+};
+
+const THINKING_LEVEL_OPTIONS: ReadonlyArray<AgentProfile["thinkingLevel"]> = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+];
 
 function getProfileTierProviderId(profile: AgentProfile, tier: ProfileModelTier) {
   if (tier === "primary") {
@@ -1197,6 +1215,86 @@ function getProfileTierProviderId(profile: AgentProfile, tier: ProfileModelTier)
     return profile.assistantProviderId;
   }
   return profile.liteProviderId;
+}
+
+function getProfileTierModelId(profile: AgentProfile, tier: ProfileModelTier) {
+  if (tier === "primary") {
+    return profile.primaryModelId;
+  }
+  if (tier === "assistant") {
+    return profile.assistantModelId;
+  }
+  return profile.liteModelId;
+}
+
+export function getProfileTierPatch(
+  tier: ProfileModelTier,
+  providerId: string,
+  modelRecordId: string,
+): ProfileQuickEditPatch {
+  if (tier === "primary") {
+    return { primaryProviderId: providerId, primaryModelId: modelRecordId };
+  }
+  if (tier === "assistant") {
+    return { assistantProviderId: providerId, assistantModelId: modelRecordId };
+  }
+  return { liteProviderId: providerId, liteModelId: modelRecordId };
+}
+
+export function getAvailableProfileModelOptions(
+  providers: ReadonlyArray<ProviderEntry>,
+): Array<AvailableProfileModelOption> {
+  return providers.flatMap((provider) => {
+    if (!provider.enabled) {
+      return [];
+    }
+
+    return provider.models
+      .filter((model) => model.enabled)
+      .map((model) => ({
+        providerId: provider.id,
+        providerName: provider.displayName,
+        modelRecordId: model.id,
+        modelId: model.modelId,
+        displayName: model.displayName || model.modelId,
+      }));
+  });
+}
+
+const MODEL_SELECT_NONE_VALUE = "__none__";
+
+export function getModelSelectValue(providerId: string, modelRecordId: string) {
+  if (!providerId || !modelRecordId) {
+    return MODEL_SELECT_NONE_VALUE;
+  }
+
+  return JSON.stringify([providerId, modelRecordId]);
+}
+
+export function parseModelSelectValue(value: string) {
+  if (value === MODEL_SELECT_NONE_VALUE) {
+    return { providerId: "", modelRecordId: "" };
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === "string" &&
+      typeof parsed[1] === "string"
+    ) {
+      return { providerId: parsed[0], modelRecordId: parsed[1] };
+    }
+  } catch {
+    // Fall through to the empty selection below.
+  }
+
+  return { providerId: "", modelRecordId: "" };
+}
+
+function getShortModelId(modelId: string) {
+  return modelId.split("/").pop() || modelId;
 }
 
 function getResponseStyleLabel(responseStyle: AgentProfile["responseStyle"], t: ReturnType<typeof useT>) {
@@ -1249,6 +1347,203 @@ function ProfileDetailCard({
       <p className="mt-1 truncate text-[12px] font-semibold text-app-foreground">{value}</p>
       {description ? (
         <p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-app-muted">{description}</p>
+      ) : null}
+    </div>
+  );
+}
+
+type QuickThinkingLevelControlProps = {
+  disabled: boolean;
+  isPending: boolean;
+  onChange: (value: AgentProfile["thinkingLevel"]) => void;
+  value: AgentProfile["thinkingLevel"];
+};
+
+function QuickThinkingLevelControl({
+  disabled,
+  isPending,
+  onChange,
+  value,
+}: QuickThinkingLevelControlProps) {
+  const t = useT();
+  const selectedIndex = THINKING_LEVEL_OPTIONS.indexOf(value);
+
+  return (
+    <div className="rounded-xl border border-app-border/65 bg-app-surface-muted/55 px-3 py-2.5">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Brain className="size-3.5 shrink-0 text-app-info" />
+          <span className="truncate text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+            {t("composer.profileThinkingLevel")}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {isPending ? <LoaderCircle className="size-3.5 animate-spin text-app-subtle" /> : null}
+          <span className="max-w-32 truncate text-[11px] font-semibold text-app-info">
+            {getThinkingLevelLabel(value, t)}
+          </span>
+        </div>
+      </div>
+      <div className="relative mt-4">
+        <div className="absolute left-[8.333333%] right-[8.333333%] top-2 h-px bg-app-border/70" />
+        <div
+          className="absolute left-[8.333333%] top-2 h-px bg-app-info/70 transition-all"
+          style={{ width: selectedIndex > 0 ? `calc((100% - 16.666667%) * ${selectedIndex / (THINKING_LEVEL_OPTIONS.length - 1)})` : 0 }}
+        />
+        <div className="relative grid grid-cols-6">
+          {THINKING_LEVEL_OPTIONS.map((option) => {
+            const isSelected = option === value;
+            return (
+              <button
+                aria-current={isSelected ? "true" : undefined}
+                aria-label={`${t("composer.profileThinkingLevel")}: ${getThinkingLevelLabel(option, t)}`}
+                className="group flex min-w-0 flex-col items-center gap-1 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={disabled || isPending}
+                key={option}
+                onClick={() => {
+                  if (!isSelected) {
+                    onChange(option);
+                  }
+                }}
+                title={getThinkingLevelDescription(option, t)}
+                type="button"
+              >
+                <span
+                  className={cn(
+                    "relative z-10 size-4 rounded-full border bg-app-surface transition-all group-hover:border-app-info/55 group-hover:bg-app-info/12",
+                    isSelected
+                      ? "scale-110 border-app-info bg-app-info shadow-[0_0_0_4px_rgba(59,130,246,0.14)]"
+                      : "border-app-border",
+                  )}
+                />
+                <span className={cn("truncate text-[10px] leading-4", isSelected ? "font-semibold text-app-info" : "text-app-subtle")}>
+                  {getThinkingLevelLabel(option, t)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-app-muted">
+        {getThinkingLevelDescription(value, t)}
+      </p>
+    </div>
+  );
+}
+
+type QuickTierModelSelectProps = {
+  disabled: boolean;
+  isPending: boolean;
+  label: string;
+  modelRecordId: string;
+  models: ReadonlyArray<AvailableProfileModelOption>;
+  onChange: (providerId: string, modelRecordId: string) => void;
+  providerId: string;
+  tier: ProfileModelTier;
+};
+
+function QuickTierModelSelect({
+  disabled,
+  isPending,
+  label,
+  modelRecordId,
+  models,
+  onChange,
+  providerId,
+  tier,
+}: QuickTierModelSelectProps) {
+  const t = useT();
+  const selectedModel = models.find((model) => model.providerId === providerId && model.modelRecordId === modelRecordId) ?? null;
+  const selectedValue = getModelSelectValue(providerId, modelRecordId);
+  const groupedModels = useMemo(() => {
+    const grouped = new Map<string, { providerId: string; providerName: string; models: Array<AvailableProfileModelOption> }>();
+    for (const model of models) {
+      const group = grouped.get(model.providerId) ?? {
+        providerId: model.providerId,
+        providerName: model.providerName,
+        models: [],
+      };
+      group.models.push(model);
+      grouped.set(model.providerId, group);
+    }
+    return [...grouped.values()];
+  }, [models]);
+  const isPrimary = tier === "primary";
+  const placeholder = modelRecordId ? `${t("composer.profileTier.notConfigured")} · ${modelRecordId}` : t("composer.profileTier.notConfigured");
+
+  return (
+    <div className="rounded-xl border border-app-border/65 bg-app-surface-muted/55 px-3 py-2.5">
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-3">
+        <span className="truncate text-[10px] font-medium uppercase tracking-[0.12em] text-app-subtle">{label}</span>
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5">
+          {isPending ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-app-subtle" /> : null}
+          {selectedModel ? (
+            <span className="max-w-36 truncate text-[11px] font-medium text-app-muted">{selectedModel.providerName}</span>
+          ) : null}
+        </div>
+      </div>
+      <PromptInputSelect
+        disabled={disabled || isPending}
+        onValueChange={(nextValue) => {
+          const next = parseModelSelectValue(nextValue);
+          if (isPrimary && (!next.providerId || !next.modelRecordId)) {
+            return;
+          }
+          if (next.providerId === providerId && next.modelRecordId === modelRecordId) {
+            return;
+          }
+          onChange(next.providerId, next.modelRecordId);
+        }}
+        value={selectedValue}
+      >
+        <PromptInputSelectTrigger
+          className={cn(
+            "h-auto min-h-9 w-full justify-between rounded-lg border border-app-border/65 bg-app-surface px-2.5 py-2 text-left text-[12px] text-app-foreground shadow-none hover:bg-app-surface-hover",
+            !selectedModel && "text-app-muted",
+          )}
+        >
+          <PromptInputSelectValue>
+            <span className="flex min-w-0 items-center gap-2">
+              {selectedModel ? (
+                <ModelBrandIcon className="size-4 shrink-0" displayName={selectedModel.displayName} modelId={selectedModel.modelId} />
+              ) : null}
+              <span className="truncate">{selectedModel?.displayName ?? placeholder}</span>
+            </span>
+          </PromptInputSelectValue>
+        </PromptInputSelectTrigger>
+        <PromptInputSelectContent align="end" className="max-h-72 min-w-[320px]">
+          {!isPrimary ? (
+            <PromptInputSelectItem value={MODEL_SELECT_NONE_VALUE}>
+              <span className="text-app-muted">{t("settings.general.notSet")}</span>
+            </PromptInputSelectItem>
+          ) : null}
+          {groupedModels.map((group) => (
+            <div key={group.providerId}>
+              <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-app-subtle">
+                {group.providerName}
+              </div>
+              {group.models.map((model) => (
+                <PromptInputSelectItem key={`${model.providerId}:${model.modelRecordId}`} value={getModelSelectValue(model.providerId, model.modelRecordId)}>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <ModelBrandIcon className="size-4 shrink-0" displayName={model.displayName} modelId={model.modelId} />
+                    <span className="min-w-0 truncate">{model.displayName}</span>
+                    <span className="ml-auto shrink-0 truncate font-mono text-[10px] text-app-subtle">
+                      {getShortModelId(model.modelId)}
+                    </span>
+                  </span>
+                </PromptInputSelectItem>
+              ))}
+            </div>
+          ))}
+          {models.length === 0 ? (
+            <div className="px-3 py-4 text-center text-[12px] text-app-muted">
+              {t("settings.general.noModelsAvailable")}
+            </div>
+          ) : null}
+        </PromptInputSelectContent>
+      </PromptInputSelect>
+      {models.length === 0 ? (
+        <p className="mt-1.5 text-[11px] text-app-muted">{t("settings.general.noModelsAvailable")}</p>
       ) : null}
     </div>
   );
@@ -1379,31 +1674,72 @@ function AgentTeamSection({
 
 function ProfileDetailsPanel({
   customSubagents,
+  onUpdateAgentProfile,
   profile,
   providers,
 }: {
   customSubagents: ReadonlyArray<CustomSubagent>;
+  onUpdateAgentProfile?: typeof updateAgentProfileAction;
   profile: AgentProfile | null;
   providers: ReadonlyArray<ProviderEntry>;
 }) {
   const t = useT();
+  const [pendingProfilePatchKey, setPendingProfilePatchKey] = useState<string | null>(null);
+  const [quickEditError, setQuickEditError] = useState<string | null>(null);
+  const activeProfileIdRef = useRef<string | null>(profile?.id ?? null);
+  const quickEditRequestIdRef = useRef(0);
+  const availableModels = useMemo(() => getAvailableProfileModelOptions(providers), [providers]);
+
+  useEffect(() => {
+    activeProfileIdRef.current = profile?.id ?? null;
+    quickEditRequestIdRef.current += 1;
+    setPendingProfilePatchKey(null);
+    setQuickEditError(null);
+  }, [profile?.id]);
 
   if (!profile) {
     return <p className="px-3 pb-3 pt-2 text-[11px] text-app-muted">{t("composer.noProfileAvailable")}</p>;
   }
 
+  const canQuickEdit = Boolean(onUpdateAgentProfile);
+  const isQuickEditDisabled = !canQuickEdit || Boolean(pendingProfilePatchKey);
   const tiers: Array<{ label: string; tier: ProfileModelTier }> = [
     { label: t("composer.profileTier.primary"), tier: "primary" },
     { label: t("composer.profileTier.auxiliary"), tier: "assistant" },
     { label: t("composer.profileTier.lightweight"), tier: "lite" },
   ];
+  const runQuickEdit = async (key: string, patch: ProfileQuickEditPatch) => {
+    if (!onUpdateAgentProfile || pendingProfilePatchKey) {
+      return;
+    }
+
+    const targetProfileId = profile.id;
+    const requestId = quickEditRequestIdRef.current + 1;
+    quickEditRequestIdRef.current = requestId;
+
+    setQuickEditError(null);
+    setPendingProfilePatchKey(key);
+    try {
+      await onUpdateAgentProfile(targetProfileId, patch);
+    } catch (error) {
+      if (activeProfileIdRef.current === targetProfileId && quickEditRequestIdRef.current === requestId) {
+        setQuickEditError(error instanceof Error ? error.message : t("composer.profileQuickEditFailed"));
+      }
+    } finally {
+      if (activeProfileIdRef.current === targetProfileId && quickEditRequestIdRef.current === requestId) {
+        setPendingProfilePatchKey(null);
+      }
+    }
+  };
 
   return (
     <div className="max-h-[430px] space-y-3 overflow-y-auto rounded-2xl border border-app-border/65 bg-app-surface/45 p-3 [scrollbar-width:thin]">
       <div>
-        <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
-          {t("composer.profileDetailsTitle")}
-        </p>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">
+            {t("composer.profileDetailsTitle")}
+          </p>
+        </div>
         <div className="grid gap-2 sm:grid-cols-2">
           <ProfileDetailCard
             label={t("composer.profileResponseStyle")}
@@ -1413,34 +1749,50 @@ function ProfileDetailsPanel({
             label={t("composer.profileResponseLanguage")}
             value={profile.responseLanguage || t("composer.profileTier.notConfigured")}
           />
-          <ProfileDetailCard
-            className="sm:col-span-2"
-            icon={<Brain className="size-3.5" />}
-            label={t("composer.profileThinkingLevel")}
-            value={getThinkingLevelLabel(profile.thinkingLevel, t)}
-            description={getThinkingLevelDescription(profile.thinkingLevel, t)}
-          />
+          <div className="sm:col-span-2">
+            <QuickThinkingLevelControl
+              disabled={isQuickEditDisabled}
+              isPending={pendingProfilePatchKey === "thinkingLevel"}
+              onChange={(thinkingLevel) => {
+                void runQuickEdit("thinkingLevel", { thinkingLevel });
+              }}
+              value={profile.thinkingLevel}
+            />
+          </div>
         </div>
       </div>
 
       <div className="grid gap-2">
         {tiers.map(({ label, tier }) => {
           const providerId = getProfileTierProviderId(profile, tier);
-          const provider = providers.find((candidate) => candidate.id === providerId) ?? null;
-          const model = resolveProfileModelByTier(tier, profile, providers);
-          const value = model ? model.displayName : t("composer.profileTier.notConfigured");
-          const description = model ? (provider?.displayName ?? providerId) || undefined : undefined;
+          const modelRecordId = getProfileTierModelId(profile, tier);
 
           return (
-            <ProfileDetailCard
+            <QuickTierModelSelect
+              disabled={isQuickEditDisabled}
+              isPending={pendingProfilePatchKey === `model:${tier}`}
               key={tier}
               label={label}
-              value={value}
-              description={description}
+              modelRecordId={modelRecordId}
+              models={availableModels}
+              onChange={(nextProviderId, nextModelRecordId) => {
+                void runQuickEdit(
+                  `model:${tier}`,
+                  getProfileTierPatch(tier, nextProviderId, nextModelRecordId),
+                );
+              }}
+              providerId={providerId}
+              tier={tier}
             />
           );
         })}
       </div>
+
+      {quickEditError ? (
+        <p className="rounded-lg border border-app-danger/25 bg-app-danger/8 px-3 py-2 text-[11px] leading-4 text-app-danger">
+          {quickEditError}
+        </p>
+      ) : null}
 
       <AgentTeamSection customSubagents={customSubagents} profileId={profile.id} />
     </div>
@@ -1506,6 +1858,7 @@ export function WorkbenchPromptComposer({
   onOpenProfileSettings,
   onRuntimeQueueSubmitModeChange,
   onSelectAgentProfile,
+  onUpdateAgentProfile,
   onStop,
   onSubmit,
   placeholder,
@@ -2291,7 +2644,12 @@ export function WorkbenchPromptComposer({
                             ))}
                           </ModelSelectorGroup>
                         </ModelSelectorList>
-                        <ProfileDetailsPanel customSubagents={customSubagents} profile={activeProfile} providers={providers} />
+                        <ProfileDetailsPanel
+                          customSubagents={customSubagents}
+                          onUpdateAgentProfile={onUpdateAgentProfile}
+                          profile={activeProfile}
+                          providers={providers}
+                        />
                       </div>
                     </ModelSelectorContent>
                   </ModelSelector>

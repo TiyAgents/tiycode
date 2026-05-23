@@ -78,6 +78,7 @@ const en: Record<TranslationKey, string> = {
   "composer.activeProfileLabel": "Active Profile",
   "composer.editProfiles": "Edit profiles in Settings",
   "composer.profileDetailsTitle": "Profile details",
+  "composer.profileQuickEditFailed": "Failed to update profile.",
   "composer.profileThinkingLevel": "Thinking level",
   "composer.profileAgentTeam": "Agent Team",
   "composer.profileAgentTeamDesc": "Agents this profile can delegate to.",
