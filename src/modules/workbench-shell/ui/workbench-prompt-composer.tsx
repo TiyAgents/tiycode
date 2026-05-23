@@ -1263,7 +1263,7 @@ export function getAvailableProfileModelOptions(
 
 const MODEL_SELECT_NONE_VALUE = "__none__";
 
-function getModelSelectValue(providerId: string, modelRecordId: string) {
+export function getModelSelectValue(providerId: string, modelRecordId: string) {
   if (!providerId || !modelRecordId) {
     return MODEL_SELECT_NONE_VALUE;
   }
@@ -1271,7 +1271,7 @@ function getModelSelectValue(providerId: string, modelRecordId: string) {
   return JSON.stringify([providerId, modelRecordId]);
 }
 
-function parseModelSelectValue(value: string) {
+export function parseModelSelectValue(value: string) {
   if (value === MODEL_SELECT_NONE_VALUE) {
     return { providerId: "", modelRecordId: "" };
   }
@@ -1681,9 +1681,13 @@ function ProfileDetailsPanel({
   const t = useT();
   const [pendingProfilePatchKey, setPendingProfilePatchKey] = useState<string | null>(null);
   const [quickEditError, setQuickEditError] = useState<string | null>(null);
+  const activeProfileIdRef = useRef<string | null>(profile?.id ?? null);
+  const quickEditRequestIdRef = useRef(0);
   const availableModels = useMemo(() => getAvailableProfileModelOptions(providers), [providers]);
 
   useEffect(() => {
+    activeProfileIdRef.current = profile?.id ?? null;
+    quickEditRequestIdRef.current += 1;
     setPendingProfilePatchKey(null);
     setQuickEditError(null);
   }, [profile?.id]);
@@ -1703,14 +1707,22 @@ function ProfileDetailsPanel({
       return;
     }
 
+    const targetProfileId = profile.id;
+    const requestId = quickEditRequestIdRef.current + 1;
+    quickEditRequestIdRef.current = requestId;
+
     setQuickEditError(null);
     setPendingProfilePatchKey(key);
     try {
-      await onUpdateAgentProfile(profile.id, patch);
+      await onUpdateAgentProfile(targetProfileId, patch);
     } catch (error) {
-      setQuickEditError(error instanceof Error ? error.message : t("sourceControl.requestFailed"));
+      if (activeProfileIdRef.current === targetProfileId && quickEditRequestIdRef.current === requestId) {
+        setQuickEditError(error instanceof Error ? error.message : t("sourceControl.requestFailed"));
+      }
     } finally {
-      setPendingProfilePatchKey(null);
+      if (activeProfileIdRef.current === targetProfileId && quickEditRequestIdRef.current === requestId) {
+        setPendingProfilePatchKey(null);
+      }
     }
   };
 

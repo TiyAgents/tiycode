@@ -3,8 +3,10 @@ import type { ProviderEntry } from "@/modules/settings-center/model/types";
 
 import {
   getAvailableProfileModelOptions,
+  getModelSelectValue,
   getProfileTierPatch,
   markAndShouldRestoreInitialAttachmentData,
+  parseModelSelectValue,
   type ComposerInitialAttachmentRestoreState,
 } from "./workbench-prompt-composer";
 
@@ -90,6 +92,27 @@ describe("profile quick edit helpers", () => {
     expect(getProfileTierPatch("lite", "", "")).toEqual({
       liteProviderId: "",
       liteModelId: "",
+    });
+  });
+
+  it("serializes model select values and falls back to none for incomplete selections", () => {
+    expect(getModelSelectValue("provider-a", "model-a")).toBe('["provider-a","model-a"]');
+    expect(getModelSelectValue("", "model-a")).toBe("__none__");
+    expect(getModelSelectValue("provider-a", "")).toBe("__none__");
+  });
+
+  it("parses model select values defensively", () => {
+    expect(parseModelSelectValue('["provider-a","model-a"]')).toEqual({
+      providerId: "provider-a",
+      modelRecordId: "model-a",
+    });
+    expect(parseModelSelectValue("__none__")).toEqual({ providerId: "", modelRecordId: "" });
+    expect(parseModelSelectValue("not json")).toEqual({ providerId: "", modelRecordId: "" });
+    expect(parseModelSelectValue('["provider-a"]')).toEqual({ providerId: "", modelRecordId: "" });
+    expect(parseModelSelectValue('["provider-a", 42]')).toEqual({ providerId: "", modelRecordId: "" });
+    expect(parseModelSelectValue('{"providerId":"provider-a","modelRecordId":"model-a"}')).toEqual({
+      providerId: "",
+      modelRecordId: "",
     });
   });
 
