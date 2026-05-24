@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  mergeArtifactEventIntoMessages,
   mergeArtifactPartIntoMessage,
   type ArtifactEvent,
   type SurfaceMessage,
@@ -25,6 +26,8 @@ function makeEvent(overrides: Partial<ArtifactEvent> = {}): ArtifactEvent {
   return {
     artifactId: "art-1",
     artifactType: "chart",
+    messageId: "msg-1",
+    runId: "run-1",
     kind: "completed",
     payload: { library: "vega-lite", spec: { mark: "line" } },
     ...overrides,
@@ -174,5 +177,91 @@ describe("mergeArtifactPartIntoMessage", () => {
     const original = { ...msg, parts: [...msg.parts] };
     mergeArtifactPartIntoMessage(msg, makeEvent());
     expect(msg.parts).toEqual(original.parts);
+  });
+});
+
+describe("mergeArtifactEventIntoMessages", () => {
+  it("creates a render artifact host message when no non-reasoning message exists", () => {
+    const result = mergeArtifactEventIntoMessages(
+      [],
+      makeEvent({ messageId: "host-msg", runId: "run-host", kind: "started" }),
+      "2026-01-02T00:00:00Z",
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      id: "host-msg",
+      createdAt: "2026-01-02T00:00:00Z",
+      messageType: "plain_message",
+      role: "assistant",
+      runId: "run-host",
+      content: "",
+      status: "streaming",
+    });
+    expect(result[0].parts).toHaveLength(1);
+    expect(result[0].parts[0]).toMatchObject({
+      type: "chart",
+      artifactId: "art-1",
+      status: "loading",
+    });
+  });
+
+  it("updates the same host chart part from started to completed", () => {
+    const started = mergeArtifactEventIntoMessages(
+      [],
+      makeEvent({ messageId: "host-msg", runId: "run-host", kind: "started" }),
+      "2026-01-02T00:00:00Z",
+    );
+    const completed = mergeArtifactEventIntoMessages(
+      started,
+      makeEvent({ messageId: "host-msg", runId: "run-host", kind: "completed" }),
+      "2026-01-02T00:00:01Z",
+    );
+
+    expect(completed).toHaveLength(1);
+    expect(completed[0].id).toBe("host-msg");
+    expect(completed[0].status).toBe("completed");
+    expect(completed[0].parts).toHaveLength(1);
+    expect(completed[0].parts[0]).toMatchObject({
+      type: "chart",
+      artifactId: "art-1",
+      status: "ready",
+    });
+  });
+
+  it("does not attach artifacts to reasoning messages and creates a host instead", () => {
+    const reasoning = makeMessage({
+      id: "reasoning-msg",
+      messageType: "reasoning",
+      content: "thinking",
+      parts: [{ type: "text", text: "thinking" }],
+    });
+
+    const result = mergeArtifactEventIntoMessages(
+      [reasoning],
+      makeEvent({ messageId: "host-msg", runId: "run-1" }),
+      "2026-01-02T00:00:00Z",
+    );
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toBe(reasoning);
+    expect(result[0].parts).toEqual([{ type: "text", text: "thinking" }]);
+    expect(result[1]).toMatchObject({
+      id: "host-msg",
+      messageType: "plain_message",
+      role: "assistant",
+    });
+    expect(result[1].parts[0]).toMatchObject({ type: "chart", artifactId: "art-1" });
+  });
+
+  it("returns messages unchanged for non-chart artifacts", () => {
+    const messages = [makeMessage()];
+    const result = mergeArtifactEventIntoMessages(
+      messages,
+      makeEvent({ artifactType: "unknown" }),
+      "2026-01-02T00:00:00Z",
+    );
+
+    expect(result).toBe(messages);
   });
 });

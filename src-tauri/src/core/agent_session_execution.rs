@@ -1,9 +1,5 @@
 use std::sync::atomic::Ordering;
 
-use tiycore::agent::AgentToolResult;
-use tiycore::types::{ContentBlock, TextContent};
-
-use crate::core::agent_run_manager::ActiveRun;
 use crate::core::agent_session::{
     standard_tool_timeout, CLARIFY_TOOL_NAME, PLAN_TOOL_NAME, RENDER_TOOL_NAME,
     STANDARD_TOOL_TIMEOUT_SECS, TASK_TOOL_NAMES,
@@ -27,6 +23,8 @@ use crate::core::workspace_paths;
 use crate::ipc::frontend_channels::{ArtifactStatus, ThreadStreamEvent};
 use crate::model::thread::MessageRecord;
 use crate::persistence::repo::{message_repo, tool_call_repo};
+use tiycore::agent::AgentToolResult;
+use tiycore::types::{ContentBlock, TextContent};
 
 use super::agent_session::AgentSession;
 
@@ -65,20 +63,80 @@ fn resolve_helper_tool_task(
     })
 }
 
-fn message_id_from_active_run(run: &ActiveRun) -> Option<String> {
-    if let Some(ref id) = run.streaming_message_id {
-        if !id.is_empty() {
-            let is_reasoning = run.reasoning_message_id.as_ref() == Some(id);
-            if !is_reasoning {
-                return Some(id.clone());
-            }
-        }
-    }
+fn render_chart_part(artifact_id: &str, chart_payload: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "type": "chart",
+        "artifactId": artifact_id,
+        "library": chart_payload
+            .get("library")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!("vega-lite")),
+        "spec": chart_payload
+            .get("spec")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+        "source": chart_payload
+            .get("source")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        "title": chart_payload
+            .get("title")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        "caption": chart_payload
+            .get("caption")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        "status": chart_payload
+            .get("status")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!("ready")),
+        "error": chart_payload
+            .get("error")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    })
+}
 
-    run.last_completed_message_id
-        .as_ref()
-        .filter(|id| !id.is_empty())
-        .cloned()
+fn render_host_message_metadata(
+    tool_call_id: &str,
+    artifact_id: &str,
+    library: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "render_artifact_host",
+        "toolCallId": tool_call_id,
+        "artifactId": artifact_id,
+        "library": library,
+    })
+}
+
+fn render_artifact_host_message(
+    thread_id: &str,
+    run_id: &str,
+    tool_call_id: &str,
+    message_id: &str,
+    artifact_id: &str,
+    library: &str,
+    chart_payload: &serde_json::Value,
+) -> Result<MessageRecord, serde_json::Error> {
+    let chart_part = render_chart_part(artifact_id, chart_payload);
+    let parts_json = serde_json::to_string(&vec![chart_part])?;
+    let metadata = render_host_message_metadata(tool_call_id, artifact_id, library);
+
+    Ok(MessageRecord {
+        id: message_id.to_string(),
+        thread_id: thread_id.to_string(),
+        run_id: Some(run_id.to_string()),
+        role: "assistant".to_string(),
+        content_markdown: String::new(),
+        parts_json: Some(parts_json),
+        message_type: "plain_message".to_string(),
+        status: "completed".to_string(),
+        metadata_json: Some(metadata.to_string()),
+        attachments_json: None,
+        created_at: String::new(),
+    })
 }
 
 impl AgentSession {
@@ -878,16 +936,60 @@ impl AgentSession {
             }
         };
 
-        // Resolve the message to attach the artifact to
-        let target_message_id = {
-            let runs = self.active_runs_message_id().await;
-            runs.unwrap_or_else(|| format!("chart-msg-{}", &artifact_id[..8]))
+        let host_message_id = uuid::Uuid::now_v7().to_string();
+        let host_message = match render_artifact_host_message(
+            &self.spec.thread_id,
+            &self.spec.run_id,
+            tool_call_id,
+            &host_message_id,
+            &artifact_id,
+            &library,
+            &chart_payload,
+        ) {
+            Ok(host_message) => host_message,
+            Err(error) => {
+                let error = format!("failed to serialize render artifact message parts: {error}");
+                let error_json = serde_json::json!({ "error": &error });
+                tool_call_repo::update_result(
+                    &self.pool,
+                    &tool_call_storage_id,
+                    &error_json.to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+                let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                    run_id: self.spec.run_id.clone(),
+                    tool_call_id: tool_call_id.to_string(),
+                    error: error.clone(),
+                });
+                return agent_error_result(error);
+            }
         };
+
+        if let Err(error) = message_repo::insert(&self.pool, &host_message).await {
+            let error = format!("failed to persist render artifact host message: {error}");
+            let error_json = serde_json::json!({ "error": &error });
+            tool_call_repo::update_result(
+                &self.pool,
+                &tool_call_storage_id,
+                &error_json.to_string(),
+                "failed",
+            )
+            .await
+            .ok();
+            let _ = self.event_tx.send(ThreadStreamEvent::ToolFailed {
+                run_id: self.spec.run_id.clone(),
+                tool_call_id: tool_call_id.to_string(),
+                error: error.clone(),
+            });
+            return agent_error_result(error);
+        }
 
         // Emit started event
         let _ = self.event_tx.send(ThreadStreamEvent::ArtifactUpdated {
             run_id: self.spec.run_id.clone(),
-            message_id: target_message_id.clone(),
+            message_id: host_message_id.clone(),
             artifact_id: artifact_id.clone(),
             artifact_type: "chart".to_string(),
             status: ArtifactStatus::Started,
@@ -895,26 +997,10 @@ impl AgentSession {
             error: None,
         });
 
-        // Persist chart artifact into message parts
-        if let Err(error) = message_repo::merge_chart_artifact_part(
-            &self.pool,
-            &target_message_id,
-            &artifact_id,
-            chart_payload.clone(),
-        )
-        .await
-        {
-            tracing::warn!(
-                artifact_id = %artifact_id,
-                error = %error,
-                "failed to persist chart artifact part"
-            );
-        }
-
         // Emit completed event
         let _ = self.event_tx.send(ThreadStreamEvent::ArtifactUpdated {
             run_id: self.spec.run_id.clone(),
-            message_id: target_message_id.clone(),
+            message_id: host_message_id.clone(),
             artifact_id: artifact_id.clone(),
             artifact_type: "chart".to_string(),
             status: ArtifactStatus::Completed,
@@ -926,7 +1012,7 @@ impl AgentSession {
         let result_json = serde_json::json!({
             "success": true,
             "artifactId": artifact_id,
-            "messageId": target_message_id,
+            "messageId": host_message_id,
             "library": library,
             "title": title,
             "caption": caption,
@@ -954,41 +1040,6 @@ impl AgentSession {
             ))],
             details: Some(result_json),
         }
-    }
-
-    /// Get the last streaming/completed message ID for the current run.
-    /// Skips reasoning messages since they cannot host artifact parts.
-    async fn active_runs_message_id(&self) -> Option<String> {
-        // First: check the in-memory message IDs tracked by the run manager —
-        // this is authoritative and avoids the DB race where the message hasn't
-        // been persisted yet by the async event handler.
-        {
-            let runs = self.active_runs.lock().await;
-            if let Some(run) = runs.get(&self.spec.run_id) {
-                if let Some(message_id) = message_id_from_active_run(run) {
-                    return Some(message_id);
-                }
-            }
-        }
-        // Fallback: query DB for the last non-reasoning assistant message in this run
-        let runs = self.active_runs_db_fallback().await;
-        runs.and_then(|id| if id.is_empty() { None } else { Some(id) })
-    }
-
-    /// DB fallback: look for the last completed plain_message in this run from DB.
-    async fn active_runs_db_fallback(&self) -> Option<String> {
-        let messages = message_repo::list_since_last_reset(&self.pool, &self.spec.thread_id)
-            .await
-            .ok()?;
-        messages
-            .iter()
-            .rev()
-            .find(|m| {
-                m.run_id.as_deref() == Some(&self.spec.run_id)
-                    && m.role == "assistant"
-                    && m.message_type != "reasoning"
-            })
-            .map(|m| m.id.clone())
     }
 
     async fn execute_task_tool(
@@ -1162,71 +1213,157 @@ impl AgentSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{message_id_from_active_run, resolve_helper_tool_task, RuntimeOrchestrationTool};
-    use crate::core::agent_run_manager::ActiveRun;
+    use super::{
+        render_artifact_host_message, render_chart_part, render_host_message_metadata,
+        resolve_helper_tool_task, RuntimeOrchestrationTool,
+    };
     use crate::core::subagent::review_contract::{GlobalScanMode, ReviewScope, ReviewTarget};
-    use tokio::sync::broadcast;
-
-    fn active_run(
-        streaming_message_id: Option<&str>,
-        last_completed_message_id: Option<&str>,
-        reasoning_message_id: Option<&str>,
-    ) -> ActiveRun {
-        let (frontend_tx, _) = broadcast::channel(1);
-        ActiveRun {
-            run_id: "run-1".to_string(),
-            thread_id: "thread-1".to_string(),
-            profile_id: None,
-            frontend_tx,
-            lightweight_model_role: None,
-            auxiliary_model_role: None,
-            primary_model_role: None,
-            streaming_message_id: streaming_message_id.map(str::to_string),
-            last_completed_message_id: last_completed_message_id.map(str::to_string),
-            reasoning_message_id: reasoning_message_id.map(str::to_string),
-            cancellation_requested: false,
-        }
-    }
 
     #[test]
-    fn message_id_from_active_run_prefers_non_reasoning_streaming_message() {
-        let run = active_run(Some("streaming-msg"), Some("completed-msg"), None);
-
-        assert_eq!(
-            message_id_from_active_run(&run),
-            Some("streaming-msg".to_string())
-        );
-    }
-
-    #[test]
-    fn message_id_from_active_run_skips_reasoning_streaming_message_and_uses_completed() {
-        let run = active_run(
-            Some("reasoning-msg"),
-            Some("completed-msg"),
-            Some("reasoning-msg"),
+    fn render_chart_part_maps_vega_payload_fields() {
+        let part = render_chart_part(
+            "artifact-1",
+            &serde_json::json!({
+                "library": "vega-lite",
+                "spec": { "mark": "bar" },
+                "title": "Sales",
+                "caption": "Quarterly sales",
+                "status": "ready"
+            }),
         );
 
         assert_eq!(
-            message_id_from_active_run(&run),
-            Some("completed-msg".to_string())
+            part.get("type").and_then(serde_json::Value::as_str),
+            Some("chart")
         );
+        assert_eq!(
+            part.get("artifactId").and_then(serde_json::Value::as_str),
+            Some("artifact-1")
+        );
+        assert_eq!(
+            part.pointer("/spec/mark")
+                .and_then(serde_json::Value::as_str),
+            Some("bar")
+        );
+        assert_eq!(part.get("source"), Some(&serde_json::Value::Null));
+        assert_eq!(part.get("error"), Some(&serde_json::Value::Null));
     }
 
     #[test]
-    fn message_id_from_active_run_uses_completed_when_streaming_is_missing() {
-        let run = active_run(None, Some("completed-msg"), None);
+    fn render_chart_part_maps_html_source_fields() {
+        let part = render_chart_part(
+            "artifact-html",
+            &serde_json::json!({
+                "library": "html",
+                "source": "<div>Hello</div>",
+                "title": "HTML preview",
+                "caption": null,
+                "status": "ready"
+            }),
+        );
 
         assert_eq!(
-            message_id_from_active_run(&run),
-            Some("completed-msg".to_string())
+            part.get("library").and_then(serde_json::Value::as_str),
+            Some("html")
+        );
+        assert_eq!(
+            part.get("source").and_then(serde_json::Value::as_str),
+            Some("<div>Hello</div>")
+        );
+        assert_eq!(part.get("spec"), Some(&serde_json::json!({})));
+    }
+
+    #[test]
+    fn render_host_message_metadata_marks_render_artifact_hosts() {
+        let metadata = render_host_message_metadata("tool-call-1", "artifact-1", "svg");
+
+        assert_eq!(
+            metadata.get("kind").and_then(serde_json::Value::as_str),
+            Some("render_artifact_host")
+        );
+        assert_eq!(
+            metadata
+                .get("toolCallId")
+                .and_then(serde_json::Value::as_str),
+            Some("tool-call-1")
+        );
+        assert_eq!(
+            metadata
+                .get("artifactId")
+                .and_then(serde_json::Value::as_str),
+            Some("artifact-1")
+        );
+        assert_eq!(
+            metadata.get("library").and_then(serde_json::Value::as_str),
+            Some("svg")
         );
     }
 
     #[test]
-    fn message_id_from_active_run_ignores_empty_message_ids() {
-        let run = active_run(Some(""), Some(""), None);
+    fn render_artifact_host_message_contains_persistable_chart_part() {
+        let message = render_artifact_host_message(
+            "thread-1",
+            "run-1",
+            "tool-call-1",
+            "host-msg-1",
+            "artifact-1",
+            "vega-lite",
+            &serde_json::json!({
+                "library": "vega-lite",
+                "spec": { "mark": "line" },
+                "title": "Trend",
+                "caption": "A trend chart",
+                "status": "ready"
+            }),
+        )
+        .expect("render host message should serialize");
 
-        assert_eq!(message_id_from_active_run(&run), None);
+        assert_eq!(message.id, "host-msg-1");
+        assert_eq!(message.thread_id, "thread-1");
+        assert_eq!(message.run_id.as_deref(), Some("run-1"));
+        assert_eq!(message.role, "assistant");
+        assert_eq!(message.message_type, "plain_message");
+        assert_eq!(message.status, "completed");
+        assert!(message.content_markdown.is_empty());
+
+        let parts: Vec<serde_json::Value> = serde_json::from_str(
+            message
+                .parts_json
+                .as_deref()
+                .expect("host should include parts_json"),
+        )
+        .expect("parts_json should parse");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(
+            parts[0]
+                .get("artifactId")
+                .and_then(serde_json::Value::as_str),
+            Some("artifact-1")
+        );
+        assert_eq!(
+            parts[0]
+                .pointer("/spec/mark")
+                .and_then(serde_json::Value::as_str),
+            Some("line")
+        );
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            message
+                .metadata_json
+                .as_deref()
+                .expect("host should include metadata_json"),
+        )
+        .expect("metadata_json should parse");
+        assert_eq!(
+            metadata.get("kind").and_then(serde_json::Value::as_str),
+            Some("render_artifact_host")
+        );
+        assert_eq!(
+            metadata
+                .get("toolCallId")
+                .and_then(serde_json::Value::as_str),
+            Some("tool-call-1")
+        );
     }
 
     #[test]

@@ -293,11 +293,6 @@ pub(super) mod tests {
         helper_orchestrator: Arc<HelperAgentOrchestrator>,
         event_tx: mpsc::UnboundedSender<ThreadStreamEvent>,
         workspace_path: String,
-        active_runs: Arc<
-            tokio::sync::Mutex<
-                std::collections::HashMap<String, crate::core::agent_run_manager::ActiveRun>,
-            >,
-        >,
     ) -> Arc<AgentSession> {
         let spec = AgentSessionSpec {
             run_id: run_id.to_string(),
@@ -314,15 +309,7 @@ pub(super) mod tests {
             initial_context_calibration: Default::default(),
         };
 
-        AgentSession::new(
-            pool,
-            tool_gateway,
-            helper_orchestrator,
-            event_tx,
-            spec,
-            4,
-            active_runs,
-        )
+        AgentSession::new(pool, tool_gateway, helper_orchestrator, event_tx, spec, 4)
     }
 
     #[tokio::test]
@@ -337,7 +324,6 @@ pub(super) mod tests {
             Arc::clone(&tool_gateway),
         ));
         let (event_tx, _event_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
-        let active_runs = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let session = sample_agent_session(
             "run-queue-validation",
             "thread-queue-validation",
@@ -346,7 +332,6 @@ pub(super) mod tests {
             helper_orchestrator,
             event_tx,
             temp_dir.path().to_string_lossy().to_string(),
-            active_runs,
         );
 
         let error = session
@@ -373,7 +358,6 @@ pub(super) mod tests {
             Arc::clone(&tool_gateway),
         ));
         let (event_tx, _event_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
-        let active_runs = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let spec = AgentSessionSpec {
             run_id: "run-queue-snapshot".to_string(),
             thread_id: "thread-queue-snapshot".to_string(),
@@ -388,15 +372,7 @@ pub(super) mod tests {
             initial_prompt: None,
             initial_context_calibration: Default::default(),
         };
-        let session = AgentSession::new(
-            pool,
-            tool_gateway,
-            helper_orchestrator,
-            event_tx,
-            spec,
-            4,
-            active_runs,
-        );
+        let session = AgentSession::new(pool, tool_gateway, helper_orchestrator, event_tx, spec, 4);
 
         let enqueue_snapshot = session
             .enqueue_queue_message(
@@ -4555,7 +4531,6 @@ Used for prompt assembly coverage.
             Arc::clone(&tool_gateway),
         ));
         let (event_tx, _event_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
-        let active_runs = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let spec = AgentSessionSpec {
             run_id: "run-cancel-consistency".to_string(),
             thread_id: "thread-cancel-consistency".to_string(),
@@ -4570,15 +4545,7 @@ Used for prompt assembly coverage.
             initial_prompt: None,
             initial_context_calibration: Default::default(),
         };
-        let session = AgentSession::new(
-            pool,
-            tool_gateway,
-            helper_orchestrator,
-            event_tx,
-            spec,
-            4,
-            active_runs,
-        );
+        let session = AgentSession::new(pool, tool_gateway, helper_orchestrator, event_tx, spec, 4);
 
         // Enqueue a follow-up message.
         let first_snapshot = session

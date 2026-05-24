@@ -129,7 +129,7 @@ import {
   mapSnapshotMessage,
   mapRecordedUserMessage,
   mapSnapshotTool,
-  mergeArtifactPartIntoMessage,
+  mergeArtifactEventIntoMessages,
   mergeSnapshotMessages,
   mergeSnapshotTools,
   prependOlderMessages,
@@ -372,44 +372,6 @@ export function RuntimeThreadSurface({
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
   const lastOptimisticUserIdRef = useRef<string | null>(null);
 
-  // Buffer for artifact events that arrive before their target message exists
-  // in React state. Keyed by messageId → array of pending artifact events.
-  type PendingArtifactEntry = { artifactId: string; artifactType: string; payload?: unknown; error?: string; kind: "started" | "delta" | "completed" | "failed"; runId?: string };
-  const pendingArtifactsRef = useRef<Map<string, Array<PendingArtifactEntry>>>(new Map());
-
-  /**
-   * Drain orphaned artifacts from the same run that were buffered under a
-   * synthetic/mismatched messageId (e.g. when the render tool executed before
-   * the assistant message existed). Mutates pendingArtifactsRef in place and
-   * returns the updated messages array with artifacts merged in.
-   */
-  function drainOrphanedArtifacts(
-    messages: SurfaceMessage[],
-    runId: string | undefined,
-    targetMessageId: string,
-  ): SurfaceMessage[] {
-    if (!runId || pendingArtifactsRef.current.size === 0) return messages;
-    let result = messages;
-    const keysToDelete: string[] = [];
-    for (const [key, entries] of pendingArtifactsRef.current.entries()) {
-      if (key === targetMessageId) continue;
-      if (entries.length > 0 && entries[0].runId === runId) {
-        keysToDelete.push(key);
-        for (const artifact of entries) {
-          result = result.map((message) => (
-            message.id === targetMessageId
-              ? mergeArtifactPartIntoMessage(message, artifact)
-              : message
-          ));
-        }
-      }
-    }
-    for (const key of keysToDelete) {
-      pendingArtifactsRef.current.delete(key);
-    }
-    return result;
-  }
-
   // --- Delayed auto-collapse infrastructure ---
   const userManuallyOpenedIds = useRef<Set<string>>(new Set());
 
@@ -547,8 +509,7 @@ export function RuntimeThreadSurface({
       setSnapshotReady(true);
       setSnapshotThreadId(null);
       setThinkingPlaceholder(null);
-      pendingArtifactsRef.current.clear();
-      
+
       return;
     }
 
@@ -777,7 +738,6 @@ export function RuntimeThreadSurface({
     clearScheduledThinkingPhase();
     setThinkingPlaceholder(null);
     setTools([]);
-    pendingArtifactsRef.current.clear();
     void loadSnapshot();
   }, [clearScheduledThinkingPhase, loadSnapshot, threadId]);
 
@@ -933,22 +893,6 @@ export function RuntimeThreadSurface({
             parts: [{ type: "text" as const, text: accumulatedText }, ...nonTextParts],
             status: "streaming",
           });
-          // Drain any buffered artifacts targeting this message
-          const pending = pendingArtifactsRef.current.get(event.messageId);
-          if (pending && pending.length > 0) {
-            pendingArtifactsRef.current.delete(event.messageId);
-            for (const artifact of pending) {
-              result = result.map((message) => (
-                message.id === event.messageId
-                  ? mergeArtifactPartIntoMessage(message, artifact)
-                  : message
-              ));
-            }
-          }
-          // Run-aware sweep: drain orphaned artifacts from the same run that
-          // were buffered under a synthetic/mismatched messageId (e.g. when
-          // the render tool executed before this assistant message existed).
-          result = drainOrphanedArtifacts(result, event.runId, event.messageId);
           return result;
         });
         return;
@@ -957,7 +901,7 @@ export function RuntimeThreadSurface({
       setMessages((current) => {
         const existing = current.find((entry) => entry.id === event.messageId);
         const nonTextParts = existing?.parts.filter((p) => p.type !== "text") ?? [];
-        let result = appendOrReplaceMessage(current, {
+        const result = appendOrReplaceMessage(current, {
           createdAt: existing?.createdAt ?? new Date().toISOString(),
           id: event.messageId,
           messageType: "plain_message",
@@ -968,20 +912,6 @@ export function RuntimeThreadSurface({
           parts: [{ type: "text" as const, text: event.content ?? "" }, ...nonTextParts],
           status: "completed",
         });
-        // Drain any buffered artifacts targeting this message
-        const pending = pendingArtifactsRef.current.get(event.messageId);
-        if (pending && pending.length > 0) {
-          pendingArtifactsRef.current.delete(event.messageId);
-          for (const artifact of pending) {
-            result = result.map((message) => (
-              message.id === event.messageId
-                ? mergeArtifactPartIntoMessage(message, artifact)
-                : message
-            ));
-          }
-        }
-        // Run-aware sweep: drain orphaned artifacts from the same run
-        result = drainOrphanedArtifacts(result, event.runId, event.messageId);
         return result;
       });
 
@@ -1031,29 +961,7 @@ export function RuntimeThreadSurface({
     });
 
     stream.onArtifact = withActiveStream((event) => {
-      setMessages((current) => {
-        // Only attach to non-reasoning messages directly; reasoning messages
-        // should not host chart artifacts since the UI won't render them there.
-        const hasMatch = current.some(
-          (message) => message.id === event.messageId && message.messageType !== "reasoning",
-        );
-        if (hasMatch) {
-          return current.map((message) => (
-            message.id === event.messageId
-              ? mergeArtifactPartIntoMessage(message, event)
-              : message
-          ));
-        }
-        // No matching non-reasoning message yet — buffer the artifact for later attachment
-        console.warn(
-          `[onArtifact] No non-reasoning message found for artifact ${event.artifactId} (messageId: ${event.messageId}). Buffering for later.`,
-        );
-        const pending = pendingArtifactsRef.current;
-        const existing = pending.get(event.messageId) ?? [];
-        existing.push(event);
-        pending.set(event.messageId, existing);
-        return current;
-      });
+      setMessages((current) => mergeArtifactEventIntoMessages(current, event, new Date().toISOString()));
     });
 
     stream.onQueue = withActiveStream((event: QueueEvent) => {

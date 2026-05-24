@@ -572,6 +572,8 @@ export function appendOrReplaceMessage(
 export type ArtifactEvent = {
   artifactId: string;
   artifactType: string;
+  messageId?: string;
+  runId?: string;
   payload?: unknown;
   error?: string;
   kind: "started" | "delta" | "completed" | "failed";
@@ -627,6 +629,62 @@ export function mergeArtifactPartIntoMessage(
     ...message,
     parts: nextParts,
   };
+}
+
+export function createArtifactHostMessage(
+  event: ArtifactEvent & { messageId: string; runId: string },
+  createdAt: string,
+): SurfaceMessage {
+  return {
+    createdAt,
+    id: event.messageId,
+    messageType: "plain_message",
+    metadata: null,
+    attachments: [],
+    role: "assistant",
+    runId: event.runId,
+    content: "",
+    parts: [],
+    status: event.kind === "started" ? "streaming" : event.kind === "failed" ? "failed" : "completed",
+  };
+}
+
+export function mergeArtifactEventIntoMessages(
+  messages: Array<SurfaceMessage>,
+  event: ArtifactEvent,
+  createdAt: string,
+): Array<SurfaceMessage> {
+  if (event.artifactType !== "chart" || !event.messageId || !event.runId) {
+    return messages;
+  }
+
+  const existingIndex = messages.findIndex(
+    (message) => message.id === event.messageId && message.messageType !== "reasoning",
+  );
+
+  if (existingIndex !== -1) {
+    const nextMessages = [...messages];
+    const existing = nextMessages[existingIndex];
+    const merged = mergeArtifactPartIntoMessage(existing, event);
+    const isArtifactHost = existing.role === "assistant"
+      && existing.content.trim().length === 0
+      && existing.parts.every(
+        (part) => part.type !== "text" || ("text" in part && part.text.trim().length === 0),
+      );
+    nextMessages[existingIndex] = {
+      ...merged,
+      status: isArtifactHost
+        ? event.kind === "started" ? "streaming" : event.kind === "failed" ? "failed" : "completed"
+        : existing.status,
+    };
+    return nextMessages;
+  }
+
+  const hostMessage = createArtifactHostMessage(
+    { ...event, messageId: event.messageId, runId: event.runId },
+    createdAt,
+  );
+  return [...messages, mergeArtifactPartIntoMessage(hostMessage, event)];
 }
 
 export function prependOlderMessages(
