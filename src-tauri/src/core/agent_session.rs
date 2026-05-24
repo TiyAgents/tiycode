@@ -474,13 +474,6 @@ pub struct AgentSession {
     pub(crate) abort_signal: tiycore::agent::AbortSignal,
     context_compression_state: Arc<StdMutex<ContextCompressionRuntimeState>>,
     runtime_queue_state: Arc<StdMutex<RuntimeQueueState>>,
-    /// Shared reference to the active-runs map so we can read the in-memory
-    /// `streaming_message_id` without querying the database (avoids race).
-    pub(crate) active_runs: Arc<
-        tokio::sync::Mutex<
-            std::collections::HashMap<String, crate::core::agent_run_manager::ActiveRun>,
-        >,
-    >,
 }
 
 impl AgentSession {
@@ -491,11 +484,6 @@ impl AgentSession {
         event_tx: mpsc::UnboundedSender<ThreadStreamEvent>,
         spec: AgentSessionSpec,
         max_turns: usize,
-        active_runs: Arc<
-            tokio::sync::Mutex<
-                std::collections::HashMap<String, crate::core::agent_run_manager::ActiveRun>,
-            >,
-        >,
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak_self| {
             let agent = Arc::new(Agent::with_model(spec.model_plan.primary.model.clone()));
@@ -526,7 +514,6 @@ impl AgentSession {
                 abort_signal: tiycore::agent::AbortSignal::new(),
                 context_compression_state,
                 runtime_queue_state,
-                active_runs,
             }
         })
     }
