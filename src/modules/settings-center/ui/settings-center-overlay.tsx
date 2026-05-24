@@ -924,6 +924,10 @@ type ProfilePrimaryModelSummary = {
   iconModelId?: string;
 };
 
+function getThinkingLevelLabel(value: ThinkingLevel, t: TFunc) {
+  return getThinkingLevelOptions(t).find((option) => option.value === value)?.label ?? t("settings.thinkingLevel.off");
+}
+
 function ProfileLibraryCard({
   profile,
   isActive,
@@ -955,6 +959,8 @@ function ProfileLibraryCard({
 }) {
   const t = useT();
   const [showActions, setShowActions] = useState(false);
+  const thinkingLevelLabel = getThinkingLevelLabel(profile.thinkingLevel, t);
+  const modelSummaryTitle = `${primaryModel.label} · ${thinkingLevelLabel}`;
 
   return (
     <div
@@ -997,7 +1003,15 @@ function ProfileLibraryCard({
             : "border-app-border bg-app-surface text-app-subtle",
         )}
       >
-        <CircleUserRound className="size-5" />
+        {primaryModel.iconModelId ? (
+          <ModelBrandIcon
+            className="size-5 text-[15px]"
+            displayName={primaryModel.iconDisplayName ?? primaryModel.label}
+            modelId={primaryModel.iconModelId}
+          />
+        ) : (
+          <Bot className="size-5" />
+        )}
       </span>
 
       <div
@@ -1023,17 +1037,13 @@ function ProfileLibraryCard({
         ) : (
           <p className="truncate text-[13px] font-medium leading-5 text-app-foreground">{profile.name}</p>
         )}
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-app-muted">
-          {primaryModel.iconModelId ? (
-            <ModelBrandIcon
-              className="size-4 shrink-0 text-[13px]"
-              displayName={primaryModel.iconDisplayName ?? primaryModel.label}
-              modelId={primaryModel.iconModelId}
-            />
-          ) : (
-            <Bot className="size-4 shrink-0 text-app-subtle" />
-          )}
-          <span className="min-w-0 flex-1 truncate">{primaryModel.label}</span>
+        <div
+          className="mt-1 flex min-w-0 items-center gap-1 text-[12px] leading-5 text-app-muted"
+          title={modelSummaryTitle}
+        >
+          <span className="min-w-0 truncate">{primaryModel.label}</span>
+          <span aria-hidden="true" className="shrink-0 text-app-subtle">·</span>
+          <span className="min-w-0 max-w-[88px] truncate">{thinkingLevelLabel}</span>
         </div>
       </div>
 
