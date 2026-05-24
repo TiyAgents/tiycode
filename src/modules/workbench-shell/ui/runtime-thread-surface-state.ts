@@ -645,7 +645,11 @@ export function createArtifactHostMessage(
     runId: event.runId,
     content: "",
     parts: [],
-    status: event.kind === "started" ? "streaming" : event.kind === "failed" ? "failed" : "completed",
+    status: event.kind === "started" || event.kind === "delta"
+      ? "streaming"
+      : event.kind === "failed"
+        ? "failed"
+        : "completed",
   };
 }
 
@@ -669,12 +673,17 @@ export function mergeArtifactEventIntoMessages(
     const isArtifactHost = existing.role === "assistant"
       && existing.content.trim().length === 0
       && existing.parts.every(
-        (part) => part.type !== "text" || ("text" in part && part.text.trim().length === 0),
+        (part) => part.type === "chart"
+          || (part.type === "text" && "text" in part && part.text.trim().length === 0),
       );
     nextMessages[existingIndex] = {
       ...merged,
       status: isArtifactHost
-        ? event.kind === "started" ? "streaming" : event.kind === "failed" ? "failed" : "completed"
+        ? event.kind === "started" || event.kind === "delta"
+          ? "streaming"
+          : event.kind === "failed"
+            ? "failed"
+            : "completed"
         : existing.status,
     };
     return nextMessages;

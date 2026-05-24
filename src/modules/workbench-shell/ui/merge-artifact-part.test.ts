@@ -229,9 +229,30 @@ describe("mergeArtifactEventIntoMessages", () => {
     });
   });
 
+  it("keeps host messages streaming while artifact deltas arrive", () => {
+    const started = mergeArtifactEventIntoMessages(
+      [],
+      makeEvent({ messageId: "host-msg", runId: "run-host", kind: "started" }),
+      "2026-01-02T00:00:00Z",
+    );
+    const delta = mergeArtifactEventIntoMessages(
+      started,
+      makeEvent({ messageId: "host-msg", runId: "run-host", kind: "delta" }),
+      "2026-01-02T00:00:01Z",
+    );
+
+    expect(delta).toHaveLength(1);
+    expect(delta[0].status).toBe("streaming");
+    expect(delta[0].parts[0]).toMatchObject({
+      type: "chart",
+      artifactId: "art-1",
+      status: "ready",
+    });
+  });
+
   it("does not attach artifacts to reasoning messages and creates a host instead", () => {
     const reasoning = makeMessage({
-      id: "reasoning-msg",
+      id: "host-msg",
       messageType: "reasoning",
       content: "thinking",
       parts: [{ type: "text", text: "thinking" }],
@@ -252,6 +273,27 @@ describe("mergeArtifactEventIntoMessages", () => {
       role: "assistant",
     });
     expect(result[1].parts[0]).toMatchObject({ type: "chart", artifactId: "art-1" });
+  });
+
+  it("does not treat non-chart non-text messages as artifact hosts", () => {
+    const existing = makeMessage({
+      id: "host-msg",
+      content: "",
+      parts: [{ type: "data-custom", data: { ok: true } }],
+      status: "completed",
+    });
+
+    const result = mergeArtifactEventIntoMessages(
+      [existing],
+      makeEvent({ messageId: "host-msg", runId: "run-1", kind: "started" }),
+      "2026-01-02T00:00:00Z",
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].status).toBe("completed");
+    expect(result[0].parts).toHaveLength(2);
+    expect(result[0].parts[0]).toEqual({ type: "data-custom", data: { ok: true } });
+    expect(result[0].parts[1]).toMatchObject({ type: "chart", artifactId: "art-1" });
   });
 
   it("returns messages unchanged for non-chart artifacts", () => {
