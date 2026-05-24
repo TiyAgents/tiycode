@@ -531,48 +531,86 @@ fn push_shell_segment(segments: &mut Vec<String>, current: &mut String) {
     current.clear();
 }
 
-fn simple_glob_match(pattern: &str, text: &str) -> bool {
-    let pattern_chars: Vec<char> = pattern.chars().collect();
-    let text_chars: Vec<char> = text.chars().collect();
-    let mut memo = vec![vec![None; text_chars.len() + 1]; pattern_chars.len() + 1];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SimpleGlobToken {
+    AnySequence,
+    Literal(char),
+}
 
-    fn matches_from(
-        pattern: &[char],
-        text: &[char],
-        pi: usize,
-        ti: usize,
-        memo: &mut [Vec<Option<bool>>],
-    ) -> bool {
-        if let Some(cached) = memo[pi][ti] {
-            return cached;
+fn simple_glob_match(pattern: &str, text: &str) -> bool {
+    let pattern_tokens = tokenize_simple_glob(pattern);
+    let text_chars: Vec<char> = text.chars().collect();
+
+    let mut pattern_index = 0;
+    let mut text_index = 0;
+    let mut star_pattern_index = None;
+    let mut star_text_index = 0;
+
+    while text_index < text_chars.len() {
+        if let Some(token) = pattern_tokens.get(pattern_index) {
+            match token {
+                SimpleGlobToken::AnySequence => {
+                    star_pattern_index = Some(pattern_index);
+                    star_text_index = text_index;
+                    pattern_index += 1;
+                    continue;
+                }
+                SimpleGlobToken::Literal(expected) if *expected == text_chars[text_index] => {
+                    pattern_index += 1;
+                    text_index += 1;
+                    continue;
+                }
+                SimpleGlobToken::Literal(_) => {}
+            }
         }
 
-        let result = if pi == pattern.len() {
-            ti == text.len()
-        } else if pattern[pi] == '\\' {
-            if pi + 1 >= pattern.len() {
-                ti < text.len()
-                    && text[ti] == '\\'
-                    && matches_from(pattern, text, pi + 1, ti + 1, memo)
-            } else {
-                ti < text.len()
-                    && text[ti] == pattern[pi + 1]
-                    && matches_from(pattern, text, pi + 2, ti + 1, memo)
-            }
-        } else if pattern[pi] == '*' {
-            matches_from(pattern, text, pi + 1, ti, memo)
-                || (ti < text.len() && matches_from(pattern, text, pi, ti + 1, memo))
+        if let Some(star_index) = star_pattern_index {
+            star_text_index += 1;
+            text_index = star_text_index;
+            pattern_index = star_index + 1;
         } else {
-            ti < text.len()
-                && pattern[pi] == text[ti]
-                && matches_from(pattern, text, pi + 1, ti + 1, memo)
-        };
-
-        memo[pi][ti] = Some(result);
-        result
+            return false;
+        }
     }
 
-    matches_from(&pattern_chars, &text_chars, 0, 0, &mut memo)
+    while matches!(
+        pattern_tokens.get(pattern_index),
+        Some(SimpleGlobToken::AnySequence)
+    ) {
+        pattern_index += 1;
+    }
+
+    pattern_index == pattern_tokens.len()
+}
+
+fn tokenize_simple_glob(pattern: &str) -> Vec<SimpleGlobToken> {
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+    let mut tokens = Vec::with_capacity(pattern_chars.len());
+    let mut index = 0;
+
+    while index < pattern_chars.len() {
+        match pattern_chars[index] {
+            '*' => {
+                tokens.push(SimpleGlobToken::AnySequence);
+                index += 1;
+            }
+            '\\' => {
+                if let Some(escaped) = pattern_chars.get(index + 1) {
+                    tokens.push(SimpleGlobToken::Literal(*escaped));
+                    index += 2;
+                } else {
+                    tokens.push(SimpleGlobToken::Literal('\\'));
+                    index += 1;
+                }
+            }
+            literal => {
+                tokens.push(SimpleGlobToken::Literal(literal));
+                index += 1;
+            }
+        }
+    }
+
+    tokens
 }
 
 fn effective_policy_rule(rule: &serde_json::Value) -> Option<EffectivePolicyRule> {

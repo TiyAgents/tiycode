@@ -100,6 +100,47 @@ async fn test_safe_commands_not_flagged() {
 }
 
 #[tokio::test]
+async fn test_policy_long_shell_commands_do_not_overflow_glob_matcher() {
+    let pool = test_helpers::setup_test_pool().await;
+    let engine = PolicyEngine::new(pool);
+
+    let long_argument = "a".repeat(30_000);
+    let dangerous_command = format!("sudo {long_argument}");
+    let dangerous_verdict = engine
+        .evaluate(
+            "shell",
+            &json!({ "command": dangerous_command }),
+            None,
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        dangerous_verdict.verdict,
+        PolicyVerdict::Deny { .. }
+    ));
+
+    let safe_command = format!("echo {long_argument}");
+    let safe_verdict = engine
+        .evaluate(
+            "shell",
+            &json!({ "command": safe_command }),
+            None,
+            &[],
+            "default",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !matches!(safe_verdict.verdict, PolicyVerdict::Deny { .. }),
+        "long safe commands should not be denied by wildcard dangerous patterns"
+    );
+}
+
+#[tokio::test]
 async fn test_policy_shell_pattern_requires_exact_segment_match() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_policy(
