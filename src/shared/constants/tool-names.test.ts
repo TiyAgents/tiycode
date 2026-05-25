@@ -21,8 +21,8 @@ describe("isRuntimeOrchestrationToolName", () => {
     expect(isRuntimeOrchestrationToolName("agent_custom_helper")).toBe(true);
   });
 
-  it("returns true for bare prefix (agent_)", () => {
-    expect(isRuntimeOrchestrationToolName("agent_")).toBe(true);
+  it("returns false for bare prefix (agent_)", () => {
+    expect(isRuntimeOrchestrationToolName("agent_")).toBe(false);
   });
 
   it("returns false for non-orchestration tool names", () => {

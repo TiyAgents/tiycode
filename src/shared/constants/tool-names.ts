@@ -29,7 +29,10 @@ export const DEFAULT_COLLAPSED_TOOLS = [
 ] as const;
 
 export function isRuntimeOrchestrationToolName(toolName: string): boolean {
-  return toolName.startsWith(RUNTIME_ORCHESTRATION_TOOL_PREFIX);
+  return (
+    toolName.startsWith(RUNTIME_ORCHESTRATION_TOOL_PREFIX)
+    && toolName.length > RUNTIME_ORCHESTRATION_TOOL_PREFIX.length
+  );
 }
 
 export function isTaskBoardTool(toolName: string): boolean {
