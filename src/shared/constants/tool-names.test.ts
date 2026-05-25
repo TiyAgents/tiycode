@@ -16,6 +16,15 @@ describe("isRuntimeOrchestrationToolName", () => {
     }
   });
 
+  it("returns true for custom agent tool names", () => {
+    expect(isRuntimeOrchestrationToolName("agent_refactor")).toBe(true);
+    expect(isRuntimeOrchestrationToolName("agent_custom_helper")).toBe(true);
+  });
+
+  it("returns true for bare prefix (agent_)", () => {
+    expect(isRuntimeOrchestrationToolName("agent_")).toBe(true);
+  });
+
   it("returns false for non-orchestration tool names", () => {
     expect(isRuntimeOrchestrationToolName("read")).toBe(false);
     expect(isRuntimeOrchestrationToolName("edit")).toBe(false);
@@ -27,12 +36,6 @@ describe("isRuntimeOrchestrationToolName", () => {
     expect(isRuntimeOrchestrationToolName("")).toBe(false);
     expect(isRuntimeOrchestrationToolName("AGENT_EXPLORE")).toBe(false);
     expect(isRuntimeOrchestrationToolName("Agent_Explore")).toBe(false);
-  });
-
-  it("returns false for partial or extended matches", () => {
-    expect(isRuntimeOrchestrationToolName("agent_")).toBe(false);
-    expect(isRuntimeOrchestrationToolName("agent_explore_extra")).toBe(false);
-    expect(isRuntimeOrchestrationToolName("agent_review_v2")).toBe(false);
   });
 });
 

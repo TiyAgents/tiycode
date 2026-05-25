@@ -95,13 +95,30 @@ export function applyHelperSnapshot(
   };
 }
 
-export function formatHelperKind(kind: string) {
+const CUSTOM_PREFIX = "helper_custom_";
+
+function capitalizeSlug(slug: string) {
+  return slug
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+export function formatHelperKind(
+  kind: string,
+  slugToNameMap?: ReadonlyMap<string, string>,
+) {
   switch (kind) {
     case "helper_explore":
       return "Explore Agent";
     case "helper_review":
       return "Review Agent";
     default:
+      if (kind.startsWith(CUSTOM_PREFIX)) {
+        const slug = kind.slice(CUSTOM_PREFIX.length);
+        const customName = slugToNameMap?.get(slug);
+        return customName ?? capitalizeSlug(slug);
+      }
       return kind;
   }
 }
@@ -110,15 +127,21 @@ export function formatToolCallCount(count: number) {
   return `${count} tool call${count === 1 ? "" : "s"}`;
 }
 
-export function formatHelperSummary(helper: RuntimeSurfaceHelperEntry) {
+export function formatHelperSummary(
+  helper: RuntimeSurfaceHelperEntry,
+  slugToNameMap?: ReadonlyMap<string, string>,
+) {
   return [
-    formatHelperName(helper),
+    formatHelperName(helper, slugToNameMap),
     formatHelperDetailSummary(helper),
   ].filter(Boolean).join(" · ");
 }
 
-export function formatHelperName(helper: RuntimeSurfaceHelperEntry) {
-  return formatHelperKind(helper.kind);
+export function formatHelperName(
+  helper: RuntimeSurfaceHelperEntry,
+  slugToNameMap?: ReadonlyMap<string, string>,
+) {
+  return formatHelperKind(helper.kind, slugToNameMap);
 }
 
 export function formatHelperDetailSummary(helper: RuntimeSurfaceHelperEntry) {

@@ -247,6 +247,10 @@ export function RuntimeThreadSurface({
   const globalAgentProfileId = useStore(settingsStore, (s) => s.activeAgentProfileId);
   const agentProfiles = useStore(settingsStore, (s) => s.agentProfiles);
   const customSubagents = useStore(settingsStore, (s) => s.customSubagents, shallowEqual);
+  const customAgentSlugToName = useMemo(
+    () => new Map(customSubagents.map((a) => [a.slug, a.name])),
+    [customSubagents],
+  );
   const providers = useStore(settingsStore, (s) => s.providers);
   const defaultAppendMessageKind = useStore(settingsStore, (s) => s.general.defaultAppendMessageKind);
   const isNewThreadMode = useStore(threadStore, (s) => s.isNewThreadMode);
@@ -2783,9 +2787,9 @@ export function RuntimeThreadSurface({
 
               if (entry.kind === "helper") {
                 const { helper } = entry;
-                const helperName = formatHelperName(helper);
+                const helperName = formatHelperName(helper, customAgentSlugToName);
                 const helperDetailSummary = formatHelperDetailSummary(helper);
-                const helperSummary = formatHelperSummary(helper);
+                const helperSummary = formatHelperSummary(helper, customAgentSlugToName);
                 const helperToolCounts = formatHelperToolCounts(helper.toolCounts);
                 const executionSummary = formatExecutionSummary({
                   elapsedText: formatElapsedSeconds(getHelperElapsedSeconds(helper)),

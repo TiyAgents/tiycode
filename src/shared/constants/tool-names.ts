@@ -11,6 +11,9 @@ export const RUNTIME_ORCHESTRATION_TOOLS = [
   "agent_review",
 ] as const;
 
+/** The prefix shared by all runtime orchestration tool names (built-in and custom). */
+export const RUNTIME_ORCHESTRATION_TOOL_PREFIX = "agent_";
+
 /** Task board tools. */
 export const TASK_BOARD_TOOLS = [
   "create_task",
@@ -26,7 +29,7 @@ export const DEFAULT_COLLAPSED_TOOLS = [
 ] as const;
 
 export function isRuntimeOrchestrationToolName(toolName: string): boolean {
-  return (RUNTIME_ORCHESTRATION_TOOLS as ReadonlyArray<string>).includes(toolName);
+  return toolName.startsWith(RUNTIME_ORCHESTRATION_TOOL_PREFIX);
 }
 
 export function isTaskBoardTool(toolName: string): boolean {
