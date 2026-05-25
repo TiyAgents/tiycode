@@ -1,5 +1,6 @@
 import type { TranslationKey } from "@/i18n";
 import { isHelperOwnedTool } from "@/modules/workbench-shell/model/helpers";
+import { isRuntimeOrchestrationToolName } from "@/shared/constants/tool-names";
 import type {
   ChartMessagePartDto,
   DataMessagePartDto,
@@ -922,13 +923,6 @@ export function getApprovalTagClass(tool: SurfaceToolEntry) {
   return "border-app-success/24 bg-app-success/10 text-app-success";
 }
 
-function isRuntimeOrchestrationTool(toolName: string) {
-  return (
-    toolName === "agent_explore"
-    || toolName === "agent_review"
-  );
-}
-
 export function isVisibleTimelineTool(
   tool: SurfaceToolEntry,
   helperIds: ReadonlySet<string>,
@@ -937,7 +931,7 @@ export function isVisibleTimelineTool(
     return tool.state === "clarify-requested";
   }
 
-  return !isHelperOwnedTool(tool.id, helperIds) && !isRuntimeOrchestrationTool(tool.name);
+  return !isHelperOwnedTool(tool.id, helperIds) && !isRuntimeOrchestrationToolName(tool.name);
 }
 
 export function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry) {
