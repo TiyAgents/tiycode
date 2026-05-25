@@ -69,7 +69,7 @@ describe("formatHelperKind", () => {
   });
 
   it("handles empty slug after prefix gracefully", () => {
-    // helper_custom_ with no slug — should return empty string from capitalizeSlug
+    // helper_custom_ with no slug — capitalizeSlug returns empty string
     expect(formatHelperKind("helper_custom_")).toBe("");
   });
 
