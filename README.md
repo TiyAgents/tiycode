@@ -7,11 +7,11 @@
     <a href="./README_zh.md">简体中文</a>
   </p>
   <p>
+    <img src="https://img.shields.io/github/actions/workflow/status/tiylabs/tiycode/ci.yml?branch=master&style=flat-square&label=CI" alt="CI" />
+    <img src="https://img.shields.io/github/v/release/tiylabs/tiycode?style=flat-square&label=Release" alt="Release" />
     <img src="https://img.shields.io/github/downloads/tiylabs/tiycode/total?style=flat-square&label=Downloads" alt="Downloads" />
     <img src="https://img.shields.io/github/license/tiylabs/tiycode?style=flat-square" alt="License" />
     <img src="https://img.shields.io/badge/Rust-1.77%2B-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust" />
-    <img src="https://img.shields.io/github/actions/workflow/status/tiylabs/tiycode/ci.yml?branch=master&style=flat-square&label=CI" alt="CI" />
-    <img src="https://img.shields.io/github/v/release/tiylabs/tiycode?style=flat-square&label=Release" alt="Release" />
     <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square&logo=tauri" alt="Platform" />
   </p>
   <br />
@@ -364,6 +364,14 @@ That means the best use cases today are:
 ## License
 
 This project is licensed under the Apache License 2.0. See `LICENSE` for details.
+
+## Community
+
+Join our WeChat group to connect with the author and other users!
+
+<div align="center">
+  <img width="320" alt="WeChat Group" src="https://github.com/user-attachments/assets/ca078477-8068-47f1-810c-20f8e03eec0d" />
+</div>
 
 ## Acknowledgements
 
