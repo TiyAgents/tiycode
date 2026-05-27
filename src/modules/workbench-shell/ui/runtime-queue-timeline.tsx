@@ -9,7 +9,6 @@ import {
   Loader2Icon,
   PencilIcon,
   Trash2Icon,
-  Wand2Icon,
   XIcon,
 } from "lucide-react";
 import type { ComponentProps } from "react";
@@ -179,7 +178,7 @@ export function RuntimeQueueMessageCard({
                   }
                 }}
               >
-                {isPromoting ? <Loader2Icon className="size-3.5 animate-spin" /> : <Wand2Icon className="size-3.5" />}
+                {isPromoting ? <Loader2Icon className="size-3.5 animate-spin" /> : <ListStart className="size-3.5" />}
               </button>
             ) : null}
             {canEdit ? (
