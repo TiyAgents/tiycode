@@ -186,6 +186,24 @@ export function parseCommandComposerMetadata(value: unknown): {
   displayText: string | null;
   effectivePrompt: string | null;
 } | null {
+  const runtimeQueueComposer = parseRuntimeQueueComposerMetadata(value);
+  if (!runtimeQueueComposer) {
+    return null;
+  }
+
+  return {
+    kind: runtimeQueueComposer.kind,
+    displayText: runtimeQueueComposer.displayText,
+    effectivePrompt: runtimeQueueComposer.effectivePrompt,
+  };
+}
+
+export function parseRuntimeQueueComposerMetadata(value: unknown): {
+  kind: "plain" | "command";
+  displayText: string | null;
+  effectivePrompt: string | null;
+  referencedFiles: Array<{ name: string; path: string; parentPath: string }>;
+} | null {
   const record = asObjectRecord(value);
   const composer = asObjectRecord(record?.composer);
   if (!composer) {
@@ -197,10 +215,26 @@ export function parseCommandComposerMetadata(value: unknown): {
     return null;
   }
 
+  const referencedFiles = Array.isArray(composer.referencedFiles)
+    ? composer.referencedFiles
+        .map((entry) => {
+          const file = asObjectRecord(entry);
+          const name = readStringField(file, "name");
+          const path = readStringField(file, "path");
+          const parentPath = readStringField(file, "parentPath") ?? "";
+          if (!name || !path) {
+            return null;
+          }
+          return { name, path, parentPath };
+        })
+        .filter((entry): entry is { name: string; path: string; parentPath: string } => entry !== null)
+    : [];
+
   return {
     kind,
     displayText: readStringField(composer, "displayText"),
     effectivePrompt: readStringField(composer, "effectivePrompt"),
+    referencedFiles,
   };
 }
 

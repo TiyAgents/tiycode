@@ -22,6 +22,7 @@ import {
   threadCompactContext,
   threadEnqueueQueueMessage,
   threadExecuteApprovedPlan,
+  threadPromoteRuntimeQueueMessage,
   threadStartRun,
   threadSubscribeRun,
   toolApprovalRespond,
@@ -322,6 +323,21 @@ export class ThreadStream {
   ): Promise<RuntimeQueueSnapshotDto> {
     try {
       const queue = await threadCancelRuntimeQueueMessage(threadId, messageId);
+      this.onQueue?.({ runId: this.currentRunId ?? "", queue });
+      return queue;
+    } catch (error) {
+      const message = formatInvokeErrorMessage(error) ?? "Unknown error";
+      this.onError?.(message, this.currentRunId ?? "");
+      throw error;
+    }
+  }
+
+  async promoteRuntimeQueueMessage(
+    threadId: string,
+    messageId: string,
+  ): Promise<RuntimeQueueSnapshotDto> {
+    try {
+      const queue = await threadPromoteRuntimeQueueMessage(threadId, messageId);
       this.onQueue?.({ runId: this.currentRunId ?? "", queue });
       return queue;
     } catch (error) {

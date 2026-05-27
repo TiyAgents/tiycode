@@ -545,6 +545,27 @@ impl AgentRunManager {
             })
     }
 
+    pub async fn promote_runtime_queue_message(
+        &self,
+        thread_id: &str,
+        message_id: &str,
+    ) -> Result<RuntimeQueueSnapshotDto, AppError> {
+        let Some(run_id) = active_run_id_for_thread(&self.active_runs, thread_id).await else {
+            return Err(inactive_thread_run_error());
+        };
+
+        self.runtime
+            .promote_runtime_queue_message(&run_id, message_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.run.session_missing",
+                    "The active run session is no longer available",
+                )
+            })
+    }
+
     pub async fn wait_until_thread_inactive(
         &self,
         thread_id: &str,

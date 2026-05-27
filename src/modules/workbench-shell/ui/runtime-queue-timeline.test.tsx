@@ -44,7 +44,11 @@ function t(key: string) {
   const labels: Record<string, string> = {
     "queue.cancelMessage": "Cancel queued message",
     "queue.cancellingMessage": "Cancelling queued message",
+    "queue.editMessage": "Edit queued message",
+    "queue.editingMessage": "Editing queued message",
     "queue.followUp": "Follow-up",
+    "queue.promoteMessage": "Promote to steer",
+    "queue.promotingMessage": "Promoting to steer",
     "queue.steer": "Steering",
     "queue.status.cancelled": "Cancelled",
     "queue.status.cleared": "Cleared",
@@ -58,6 +62,40 @@ function findButton(element: ReactElement): ReactElement<ComponentProps<"button"
   const found = findButtonOrNull(element);
   if (!found) throw new Error("button not found");
   return found;
+}
+
+function findButtonByLabel(element: ReactElement, label: string): ReactElement<ComponentProps<"button">> {
+  const found = findButtons(element).find((button) => button.props["aria-label"] === label);
+  if (!found) throw new Error(`button not found: ${label}`);
+  return found;
+}
+
+function findButtons(element: ReactElement): Array<ReactElement<ComponentProps<"button">>> {
+  const found: Array<ReactElement<ComponentProps<"button">>> = [];
+  collectButtons(element, found);
+  return found;
+}
+
+function collectButtons(element: ReactElement, found: Array<ReactElement<ComponentProps<"button">>>) {
+  let current: ReactElement = element;
+  while (typeof current.type === "function") {
+    const next = (current.type as (...args: unknown[]) => ReactElement)(current.props);
+    if (!next || typeof next !== "object" || !("type" in next)) return;
+    current = next as ReactElement;
+  }
+
+  if (current.type === "button") {
+    found.push(current as ReactElement<ComponentProps<"button">>);
+    return;
+  }
+
+  const props = current.props as { children?: unknown };
+  const children = Array.isArray(props.children) ? props.children : [props.children];
+
+  for (const child of children) {
+    if (!child || typeof child !== "object" || !("type" in child)) continue;
+    collectButtons(child as ReactElement, found);
+  }
 }
 
 function findButtonOrNull(element: ReactElement): ReactElement<ComponentProps<"button">> | null {
@@ -151,6 +189,58 @@ describe("RuntimeQueueTimeline", () => {
     expect(html).toMatch(/Steering|引导/);
     expect(html).toMatch(/1 (queued|个排队)/);
     expect(html).not.toMatch(/0 (queued|个排队)/);
+  });
+
+  it("renders promote and edit actions for pending follow-up messages", () => {
+    const html = renderQueue([
+      message({ id: "follow-up-message", kind: "follow_up", status: "pending" }),
+    ], {
+      onCancelMessage: () => undefined,
+      onPromoteMessage: () => undefined,
+      onEditMessage: () => undefined,
+    });
+
+    expect(html).toMatch(/Promote to steer|提升为引导消息/);
+    expect(html).toMatch(/Edit queued message|编辑排队消息/);
+    expect(html).toMatch(/Cancel queued message|取消排队消息/);
+  });
+
+  it("renders edit but not promote for pending steering messages", () => {
+    const html = renderQueue([
+      message({ id: "steer-message", kind: "steer", status: "pending" }),
+    ], {
+      onCancelMessage: () => undefined,
+      onPromoteMessage: () => undefined,
+      onEditMessage: () => undefined,
+    });
+
+    expect(html).not.toMatch(/Promote to steer|提升为引导消息/);
+    expect(html).toMatch(/Edit queued message|编辑排队消息/);
+    expect(html).toMatch(/Cancel queued message|取消排队消息/);
+  });
+
+  it("invokes promote and edit handlers with the queued message", () => {
+    const onPromoteMessage = vi.fn();
+    const onEditMessage = vi.fn();
+    const stopPromotePropagation = vi.fn();
+    const stopEditPropagation = vi.fn();
+    const queuedMessage = message({ id: "follow-up-message", kind: "follow_up", status: "pending" });
+    const card = (
+      <RuntimeQueueMessageCard
+        message={queuedMessage}
+        t={t}
+        onPromoteMessage={onPromoteMessage}
+        onEditMessage={onEditMessage}
+      />
+    ) as ReactElement;
+
+    findButtonByLabel(card, "Promote to steer").props.onClick?.({ stopPropagation: stopPromotePropagation } as never);
+    findButtonByLabel(card, "Edit queued message").props.onClick?.({ stopPropagation: stopEditPropagation } as never);
+
+    expect(stopPromotePropagation).toHaveBeenCalledOnce();
+    expect(onPromoteMessage).toHaveBeenCalledWith("follow-up-message");
+    expect(stopEditPropagation).toHaveBeenCalledOnce();
+    expect(onEditMessage).toHaveBeenCalledWith(queuedMessage);
   });
 
   it("renders a cancel action only for pending messages when a handler is provided", () => {

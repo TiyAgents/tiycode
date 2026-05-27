@@ -35,6 +35,7 @@ import type {
   MessageAttachmentDto,
   RunMode,
   RuntimeQueueMessageKind,
+  RuntimeQueueMessageDto,
   RuntimeQueueSnapshotDto,
   TaskBoardDto,
 } from "@/shared/types/api";
@@ -156,6 +157,7 @@ import {
   asObjectRecord,
   parseApprovalPromptMetadata,
   parseCommandComposerMetadata,
+  parseRuntimeQueueComposerMetadata,
   parseSummaryMarkerMetadata,
   parseClarifyPrompt,
   formatPlanMetadata,
@@ -300,6 +302,9 @@ export function RuntimeThreadSurface({
   const [messages, setMessages] = useState<Array<SurfaceMessage>>([]);
   const [runtimeQueue, setRuntimeQueue] = useState<RuntimeQueueSnapshotDto | null>(null);
   const [cancellingRuntimeQueueMessageIds, setCancellingRuntimeQueueMessageIds] = useState<Set<string>>(() => new Set());
+  const [promotingRuntimeQueueMessageIds, setPromotingRuntimeQueueMessageIds] = useState<Set<string>>(() => new Set());
+  const [editingRuntimeQueueMessageIds, setEditingRuntimeQueueMessageIds] = useState<Set<string>>(() => new Set());
+  const [composerRestoreSignal, setComposerRestoreSignal] = useState(0);
   const [runtimeQueueSubmitMode, setRuntimeQueueSubmitMode] = useState<RuntimeQueueSubmitMode>(defaultAppendMessageKind);
   const previousDefaultAppendMessageKindRef = useRef(defaultAppendMessageKind);
   const [requestRetryEntries, setRequestRetryEntries] = useState<Array<SurfaceRequestRetryEntry>>([]);
@@ -351,6 +356,8 @@ export function RuntimeThreadSurface({
       setRequestRetryEntries([]);
       setRequestRetryOpen({});
       setCancellingRuntimeQueueMessageIds(new Set());
+      setPromotingRuntimeQueueMessageIds(new Set());
+      setEditingRuntimeQueueMessageIds(new Set());
       setCompletedToolOpen({});
       setHelperOpen({});
       setReasoningOpen({});
@@ -785,6 +792,8 @@ export function RuntimeThreadSurface({
     setApprovingPlanMessageId(null);
     setRuntimeQueue(null);
     setCancellingRuntimeQueueMessageIds(new Set());
+    setPromotingRuntimeQueueMessageIds(new Set());
+    setEditingRuntimeQueueMessageIds(new Set());
     setRuntimeError(null);
     if (threadId) runMachine.reset("idle", RESET_IDLE_CONTEXT);
     setSnapshotReady(false);
@@ -1572,6 +1581,83 @@ export function RuntimeThreadSurface({
     }
   }, [threadId]);
 
+  const promoteRuntimeQueueMessage = useCallback(async (messageId: string) => {
+    if (!threadId || !streamRef.current) {
+      return;
+    }
+
+    setComposerError(null);
+    setRuntimeError(null);
+    setPromotingRuntimeQueueMessageIds((current) => {
+      const next = new Set(current);
+      next.add(messageId);
+      return next;
+    });
+
+    try {
+      const queue = await streamRef.current.promoteRuntimeQueueMessage(threadId, messageId);
+      setRuntimeQueue(queue);
+    } catch {
+      // ThreadStream already routes the formatted backend error to runtimeError.
+    } finally {
+      setPromotingRuntimeQueueMessageIds((current) => {
+        const next = new Set(current);
+        next.delete(messageId);
+        return next;
+      });
+    }
+  }, [threadId]);
+
+  const restoreRuntimeQueueMessageToComposer = useCallback((message: RuntimeQueueMessageDto) => {
+    if (!threadId) {
+      return;
+    }
+
+    const composer = parseRuntimeQueueComposerMetadata(message.metadata);
+    const displayText = composer?.displayText?.trim()
+      ? composer.displayText
+      : message.content;
+    const referencedFiles = composer?.referencedFiles ?? [];
+    const existing = getDraft(threadId);
+    setDraft(threadId, {
+      ...existing,
+      text: displayText,
+      referencedFiles: referencedFiles as ComposerReferencedFile[],
+      attachmentData: [],
+    });
+    setRuntimeQueueSubmitMode(message.kind);
+    setComposerClearSignal((current) => current + 1);
+    setComposerRestoreSignal((current) => current + 1);
+  }, [threadId]);
+
+  const editRuntimeQueueMessage = useCallback(async (message: RuntimeQueueMessageDto) => {
+    if (!threadId || !streamRef.current) {
+      return;
+    }
+
+    setComposerError(null);
+    setRuntimeError(null);
+    setEditingRuntimeQueueMessageIds((current) => {
+      const next = new Set(current);
+      next.add(message.id);
+      return next;
+    });
+
+    try {
+      const queue = await streamRef.current.cancelRuntimeQueueMessage(threadId, message.id);
+      setRuntimeQueue(queue);
+      restoreRuntimeQueueMessageToComposer(message);
+    } catch {
+      // ThreadStream already routes the formatted backend error to runtimeError.
+    } finally {
+      setEditingRuntimeQueueMessageIds((current) => {
+        const next = new Set(current);
+        next.delete(message.id);
+        return next;
+      });
+    }
+  }, [restoreRuntimeQueueMessageToComposer, threadId]);
+
   const respondToClarify = useCallback(async (
     tool: SurfaceToolEntry,
     response: Record<string, unknown>,
@@ -1658,6 +1744,12 @@ export function RuntimeThreadSurface({
   const hasPendingRuntimeQueue = Boolean(
     runtimeQueue?.messages.some((message) => message.status === "pending"),
   );
+  const composerReferencedFiles = threadId
+    ? getDraft(threadId).referencedFiles
+    : [];
+  const composerAttachmentData = threadId
+    ? getDraft(threadId).attachmentData
+    : undefined;
   const hasTaskHistoryTimeline = taskBoards.boards.some((board) => board.status !== "active");
   // Keep empty-state suppression aligned with panels that are actually visible:
   // the composer-adjacent queue panel only renders pending messages.
@@ -3118,6 +3210,10 @@ export function RuntimeThreadSurface({
                     variant="compact"
                     onCancelMessage={cancelRuntimeQueueMessage}
                     cancellingMessageIds={cancellingRuntimeQueueMessageIds}
+                    onPromoteMessage={promoteRuntimeQueueMessage}
+                    promotingMessageIds={promotingRuntimeQueueMessageIds}
+                    onEditMessage={editRuntimeQueueMessage}
+                    editingMessageIds={editingRuntimeQueueMessageIds}
                   />
                 ) : null}
                 {hasTaskHistoryTimeline ? (
@@ -3240,8 +3336,9 @@ export function RuntimeThreadSurface({
                 : undefined
             }
             onValueChange={setComposerValue}
-            initialReferencedFiles={threadId ? getDraft(threadId).referencedFiles : []}
-            initialAttachmentData={threadId ? getDraft(threadId).attachmentData : undefined}
+            initialReferencedFiles={composerReferencedFiles}
+            initialAttachmentData={composerAttachmentData}
+            restoreSignal={composerRestoreSignal}
             clearSignal={composerClearSignal}
             onReferencedFilesChange={(files) => {
               if (threadId) {

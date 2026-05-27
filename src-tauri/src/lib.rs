@@ -336,6 +336,7 @@ pub fn run() {
             commands::agent::thread_enqueue_queue_message,
             commands::agent::thread_clear_runtime_queue,
             commands::agent::thread_cancel_runtime_queue_message,
+            commands::agent::thread_promote_runtime_queue_message,
             commands::agent::thread_clear_context,
             commands::agent::thread_compact_context,
             commands::agent::thread_cancel_run,

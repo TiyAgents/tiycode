@@ -109,6 +109,7 @@ pub enum RuntimeQueueEventAction {
     Consumed,
     Cleared,
     Removed,
+    Transferred,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

@@ -7,7 +7,9 @@ import {
   ListPlusIcon,
   ListStart,
   Loader2Icon,
+  PencilIcon,
   Trash2Icon,
+  Wand2Icon,
   XIcon,
 } from "lucide-react";
 import type { ComponentProps } from "react";
@@ -36,6 +38,10 @@ export type RuntimeQueueTimelineProps = ComponentProps<"div"> & {
   queue: RuntimeQueueSnapshotDto | null;
   onCancelMessage?: (messageId: string) => void;
   cancellingMessageIds?: ReadonlySet<string>;
+  onPromoteMessage?: (messageId: string) => void;
+  promotingMessageIds?: ReadonlySet<string>;
+  onEditMessage?: (message: RuntimeQueueMessageDto) => void;
+  editingMessageIds?: ReadonlySet<string>;
   variant?: RuntimeQueueTimelineVariant;
 };
 
@@ -76,12 +82,20 @@ export function RuntimeQueueMessageCard({
   t,
   onCancelMessage,
   isCancelling,
+  onPromoteMessage,
+  isPromoting,
+  onEditMessage,
+  isEditing,
   variant = "default",
 }: {
   message: RuntimeQueueMessageDto;
   t: ReturnType<typeof useT>;
   onCancelMessage?: (messageId: string) => void;
   isCancelling?: boolean;
+  onPromoteMessage?: (messageId: string) => void;
+  isPromoting?: boolean;
+  onEditMessage?: (message: RuntimeQueueMessageDto) => void;
+  isEditing?: boolean;
   variant?: RuntimeQueueTimelineVariant;
 }) {
   const commandComposer = parseCommandComposerMetadata(message.metadata);
@@ -96,7 +110,12 @@ export function RuntimeQueueMessageCard({
     expandedPrompt && expandedPrompt !== displayText.trim(),
   );
   const canCancel = message.status === "pending" && Boolean(onCancelMessage);
+  const canPromote = message.status === "pending" && message.kind === "follow_up" && Boolean(onPromoteMessage);
+  const canEdit = message.status === "pending" && Boolean(onEditMessage);
+  const isBusy = Boolean(isCancelling || isPromoting || isEditing);
   const cancelLabel = isCancelling ? t("queue.cancellingMessage") : t("queue.cancelMessage");
+  const promoteLabel = isPromoting ? t("queue.promotingMessage") : t("queue.promoteMessage");
+  const editLabel = isEditing ? t("queue.editingMessage") : t("queue.editMessage");
   const isCompact = variant === "compact";
 
   return (
@@ -140,26 +159,72 @@ export function RuntimeQueueMessageCard({
             </CompactCollapsible>
           ) : null}
         </div>
-        {canCancel ? (
-          <button
-            type="button"
-            aria-label={cancelLabel}
-            title={cancelLabel}
-            disabled={isCancelling}
-            className={cn(
-              "-mr-1 -mt-1 flex flex-shrink-0 items-center justify-center rounded-full text-app-subtle opacity-70 transition-all hover:bg-app-surface-hover hover:text-app-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-primary/40 disabled:cursor-not-allowed disabled:opacity-50 sm:opacity-0 sm:group-hover/queue-card:opacity-100",
-              isCompact ? "size-6" : "size-7",
-              isCancelling && "opacity-100 sm:opacity-100",
-            )}
-            onClick={(event) => {
-              event.stopPropagation();
-              if (!isCancelling) {
-                onCancelMessage?.(message.id);
-              }
-            }}
-          >
-            {isCancelling ? <Loader2Icon className="size-3.5 animate-spin" /> : <XIcon className="size-3.5" />}
-          </button>
+        {canPromote || canEdit || canCancel ? (
+          <div className={cn("-mr-1 -mt-1 flex flex-shrink-0 items-center", isCompact ? "gap-0.5" : "gap-1")}>
+            {canPromote ? (
+              <button
+                type="button"
+                aria-label={promoteLabel}
+                title={promoteLabel}
+                disabled={isBusy}
+                className={cn(
+                  "flex items-center justify-center rounded-full text-app-subtle opacity-70 transition-all hover:bg-app-surface-hover hover:text-app-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-primary/40 disabled:cursor-not-allowed disabled:opacity-50 sm:opacity-0 sm:group-hover/queue-card:opacity-100",
+                  isCompact ? "size-6" : "size-7",
+                  isPromoting && "opacity-100 sm:opacity-100",
+                )}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (!isBusy) {
+                    onPromoteMessage?.(message.id);
+                  }
+                }}
+              >
+                {isPromoting ? <Loader2Icon className="size-3.5 animate-spin" /> : <Wand2Icon className="size-3.5" />}
+              </button>
+            ) : null}
+            {canEdit ? (
+              <button
+                type="button"
+                aria-label={editLabel}
+                title={editLabel}
+                disabled={isBusy}
+                className={cn(
+                  "flex items-center justify-center rounded-full text-app-subtle opacity-70 transition-all hover:bg-app-surface-hover hover:text-app-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-primary/40 disabled:cursor-not-allowed disabled:opacity-50 sm:opacity-0 sm:group-hover/queue-card:opacity-100",
+                  isCompact ? "size-6" : "size-7",
+                  isEditing && "opacity-100 sm:opacity-100",
+                )}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (!isBusy) {
+                    onEditMessage?.(message);
+                  }
+                }}
+              >
+                {isEditing ? <Loader2Icon className="size-3.5 animate-spin" /> : <PencilIcon className="size-3.5" />}
+              </button>
+            ) : null}
+            {canCancel ? (
+              <button
+                type="button"
+                aria-label={cancelLabel}
+                title={cancelLabel}
+                disabled={isBusy}
+                className={cn(
+                  "flex items-center justify-center rounded-full text-app-subtle opacity-70 transition-all hover:bg-app-surface-hover hover:text-app-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-app-primary/40 disabled:cursor-not-allowed disabled:opacity-50 sm:opacity-0 sm:group-hover/queue-card:opacity-100",
+                  isCompact ? "size-6" : "size-7",
+                  isCancelling && "opacity-100 sm:opacity-100",
+                )}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (!isBusy) {
+                    onCancelMessage?.(message.id);
+                  }
+                }}
+              >
+                {isCancelling ? <Loader2Icon className="size-3.5 animate-spin" /> : <XIcon className="size-3.5" />}
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>
@@ -170,6 +235,10 @@ export const RuntimeQueueTimeline = ({
   queue,
   onCancelMessage,
   cancellingMessageIds,
+  onPromoteMessage,
+  promotingMessageIds,
+  onEditMessage,
+  editingMessageIds,
   className,
   variant = "default",
   ...props
@@ -222,6 +291,10 @@ export const RuntimeQueueTimeline = ({
                   t={t}
                   onCancelMessage={onCancelMessage}
                   isCancelling={cancellingMessageIds?.has(message.id)}
+                  onPromoteMessage={onPromoteMessage}
+                  isPromoting={promotingMessageIds?.has(message.id)}
+                  onEditMessage={onEditMessage}
+                  isEditing={editingMessageIds?.has(message.id)}
                   variant={variant}
                 />
               ))}
@@ -239,6 +312,10 @@ export const RuntimeQueueTimeline = ({
                   t={t}
                   onCancelMessage={onCancelMessage}
                   isCancelling={cancellingMessageIds?.has(message.id)}
+                  onPromoteMessage={onPromoteMessage}
+                  isPromoting={promotingMessageIds?.has(message.id)}
+                  onEditMessage={onEditMessage}
+                  isEditing={editingMessageIds?.has(message.id)}
                   variant={variant}
                 />
               ))}

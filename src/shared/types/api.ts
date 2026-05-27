@@ -465,7 +465,7 @@ export interface SubagentProgressSnapshot {
 
 export type RuntimeQueueMessageKind = "steer" | "follow_up";
 export type RuntimeQueueMessageStatus = "pending" | "consumed" | "cleared" | "cancelled";
-export type RuntimeQueueEventAction = "enqueued" | "consumed" | "cleared" | "removed";
+export type RuntimeQueueEventAction = "enqueued" | "consumed" | "cleared" | "removed" | "transferred";
 
 export interface RuntimeQueueMessageDto {
   id: string;
