@@ -119,7 +119,7 @@ impl RuntimeOrchestrationTool {
                 "Review an implemented code change or diff, run the necessary type-check and test commands, and return risks, regressions, verification results, and concrete follow-ups. Use this after implementation to stress-test the work."
             }
             Self::Parallel => {
-                "Delegate 1-3 independent subtasks to subagents with bounded concurrency. Use this for parallel exploration or review work only when tasks are independent and low side-effect; results are aggregated for the parent agent."
+                "Delegate 1-5 independent subtasks to subagents with bounded concurrency. Use this for parallel exploration or review work only when tasks are independent and low side-effect; results are aggregated for the parent agent."
             }
             Self::Custom(_) => {
                 // Custom subagents have their description set externally via custom_subagent_as_tool
@@ -256,7 +256,7 @@ impl RuntimeOrchestrationTool {
                         "minimum": 1,
                         "maximum": PARALLEL_SUBAGENT_MAX_CONCURRENCY,
                         "default": PARALLEL_SUBAGENT_DEFAULT_CONCURRENCY,
-                        "description": "Maximum number of subagents to run at once. Defaults to 2 and is capped at 3."
+                        "description": "Maximum number of subagents to run at once. Defaults to 3 and is capped at 5."
                     },
                     "failFast": {
                         "type": "boolean",
@@ -834,9 +834,13 @@ mod tests {
         let tool = RuntimeOrchestrationTool::Parallel.as_agent_tool();
         assert_eq!(tool.name, "agent_parallel");
         assert_eq!(tool.parameters["required"], serde_json::json!(["tasks"]));
-        assert_eq!(tool.parameters["properties"]["tasks"]["maxItems"], 3);
+        assert_eq!(tool.parameters["properties"]["tasks"]["maxItems"], 5);
         assert_eq!(
             tool.parameters["properties"]["maxConcurrency"]["maximum"],
+            5
+        );
+        assert_eq!(
+            tool.parameters["properties"]["maxConcurrency"]["default"],
             3
         );
         assert!(tool.description.contains("bounded concurrency"));

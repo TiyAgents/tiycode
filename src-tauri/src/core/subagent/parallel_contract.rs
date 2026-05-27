@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use crate::core::subagent::review_contract::{ReviewReport, ReviewRequest};
 use crate::core::subagent::SubagentProgressSnapshot;
 
-pub const PARALLEL_SUBAGENT_DEFAULT_CONCURRENCY: usize = 2;
-pub const PARALLEL_SUBAGENT_MAX_CONCURRENCY: usize = 3;
-pub const PARALLEL_SUBAGENT_MAX_TASKS: usize = 3;
+pub const PARALLEL_SUBAGENT_DEFAULT_CONCURRENCY: usize = 3;
+pub const PARALLEL_SUBAGENT_MAX_CONCURRENCY: usize = 5;
+pub const PARALLEL_SUBAGENT_MAX_TASKS: usize = 5;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -237,14 +237,31 @@ mod tests {
         let request = ParallelSubagentRequest::from_tool_input(&serde_json::json!({
             "tasks": [
                 { "agent": "agent_explore", "task": "Explore backend" },
-                { "agent": "agent_review", "task": "Review diff", "target": "diff" }
-            ],
-            "maxConcurrency": 2
+                { "agent": "agent_review", "task": "Review diff", "target": "diff" },
+                { "agent": "agent_explore", "task": "Explore frontend" }
+            ]
         }))
         .expect("request should be valid");
 
-        assert_eq!(request.effective_max_concurrency(), 2);
+        assert_eq!(request.effective_max_concurrency(), 3);
         assert_eq!(request.tasks[1].to_tool_input()["target"], "diff");
+    }
+
+    #[test]
+    fn accepts_maximum_parallel_request_bounds() {
+        let request = ParallelSubagentRequest::from_tool_input(&serde_json::json!({
+            "tasks": [
+                { "agent": "agent_explore", "task": "one" },
+                { "agent": "agent_explore", "task": "two" },
+                { "agent": "agent_explore", "task": "three" },
+                { "agent": "agent_explore", "task": "four" },
+                { "agent": "agent_explore", "task": "five" }
+            ],
+            "maxConcurrency": 5
+        }))
+        .expect("maximum request should be valid");
+
+        assert_eq!(request.effective_max_concurrency(), 5);
     }
 
     #[test]
@@ -254,12 +271,27 @@ mod tests {
                 { "agent": "agent_explore", "task": "one" },
                 { "agent": "agent_explore", "task": "two" },
                 { "agent": "agent_explore", "task": "three" },
-                { "agent": "agent_explore", "task": "four" }
+                { "agent": "agent_explore", "task": "four" },
+                { "agent": "agent_explore", "task": "five" },
+                { "agent": "agent_explore", "task": "six" }
             ]
         }))
         .expect_err("request should be rejected");
 
-        assert!(error.contains("at most 3 tasks"));
+        assert!(error.contains("at most 5 tasks"));
+    }
+
+    #[test]
+    fn rejects_parallel_request_with_too_much_concurrency() {
+        let error = ParallelSubagentRequest::from_tool_input(&serde_json::json!({
+            "tasks": [
+                { "agent": "agent_explore", "task": "one" }
+            ],
+            "maxConcurrency": 6
+        }))
+        .expect_err("request should be rejected");
+
+        assert!(error.contains("maxConcurrency must be <= 5"));
     }
 
     #[test]

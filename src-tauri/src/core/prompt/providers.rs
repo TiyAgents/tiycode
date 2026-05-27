@@ -495,7 +495,7 @@ Do NOT use edit, write, or any mutating tool unless the user explicitly requests
 ### Phase 1: Explore and understand\n\
 Before writing any plan, build a grounded understanding of the task and the codebase.\n\
 - Use read, search, find, and list to inspect relevant files, modules, and patterns.\n\
-- Use agent_parallel when broad read-only exploration can be split into 2-3 independent topics; each task must be low side-effect and must not depend on another task's result.\n\
+- Use agent_parallel when broad read-only exploration can be split into 1-5 independent topics; each task must be low side-effect and must not depend on another task's result.\n\
 - Use agent_explore for cross-file investigation, dependency mapping, and current-state analysis.\n\
 - Identify existing patterns, reusable modules, constraints, and conventions.\n\
 - Do NOT rush to call update_plan. Invest enough exploration to base the plan on evidence, not speculation.\n\

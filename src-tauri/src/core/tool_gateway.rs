@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 use tiycore::agent::AbortSignal;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex, Semaphore};
 
 use crate::core::executors::{self, ToolOutput};
 use crate::core::policy_engine::{PolicyEngine, PolicyVerdict};
@@ -22,6 +22,9 @@ use crate::model::thread::MessageRecord;
 use crate::persistence::repo::{
     audit_repo, message_repo, settings_repo, thread_repo, tool_call_repo,
 };
+
+const MAX_CONCURRENT_TOOL_EXECUTIONS: usize = 5;
+const MAX_CONCURRENT_TERMINAL_CONTROL_TOOLS: usize = 1;
 
 /// Request context for a single tool execution.
 #[derive(Debug, Clone)]
@@ -104,6 +107,8 @@ pub struct ToolGateway {
     extensions_manager: Arc<ExtensionsManager>,
     pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     pending_clarifications: Arc<Mutex<HashMap<String, PendingClarification>>>,
+    tool_execution_semaphore: Arc<Semaphore>,
+    terminal_control_semaphore: Arc<Semaphore>,
 }
 
 struct PendingClarification {
@@ -121,6 +126,10 @@ impl ToolGateway {
             extensions_manager: Arc::new(ExtensionsManager::new(pool.clone())),
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
             pending_clarifications: Arc::new(Mutex::new(HashMap::new())),
+            tool_execution_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_TOOL_EXECUTIONS)),
+            terminal_control_semaphore: Arc::new(Semaphore::new(
+                MAX_CONCURRENT_TERMINAL_CONTROL_TOOLS,
+            )),
         }
     }
 
@@ -612,6 +621,33 @@ impl ToolGateway {
         policy_json: &str,
         resolved_tool: Option<&ResolvedTool>,
     ) -> Result<ToolOutput, crate::model::errors::AppError> {
+        let _terminal_control_permit = if is_terminal_control_tool(&request.tool_name) {
+            Some(
+                self.terminal_control_semaphore
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|error| {
+                        crate::model::errors::AppError::internal(
+                            crate::model::errors::ErrorSource::Tool,
+                            error.to_string(),
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+        let _tool_execution_permit = self
+            .tool_execution_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|error| {
+                crate::model::errors::AppError::internal(
+                    crate::model::errors::ErrorSource::Tool,
+                    error.to_string(),
+                )
+            })?;
         tool_call_repo::update_status(&self.pool, &request.tool_call_storage_id, "running").await?;
         let writable_roots = self.load_writable_roots().await?;
 
@@ -781,5 +817,33 @@ impl ToolGateway {
                 &request.tool_call_storage_id,
             )
             .await
+    }
+}
+
+fn is_terminal_control_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "term_write" | "term_restart" | "term_close")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_terminal_control_tool, MAX_CONCURRENT_TERMINAL_CONTROL_TOOLS,
+        MAX_CONCURRENT_TOOL_EXECUTIONS,
+    };
+
+    #[test]
+    fn tool_gateway_concurrency_limits_match_policy() {
+        assert_eq!(MAX_CONCURRENT_TOOL_EXECUTIONS, 5);
+        assert_eq!(MAX_CONCURRENT_TERMINAL_CONTROL_TOOLS, 1);
+    }
+
+    #[test]
+    fn terminal_control_detection_only_matches_mutating_terminal_tools() {
+        assert!(is_terminal_control_tool("term_write"));
+        assert!(is_terminal_control_tool("term_restart"));
+        assert!(is_terminal_control_tool("term_close"));
+        assert!(!is_terminal_control_tool("term_status"));
+        assert!(!is_terminal_control_tool("term_output"));
+        assert!(!is_terminal_control_tool("shell"));
     }
 }
