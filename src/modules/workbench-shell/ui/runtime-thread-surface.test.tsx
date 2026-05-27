@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createMachine } from "@/shared/lib/create-machine";
 import { mapSnapshotToRunState, isTaskBoardTool, getDefaultToolOpenState } from "./runtime-thread-surface-logic";
 import { LongMessageBody, shouldRenderTextPartAsPlainText } from "./long-message-body";
-import { mapMessageParts, mapRecordedUserMessage, mapSnapshotMessage, mergeSnapshotMessages, mergeSnapshotTools } from "./runtime-thread-surface-state";
+import { mapMessageParts, mapRecordedUserMessage, mapSnapshotMessage, mergeSnapshotMessages, mergeSnapshotTools, getCopyableMessageText, getCopyableThreadMessageText } from "./runtime-thread-surface-state";
 import type { SurfaceMessage } from "./runtime-thread-surface-state";
 import type { MessageDto, RunStatus, ThreadSnapshotDto } from "@/shared/types/api";
 
@@ -170,6 +170,86 @@ describe("mapSnapshotMessage", () => {
 
     expect(message.content).toBe("legacy body");
     expect(message.parts).toEqual([{ type: "text", text: "structured body" }]);
+  });
+});
+
+describe("copyable message text", () => {
+  it("joins only text parts and filters non-text tool-like artifact parts", () => {
+    const message = mapSnapshotMessage(makeMessage({
+      contentMarkdown: "legacy body should not be copied",
+      parts: [
+        { type: "text", text: "Intro" },
+        { type: "chart", artifactId: "chart-1", library: "vega-lite", spec: { mark: "bar" }, title: "Chart" },
+        { type: "data-tool", data: { input: "should not copy" } },
+        { type: "tool-result", result: "should not copy" } as never,
+        { type: "text", text: "Outro" },
+      ],
+    }));
+
+    expect(getCopyableMessageText(message)).toBe("Intro\n\nOutro");
+  });
+
+  it("falls back to legacy content only when no structured parts exist", () => {
+    expect(getCopyableMessageText({
+      content: "legacy markdown",
+      parts: [],
+      status: "completed",
+    })).toBe("legacy markdown");
+  });
+
+  it("returns an empty string for messages that only contain non-text parts", () => {
+    expect(getCopyableMessageText({
+      content: "legacy chart description",
+      parts: [{
+        artifactId: "chart-only",
+        caption: null,
+        error: null,
+        library: "vega-lite",
+        source: null,
+        spec: { mark: "line" },
+        status: "ready",
+        title: null,
+        type: "chart",
+      }],
+      status: "completed",
+    })).toBe("");
+  });
+
+  it("keeps plain user and assistant messages on the text-part copy path", () => {
+    const plainUserMessage: Pick<SurfaceMessage, "content" | "parts" | "role" | "status"> = {
+      content: "legacy user content",
+      parts: [{ type: "text", text: "plain user text" }],
+      role: "user",
+      status: "completed",
+    };
+    const assistantMessage: Pick<SurfaceMessage, "content" | "parts" | "role" | "status"> = {
+      content: "legacy assistant content",
+      parts: [{ type: "text", text: "assistant **markdown**" }],
+      role: "assistant",
+      status: "completed",
+    };
+
+    expect(getCopyableThreadMessageText(plainUserMessage, {
+      kind: "plain",
+      displayText: "ignored plain display",
+      effectivePrompt: null,
+    })).toBe("plain user text");
+    expect(getCopyableThreadMessageText(assistantMessage)).toBe("assistant **markdown**");
+  });
+
+  it("copies only the original slash command display text for command messages", () => {
+    const message: Pick<SurfaceMessage, "content" | "parts" | "role" | "status"> = {
+      content: "/init",
+      parts: [{ type: "text", text: "/init" }],
+      role: "user",
+      status: "completed",
+    };
+
+    expect(getCopyableThreadMessageText(message, {
+      kind: "command",
+      displayText: "/init --check",
+      effectivePrompt: "Generate or update AGENTS.md with a long internal prompt",
+    })).toBe("/init --check");
   });
 });
 

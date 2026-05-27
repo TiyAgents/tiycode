@@ -1,7 +1,7 @@
 "use client";
 
 import type { ChatStatus } from "ai";
-import { AlertCircleIcon, BotIcon, ChevronDownIcon, Info, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
+import { AlertCircleIcon, BotIcon, CheckIcon, ChevronDownIcon, CopyIcon, Info, RefreshCcwIcon, SparklesIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "@/i18n";
@@ -13,7 +13,7 @@ import {
 } from "@/components/ai-elements/compact-collapsible";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import type { StickToBottomContext } from "use-stick-to-bottom";
-import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
+import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Plan, PlanContent, PlanDescription, PlanHeader, PlanTitle, PlanTrigger } from "@/components/ai-elements/plan";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
@@ -117,6 +117,7 @@ import {
   getApprovalReason,
   getApprovalTagClass,
   getApprovalTagLabel,
+  getCopyableThreadMessageText,
   getLatestVisibleRun,
   getPresentationEntryRole,
   getRoleSpacingClass,
@@ -286,6 +287,8 @@ export function RuntimeThreadSurface({
     [threadId],
   );
   const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const messageCopyResetTimeoutRef = useRef<number>(0);
   const [helpers, setHelpers] = useState<Array<SurfaceHelperEntry>>([]);
   const [helperOpen, setHelperOpen] = useState<Record<string, boolean>>({});
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
@@ -346,6 +349,10 @@ export function RuntimeThreadSurface({
       setCompletedToolOpen({});
       setHelperOpen({});
       setReasoningOpen({});
+      setCopiedMessageId(null);
+      if (typeof window !== "undefined") {
+        window.clearTimeout(messageCopyResetTimeoutRef.current);
+      }
       userManuallyOpenedIds.current.clear();
     }
   }, [defaultAppendMessageKind, threadId]);
@@ -383,6 +390,34 @@ export function RuntimeThreadSurface({
     if (thinkingTimerRef.current !== null) {
       clearTimeout(thinkingTimerRef.current);
       thinkingTimerRef.current = null;
+    }
+  }, []);
+
+  const handleCopyMessage = useCallback(async (messageId: string, text: string) => {
+    if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
+      return;
+    }
+
+    const normalizedText = text.trim();
+    if (!normalizedText) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(normalizedText);
+      window.clearTimeout(messageCopyResetTimeoutRef.current);
+      setCopiedMessageId(messageId);
+      messageCopyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopiedMessageId((current) => (current === messageId ? null : current));
+      }, 2000);
+    } catch {
+      // Ignore clipboard permission/focus failures; manual selection still works.
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (typeof window !== "undefined") {
+      window.clearTimeout(messageCopyResetTimeoutRef.current);
     }
   }, []);
 
@@ -2652,6 +2687,20 @@ export function RuntimeThreadSurface({
                   );
                 }
 
+                const commandComposer = message.role === "user"
+                  ? parseCommandComposerMetadata(message.metadata)
+                  : null;
+                const expandedPrompt = commandComposer?.kind === "command"
+                  ? (commandComposer.effectivePrompt?.trim() ?? "")
+                  : "";
+                const copyableText = getCopyableThreadMessageText(message, commandComposer);
+                const canCopyMessage =
+                  (message.role === "user" || message.role === "assistant")
+                  && message.status !== "discarded"
+                  && copyableText.length > 0;
+                const copied = copiedMessageId === message.id;
+                const copyLabel = copied ? t("message.copied") : t("message.copy");
+
                 return (
                   <div className={spacingClass} key={entry.key}>
                     <Message
@@ -2677,49 +2726,59 @@ export function RuntimeThreadSurface({
                             </p>
                           </div>
                         ) : (
-                          (() => {
-                            const commandComposer = message.role === "user"
-                              ? parseCommandComposerMetadata(message.metadata)
-                              : null;
-                            const expandedPrompt = commandComposer?.kind === "command"
-                              ? (commandComposer.effectivePrompt?.trim() ?? "")
-                              : "";
-
-                            return (
-                              <div className="space-y-2">
-                                <ComposerMessageAttachments
-                                  attachments={message.attachments.map((attachment) => ({
-                                    id: attachment.id,
-                                    mediaType: attachment.mediaType ?? undefined,
-                                    name: attachment.name,
-                                    url: attachment.url ?? undefined,
-                                  }))}
-                                />
-                                {<LongMessageBody message={message} t={t} />}
-                                {expandedPrompt && expandedPrompt !== (message.content ?? "").trim() ? (
-                                  <CompactCollapsible defaultOpen={false}>
-                                    <CompactCollapsibleHeader className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground">
-                                      <div className="min-w-0">
-                                        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-app-subtle">
-                                          Expanded prompt
-                                        </div>
-                                        <div className="truncate text-xs text-app-muted">
-                                          {expandedPrompt}
-                                        </div>
-                                      </div>
-                                    </CompactCollapsibleHeader>
-                                    <CompactCollapsibleContent className="pl-0">
-                                      <div className="whitespace-pre-wrap rounded-xl border border-app-border/25 bg-app-surface/35 px-3 py-2 text-xs leading-5 text-app-muted">
-                                        {expandedPrompt}
-                                      </div>
-                                    </CompactCollapsibleContent>
-                                  </CompactCollapsible>
-                                ) : null}
-                              </div>
-                            );
-                          })()
+                          <div className="space-y-2">
+                            <ComposerMessageAttachments
+                              attachments={message.attachments.map((attachment) => ({
+                                id: attachment.id,
+                                mediaType: attachment.mediaType ?? undefined,
+                                name: attachment.name,
+                                url: attachment.url ?? undefined,
+                              }))}
+                            />
+                            {<LongMessageBody message={message} t={t} />}
+                            {expandedPrompt && expandedPrompt !== (message.content ?? "").trim() ? (
+                              <CompactCollapsible defaultOpen={false}>
+                                <CompactCollapsibleHeader className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground">
+                                  <div className="min-w-0">
+                                    <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-app-subtle">
+                                      Expanded prompt
+                                    </div>
+                                    <div className="truncate text-xs text-app-muted">
+                                      {expandedPrompt}
+                                    </div>
+                                  </div>
+                                </CompactCollapsibleHeader>
+                                <CompactCollapsibleContent className="pl-0">
+                                  <div className="whitespace-pre-wrap rounded-xl border border-app-border/25 bg-app-surface/35 px-3 py-2 text-xs leading-5 text-app-muted">
+                                    {expandedPrompt}
+                                  </div>
+                                </CompactCollapsibleContent>
+                              </CompactCollapsible>
+                            ) : null}
+                          </div>
                         )}
                       </MessageContent>
+                      {canCopyMessage ? (
+                        <MessageActions
+                          className={cn(
+                            "pointer-events-none h-7 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
+                            message.role === "user" ? "ml-auto justify-end" : "justify-start",
+                          )}
+                        >
+                          <MessageAction
+                            aria-label={copyLabel}
+                            className={cn(
+                              "size-7 rounded-md border border-transparent bg-transparent text-app-subtle/85 shadow-none hover:bg-app-surface-hover hover:text-app-foreground focus-visible:bg-app-surface-hover",
+                              copied && "bg-app-surface-hover text-app-foreground",
+                            )}
+                            label={copyLabel}
+                            onClick={() => void handleCopyMessage(message.id, copyableText)}
+                            tooltip={copyLabel}
+                          >
+                            {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+                          </MessageAction>
+                        </MessageActions>
+                      ) : null}
                     </Message>
                   </div>
                 );
