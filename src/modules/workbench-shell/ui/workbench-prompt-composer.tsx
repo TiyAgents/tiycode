@@ -141,6 +141,8 @@ type WorkbenchPromptComposerProps = {
   initialReferencedFiles?: ReadonlyArray<ComposerReferencedFile>;
   /** Pre-populate attachments on mount (restored from serialized draft). */
   initialAttachmentData?: ReadonlyArray<SerializableAttachment>;
+  /** Increment to restore local composer state from current initial* props. */
+  restoreSignal?: number;
   /** Increment to clear all local composer state (attachments, referenced files, etc.). */
   clearSignal?: number;
   /** Callback to persist referenced files back to the draft store. */
@@ -1877,6 +1879,7 @@ export function WorkbenchPromptComposer({
   onValueChange,
   initialReferencedFiles,
   initialAttachmentData,
+  restoreSignal,
   clearSignal,
   onReferencedFilesChange,
   onAttachmentDataChange,
@@ -2108,6 +2111,21 @@ export function WorkbenchPromptComposer({
     setFileSearchLoading(false);
     setFileSearchError(null);
   }, [clearSignal]);
+
+  // ── Restore local state when parent explicitly restores a draft ──
+  useEffect(() => {
+    if (restoreSignal === undefined || restoreSignal === 0) {
+      return;
+    }
+    setReferencedFiles(initialReferencedFiles ?? []);
+    referencedSourceBridgeRef.current?.syncFiles(initialReferencedFiles ?? []);
+    setSelectedCommandKey(null);
+    setSelectedFileIndex(0);
+    setSelectedSkillIndex(0);
+    setFileSearchResults([]);
+    setFileSearchLoading(false);
+    setFileSearchError(null);
+  }, [initialReferencedFiles, restoreSignal]);
 
   // ── Sync referenced files to parent (draft persistence) ──
   const syncedRefFilesRef = useRef<string>("");

@@ -202,6 +202,18 @@ pub async fn thread_cancel_runtime_queue_message(
         .await
 }
 
+#[tauri::command]
+pub async fn thread_promote_runtime_queue_message(
+    state: State<'_, AppState>,
+    thread_id: String,
+    message_id: String,
+) -> Result<RuntimeQueueSnapshotDto, AppError> {
+    state
+        .agent_run_manager
+        .promote_runtime_queue_message(&thread_id, &message_id)
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;

@@ -503,6 +503,107 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn update_runtime_queue_state_for_transferred_moves_pending_message_to_target_kind() {
+        let mut state = RuntimeQueueState::default();
+        let message_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Promote this".to_string(),
+            None,
+        );
+
+        let update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Transferred {
+                from: QueueKind::FollowUp,
+                to: QueueKind::Steering,
+                count: 1,
+                source_remaining: 0,
+                target_queue_depth: 1,
+            },
+        );
+
+        assert!(update.consumed_messages.is_empty());
+        assert_eq!(update.event.action, RuntimeQueueEventAction::Transferred);
+        assert_eq!(update.event.kind, AgentQueueMessageKind::Steer);
+        assert_eq!(update.event.remaining, Some(0));
+        assert_eq!(update.event.queue_depth, Some(1));
+        assert_eq!(state.messages[0].id, message_id);
+        assert_eq!(state.messages[0].kind, AgentQueueMessageKind::Steer);
+        assert_eq!(state.messages[0].status, RuntimeQueueMessageStatus::Pending);
+    }
+
+    #[test]
+    fn removed_event_for_pending_promote_does_not_cancel_message() {
+        let mut state = RuntimeQueueState::default();
+        let message_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Promote this".to_string(),
+            None,
+        );
+        state.pending_promoted_message_ids.push(message_id.clone());
+
+        let update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::FollowUp,
+                count: 1,
+                remaining: 0,
+            },
+        );
+
+        assert!(update.consumed_messages.is_empty());
+        assert_eq!(update.event.action, RuntimeQueueEventAction::Removed);
+        assert_eq!(state.messages[0].id, message_id);
+        assert_eq!(state.messages[0].kind, AgentQueueMessageKind::FollowUp);
+        assert_eq!(state.messages[0].status, RuntimeQueueMessageStatus::Pending);
+        assert!(state.pending_promoted_message_ids.contains(&message_id));
+    }
+
+    #[test]
+    fn removed_event_for_pending_promote_counts_promoted_message_once() {
+        let mut state = RuntimeQueueState::default();
+        let promoted_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Promote this".to_string(),
+            None,
+        );
+        let cancelled_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Cancel this".to_string(),
+            None,
+        );
+        state.pending_promoted_message_ids.push(promoted_id.clone());
+
+        let update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::FollowUp,
+                count: 2,
+                remaining: 0,
+            },
+        );
+
+        assert!(update.consumed_messages.is_empty());
+        assert_eq!(update.event.action, RuntimeQueueEventAction::Removed);
+        let promoted = state
+            .messages
+            .iter()
+            .find(|message| message.id == promoted_id)
+            .expect("promoted message");
+        let cancelled = state
+            .messages
+            .iter()
+            .find(|message| message.id == cancelled_id)
+            .expect("cancelled message");
+        assert_eq!(promoted.status, RuntimeQueueMessageStatus::Pending);
+        assert_eq!(cancelled.status, RuntimeQueueMessageStatus::Cancelled);
+    }
+
+    #[test]
     fn mark_runtime_queue_message_by_id_only_marks_requested_message() {
         let mut state = RuntimeQueueState::default();
         let first_id = super::super::append_runtime_queue_message(
@@ -4518,6 +4619,70 @@ Used for prompt assembly coverage.
     // consistent state with no leaked pending IDs corrupting subsequent
     // operations.
     // ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn promote_runtime_queue_message_keeps_ui_id_and_updates_kind() {
+        let temp_dir = tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+        let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+        let tool_gateway = Arc::new(ToolGateway::new(pool.clone(), terminal_manager));
+        let helper_orchestrator = Arc::new(HelperAgentOrchestrator::new(
+            pool.clone(),
+            Arc::clone(&tool_gateway),
+        ));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<ThreadStreamEvent>();
+        let spec = AgentSessionSpec {
+            run_id: "run-promote-queue".to_string(),
+            thread_id: "thread-promote-queue".to_string(),
+            workspace_path: temp_dir.path().to_string_lossy().to_string(),
+            run_mode: "default".to_string(),
+            tool_profile_name: DEFAULT_FULL_TOOL_PROFILE.to_string(),
+            runtime_tools: Vec::new(),
+            system_prompt: "You are a test agent.".to_string(),
+            history_messages: Vec::new(),
+            history_tool_calls: Vec::new(),
+            model_plan: sample_resolved_runtime_model_plan(None),
+            initial_prompt: None,
+            initial_context_calibration: Default::default(),
+        };
+        let session = AgentSession::new(pool, tool_gateway, helper_orchestrator, event_tx, spec, 4);
+        let enqueue_snapshot = session
+            .enqueue_queue_message(
+                AgentQueueMessageKind::FollowUp,
+                "promote me".to_string(),
+                None,
+            )
+            .expect("enqueue follow-up");
+        let message_id = enqueue_snapshot.messages[0].id.clone();
+        let old_handle = enqueue_snapshot.messages[0].handle.expect("old handle");
+
+        let promote_snapshot = session
+            .promote_runtime_queue_message(&message_id)
+            .expect("promote follow-up");
+
+        let promoted = promote_snapshot
+            .messages
+            .iter()
+            .find(|message| message.id == message_id)
+            .expect("promoted message");
+        assert_eq!(promoted.kind, AgentQueueMessageKind::Steer);
+        assert_eq!(promoted.status, RuntimeQueueMessageStatus::Pending);
+        let new_handle = promoted.handle.expect("new handle");
+        assert_ne!(new_handle.kind, old_handle.kind);
+
+        let cancel_snapshot = session
+            .cancel_runtime_queue_message(&message_id)
+            .expect("cancel promoted steering message");
+        let cancelled = cancel_snapshot
+            .messages
+            .iter()
+            .find(|message| message.id == message_id)
+            .expect("cancelled promoted message");
+        assert_eq!(cancelled.kind, AgentQueueMessageKind::Steer);
+        assert_eq!(cancelled.status, RuntimeQueueMessageStatus::Cancelled);
+        assert!(promote_snapshot.steering_depth >= 1);
+    }
 
     #[tokio::test]
     async fn cancel_runtime_queue_message_preserves_consistency() {

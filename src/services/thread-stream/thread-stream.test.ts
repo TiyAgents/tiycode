@@ -5,6 +5,7 @@ const {
   threadCancelRunMock,
   threadCompactContextMock,
   threadExecuteApprovedPlanMock,
+  threadPromoteRuntimeQueueMessageMock,
   threadStartRunMock,
   threadSubscribeRunMock,
   toolApprovalRespondMock,
@@ -13,6 +14,7 @@ const {
   threadCancelRunMock: vi.fn(),
   threadCompactContextMock: vi.fn(),
   threadExecuteApprovedPlanMock: vi.fn(),
+  threadPromoteRuntimeQueueMessageMock: vi.fn(),
   threadStartRunMock: vi.fn(),
   threadSubscribeRunMock: vi.fn(),
   toolApprovalRespondMock: vi.fn(),
@@ -23,6 +25,7 @@ vi.mock("@/services/bridge", () => ({
   threadCancelRun: threadCancelRunMock,
   threadCompactContext: threadCompactContextMock,
   threadExecuteApprovedPlan: threadExecuteApprovedPlanMock,
+  threadPromoteRuntimeQueueMessage: threadPromoteRuntimeQueueMessageMock,
   threadStartRun: threadStartRunMock,
   threadSubscribeRun: threadSubscribeRunMock,
   toolApprovalRespond: toolApprovalRespondMock,
@@ -371,6 +374,37 @@ describe("ThreadStream commands", () => {
 
     expect(onQueue).toHaveBeenCalledWith({ runId: "run-sub", queue: replayedQueue });
     expect(stream.runId).toBe("run-sub");
+  });
+
+  it("promotes queued messages and emits the returned queue snapshot", async () => {
+    const promotedQueue = {
+      steeringDepth: 1,
+      followUpDepth: 0,
+      isDeferringSteering: false,
+      messages: [],
+      events: [],
+    };
+    threadPromoteRuntimeQueueMessageMock.mockResolvedValueOnce(promotedQueue);
+
+    const stream = new ThreadStream();
+    const onQueue = vi.fn();
+    stream.onQueue = onQueue;
+
+    await expect(stream.promoteRuntimeQueueMessage("thread-1", "queue-message-1"))
+      .resolves.toBe(promotedQueue);
+    expect(threadPromoteRuntimeQueueMessageMock).toHaveBeenCalledWith("thread-1", "queue-message-1");
+    expect(onQueue).toHaveBeenCalledWith({ runId: "", queue: promotedQueue });
+  });
+
+  it("reports promote queued message failures and rethrows", async () => {
+    const stream = new ThreadStream();
+    const onError = vi.fn();
+    stream.onError = onError;
+    threadPromoteRuntimeQueueMessageMock.mockRejectedValueOnce(new Error("promote failed"));
+
+    await expect(stream.promoteRuntimeQueueMessage("thread-1", "queue-message-1"))
+      .rejects.toThrow("promote failed");
+    expect(onError).toHaveBeenCalledWith("promote failed", "");
   });
 
   it("responds to approval and clarify requests", async () => {

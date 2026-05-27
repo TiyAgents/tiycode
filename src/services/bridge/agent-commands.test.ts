@@ -1,6 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 
-import { normalizeThreadStreamEvent } from "./agent-commands";
+const { invokeMock, isTauriMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  isTauriMock: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: invokeMock,
+  isTauri: isTauriMock,
+  Channel: class MockChannel<T> {
+    onmessage: ((event: T) => void) | null = null;
+  },
+}));
+
+import { normalizeThreadStreamEvent, threadPromoteRuntimeQueueMessage } from "./agent-commands";
 import type { RawThreadStreamEvent } from "./agent-commands";
 import type { ThreadStreamEvent } from "@/shared/types/api";
 
@@ -21,6 +34,70 @@ function makeRawEvent(overrides: Record<string, unknown> = {}): RawThreadStreamE
     ...overrides,
   };
 }
+
+describe("threadPromoteRuntimeQueueMessage", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    isTauriMock.mockReset();
+  });
+
+  it("invokes the promote command and normalizes the queue snapshot", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockResolvedValueOnce({
+      steering_depth: 1,
+      follow_up_depth: 0,
+      is_deferring_steering: false,
+      messages: [
+        {
+          id: "queue-message-1",
+          kind: "steer",
+          content: "Handle this now",
+          status: "pending",
+          created_at: "2026-05-20T00:00:00Z",
+          updated_at: "2026-05-20T00:00:01Z",
+        },
+      ],
+      events: [
+        {
+          id: "event-1",
+          kind: "steer",
+          action: "transferred",
+          count: 1,
+          queue_depth: 1,
+          remaining: 0,
+          created_at: "2026-05-20T00:00:01Z",
+        },
+      ],
+    });
+
+    await expect(threadPromoteRuntimeQueueMessage("thread-1", "queue-message-1")).resolves.toMatchObject({
+      steeringDepth: 1,
+      followUpDepth: 0,
+      messages: [expect.objectContaining({ id: "queue-message-1", kind: "steer" })],
+      events: [expect.objectContaining({ id: "event-1", action: "transferred" })],
+    });
+    expect(invokeMock).toHaveBeenCalledWith("thread_promote_runtime_queue_message", {
+      threadId: "thread-1",
+      messageId: "queue-message-1",
+    });
+  });
+
+  it("requires Tauri runtime", async () => {
+    isTauriMock.mockReturnValue(false);
+
+    await expect(threadPromoteRuntimeQueueMessage("thread-1", "queue-message-1"))
+      .rejects.toThrow("thread_promote_runtime_queue_message requires Tauri runtime");
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates invoke rejections", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockRejectedValueOnce(new Error("promote failed"));
+
+    await expect(threadPromoteRuntimeQueueMessage("thread-1", "queue-message-1"))
+      .rejects.toThrow("promote failed");
+  });
+});
 
 describe("normalizeThreadStreamEvent artifact_updated", () => {
   it("normalizes a valid artifact_updated event with all fields", () => {

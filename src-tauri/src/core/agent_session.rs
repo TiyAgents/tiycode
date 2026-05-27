@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex as StdMutex, Weak};
 use chrono::{SecondsFormat, Utc};
 use sqlx::SqlitePool;
 use tiycore::agent::{
-    Agent, AgentError, AgentMessage, QueueEvent, QueueMode, QueuedMessageHandle, ToolExecutionMode,
+    Agent, AgentError, AgentMessage, PromoteError, QueueEvent, QueueMode, QueuedMessageHandle,
+    ToolExecutionMode,
 };
 use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{Cost, InputType, Model, Provider, Usage};
@@ -51,6 +52,7 @@ struct RuntimeQueueState {
     messages: Vec<RuntimeQueueMessageDto>,
     events: Vec<RuntimeQueueEventDto>,
     pending_removed_message_ids: Vec<String>,
+    pending_promoted_message_ids: Vec<String>,
 }
 
 fn runtime_queue_timestamp() -> String {
@@ -135,6 +137,68 @@ fn pending_runtime_queue_message_handle(
             "The queued message cannot be cancelled yet",
         )
     })
+}
+
+fn pending_follow_up_runtime_queue_message_handle(
+    state: &RuntimeQueueState,
+    message_id: &str,
+) -> Result<QueuedMessageHandle, AppError> {
+    let Some(message) = state
+        .messages
+        .iter()
+        .find(|message| message.id == message_id)
+    else {
+        return Err(AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.queue_message.not_found",
+            "The queued message is no longer available",
+        ));
+    };
+
+    if message.status != RuntimeQueueMessageStatus::Pending {
+        return Err(AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.queue_message.not_pending",
+            "The queued message has already been consumed, cleared, or cancelled",
+        ));
+    }
+
+    if message.kind != AgentQueueMessageKind::FollowUp {
+        return Err(AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.queue_message.promote_invalid_kind",
+            "Only follow-up queue messages can be promoted to steering",
+        ));
+    }
+
+    message.handle.ok_or_else(|| {
+        AppError::recoverable(
+            ErrorSource::Thread,
+            "thread.queue_message.handle_missing",
+            "The queued message cannot be promoted yet",
+        )
+    })
+}
+
+fn remove_pending_promoted_message_id(state: &mut RuntimeQueueState, message_id: &str) {
+    state
+        .pending_promoted_message_ids
+        .retain(|pending_message_id| pending_message_id != message_id);
+}
+
+fn promote_runtime_queue_message_by_id(
+    messages: &mut [RuntimeQueueMessageDto],
+    message_id: &str,
+    handle: QueuedMessageHandle,
+    updated_at: &str,
+) -> Option<RuntimeQueueMessageDto> {
+    let message = messages.iter_mut().find(|message| {
+        message.id == message_id && message.status == RuntimeQueueMessageStatus::Pending
+    })?;
+    message.kind = AgentQueueMessageKind::Steer;
+    message.handle = Some(handle);
+    message.updated_at = updated_at.to_string();
+    Some(message.clone())
 }
 
 fn trim_runtime_queue_state(state: &mut RuntimeQueueState) {
@@ -304,14 +368,54 @@ fn update_runtime_queue_state_for_event(
                     }
                 }
             }
+            let promoted_positions: Vec<usize> = state
+                .pending_promoted_message_ids
+                .iter()
+                .enumerate()
+                .rev()
+                .filter_map(|(pos, id)| {
+                    state
+                        .messages
+                        .iter()
+                        .any(|message| {
+                            message.id == *id
+                                && message.kind == queue_kind
+                                && message.status == RuntimeQueueMessageStatus::Pending
+                        })
+                        .then_some(pos)
+                })
+                .take(count.saturating_sub(marked))
+                .collect();
+            for pos in promoted_positions {
+                if let Some(message_id) = state.pending_promoted_message_ids.get(pos) {
+                    if let Some(message) = state.messages.iter_mut().find(|message| {
+                        message.id == *message_id
+                            && message.kind == queue_kind
+                            && message.status == RuntimeQueueMessageStatus::Pending
+                    }) {
+                        message.updated_at = now.clone();
+                        marked += 1;
+                    }
+                }
+            }
             if marked < *count {
-                mark_runtime_queue_messages(
-                    &mut state.messages,
-                    queue_kind,
-                    count.saturating_sub(marked),
-                    RuntimeQueueMessageStatus::Cancelled,
-                    &now,
-                );
+                let mut remaining = count.saturating_sub(marked);
+                for message in state.messages.iter_mut() {
+                    if remaining == 0 {
+                        break;
+                    }
+                    if message.kind == queue_kind
+                        && message.status == RuntimeQueueMessageStatus::Pending
+                        && !state
+                            .pending_promoted_message_ids
+                            .iter()
+                            .any(|pending_message_id| pending_message_id == &message.id)
+                    {
+                        message.status = RuntimeQueueMessageStatus::Cancelled;
+                        message.updated_at = now.clone();
+                        remaining = remaining.saturating_sub(1);
+                    }
+                }
             }
             RuntimeQueueEventDto {
                 id: uuid::Uuid::now_v7().to_string(),
@@ -320,6 +424,68 @@ fn update_runtime_queue_state_for_event(
                 count: *count,
                 queue_depth: None,
                 remaining: Some(*remaining),
+                count_dropped: None,
+                created_at: now,
+            }
+        }
+        QueueEvent::Transferred {
+            from,
+            to,
+            count,
+            source_remaining,
+            target_queue_depth,
+        } => {
+            let source_kind = AgentQueueMessageKind::from_tiy_queue_kind(*from);
+            let target_kind = AgentQueueMessageKind::from_tiy_queue_kind(*to);
+            let mut moved = 0usize;
+            while moved < *count {
+                let position = state
+                    .pending_promoted_message_ids
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, id)| {
+                        state.messages.iter().any(|message| {
+                            message.id == **id
+                                && (message.kind == source_kind || message.kind == target_kind)
+                                && message.status == RuntimeQueueMessageStatus::Pending
+                        })
+                    })
+                    .map(|(pos, _)| pos);
+
+                let Some(pos) = position else {
+                    break;
+                };
+                let message_id = state.pending_promoted_message_ids.remove(pos);
+                if let Some(message) = state.messages.iter_mut().find(|message| {
+                    message.id == message_id && message.status == RuntimeQueueMessageStatus::Pending
+                }) {
+                    message.kind = target_kind;
+                    message.updated_at = now.clone();
+                    moved += 1;
+                }
+            }
+            if moved < *count {
+                for message in state.messages.iter_mut() {
+                    if moved >= *count {
+                        break;
+                    }
+                    if message.kind == source_kind
+                        && message.status == RuntimeQueueMessageStatus::Pending
+                    {
+                        message.kind = target_kind;
+                        message.updated_at = now.clone();
+                        moved += 1;
+                    }
+                }
+            }
+            RuntimeQueueEventDto {
+                id: uuid::Uuid::now_v7().to_string(),
+                kind: target_kind,
+                action: RuntimeQueueEventAction::Transferred,
+                count: *count,
+                queue_depth: Some(*target_queue_depth),
+                remaining: Some(*source_remaining),
                 count_dropped: None,
                 created_at: now,
             }
@@ -635,6 +801,67 @@ impl AgentSession {
             RuntimeQueueMessageStatus::Cancelled,
             &now,
         );
+        Ok(build_runtime_queue_snapshot(&stats, &state))
+    }
+
+    pub fn promote_runtime_queue_message(
+        &self,
+        message_id: &str,
+    ) -> Result<RuntimeQueueSnapshotDto, AppError> {
+        let handle = {
+            let mut state = self
+                .runtime_queue_state
+                .lock()
+                .expect("runtime queue state poisoned");
+            let handle = pending_follow_up_runtime_queue_message_handle(&state, message_id)?;
+            state
+                .pending_promoted_message_ids
+                .push(message_id.to_string());
+            handle
+        };
+
+        let new_handle = match self.agent.try_promote_follow_up_to_steering(handle.id) {
+            Ok(new_handle) => new_handle,
+            Err(PromoteError::NotFound) => {
+                let mut state = self
+                    .runtime_queue_state
+                    .lock()
+                    .expect("runtime queue state poisoned");
+                remove_pending_promoted_message_id(&mut state, message_id);
+                return Err(AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.queue_message.promote_not_found",
+                    "The queued message was already consumed or removed",
+                ));
+            }
+            Err(PromoteError::QueueFull(error)) => {
+                let mut state = self
+                    .runtime_queue_state
+                    .lock()
+                    .expect("runtime queue state poisoned");
+                remove_pending_promoted_message_id(&mut state, message_id);
+                return Err(AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.queue_message.promote_queue_full",
+                    format!(
+                        "The steering queue is full (depth={}, max={})",
+                        error.current_depth, error.max_depth
+                    ),
+                ));
+            }
+        };
+
+        let now = runtime_queue_timestamp();
+        // Fetch queue stats BEFORE re-acquiring runtime_queue_state to avoid
+        // an ABBA deadlock (see enqueue_queue_message for details).
+        let stats = self.agent.queue_stats();
+
+        let mut state = self
+            .runtime_queue_state
+            .lock()
+            .expect("runtime queue state poisoned");
+        remove_pending_promoted_message_id(&mut state, message_id);
+        promote_runtime_queue_message_by_id(&mut state.messages, message_id, new_handle, &now);
         Ok(build_runtime_queue_snapshot(&stats, &state))
     }
 

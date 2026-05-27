@@ -245,6 +245,7 @@ function readRuntimeQueueSnapshot(value: unknown): RuntimeQueueSnapshotDto {
           entry.action === "consumed"
           || entry.action === "cleared"
           || entry.action === "removed"
+          || entry.action === "transferred"
             ? entry.action
             : "enqueued",
         count: Number(entry.count ?? 0),
@@ -613,6 +614,17 @@ export async function threadCancelRuntimeQueueMessage(
 ): Promise<RuntimeQueueSnapshotDto> {
   requireTauri("thread_cancel_runtime_queue_message");
   return readRuntimeQueueSnapshot(await invoke("thread_cancel_runtime_queue_message", {
+    threadId,
+    messageId,
+  }));
+}
+
+export async function threadPromoteRuntimeQueueMessage(
+  threadId: string,
+  messageId: string,
+): Promise<RuntimeQueueSnapshotDto> {
+  requireTauri("thread_promote_runtime_queue_message");
+  return readRuntimeQueueSnapshot(await invoke("thread_promote_runtime_queue_message", {
     threadId,
     messageId,
   }));
