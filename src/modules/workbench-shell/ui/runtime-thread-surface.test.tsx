@@ -372,6 +372,36 @@ describe("copyable message text", () => {
     });
   });
 
+  it("does not expose a copy action for an excluded active assistant run", () => {
+    const messages = [
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-active",
+        messageType: "plain_message",
+        runId: "run-active",
+        role: "assistant",
+        parts: [{ type: "text", text: "Still running text" }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-completed",
+        messageType: "plain_message",
+        runId: "run-completed",
+        role: "assistant",
+        parts: [{ type: "text", text: "Completed text" }],
+      })),
+    ];
+
+    expect(getAssistantRunCopyState(messages, {
+      excludedRunIds: new Set(["run-active"]),
+    })).toEqual({
+      buttonMessageIdByRunId: {
+        "run-completed": "assistant-completed",
+      },
+      textByRunId: {
+        "run-completed": "Completed text",
+      },
+    });
+  });
+
   it("keeps user command copy text on the original display text path", () => {
     const message: Pick<SurfaceMessage, "content" | "parts" | "role" | "status"> = {
       content: "/init",

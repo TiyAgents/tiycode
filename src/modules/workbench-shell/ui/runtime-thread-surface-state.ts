@@ -130,10 +130,18 @@ function isCopyButtonHostMessage(message: AssistantRunCopyStateMessage) {
     && message.status !== "discarded";
 }
 
+export type AssistantRunCopyStateOptions = {
+  excludedRunIds?: ReadonlySet<string>;
+};
+
 export function getAssistantRunCopyState(
   messages: ReadonlyArray<AssistantRunCopyStateMessage>,
+  options: AssistantRunCopyStateOptions = {},
 ): AssistantRunCopyState {
-  const assistantMessages = messages.filter(isCopyButtonHostMessage);
+  const assistantMessages = messages.filter((message) => (
+    isCopyButtonHostMessage(message)
+    && !(message.runId && options.excludedRunIds?.has(message.runId))
+  ));
   const buttonMessageIdByRunId: Record<string, string> = {};
 
   for (const message of assistantMessages) {

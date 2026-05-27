@@ -322,6 +322,10 @@ export function RuntimeThreadSurface({
     threadStore,
     (s) => (threadId ? s.threadStatuses[threadId]?.status ?? "idle" : "idle") as RunState,
   );
+  const activeRunId = useStore(
+    threadStore,
+    (s) => (threadId ? s.threadStatuses[threadId]?.runId ?? null : null),
+  );
   const [selectedRunMode, setSelectedRunMode] = useState<RunMode>("default");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [snapshotThreadId, setSnapshotThreadId] = useState<string | null>(null);
@@ -1706,8 +1710,16 @@ export function RuntimeThreadSurface({
       }
     }
 
-    return getAssistantRunCopyState(copyableMessages);
-  }, [presentationEntries]);
+    const activeCopyExcludedRunIds = activeRunId && (
+      runState === "running"
+      || runState === "waiting_approval"
+      || runState === "needs_reply"
+    ) ? new Set([activeRunId]) : undefined;
+
+    return getAssistantRunCopyState(copyableMessages, {
+      excludedRunIds: activeCopyExcludedRunIds,
+    });
+  }, [activeRunId, presentationEntries, runState]);
 
   // Build entries for the delayed auto-collapse hook.
   const delayedCollapseEntries = useMemo<ReadonlyArray<DelayedAutoCollapseEntry>>(() => {
