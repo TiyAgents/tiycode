@@ -973,6 +973,10 @@ const en: Record<TranslationKey, string> = {
   "artifact.expandCode": "Expand code",
   "artifact.preview": "Preview",
 
+  // ── Message actions ───────────────────────────────────────
+  "message.copy": "Copy message",
+  "message.copied": "Copied",
+
   // ── Long message preview ──────────────────────────────────
   "longMessage.collapseAll": "Collapse",
   "longMessage.expandAll": "Expand",
