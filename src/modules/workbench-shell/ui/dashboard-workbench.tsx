@@ -1016,25 +1016,51 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                           <div className="group/context-window relative shrink-0">
                             <span
                               tabIndex={0}
-                              className="relative inline-flex overflow-hidden rounded-full border border-app-border bg-app-surface-muted text-[11px] text-app-muted outline-none"
+                              className={cn(
+                                "relative inline-flex overflow-hidden rounded-full border bg-app-surface-muted text-[11px] text-app-muted outline-none",
+                                contextBadge.isExceeded
+                                  ? "border-red-500/45 bg-red-500/10"
+                                  : "border-app-border",
+                              )}
                             >
                               <span
-                                className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-primary/12"
+                                className={cn(
+                                  "pointer-events-none absolute inset-y-0 left-0 rounded-full",
+                                  contextBadge.isExceeded
+                                    ? "bg-red-500/25"
+                                    : "bg-primary/12",
+                                )}
                                 style={{
                                   width: `${contextBadge.usageRatio * 100}%`,
                                 }}
                               />
                               <span className="relative inline-flex items-center gap-1.5 px-2 py-0.5">
                                 <span className="text-app-subtle">Context</span>
-                                <span className="font-semibold text-app-foreground">
+                                <span
+                                  className={cn(
+                                    "font-semibold",
+                                    contextBadge.isExceeded
+                                      ? "text-red-600 dark:text-red-400"
+                                      : "text-app-foreground",
+                                  )}
+                                >
                                   {contextBadge.usedLabel} /{" "}
                                   {contextBadge.totalLabel}
                                 </span>
                               </span>
                             </span>
                             <div className="pointer-events-none absolute left-1/2 top-[calc(100%+0.5rem)] z-20 w-max min-w-[190px] -translate-x-1/2 translate-y-1 rounded-xl border border-app-border bg-app-menu px-3 py-2 text-center opacity-0 shadow-[0_14px_32px_rgba(15,23,42,0.14)] transition-[opacity,transform] duration-150 group-hover/context-window:translate-y-0 group-hover/context-window:opacity-100 group-focus-within/context-window:translate-y-0 group-focus-within/context-window:opacity-100 dark:shadow-[0_16px_36px_rgba(0,0,0,0.38)]">
-                              <p className="whitespace-nowrap text-[11px] font-semibold text-app-foreground">
-                                {contextBadge.usedPercent}% used
+                              <p
+                                className={cn(
+                                  "whitespace-nowrap text-[11px] font-semibold",
+                                  contextBadge.isExceeded
+                                    ? "text-red-600 dark:text-red-400"
+                                    : "text-app-foreground",
+                                )}
+                              >
+                                {contextBadge.isExceeded
+                                  ? `${contextBadge.rawUsedPercent}% used · over limit`
+                                  : `${contextBadge.usedPercent}% used`}
                                 <span className="font-normal text-app-subtle">
                                   {" "}
                                   ({contextBadge.leftPercent}% left)

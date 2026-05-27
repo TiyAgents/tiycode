@@ -136,22 +136,29 @@ export function buildThreadContextBadgeData(options: {
   runtimeUsage: ThreadContextUsage | null;
 }) {
   const contextWindow =
-    parseTokenCount(options.runtimeUsage?.contextWindow) ??
-    parseTokenCount(options.fallbackContextWindow);
+    parseTokenCount(options.fallbackContextWindow) ??
+    parseTokenCount(options.runtimeUsage?.contextWindow);
   const totalTokens = options.runtimeUsage?.totalTokens ?? 0;
   const inputTokens = options.runtimeUsage?.inputTokens ?? 0;
   const outputTokens = options.runtimeUsage?.outputTokens ?? 0;
   const cacheReadTokens = options.runtimeUsage?.cacheReadTokens ?? 0;
   const cacheWriteTokens = options.runtimeUsage?.cacheWriteTokens ?? 0;
+  const rawUsedPercent =
+    contextWindow && contextWindow > 0
+      ? Math.round((totalTokens / contextWindow) * 100)
+      : 0;
   const usageRatio =
     contextWindow && contextWindow > 0
       ? Math.min(totalTokens / contextWindow, 1)
       : 0;
   const usedPercent =
     contextWindow && contextWindow > 0
-      ? Math.min(Math.round((totalTokens / contextWindow) * 100), 100)
+      ? Math.min(rawUsedPercent, 100)
       : 0;
-  const leftPercent = Math.max(0, 100 - usedPercent);
+  const leftPercent = Math.max(0, 100 - rawUsedPercent);
+  const isExceeded = Boolean(
+    contextWindow && contextWindow > 0 && totalTokens > contextWindow,
+  );
 
   return {
     contextWindow,
@@ -159,10 +166,13 @@ export function buildThreadContextBadgeData(options: {
     outputTokens,
     cacheReadTokens,
     cacheWriteTokens,
+    isExceeded,
     leftPercent,
     modelDisplayName:
+      options.fallbackModelDisplayName ??
       options.runtimeUsage?.modelDisplayName ??
-      options.fallbackModelDisplayName,
+      null,
+    rawUsedPercent,
     totalTokens,
     usageRatio,
     usedLabel: formatCompactTokenCount(totalTokens),
