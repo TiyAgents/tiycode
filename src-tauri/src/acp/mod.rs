@@ -1,9 +1,16 @@
-use sqlx::SqlitePool;
+pub mod agent_handlers;
+pub mod event_bridge;
+pub mod permission_bridge;
+pub mod session_map;
+pub mod transport;
+
 use std::sync::Arc;
-use tauri::AppHandle;
+
+use sqlx::SqlitePool;
 
 use crate::core::agent_run_manager::AgentRunManager;
-use crate::core::app_event_emitter::{AppEventEmitterRef, TauriAppEventEmitter};
+use crate::core::app_event_emitter::{AppEventEmitterRef, NoopAppEventEmitter};
+use crate::core::app_state::AppState;
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
 use crate::core::git_manager::GitManager;
 use crate::core::index_manager::IndexManager;
@@ -17,10 +24,10 @@ use crate::core::workspace_manager::WorkspaceManager;
 use crate::core::worktree_manager::WorktreeManager;
 use crate::extensions::ExtensionsManager;
 
-/// Global application state shared across all Tauri commands.
-///
-/// Holds the database pool and manager instances.
-pub struct AppState {
+use self::session_map::AcpSessionMap;
+
+#[derive(Clone)]
+pub struct AcpServerState {
     pub pool: SqlitePool,
     pub workspace_manager: Arc<WorkspaceManager>,
     pub worktree_manager: Arc<WorktreeManager>,
@@ -32,15 +39,37 @@ pub struct AppState {
     pub agent_run_manager: Arc<AgentRunManager>,
     pub tool_gateway: Arc<ToolGateway>,
     pub terminal_manager: Arc<TerminalManager>,
-    pub index_manager: IndexManager,
-    pub git_manager: GitManager,
+    pub index_manager: Arc<IndexManager>,
+    pub git_manager: Arc<GitManager>,
     pub extensions_manager: Arc<ExtensionsManager>,
     pub app_events: AppEventEmitterRef,
+    pub sessions: Arc<AcpSessionMap>,
 }
 
-impl AppState {
-    pub fn new(pool: SqlitePool, app_handle: AppHandle) -> Self {
-        let app_events: AppEventEmitterRef = Arc::new(TauriAppEventEmitter::new(app_handle));
+impl AcpServerState {
+    pub fn from_app_state(state: &AppState) -> Self {
+        Self {
+            pool: state.pool.clone(),
+            workspace_manager: Arc::clone(&state.workspace_manager),
+            worktree_manager: Arc::clone(&state.worktree_manager),
+            settings_manager: Arc::clone(&state.settings_manager),
+            prompt_command_manager: Arc::clone(&state.prompt_command_manager),
+            thread_manager: Arc::clone(&state.thread_manager),
+            sleep_manager: Arc::clone(&state.sleep_manager),
+            built_in_agent_runtime: Arc::clone(&state.built_in_agent_runtime),
+            agent_run_manager: Arc::clone(&state.agent_run_manager),
+            tool_gateway: Arc::clone(&state.tool_gateway),
+            terminal_manager: Arc::clone(&state.terminal_manager),
+            index_manager: Arc::new(IndexManager::new()),
+            git_manager: Arc::new(GitManager::new()),
+            extensions_manager: Arc::clone(&state.extensions_manager),
+            app_events: Arc::clone(&state.app_events),
+            sessions: Arc::new(AcpSessionMap::new()),
+        }
+    }
+
+    pub fn new_headless(pool: SqlitePool) -> Self {
+        let app_events: AppEventEmitterRef = Arc::new(NoopAppEventEmitter);
         let workspace_manager = Arc::new(WorkspaceManager::new(pool.clone()));
         let worktree_manager = Arc::new(WorktreeManager::new(pool.clone()));
         workspace_manager.set_worktree_manager(Arc::clone(&worktree_manager));
@@ -64,8 +93,6 @@ impl AppState {
             Arc::clone(&built_in_agent_runtime),
             Arc::clone(&sleep_manager),
         ));
-        let index_manager = IndexManager::new();
-        let git_manager = GitManager::new();
 
         Self {
             pool,
@@ -79,10 +106,19 @@ impl AppState {
             agent_run_manager,
             tool_gateway,
             terminal_manager,
-            index_manager,
-            git_manager,
+            index_manager: Arc::new(IndexManager::new()),
+            git_manager: Arc::new(GitManager::new()),
             extensions_manager,
             app_events,
+            sessions: Arc::new(AcpSessionMap::new()),
         }
     }
+}
+
+pub async fn run_stdio(state: AcpServerState) -> Result<(), agent_client_protocol::Error> {
+    transport::run_stdio(state).await
+}
+
+pub fn spawn_http_server(state: AcpServerState) {
+    transport::spawn_http_server_if_configured(state);
 }

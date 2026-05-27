@@ -1,5 +1,4 @@
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 use tiycore::provider::get_provider;
 use tiycore::types::{
     Context as TiyContext, Message as TiyMessage, StopReason, StreamOptions as TiyStreamOptions,
@@ -11,6 +10,7 @@ use crate::core::agent_session::{
     normalize_profile_response_language, normalize_profile_response_style, ProfileResponseStyle,
     ResolvedModelRole,
 };
+use crate::core::app_event_emitter::{emit_app_event, AppEventEmitterRef};
 use crate::core::tiycode_default_headers;
 use crate::core::tiycode_url_policy;
 use crate::core::TIYCORE_REQUEST_MAX_RETRIES;
@@ -48,7 +48,7 @@ pub(crate) async fn maybe_generate_thread_title(
     profile_id: Option<String>,
     candidates: &[ResolvedModelRole],
     frontend_tx: broadcast::Sender<ThreadStreamEvent>,
-    app_handle: AppHandle,
+    app_events: AppEventEmitterRef,
 ) -> Result<(), AppError> {
     if thread_repo::has_title(pool, thread_id).await? {
         tracing::debug!(
@@ -104,7 +104,8 @@ pub(crate) async fn maybe_generate_thread_title(
 
                 // Broadcast a global event so the sidebar can pick up the new title even
                 // when no per-run stream subscription exists (e.g. inactive threads).
-                let _ = app_handle.emit(
+                emit_app_event(
+                    app_events.as_ref(),
                     app_events::THREAD_TITLE_UPDATED,
                     ThreadTitleUpdatedPayload {
                         thread_id: thread_id.to_string(),

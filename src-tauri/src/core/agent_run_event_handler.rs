@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::broadcast;
 
 use crate::core::agent_run_title::{build_title_model_candidates, maybe_generate_thread_title};
 use crate::core::agent_session::ResolvedModelRole;
+use crate::core::app_event_emitter::{emit_app_event, AppEventEmitter, AppEventEmitterRef};
 use crate::core::built_in_agent_runtime::RuntimeSessionFinishState;
 use crate::core::task_board_manager;
 use crate::ipc::app_events::{
@@ -69,7 +71,7 @@ pub(crate) async fn persist_user_message_recorded(
 /// task board reconciliation, title generation, active_run removal).
 pub(crate) async fn finalize_run(
     pool: &SqlitePool,
-    app_handle: &AppHandle,
+    app_events: &dyn AppEventEmitter,
     run_id: &str,
     thread_id: &str,
     status: RunStatus,
@@ -77,7 +79,8 @@ pub(crate) async fn finalize_run(
 ) -> Result<(), AppError> {
     persist_final_run_state(pool, run_id, thread_id, status, error_message).await?;
 
-    let _ = app_handle.emit(
+    emit_app_event(
+        app_events,
         app_events::THREAD_RUN_FINISHED,
         ThreadRunFinishedPayload {
             thread_id: thread_id.to_string(),
@@ -422,7 +425,8 @@ impl AgentRunManager {
         match &event {
             ThreadStreamEvent::RunStarted { .. } => {
                 let thread_id = self.get_thread_id(run_id).await;
-                let _ = self.app_handle.emit(
+                emit_app_event(
+                    self.app_events.as_ref(),
                     app_events::THREAD_RUN_STARTED,
                     ThreadRunStartedPayload {
                         thread_id,
@@ -442,7 +446,8 @@ impl AgentRunManager {
             if matches!(tool_name.as_str(), "write" | "edit" | "patch") {
                 if let Some(path) = result.get("path").and_then(|v| v.as_str()) {
                     let thread_id = self.get_thread_id(run_id).await;
-                    let _ = self.app_handle.emit(
+                    emit_app_event(
+                        self.app_events.as_ref(),
                         app_events::AGENT_FILE_CHANGED,
                         AgentFileChangedPayload {
                             thread_id,
@@ -462,7 +467,8 @@ impl AgentRunManager {
             sidebar_status_for_runtime_event(&event, self.was_cancel_requested(run_id).await)
         {
             let thread_id = self.get_thread_id(run_id).await;
-            let _ = self.app_handle.emit(
+            emit_app_event(
+                self.app_events.as_ref(),
                 app_events::THREAD_RUN_STATUS_CHANGED,
                 ThreadRunStatusChangedPayload {
                     thread_id,
@@ -712,7 +718,7 @@ impl AgentRunManager {
 
         finalize_run(
             &self.pool,
-            &self.app_handle,
+            self.app_events.as_ref(),
             run_id,
             &thread_id,
             status,
@@ -729,7 +735,7 @@ impl AgentRunManager {
                 lightweight_model_role,
                 auxiliary_model_role,
                 primary_model_role,
-                self.app_handle.clone(),
+                Arc::clone(&self.app_events),
             );
         }
 
@@ -745,7 +751,7 @@ impl AgentRunManager {
         lightweight_model_role: Option<ResolvedModelRole>,
         auxiliary_model_role: Option<ResolvedModelRole>,
         primary_model_role: Option<ResolvedModelRole>,
-        app_handle: AppHandle,
+        app_events: AppEventEmitterRef,
     ) {
         let candidates = build_title_model_candidates(
             lightweight_model_role.as_ref(),
@@ -770,7 +776,7 @@ impl AgentRunManager {
                 profile_id,
                 &candidates,
                 frontend_tx,
-                app_handle,
+                app_events,
             )
             .await
             {

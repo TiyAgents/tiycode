@@ -30,7 +30,13 @@ tauri-plugin-process = "2"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
+tokio-util = { version = "0.7", features = ["compat"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# ACP server
+agent-client-protocol = { version = "0.11.1", features = ["unstable"] }
+agent-client-protocol-tokio = "0.11.1"
+axum = { version = "0.8", features = ["ws"] }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid"] }

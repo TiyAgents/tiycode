@@ -11,6 +11,7 @@ pub mod agent_session_execution;
 pub mod agent_session_history;
 pub mod agent_session_tools;
 pub mod agent_session_types;
+pub mod app_event_emitter;
 pub mod app_state;
 pub mod built_in_agent_runtime;
 pub mod catalog_model_id_normalizer;

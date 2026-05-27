@@ -1,3 +1,4 @@
+pub mod acp;
 mod commands;
 pub mod core;
 pub mod extensions;
@@ -189,6 +190,36 @@ fn build_tray<R: tauri::Runtime>(
     tray.set_visible(visible)?;
 
     Ok(())
+}
+
+pub fn run_acp_stdio() -> anyhow::Result<()> {
+    let tiy_home = tiy_home();
+    init_directories(&tiy_home)?;
+    init_logging();
+    tracing::info!(path = %tiy_home.display(), "tiy ACP stdio server starting");
+
+    let db_path = tiy_home.join("db/tiycode.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async move {
+        let pool = persistence::init_database(&db_path).await?;
+        let state = acp::AcpServerState::new_headless(pool);
+        if let Err(error) = state.prompt_command_manager.ensure_builtin_seeded() {
+            tracing::warn!(error = %error, "failed to seed builtin prompts during ACP startup");
+        }
+        if let Err(error) = state.workspace_manager.validate_all().await {
+            tracing::warn!(error = %error, "ACP startup workspace validation failed");
+        }
+        if let Err(error) = state.thread_manager.recover_interrupted_runs().await {
+            tracing::warn!(error = %error, "ACP startup run recovery failed");
+        }
+        if let Err(error) = state.terminal_manager.recover_orphaned_sessions().await {
+            tracing::warn!(error = %error, "ACP startup terminal session recovery failed");
+        }
+        acp::run_stdio(state).await.map_err(anyhow::Error::from)
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -498,8 +529,10 @@ pub fn run() {
             crate::core::settings_manager::apply_bundled_catalog_if_newer(app.handle());
             tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "⏱ [startup] apply_bundled_catalog_if_newer");
 
+            let acp_state = crate::acp::AcpServerState::from_app_state(&state);
             app.manage(state);
             app.manage(desktop_runtime);
+            crate::acp::spawn_http_server(acp_state);
 
             // 6. Startup recovery: validate workspaces + interrupt dangling runs.
             // Spawned asynchronously so the window can render without waiting for
