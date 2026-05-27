@@ -7,8 +7,9 @@ use sqlx::SqlitePool;
 use tiycore::agent::{Agent, AgentEvent, AgentMessage, AgentToolResult, ToolExecutionMode};
 use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{ContentBlock, TextContent, Usage};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 
+use crate::core::agent_session::standard_tool_timeout;
 use crate::core::agent_session::{merge_payload, ResolvedModelRole};
 use crate::core::executors::ToolOutput;
 use crate::core::subagent::review_contract::{extract_review_report, render_parent_summary};
@@ -22,6 +23,7 @@ use crate::model::errors::{AppError, ErrorSource};
 use crate::persistence::repo::{run_helper_repo, tool_call_repo};
 
 const MAX_RECENT_ACTIONS: usize = 5;
+const MAX_CONCURRENT_HELPERS: usize = 3;
 
 pub struct HelperRunRequest {
     pub run_id: String,
@@ -79,6 +81,7 @@ pub struct HelperAgentOrchestrator {
     pool: SqlitePool,
     tool_gateway: Arc<ToolGateway>,
     active_helpers: Arc<Mutex<HashMap<String, RunHelpersState>>>,
+    helper_semaphore: Arc<Semaphore>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,10 +103,17 @@ impl HelperAgentOrchestrator {
             pool,
             tool_gateway,
             active_helpers: Arc::new(Mutex::new(HashMap::new())),
+            helper_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_HELPERS)),
         }
     }
 
     pub async fn run_helper(&self, request: HelperRunRequest) -> Result<HelperRunResult, AppError> {
+        let _helper_permit = self
+            .helper_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|error| AppError::internal(ErrorSource::Thread, error.to_string()))?;
         let helper_profile = match request.helper_profile.or_else(|| request.tool.profile()) {
             Some(p) => p,
             None => {
@@ -300,7 +310,7 @@ impl HelperAgentOrchestrator {
                         helper_abort_signal.child_token(),
                         ToolExecutionOptions {
                             allow_user_approval: false,
-                            execution_timeout: None,
+                            execution_timeout: Some(standard_tool_timeout()),
                         },
                         |_| {},
                         || {},
@@ -386,10 +396,6 @@ impl HelperAgentOrchestrator {
                             );
                             helper_agent_error_result("Helper tool execution cancelled")
                         }
-                        // NOTE: Currently unreachable because subagent passes
-                        // `execution_timeout: None`. This arm exists for forward-
-                        // compatibility so enabling a timeout later won't cause a
-                        // non-exhaustive match error.
                         ToolGatewayResult::TimedOut { timeout_secs, .. } => {
                             let message =
                                 format!("Helper tool timed out after {timeout_secs}s");
@@ -1207,6 +1213,11 @@ mod tests {
             Some("Need parent help")
         );
         assert_eq!(take_escalation_summary(&summary), None);
+    }
+
+    #[test]
+    fn helper_global_concurrency_limit_is_bounded() {
+        assert_eq!(super::MAX_CONCURRENT_HELPERS, 3);
     }
 
     #[test]
