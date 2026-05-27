@@ -705,12 +705,29 @@ impl AgentSession {
         let mut results = immediate_results;
         let mut queued: std::collections::VecDeque<_> = delegates.into_iter().collect();
         let mut active = futures::stream::FuturesUnordered::new();
-        let mut stop_scheduling = request.fail_fast
+        let mut stop_reason = if self.abort_signal.is_cancelled() {
+            Some(
+                "Skipped because the parent run was cancelled before this subagent could start"
+                    .to_string(),
+            )
+        } else if request.fail_fast
             && results
                 .iter()
-                .any(|result| result.status == ParallelSubagentTaskStatus::Failed);
+                .any(|result| result.status == ParallelSubagentTaskStatus::Failed)
+        {
+            Some("Skipped because failFast stopped scheduling after an earlier failure".to_string())
+        } else {
+            None
+        };
 
-        while !stop_scheduling && active.len() < max_concurrency {
+        while stop_reason.is_none() && active.len() < max_concurrency {
+            if self.abort_signal.is_cancelled() {
+                stop_reason = Some(
+                    "Skipped because the parent run was cancelled before this subagent could start"
+                        .to_string(),
+                );
+                break;
+            }
             if let Some((index, task, delegate)) = queued.pop_front() {
                 active.push(self.run_parallel_delegate_task(
                     index,
@@ -724,12 +741,27 @@ impl AgentSession {
         }
 
         while let Some(result) = active.next().await {
-            if result.status == ParallelSubagentTaskStatus::Failed && request.fail_fast {
-                stop_scheduling = true;
+            if self.abort_signal.is_cancelled() {
+                stop_reason.get_or_insert_with(|| {
+                    "Skipped because the parent run was cancelled before this subagent could start"
+                        .to_string()
+                });
+            } else if result.status == ParallelSubagentTaskStatus::Failed && request.fail_fast {
+                stop_reason.get_or_insert_with(|| {
+                    "Skipped because failFast stopped scheduling after an earlier failure"
+                        .to_string()
+                });
             }
             results.push(result);
 
-            while !stop_scheduling && active.len() < max_concurrency {
+            while stop_reason.is_none() && active.len() < max_concurrency {
+                if self.abort_signal.is_cancelled() {
+                    stop_reason = Some(
+                        "Skipped because the parent run was cancelled before this subagent could start"
+                            .to_string(),
+                    );
+                    break;
+                }
                 if let Some((index, task, delegate)) = queued.pop_front() {
                     active.push(self.run_parallel_delegate_task(
                         index,
@@ -743,14 +775,13 @@ impl AgentSession {
             }
         }
 
-        if stop_scheduling {
+        if let Some(reason) = stop_reason {
             for (index, task, _delegate) in queued {
                 results.push(parallel_task_skipped_result(
                     index,
                     task.agent,
                     task.task,
-                    "Skipped because failFast stopped scheduling after an earlier failure"
-                        .to_string(),
+                    reason.clone(),
                 ));
             }
         }

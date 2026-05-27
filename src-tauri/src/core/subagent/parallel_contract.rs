@@ -27,11 +27,11 @@ pub struct ParallelSubagentTask {
     pub agent: String,
     pub task: String,
     #[serde(default)]
-    pub target: Option<serde_json::Value>,
+    pub target: Option<String>,
     #[serde(default)]
-    pub review_scope: Option<serde_json::Value>,
+    pub review_scope: Option<String>,
     #[serde(default)]
-    pub global_scan_mode: Option<serde_json::Value>,
+    pub global_scan_mode: Option<String>,
     #[serde(default)]
     pub changed_files: Option<Vec<String>>,
     #[serde(default)]
@@ -145,13 +145,22 @@ impl ParallelSubagentTask {
             serde_json::Value::String(self.task.clone()),
         );
         if let Some(value) = &self.target {
-            input.insert("target".to_string(), value.clone());
+            input.insert(
+                "target".to_string(),
+                serde_json::Value::String(value.clone()),
+            );
         }
         if let Some(value) = &self.review_scope {
-            input.insert("reviewScope".to_string(), value.clone());
+            input.insert(
+                "reviewScope".to_string(),
+                serde_json::Value::String(value.clone()),
+            );
         }
         if let Some(value) = &self.global_scan_mode {
-            input.insert("globalScanMode".to_string(), value.clone());
+            input.insert(
+                "globalScanMode".to_string(),
+                serde_json::Value::String(value.clone()),
+            );
         }
         if let Some(value) = &self.changed_files {
             input.insert("changedFiles".to_string(), serde_json::json!(value));
@@ -292,6 +301,85 @@ mod tests {
         .expect_err("request should be rejected");
 
         assert!(error.contains("maxConcurrency must be <= 5"));
+    }
+
+    #[test]
+    fn rejects_non_string_review_option_fields() {
+        let error = ParallelSubagentRequest::from_tool_input(&serde_json::json!({
+            "tasks": [
+                {
+                    "agent": "agent_review",
+                    "task": "review diff",
+                    "target": { "kind": "diff" }
+                }
+            ]
+        }))
+        .expect_err("non-string target should be rejected during deserialization");
+
+        assert!(error.contains("invalid agent_parallel request"));
+    }
+
+    #[test]
+    fn render_parallel_summary_includes_completed_failed_and_skipped_results() {
+        let summary = ParallelSubagentSummary {
+            summary: String::new(),
+            mode: Some("mixed".to_string()),
+            result_format: None,
+            batch_status: ParallelSubagentBatchStatus::PartialFailure,
+            max_concurrency: 3,
+            total: 3,
+            completed: 1,
+            failed: 1,
+            skipped: 1,
+            duration_ms: 42,
+            results: vec![
+                ParallelSubagentTaskResult {
+                    index: 0,
+                    agent: "agent_explore".to_string(),
+                    task: "explore backend".to_string(),
+                    status: ParallelSubagentTaskStatus::Completed,
+                    summary: Some("backend summary".to_string()),
+                    raw_summary: None,
+                    snapshot: None,
+                    review_request: None,
+                    review_report: None,
+                    error: None,
+                    duration_ms: 10,
+                },
+                ParallelSubagentTaskResult {
+                    index: 1,
+                    agent: "agent_review".to_string(),
+                    task: "review diff".to_string(),
+                    status: ParallelSubagentTaskStatus::Failed,
+                    summary: None,
+                    raw_summary: None,
+                    snapshot: None,
+                    review_request: None,
+                    review_report: None,
+                    error: Some("review failed".to_string()),
+                    duration_ms: 20,
+                },
+                ParallelSubagentTaskResult {
+                    index: 2,
+                    agent: "agent_explore".to_string(),
+                    task: "explore frontend".to_string(),
+                    status: ParallelSubagentTaskStatus::Skipped,
+                    summary: None,
+                    raw_summary: None,
+                    snapshot: None,
+                    review_request: None,
+                    review_report: None,
+                    error: Some("cancelled".to_string()),
+                    duration_ms: 0,
+                },
+            ],
+        };
+
+        let rendered = render_parallel_summary(&summary);
+        assert!(rendered.contains("1/3 succeeded, 1 failed, 1 skipped"));
+        assert!(rendered.contains("1. agent_explore succeeded: backend summary"));
+        assert!(rendered.contains("2. agent_review failed: review failed"));
+        assert!(rendered.contains("3. agent_explore skipped: cancelled"));
     }
 
     #[test]
