@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.17] - 2026-05-27
+### :sparkles: New Features
+- [`85398d2`](https://github.com/tiylabs/tiycode/commit/85398d2b8410afa76e0398e48656bda6bb9a259e) - **ui**: ✨ show model and thinking level in profile identity display *(PR [#201](https://github.com/tiylabs/tiycode/pull/201) by [@HayWolf](https://github.com/HayWolf))*
+- [`c9dfaf3`](https://github.com/tiylabs/tiycode/commit/c9dfaf3d25813a5a7248b8033665b18d4a8aaf1d) - **thread**: ✨ add hover copy button to user and assistant messages *(PR [#210](https://github.com/tiylabs/tiycode/pull/210) by [@jorben](https://github.com/jorben))*
+- [`f6d0f21`](https://github.com/tiylabs/tiycode/commit/f6d0f21432f1e87d0ef9a6624b5a849e8521352d) - **subagent**: ✨ Add parallel delegation *(PR [#209](https://github.com/tiylabs/tiycode/pull/209) by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`dc6b471`](https://github.com/tiylabs/tiycode/commit/dc6b471d256beb55b831c4a88c4f42057b46f940) - **render**: 🐛 Preserve artifact results in message flow *(PR [#202](https://github.com/tiylabs/tiycode/pull/202) by [@HayWolf](https://github.com/HayWolf))*
+- [`91ed98d`](https://github.com/tiylabs/tiycode/commit/91ed98d8c5fbc14a7a716329b28333e40fd6bff5) - **core**: 🐛 prevent stack overflow in simple_glob_match for long inputs *(PR [#203](https://github.com/tiylabs/tiycode/pull/203) by [@jorben](https://github.com/jorben))*
+- [`c86bbb3`](https://github.com/tiylabs/tiycode/commit/c86bbb34c11b79b104d5380f9eaf0bc9c81bb623) - **thread**: 🐛 hide custom agent tool calls and display proper names *(PR [#204](https://github.com/tiylabs/tiycode/pull/204) by [@jorben](https://github.com/jorben))*
+- [`6ad2d3a`](https://github.com/tiylabs/tiycode/commit/6ad2d3a5204a99c273d80cf4199469cce92a8035) - **runtime**: 🐛 consume follow-ups one at a time *(PR [#208](https://github.com/tiylabs/tiycode/pull/208) by [@jorben](https://github.com/jorben))*
+- [`ab5b4c0`](https://github.com/tiylabs/tiycode/commit/ab5b4c0f33deda36947d08a26205e47b21f097b9) - **workbench**: 🐛 restore sidebar thread statuses *(PR [#207](https://github.com/tiylabs/tiycode/pull/207) by [@jorben](https://github.com/jorben))*
+
+
 ## [0.3.16] - 2026-05-23
 ### :sparkles: New Features
 - [`1473503`](https://github.com/tiylabs/tiycode/commit/1473503734a9e1e73c50c4720d22993fb688933b) - **agent**: ✨ Add tiycore request retry handling *(PR [#190](https://github.com/tiylabs/tiycode/pull/190) by [@jorben](https://github.com/jorben))*
@@ -788,3 +802,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.14]: https://github.com/tiylabs/tiycode/compare/0.3.13...0.3.14
 [0.3.15]: https://github.com/tiylabs/tiycode/compare/0.3.14...0.3.15
 [0.3.16]: https://github.com/tiylabs/tiycode/compare/0.3.15...0.3.16
+[0.3.17]: https://github.com/tiylabs/tiycode/compare/0.3.16...0.3.17
