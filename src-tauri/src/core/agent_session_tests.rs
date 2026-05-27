@@ -562,6 +562,48 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn removed_event_for_pending_promote_counts_promoted_message_once() {
+        let mut state = RuntimeQueueState::default();
+        let promoted_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Promote this".to_string(),
+            None,
+        );
+        let cancelled_id = super::super::append_runtime_queue_message(
+            &mut state,
+            AgentQueueMessageKind::FollowUp,
+            "Cancel this".to_string(),
+            None,
+        );
+        state.pending_promoted_message_ids.push(promoted_id.clone());
+
+        let update = update_runtime_queue_state_for_event(
+            &mut state,
+            &QueueEvent::Removed {
+                kind: QueueKind::FollowUp,
+                count: 2,
+                remaining: 0,
+            },
+        );
+
+        assert!(update.consumed_messages.is_empty());
+        assert_eq!(update.event.action, RuntimeQueueEventAction::Removed);
+        let promoted = state
+            .messages
+            .iter()
+            .find(|message| message.id == promoted_id)
+            .expect("promoted message");
+        let cancelled = state
+            .messages
+            .iter()
+            .find(|message| message.id == cancelled_id)
+            .expect("cancelled message");
+        assert_eq!(promoted.status, RuntimeQueueMessageStatus::Pending);
+        assert_eq!(cancelled.status, RuntimeQueueMessageStatus::Cancelled);
+    }
+
+    #[test]
     fn mark_runtime_queue_message_by_id_only_marks_requested_message() {
         let mut state = RuntimeQueueState::default();
         let first_id = super::super::append_runtime_queue_message(

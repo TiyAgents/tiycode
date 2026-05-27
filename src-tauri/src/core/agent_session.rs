@@ -368,24 +368,25 @@ fn update_runtime_queue_state_for_event(
                     }
                 }
             }
-            while marked < *count {
-                let position = state
-                    .pending_promoted_message_ids
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, id)| {
-                        state.messages.iter().any(|message| {
-                            message.id == **id
+            let promoted_positions: Vec<usize> = state
+                .pending_promoted_message_ids
+                .iter()
+                .enumerate()
+                .rev()
+                .filter_map(|(pos, id)| {
+                    state
+                        .messages
+                        .iter()
+                        .any(|message| {
+                            message.id == *id
                                 && message.kind == queue_kind
                                 && message.status == RuntimeQueueMessageStatus::Pending
                         })
-                    })
-                    .map(|(pos, _)| pos);
-
-                let Some(pos) = position else {
-                    break;
-                };
+                        .then_some(pos)
+                })
+                .take(count.saturating_sub(marked))
+                .collect();
+            for pos in promoted_positions {
                 if let Some(message_id) = state.pending_promoted_message_ids.get(pos) {
                     if let Some(message) = state.messages.iter_mut().find(|message| {
                         message.id == *message_id
@@ -395,18 +396,26 @@ fn update_runtime_queue_state_for_event(
                         message.updated_at = now.clone();
                         marked += 1;
                     }
-                } else {
-                    break;
                 }
             }
             if marked < *count {
-                mark_runtime_queue_messages(
-                    &mut state.messages,
-                    queue_kind,
-                    count.saturating_sub(marked),
-                    RuntimeQueueMessageStatus::Cancelled,
-                    &now,
-                );
+                let mut remaining = count.saturating_sub(marked);
+                for message in state.messages.iter_mut() {
+                    if remaining == 0 {
+                        break;
+                    }
+                    if message.kind == queue_kind
+                        && message.status == RuntimeQueueMessageStatus::Pending
+                        && !state
+                            .pending_promoted_message_ids
+                            .iter()
+                            .any(|pending_message_id| pending_message_id == &message.id)
+                    {
+                        message.status = RuntimeQueueMessageStatus::Cancelled;
+                        message.updated_at = now.clone();
+                        remaining = remaining.saturating_sub(1);
+                    }
+                }
             }
             RuntimeQueueEventDto {
                 id: uuid::Uuid::now_v7().to_string(),
