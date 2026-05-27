@@ -117,6 +117,7 @@ import {
   getApprovalReason,
   getApprovalTagClass,
   getApprovalTagLabel,
+  getAssistantRunCopyState,
   getCopyableThreadMessageText,
   getLatestVisibleRun,
   getPresentationEntryRole,
@@ -287,7 +288,7 @@ export function RuntimeThreadSurface({
     [threadId],
   );
   const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string | null>(null);
-  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [copiedCopyTargetId, setCopiedCopyTargetId] = useState<string | null>(null);
   const messageCopyResetTimeoutRef = useRef<number>(0);
   const [helpers, setHelpers] = useState<Array<SurfaceHelperEntry>>([]);
   const [helperOpen, setHelperOpen] = useState<Record<string, boolean>>({});
@@ -349,7 +350,7 @@ export function RuntimeThreadSurface({
       setCompletedToolOpen({});
       setHelperOpen({});
       setReasoningOpen({});
-      setCopiedMessageId(null);
+      setCopiedCopyTargetId(null);
       if (typeof window !== "undefined") {
         window.clearTimeout(messageCopyResetTimeoutRef.current);
       }
@@ -393,7 +394,7 @@ export function RuntimeThreadSurface({
     }
   }, []);
 
-  const handleCopyMessage = useCallback(async (messageId: string, text: string) => {
+  const handleCopyMessage = useCallback(async (copyTargetId: string, text: string) => {
     if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
       return;
     }
@@ -406,12 +407,23 @@ export function RuntimeThreadSurface({
     try {
       await navigator.clipboard.writeText(normalizedText);
       window.clearTimeout(messageCopyResetTimeoutRef.current);
-      setCopiedMessageId(messageId);
+      setCopiedCopyTargetId(copyTargetId);
       messageCopyResetTimeoutRef.current = window.setTimeout(() => {
-        setCopiedMessageId((current) => (current === messageId ? null : current));
+        setCopiedCopyTargetId((current) => (current === copyTargetId ? null : current));
       }, 2000);
     } catch {
       // Ignore clipboard permission/focus failures; manual selection still works.
+    }
+  }, []);
+
+  const blurActiveCopyAction = useCallback((scope: HTMLElement | null) => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement && (!scope || scope.contains(activeElement))) {
+      activeElement.blur();
     }
   }, []);
 
@@ -1685,6 +1697,18 @@ export function RuntimeThreadSurface({
   );
   const presentationEntries = timelineEntries;
 
+  const assistantRunCopyState = useMemo(() => {
+    const copyableMessages: SurfaceMessage[] = [];
+
+    for (const entry of presentationEntries) {
+      if (entry.kind === "message") {
+        copyableMessages.push(entry.message);
+      }
+    }
+
+    return getAssistantRunCopyState(copyableMessages);
+  }, [presentationEntries]);
+
   // Build entries for the delayed auto-collapse hook.
   const delayedCollapseEntries = useMemo<ReadonlyArray<DelayedAutoCollapseEntry>>(() => {
     const result: DelayedAutoCollapseEntry[] = [];
@@ -2693,12 +2717,36 @@ export function RuntimeThreadSurface({
                 const expandedPrompt = commandComposer?.kind === "command"
                   ? (commandComposer.effectivePrompt?.trim() ?? "")
                   : "";
-                const copyableText = getCopyableThreadMessageText(message, commandComposer);
-                const canCopyMessage =
-                  (message.role === "user" || message.role === "assistant")
-                  && message.status !== "discarded"
-                  && copyableText.length > 0;
-                const copied = copiedMessageId === message.id;
+                const messageCopyTarget = (() => {
+                  if (message.role === "user") {
+                    return {
+                      canCopy: message.status !== "discarded",
+                      id: `message:${message.id}`,
+                      text: getCopyableThreadMessageText(message, commandComposer),
+                    };
+                  }
+
+                  if (message.role !== "assistant" || message.status === "discarded") {
+                    return { canCopy: false, id: `message:${message.id}`, text: "" };
+                  }
+
+                  if (!message.runId) {
+                    return {
+                      canCopy: true,
+                      id: `message:${message.id}`,
+                      text: getCopyableThreadMessageText(message),
+                    };
+                  }
+
+                  return {
+                    canCopy: assistantRunCopyState.buttonMessageIdByRunId[message.runId] === message.id,
+                    id: `assistant-run:${message.runId}`,
+                    text: assistantRunCopyState.textByRunId[message.runId] ?? "",
+                  };
+                })();
+                const copyableText = messageCopyTarget.text;
+                const canCopyMessage = messageCopyTarget.canCopy && copyableText.length > 0;
+                const copied = copiedCopyTargetId === messageCopyTarget.id;
                 const copyLabel = copied ? t("message.copied") : t("message.copy");
 
                 return (
@@ -2764,6 +2812,7 @@ export function RuntimeThreadSurface({
                             "pointer-events-none h-7 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
                             message.role === "user" ? "ml-auto justify-end" : "justify-start",
                           )}
+                          onMouseLeave={(event) => blurActiveCopyAction(event.currentTarget)}
                         >
                           <MessageAction
                             aria-label={copyLabel}
@@ -2772,7 +2821,8 @@ export function RuntimeThreadSurface({
                               copied && "bg-app-surface-hover text-app-foreground",
                             )}
                             label={copyLabel}
-                            onClick={() => void handleCopyMessage(message.id, copyableText)}
+                            onClick={() => void handleCopyMessage(messageCopyTarget.id, copyableText)}
+                            onMouseLeave={(event) => event.currentTarget.blur()}
                             tooltip={copyLabel}
                           >
                             {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}

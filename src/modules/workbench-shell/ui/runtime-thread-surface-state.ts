@@ -87,6 +87,72 @@ export function getCopyableMessageText(
   return "";
 }
 
+export type CopyableAssistantTurnMessage = Pick<SurfaceMessage, "content" | "parts" | "role" | "runId" | "status">;
+
+export function getCopyableAssistantTurnText(
+  messages: ReadonlyArray<CopyableAssistantTurnMessage>,
+  runId: string | null,
+  fallbackMessage?: Pick<SurfaceMessage, "content" | "parts" | "status">,
+): string {
+  if (!runId) {
+    return fallbackMessage ? getCopyableMessageText(fallbackMessage) : "";
+  }
+
+  const runText = messages
+    .filter((message) => (
+      message.role === "assistant"
+      && message.runId === runId
+      && message.status !== "discarded"
+    ))
+    .map((message) => getCopyableMessageText(message))
+    .filter((text) => text.length > 0)
+    .join("\n\n")
+    .trim();
+
+  if (runText) {
+    return runText;
+  }
+
+  return fallbackMessage ? getCopyableMessageText(fallbackMessage) : "";
+}
+
+export type AssistantRunCopyStateMessage = Pick<SurfaceMessage, "content" | "id" | "messageType" | "parts" | "role" | "runId" | "status">;
+
+export type AssistantRunCopyState = {
+  buttonMessageIdByRunId: Record<string, string>;
+  textByRunId: Record<string, string>;
+};
+
+function isCopyButtonHostMessage(message: AssistantRunCopyStateMessage) {
+  return message.role === "assistant"
+    && message.runId !== null
+    && message.messageType === "plain_message"
+    && message.status !== "discarded";
+}
+
+export function getAssistantRunCopyState(
+  messages: ReadonlyArray<AssistantRunCopyStateMessage>,
+): AssistantRunCopyState {
+  const assistantMessages = messages.filter(isCopyButtonHostMessage);
+  const buttonMessageIdByRunId: Record<string, string> = {};
+
+  for (const message of assistantMessages) {
+    if (getCopyableMessageText(message).length > 0) {
+      buttonMessageIdByRunId[message.runId!] = message.id;
+    }
+  }
+
+  const textByRunId: Record<string, string> = {};
+  for (const runId of Object.keys(buttonMessageIdByRunId)) {
+    const text = getCopyableAssistantTurnText(assistantMessages, runId);
+    if (text.length > 0) {
+      textByRunId[runId] = text;
+    }
+  }
+
+  return { buttonMessageIdByRunId, textByRunId };
+}
+
 export function getCopyableThreadMessageText(
   message: Pick<SurfaceMessage, "content" | "parts" | "role" | "status">,
   commandComposer: CopyableCommandComposerMetadata = null,
