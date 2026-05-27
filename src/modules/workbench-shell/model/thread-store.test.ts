@@ -224,6 +224,49 @@ describe("batchSetThreadStatuses", () => {
     expect(statuses["thread-2"].status).toBe("idle");
   });
 
+  it("initializes visible sidebar thread statuses from snapshot data", () => {
+    threadStore.reset();
+    batchSetThreadStatuses({
+      "waiting-thread": { status: "waiting_approval", runId: null, source: "snapshot" },
+      "reply-thread": { status: "needs_reply", runId: null, source: "snapshot" },
+      "failed-thread": { status: "failed", runId: null, source: "snapshot" },
+    });
+
+    const statuses = threadStore.getState().threadStatuses;
+    expect(statuses["waiting-thread"]).toMatchObject({
+      status: "waiting_approval",
+      runId: null,
+      source: "snapshot",
+    });
+    expect(statuses["reply-thread"]).toMatchObject({
+      status: "needs_reply",
+      runId: null,
+      source: "snapshot",
+    });
+    expect(statuses["failed-thread"]).toMatchObject({
+      status: "failed",
+      runId: null,
+      source: "snapshot",
+    });
+  });
+
+  it("does not let an idle snapshot overwrite an active pending run in batch", () => {
+    threadStore.reset();
+    setThreadStatus("thread-1", "waiting_approval", {
+      runId: "run-1",
+      source: "stream",
+    });
+
+    batchSetThreadStatuses({
+      "thread-1": { status: "idle", runId: null, source: "snapshot" },
+    });
+
+    const status = threadStore.getState().threadStatuses["thread-1"];
+    expect(status.status).toBe("waiting_approval");
+    expect(status.runId).toBe("run-1");
+    expect(status.source).toBe("stream");
+  });
+
   it("applies same-run updates to advance status forward", () => {
     threadStore.reset();
     setThreadStatus("thread-1", "running", {

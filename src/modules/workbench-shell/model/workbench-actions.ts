@@ -17,7 +17,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { threadCreate, threadDelete, threadList, threadUpdateTitle } from "@/services/bridge/thread-commands";
 import { workspaceRemove, workspaceAdd, workspaceList, workspaceEnsureDefault } from "@/services/bridge/workspace-commands";
-import { threadStore, setThreadStatus } from "./thread-store";
+import { threadStore, setThreadStatus, batchSetThreadStatuses } from "./thread-store";
+import { backendToThreadRunStatus } from "./status-mappings";
 import { projectStore } from "./project-store";
 import { composerStore } from "./composer-store";
 import { uiLayoutStore } from "./ui-layout-store";
@@ -824,6 +825,19 @@ export async function performSidebarSync(options: SidebarSyncOptions): Promise<v
   const threadsByWorkspaceId = Object.fromEntries(
     threadEntries.map(([workspaceId, result]) => [workspaceId, result.threads]),
   );
+  const snapshotStatusUpdates: Parameters<typeof batchSetThreadStatuses>[0] = {};
+  for (const [, result] of threadEntries) {
+    for (const thread of result.threads) {
+      snapshotStatusUpdates[thread.id] = {
+        status: backendToThreadRunStatus(thread.status),
+        runId: null,
+        source: "snapshot",
+      };
+    }
+  }
+  if (Object.keys(snapshotStatusUpdates).length > 0) {
+    batchSetThreadStatuses(snapshotStatusUpdates);
+  }
   const nextHasMoreByWorkspaceId = Object.fromEntries(
     threadEntries.map(([workspaceId, result]) => [workspaceId, result.hasMore]),
   );
