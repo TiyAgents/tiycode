@@ -9,6 +9,7 @@ use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{ContentBlock, TextContent, Usage};
 use tokio::sync::Mutex;
 
+use crate::core::agent_session::standard_tool_timeout;
 use crate::core::agent_session::{merge_payload, ResolvedModelRole};
 use crate::core::executors::ToolOutput;
 use crate::core::subagent::review_contract::{extract_review_report, render_parent_summary};
@@ -300,7 +301,7 @@ impl HelperAgentOrchestrator {
                         helper_abort_signal.child_token(),
                         ToolExecutionOptions {
                             allow_user_approval: false,
-                            execution_timeout: None,
+                            execution_timeout: Some(standard_tool_timeout()),
                         },
                         |_| {},
                         || {},
@@ -386,10 +387,6 @@ impl HelperAgentOrchestrator {
                             );
                             helper_agent_error_result("Helper tool execution cancelled")
                         }
-                        // NOTE: Currently unreachable because subagent passes
-                        // `execution_timeout: None`. This arm exists for forward-
-                        // compatibility so enabling a timeout later won't cause a
-                        // non-exhaustive match error.
                         ToolGatewayResult::TimedOut { timeout_secs, .. } => {
                             let message =
                                 format!("Helper tool timed out after {timeout_secs}s");

@@ -9,6 +9,7 @@
 export const RUNTIME_ORCHESTRATION_TOOLS = [
   "agent_explore",
   "agent_review",
+  "agent_parallel",
 ] as const;
 
 /** The prefix shared by all runtime orchestration tool names (built-in and custom). */

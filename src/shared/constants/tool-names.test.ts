@@ -16,6 +16,14 @@ describe("isRuntimeOrchestrationToolName", () => {
     }
   });
 
+  it("returns true for built-in runtime orchestration tools", () => {
+    expect([...RUNTIME_ORCHESTRATION_TOOLS]).toEqual([
+      "agent_explore",
+      "agent_review",
+      "agent_parallel",
+    ]);
+  });
+
   it("returns true for custom agent tool names", () => {
     expect(isRuntimeOrchestrationToolName("agent_refactor")).toBe(true);
     expect(isRuntimeOrchestrationToolName("agent_custom_helper")).toBe(true);

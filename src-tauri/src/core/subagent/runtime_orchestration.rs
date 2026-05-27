@@ -1,4 +1,8 @@
 use crate::core::agent_session_tools::web_search_agent_tool;
+use crate::core::subagent::parallel_contract::{
+    PARALLEL_SUBAGENT_DEFAULT_CONCURRENCY, PARALLEL_SUBAGENT_MAX_CONCURRENCY,
+    PARALLEL_SUBAGENT_MAX_TASKS,
+};
 use crate::model::subagent::CustomSubagentModelRole;
 use tiycore::agent::AgentTool;
 
@@ -19,6 +23,7 @@ pub const TERM_PANEL_USAGE_NOTE: &str =
 pub enum RuntimeOrchestrationTool {
     Explore,
     Review,
+    Parallel,
     Custom(String), // slug of the custom subagent
 }
 
@@ -62,14 +67,15 @@ pub fn custom_subagent_as_tool(record: &crate::model::subagent::CustomSubagentRe
 }
 
 impl RuntimeOrchestrationTool {
-    pub fn builtin_all() -> [Self; 2] {
-        [Self::Explore, Self::Review]
+    pub fn builtin_all() -> [Self; 3] {
+        [Self::Explore, Self::Review, Self::Parallel]
     }
 
     pub fn parse(tool_name: &str) -> Option<Self> {
         match tool_name {
             "agent_explore" => Some(Self::Explore),
             "agent_review" => Some(Self::Review),
+            "agent_parallel" => Some(Self::Parallel),
             _ => {
                 // Match custom subagent pattern: "agent_{slug}"
                 if let Some(slug) = tool_name.strip_prefix("agent_") {
@@ -90,6 +96,7 @@ impl RuntimeOrchestrationTool {
         match self {
             Self::Explore => "agent_explore".to_string(),
             Self::Review => "agent_review".to_string(),
+            Self::Parallel => "agent_parallel".to_string(),
             Self::Custom(slug) => format!("agent_{slug}"),
         }
     }
@@ -98,6 +105,7 @@ impl RuntimeOrchestrationTool {
         match self {
             Self::Explore => "Agent Explore".to_string(),
             Self::Review => "Agent Review".to_string(),
+            Self::Parallel => "Agent Parallel".to_string(),
             Self::Custom(slug) => format!("Agent {slug}"),
         }
     }
@@ -110,6 +118,9 @@ impl RuntimeOrchestrationTool {
             Self::Review => {
                 "Review an implemented code change or diff, run the necessary type-check and test commands, and return risks, regressions, verification results, and concrete follow-ups. Use this after implementation to stress-test the work."
             }
+            Self::Parallel => {
+                "Delegate 1-5 independent subtasks to subagents with bounded concurrency. Use this for parallel exploration or review work only when tasks are independent and low side-effect; results are aggregated for the parent agent."
+            }
             Self::Custom(_) => {
                 // Custom subagents have their description set externally via custom_subagent_as_tool
                 "Custom subagent."
@@ -118,12 +129,12 @@ impl RuntimeOrchestrationTool {
     }
 
     /// Returns the built-in profile for this tool, or `None` for custom subagents
-    /// (which must be resolved externally with full record data).
+    /// and batch orchestration tools (which resolve delegates separately).
     pub fn profile(&self) -> Option<SubagentProfile> {
         match self {
             Self::Explore => Some(SubagentProfile::Explore),
             Self::Review => Some(SubagentProfile::Review),
-            Self::Custom(_) => None,
+            Self::Parallel | Self::Custom(_) => None,
         }
     }
 
@@ -182,6 +193,87 @@ impl RuntimeOrchestrationTool {
                     }
                 },
                 "required": ["task"]
+            }),
+            Self::Parallel => serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": PARALLEL_SUBAGENT_MAX_TASKS,
+                        "description": "Independent subagent tasks to run with bounded concurrency. Use only for separable, low side-effect exploration or review work.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "agent": {
+                                    "type": "string",
+                                    "description": "Subagent tool name to invoke, such as agent_explore, agent_review, or agent_{customSlug}. Do not use agent_parallel recursively."
+                                },
+                                "task": {
+                                    "type": "string",
+                                    "description": "Specific delegated task for this subagent, including scope, relevant files, and expected output."
+                                },
+                                "target": {
+                                    "type": "string",
+                                    "enum": ["code", "diff"],
+                                    "description": "Optional agent_review target for this item."
+                                },
+                                "reviewScope": {
+                                    "type": "string",
+                                    "enum": ["local", "diff_first_global"],
+                                    "description": "Optional agent_review scope for this item."
+                                },
+                                "globalScanMode": {
+                                    "type": "string",
+                                    "enum": ["off", "auto"],
+                                    "description": "Optional agent_review global scan mode for this item."
+                                },
+                                "changedFiles": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "Optional changed files for an agent_review item."
+                                },
+                                "preferredChecks": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "Optional verification commands for an agent_review item."
+                                },
+                                "riskHints": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "Optional risk hints for an agent_review item."
+                                },
+                                "planFilePath": {
+                                    "type": "string",
+                                    "description": "Optional plan file path for an agent_review item."
+                                }
+                            },
+                            "required": ["agent", "task"]
+                        }
+                    },
+                    "maxConcurrency": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": PARALLEL_SUBAGENT_MAX_CONCURRENCY,
+                        "default": PARALLEL_SUBAGENT_DEFAULT_CONCURRENCY,
+                        "description": "Maximum number of subagents to run at once. Defaults to 3 and is capped at 5."
+                    },
+                    "failFast": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "If true, stop scheduling additional items after the first failure. Already-running helpers may still finish."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["explore", "review", "mixed"],
+                        "description": "Optional high-level batch mode for result grouping."
+                    },
+                    "resultFormat": {
+                        "type": "string",
+                        "description": "Optional guidance for how the parent should compare or synthesize the returned summaries."
+                    }
+                },
+                "required": ["tasks"]
             }),
             Self::Custom(_) => serde_json::json!({
                 "type": "object",
@@ -675,6 +767,10 @@ mod tests {
             RuntimeOrchestrationTool::parse("agent_review"),
             Some(RuntimeOrchestrationTool::Review)
         );
+        assert_eq!(
+            RuntimeOrchestrationTool::parse("agent_parallel"),
+            Some(RuntimeOrchestrationTool::Parallel)
+        );
         assert_eq!(RuntimeOrchestrationTool::parse("read"), None);
     }
 
@@ -727,7 +823,27 @@ mod tests {
         let tools = runtime_orchestration_tools();
         let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
-        assert_eq!(tool_names, vec!["agent_explore", "agent_review"]);
+        assert_eq!(
+            tool_names,
+            vec!["agent_explore", "agent_review", "agent_parallel"]
+        );
+    }
+
+    #[test]
+    fn agent_parallel_tool_schema_has_bounded_tasks() {
+        let tool = RuntimeOrchestrationTool::Parallel.as_agent_tool();
+        assert_eq!(tool.name, "agent_parallel");
+        assert_eq!(tool.parameters["required"], serde_json::json!(["tasks"]));
+        assert_eq!(tool.parameters["properties"]["tasks"]["maxItems"], 5);
+        assert_eq!(
+            tool.parameters["properties"]["maxConcurrency"]["maximum"],
+            5
+        );
+        assert_eq!(
+            tool.parameters["properties"]["maxConcurrency"]["default"],
+            3
+        );
+        assert!(tool.description.contains("bounded concurrency"));
     }
 
     #[test]

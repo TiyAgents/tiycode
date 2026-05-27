@@ -643,7 +643,7 @@ pub(crate) fn resolve_helper_profile(tool: &RuntimeOrchestrationTool) -> Option<
     match tool {
         RuntimeOrchestrationTool::Explore => Some(SubagentProfile::Explore),
         RuntimeOrchestrationTool::Review => Some(SubagentProfile::Review),
-        RuntimeOrchestrationTool::Custom(_) => None, // Custom profiles are resolved externally
+        RuntimeOrchestrationTool::Parallel | RuntimeOrchestrationTool::Custom(_) => None,
     }
 }
 
@@ -663,7 +663,7 @@ pub(crate) fn resolve_helper_model_role(
                 .clone()
                 .unwrap_or_else(|| model_plan.primary.clone()),
         ),
-        RuntimeOrchestrationTool::Custom(_) => None,
+        RuntimeOrchestrationTool::Parallel | RuntimeOrchestrationTool::Custom(_) => None,
     }
 }
 

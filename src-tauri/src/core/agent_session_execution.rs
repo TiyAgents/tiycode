@@ -1,7 +1,10 @@
 use std::sync::atomic::Ordering;
+use std::time::Instant;
+
+use futures::StreamExt;
 
 use crate::core::agent_session::{
-    standard_tool_timeout, CLARIFY_TOOL_NAME, PLAN_TOOL_NAME, RENDER_TOOL_NAME,
+    standard_tool_timeout, ResolvedModelRole, CLARIFY_TOOL_NAME, PLAN_TOOL_NAME, RENDER_TOOL_NAME,
     STANDARD_TOOL_TIMEOUT_SECS, TASK_TOOL_NAMES,
 };
 use crate::core::agent_session_tools::{
@@ -13,8 +16,10 @@ use crate::core::plan_checkpoint::{
     build_plan_message_metadata, plan_markdown, write_plan_file,
 };
 use crate::core::subagent::{
-    extract_review_report, HelperRunRequest, ReviewRequest, RuntimeOrchestrationTool,
-    SubagentProfile,
+    extract_review_report, render_parallel_summary, HelperRunRequest, HelperRunResult,
+    ParallelSubagentBatchStatus, ParallelSubagentRequest, ParallelSubagentSummary,
+    ParallelSubagentTask, ParallelSubagentTaskResult, ParallelSubagentTaskStatus, ReviewRequest,
+    RuntimeOrchestrationTool, SubagentProfile,
 };
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGatewayResult,
@@ -32,6 +37,16 @@ use super::agent_session::AgentSession;
 struct HelperToolTask {
     task: String,
     review_request: Option<ReviewRequest>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedHelperDelegate {
+    tool: RuntimeOrchestrationTool,
+    agent_name: String,
+    task: String,
+    review_request: Option<ReviewRequest>,
+    helper_profile: Option<SubagentProfile>,
+    model_role: ResolvedModelRole,
 }
 
 fn resolve_helper_tool_task(
@@ -61,6 +76,88 @@ fn resolve_helper_tool_task(
         task,
         review_request: None,
     })
+}
+
+fn parallel_task_failed_result(
+    index: usize,
+    agent: String,
+    task: String,
+    error: String,
+    duration_ms: u64,
+) -> ParallelSubagentTaskResult {
+    ParallelSubagentTaskResult {
+        index,
+        agent,
+        task,
+        status: ParallelSubagentTaskStatus::Failed,
+        summary: None,
+        raw_summary: None,
+        snapshot: None,
+        review_request: None,
+        review_report: None,
+        error: Some(error),
+        duration_ms,
+    }
+}
+
+fn parallel_task_skipped_result(
+    index: usize,
+    agent: String,
+    task: String,
+    reason: String,
+) -> ParallelSubagentTaskResult {
+    ParallelSubagentTaskResult {
+        index,
+        agent,
+        task,
+        status: ParallelSubagentTaskStatus::Skipped,
+        summary: None,
+        raw_summary: None,
+        snapshot: None,
+        review_request: None,
+        review_report: None,
+        error: Some(reason),
+        duration_ms: 0,
+    }
+}
+
+fn elapsed_ms_u64(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn validate_parallel_delegate_safety(delegate: &ResolvedHelperDelegate) -> Result<(), String> {
+    let Some(SubagentProfile::Custom { allowed_tools, .. }) = &delegate.helper_profile else {
+        return Ok(());
+    };
+
+    const PARALLEL_SAFE_CUSTOM_TOOLS: &[&str] = &[
+        "read",
+        "list",
+        "find",
+        "search",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "term_status",
+        "term_output",
+        "web_search",
+    ];
+
+    let unsafe_tools = allowed_tools
+        .iter()
+        .filter(|tool| !PARALLEL_SAFE_CUSTOM_TOOLS.contains(&tool.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if unsafe_tools.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Custom subagent '{}' is not allowed in agent_parallel because it has non-read-only tools: {}",
+            delegate.agent_name,
+            unsafe_tools.join(", ")
+        ))
+    }
 }
 
 fn render_chart_part(artifact_id: &str, chart_payload: &serde_json::Value) -> serde_json::Value {
@@ -215,9 +312,20 @@ impl AgentSession {
         }
 
         if let Some(tool) = RuntimeOrchestrationTool::parse(tool_name) {
-            return self
-                .execute_helper_tool(tool, tool_call_id, &tool_call_storage_id, tool_input)
-                .await;
+            return match tool {
+                RuntimeOrchestrationTool::Parallel => {
+                    self.execute_parallel_helper_tool(
+                        tool_call_id,
+                        &tool_call_storage_id,
+                        tool_input,
+                    )
+                    .await
+                }
+                _ => {
+                    self.execute_helper_tool(tool, tool_call_id, &tool_call_storage_id, tool_input)
+                        .await
+                }
+            };
         }
 
         let _ = self.event_tx.send(ThreadStreamEvent::ToolRequested {
@@ -455,11 +563,8 @@ impl AgentSession {
         tool_call_storage_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
-        let HelperToolTask {
-            task,
-            review_request,
-        } = match resolve_helper_tool_task(tool.clone(), tool_input) {
-            Ok(resolved) => resolved,
+        let delegate = match self.resolve_helper_delegate(tool, tool_input).await {
+            Ok(delegate) => delegate,
             Err(error) => {
                 tool_call_repo::update_result(
                     &self.pool,
@@ -473,70 +578,11 @@ impl AgentSession {
             }
         };
 
-        let helper_profile = resolve_helper_profile(&tool);
-
-        // For custom subagents, resolve the profile from the session's custom subagent registry
-        let resolved_profile = if let RuntimeOrchestrationTool::Custom(ref slug) = tool {
-            match self.resolve_custom_subagent_profile(slug).await {
-                Some(profile) => Some(profile),
-                None => {
-                    let error = format!("Custom subagent 'agent_{slug}' not found or not enabled");
-                    tool_call_repo::update_result(
-                        &self.pool,
-                        tool_call_storage_id,
-                        &serde_json::json!({ "error": &error }).to_string(),
-                        "failed",
-                    )
-                    .await
-                    .ok();
-                    return agent_error_result(error);
-                }
-            }
-        } else {
-            helper_profile
-        };
-        let helper_role = match resolve_helper_model_role(
-            &self.spec.model_plan,
-            &tool,
-            resolved_profile.as_ref(),
-        ) {
-            Some(role) => role,
-            None => {
-                let error = format!("No helper profile resolved for tool '{}'", tool.tool_name());
-                tool_call_repo::update_result(
-                    &self.pool,
-                    tool_call_storage_id,
-                    &serde_json::json!({ "error": &error }).to_string(),
-                    "failed",
-                )
-                .await
-                .ok();
-                return agent_error_result(error);
-            }
-        };
-
-        let result = self
-            .helper_orchestrator
-            .run_helper(HelperRunRequest {
-                run_id: self.spec.run_id.clone(),
-                thread_id: self.spec.thread_id.clone(),
-                tool: tool.clone(),
-                helper_profile: resolved_profile,
-                parent_tool_call_id: Some(tool_call_id.to_string()),
-                task: task.clone(),
-                model_role: helper_role,
-                system_prompt: self.spec.system_prompt.clone(),
-                workspace_path: self.spec.workspace_path.clone(),
-                run_mode: self.spec.run_mode.clone(),
-                event_tx: self.event_tx.clone(),
-                session_abort_signal: self.abort_signal.clone(),
-                thinking_level: self.spec.model_plan.thinking_level,
-            })
-            .await;
+        let result = self.run_helper_for_delegate(&delegate, tool_call_id).await;
 
         match result {
             Ok(summary) => {
-                let review_report = if tool == RuntimeOrchestrationTool::Review {
+                let review_report = if delegate.tool == RuntimeOrchestrationTool::Review {
                     summary
                         .raw_summary
                         .as_deref()
@@ -549,7 +595,7 @@ impl AgentSession {
                     "summary": summary.summary.clone(),
                     "rawSummary": summary.raw_summary.clone(),
                     "snapshot": summary.snapshot,
-                    "reviewRequest": review_request,
+                    "reviewRequest": delegate.review_request,
                     "reviewReport": review_report,
                 });
                 tool_call_repo::update_result(
@@ -578,6 +624,340 @@ impl AgentSession {
 
                 agent_error_result(error.to_string())
             }
+        }
+    }
+
+    async fn execute_parallel_helper_tool(
+        &self,
+        tool_call_id: &str,
+        tool_call_storage_id: &str,
+        tool_input: &serde_json::Value,
+    ) -> AgentToolResult {
+        let batch_started = Instant::now();
+        let request = match ParallelSubagentRequest::from_tool_input(tool_input) {
+            Ok(request) => request,
+            Err(error) => {
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_storage_id,
+                    &serde_json::json!({ "error": &error }).to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+                return agent_error_result(error);
+            }
+        };
+
+        let max_concurrency = request.effective_max_concurrency();
+        let mut immediate_results = Vec::new();
+        let mut delegates = Vec::new();
+
+        for (index, task) in request.tasks.iter().cloned().enumerate() {
+            let task_started = Instant::now();
+            let agent_name = task.agent.trim().to_string();
+            let Some(tool) = RuntimeOrchestrationTool::parse(&agent_name) else {
+                immediate_results.push(parallel_task_failed_result(
+                    index,
+                    agent_name,
+                    task.task,
+                    "Unknown subagent tool".to_string(),
+                    elapsed_ms_u64(task_started),
+                ));
+                continue;
+            };
+
+            if tool == RuntimeOrchestrationTool::Parallel {
+                immediate_results.push(parallel_task_failed_result(
+                    index,
+                    agent_name,
+                    task.task,
+                    "agent_parallel cannot delegate to itself".to_string(),
+                    elapsed_ms_u64(task_started),
+                ));
+                continue;
+            }
+
+            match self
+                .resolve_helper_delegate(tool, &task.to_tool_input())
+                .await
+            {
+                Ok(delegate) => match validate_parallel_delegate_safety(&delegate) {
+                    Ok(()) => delegates.push((index, task, delegate)),
+                    Err(error) => immediate_results.push(parallel_task_failed_result(
+                        index,
+                        agent_name,
+                        task.task,
+                        error,
+                        elapsed_ms_u64(task_started),
+                    )),
+                },
+                Err(error) => immediate_results.push(parallel_task_failed_result(
+                    index,
+                    agent_name,
+                    task.task,
+                    error,
+                    elapsed_ms_u64(task_started),
+                )),
+            }
+        }
+
+        let mut results = immediate_results;
+        let mut queued: std::collections::VecDeque<_> = delegates.into_iter().collect();
+        let mut active = futures::stream::FuturesUnordered::new();
+        let mut stop_reason = if self.abort_signal.is_cancelled() {
+            Some(
+                "Skipped because the parent run was cancelled before this subagent could start"
+                    .to_string(),
+            )
+        } else if request.fail_fast
+            && results
+                .iter()
+                .any(|result| result.status == ParallelSubagentTaskStatus::Failed)
+        {
+            Some("Skipped because failFast stopped scheduling after an earlier failure".to_string())
+        } else {
+            None
+        };
+
+        while stop_reason.is_none() && active.len() < max_concurrency {
+            if self.abort_signal.is_cancelled() {
+                stop_reason = Some(
+                    "Skipped because the parent run was cancelled before this subagent could start"
+                        .to_string(),
+                );
+                break;
+            }
+            if let Some((index, task, delegate)) = queued.pop_front() {
+                active.push(self.run_parallel_delegate_task(
+                    index,
+                    task,
+                    delegate,
+                    tool_call_id.to_string(),
+                ));
+            } else {
+                break;
+            }
+        }
+
+        while let Some(result) = active.next().await {
+            if self.abort_signal.is_cancelled() {
+                stop_reason.get_or_insert_with(|| {
+                    "Skipped because the parent run was cancelled before this subagent could start"
+                        .to_string()
+                });
+            } else if result.status == ParallelSubagentTaskStatus::Failed && request.fail_fast {
+                stop_reason.get_or_insert_with(|| {
+                    "Skipped because failFast stopped scheduling after an earlier failure"
+                        .to_string()
+                });
+            }
+            results.push(result);
+
+            while stop_reason.is_none() && active.len() < max_concurrency {
+                if self.abort_signal.is_cancelled() {
+                    stop_reason = Some(
+                        "Skipped because the parent run was cancelled before this subagent could start"
+                            .to_string(),
+                    );
+                    break;
+                }
+                if let Some((index, task, delegate)) = queued.pop_front() {
+                    active.push(self.run_parallel_delegate_task(
+                        index,
+                        task,
+                        delegate,
+                        tool_call_id.to_string(),
+                    ));
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if let Some(reason) = stop_reason {
+            for (index, task, _delegate) in queued {
+                results.push(parallel_task_skipped_result(
+                    index,
+                    task.agent,
+                    task.task,
+                    reason.clone(),
+                ));
+            }
+        }
+
+        results.sort_by_key(|result| result.index);
+        let completed = results
+            .iter()
+            .filter(|result| result.status == ParallelSubagentTaskStatus::Completed)
+            .count();
+        let failed = results
+            .iter()
+            .filter(|result| result.status == ParallelSubagentTaskStatus::Failed)
+            .count();
+        let skipped = results
+            .iter()
+            .filter(|result| result.status == ParallelSubagentTaskStatus::Skipped)
+            .count();
+        let batch_status = if completed == request.tasks.len() {
+            ParallelSubagentBatchStatus::Completed
+        } else if completed == 0 {
+            ParallelSubagentBatchStatus::Failed
+        } else {
+            ParallelSubagentBatchStatus::PartialFailure
+        };
+        let mut aggregate = ParallelSubagentSummary {
+            summary: String::new(),
+            mode: request.mode,
+            result_format: request.result_format,
+            batch_status,
+            max_concurrency,
+            total: request.tasks.len(),
+            completed,
+            failed,
+            skipped,
+            duration_ms: elapsed_ms_u64(batch_started),
+            results,
+        };
+        aggregate.summary = render_parallel_summary(&aggregate);
+        let details = serde_json::to_value(&aggregate).unwrap_or_else(|_| {
+            serde_json::json!({
+                "summary": aggregate.summary,
+                "error": "failed to serialize parallel subagent result"
+            })
+        });
+
+        let storage_status = if aggregate.batch_status == ParallelSubagentBatchStatus::Failed {
+            "failed"
+        } else {
+            "completed"
+        };
+        tool_call_repo::update_result(
+            &self.pool,
+            tool_call_storage_id,
+            &details.to_string(),
+            storage_status,
+        )
+        .await
+        .ok();
+
+        AgentToolResult {
+            content: vec![ContentBlock::Text(TextContent::new(aggregate.summary))],
+            details: Some(details),
+        }
+    }
+
+    async fn resolve_helper_delegate(
+        &self,
+        tool: RuntimeOrchestrationTool,
+        tool_input: &serde_json::Value,
+    ) -> Result<ResolvedHelperDelegate, String> {
+        if tool == RuntimeOrchestrationTool::Parallel {
+            return Err("agent_parallel cannot be used as an individual helper".to_string());
+        }
+
+        let HelperToolTask {
+            task,
+            review_request,
+        } = resolve_helper_tool_task(tool.clone(), tool_input)?;
+
+        let helper_profile = resolve_helper_profile(&tool);
+        let resolved_profile = if let RuntimeOrchestrationTool::Custom(ref slug) = tool {
+            match self.resolve_custom_subagent_profile(slug).await {
+                Some(profile) => Some(profile),
+                None => {
+                    return Err(format!(
+                        "Custom subagent 'agent_{slug}' not found or not enabled"
+                    ));
+                }
+            }
+        } else {
+            helper_profile
+        };
+        let model_role =
+            resolve_helper_model_role(&self.spec.model_plan, &tool, resolved_profile.as_ref())
+                .ok_or_else(|| {
+                    format!("No helper profile resolved for tool '{}'", tool.tool_name())
+                })?;
+
+        Ok(ResolvedHelperDelegate {
+            agent_name: tool.tool_name(),
+            tool,
+            task,
+            review_request,
+            helper_profile: resolved_profile,
+            model_role,
+        })
+    }
+
+    async fn run_helper_for_delegate(
+        &self,
+        delegate: &ResolvedHelperDelegate,
+        parent_tool_call_id: &str,
+    ) -> Result<HelperRunResult, crate::model::errors::AppError> {
+        self.helper_orchestrator
+            .run_helper(HelperRunRequest {
+                run_id: self.spec.run_id.clone(),
+                thread_id: self.spec.thread_id.clone(),
+                tool: delegate.tool.clone(),
+                helper_profile: delegate.helper_profile.clone(),
+                parent_tool_call_id: Some(parent_tool_call_id.to_string()),
+                task: delegate.task.clone(),
+                model_role: delegate.model_role.clone(),
+                system_prompt: self.spec.system_prompt.clone(),
+                workspace_path: self.spec.workspace_path.clone(),
+                run_mode: self.spec.run_mode.clone(),
+                event_tx: self.event_tx.clone(),
+                session_abort_signal: self.abort_signal.clone(),
+                thinking_level: self.spec.model_plan.thinking_level,
+            })
+            .await
+    }
+
+    async fn run_parallel_delegate_task(
+        &self,
+        index: usize,
+        task: ParallelSubagentTask,
+        delegate: ResolvedHelperDelegate,
+        parent_tool_call_id: String,
+    ) -> ParallelSubagentTaskResult {
+        let started = Instant::now();
+        let review_request = delegate.review_request.clone();
+        let agent_name = delegate.agent_name.clone();
+        let task_summary = task.task.clone();
+        let tool = delegate.tool.clone();
+
+        match self
+            .run_helper_for_delegate(&delegate, &parent_tool_call_id)
+            .await
+        {
+            Ok(summary) => ParallelSubagentTaskResult {
+                index,
+                agent: agent_name,
+                task: task_summary,
+                status: ParallelSubagentTaskStatus::Completed,
+                summary: Some(summary.summary),
+                raw_summary: summary.raw_summary.clone(),
+                snapshot: Some(summary.snapshot),
+                review_request,
+                review_report: if tool == RuntimeOrchestrationTool::Review {
+                    summary
+                        .raw_summary
+                        .as_deref()
+                        .and_then(extract_review_report)
+                } else {
+                    None
+                },
+                error: None,
+                duration_ms: elapsed_ms_u64(started),
+            },
+            Err(error) => parallel_task_failed_result(
+                index,
+                agent_name,
+                task_summary,
+                error.to_string(),
+                elapsed_ms_u64(started),
+            ),
         }
     }
 
@@ -1215,9 +1595,14 @@ impl AgentSession {
 mod tests {
     use super::{
         render_artifact_host_message, render_chart_part, render_host_message_metadata,
-        resolve_helper_tool_task, RuntimeOrchestrationTool,
+        resolve_helper_tool_task, validate_parallel_delegate_safety, ResolvedHelperDelegate,
+        RuntimeOrchestrationTool,
     };
+    use crate::core::agent_session::ResolvedModelRole;
     use crate::core::subagent::review_contract::{GlobalScanMode, ReviewScope, ReviewTarget};
+    use crate::core::subagent::SubagentProfile;
+    use crate::model::subagent::CustomSubagentModelRole;
+    use tiycore::types::{Cost, InputType, Model, Provider};
 
     #[test]
     fn render_chart_part_maps_vega_payload_fields() {
@@ -1444,5 +1829,65 @@ mod tests {
         );
         assert_eq!(request.risk_hints, vec!["tests".to_string()]);
         assert_eq!(request.plan_file_path.as_deref(), Some("/tmp/plan.md"));
+    }
+
+    #[test]
+    fn parallel_delegate_safety_allows_read_only_custom_tools() {
+        let delegate = test_custom_delegate(vec!["read", "search", "term_output"]);
+
+        assert!(validate_parallel_delegate_safety(&delegate).is_ok());
+    }
+
+    #[test]
+    fn parallel_delegate_safety_rejects_mutating_custom_tools() {
+        let delegate = test_custom_delegate(vec!["read", "edit", "shell"]);
+        let error = validate_parallel_delegate_safety(&delegate)
+            .expect_err("mutating custom helper should be rejected");
+
+        assert!(error.contains("non-read-only tools"));
+        assert!(error.contains("edit"));
+        assert!(error.contains("shell"));
+    }
+
+    fn test_custom_delegate(allowed_tools: Vec<&str>) -> ResolvedHelperDelegate {
+        ResolvedHelperDelegate {
+            tool: RuntimeOrchestrationTool::Custom("custom".to_string()),
+            agent_name: "agent_custom".to_string(),
+            task: "custom task".to_string(),
+            review_request: None,
+            helper_profile: Some(SubagentProfile::Custom {
+                slug: "custom".to_string(),
+                system_prompt: "custom prompt".to_string(),
+                allowed_tools: allowed_tools.into_iter().map(str::to_string).collect(),
+                model_role: CustomSubagentModelRole::Auxiliary,
+            }),
+            model_role: test_model_role(),
+        }
+    }
+
+    fn test_model_role() -> ResolvedModelRole {
+        let model = Model::builder()
+            .id("test-model")
+            .name("Test Model")
+            .provider(Provider::OpenAI)
+            .base_url("https://example.com")
+            .input(vec![InputType::Text])
+            .context_window(128_000)
+            .max_tokens(32_000)
+            .cost(Cost::default())
+            .build()
+            .expect("test model should build");
+
+        ResolvedModelRole {
+            provider_id: "provider".to_string(),
+            model_record_id: "model-record".to_string(),
+            model_id: "model".to_string(),
+            model_name: "Test Model".to_string(),
+            provider_type: "openai".to_string(),
+            provider_name: "Provider".to_string(),
+            api_key: None,
+            provider_options: None,
+            model,
+        }
     }
 }

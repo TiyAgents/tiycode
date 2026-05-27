@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createMachine } from "@/shared/lib/create-machine";
 import { mapSnapshotToRunState, isTaskBoardTool, getDefaultToolOpenState } from "./runtime-thread-surface-logic";
 import { LongMessageBody, shouldRenderTextPartAsPlainText } from "./long-message-body";
-import { mapMessageParts, mapRecordedUserMessage, mapSnapshotMessage, mergeSnapshotMessages, mergeSnapshotTools, getCopyableMessageText, getCopyableThreadMessageText } from "./runtime-thread-surface-state";
+import { mapMessageParts, mapRecordedUserMessage, mapSnapshotMessage, mergeSnapshotMessages, mergeSnapshotTools, getAssistantRunCopyState, getCopyableAssistantTurnText, getCopyableMessageText, getCopyableThreadMessageText } from "./runtime-thread-surface-state";
 import type { SurfaceMessage } from "./runtime-thread-surface-state";
 import type { MessageDto, RunStatus, ThreadSnapshotDto } from "@/shared/types/api";
 
@@ -237,7 +237,172 @@ describe("copyable message text", () => {
     expect(getCopyableThreadMessageText(assistantMessage)).toBe("assistant **markdown**");
   });
 
-  it("copies only the original slash command display text for command messages", () => {
+  it("copies all text from one assistant run in display order", () => {
+    const messages = [
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-1",
+        runId: "run-copy",
+        role: "assistant",
+        parts: [{ type: "text", text: "First assistant paragraph" }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-chart",
+        runId: "run-copy",
+        role: "assistant",
+        contentMarkdown: "chart fallback should not copy",
+        parts: [{ type: "chart", artifactId: "chart-1", library: "vega-lite", spec: { mark: "bar" } }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-other-run",
+        runId: "run-other",
+        role: "assistant",
+        parts: [{ type: "text", text: "Other run text" }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-discarded",
+        runId: "run-copy",
+        role: "assistant",
+        status: "discarded",
+        parts: [{ type: "text", text: "Discarded text" }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "user-same-run",
+        runId: "run-copy",
+        role: "user",
+        parts: [{ type: "text", text: "User text" }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-2",
+        runId: "run-copy",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Second assistant paragraph" },
+          { type: "data-tool", data: { value: "not copied" } },
+        ],
+      })),
+    ];
+
+    expect(getCopyableAssistantTurnText(messages, "run-copy")).toBe(
+      "First assistant paragraph\n\nSecond assistant paragraph",
+    );
+  });
+
+  it("falls back to one assistant message when the run id is missing", () => {
+    const fallbackMessage = mapSnapshotMessage(makeMessage({
+      id: "assistant-no-run",
+      runId: null,
+      role: "assistant",
+      parts: [{ type: "text", text: "Single legacy assistant message" }],
+    }));
+
+    expect(getCopyableAssistantTurnText([fallbackMessage], null, fallbackMessage)).toBe(
+      "Single legacy assistant message",
+    );
+  });
+
+  it("falls back to the current assistant message when a run has no copyable text", () => {
+    const fallbackMessage = mapSnapshotMessage(makeMessage({
+      id: "assistant-fallback",
+      runId: "run-empty",
+      role: "assistant",
+      parts: [{ type: "text", text: "Fallback assistant message" }],
+    }));
+    const messages = [
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-chart-only",
+        runId: "run-empty",
+        role: "assistant",
+        parts: [{ type: "chart", artifactId: "chart-2", library: "vega-lite", spec: { mark: "line" } }],
+      })),
+    ];
+
+    expect(getCopyableAssistantTurnText(messages, "run-empty", fallbackMessage)).toBe(
+      "Fallback assistant message",
+    );
+  });
+
+  it("places assistant run copy action only on the last copyable plain assistant message", () => {
+    const messages = [
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-1",
+        messageType: "plain_message",
+        runId: "run-copy",
+        role: "assistant",
+        parts: [{ type: "text", text: "First assistant paragraph" }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-tool-result",
+        messageType: "tool_result",
+        runId: "run-copy",
+        role: "assistant",
+        parts: [{ type: "text", text: "Tool result should not copy" }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-chart-only",
+        messageType: "plain_message",
+        runId: "run-copy",
+        role: "assistant",
+        parts: [{ type: "chart", artifactId: "chart-3", library: "vega-lite", spec: { mark: "line" } }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-2",
+        messageType: "plain_message",
+        runId: "run-copy",
+        role: "assistant",
+        parts: [{ type: "text", text: "Second assistant paragraph" }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-other-run",
+        messageType: "plain_message",
+        runId: "run-other",
+        role: "assistant",
+        parts: [{ type: "text", text: "Other run text" }],
+      })),
+    ];
+
+    expect(getAssistantRunCopyState(messages)).toEqual({
+      buttonMessageIdByRunId: {
+        "run-copy": "assistant-2",
+        "run-other": "assistant-other-run",
+      },
+      textByRunId: {
+        "run-copy": "First assistant paragraph\n\nSecond assistant paragraph",
+        "run-other": "Other run text",
+      },
+    });
+  });
+
+  it("does not expose a copy action for an excluded active assistant run", () => {
+    const messages = [
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-active",
+        messageType: "plain_message",
+        runId: "run-active",
+        role: "assistant",
+        parts: [{ type: "text", text: "Still running text" }],
+      })),
+      mapSnapshotMessage(makeMessage({
+        id: "assistant-completed",
+        messageType: "plain_message",
+        runId: "run-completed",
+        role: "assistant",
+        parts: [{ type: "text", text: "Completed text" }],
+      })),
+    ];
+
+    expect(getAssistantRunCopyState(messages, {
+      excludedRunIds: new Set(["run-active"]),
+    })).toEqual({
+      buttonMessageIdByRunId: {
+        "run-completed": "assistant-completed",
+      },
+      textByRunId: {
+        "run-completed": "Completed text",
+      },
+    });
+  });
+
+  it("keeps user command copy text on the original display text path", () => {
     const message: Pick<SurfaceMessage, "content" | "parts" | "role" | "status"> = {
       content: "/init",
       parts: [{ type: "text", text: "/init" }],
