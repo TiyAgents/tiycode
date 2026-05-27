@@ -1012,6 +1012,10 @@ const zhCN = {
   "artifact.expandCode": "展开代码",
   "artifact.preview": "点击预览",
 
+  // ── Message actions ───────────────────────────────────────
+  "message.copy": "复制消息",
+  "message.copied": "已复制",
+
   // ── Long message preview ──────────────────────────────────
   "longMessage.collapseAll": "收起全文",
   "longMessage.expandAll": "展开全文",

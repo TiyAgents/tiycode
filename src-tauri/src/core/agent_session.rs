@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex as StdMutex, Weak};
 use chrono::{SecondsFormat, Utc};
 use sqlx::SqlitePool;
 use tiycore::agent::{
-    Agent, AgentError, AgentMessage, QueueEvent, QueuedMessageHandle, ToolExecutionMode,
+    Agent, AgentError, AgentMessage, QueueEvent, QueueMode, QueuedMessageHandle, ToolExecutionMode,
 };
 use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{Cost, InputType, Model, Provider, Usage};
@@ -952,6 +952,10 @@ fn configure_agent(
     // Set session ID for prompt caching (used as prompt_cache_key in OpenAI Responses API).
     // Using thread_id ensures the same conversation thread shares a cache across runs.
     agent.set_session_id(&spec.thread_id);
+
+    // Consume at most the oldest follow-up message per turn. Steering keeps
+    // tiycore's default mode because it is configured independently.
+    agent.set_follow_up_mode(QueueMode::OneAtATime);
 
     {
         let run_id = spec.run_id.clone();

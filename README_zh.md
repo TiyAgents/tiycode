@@ -6,6 +6,14 @@
   <p>
     <a href="./README.md">English</a>
   </p>
+  <p>
+    <img src="https://img.shields.io/github/actions/workflow/status/tiylabs/tiycode/ci.yml?branch=master&style=flat-square&label=CI" alt="CI" />
+    <img src="https://img.shields.io/github/v/release/tiylabs/tiycode?style=flat-square&label=Release" alt="Release" />
+    <img src="https://img.shields.io/github/downloads/tiylabs/tiycode/total?style=flat-square&label=Downloads" alt="Downloads" />
+    <img src="https://img.shields.io/github/license/tiylabs/tiycode?style=flat-square" alt="License" />
+    <img src="https://img.shields.io/badge/Rust-1.77%2B-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust" />
+    <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square&logo=tauri" alt="Platform" />
+  </p>
   <br />
   <img width="1611" height="1032"  alt="TiyCode screenshot" src="https://github.com/user-attachments/assets/d30c016c-8642-43fe-bde9-0dac9feb2148" />
 </div>
@@ -356,6 +364,14 @@ npm run dev
 ## License
 
 本项目采用 Apache License 2.0 开源协议。详细信息请见 `LICENSE`。
+
+## 社区
+
+使用微信扫描下方二维码加入用户群，与作者和用户共同交流！
+
+<div align="center">
+  <img width="320" alt="WeChat Group" src="https://github.com/user-attachments/assets/ca078477-8068-47f1-810c-20f8e03eec0d" />
+</div>
 
 ## 致敬
 

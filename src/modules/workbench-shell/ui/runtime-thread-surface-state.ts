@@ -54,6 +54,50 @@ export type SurfaceMessagePart =
   | SurfaceDataMessagePart
   | SurfaceUnknownMessagePart;
 
+export type GetCopyableMessageTextOptions = {
+  fallbackToContent?: boolean;
+};
+
+export type CopyableCommandComposerMetadata = {
+  kind: "plain" | "command";
+  displayText: string | null;
+  effectivePrompt: string | null;
+} | null;
+
+function isCopyableTextMessagePart(
+  part: SurfaceMessagePart,
+): part is SurfaceTextMessagePart {
+  return part.type === "text";
+}
+
+export function getCopyableMessageText(
+  message: Pick<SurfaceMessage, "content" | "parts" | "status">,
+  options: GetCopyableMessageTextOptions = {},
+): string {
+  const textParts = message.parts.filter(isCopyableTextMessagePart);
+
+  if (textParts.length > 0) {
+    return textParts.map((part) => part.text).join("\n\n").trim();
+  }
+
+  if ((options.fallbackToContent ?? true) && message.parts.length === 0) {
+    return message.content.trim();
+  }
+
+  return "";
+}
+
+export function getCopyableThreadMessageText(
+  message: Pick<SurfaceMessage, "content" | "parts" | "role" | "status">,
+  commandComposer: CopyableCommandComposerMetadata = null,
+): string {
+  if (message.role === "user" && commandComposer?.kind === "command") {
+    return commandComposer.displayText?.trim() || getCopyableMessageText(message);
+  }
+
+  return getCopyableMessageText(message);
+}
+
 export type SurfaceMessage = {
   createdAt: string;
   id: string;
