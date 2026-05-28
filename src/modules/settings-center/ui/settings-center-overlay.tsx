@@ -1206,32 +1206,6 @@ function GeneralSettingsPanel({
 
       <SettingsSection title={t("settings.general.preferences")}>
         <SettingsRow
-          label={t("settings.general.cliLabel")}
-          description={t("settings.general.cliDesc")}
-          control={
-            <Button
-              type="button"
-              variant="outline"
-              className="h-8 rounded-lg border-app-border bg-app-surface-muted px-3 text-[12px] font-medium text-app-foreground shadow-none hover:border-app-border-strong hover:bg-app-surface-hover"
-              disabled={cliLoading}
-              onClick={handleToggleCli}
-            >
-              {cliInstalled ? (
-                <>
-                  <Check className="size-3.5" />
-                  {t("settings.general.cliUninstall")}
-                </>
-              ) : (
-                <>
-                  <TerminalSquare className="size-3.5" />
-                  {t("settings.general.cliInstall")}
-                </>
-              )}
-            </Button>
-          }
-        />
-        <SectionDivider />
-        <SettingsRow
           label={t("settings.general.themeLabel")}
           description={t("settings.general.themeDesc")}
           control={
@@ -1432,6 +1406,34 @@ function GeneralSettingsPanel({
               checked={webSearch.includeRawContent}
               onCheckedChange={(checked) => void onUpdateWebSearchSettings({ includeRawContent: checked })}
             />
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection title={t("settings.general.acpServerTitle")}>
+        <SettingsRow
+          label={t("settings.general.acpServerCliLabel")}
+          description={t("settings.general.acpServerCliDesc")}
+          control={
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 rounded-lg border-app-border bg-app-surface-muted px-3 text-[12px] font-medium text-app-foreground shadow-none hover:border-app-border-strong hover:bg-app-surface-hover"
+              disabled={cliLoading}
+              onClick={handleToggleCli}
+            >
+              {cliInstalled ? (
+                <>
+                  <Check className="size-3.5" />
+                  {t("settings.general.cliUninstall")}
+                </>
+              ) : (
+                <>
+                  <TerminalSquare className="size-3.5" />
+                  {t("settings.general.cliInstall")}
+                </>
+              )}
+            </Button>
           }
         />
       </SettingsSection>
