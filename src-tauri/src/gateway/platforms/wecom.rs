@@ -20,7 +20,7 @@ use futures::stream::SplitSink;
 use futures::{SinkExt, Stream, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use tokio_tungstenite::tungstenite::Message;
@@ -48,8 +48,8 @@ const DEBOUNCE_DELAY_MS: u64 = 600;
 const DEBOUNCE_SPLIT_DELAY_MS: u64 = 2000;
 /// WeCom client-side text split threshold (~4000 chars).
 const SPLIT_THRESHOLD: usize = 3900;
-/// Reconnect backoff sequence (seconds).
-const RECONNECT_BACKOFF: &[u64] = &[2, 5, 10, 30, 60];
+/// Timeout for awaiting a server ack to an outbound send frame.
+const SEND_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 
 // ── Command constants ────────────────────────────────────────────────
 
@@ -76,6 +76,10 @@ pub struct WecomAdapter {
     last_req_ids: Arc<Mutex<HashMap<String, String>>>,
     /// Message ID dedup map with TTL: msg_id → insert time.
     seen_messages: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Pending outbound send acks keyed by req_id → oneshot sender for the
+    /// server's response frame. The reader task resolves these when a matching
+    /// ack frame arrives.
+    pending_acks: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
 }
 
 impl WecomAdapter {
@@ -91,6 +95,7 @@ impl WecomAdapter {
             reader_handle: None,
             last_req_ids: Arc::new(Mutex::new(HashMap::new())),
             seen_messages: Arc::new(Mutex::new(HashMap::new())),
+            pending_acks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -271,6 +276,52 @@ impl WecomAdapter {
 
     // ── Inbound frame dispatch ───────────────────────────────────────
 
+    /// Try to resolve a pending outbound-send ack from an inbound text frame.
+    ///
+    /// WeCom replies to `aibot_send_msg` / `aibot_respond_msg` with a frame that
+    /// echoes the request's `req_id` in `headers.req_id`. If that req_id matches
+    /// a waiting sender in `pending_acks`, the full frame is delivered to it and
+    /// `true` is returned so the reader skips normal message parsing.
+    async fn try_resolve_ack(
+        text: &str,
+        pending_acks: &Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
+    ) -> bool {
+        let v: Value = match serde_json::from_str(text) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+
+        // Callback / push commands are inbound user messages or server pushes,
+        // never outbound-send acks. Exclude all known non-ack commands so a
+        // genuine inbound frame is never mistaken for an ack even on the
+        // (astronomically unlikely) event of a req_id collision.
+        let cmd = v.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
+        if matches!(
+            cmd,
+            CMD_MSG_CALLBACK | CMD_LEGACY_CALLBACK | CMD_EVENT_CALLBACK | CMD_SUBSCRIBE | CMD_PING
+        ) {
+            return false;
+        }
+
+        let req_id = match v
+            .get("headers")
+            .and_then(|h| h.get("req_id"))
+            .and_then(|r| r.as_str())
+        {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => return false,
+        };
+
+        let sender = pending_acks.lock().await.remove(&req_id);
+        match sender {
+            Some(tx) => {
+                let _ = tx.send(v);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Parse an inbound WeCom WebSocket frame into an InboundMessage.
     ///
     /// Handles `aibot_msg_callback` and `aibot_callback` commands.
@@ -447,6 +498,7 @@ impl PlatformAdapter for WecomAdapter {
         let inbound_tx = self.inbound_tx.clone();
         let last_req_ids = Arc::clone(&self.last_req_ids);
         let seen_messages = Arc::clone(&self.seen_messages);
+        let pending_acks = Arc::clone(&self.pending_acks);
         self.reader_handle = Some(tokio::spawn(async move {
             let mut stream = stream;
             // Debounce buffer: accumulate messages from the same sender within a window.
@@ -497,6 +549,12 @@ impl PlatformAdapter for WecomAdapter {
 
                 match frame {
                     Some(Ok(Message::Text(text))) => {
+                        // First, try to resolve a pending outbound send ack.
+                        // Send-response frames echo back the request's req_id in
+                        // headers; route them to the waiting sender if matched.
+                        if WecomAdapter::try_resolve_ack(&text, &pending_acks).await {
+                            continue;
+                        }
                         if let Some(msg) = WecomAdapter::parse_message(&text) {
                             // Dedup by msg_id with TTL.
                             if !msg.message_id.is_empty() {
@@ -597,6 +655,8 @@ impl PlatformAdapter for WecomAdapter {
             let _ = sink.close().await;
         }
         *guard = None;
+        // Drop any pending send-ack waiters so callers stop blocking.
+        self.pending_acks.lock().await.clear();
         tracing::info!("WeCom adapter disconnected");
     }
 
@@ -612,37 +672,113 @@ impl PlatformAdapter for WecomAdapter {
             text.to_string()
         };
 
-        let payload = if let Some(ref rid) = req_id {
+        let (frame_req_id, payload) = if let Some(ref rid) = req_id {
             // Group chat: must use aibot_respond_msg with original req_id.
-            Self::build_frame(
-                CMD_RESPOND_MSG,
-                rid,
-                json!({
-                    "msgtype": "markdown",
-                    "markdown": { "content": content },
-                }),
+            (
+                rid.clone(),
+                Self::build_frame(
+                    CMD_RESPOND_MSG,
+                    rid,
+                    json!({
+                        "msgtype": "markdown",
+                        "markdown": { "content": content },
+                    }),
+                ),
             )
         } else {
             // DM: use aibot_send_msg with new req_id.
-            Self::build_frame(
-                CMD_SEND_MSG,
-                &Self::new_req_id(CMD_SEND_MSG),
-                json!({
-                    "chatid": chat_id,
-                    "msgtype": "markdown",
-                    "markdown": { "content": content },
-                }),
+            let rid = Self::new_req_id(CMD_SEND_MSG);
+            (
+                rid.clone(),
+                Self::build_frame(
+                    CMD_SEND_MSG,
+                    &rid,
+                    json!({
+                        "chatid": chat_id,
+                        "msgtype": "markdown",
+                        "markdown": { "content": content },
+                    }),
+                ),
             )
         };
 
-        let mut guard = self.ws_sink.lock().await;
-        if let Some(ref mut sink) = *guard {
-            sink.send(Message::Text(payload.to_string().into()))
-                .await
-                .map_err(|e| anyhow::anyhow!("send failed: {e}"))?;
-            Ok(SendResult::ok(None))
-        } else {
-            Ok(SendResult::err("not connected"))
+        // Register a pending ack waiter before sending so the reader task can
+        // resolve it when the server's response frame arrives.
+        //
+        // The ack is correlated by frame req_id. For DM (`aibot_send_msg`) the
+        // req_id is freshly generated and unique. For group chats
+        // (`aibot_respond_msg`) the WeCom protocol requires reusing the inbound
+        // req_id, so two concurrent sends to the same chat would collide on the
+        // same key. Callers send sequentially (one awaited chunk at a time), but
+        // to stay robust we detect an existing waiter and fail the older one
+        // explicitly instead of silently dropping its sender.
+        let (ack_tx, ack_rx) = oneshot::channel::<Value>();
+        if let Some(stale) = self
+            .pending_acks
+            .lock()
+            .await
+            .insert(frame_req_id.clone(), ack_tx)
+        {
+            tracing::warn!(
+                chat_id,
+                req_id = %frame_req_id,
+                "overlapping WeCom send reused the same req_id; previous ack waiter dropped"
+            );
+            drop(stale);
+        }
+
+        // Send the frame, releasing the sink lock before awaiting the ack so the
+        // reader task can run and resolve the pending ack. Track whether the send
+        // failed so cleanup happens outside the sink guard (consistent lock order).
+        let send_error: Option<anyhow::Result<SendResult>> = {
+            let mut guard = self.ws_sink.lock().await;
+            match guard.as_mut() {
+                Some(sink) => match sink.send(Message::Text(payload.to_string().into())).await {
+                    Ok(()) => None,
+                    Err(e) => Some(Err(anyhow::anyhow!("send failed: {e}"))),
+                },
+                None => Some(Ok(SendResult::err("not connected"))),
+            }
+        };
+        if let Some(result) = send_error {
+            self.pending_acks.lock().await.remove(&frame_req_id);
+            return result;
+        }
+
+        // Await the server ack with a timeout, then validate errcode.
+        match timeout(SEND_ACK_TIMEOUT, ack_rx).await {
+            Ok(Ok(resp)) => {
+                let errcode = resp
+                    .get("body")
+                    .and_then(|b| b.get("errcode"))
+                    .and_then(|e| e.as_i64())
+                    .or_else(|| resp.get("errcode").and_then(|e| e.as_i64()))
+                    .unwrap_or(0);
+                if errcode == 0 {
+                    Ok(SendResult::ok(Some(frame_req_id)))
+                } else {
+                    let errmsg = resp
+                        .get("body")
+                        .and_then(|b| b.get("errmsg"))
+                        .and_then(|m| m.as_str())
+                        .or_else(|| resp.get("errmsg").and_then(|m| m.as_str()))
+                        .unwrap_or("unknown");
+                    tracing::warn!(chat_id, errcode, errmsg, "WeCom send rejected by server");
+                    Ok(SendResult::err(format!(
+                        "send rejected: errcode={errcode} errmsg={errmsg}"
+                    )))
+                }
+            }
+            Ok(Err(_)) => {
+                // Sender dropped (reader task ended) — treat as transport loss.
+                Ok(SendResult::err("ack channel closed (reader stopped)"))
+            }
+            Err(_) => {
+                // Timed out — clean up the waiter and report failure.
+                self.pending_acks.lock().await.remove(&frame_req_id);
+                tracing::warn!(chat_id, req_id = %frame_req_id, "WeCom send ack timed out");
+                Ok(SendResult::err("send ack timed out"))
+            }
         }
     }
 
@@ -676,13 +812,4 @@ impl PlatformAdapter for WecomAdapter {
     fn platform(&self) -> Platform {
         Platform::Wecom
     }
-}
-
-/// Reconnect delay with fixed backoff sequence:
-/// `[2, 5, 10, 30, 60]` seconds.
-pub async fn reconnect_delay(attempt: u32) -> Duration {
-    let idx = (attempt as usize).min(RECONNECT_BACKOFF.len() - 1);
-    let delay = Duration::from_secs(RECONNECT_BACKOFF[idx]);
-    sleep(delay).await;
-    delay
 }

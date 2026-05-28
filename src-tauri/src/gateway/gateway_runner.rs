@@ -35,6 +35,10 @@ const CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Idle wait interval when no config or no enabled channels.
 const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Reconnect backoff schedule (seconds) applied after a disconnect or failure.
+/// The attempt index is clamped to the last entry for sustained outages.
+const RECONNECT_BACKOFF_SECONDS: &[u64] = &[2, 5, 10, 30, 60];
+
 /// Get the modification time of a file, or None if it doesn't exist.
 fn file_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
@@ -62,6 +66,8 @@ pub async fn run(state: GatewayState, config_path: PathBuf) -> anyhow::Result<()
     tracing::info!(config = %config_path.display(), "gateway runner starting (config-watch mode)");
 
     let mut last_mtime: Option<SystemTime> = None;
+    // Consecutive disconnect/failure counter for exponential reconnect backoff.
+    let mut reconnect_attempt: usize = 0;
 
     loop {
         // Check for config changes.
@@ -126,20 +132,42 @@ pub async fn run(state: GatewayState, config_path: PathBuf) -> anyhow::Result<()
         match result {
             Ok(RunExitReason::ConfigChanged) => {
                 tracing::info!("config changed, reloading adapter");
+                reconnect_attempt = 0;
                 continue;
             }
             Ok(RunExitReason::AdapterDisconnected) => {
-                tracing::info!("adapter disconnected, will retry with current config");
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                let delay = reconnect_backoff_delay(reconnect_attempt);
+                reconnect_attempt = reconnect_attempt.saturating_add(1);
+                tracing::info!(
+                    delay_secs = delay.as_secs(),
+                    attempt = reconnect_attempt,
+                    "adapter disconnected, will retry with current config"
+                );
+                tokio::time::sleep(delay).await;
                 continue;
             }
             Err(e) => {
-                tracing::error!(error = %e, "adapter run failed, will retry");
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                let delay = reconnect_backoff_delay(reconnect_attempt);
+                reconnect_attempt = reconnect_attempt.saturating_add(1);
+                tracing::error!(
+                    error = %e,
+                    delay_secs = delay.as_secs(),
+                    attempt = reconnect_attempt,
+                    "adapter run failed, will retry"
+                );
+                tokio::time::sleep(delay).await;
                 continue;
             }
         }
     }
+}
+
+/// Compute the reconnect delay for a given consecutive-attempt index using the
+/// fixed backoff schedule. The index is clamped to the final entry so sustained
+/// outages settle at the longest interval instead of overflowing.
+fn reconnect_backoff_delay(attempt: usize) -> Duration {
+    let idx = attempt.min(RECONNECT_BACKOFF_SECONDS.len() - 1);
+    Duration::from_secs(RECONNECT_BACKOFF_SECONDS[idx])
 }
 
 /// Reason the inner run loop exited.
