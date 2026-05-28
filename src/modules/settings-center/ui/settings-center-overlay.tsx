@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import { AgentsSettingsPanel } from "@/modules/settings-center/ui/agents-settings-panel";
+import { GatewaySettingsPanel } from "@/modules/settings-center/ui/gateway-settings-panel";
 import { ProfileAgentAccess } from "@/modules/settings-center/ui/profile-agent-access";
 import { useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n/locales/zh-CN";
@@ -33,6 +34,7 @@ import {
   GitBranch,
   Image,
   Info,
+  MessageSquare,
   Monitor,
   MousePointerClick,
   Pencil,
@@ -254,6 +256,12 @@ function getCategoryMeta(t: TFunc) {
       title: t("settings.category.terminal"),
       description: t("settings.category.terminalDesc"),
       icon: TerminalSquare,
+    },
+    {
+      key: "gateway" as SettingsCategory,
+      title: t("settings.category.gateway"),
+      description: t("settings.category.gatewayDesc"),
+      icon: MessageSquare,
     },
     {
       key: "about" as SettingsCategory,
@@ -620,6 +628,10 @@ export function SettingsCenterOverlay({
                     description={activeMeta.description}
                     onUnsavedChangesChange={setAgentsUnsavedChanges}
                   />
+                ) : null}
+
+                {activeCategory === "gateway" ? (
+                  <GatewaySettingsPanel description={activeMeta.description} />
                 ) : null}
 
                 {activeCategory === "about" ? (
