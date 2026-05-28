@@ -120,46 +120,14 @@ export function RuntimeQueueMessageCard({
   return (
     <div
       className={cn(
-        "group/queue-card rounded-lg border border-app-border/30 bg-app-surface/30",
+        "group/queue-card relative rounded-lg border border-app-border/30 bg-app-surface/30",
         isCompact ? "px-2.5 py-2" : "p-3",
         message.kind === "steer" && message.status === "pending" && "border-app-warning/20 bg-app-warning/5",
         message.kind === "follow_up" && message.status === "pending" && "border-app-info/20 bg-app-info/5",
       )}
     >
-      <div className={cn("flex items-start", isCompact ? "gap-1.5" : "gap-2")}>
-        <div className={cn("flex-shrink-0", isCompact ? "mt-0.5 [&_svg]:size-3" : "mt-0.5")}>{statusIcon(message)}</div>
-        <div className="min-w-0 flex-1">
-          <div className={cn("flex flex-wrap items-center text-app-subtle", isCompact ? "gap-1.5 text-[11px]" : "gap-2 text-xs")}>
-            <span className="font-medium text-app-foreground">{kindLabel(message.kind, t)}</span>
-            <span className={cn("rounded-md bg-app-surface-muted", isCompact ? "px-1 py-0.5 text-[10px]" : "px-1.5 py-0.5 text-[11px]")}>
-              {statusLabel(message, t)}
-            </span>
-          </div>
-          <p className={cn("mt-1 whitespace-pre-wrap break-words text-app-muted", isCompact ? "text-xs leading-5" : "text-sm leading-6")}>
-            {displayText}
-          </p>
-          {shouldShowExpandedPrompt ? (
-            <CompactCollapsible className={isCompact ? "mt-1.5" : "mt-2"} defaultOpen={false}>
-              <CompactCollapsibleHeader className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground">
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-app-subtle">
-                    Expanded prompt
-                  </div>
-                  <div className="truncate text-xs text-app-muted">
-                    {expandedPrompt}
-                  </div>
-                </div>
-              </CompactCollapsibleHeader>
-              <CompactCollapsibleContent className="pl-0">
-                <div className={cn("whitespace-pre-wrap rounded-xl border border-app-border/25 bg-app-surface/35 text-xs text-app-muted", isCompact ? "px-2 py-1.5 leading-5" : "px-3 py-2 leading-5")}>
-                  {expandedPrompt}
-                </div>
-              </CompactCollapsibleContent>
-            </CompactCollapsible>
-          ) : null}
-        </div>
-        {canPromote || canEdit || canCancel ? (
-          <div className={cn("-mr-1 -mt-1 flex flex-shrink-0 items-center", isCompact ? "gap-0.5" : "gap-1")}>
+      {canPromote || canEdit || canCancel ? (
+        <div className={cn("absolute right-2 top-2 flex items-center", isCompact ? "gap-0.5" : "gap-1")}>
             {canPromote ? (
               <button
                 type="button"
@@ -225,6 +193,38 @@ export function RuntimeQueueMessageCard({
             ) : null}
           </div>
         ) : null}
+      <div className={cn("flex items-start", isCompact ? "gap-1.5" : "gap-2")}>
+        <div className={cn("flex-shrink-0", isCompact ? "mt-0.5 [&_svg]:size-3" : "mt-0.5")}>{statusIcon(message)}</div>
+        <div className="min-w-0 flex-1">
+          <div className={cn("flex flex-wrap items-center text-app-subtle", isCompact ? "gap-1.5 text-[11px]" : "gap-2 text-xs")}>
+            <span className="font-medium text-app-foreground">{kindLabel(message.kind, t)}</span>
+            <span className={cn("rounded-md bg-app-surface-muted", isCompact ? "px-1 py-0.5 text-[10px]" : "px-1.5 py-0.5 text-[11px]")}>
+              {statusLabel(message, t)}
+            </span>
+          </div>
+          <p className={cn("mt-1 whitespace-pre-wrap break-words text-app-muted", isCompact ? "text-xs leading-5" : "text-sm leading-6")}>
+            {displayText}
+          </p>
+          {shouldShowExpandedPrompt ? (
+            <CompactCollapsible className={isCompact ? "mt-1.5" : "mt-2"} defaultOpen={false}>
+              <CompactCollapsibleHeader className="items-start gap-3 text-left text-app-subtle hover:text-app-foreground">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-app-subtle">
+                    Expanded prompt
+                  </div>
+                  <div className="truncate text-xs text-app-muted">
+                    {expandedPrompt}
+                  </div>
+                </div>
+              </CompactCollapsibleHeader>
+              <CompactCollapsibleContent className="pl-0">
+                <div className={cn("whitespace-pre-wrap rounded-xl border border-app-border/25 bg-app-surface/35 text-xs text-app-muted", isCompact ? "px-2 py-1.5 leading-5" : "px-3 py-2 leading-5")}>
+                  {expandedPrompt}
+                </div>
+              </CompactCollapsibleContent>
+            </CompactCollapsible>
+          ) : null}
+        </div>
       </div>
     </div>
   );
