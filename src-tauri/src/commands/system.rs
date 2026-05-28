@@ -1020,7 +1020,7 @@ fn containing_directory_path(target_path: &str) -> Result<String, String> {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 const CLI_SYMLINK_PATH: &str = "/usr/local/bin/tiycode";
 
-/// Check whether the CLI symlink is already installed and points to the current binary.
+/// Check whether the CLI is already installed and available from the current binary.
 #[tauri::command]
 pub fn is_cli_installed() -> bool {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1041,12 +1041,12 @@ pub fn is_cli_installed() -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        // On Windows, check if the current binary's directory is in PATH
-        // and the binary is accessible as `tiycode`.
+        // On Windows, check if the current binary's directory is in the user PATH
+        // stored in the registry (HKCU\Environment\Path).
         if let Ok(current_exe) = std::env::current_exe() {
             if let Some(bin_dir) = current_exe.parent() {
-                if let Ok(path_var) = std::env::var("PATH") {
-                    return std::env::split_paths(&path_var).any(|p| p == bin_dir);
+                if let Ok((user_path, _)) = read_user_path() {
+                    return path_contains_dir(&user_path, bin_dir);
                 }
             }
         }
@@ -1102,7 +1102,31 @@ pub fn install_cli_in_path() -> Result<String, String> {
 
     #[cfg(target_os = "windows")]
     {
-        Err("CLI PATH installation on Windows is not yet supported. Please add the application directory to your PATH manually.".into())
+        let current_exe = std::env::current_exe()
+            .map_err(|e| format!("Failed to determine current binary path: {e}"))?;
+        let bin_dir = current_exe
+            .parent()
+            .ok_or_else(|| "Cannot determine binary directory.".to_string())?;
+
+        let (mut user_path, reg_type) = read_user_path()?;
+
+        // Already installed — nothing to do.
+        if path_contains_dir(&user_path, bin_dir) {
+            return Ok("CLI is already installed.".into());
+        }
+
+        // Append bin_dir to the user PATH.
+        if !user_path.is_empty() && !user_path.ends_with(';') {
+            user_path.push(';');
+        }
+        user_path.push_str(&bin_dir.to_string_lossy());
+
+        write_user_path(&user_path, reg_type)?;
+
+        Ok(format!(
+            "CLI installed successfully: added {} to user PATH",
+            bin_dir.display()
+        ))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -1133,7 +1157,23 @@ pub fn uninstall_cli_from_path() -> Result<String, String> {
 
     #[cfg(target_os = "windows")]
     {
-        Err("CLI PATH uninstallation on Windows is not yet supported.".into())
+        let current_exe = std::env::current_exe()
+            .map_err(|e| format!("Failed to determine current binary path: {e}"))?;
+        let bin_dir = current_exe
+            .parent()
+            .ok_or_else(|| "Cannot determine binary directory.".to_string())?;
+
+        let (user_path, reg_type) = read_user_path()?;
+
+        if !path_contains_dir(&user_path, bin_dir) {
+            return Ok("CLI is not installed.".into());
+        }
+
+        // Remove bin_dir from the user PATH entries.
+        let new_path = remove_dir_from_path(&user_path, bin_dir);
+        write_user_path(&new_path, reg_type)?;
+
+        Ok("CLI uninstalled successfully.".into())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -1237,6 +1277,133 @@ fn remove_cli_link_privileged(link: &Path) -> Result<(), String> {
             "Failed to remove symlink with elevated privileges: {stderr}"
         ))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Windows helpers: user PATH via registry (HKCU\Environment)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+#[cfg(target_os = "windows")]
+use winreg::{RegKey, RegValue};
+
+/// Read the user-level PATH value from `HKCU\Environment\Path`.
+/// Returns the string content and the original registry value type
+/// (REG_SZ or REG_EXPAND_SZ) so we can preserve it on write-back.
+#[cfg(target_os = "windows")]
+fn read_user_path() -> Result<(String, winreg::enums::RegType), String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let env = hkcu
+        .open_subkey_with_flags("Environment", KEY_READ)
+        .map_err(|e| format!("Failed to open HKCU\\Environment: {e}"))?;
+    match env.get_raw_value("Path") {
+        Ok(reg_value) => {
+            let ty = reg_value.vtype;
+            let s = String::from_utf8_lossy(&reg_value.bytes)
+                .trim_end_matches('\0')
+                .to_string();
+            Ok((s, ty))
+        }
+        Err(_) => {
+            // Path does not exist yet — default to REG_EXPAND_SZ, which is
+            // the standard type for user PATH values on Windows.
+            Ok((String::new(), winreg::enums::RegType::REG_EXPAND_SZ))
+        }
+    }
+}
+
+/// Write the user-level PATH value to `HKCU\Environment\Path` and broadcast
+/// `WM_SETTINGCHANGE` so that new terminals pick it up immediately.
+/// Preserves the original registry value type (REG_SZ or REG_EXPAND_SZ).
+#[cfg(target_os = "windows")]
+fn write_user_path(path: &str, reg_type: winreg::enums::RegType) -> Result<(), String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let env = hkcu
+        .open_subkey_with_flags("Environment", KEY_READ | KEY_WRITE)
+        .map_err(|e| format!("Failed to open HKCU\\Environment for writing: {e}"))?;
+    // Encode as UTF-16LE with a null terminator to match Windows registry conventions.
+    let mut bytes: Vec<u8> = path.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+    bytes.extend_from_slice(&[0u8, 0u8]); // null terminator
+    let reg_value = RegValue {
+        bytes,
+        vtype: reg_type,
+    };
+    env.set_raw_value("Path", &reg_value)
+        .map_err(|e| format!("Failed to write Path value: {e}"))?;
+    broadcast_environment_change();
+    Ok(())
+}
+
+/// Broadcast `WM_SETTINGCHANGE` with "Environment" so that running shells
+/// (cmd, PowerShell, etc.) refresh their PATH from the registry.
+#[cfg(target_os = "windows")]
+fn broadcast_environment_change() {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    // WM_SETTINGCHANGE = 0x001A, HWND_BROADCAST = 0xFFFF, SMTO_ABORTIFHUNG = 0x0002
+    let w_param: usize = 0;
+    let l_param: Vec<u16> = OsStr::new("Environment")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let timeout_ms: u32 = 5000;
+
+    // SAFETY: SendMessageTimeoutW is a well-known Win32 API. We pass a valid
+    // null-terminated wide string and reasonable timeout. The broadcast is
+    // non-blocking with SMTO_ABORTIFHUNG.
+    unsafe {
+        #[link(name = "user32")]
+        extern "system" {
+            fn SendMessageTimeoutW(
+                hwnd: isize,
+                msg: u32,
+                wparam: usize,
+                lparam: *const u16,
+                flags: u32,
+                timeout: u32,
+                result: *mut isize,
+            ) -> isize;
+        }
+        let mut _result: isize = 0;
+        let ret = SendMessageTimeoutW(
+            0xFFFF, // HWND_BROADCAST
+            0x001A, // WM_SETTINGCHANGE
+            w_param,
+            l_param.as_ptr(),
+            0x0002, // SMTO_ABORTIFHUNG
+            timeout_ms,
+            &mut _result,
+        );
+        if ret == 0 {
+            tracing::warn!(
+                "WM_SETTINGCHANGE broadcast may not have reached all windows; \
+                 new terminals might not see the PATH update immediately"
+            );
+        }
+    }
+}
+
+/// Check whether a Windows PATH string (semicolon-separated) contains the
+/// given directory, using case-insensitive comparison on Windows.
+#[cfg(target_os = "windows")]
+fn path_contains_dir(path_value: &str, dir: &Path) -> bool {
+    path_value
+        .split(';')
+        .filter(|s| !s.is_empty())
+        .any(|entry| Path::new(entry) == dir)
+}
+
+/// Remove a directory entry from a Windows PATH string (semicolon-separated),
+/// using case-insensitive comparison. Returns the cleaned PATH string.
+#[cfg(target_os = "windows")]
+fn remove_dir_from_path(path_value: &str, dir: &Path) -> String {
+    path_value
+        .split(';')
+        .filter(|entry| !entry.is_empty() && Path::new(entry) != dir)
+        .collect::<Vec<&str>>()
+        .join(";")
 }
 
 #[cfg(test)]
