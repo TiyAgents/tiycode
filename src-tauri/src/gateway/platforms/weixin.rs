@@ -209,7 +209,10 @@ impl WeixinAdapter {
         // Log response summary for diagnostics.
         let errcode = data.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
         let ret = data.get("ret").and_then(|v| v.as_i64()).unwrap_or(0);
-        let msg_count = data.get("msgs").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+        let msg_count = data
+            .get("msgs")
+            .and_then(|v| v.as_array())
+            .map_or(0, |a| a.len());
         tracing::info!(errcode, ret, msg_count, "getupdates response");
 
         if errcode != 0 || (ret != 0 && ret != errcode) {
