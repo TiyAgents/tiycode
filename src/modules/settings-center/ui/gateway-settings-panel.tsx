@@ -10,6 +10,8 @@ import { Button } from "@/shared/ui/button";
 interface GatewayStatus {
   running: boolean;
   pid: number | null;
+  version: string | null;
+  configExists: boolean;
 }
 
 interface WeixinSession {
@@ -142,7 +144,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
         <p className="text-sm text-muted-foreground">{description}</p>
       </div>
 
-      {/* Gateway Status & Controls */}
+      {/* Gateway Process Status */}
       <div className="rounded-lg border bg-card p-4 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -167,9 +169,33 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
           </div>
         </div>
 
+        {/* Process details */}
+        {status && (
+          <div className="grid grid-cols-3 gap-3 text-xs">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-muted-foreground">PID</span>
+              <span className="font-mono font-medium">
+                {status.running && status.pid ? status.pid : "—"}
+              </span>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-muted-foreground">Version</span>
+              <span className="font-mono font-medium">
+                {status.running && status.version ? `v${status.version}` : "—"}
+              </span>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-muted-foreground">Config</span>
+              <span className={`font-medium ${status.configExists ? "text-green-600 dark:text-green-400" : "text-amber-600 dark:text-amber-400"}`}>
+                {status.configExists ? "✓ Found" : "✗ Missing"}
+              </span>
+            </div>
+          </div>
+        )}
+
         <div className="flex gap-2">
           {!status?.running ? (
-            <Button size="sm" onClick={handleStart} disabled={loading}>
+            <Button size="sm" onClick={handleStart} disabled={loading || !status?.configExists}>
               <Play className="h-3.5 w-3.5 mr-1" />
               {t("settings.gateway.start")}
             </Button>
@@ -186,6 +212,12 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
             </>
           )}
         </div>
+
+        {!status?.configExists && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Config file not found at ~/.tiy/gateway/config.toml — please create it before starting.
+          </p>
+        )}
       </div>
 
       {/* WeChat Login Section */}
