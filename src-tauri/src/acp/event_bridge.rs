@@ -364,6 +364,26 @@ mod tests {
     }
 
     #[test]
+    fn empty_reasoning_produces_no_updates() {
+        for reasoning in ["", "  ", "\n\t"] {
+            let event = ThreadStreamEvent::ReasoningUpdated {
+                run_id: "run-1".to_string(),
+                message_id: "msg-1".to_string(),
+                reasoning: reasoning.to_string(),
+                thinking_signature: None,
+                turn_index: None,
+            };
+
+            let mapping = map_thread_event_to_acp(&event);
+            assert!(
+                mapping.updates.is_empty(),
+                "expected no updates for empty reasoning, got {:?}",
+                mapping.updates
+            );
+        }
+    }
+
+    #[test]
     fn task_board_failed_steps_remain_visible_in_acp_plan() {
         let event = ThreadStreamEvent::TaskBoardUpdated {
             run_id: "run-1".to_string(),
