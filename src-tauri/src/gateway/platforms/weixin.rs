@@ -363,13 +363,13 @@ impl WeixinAdapter {
         }
 
         // For DMs the reply target is from_user_id; for groups use group_id/session_id.
-        let is_group = update.get("group_id").and_then(|v| v.as_str()).is_some();
+        let group_id = update
+            .get("group_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        let is_group = group_id.is_some();
         let chat_id = if is_group {
-            update
-                .get("group_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&sender_id)
-                .to_string()
+            group_id.unwrap_or(&sender_id).to_string()
         } else {
             // DM: reply target is the sender.
             sender_id.clone()
