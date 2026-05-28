@@ -18,6 +18,7 @@ use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::thread::MessageAttachmentDto;
 use crate::model::workspace::WorkspaceAddInput;
 use crate::persistence::repo::profile_repo;
+use crate::persistence::repo::provider_repo;
 use crate::persistence::repo::thread_repo;
 
 use super::approval_bridge;
@@ -530,8 +531,27 @@ async fn dispatch_command(
                 .and_then(|r| r.profile_id);
             let profiles = profile_repo::list_all(&state.pool).await?;
             session.cached_profiles = profiles.clone();
-            let text =
-                message_formatter::render_profile_list(&profiles, current_profile_id.as_deref());
+
+            // Resolve model record IDs to human-readable display names
+            let mut model_names = std::collections::HashMap::new();
+            for p in &profiles {
+                if let Some(model_id) = p.primary_model_id.as_deref().filter(|id| !id.is_empty()) {
+                    if !model_names.contains_key(model_id) {
+                        if let Ok(Some(model)) =
+                            provider_repo::find_model_by_id(&state.pool, model_id).await
+                        {
+                            let name = model.display_name.unwrap_or(model.model_name);
+                            model_names.insert(model_id.to_string(), name);
+                        }
+                    }
+                }
+            }
+
+            let text = message_formatter::render_profile_list(
+                &profiles,
+                current_profile_id.as_deref(),
+                &model_names,
+            );
             adapter.send_text(chat_id, &text).await?;
         }
 
@@ -715,8 +735,18 @@ async fn run_agent_prompt(
     // Event pump: accumulate response, handle approvals inline.
     let mut accumulator = MessageAccumulator::new();
 
+    // Periodically refresh typing indicator (WeChat auto-expires after ~15s).
+    let mut typing_interval = tokio::time::interval(Duration::from_secs(10));
+    typing_interval.tick().await; // consume the first immediate tick
+
     loop {
-        match event_rx.recv().await {
+        tokio::select! {
+            // Refresh typing indicator every 10 seconds.
+            _ = typing_interval.tick() => {
+                let _ = adapter.send_typing(chat_id).await;
+                continue;
+            }
+            event = event_rx.recv() => { match event {
             Ok(ThreadStreamEvent::MessageDelta { delta, .. }) => {
                 accumulator.push_text(&delta);
             }
@@ -799,7 +829,8 @@ async fn run_agent_prompt(
                 break;
             }
             _ => {} // Other events (reasoning, tool completed, etc.) — skip.
-        }
+        } } // close match + event arm
+        } // close tokio::select!
     }
 
     // Stop typing.

@@ -262,9 +262,13 @@ pub fn render_thread_list(
 }
 
 /// Render a numbered profile list for IM display.
+///
+/// `model_names` maps model record IDs to human-readable display names.
+/// When a mapping is missing, the model column is omitted for that profile.
 pub fn render_profile_list(
     profiles: &[crate::model::provider::AgentProfileRecord],
     current_profile_id: Option<&str>,
+    model_names: &std::collections::HashMap<String, String>,
 ) -> String {
     if profiles.is_empty() {
         return "🔧 暂无 Profile\n\n请在 TiyCode 设置中配置".to_string();
@@ -278,10 +282,13 @@ pub fn render_profile_list(
             ""
         };
         let default_tag = if p.is_default { " [默认]" } else { "" };
-        let model_info = match p.primary_model_id.as_deref() {
-            Some(id) if !id.is_empty() => format!(" ({})", id),
-            _ => String::new(),
-        };
+        let model_info = p
+            .primary_model_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .and_then(|id| model_names.get(id))
+            .map(|name| format!(" ({})", name))
+            .unwrap_or_default();
         out.push_str(&format!(
             "  {}. {}{}{}{}\n",
             i + 1,
