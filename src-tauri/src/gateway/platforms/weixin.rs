@@ -181,18 +181,24 @@ impl WeixinAdapter {
 
     /// Perform a single long-poll request to getupdates.
     async fn poll_once(&self) -> anyhow::Result<Vec<InboundMessage>> {
-        tracing::debug!("starting getupdates long-poll");
         let sync_buf = self.sync_buf.lock().await.clone();
-        let mut body = json!({
-            "timeout": POLL_TIMEOUT_SECONDS * 1000,
+        let body = json!({
+            "base_info": {
+                "channel_version": CHANNEL_VERSION,
+            },
+            "get_updates_buf": sync_buf.as_deref().unwrap_or(""),
         });
-        if let Some(ref buf) = sync_buf {
-            body["sync_buf"] = json!(buf);
-        }
+
+        let url = self.api_url("getupdates");
+        tracing::info!(
+            url = %url,
+            has_sync_buf = sync_buf.is_some(),
+            "starting getupdates long-poll"
+        );
 
         let resp = self
             .http_client
-            .post(self.api_url("getupdates"))
+            .post(&url)
             .headers(self.api_headers().await)
             .json(&body)
             .send()
@@ -200,9 +206,13 @@ impl WeixinAdapter {
 
         let data: Value = resp.json().await?;
 
-        // Check for errors.
+        // Log response summary for diagnostics.
         let errcode = data.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
-        if errcode != 0 {
+        let ret = data.get("ret").and_then(|v| v.as_i64()).unwrap_or(0);
+        let msg_count = data.get("msgs").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+        tracing::info!(errcode, ret, msg_count, "getupdates response");
+
+        if errcode != 0 || (ret != 0 && ret != errcode) {
             let errmsg = data
                 .get("errmsg")
                 .and_then(|v| v.as_str())
@@ -222,15 +232,17 @@ impl WeixinAdapter {
             anyhow::bail!("getupdates error {errcode}: {errmsg}");
         }
 
-        // Update sync_buf cursor.
-        if let Some(new_sync) = data.get("sync_buf").and_then(|v| v.as_str()) {
-            *self.sync_buf.lock().await = Some(new_sync.to_string());
-            self.persist_sync_buf(new_sync);
+        // Update sync cursor from response.
+        if let Some(new_sync) = data.get("get_updates_buf").and_then(|v| v.as_str()) {
+            if !new_sync.is_empty() {
+                *self.sync_buf.lock().await = Some(new_sync.to_string());
+                self.persist_sync_buf(new_sync);
+            }
         }
 
-        // Parse messages.
-        let updates = data
-            .get("updates")
+        // Parse messages from "msgs" array.
+        let msgs = data
+            .get("msgs")
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
@@ -239,7 +251,7 @@ impl WeixinAdapter {
         let mut seen = self.seen_messages.lock().await;
         let mut seen_content = self.seen_content.lock().await;
 
-        for update in updates {
+        for update in msgs {
             if let Some(msg) = self.parse_update(&update, &mut seen, &mut seen_content) {
                 // Update context token for this sender.
                 // Key uses account_id:peer_id composite to support multi-account.
