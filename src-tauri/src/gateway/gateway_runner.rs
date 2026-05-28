@@ -218,6 +218,7 @@ async fn run_with_adapter(
                             }
                             _ => {}
                         }
+                        continue;
                     }
 
                     // Handle approval responses if awaiting.
