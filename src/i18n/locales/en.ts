@@ -358,6 +358,13 @@ const en: Record<TranslationKey, string> = {
   // ── Settings: General Panel ────────────────────────────────
   "settings.general.newProfile": "New Profile",
   "settings.general.preferences": "Preferences",
+  "settings.general.cliLabel": "CLI in PATH",
+  "settings.general.cliDesc": "Register the `tiycode` command so you can run the ACP (Agent Communication Protocol) server from any terminal via `tiycode acp --stdio`.",
+  "settings.general.acpServerTitle": "ACP Server",
+  "settings.general.acpServerCliLabel": "CLI in PATH",
+  "settings.general.acpServerCliDesc": "Register the `tiycode` command to launch the ACP server from any terminal. Usage: `tiycode acp --stdio` (stdio transport) or `tiycode acp --http <addr>` (HTTP transport).",
+  "settings.general.cliInstall": "Install",
+  "settings.general.cliUninstall": "Uninstall",
   "settings.general.themeLabel": "Theme",
   "settings.general.themeDesc": "Use the system appearance or lock the app to light or dark mode.",
   "settings.general.languageLabel": "Language",

@@ -5,13 +5,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
-use tauri::AppHandle;
 use tiycore::types::OnPayloadFn;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::time::{sleep, Instant};
 
 use crate::core::agent_session::{build_session_spec, ResolvedModelRole};
 use crate::core::agent_session_types::{AgentQueueMessageKind, RuntimeQueueSnapshotDto};
+use crate::core::app_event_emitter::AppEventEmitterRef;
 use crate::core::built_in_agent_runtime::{BuiltInAgentRuntime, RuntimeSessionFinishState};
 use crate::core::plan_checkpoint::{
     ApprovalPromptMetadata, PlanApprovalAction, PlanMessageMetadata,
@@ -107,7 +107,7 @@ pub(crate) async fn active_run_id_for_thread(
 
 pub struct AgentRunManager {
     pub(crate) pool: SqlitePool,
-    pub(crate) app_handle: AppHandle,
+    pub(crate) app_events: AppEventEmitterRef,
     pub(crate) runtime: Arc<BuiltInAgentRuntime>,
     pub(crate) sleep_manager: Arc<SleepManager>,
     pub(crate) active_runs: Arc<Mutex<HashMap<String, ActiveRun>>>,
@@ -116,13 +116,13 @@ pub struct AgentRunManager {
 impl AgentRunManager {
     pub fn new(
         pool: SqlitePool,
-        app_handle: AppHandle,
+        app_events: AppEventEmitterRef,
         runtime: Arc<BuiltInAgentRuntime>,
         sleep_manager: Arc<SleepManager>,
     ) -> Self {
         Self {
             pool,
-            app_handle,
+            app_events,
             runtime,
             sleep_manager,
             active_runs: Arc::new(Mutex::new(HashMap::new())),

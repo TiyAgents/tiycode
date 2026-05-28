@@ -1,3 +1,4 @@
+pub mod acp;
 mod commands;
 pub mod core;
 pub mod extensions;
@@ -191,6 +192,67 @@ fn build_tray<R: tauri::Runtime>(
     Ok(())
 }
 
+pub fn run_acp_stdio() -> anyhow::Result<()> {
+    let tiy_home = tiy_home();
+    init_directories(&tiy_home)?;
+    init_logging();
+    tracing::info!(path = %tiy_home.display(), "tiy ACP stdio server starting");
+
+    let db_path = tiy_home.join("db/tiycode.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async move {
+        let pool = persistence::init_database(&db_path).await?;
+        let state = acp::AcpServerState::new_headless(pool);
+        if let Err(error) = state.prompt_command_manager.ensure_builtin_seeded() {
+            tracing::warn!(error = %error, "failed to seed builtin prompts during ACP startup");
+        }
+        if let Err(error) = state.workspace_manager.validate_all().await {
+            tracing::warn!(error = %error, "ACP startup workspace validation failed");
+        }
+        if let Err(error) = state.thread_manager.recover_interrupted_runs().await {
+            tracing::warn!(error = %error, "ACP startup run recovery failed");
+        }
+        if let Err(error) = state.terminal_manager.recover_orphaned_sessions().await {
+            tracing::warn!(error = %error, "ACP startup terminal session recovery failed");
+        }
+        acp::run_stdio(state).await.map_err(anyhow::Error::from)
+    })
+}
+
+pub fn run_acp_http(addr: &str) -> anyhow::Result<()> {
+    let tiy_home = tiy_home();
+    init_directories(&tiy_home)?;
+    init_logging();
+    tracing::info!(path = %tiy_home.display(), addr = %addr, "tiy ACP HTTP server starting");
+
+    let db_path = tiy_home.join("db/tiycode.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    let addr_owned = addr.to_string();
+    runtime.block_on(async move {
+        let pool = persistence::init_database(&db_path).await?;
+        let state = acp::AcpServerState::new_headless(pool);
+        if let Err(error) = state.prompt_command_manager.ensure_builtin_seeded() {
+            tracing::warn!(error = %error, "failed to seed builtin prompts during ACP startup");
+        }
+        if let Err(error) = state.workspace_manager.validate_all().await {
+            tracing::warn!(error = %error, "ACP startup workspace validation failed");
+        }
+        if let Err(error) = state.thread_manager.recover_interrupted_runs().await {
+            tracing::warn!(error = %error, "ACP startup run recovery failed");
+        }
+        if let Err(error) = state.terminal_manager.recover_orphaned_sessions().await {
+            tracing::warn!(error = %error, "ACP startup terminal session recovery failed");
+        }
+        acp::run_http(state, &addr_owned).await
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let tiy_home = tiy_home();
@@ -243,6 +305,9 @@ pub fn run() {
             // System
             commands::system::get_system_metadata,
             commands::system::is_homebrew_installed,
+            commands::system::is_cli_installed,
+            commands::system::install_cli_in_path,
+            commands::system::uninstall_cli_from_path,
             commands::system::get_workspace_open_apps,
             commands::system::open_workspace_in_app,
             commands::system::open_tree_path_in_app,

@@ -459,7 +459,7 @@ impl AgentRunManager {
         };
         if let Err(e) = finalize_run(
             &self.pool,
-            &self.app_handle,
+            self.app_events.as_ref(),
             &run_id,
             &thread_id,
             final_status,

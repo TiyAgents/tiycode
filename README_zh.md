@@ -36,6 +36,7 @@ TiyCode 面向的是希望以 AI 时代的方式进行编码协作的用户。�
 - **实时执行流式推送。** 丰富的 Thread Stream 事件体系支撑实时更新 —— 消息增量、工具调用、requested / active 状态、推理步骤、子 Agent 进度与计划更新。
 - **更友好的日常体验。** 支持结构化参数解析的 Slash Command、智能会话标题、上下文压缩、Commit Message 生成、包含 Ghostty 在内的外部终端衔接以及紧凑工作台控件，让协作过程更顺手、更连贯。
 - **双语界面。** 完整的 i18n 支持，覆盖英文和简体中文，随时可切换。
+- **ACP Server 支持。** TiyCode 可作为无头 ACP（Agent Client Protocol）服务器运行，通过 `tiycode acp --stdio` 或 `tiycode acp --http <addr>` 启动，让外部工具和 IDE 插件通过标准 JSON-RPC 协议驱动 Agent 运行时，无需启动桌面 GUI。
 - **良好的通用扩展能力。** Plugins、MCP Servers 与 Skills 通过 `Extensions Center` 形成统一的扩展入口与产品模型。
 - **内置 Runtime。** 主执行链路 `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`。
 
@@ -240,6 +241,8 @@ flowchart LR
   TAURI --> CATALOG[Provider Catalog / Model Metadata]
   TAURI --> EXT[Extension Host]
   EXT --> PLUGINS[Plugins / MCP / Skills]
+  TAURI --> ACP[ACP Server]
+  ACP --> CLIENT[外部客户端 / IDE 插件]
   CORE --> LLM[LLM Providers]
   TAURI --> DB[(SQLite)]
   UI -.->|Thread Stream| TAURI
@@ -269,6 +272,7 @@ src/
 src-tauri/
   src/commands/    Rust 命令模块
   src/core/        runtime/session 编排、prompt、subagent、工具、workspace 与 worktree
+  src/acp/         ACP 服务器 — 传输层、会话映射、协议处理器、事件/权限桥接
   src/extensions/  扩展宿主、注册表与运行时接缝
   src/ipc/         前端事件 / channel 桥接
   bundled-catalog/ 随应用打包的 Provider 模型目录快照
@@ -305,6 +309,39 @@ TiyCode 将可扩展性作为桌面工作台的一等能力来设计。
 - **Provider catalogs** 会作为快照随应用打包，并可进行归一化或刷新，以保持模型能力与运行时行为一致。
 
 这些能力会统一呈现在 `Extensions Center` 中，但运行时访问仍然会经过宿主侧的 tool gateway、policy check、approval 和 audit 边界治理。
+
+## ACP Server
+
+TiyCode 可将其 Agent 运行时作为 **ACP（Agent Client Protocol）** 服务器对外暴露，允许外部工具和 IDE 插件通过标准 JSON-RPC 协议与 TiyCode 的 Agent 能力交互——无需启动桌面 GUI。
+
+### 传输模式
+
+| 模式 | 命令 | 说明 |
+|------|------|------|
+| **stdio** | `tiycode acp --stdio` | 通过 stdin/stdout 的无头服务器。stdout 专用于 ACP JSON-RPC 通信；日志输出到 stderr。 |
+| **HTTP / WebSocket** | `tiycode acp --http 127.0.0.1:0` | 可选的 HTTP 端点，提供 WebSocket 传输（`GET /acp`）和健康检查（`GET /health`）。 |
+
+> HTTP/WebSocket 模式**默认关闭**，仅监听回环地址。该模式不执行 ACP 认证，仅限本机可信进程使用。请勿将端点绑定到非回环地址或在未添加外部认证层的情况下通过代理暴露。
+
+### CLI 配置
+
+通过 **设置 → 通用 → ACP Server → CLI in PATH** 将 `tiycode` 命令安装到系统 PATH，或手动操作：
+
+```bash
+# 安装 TiyCode 桌面应用后
+sudo ln -s /Applications/TiyCode.app/Contents/MacOS/TiyCode /usr/local/bin/tiycode
+```
+
+在 macOS/Linux 上，还可以在启动桌面应用前设置 `TIY_ACP_HTTP_LISTEN=127.0.0.1:0`，以在 GUI 之外同时启用 HTTP/WebSocket ACP 端点。
+
+### 核心能力
+
+- **本地执行。** 文件操作和终端命令均在 TiyCode 的 Agent 运行时内完成——ACP 客户端无需处理 `fs/*` 或 `terminal/*` 请求。
+- **流式推送。** 客户端实时接收助手消息、工具调用状态与结果、计划更新及文件变更元数据。
+- **权限委托。** 当策略引擎需要审批时，客户端收到 `session/request_permission` 请求，提供 `allow_once` / `reject_once` 选项。60 秒内未响应的请求将自动拒绝。
+- **会话映射。** ACP `SessionId` 映射到 TiyCode 内部 thread ID。创建、加载、列表、提示、取消和关闭会话均桥接到已有的 thread/run 管理器。
+
+完整协议与实现细节请参阅 [`docs/acp-server.md`](./docs/acp-server.md)。
 
 ## 问题定位与调试
 

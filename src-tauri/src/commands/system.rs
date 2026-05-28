@@ -3,9 +3,9 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::fs;
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 use std::path::{Path, PathBuf};
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use std::process::Command;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1010,6 +1010,408 @@ fn containing_directory_path(target_path: &str) -> Result<String, String> {
     };
 
     Ok(directory.to_string_lossy().into_owned())
+}
+
+// ---------------------------------------------------------------------------
+// CLI-in-PATH installation (symlink to /usr/local/bin/tiycode)
+// ---------------------------------------------------------------------------
+
+/// The well-known symlink path where `tiycode` is exposed to the user's shell.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const CLI_SYMLINK_PATH: &str = "/usr/local/bin/tiycode";
+
+/// Check whether the CLI is already installed and available from the current binary.
+#[tauri::command]
+pub fn is_cli_installed() -> bool {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let link_path = Path::new(CLI_SYMLINK_PATH);
+        if !link_path.exists() {
+            return false;
+        }
+        // Verify the symlink target matches the current binary.
+        match std::fs::read_link(link_path) {
+            Ok(target) => match std::env::current_exe() {
+                Ok(current) => target == current,
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, check if the current binary's directory is in the user PATH
+        // stored in the registry (HKCU\Environment\Path).
+        if let Ok(current_exe) = std::env::current_exe() {
+            if let Some(bin_dir) = current_exe.parent() {
+                if let Ok((user_path, _)) = read_user_path() {
+                    return path_contains_dir(&user_path, bin_dir);
+                }
+            }
+        }
+        false
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        false
+    }
+}
+
+/// Install the CLI by creating a symlink at `/usr/local/bin/tiycode`.
+/// On macOS, uses `osascript` to prompt for admin privileges when needed.
+#[tauri::command]
+pub fn install_cli_in_path() -> Result<String, String> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let current_exe = std::env::current_exe()
+            .map_err(|e| format!("Failed to determine current binary path: {e}"))?;
+
+        let link_path = PathBuf::from(CLI_SYMLINK_PATH);
+
+        // If already correctly installed, return early.
+        if link_path.exists() || link_path.symlink_metadata().is_ok() {
+            if let Ok(target) = std::fs::read_link(&link_path) {
+                if target == current_exe {
+                    return Ok("CLI is already installed.".into());
+                }
+            }
+            // Remove stale symlink / file before creating a new one.
+            remove_cli_link_privileged(&link_path)?;
+        }
+
+        // Try direct symlink first (works if user owns /usr/local/bin).
+        if try_create_symlink(&current_exe, &link_path).is_ok() {
+            return Ok(format!(
+                "CLI installed successfully: {} → {}",
+                link_path.display(),
+                current_exe.display()
+            ));
+        }
+
+        // Fall back to privileged creation via osascript (macOS) or pkexec (Linux).
+        create_symlink_privileged(&current_exe, &link_path)?;
+
+        Ok(format!(
+            "CLI installed successfully: {} → {}",
+            link_path.display(),
+            current_exe.display()
+        ))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let current_exe = std::env::current_exe()
+            .map_err(|e| format!("Failed to determine current binary path: {e}"))?;
+        let bin_dir = current_exe
+            .parent()
+            .ok_or_else(|| "Cannot determine binary directory.".to_string())?;
+
+        let (mut user_path, reg_type) = read_user_path()?;
+
+        // Already installed — nothing to do.
+        if path_contains_dir(&user_path, bin_dir) {
+            return Ok("CLI is already installed.".into());
+        }
+
+        // Append bin_dir to the user PATH.
+        if !user_path.is_empty() && !user_path.ends_with(';') {
+            user_path.push(';');
+        }
+        user_path.push_str(&bin_dir.to_string_lossy());
+
+        write_user_path(&user_path, reg_type)?;
+
+        Ok(format!(
+            "CLI installed successfully: added {} to user PATH",
+            bin_dir.display()
+        ))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Err("CLI PATH installation is not supported on this platform.".into())
+    }
+}
+
+/// Uninstall the CLI symlink.
+#[tauri::command]
+pub fn uninstall_cli_from_path() -> Result<String, String> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let link_path = PathBuf::from(CLI_SYMLINK_PATH);
+        if !link_path.exists() && link_path.symlink_metadata().is_err() {
+            return Ok("CLI is not installed.".into());
+        }
+
+        // Try direct removal first.
+        if std::fs::remove_file(&link_path).is_ok() {
+            return Ok("CLI uninstalled successfully.".into());
+        }
+
+        // Fall back to privileged removal.
+        remove_cli_link_privileged(&link_path)?;
+        Ok("CLI uninstalled successfully.".into())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let current_exe = std::env::current_exe()
+            .map_err(|e| format!("Failed to determine current binary path: {e}"))?;
+        let bin_dir = current_exe
+            .parent()
+            .ok_or_else(|| "Cannot determine binary directory.".to_string())?;
+
+        let (user_path, reg_type) = read_user_path()?;
+
+        if !path_contains_dir(&user_path, bin_dir) {
+            return Ok("CLI is not installed.".into());
+        }
+
+        // Remove bin_dir from the user PATH entries.
+        let new_path = remove_dir_from_path(&user_path, bin_dir);
+        write_user_path(&new_path, reg_type)?;
+
+        Ok("CLI uninstalled successfully.".into())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Err("CLI PATH uninstallation is not supported on this platform.".into())
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn try_create_symlink(target: &Path, link: &Path) -> Result<(), std::io::Error> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(target_os = "macos")]
+fn escape_applescript_single_quote(s: &str) -> String {
+    // In AppleScript single-quoted strings, a single quote is escaped by
+    // closing the string, emitting an escaped single quote, and reopening:
+    //   'it' -> 'it'\''s'  (renders: it's)
+    s.replace('\'', "'\\''")
+}
+
+#[cfg(target_os = "macos")]
+fn create_symlink_privileged(target: &Path, link: &Path) -> Result<(), String> {
+    let script = format!(
+        "do shell script \"ln -sf '{}' '{}'\" with administrator privileges",
+        escape_applescript_single_quote(&target.display().to_string()),
+        escape_applescript_single_quote(&link.display().to_string()),
+    );
+
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|e| format!("Failed to launch privilege escalation: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.contains("User canceled") || stderr.contains("(-128)") {
+            Err("Installation cancelled by user.".into())
+        } else {
+            Err(format!(
+                "Failed to create symlink with admin privileges: {stderr}"
+            ))
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", not(target_os = "macos")))]
+fn create_symlink_privileged(target: &Path, link: &Path) -> Result<(), String> {
+    let output = Command::new("pkexec")
+        .args([
+            "ln",
+            "-sf",
+            &target.to_string_lossy(),
+            &link.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|e| format!("Failed to launch privilege escalation: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(format!(
+            "Failed to create symlink with elevated privileges: {stderr}"
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn remove_cli_link_privileged(link: &Path) -> Result<(), String> {
+    let script = format!(
+        "do shell script \"rm -f '{}'\" with administrator privileges",
+        escape_applescript_single_quote(&link.display().to_string()),
+    );
+
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|e| format!("Failed to launch privilege escalation: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.contains("User canceled") || stderr.contains("(-128)") {
+            Err("Operation cancelled by user.".into())
+        } else {
+            Err(format!(
+                "Failed to remove old symlink with admin privileges: {stderr}"
+            ))
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", not(target_os = "macos")))]
+fn remove_cli_link_privileged(link: &Path) -> Result<(), String> {
+    let output = Command::new("pkexec")
+        .args(["rm", "-f", &link.to_string_lossy()])
+        .output()
+        .map_err(|e| format!("Failed to launch privilege escalation: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(format!(
+            "Failed to remove symlink with elevated privileges: {stderr}"
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Windows helpers: user PATH via registry (HKCU\Environment)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+#[cfg(target_os = "windows")]
+use winreg::{RegKey, RegValue};
+
+/// Read the user-level PATH value from `HKCU\Environment\Path`.
+/// Returns the string content and the original registry value type
+/// (REG_SZ or REG_EXPAND_SZ) so we can preserve it on write-back.
+#[cfg(target_os = "windows")]
+fn read_user_path() -> Result<(String, winreg::enums::RegType), String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let env = hkcu
+        .open_subkey_with_flags("Environment", KEY_READ)
+        .map_err(|e| format!("Failed to open HKCU\\Environment: {e}"))?;
+    match env.get_raw_value("Path") {
+        Ok(reg_value) => {
+            let ty = reg_value.vtype;
+            let s = String::from_utf8_lossy(&reg_value.bytes)
+                .trim_end_matches('\0')
+                .to_string();
+            Ok((s, ty))
+        }
+        Err(_) => {
+            // Path does not exist yet — default to REG_EXPAND_SZ, which is
+            // the standard type for user PATH values on Windows.
+            Ok((String::new(), winreg::enums::RegType::REG_EXPAND_SZ))
+        }
+    }
+}
+
+/// Write the user-level PATH value to `HKCU\Environment\Path` and broadcast
+/// `WM_SETTINGCHANGE` so that new terminals pick it up immediately.
+/// Preserves the original registry value type (REG_SZ or REG_EXPAND_SZ).
+#[cfg(target_os = "windows")]
+fn write_user_path(path: &str, reg_type: winreg::enums::RegType) -> Result<(), String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let env = hkcu
+        .open_subkey_with_flags("Environment", KEY_READ | KEY_WRITE)
+        .map_err(|e| format!("Failed to open HKCU\\Environment for writing: {e}"))?;
+    // Encode as UTF-16LE with a null terminator to match Windows registry conventions.
+    let mut bytes: Vec<u8> = path.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+    bytes.extend_from_slice(&[0u8, 0u8]); // null terminator
+    let reg_value = RegValue {
+        bytes,
+        vtype: reg_type,
+    };
+    env.set_raw_value("Path", &reg_value)
+        .map_err(|e| format!("Failed to write Path value: {e}"))?;
+    broadcast_environment_change();
+    Ok(())
+}
+
+/// Broadcast `WM_SETTINGCHANGE` with "Environment" so that running shells
+/// (cmd, PowerShell, etc.) refresh their PATH from the registry.
+#[cfg(target_os = "windows")]
+fn broadcast_environment_change() {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    // WM_SETTINGCHANGE = 0x001A, HWND_BROADCAST = 0xFFFF, SMTO_ABORTIFHUNG = 0x0002
+    let w_param: usize = 0;
+    let l_param: Vec<u16> = OsStr::new("Environment")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let timeout_ms: u32 = 5000;
+
+    // SAFETY: SendMessageTimeoutW is a well-known Win32 API. We pass a valid
+    // null-terminated wide string and reasonable timeout. The broadcast is
+    // non-blocking with SMTO_ABORTIFHUNG.
+    unsafe {
+        #[link(name = "user32")]
+        extern "system" {
+            fn SendMessageTimeoutW(
+                hwnd: isize,
+                msg: u32,
+                wparam: usize,
+                lparam: *const u16,
+                flags: u32,
+                timeout: u32,
+                result: *mut isize,
+            ) -> isize;
+        }
+        let mut _result: isize = 0;
+        let ret = SendMessageTimeoutW(
+            0xFFFF, // HWND_BROADCAST
+            0x001A, // WM_SETTINGCHANGE
+            w_param,
+            l_param.as_ptr(),
+            0x0002, // SMTO_ABORTIFHUNG
+            timeout_ms,
+            &mut _result,
+        );
+        if ret == 0 {
+            tracing::warn!(
+                "WM_SETTINGCHANGE broadcast may not have reached all windows; \
+                 new terminals might not see the PATH update immediately"
+            );
+        }
+    }
+}
+
+/// Check whether a Windows PATH string (semicolon-separated) contains the
+/// given directory, using case-insensitive comparison on Windows.
+#[cfg(target_os = "windows")]
+fn path_contains_dir(path_value: &str, dir: &Path) -> bool {
+    path_value
+        .split(';')
+        .filter(|s| !s.is_empty())
+        .any(|entry| Path::new(entry) == dir)
+}
+
+/// Remove a directory entry from a Windows PATH string (semicolon-separated),
+/// using case-insensitive comparison. Returns the cleaned PATH string.
+#[cfg(target_os = "windows")]
+fn remove_dir_from_path(path_value: &str, dir: &Path) -> String {
+    path_value
+        .split(';')
+        .filter(|entry| !entry.is_empty() && Path::new(entry) != dir)
+        .collect::<Vec<&str>>()
+        .join(";")
 }
 
 #[cfg(test)]

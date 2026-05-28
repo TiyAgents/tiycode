@@ -1173,6 +1173,41 @@ function GeneralSettingsPanel({
 
   const clampWebSearchMaxResults = (value: number) => Math.min(20, Math.max(1, Math.round(value)));
 
+  const [cliInstalled, setCliInstalled] = useState(false);
+  const [cliLoading, setCliLoading] = useState(false);
+  const [cliError, setCliError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isTauri()) {
+      invoke<boolean>("is_cli_installed").then(setCliInstalled).catch(() => {});
+    }
+  }, []);
+
+  const handleToggleCli = async () => {
+    if (!isTauri()) return;
+    setCliLoading(true);
+    setCliError(null);
+    try {
+      if (cliInstalled) {
+        await invoke<string>("uninstall_cli_from_path");
+        setCliInstalled(false);
+      } else {
+        await invoke<string>("install_cli_in_path");
+        setCliInstalled(true);
+      }
+    } catch (error) {
+      // User-cancelled operations get a friendly message from the backend;
+      // other errors are surfaced so the user knows something went wrong.
+      const msg = typeof error === "string" ? error : String(error);
+      if (!msg.includes("cancelled by user") && !msg.includes("User canceled") && !msg.includes("(-128)")) {
+        console.error("CLI toggle failed:", error);
+        setCliError(msg);
+      }
+    } finally {
+      setCliLoading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeading title={t("settings.category.general")} description={description} />
@@ -1381,6 +1416,37 @@ function GeneralSettingsPanel({
             />
           }
         />
+      </SettingsSection>
+
+      <SettingsSection title={t("settings.general.acpServerTitle")}>
+        <SettingsRow
+          label={t("settings.general.acpServerCliLabel")}
+          description={t("settings.general.acpServerCliDesc")}
+          control={
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 rounded-lg border-app-border bg-app-surface-muted px-3 text-[12px] font-medium text-app-foreground shadow-none hover:border-app-border-strong hover:bg-app-surface-hover"
+              disabled={cliLoading}
+              onClick={handleToggleCli}
+            >
+              {cliInstalled ? (
+                <>
+                  <Check className="size-3.5" />
+                  {t("settings.general.cliUninstall")}
+                </>
+              ) : (
+                <>
+                  <TerminalSquare className="size-3.5" />
+                  {t("settings.general.cliInstall")}
+                </>
+              )}
+            </Button>
+          }
+        />
+        {cliError && (
+          <p className="px-1 text-xs text-app-danger">{cliError}</p>
+        )}
       </SettingsSection>
     </div>
   );
@@ -1874,6 +1940,7 @@ function AboutSettingsPanel({
   const appName = runtime?.appName ?? "TiyCode";
   const platformSummary = runtime?.platform ?? "Unknown platform";
   const architectureSummary = runtime?.arch ?? "Unknown architecture";
+
   const aboutActions = [
     { href: "https://tiy.ai", label: t("settings.about.officialWebsite") },
     { href: "https://github.com/tiylabs/tiycode/blob/master/LICENSE", label: t("settings.about.license") },

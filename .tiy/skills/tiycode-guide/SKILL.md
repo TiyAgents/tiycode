@@ -48,11 +48,15 @@ TiyCode is a native desktop application (macOS / Windows / Linux), not a browser
 |-----------|-------------|
 | **Agent Profiles** | Mix models from different providers, tune response style, language, and custom instructions. Switch profiles for different kinds of work. |
 | **Three-tier model architecture** | Each profile has a Primary model (core reasoning), an Auxiliary model (helper tasks), and a Lightweight model (fast operations), with automatic fallback. |
-| **Multi-provider support** | 13+ LLM providers: OpenAI, Anthropic, Google, Ollama, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi, ZAI, Zenmux, plus any OpenAI-compatible endpoint. |
+| **Multi-provider support** | 16+ LLM providers: OpenAI, Anthropic, Google, Ollama, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi, ZAI, Zenmux, OpenCode Go, Xiaomi MIMO, Synthetic, plus any OpenAI-compatible or Anthropic-compatible endpoint. |
 | **Workspace-centered** | Threads are grounded in a local workspace with code review, Git, repository inspection, and terminal access. |
 | **Extensions** | Plugins, MCP servers, and Skills — managed through the Extensions Center. |
 | **Bilingual** | Full English and Simplified Chinese interface, switchable anytime. |
 | **Built-in commands** | `/commit` for generating conventional commit messages, `/create-pr` for GitHub pull requests, and custom slash commands. All commands support structured argument interpolation via `--key=value` flags, positional arguments, and `{{placeholder}}` template variables. |
+| **ACP Server** | Run TiyCode as an Agent Client Protocol server for external IDE/editor/CLI integration via stdio or HTTP/WebSocket. |
+| **Custom Subagents** | User-defined subagents with custom system prompts, tool access, and model role selection. Registered as `agent_{slug}` tools. |
+| **Web Search** | Built-in web search with configurable engine (Tavily, Brave, Exa, Firecrawl). |
+| **Visual rendering** | Render Vega-Lite charts, HTML pages, and SVG graphics inline in conversation. |
 
 ---
 
@@ -76,6 +80,9 @@ The agent runs inside the `BuiltInAgentRuntime`. It does **NOT** have direct acc
 | `update_plan` | Publish an implementation plan for user review |
 | `agent_explore` | Spawn a read-only helper agent for investigation |
 | `agent_review` | Spawn a review/verification helper agent |
+| `agent_parallel` | Delegate 1–5 independent subtasks to subagents with bounded concurrency |
+| `render` | Render visual artifacts (Vega-Lite charts, HTML pages, SVG graphics) inline in conversation |
+| `web_search` | Search the public web (requires Web Search to be enabled in Settings) |
 | `create_task` | Create a task on the task board |
 | `update_task` | Update task progress |
 | `query_task` | Query task board state |
@@ -100,7 +107,7 @@ The available tools depend on the run mode:
 | `default_full` | Normal conversation | ✅ All tools | Full read + write + shell + terminal |
 | `plan_read_only` | Plan mode (`run_mode="plan"`) | ❌ None | Read-only: can explore code and propose plans, but cannot modify anything |
 
-### 2.3 Helper Agents
+### 2.3 Helper Agents & Custom Subagents
 
 The agent can delegate subtasks to specialized helpers:
 
@@ -108,6 +115,23 @@ The agent can delegate subtasks to specialized helpers:
 |--------|----------------|----------|
 | `agent_explore` | `read`, `list`, `find`, `search` | Code exploration, cross-file analysis, fact-finding |
 | `agent_review` | `read`, `list`, `find`, `search`, `term_status`, `term_output`, `shell` (diagnostics only) | Code review, type-checking, test verification |
+| `agent_parallel` | Delegates 1–5 independent subtasks to helpers | Parallel exploration or review work, bounded concurrency (default 3, max 5) |
+
+#### Custom Subagents
+
+In addition to the built-in helpers, users can create **custom subagents** via **Settings Center > Agents**. Each custom subagent defines:
+
+| Field | Description |
+|-------|-------------|
+| **Name** | Display name for the subagent |
+| **Slug** | URL-friendly identifier (used as tool name: `agent_{slug}`) |
+| **System Prompt** | Custom instructions for the subagent |
+| **Invocation Description** | When this subagent should be used |
+| **Allowed Tools** | Tool categories the subagent can access: fileRead, web, fileWrite, terminal, git |
+| **Model Role** | Which model from the active profile to use: `primary`, `auxiliary`, or `lightweight` |
+| **Enabled** | Whether the subagent is active |
+
+Custom subagents are registered as tools named `agent_{slug}` and appear alongside built-in tools. Profile-Agent Access controls which custom subagents are available per profile (configured in **Settings Center > Agent Profiles**).
 
 ### 2.4 Policy & Approval
 
@@ -208,15 +232,18 @@ TiyCode organizes settings into the following categories, all accessible from th
 
 | Tab | What it controls |
 |-----|-----------------|
-| **General** | Launch at login, prevent sleep while running, minimize to tray |
+| **General** | Launch at login, prevent sleep while running, minimize to tray, Web Search configuration, ACP Server CLI install/uninstall, default append message kind (steer / follow-up) |
 | **Workspace** | Workspace list, default workspace, Git tracking, auto-worktree |
 | **Providers** | LLM provider connections (API keys, base URLs, models, capabilities) |
-| **Agent Profiles** | Active profile, model selection, response style, thinking level, custom instructions, language |
+| **Agent Profiles** | Active profile, model selection, response style, thinking level, custom instructions, language, subagent access per profile |
+| **Agents** | Custom subagents — CRUD with name, slug, system prompt, invocation description, allowed tools, model role, enabled state |
+| **Account** | Session identity, plan comparison (Free / Lite / Pro / Max), billing history |
 | **Commands** | Built-in commands (`commit`, `create-pr`) and custom slash commands with structured argument support |
 | **Terminal** | Shell path/args, font, cursor style, scrollback, environment |
 | **Policy** | Approval policy, allow/deny pattern lists, writable roots |
+| **About** | Version info, platform/architecture, check for updates, links (website, license, feedback, contact), terms of service, privacy policy |
 
-> The agent **cannot** directly modify these UI-based settings. The agent's role is to **guide users** on what to change and where to find it. However, some extension configs can be managed via config files — see Section 7.
+> The agent **cannot** directly modify these UI-based settings. The agent's role is to **guide users** on what to change and where to find it. However, some extension configs can be managed via config files — see Section 8.
 
 ---
 
@@ -270,11 +297,17 @@ The agent **cannot** switch profiles or modify profile settings programmatically
 | Kimi | builtin | Kimi Coding |
 | ZAI | builtin | ZAI models |
 | Zenmux | builtin | Zenmux gateway |
+| OpenCode Go | builtin | OpenCode Go models (opencode.ai) |
+| Xiaomi MIMO | builtin | Xiaomi MIMO models |
+| Synthetic | builtin | Synthetic models (Anthropic-compatible) |
 | Custom | custom | Any OpenAI-compatible, Anthropic, Google, or Ollama endpoint |
+| Custom (OpenAI Responses) | custom | OpenAI Responses API-compatible endpoint |
 
 ### Model Capabilities
 
-Each model can declare capabilities: **vision**, **toolCalling**, **reasoning**, **imageOutput**, **embedding**.
+Each model can declare capabilities: **vision**, **toolCalling**, **reasoning**, **imageOutput**, **embedding**, **reasoningContentConstrained**.
+
+The `reasoningContentConstrained` capability indicates that the model's reasoning/thinking content is constrained (e.g. DeepSeek R1). When set, the agent runtime adjusts how it handles reasoning output.
 
 ### What the Agent Can Do
 
@@ -282,13 +315,64 @@ The agent **cannot** add providers, set API keys, or change model selections. It
 
 ---
 
-## 7. Self-Operation via Config Files
+## 7. ACP Server (Agent Client Protocol)
+
+TiyCode can act as an **ACP server**, allowing external AI coding clients (IDEs, editors, CLI tools) to connect and use TiyCode's agent capabilities remotely.
+
+### Transports
+
+| Transport | Command | Description |
+|-----------|---------|-------------|
+| **Stdio** | `tiycode acp --stdio` | Communicates over stdin/stdout, suitable for editor integrations |
+| **HTTP/WebSocket** | `tiycode acp --http <addr>` | HTTP + WebSocket server, restricted to loopback addresses only (e.g. `127.0.0.1:3000`) |
+
+### Supported ACP Methods
+
+| Method | Description |
+|--------|-------------|
+| `initialize` | Handshake with the ACP server |
+| `authenticate` | Validate access credentials |
+| `new_session` | Create a new agent session (auto-creates thread + workspace) |
+| `load_session` | Load an existing session by ID |
+| `resume_session` | Resume a previously active session |
+| `list_sessions` | List available sessions |
+| `prompt` | Send a user message to the active session |
+| `close_session` | Close and clean up a session |
+| `cancel` | Cancel an in-progress agent run |
+
+### Key Behaviors
+
+- ACP sessions automatically create threads and workspaces, inheriting the currently active Agent Profile.
+- Tool approval is delegated to the ACP client via a permission bridge. If the client does not respond within 60 seconds, the request is automatically denied.
+- The ACP server can run in desktop mode (alongside the GUI) or headless mode.
+
+### CLI-in-PATH Installation
+
+For ACP to work from any terminal, the `tiycode` CLI binary must be in the system PATH. This can be managed from **Settings Center > General > ACP Server**:
+
+| Action | What it does |
+|--------|-------------|
+| **Install CLI** | Creates a symlink at `/usr/local/bin/tiycode` (may require admin privileges on macOS/Linux) |
+| **Uninstall CLI** | Removes the symlink from PATH |
+
+On macOS/Linux, if the target directory requires elevated permissions, TiyCode uses `osascript` to prompt for admin credentials. On Linux, `pkexec` is used as a fallback.
+
+### What the Agent Can Do
+
+The agent **cannot** start/stop the ACP server or install/uninstall the CLI programmatically. It should:
+- **Explain** what ACP is and how to use it.
+- **Guide users** to Settings Center > General > ACP Server for CLI installation.
+- **Help troubleshoot** ACP connection issues by checking if the CLI is in PATH (`which tiycode`).
+
+---
+
+## 8. Self-Operation via Config Files
 
 While the agent cannot call Tauri internal APIs, it **can** directly read and write configuration files under `~/.tiy/` and `<workspace>/.tiy/` using its `read`, `write`, and `edit` tools. These paths are within the builtin writable roots, so **no user approval is needed**.
 
 Config files are loaded **on-demand** (not watched). After the agent modifies a config file, the user may need to trigger a reload in the Extensions Center UI or restart TiyCode for changes to take effect.
 
-### 7.1 MCP Server Configuration
+### 8.1 MCP Server Configuration
 
 **Global:** `~/.tiy/mcp.json`
 **Workspace-scoped:** `<workspace>/.tiy/mcp.json`
@@ -407,7 +491,7 @@ Workspace config overrides global config by server `id`.
 
 ---
 
-### 7.2 Skills State Management
+### 8.2 Skills State Management
 
 **Global:** `~/.tiy/skills.json`
 **Workspace-scoped:** `<workspace>/.tiy/skills.json`
@@ -459,7 +543,7 @@ This file controls the enable/disable/pin state of skills. Workspace state is me
 
 ---
 
-### 7.3 Creating Custom Skills
+### 8.3 Creating Custom Skills
 
 Each skill is a **subdirectory** containing a `SKILL.md` file (uppercase). TiyCode scans these directories:
 
@@ -578,7 +662,7 @@ When reviewing code, check for:
 
 ---
 
-### 7.4 Marketplace Sources
+### 8.4 Marketplace Sources
 
 **Global:** `~/.tiy/marketplaces.json`
 
@@ -610,7 +694,7 @@ When reviewing code, check for:
 
 ---
 
-### 7.5 Config Files Reference Table
+### 8.5 Config Files Reference Table
 
 | Config File | Path | Agent Can Write | What It Controls |
 |-------------|------|:---------------:|-----------------|
@@ -630,7 +714,7 @@ When reviewing code, check for:
 
 ---
 
-## 8. Logs & Diagnostics
+## 9. Logs & Diagnostics
 
 TiyCode's native backend logs are produced by the Rust/Tauri process through `tracing`. These file logs are **platform-native operational logs**, not files inside `~/.tiy/`.
 
@@ -676,7 +760,7 @@ The current Rust tracing is mostly **metadata-oriented**, not intended as a full
 
 ---
 
-## 9. Workspace & Git
+## 10. Workspace & Git
 
 ### Workspaces
 
@@ -723,7 +807,7 @@ Slash commands support structured arguments that are parsed and injected into pr
 
 ---
 
-## 10. Terminal
+## 11. Terminal
 
 TiyCode includes a built-in Terminal panel.
 
@@ -755,7 +839,7 @@ TiyCode includes a built-in Terminal panel.
 
 ---
 
-## 11. Theme & Language
+## 12. Theme & Language
 
 ### Theme
 
@@ -780,7 +864,7 @@ TiyCode includes a built-in Terminal panel.
 
 ---
 
-## 12. Common User Scenarios
+## 13. Common User Scenarios
 
 ### "Command not found" in terminal
 
@@ -885,6 +969,27 @@ Guide the user to check the active profile in the top bar or Settings Center > A
 2. `find ~/.tiy/skills/*.md` and `find <workspace>/.tiy/skills/*.md` to discover skill files.
 3. `read` each skill file's frontmatter to report names and descriptions.
 
+### "How do I use TiyCode with my IDE?"
+
+**Agent should:**
+1. Explain ACP (Agent Client Protocol) — TiyCode can run as an ACP server for external tool integration.
+2. Guide to **Settings Center > General > ACP Server** to install the CLI in PATH.
+3. After CLI is installed, the user can run `tiycode acp --stdio` or `tiycode acp --http <addr>` to start the ACP server.
+4. The external IDE/client connects to the ACP endpoint and sends prompts through the ACP protocol.
+
+### "Create a custom subagent"
+
+**Agent should:**
+1. Guide the user to **Settings Center > Agents** — this is the UI where custom subagents are managed.
+2. The agent **cannot** create subagents via config files; they are stored in the database and require the UI.
+3. Help the user define: name, slug, system prompt, invocation description, allowed tools, and model role.
+
+### "Search the web for X"
+
+**Agent should:**
+1. Use the `web_search` tool if Web Search is enabled in Settings.
+2. If `web_search` is not available, explain that the user needs to enable it in **Settings Center > General > Web Search** and configure a search engine (Tavily, Brave, Exa, or Firecrawl) with an API key.
+
 ### "Generate a commit message"
 
 **Agent should:**
@@ -898,7 +1003,7 @@ Use `shell` to run `git status`, `git diff`, `git log --oneline -10`, etc.
 
 ---
 
-## 13. Capability Summary
+## 14. Capability Summary
 
 ### What the Agent CAN Do Directly
 
@@ -909,6 +1014,9 @@ Use `shell` to run `git status`, `git diff`, `git log --oneline -10`, etc.
 | Run shell commands | `shell` tool | `git status`, `npm test`, `cargo build` |
 | Git operations | `shell` tool | stage, commit, push, pull, diff, log |
 | Interact with Terminal | `term_write`, `term_status`, `term_output` | Dev servers, REPLs, long-running processes |
+| **Render visual artifacts** | `render` tool | Vega-Lite charts, HTML pages, SVG graphics inline in conversation |
+| **Search the web** | `web_search` tool | Search public web with configurable engine (requires Web Search enabled in Settings) |
+| **Delegate parallel subtasks** | `agent_parallel` tool | Run 1–5 independent exploration/review helpers concurrently |
 | **Manage MCP servers** | Read/write `~/.tiy/mcp.json` | Add, remove, enable, disable, reconfigure servers |
 | **Enable/disable skills** | Read/write `~/.tiy/skills.json` | Toggle skill state |
 | **Create custom skills** | Write `SKILL.md` in `~/.tiy/skills/<name>/` | Create new agent capabilities as subdirectories |
@@ -929,6 +1037,11 @@ Use `shell` to run `git status`, `git diff`, `git log --oneline -10`, etc.
 | Manage API keys | Settings Center > Providers | Security: encrypted storage |
 | Create/edit/switch Agent Profiles | Settings Center > Agent Profiles | Stored in database |
 | Change response style / thinking level | Settings Center > Agent Profiles | Stored in database |
+| Create/manage custom subagents | Settings Center > Agents | Stored in database, runtime tool registration |
+| Configure subagent access per profile | Settings Center > Agent Profiles | Stored in database |
+| Configure Web Search | Settings Center > General | Search engine selection, API key, settings |
+| Install/uninstall CLI-in-PATH | Settings Center > General > ACP Server | Requires system-level symlink creation |
+| View account / billing | Settings Center > Account | Remote service, requires authentication |
 | Install/uninstall plugins | Extensions Center > Plugins | Requires runtime plugin loading |
 | Enable/disable plugins | Extensions Center > Plugins | Requires runtime state change |
 | Configure terminal settings | Settings Center > Terminal | Stored in database |

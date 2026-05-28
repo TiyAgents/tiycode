@@ -36,6 +36,7 @@ Around that collaboration model, TiyCode brings together Agent Profiles, workspa
 - **Real-time execution streaming.** A rich thread stream event system delivers live updates — message deltas, tool calls, requested/active statuses, reasoning steps, subagent progress, and plan updates — all rendered through purpose-built AI Elements components.
 - **Operator-friendly experience.** Slash commands with structured argument parsing, smart conversation titles, context compression controls, commit message generation, external terminal handoff including Ghostty, and compact workbench controls help the product feel fast and practical in day-to-day use.
 - **Bilingual interface.** Full i18n coverage with English and Simplified Chinese, switchable at any time.
+- **ACP Server support.** TiyCode can run as a headless ACP (Agent Client Protocol) server via `tiycode acp --stdio` or `tiycode acp --http <addr>`, letting external tools and IDE plugins drive the agent runtime through a standard JSON-RPC protocol without the desktop GUI.
 - **Extensible by design.** Plugins, MCP servers, and Skills are treated as first-class building blocks through the `Extensions Center`.
 - **Built-in runtime path.** The main execution flow is `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`.
 
@@ -240,6 +241,8 @@ flowchart LR
   TAURI --> CATALOG[Provider Catalog / Model Metadata]
   TAURI --> EXT[Extension Host]
   EXT --> PLUGINS[Plugins / MCP / Skills]
+  TAURI --> ACP[ACP Server]
+  ACP --> CLIENT[External Clients / IDE Plugins]
   CORE --> LLM[LLM Providers]
   TAURI --> DB[(SQLite)]
   UI -.->|Thread Stream| TAURI
@@ -269,6 +272,7 @@ src/
 src-tauri/
   src/commands/    Rust command modules
   src/core/        runtime/session orchestration, prompts, subagents, tools, workspaces, worktrees
+  src/acp/         ACP server — transport, session map, protocol handlers, event/permission bridges
   src/extensions/  extension host, registries, and runtime integration
   src/ipc/         frontend event/channel bridge
   bundled-catalog/ provider model catalog snapshots bundled into the app
@@ -305,6 +309,39 @@ TiyCode treats extensibility as a first-class part of the desktop workbench.
 - **Provider catalogs** are bundled as snapshots and can be normalized or refreshed so model capabilities stay aligned with runtime behavior.
 
 These capabilities are surfaced through the `Extensions Center`, while runtime access is still governed by the host through tool gateways, policy checks, approvals, and audit boundaries.
+
+## ACP Server
+
+TiyCode can expose its agent runtime as an **ACP (Agent Client Protocol)** server, allowing external tools and IDE plugins to interact with TiyCode's agent capabilities through a standard JSON-RPC protocol — without requiring the desktop GUI.
+
+### Transport modes
+
+| Mode | Command | Description |
+|------|---------|-------------|
+| **stdio** | `tiycode acp --stdio` | Headless server over stdin/stdout. Stdout is reserved for ACP JSON-RPC; logs go to stderr. |
+| **HTTP / WebSocket** | `tiycode acp --http 127.0.0.1:0` | Opt-in HTTP endpoint with WebSocket transport at `GET /acp` and a health check at `GET /health`. |
+
+> The HTTP/WebSocket mode is **disabled by default** and only listens on loopback addresses. It does not perform ACP authentication and is intended only for trusted local processes. Do not expose it to non-loopback interfaces without adding an external authentication layer.
+
+### CLI setup
+
+To make the `tiycode` command available system-wide, install it to PATH via **Settings → General → ACP Server → CLI in PATH**, or manually:
+
+```bash
+# After installing TiyCode desktop app
+sudo ln -s /Applications/TiyCode.app/Contents/MacOS/TiyCode /usr/local/bin/tiycode
+```
+
+On macOS/Linux you can also set `TIY_ACP_HTTP_LISTEN=127.0.0.1:0` before launching the desktop app to enable the HTTP/WebSocket ACP endpoint alongside the GUI.
+
+### Key capabilities
+
+- **Local execution.** File operations and terminal commands run inside TiyCode's agent runtime — the ACP client does not need to handle `fs/*` or `terminal/*` requests.
+- **Streaming updates.** Clients receive live assistant messages, tool call status and results, plan updates, and file-change metadata.
+- **Permission delegation.** When the policy engine requires approval, the client receives a `session/request_permission` request with `allow_once` / `reject_once` options. Unanswered requests are auto-rejected after 60 seconds.
+- **Session mapping.** ACP `SessionId` maps to an internal TiyCode thread ID. Creating, loading, listing, prompting, cancelling, and closing sessions all bridge to the existing thread/run managers.
+
+See [`docs/acp-server.md`](./docs/acp-server.md) for the full protocol and implementation details.
 
 ## Troubleshooting & Debugging
 

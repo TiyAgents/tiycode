@@ -371,6 +371,13 @@ const zhCN = {
   // ── Settings: General Panel ────────────────────────────────
   "settings.general.newProfile": "新 Profile",
   "settings.general.preferences": "偏好设置",
+  "settings.general.cliLabel": "CLI 命令注册",
+  "settings.general.cliDesc": "注册 `tiycode` 命令，以便在任意终端通过 `tiycode acp --stdio` 启动 ACP (Agent Communication Protocol) 服务。",
+  "settings.general.acpServerTitle": "ACP 服务",
+  "settings.general.acpServerCliLabel": "CLI 命令注册",
+  "settings.general.acpServerCliDesc": "注册 `tiycode` 命令，以便在任意终端启动 ACP 服务。用法：`tiycode acp --stdio`（stdio 传输）或 `tiycode acp --http <addr>`（HTTP 传输）。",
+  "settings.general.cliInstall": "安装",
+  "settings.general.cliUninstall": "卸载",
   "settings.general.themeLabel": "主题",
   "settings.general.themeDesc": "使用系统外观或将应用锁定为亮色或暗色模式。",
   "settings.general.languageLabel": "语言",
