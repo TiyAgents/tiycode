@@ -317,6 +317,7 @@ impl WecomAdapter {
         let chat_id = body
             .get("chatid")
             .and_then(|c| c.as_str())
+            .filter(|s| !s.is_empty())
             .unwrap_or(&sender_id)
             .to_string();
 
