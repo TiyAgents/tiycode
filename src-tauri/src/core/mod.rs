@@ -9,6 +9,7 @@ pub mod agent_session_compression;
 pub mod agent_session_events;
 pub mod agent_session_execution;
 pub mod agent_session_history;
+pub mod agent_session_model_plan;
 pub mod agent_session_tools;
 pub mod agent_session_types;
 pub mod app_event_emitter;

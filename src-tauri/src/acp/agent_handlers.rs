@@ -16,6 +16,7 @@ use crate::acp::event_bridge::{content_blocks_to_markdown, map_thread_event_to_a
 use crate::acp::permission_bridge;
 use crate::acp::session_map::AcpSessionRecord;
 use crate::acp::AcpServerState;
+use crate::core::agent_session_model_plan;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::workspace::WorkspaceAddInput;
 use crate::persistence::repo::{thread_repo, workspace_repo};
@@ -149,9 +150,13 @@ async fn handle_new_session(
     request: NewSessionRequest,
 ) -> Result<NewSessionResponse, agent_client_protocol::Error> {
     let workspace = resolve_or_create_workspace(&state, &request.cwd).await?;
+    // Resolve active profile so ACP sessions inherit the user's model configuration
+    let profile_id = agent_session_model_plan::resolve_active_profile_id(&state.pool)
+        .await
+        .map_err(to_acp_error)?;
     let thread = state
         .thread_manager
-        .create(&workspace.id, Some("ACP Session".to_string()), None)
+        .create(&workspace.id, Some("ACP Session".to_string()), profile_id)
         .await
         .map_err(to_acp_error)?;
     let session_id = thread.id.clone();
@@ -272,6 +277,24 @@ async fn handle_prompt(
         return Err(agent_client_protocol::Error::invalid_params().data("prompt is empty"));
     }
 
+    // Build model plan from the session's profile (or resolve active profile as fallback)
+    let effective_profile_id = match record.profile_id.as_deref() {
+        Some(id) if !id.is_empty() => Some(id.to_string()),
+        _ => agent_session_model_plan::resolve_active_profile_id(&state.pool)
+            .await
+            .map_err(to_acp_error)?,
+    };
+    let model_plan = match effective_profile_id {
+        Some(ref pid) => agent_session_model_plan::build_model_plan_from_profile(&state.pool, pid)
+            .await
+            .map_err(to_acp_error)?,
+        None => {
+            return Err(agent_client_protocol::Error::invalid_params().data(
+                "No agent profile configured. Please set up a profile with a model in TiyCode settings.",
+            ));
+        }
+    };
+
     let (run_id, event_rx) = state
         .agent_run_manager
         .start_run(
@@ -281,10 +304,10 @@ async fn handle_prompt(
             None,
             Vec::new(),
             "default",
-            record.profile_id.clone(),
+            effective_profile_id,
             None,
             None,
-            serde_json::json!({}),
+            model_plan,
         )
         .await
         .map_err(to_acp_error)?;
