@@ -5,6 +5,7 @@
 //! Reference: hermes-agent/gateway/platforms/weixin.py
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -29,6 +30,11 @@ const MAX_MESSAGE_LENGTH: usize = 2000;
 const CHANNEL_VERSION: &str = "2.2.0";
 /// TTL for message dedup entries (seconds).
 const DEDUP_TTL_SECONDS: u64 = 300;
+/// Long backoff when session is expired/stale (seconds).
+/// Aligned with hermes-agent: 600s to avoid hammering a dead session.
+const SESSION_EXPIRED_BACKOFF_SECONDS: u64 = 600;
+/// Rate-limit retry multiplier for errcode=-2.
+const RATE_LIMIT_RETRY_MULTIPLIER: u32 = 3;
 
 /// Persistence directory for WeChat state: `~/.tiy/gateway/weixin/`
 fn weixin_state_dir() -> PathBuf {
@@ -51,6 +57,9 @@ pub struct WeixinAdapter {
     sync_buf: Arc<Mutex<Option<String>>>,
     /// Message ID dedup map with TTL: message_id → insert time.
     seen_messages: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Content fingerprint dedup: hash(text) → insert time.
+    /// Catches iLink re-delivery with different msg_id but same content.
+    seen_content: Arc<Mutex<HashMap<u64, Instant>>>,
     /// Directory for persisted state files.
     state_dir: PathBuf,
     /// Cached typing_ticket (fetched from getconfig API).
@@ -95,6 +104,7 @@ impl WeixinAdapter {
             context_tokens: Arc::new(Mutex::new(context_tokens)),
             sync_buf: Arc::new(Mutex::new(sync_buf)),
             seen_messages: Arc::new(Mutex::new(HashMap::new())),
+            seen_content: Arc::new(Mutex::new(HashMap::new())),
             state_dir,
             typing_ticket: Arc::new(Mutex::new(None)),
             client_id,
@@ -198,7 +208,15 @@ impl WeixinAdapter {
                 .unwrap_or("unknown error");
             if errcode == -14 {
                 // Session expired — need re-authentication.
-                anyhow::bail!("session expired (errcode=-14): {errmsg}");
+                anyhow::bail!("[session_expired] errcode=-14: {errmsg}");
+            }
+            if errcode == -2 && errmsg.contains("unknown error") {
+                // Stale session (hermes-agent: ret=-2 + "unknown error").
+                anyhow::bail!("[session_expired] stale session errcode=-2: {errmsg}");
+            }
+            if errcode == -2 {
+                // Rate-limited — signal for extended backoff.
+                anyhow::bail!("[rate_limited] errcode=-2: {errmsg}");
             }
             anyhow::bail!("getupdates error {errcode}: {errmsg}");
         }
@@ -218,13 +236,16 @@ impl WeixinAdapter {
 
         let mut messages = Vec::new();
         let mut seen = self.seen_messages.lock().await;
+        let mut seen_content = self.seen_content.lock().await;
 
         for update in updates {
-            if let Some(msg) = self.parse_update(&update, &mut seen) {
+            if let Some(msg) = self.parse_update(&update, &mut seen, &mut seen_content) {
                 // Update context token for this sender.
+                // Key uses account_id:peer_id composite to support multi-account.
                 if let Some(token) = update.get("context_token").and_then(|v| v.as_str()) {
                     let mut tokens = self.context_tokens.lock().await;
-                    tokens.insert(msg.sender_id.clone(), token.to_string());
+                    let key = format!("{}:{}", self.account_id, msg.sender_id);
+                    tokens.insert(key, token.to_string());
                     self.persist_context_tokens(&tokens);
                 }
                 messages.push(msg);
@@ -239,6 +260,7 @@ impl WeixinAdapter {
         &self,
         update: &Value,
         seen: &mut HashMap<String, Instant>,
+        seen_content: &mut HashMap<u64, Instant>,
     ) -> Option<InboundMessage> {
         let msg_id = update.get("message_id")?.as_str()?.to_string();
 
@@ -275,6 +297,26 @@ impl WeixinAdapter {
 
         if text.is_empty() {
             return None;
+        }
+
+        // Content fingerprint dedup: catch re-delivery with different msg_id.
+        let content_hash = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            sender_id.hash(&mut hasher);
+            text.hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Some(inserted_at) = seen_content.get(&content_hash) {
+            if now.duration_since(*inserted_at).as_secs() < DEDUP_TTL_SECONDS {
+                tracing::debug!(msg_id, "content fingerprint dedup hit, skipping");
+                return None;
+            }
+        }
+        seen_content.insert(content_hash, now);
+
+        // Evict expired content fingerprints.
+        if seen_content.len() > 2000 {
+            seen_content.retain(|_, t| now.duration_since(*t).as_secs() < DEDUP_TTL_SECONDS);
         }
 
         let chat_id = update
@@ -371,7 +413,9 @@ impl WeixinAdapter {
 
     /// Send a single text chunk with retry logic.
     async fn send_text_chunk(&self, chat_id: &str, text: &str) -> anyhow::Result<SendResult> {
-        let context_token = self.context_tokens.lock().await.get(chat_id).cloned();
+        // Look up context_token with composite key (account_id:peer_id).
+        let token_key = format!("{}:{}", self.account_id, chat_id);
+        let context_token = self.context_tokens.lock().await.get(&token_key).cloned();
 
         for attempt in 0..MAX_SEND_RETRIES {
             // Build hermes-agent compatible sendmessage body.
@@ -512,17 +556,33 @@ impl PlatformAdapter for WeixinAdapter {
                     }
                     Err(e) => {
                         consecutive_errors += 1;
+                        let err_str = e.to_string();
                         tracing::warn!(
-                            error = %e,
+                            error = %err_str,
                             consecutive = consecutive_errors,
                             "poll error"
                         );
-                        if consecutive_errors >= 3 {
-                            // Back off for 30s after 3 consecutive errors.
+
+                        // Determine backoff based on error type.
+                        if err_str.contains("[session_expired]") {
+                            // Session expired/stale — long backoff to avoid hammering.
+                            tracing::warn!(
+                                backoff_secs = SESSION_EXPIRED_BACKOFF_SECONDS,
+                                "session expired, entering long backoff"
+                            );
+                            sleep(Duration::from_secs(SESSION_EXPIRED_BACKOFF_SECONDS)).await;
+                        } else if err_str.contains("[rate_limited]") {
+                            // Rate-limited — use multiplied backoff.
+                            let delay = SEND_RETRY_DELAY * RATE_LIMIT_RETRY_MULTIPLIER * (consecutive_errors.min(10));
+                            tracing::warn!(delay_ms = delay.as_millis(), "rate limited, backing off");
+                            sleep(delay).await;
+                        } else if consecutive_errors >= 3 {
+                            // Generic errors — exponential backoff capped at 30s.
                             sleep(Duration::from_secs(30)).await;
                         } else {
                             sleep(Duration::from_secs(2)).await;
                         }
+
                         // Yield the error to let the runner decide.
                         yield Err(e);
                     }

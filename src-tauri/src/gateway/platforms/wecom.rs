@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_stream::stream;
 use futures::stream::SplitSink;
@@ -29,6 +29,12 @@ type WsSink = SplitSink<WsStream, Message>;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+/// TTL for message dedup entries (seconds).
+const DEDUP_TTL_SECONDS: u64 = 300;
+/// Subscribe response wait timeout.
+const SUBSCRIBE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Maximum outbound message length for WeCom markdown.
+const MAX_WECOM_MESSAGE_LENGTH: usize = 4000;
 
 /// WeCom AI Bot WebSocket adapter.
 pub struct WecomAdapter {
@@ -41,6 +47,8 @@ pub struct WecomAdapter {
     reader_handle: Option<JoinHandle<()>>,
     /// Last req_id per chat_id — used for aibot_respond_msg in group chats.
     last_req_ids: Arc<Mutex<HashMap<String, String>>>,
+    /// Message ID dedup map with TTL: msg_id → insert time.
+    seen_messages: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 impl WecomAdapter {
@@ -54,6 +62,7 @@ impl WecomAdapter {
             inbound_rx: Arc::new(Mutex::new(Some(inbound_rx))),
             reader_handle: None,
             last_req_ids: Arc::new(Mutex::new(HashMap::new())),
+            seen_messages: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -183,13 +192,60 @@ impl WecomAdapter {
 impl PlatformAdapter for WecomAdapter {
     async fn connect(&mut self) -> anyhow::Result<()> {
         let ws_stream = self.connect_ws().await?;
-        let (mut sink, stream) = ws_stream.split();
+        let (mut sink, mut stream) = ws_stream.split();
 
         // Send subscribe command.
         let subscribe_msg = self.subscribe_payload().to_string();
         sink.send(Message::Text(subscribe_msg.into()))
             .await
             .map_err(|e| anyhow::anyhow!("failed to send subscribe: {e}"))?;
+
+        // Wait for subscribe response to verify authentication.
+        let subscribe_result = timeout(SUBSCRIBE_RESPONSE_TIMEOUT, stream.next()).await;
+        match subscribe_result {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let v: Value = serde_json::from_str(&text).unwrap_or_default();
+                let command = v.get("command").and_then(|c| c.as_str()).unwrap_or("");
+                let errcode = v
+                    .get("data")
+                    .and_then(|d| d.get("errcode"))
+                    .and_then(|e| e.as_i64())
+                    .unwrap_or(-1);
+
+                if command == "aibot_subscribe" && errcode != 0 {
+                    let errmsg = v
+                        .get("data")
+                        .and_then(|d| d.get("errmsg"))
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown");
+                    anyhow::bail!(
+                        "subscribe authentication failed: errcode={errcode} errmsg={errmsg}"
+                    );
+                }
+                tracing::info!(
+                    command,
+                    errcode,
+                    "subscribe response received, authenticated"
+                );
+            }
+            Ok(Some(Ok(_))) => {
+                // Non-text frame — treat as success (ping/pong).
+                tracing::debug!("subscribe: received non-text frame, assuming success");
+            }
+            Ok(Some(Err(e))) => {
+                anyhow::bail!("WebSocket error while waiting for subscribe response: {e}");
+            }
+            Ok(None) => {
+                anyhow::bail!("WebSocket closed before subscribe response");
+            }
+            Err(_) => {
+                // Timeout — log warning but continue (old servers may not respond).
+                tracing::warn!(
+                    "subscribe response timed out after {:?}, proceeding anyway",
+                    SUBSCRIBE_RESPONSE_TIMEOUT
+                );
+            }
+        }
 
         // Store sink.
         *self.ws_sink.lock().await = Some(sink);
@@ -200,6 +256,7 @@ impl PlatformAdapter for WecomAdapter {
         // Start reader task with debounce for text aggregation.
         let inbound_tx = self.inbound_tx.clone();
         let last_req_ids = Arc::clone(&self.last_req_ids);
+        let seen_messages = Arc::clone(&self.seen_messages);
         self.reader_handle = Some(tokio::spawn(async move {
             let mut stream = stream;
             // Debounce buffer: accumulate messages from the same sender within a window.
@@ -243,6 +300,24 @@ impl PlatformAdapter for WecomAdapter {
                 match frame {
                     Some(Ok(Message::Text(text))) => {
                         if let Some(msg) = WecomAdapter::parse_message(&text) {
+                            // Dedup by msg_id with TTL.
+                            if !msg.message_id.is_empty() {
+                                let now = Instant::now();
+                                let mut seen = seen_messages.lock().await;
+                                if let Some(t) = seen.get(&msg.message_id) {
+                                    if now.duration_since(*t).as_secs() < DEDUP_TTL_SECONDS {
+                                        continue; // Duplicate, skip.
+                                    }
+                                }
+                                seen.insert(msg.message_id.clone(), now);
+                                // Evict expired entries.
+                                if seen.len() > 2000 {
+                                    seen.retain(|_, t| {
+                                        now.duration_since(*t).as_secs() < DEDUP_TTL_SECONDS
+                                    });
+                                }
+                            }
+
                             // Check if we should merge with pending.
                             if let Some(ref mut p) = pending {
                                 if p.sender_id == msg.sender_id && p.chat_id == msg.chat_id {
@@ -318,6 +393,14 @@ impl PlatformAdapter for WecomAdapter {
         // Check if we have a req_id for this chat (group reply routing).
         let req_id = self.last_req_ids.lock().await.get(chat_id).cloned();
 
+        // Truncate to WeCom max markdown length.
+        let content = if text.chars().count() > MAX_WECOM_MESSAGE_LENGTH {
+            let truncated: String = text.chars().take(MAX_WECOM_MESSAGE_LENGTH - 20).collect();
+            format!("{truncated}\n\n…(已截断)")
+        } else {
+            text.to_string()
+        };
+
         let payload = if let Some(ref rid) = req_id {
             // Group chat: must use aibot_respond_msg with req_id.
             json!({
@@ -326,9 +409,9 @@ impl PlatformAdapter for WecomAdapter {
                     "req_id": rid,
                     "msg": {
                         "content": {
-                            "text": text
+                            "text": content
                         },
-                        "msg_type": "text"
+                        "msg_type": "markdown"
                     }
                 }
             })
@@ -340,9 +423,9 @@ impl PlatformAdapter for WecomAdapter {
                     "chat_id": chat_id,
                     "msg": {
                         "content": {
-                            "text": text
+                            "text": content
                         },
-                        "msg_type": "text"
+                        "msg_type": "markdown"
                     }
                 }
             })
