@@ -227,6 +227,12 @@ function getCategoryMeta(t: TFunc) {
       icon: UserCog,
     },
     {
+      key: "gateway" as SettingsCategory,
+      title: t("settings.category.gateway"),
+      description: t("settings.category.gatewayDesc"),
+      icon: MessageSquare,
+    },
+    {
       key: "agents" as SettingsCategory,
       title: t("settings.category.agents"),
       description: t("settings.category.agentsDesc"),
@@ -255,12 +261,6 @@ function getCategoryMeta(t: TFunc) {
       title: t("settings.category.terminal"),
       description: t("settings.category.terminalDesc"),
       icon: TerminalSquare,
-    },
-    {
-      key: "gateway" as SettingsCategory,
-      title: t("settings.category.gateway"),
-      description: t("settings.category.gatewayDesc"),
-      icon: MessageSquare,
     },
     {
       key: "about" as SettingsCategory,
