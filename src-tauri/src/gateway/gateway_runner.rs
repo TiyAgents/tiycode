@@ -176,6 +176,9 @@ async fn run_with_adapter(
     let approval_rx = Arc::new(tokio::sync::Mutex::new(approval_rx));
 
     // Main message loop with config change detection.
+    // Re-snapshot mtime right before entering the loop to avoid false positives
+    // from the outer loop's read vs inner loop's first check.
+    *last_mtime = file_mtime(config_path);
     let exit_reason;
     {
         let mut messages = adapter.poll_messages();
