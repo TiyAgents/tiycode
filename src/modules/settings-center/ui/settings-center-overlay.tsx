@@ -1175,6 +1175,7 @@ function GeneralSettingsPanel({
 
   const [cliInstalled, setCliInstalled] = useState(false);
   const [cliLoading, setCliLoading] = useState(false);
+  const [cliError, setCliError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isTauri()) {
@@ -1185,6 +1186,7 @@ function GeneralSettingsPanel({
   const handleToggleCli = async () => {
     if (!isTauri()) return;
     setCliLoading(true);
+    setCliError(null);
     try {
       if (cliInstalled) {
         await invoke<string>("uninstall_cli_from_path");
@@ -1193,8 +1195,14 @@ function GeneralSettingsPanel({
         await invoke<string>("install_cli_in_path");
         setCliInstalled(true);
       }
-    } catch {
-      // User cancelled or error — no-op, state stays unchanged.
+    } catch (error) {
+      // User-cancelled operations get a friendly message from the backend;
+      // other errors are surfaced so the user knows something went wrong.
+      const msg = typeof error === "string" ? error : String(error);
+      if (!msg.includes("cancelled by user") && !msg.includes("User canceled") && !msg.includes("(-128)")) {
+        console.error("CLI toggle failed:", error);
+        setCliError(msg);
+      }
     } finally {
       setCliLoading(false);
     }
@@ -1436,6 +1444,9 @@ function GeneralSettingsPanel({
             </Button>
           }
         />
+        {cliError && (
+          <p className="px-1 text-xs text-app-danger">{cliError}</p>
+        )}
       </SettingsSection>
     </div>
   );

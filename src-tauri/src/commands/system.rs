@@ -1188,11 +1188,19 @@ fn try_create_symlink(target: &Path, link: &Path) -> Result<(), std::io::Error> 
 }
 
 #[cfg(target_os = "macos")]
+fn escape_applescript_single_quote(s: &str) -> String {
+    // In AppleScript single-quoted strings, a single quote is escaped by
+    // closing the string, emitting an escaped single quote, and reopening:
+    //   'it' -> 'it'\''s'  (renders: it's)
+    s.replace('\'', "'\\''")
+}
+
+#[cfg(target_os = "macos")]
 fn create_symlink_privileged(target: &Path, link: &Path) -> Result<(), String> {
     let script = format!(
         "do shell script \"ln -sf '{}' '{}'\" with administrator privileges",
-        target.display(),
-        link.display()
+        escape_applescript_single_quote(&target.display().to_string()),
+        escape_applescript_single_quote(&link.display().to_string()),
     );
 
     let output = Command::new("osascript")
@@ -1240,7 +1248,7 @@ fn create_symlink_privileged(target: &Path, link: &Path) -> Result<(), String> {
 fn remove_cli_link_privileged(link: &Path) -> Result<(), String> {
     let script = format!(
         "do shell script \"rm -f '{}'\" with administrator privileges",
-        link.display()
+        escape_applescript_single_quote(&link.display().to_string()),
     );
 
     let output = Command::new("osascript")

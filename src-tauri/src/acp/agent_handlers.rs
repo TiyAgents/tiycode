@@ -39,6 +39,11 @@ pub async fn serve_connection(
         .on_receive_request(
             {
                 async move |_request: AuthenticateRequest, responder, _cx| {
+                    // TODO(security): implement authentication — currently any local
+                    // process on the loopback interface can connect and perform all
+                    // supported operations. This is acceptable only for single-user
+                    // desktop scenarios; add token or capability-based auth before
+                    // exposing ACP beyond localhost.
                     responder.respond(AuthenticateResponse::new())
                 }
             },
