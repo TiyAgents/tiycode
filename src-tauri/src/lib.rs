@@ -2,6 +2,7 @@ pub mod acp;
 mod commands;
 pub mod core;
 pub mod extensions;
+pub mod gateway;
 pub mod ipc;
 pub mod model;
 pub mod persistence;
@@ -253,6 +254,47 @@ pub fn run_acp_http(addr: &str) -> anyhow::Result<()> {
     })
 }
 
+pub fn run_gateway(config_path: Option<&str>) -> anyhow::Result<()> {
+    let tiy_home = tiy_home();
+    init_directories(&tiy_home)?;
+    init_logging();
+
+    let config_file = config_path
+        .map(PathBuf::from)
+        .unwrap_or_else(gateway::config::default_config_path);
+    let config = gateway::config::GatewayConfig::load(&config_file)?;
+
+    tracing::info!(
+        path = %tiy_home.display(),
+        platform = %config.platform,
+        config_file = %config_file.display(),
+        "tiy IM gateway starting"
+    );
+
+    let db_path = tiy_home.join("db/tiycode.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async move {
+        let pool = persistence::init_database(&db_path).await?;
+        let state = gateway::GatewayState::new_headless(pool);
+        if let Err(error) = state.prompt_command_manager.ensure_builtin_seeded() {
+            tracing::warn!(error = %error, "failed to seed builtin prompts during gateway startup");
+        }
+        if let Err(error) = state.workspace_manager.validate_all().await {
+            tracing::warn!(error = %error, "gateway startup workspace validation failed");
+        }
+        if let Err(error) = state.thread_manager.recover_interrupted_runs().await {
+            tracing::warn!(error = %error, "gateway startup run recovery failed");
+        }
+        if let Err(error) = state.terminal_manager.recover_orphaned_sessions().await {
+            tracing::warn!(error = %error, "gateway startup terminal session recovery failed");
+        }
+        gateway::run(state, config).await
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let tiy_home = tiy_home();
@@ -445,6 +487,11 @@ pub fn run() {
             commands::terminal::terminal_close,
             commands::terminal::terminal_list,
             commands::terminal::terminal_list_available_shells,
+            // Gateway
+            commands::gateway::gateway_start,
+            commands::gateway::gateway_stop,
+            commands::gateway::gateway_restart,
+            commands::gateway::gateway_status,
         ])
         .setup(move |app| {
             tracing::info!(elapsed_ms = build_start.elapsed().as_millis(), "⏱ [startup] builder configured (plugins + invoke_handler), entering setup()");
@@ -565,6 +612,7 @@ pub fn run() {
 
             app.manage(state);
             app.manage(desktop_runtime);
+            app.manage(crate::core::gateway_supervisor::GatewaySupervisorHandle::new());
 
             // 6. Startup recovery: validate workspaces + interrupt dangling runs.
             // Spawned asynchronously so the window can render without waiting for
@@ -594,6 +642,17 @@ pub fn run() {
                 tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "⏱ [startup-recovery] recover_orphaned_sessions");
 
                 tracing::info!(elapsed_ms = recovery_start.elapsed().as_millis(), "⏱ [startup-recovery] total");
+            });
+
+            // 7. Auto-start gateway if config exists (or restart on version upgrade).
+            let gateway_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let supervisor = gateway_handle.state::<crate::core::gateway_supervisor::GatewaySupervisorHandle>();
+                match supervisor.ensure_started().await {
+                    Ok(true) => tracing::info!("gateway process auto-started"),
+                    Ok(false) => tracing::debug!("gateway already running"),
+                    Err(e) => tracing::debug!(error = %e, "gateway auto-start skipped"),
+                }
             });
 
             tauri::async_runtime::spawn(async {

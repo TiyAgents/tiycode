@@ -2,6 +2,7 @@ pub mod agent;
 pub mod attachment;
 pub mod extensions;
 pub mod file;
+pub mod gateway;
 pub mod git;
 pub mod index;
 pub mod prompts;
