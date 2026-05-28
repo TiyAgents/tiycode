@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::{
     AgentCapabilities, AuthenticateRequest, AuthenticateResponse, CancelNotification,
-    CloseSessionRequest, CloseSessionResponse, Implementation, InitializeRequest,
-    InitializeResponse, ListSessionsRequest, ListSessionsResponse, LoadSessionRequest,
-    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest,
-    PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities,
-    SessionCloseCapabilities, SessionId, SessionListCapabilities, SessionResumeCapabilities,
-    StopReason,
+    CloseSessionRequest, CloseSessionResponse, ContentBlock, ContentChunk, Implementation,
+    InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse,
+    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
+    PromptCapabilities, PromptRequest, PromptResponse, ResumeSessionRequest, ResumeSessionResponse,
+    SessionCapabilities, SessionCloseCapabilities, SessionId, SessionListCapabilities,
+    SessionNotification, SessionResumeCapabilities, SessionUpdate, StopReason, TextContent,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Dispatch};
 use tokio::sync::broadcast;
@@ -292,6 +292,7 @@ async fn handle_prompt(
     pump_run_events(
         state,
         request.session_id.clone(),
+        record.thread_id,
         run_id,
         event_rx,
         connection,
@@ -302,6 +303,7 @@ async fn handle_prompt(
 async fn pump_run_events(
     state: AcpServerState,
     session_id: SessionId,
+    thread_id: String,
     run_id: String,
     mut event_rx: broadcast::Receiver<ThreadStreamEvent>,
     connection: ConnectionTo<Client>,
@@ -341,24 +343,60 @@ async fn pump_run_events(
                 }
             }
             Err(broadcast::error::RecvError::Lagged(dropped_events)) => {
-                let event = ThreadStreamEvent::StreamResyncRequired {
-                    run_id: run_id.clone(),
-                    dropped_events: dropped_events as u64,
-                };
-                for update in map_thread_event_to_acp(&event).updates {
-                    connection.send_notification(
-                        agent_client_protocol::schema::SessionNotification::new(
-                            session_id.clone(),
-                            update,
-                        ),
-                    )?;
-                }
+                state
+                    .agent_run_manager
+                    .cancel_run(&thread_id)
+                    .await
+                    .map_err(|error| {
+                        tracing::warn!(
+                            run_id = %run_id,
+                            error = %error,
+                            "failed to cancel ACP run after lagged stream"
+                        );
+                        to_acp_error(error)
+                    })?;
+                send_lagged_stream_cancel_notification(
+                    &connection,
+                    &session_id,
+                    &run_id,
+                    dropped_events,
+                )?;
+                return Ok(PromptResponse::new(StopReason::Cancelled));
             }
             Err(broadcast::error::RecvError::Closed) => {
                 return Ok(PromptResponse::new(StopReason::Refusal));
             }
         }
     }
+}
+
+fn lagged_stream_cancel_message(dropped_events: u64) -> String {
+    format!(
+        "ACP event stream lagged and dropped {dropped_events} events; cancelling this run to avoid missing approval or terminal state."
+    )
+}
+
+fn lagged_stream_cancel_update(dropped_events: u64) -> SessionUpdate {
+    SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
+        lagged_stream_cancel_message(dropped_events),
+    ))))
+}
+
+fn send_lagged_stream_cancel_notification(
+    connection: &ConnectionTo<Client>,
+    session_id: &SessionId,
+    run_id: &str,
+    dropped_events: u64,
+) -> Result<(), agent_client_protocol::Error> {
+    tracing::warn!(
+        run_id,
+        dropped_events,
+        "ACP event stream lagged; cancelling run to avoid missing approval state"
+    );
+    connection.send_notification(SessionNotification::new(
+        session_id.clone(),
+        lagged_stream_cancel_update(dropped_events),
+    ))
 }
 
 async fn reject_approval_if_pending(state: &AcpServerState, event: &ThreadStreamEvent) {
@@ -451,4 +489,26 @@ async fn canonicalize_existing(path: &Path) -> Result<PathBuf, agent_client_prot
 
 fn to_acp_error(error: impl std::fmt::Display) -> agent_client_protocol::Error {
     agent_client_protocol::util::internal_error(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lagged_stream_cancel_update_explains_hard_cancel_policy() {
+        let update = lagged_stream_cancel_update(3);
+
+        match update {
+            SessionUpdate::AgentThoughtChunk(chunk) => match chunk.content {
+                ContentBlock::Text(text) => {
+                    assert!(text.text.contains("dropped 3 events"));
+                    assert!(text.text.contains("cancelling this run"));
+                    assert!(text.text.contains("missing approval"));
+                }
+                other => panic!("unexpected content block: {other:?}"),
+            },
+            other => panic!("unexpected session update: {other:?}"),
+        }
+    }
 }
