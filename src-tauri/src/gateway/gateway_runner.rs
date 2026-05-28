@@ -17,6 +17,7 @@ use crate::gateway::platforms::weixin::WeixinAdapter;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::thread::MessageAttachmentDto;
 use crate::model::workspace::WorkspaceAddInput;
+use crate::persistence::repo::thread_repo;
 
 use super::approval_bridge;
 use super::command_router::{self, GatewayCommand};
@@ -525,8 +526,17 @@ async fn run_agent_prompt(
 ) -> anyhow::Result<()> {
     let thread_id = session.require_thread()?.to_string();
 
-    // Resolve model plan.
-    let profile_id = agent_session_model_plan::resolve_active_profile_id(&state.pool).await?;
+    // Resolve model plan: prefer thread's stored profile_id, fallback to global active profile.
+    let thread_profile_id = thread_repo::find_by_id(&state.pool, &thread_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|r| r.profile_id)
+        .filter(|id| !id.is_empty());
+    let profile_id = match thread_profile_id {
+        Some(id) => Some(id),
+        None => agent_session_model_plan::resolve_active_profile_id(&state.pool).await?,
+    };
     let model_plan = match &profile_id {
         Some(pid) => agent_session_model_plan::build_model_plan_from_profile(&state.pool, pid)
             .await
