@@ -119,6 +119,6 @@ pub async fn run_stdio(state: AcpServerState) -> Result<(), agent_client_protoco
     transport::run_stdio(state).await
 }
 
-pub fn spawn_http_server(state: AcpServerState) {
-    transport::spawn_http_server_if_configured(state);
+pub async fn run_http(state: AcpServerState, addr: &str) -> anyhow::Result<()> {
+    transport::run_http_server_standalone(state, addr).await
 }

@@ -358,6 +358,10 @@ const en: Record<TranslationKey, string> = {
   // ── Settings: General Panel ────────────────────────────────
   "settings.general.newProfile": "New Profile",
   "settings.general.preferences": "Preferences",
+  "settings.general.cliLabel": "CLI in PATH",
+  "settings.general.cliDesc": "Install the `tiycode` command to /usr/local/bin so you can run the ACP (Agent Communication Protocol) server from any terminal via `tiycode acp --stdio`.",
+  "settings.general.cliInstall": "Install",
+  "settings.general.cliUninstall": "Uninstall",
   "settings.general.themeLabel": "Theme",
   "settings.general.themeDesc": "Use the system appearance or lock the app to light or dark mode.",
   "settings.general.languageLabel": "Language",

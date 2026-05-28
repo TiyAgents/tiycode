@@ -1173,11 +1173,64 @@ function GeneralSettingsPanel({
 
   const clampWebSearchMaxResults = (value: number) => Math.min(20, Math.max(1, Math.round(value)));
 
+  const [cliInstalled, setCliInstalled] = useState(false);
+  const [cliLoading, setCliLoading] = useState(false);
+
+  useEffect(() => {
+    if (isTauri()) {
+      invoke<boolean>("is_cli_installed").then(setCliInstalled).catch(() => {});
+    }
+  }, []);
+
+  const handleToggleCli = async () => {
+    if (!isTauri()) return;
+    setCliLoading(true);
+    try {
+      if (cliInstalled) {
+        await invoke<string>("uninstall_cli_from_path");
+        setCliInstalled(false);
+      } else {
+        await invoke<string>("install_cli_in_path");
+        setCliInstalled(true);
+      }
+    } catch {
+      // User cancelled or error — no-op, state stays unchanged.
+    } finally {
+      setCliLoading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeading title={t("settings.category.general")} description={description} />
 
       <SettingsSection title={t("settings.general.preferences")}>
+        <SettingsRow
+          label={t("settings.general.cliLabel")}
+          description={t("settings.general.cliDesc")}
+          control={
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 rounded-lg border-app-border bg-app-surface-muted px-3 text-[12px] font-medium text-app-foreground shadow-none hover:border-app-border-strong hover:bg-app-surface-hover"
+              disabled={cliLoading}
+              onClick={handleToggleCli}
+            >
+              {cliInstalled ? (
+                <>
+                  <Check className="size-3.5" />
+                  {t("settings.general.cliUninstall")}
+                </>
+              ) : (
+                <>
+                  <TerminalSquare className="size-3.5" />
+                  {t("settings.general.cliInstall")}
+                </>
+              )}
+            </Button>
+          }
+        />
+        <SectionDivider />
         <SettingsRow
           label={t("settings.general.themeLabel")}
           description={t("settings.general.themeDesc")}
@@ -1874,6 +1927,7 @@ function AboutSettingsPanel({
   const appName = runtime?.appName ?? "TiyCode";
   const platformSummary = runtime?.platform ?? "Unknown platform";
   const architectureSummary = runtime?.arch ?? "Unknown architecture";
+
   const aboutActions = [
     { href: "https://tiy.ai", label: t("settings.about.officialWebsite") },
     { href: "https://github.com/tiylabs/tiycode/blob/master/LICENSE", label: t("settings.about.license") },

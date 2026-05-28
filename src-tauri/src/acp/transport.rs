@@ -12,37 +12,22 @@ use futures::{Sink, SinkExt, Stream, StreamExt};
 use crate::acp::agent_handlers;
 use crate::acp::AcpServerState;
 
-const ACP_HTTP_LISTEN_ENV: &str = "TIY_ACP_HTTP_LISTEN";
-
 pub async fn run_stdio(state: AcpServerState) -> Result<(), agent_client_protocol::Error> {
     agent_handlers::serve_connection(state, agent_client_protocol_tokio::Stdio::new()).await
 }
 
-pub fn spawn_http_server_if_configured(state: AcpServerState) {
-    let raw_addr = std::env::var(ACP_HTTP_LISTEN_ENV).ok();
-    let addr = match parse_http_listen_addr(raw_addr.as_deref()) {
-        Ok(Some(addr)) => addr,
-        Ok(None) => return,
-        Err(error) => {
-            tracing::warn!(error = %error, "invalid ACP HTTP listen configuration");
-            return;
-        }
-    };
-
-    tokio::spawn(async move {
-        if let Err(error) = run_http_server(state, addr).await {
-            tracing::error!(error = %error, "ACP HTTP server stopped with error");
-        }
-    });
+pub async fn run_http_server_standalone(
+    state: AcpServerState,
+    raw_addr: &str,
+) -> anyhow::Result<()> {
+    let addr = parse_http_listen_addr(raw_addr).map_err(|error| anyhow::anyhow!("{error}"))?;
+    run_http_server(state, addr).await
 }
 
-fn parse_http_listen_addr(raw_addr: Option<&str>) -> Result<Option<SocketAddr>, String> {
-    let Some(raw_addr) = raw_addr else {
-        return Ok(None);
-    };
+fn parse_http_listen_addr(raw_addr: &str) -> Result<SocketAddr, String> {
     let raw_addr = raw_addr.trim();
-    if raw_addr.is_empty() || raw_addr.eq_ignore_ascii_case("off") {
-        return Ok(None);
+    if raw_addr.is_empty() {
+        return Err("ACP HTTP listen address must not be empty".to_string());
     }
 
     let addr = raw_addr
@@ -54,7 +39,7 @@ fn parse_http_listen_addr(raw_addr: Option<&str>) -> Result<Option<SocketAddr>, 
         ));
     }
 
-    Ok(Some(addr))
+    Ok(addr)
 }
 
 async fn run_http_server(state: AcpServerState, addr: SocketAddr) -> anyhow::Result<()> {
@@ -138,32 +123,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_http_listen_addr_disables_empty_and_off_values() {
-        assert_eq!(parse_http_listen_addr(None).unwrap(), None);
-        assert_eq!(parse_http_listen_addr(Some("")).unwrap(), None);
-        assert_eq!(parse_http_listen_addr(Some("   ")).unwrap(), None);
-        assert_eq!(parse_http_listen_addr(Some("off")).unwrap(), None);
-        assert_eq!(parse_http_listen_addr(Some("OFF")).unwrap(), None);
-        assert_eq!(parse_http_listen_addr(Some("Off")).unwrap(), None);
+    fn parse_http_listen_addr_rejects_empty() {
+        assert!(parse_http_listen_addr("").is_err());
+        assert!(parse_http_listen_addr("   ").is_err());
     }
 
     #[test]
     fn parse_http_listen_addr_accepts_loopback_addresses() {
         assert_eq!(
-            parse_http_listen_addr(Some("127.0.0.1:0")).unwrap(),
-            Some("127.0.0.1:0".parse().unwrap())
+            parse_http_listen_addr("127.0.0.1:0").unwrap(),
+            "127.0.0.1:0".parse().unwrap()
         );
         assert_eq!(
-            parse_http_listen_addr(Some("[::1]:4321")).unwrap(),
-            Some("[::1]:4321".parse().unwrap())
+            parse_http_listen_addr("[::1]:4321").unwrap(),
+            "[::1]:4321".parse().unwrap()
         );
     }
 
     #[test]
     fn parse_http_listen_addr_rejects_invalid_and_non_loopback_addresses() {
-        assert!(parse_http_listen_addr(Some("127.0.0.1:not-a-port")).is_err());
-        assert!(parse_http_listen_addr(Some("0.0.0.0:3000")).is_err());
-        assert!(parse_http_listen_addr(Some("192.168.1.10:3000")).is_err());
-        assert!(parse_http_listen_addr(Some("[::ffff:127.0.0.1]:3000")).is_err());
+        assert!(parse_http_listen_addr("127.0.0.1:not-a-port").is_err());
+        assert!(parse_http_listen_addr("0.0.0.0:3000").is_err());
+        assert!(parse_http_listen_addr("192.168.1.10:3000").is_err());
+        assert!(parse_http_listen_addr("[::ffff:127.0.0.1]:3000").is_err());
     }
 }

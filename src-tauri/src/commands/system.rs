@@ -3,7 +3,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::fs;
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
@@ -1010,6 +1010,233 @@ fn containing_directory_path(target_path: &str) -> Result<String, String> {
     };
 
     Ok(directory.to_string_lossy().into_owned())
+}
+
+// ---------------------------------------------------------------------------
+// CLI-in-PATH installation (symlink to /usr/local/bin/tiycode)
+// ---------------------------------------------------------------------------
+
+/// The well-known symlink path where `tiycode` is exposed to the user's shell.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const CLI_SYMLINK_PATH: &str = "/usr/local/bin/tiycode";
+
+/// Check whether the CLI symlink is already installed and points to the current binary.
+#[tauri::command]
+pub fn is_cli_installed() -> bool {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let link_path = Path::new(CLI_SYMLINK_PATH);
+        if !link_path.exists() {
+            return false;
+        }
+        // Verify the symlink target matches the current binary.
+        match std::fs::read_link(link_path) {
+            Ok(target) => match std::env::current_exe() {
+                Ok(current) => target == current,
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, check if the current binary's directory is in PATH
+        // and the binary is accessible as `tiycode`.
+        if let Ok(current_exe) = std::env::current_exe() {
+            if let Some(bin_dir) = current_exe.parent() {
+                if let Ok(path_var) = std::env::var("PATH") {
+                    return std::env::split_paths(&path_var).any(|p| p == bin_dir);
+                }
+            }
+        }
+        false
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        false
+    }
+}
+
+/// Install the CLI by creating a symlink at `/usr/local/bin/tiycode`.
+/// On macOS, uses `osascript` to prompt for admin privileges when needed.
+#[tauri::command]
+pub fn install_cli_in_path() -> Result<String, String> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let current_exe = std::env::current_exe()
+            .map_err(|e| format!("Failed to determine current binary path: {e}"))?;
+
+        let link_path = PathBuf::from(CLI_SYMLINK_PATH);
+
+        // If already correctly installed, return early.
+        if link_path.exists() || link_path.symlink_metadata().is_ok() {
+            if let Ok(target) = std::fs::read_link(&link_path) {
+                if target == current_exe {
+                    return Ok("CLI is already installed.".into());
+                }
+            }
+            // Remove stale symlink / file before creating a new one.
+            remove_cli_link_privileged(&link_path)?;
+        }
+
+        // Try direct symlink first (works if user owns /usr/local/bin).
+        if try_create_symlink(&current_exe, &link_path).is_ok() {
+            return Ok(format!(
+                "CLI installed successfully: {} → {}",
+                link_path.display(),
+                current_exe.display()
+            ));
+        }
+
+        // Fall back to privileged creation via osascript (macOS) or pkexec (Linux).
+        create_symlink_privileged(&current_exe, &link_path)?;
+
+        Ok(format!(
+            "CLI installed successfully: {} → {}",
+            link_path.display(),
+            current_exe.display()
+        ))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Err("CLI PATH installation on Windows is not yet supported. Please add the application directory to your PATH manually.".into())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Err("CLI PATH installation is not supported on this platform.".into())
+    }
+}
+
+/// Uninstall the CLI symlink.
+#[tauri::command]
+pub fn uninstall_cli_from_path() -> Result<String, String> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let link_path = PathBuf::from(CLI_SYMLINK_PATH);
+        if !link_path.exists() && link_path.symlink_metadata().is_err() {
+            return Ok("CLI is not installed.".into());
+        }
+
+        // Try direct removal first.
+        if std::fs::remove_file(&link_path).is_ok() {
+            return Ok("CLI uninstalled successfully.".into());
+        }
+
+        // Fall back to privileged removal.
+        remove_cli_link_privileged(&link_path)?;
+        Ok("CLI uninstalled successfully.".into())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Err("CLI PATH uninstallation on Windows is not yet supported.".into())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Err("CLI PATH uninstallation is not supported on this platform.".into())
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn try_create_symlink(target: &Path, link: &Path) -> Result<(), std::io::Error> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(target_os = "macos")]
+fn create_symlink_privileged(target: &Path, link: &Path) -> Result<(), String> {
+    let script = format!(
+        "do shell script \"ln -sf '{}' '{}'\" with administrator privileges",
+        target.display(),
+        link.display()
+    );
+
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|e| format!("Failed to launch privilege escalation: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.contains("User canceled") || stderr.contains("(-128)") {
+            Err("Installation cancelled by user.".into())
+        } else {
+            Err(format!(
+                "Failed to create symlink with admin privileges: {stderr}"
+            ))
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", not(target_os = "macos")))]
+fn create_symlink_privileged(target: &Path, link: &Path) -> Result<(), String> {
+    let output = Command::new("pkexec")
+        .args([
+            "ln",
+            "-sf",
+            &target.to_string_lossy(),
+            &link.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|e| format!("Failed to launch privilege escalation: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(format!(
+            "Failed to create symlink with elevated privileges: {stderr}"
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn remove_cli_link_privileged(link: &Path) -> Result<(), String> {
+    let script = format!(
+        "do shell script \"rm -f '{}'\" with administrator privileges",
+        link.display()
+    );
+
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|e| format!("Failed to launch privilege escalation: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.contains("User canceled") || stderr.contains("(-128)") {
+            Err("Operation cancelled by user.".into())
+        } else {
+            Err(format!(
+                "Failed to remove old symlink with admin privileges: {stderr}"
+            ))
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", not(target_os = "macos")))]
+fn remove_cli_link_privileged(link: &Path) -> Result<(), String> {
+    let output = Command::new("pkexec")
+        .args(["rm", "-f", &link.to_string_lossy()])
+        .output()
+        .map_err(|e| format!("Failed to launch privilege escalation: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(format!(
+            "Failed to remove symlink with elevated privileges: {stderr}"
+        ))
+    }
 }
 
 #[cfg(test)]
