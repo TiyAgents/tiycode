@@ -379,13 +379,35 @@ async fn dispatch_command(
         }
 
         GatewayCommand::Status => {
-            let ws_name = session
-                .current_workspace_id
-                .as_deref()
-                .unwrap_or("(未设置)");
-            let thread_name = session.current_thread_id.as_deref().unwrap_or("(未设置)");
+            let ws_display = match session.current_workspace_id.as_deref() {
+                Some(id) => {
+                    use crate::persistence::repo::workspace_repo;
+                    workspace_repo::find_by_id(&state.pool, id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|w| w.name)
+                        .unwrap_or_else(|| id.to_string())
+                }
+                None => "(未设置)".to_string(),
+            };
+            let thread_display = match session.current_thread_id.as_deref() {
+                Some(id) => thread_repo::find_by_id(&state.pool, id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|t| {
+                        if t.title.is_empty() {
+                            "(无标题)".to_string()
+                        } else {
+                            t.title
+                        }
+                    })
+                    .unwrap_or_else(|| id.to_string()),
+                None => "(未设置)".to_string(),
+            };
             let status = format!(
-                "📊 当前状态:\n  Workspace: {ws_name}\n  会话: {thread_name}\n  状态: {:?}",
+                "📊 当前状态:\n  Workspace: {ws_display}\n  会话: {thread_display}\n  状态: {:?}",
                 session.state
             );
             adapter.send_text(chat_id, &status).await?;
