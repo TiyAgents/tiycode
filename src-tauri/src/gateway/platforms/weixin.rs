@@ -181,6 +181,7 @@ impl WeixinAdapter {
 
     /// Perform a single long-poll request to getupdates.
     async fn poll_once(&self) -> anyhow::Result<Vec<InboundMessage>> {
+        tracing::debug!("starting getupdates long-poll");
         let sync_buf = self.sync_buf.lock().await.clone();
         let mut body = json!({
             "timeout": POLL_TIMEOUT_SECONDS * 1000,
@@ -545,6 +546,7 @@ impl PlatformAdapter for WeixinAdapter {
         &self,
     ) -> Pin<Box<dyn Stream<Item = anyhow::Result<InboundMessage>> + Send + '_>> {
         Box::pin(stream! {
+            tracing::info!("poll_messages stream started, beginning long-poll loop");
             let mut consecutive_errors = 0u32;
             loop {
                 match self.poll_once().await {
