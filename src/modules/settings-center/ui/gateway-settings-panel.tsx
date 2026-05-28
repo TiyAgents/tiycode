@@ -3,7 +3,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { AlertCircle, Play, Power, RefreshCw, QrCode, LogOut, Save } from "lucide-react";
+import { AlertCircle, Play, RefreshCw, QrCode, LogOut, Save } from "lucide-react";
 import { useT } from "@/i18n";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -302,16 +302,10 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
                   {t("settings.gateway.start")}
                 </Button>
               ) : (
-                <>
-                  <Button size="sm" variant="outline" onClick={handleStop} disabled={loading}>
-                    <Power className="h-3.5 w-3.5 mr-1" />
-                    {t("settings.gateway.stop")}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={handleRestart} disabled={loading}>
-                    <RefreshCw className="h-3.5 w-3.5 mr-1" />
-                    {t("settings.gateway.restart")}
-                  </Button>
-                </>
+                <Button size="sm" variant="outline" onClick={handleRestart} disabled={loading}>
+                  <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                  {t("settings.gateway.restart")}
+                </Button>
               )}
             </div>
           }
