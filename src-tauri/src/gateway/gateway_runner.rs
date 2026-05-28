@@ -269,6 +269,7 @@ async fn run_with_adapter(
                         SessionState::AwaitingWorkspaceSelection | SessionState::AwaitingThreadSelection
                     ) {
                         if let Ok(index) = msg.text.trim().parse::<usize>() {
+                            let _ = adapter.send_typing(&reply_to).await;
                             handle_number_selection(
                                 &state,
                                 &mut session,
@@ -285,6 +286,12 @@ async fn run_with_adapter(
 
                     // Parse and dispatch command.
                     let cmd = command_router::parse(&msg.text);
+
+                    // Show typing indicator for command-level interactions too
+                    // (agent prompts have their own periodic refresh inside
+                    // run_agent_prompt; commands are quick so a single send covers them).
+                    let _ = adapter.send_typing(&reply_to).await;
+
                     let response = dispatch_command(
                         &state,
                         &mut session,

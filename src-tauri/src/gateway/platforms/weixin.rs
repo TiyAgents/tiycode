@@ -475,12 +475,25 @@ impl WeixinAdapter {
                 errcode,
                 errmsg,
                 chat_id,
+                has_context_token = context_token.is_some(),
                 "getconfig failed, typing unavailable"
             );
             return None;
         }
 
-        let ticket = data.get("typing_ticket").and_then(|v| v.as_str())?;
+        let ticket = match data.get("typing_ticket").and_then(|v| v.as_str()) {
+            Some(t) if !t.is_empty() => t,
+            _ => {
+                tracing::warn!(
+                    chat_id,
+                    has_context_token = context_token.is_some(),
+                    response_keys = ?data.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+                    "getconfig succeeded but no typing_ticket in response"
+                );
+                return None;
+            }
+        };
+        tracing::info!(chat_id, "getconfig: typing_ticket acquired");
         let ticket_str = ticket.to_string();
         self.typing_tickets
             .lock()
@@ -536,17 +549,20 @@ impl WeixinAdapter {
                 if code != 0 {
                     // Ticket may have expired — clear cache for this user.
                     self.typing_tickets.lock().await.remove(chat_id);
-                    tracing::debug!(
+                    tracing::warn!(
                         code,
                         ret,
                         errcode,
                         chat_id,
+                        status,
                         "sendtyping failed, cleared ticket cache"
                     );
+                } else {
+                    tracing::info!(chat_id, status, "sendtyping ok");
                 }
             }
             Err(e) => {
-                tracing::debug!(error = %e, "sendtyping request failed");
+                tracing::warn!(error = %e, chat_id, status, "sendtyping request failed");
             }
         }
 
