@@ -2,7 +2,13 @@
 //!
 //! Connects via WebSocket to `openws.work.weixin.qq.com`, authenticates with
 //! `aibot_subscribe`, maintains a 30s heartbeat, and handles message send/recv.
-//! Reference: hermes-agent/gateway/platforms/wecom.py
+//!
+//! Aligned with WeCom AI Bot WebSocket protocol:
+//! - Frame structure: `{ cmd, headers: { req_id }, body: { ... } }`
+//! - Commands: `ping`, `aibot_subscribe`, `aibot_msg_callback`, `aibot_callback`,
+//!   `aibot_respond_msg`, `aibot_send_msg`
+//! - Text extraction: text, mixed, voice, appmsg
+//! - Split-aware debounce: 600ms default, 2s for chunks ≥3900 chars
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -26,19 +32,40 @@ use crate::gateway::traits::{InboundMessage, Platform, PlatformAdapter, SendResu
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = SplitSink<WsStream, Message>;
 
+// ── Constants ────────────────────────────────────────────────────────
+
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
-/// TTL for message dedup entries (seconds).
-const DEDUP_TTL_SECONDS: u64 = 300;
-/// Subscribe response wait timeout.
-const SUBSCRIBE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum outbound message length for WeCom markdown.
 const MAX_WECOM_MESSAGE_LENGTH: usize = 4000;
+/// TTL for message dedup entries (seconds).
+const DEDUP_TTL_SECONDS: u64 = 300;
+/// Max dedup map size before eviction.
+const DEDUP_MAX_SIZE: usize = 1000;
+/// Default debounce window for text aggregation.
+const DEBOUNCE_DELAY_MS: u64 = 600;
+/// Extended debounce for chunks near the split threshold (≥3900 chars).
+const DEBOUNCE_SPLIT_DELAY_MS: u64 = 2000;
+/// WeCom client-side text split threshold (~4000 chars).
+const SPLIT_THRESHOLD: usize = 3900;
+/// Reconnect backoff sequence (seconds).
+const RECONNECT_BACKOFF: &[u64] = &[2, 5, 10, 30, 60];
+
+// ── Command constants ────────────────────────────────────────────────
+
+const CMD_SUBSCRIBE: &str = "aibot_subscribe";
+const CMD_PING: &str = "ping";
+const CMD_MSG_CALLBACK: &str = "aibot_msg_callback";
+const CMD_LEGACY_CALLBACK: &str = "aibot_callback";
+const CMD_EVENT_CALLBACK: &str = "aibot_event_callback";
+const CMD_RESPOND_MSG: &str = "aibot_respond_msg";
+const CMD_SEND_MSG: &str = "aibot_send_msg";
 
 /// WeCom AI Bot WebSocket adapter.
 pub struct WecomAdapter {
     config: WecomConfig,
+    /// Stable device_id for this adapter instance (persists across reconnects).
+    device_id: String,
     ws_sink: Arc<Mutex<Option<WsSink>>>,
     heartbeat_handle: Option<JoinHandle<()>>,
     /// Channel for forwarding inbound messages from the WS reader task.
@@ -56,6 +83,7 @@ impl WecomAdapter {
         let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel(256);
         Self {
             config,
+            device_id: uuid::Uuid::new_v4().to_string().replace('-', ""),
             ws_sink: Arc::new(Mutex::new(None)),
             heartbeat_handle: None,
             inbound_tx,
@@ -66,7 +94,27 @@ impl WecomAdapter {
         }
     }
 
-    /// Establish WebSocket connection and authenticate.
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    /// Generate a new req_id: `{prefix}-{uuid4_hex}`.
+    fn new_req_id(prefix: &str) -> String {
+        format!(
+            "{}-{}",
+            prefix,
+            uuid::Uuid::new_v4().to_string().replace('-', "")
+        )
+    }
+
+    /// Build a WeCom protocol frame: `{ cmd, headers: { req_id }, body }`.
+    fn build_frame(cmd: &str, req_id: &str, body: Value) -> Value {
+        json!({
+            "cmd": cmd,
+            "headers": { "req_id": req_id },
+            "body": body,
+        })
+    }
+
+    /// Establish WebSocket connection.
     async fn connect_ws(&self) -> anyhow::Result<WsStream> {
         let url = format!("wss://{}/", self.config.ws_url);
         tracing::info!(url = %url, "connecting to WeCom WebSocket");
@@ -75,37 +123,28 @@ impl WecomAdapter {
             .await
             .map_err(|_| anyhow::anyhow!("WebSocket connection timed out"))??;
 
-        tracing::info!("WebSocket connected, sending aibot_subscribe");
+        tracing::info!("WebSocket connected");
         Ok(ws_stream)
     }
 
-    /// Send the `aibot_subscribe` authentication command (reserved for future use).
-    #[allow(dead_code)]
-    async fn authenticate(sink: &Arc<Mutex<Option<WsSink>>>) -> anyhow::Result<()> {
-        // Authentication is sent in connect() after split.
-        // This is a placeholder — actual auth message is sent in connect().
-        let _ = sink;
-        Ok(())
-    }
-
     /// Build the subscribe payload.
-    fn subscribe_payload(&self) -> Value {
-        json!({
-            "command": "aibot_subscribe",
-            "data": {
+    fn subscribe_payload(&self) -> (String, Value) {
+        let req_id = Self::new_req_id("subscribe");
+        let frame = Self::build_frame(
+            CMD_SUBSCRIBE,
+            &req_id,
+            json!({
                 "bot_id": self.config.bot_id,
                 "secret": self.config.secret,
-                "device_id": uuid::Uuid::new_v4().to_string(),
-            }
-        })
+                "device_id": self.device_id,
+            }),
+        );
+        (req_id, frame)
     }
 
     /// Build a heartbeat ping payload.
     fn ping_payload() -> Value {
-        json!({
-            "command": "aibot_ping",
-            "data": {}
-        })
+        Self::build_frame(CMD_PING, &Self::new_req_id("ping"), json!({}))
     }
 
     /// Start the heartbeat task.
@@ -127,50 +166,169 @@ impl WecomAdapter {
         })
     }
 
+    // ── Message extraction ───────────────────────────────────────────
+
+    /// Extract text content from a WeCom message body.
+    ///
+    /// Supports: `text`, `mixed` (multi-item), `voice` (transcription), `appmsg` (file title).
+    /// Returns `(main_text, reply_text)`.
+    fn extract_text(body: &Value) -> (String, Option<String>) {
+        let msgtype = body.get("msgtype").and_then(|v| v.as_str()).unwrap_or("");
+
+        let mut text_parts: Vec<String> = Vec::new();
+
+        match msgtype {
+            "mixed" => {
+                // Iterate mixed.msg_item[] and extract text items.
+                if let Some(items) = body
+                    .get("mixed")
+                    .and_then(|m| m.get("msg_item"))
+                    .and_then(|v| v.as_array())
+                {
+                    for item in items {
+                        let item_type = item.get("msgtype").and_then(|v| v.as_str()).unwrap_or("");
+                        if item_type == "text" {
+                            if let Some(content) = item
+                                .get("text")
+                                .and_then(|t| t.get("content"))
+                                .and_then(|c| c.as_str())
+                            {
+                                let trimmed = content.trim();
+                                if !trimmed.is_empty() {
+                                    text_parts.push(trimmed.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Standard text.content
+                if let Some(content) = body
+                    .get("text")
+                    .and_then(|t| t.get("content"))
+                    .and_then(|c| c.as_str())
+                {
+                    let trimmed = content.trim();
+                    if !trimmed.is_empty() {
+                        text_parts.push(trimmed.to_string());
+                    }
+                }
+
+                // Voice transcription: voice.content
+                if msgtype == "voice" {
+                    if let Some(voice_text) = body
+                        .get("voice")
+                        .and_then(|v| v.get("content"))
+                        .and_then(|c| c.as_str())
+                    {
+                        let trimmed = voice_text.trim();
+                        if !trimmed.is_empty() {
+                            text_parts.push(trimmed.to_string());
+                        }
+                    }
+                }
+
+                // Appmsg title (file attachment).
+                if msgtype == "appmsg" {
+                    if let Some(title) = body
+                        .get("appmsg")
+                        .and_then(|a| a.get("title"))
+                        .and_then(|t| t.as_str())
+                    {
+                        let trimmed = title.trim();
+                        if !trimmed.is_empty() {
+                            text_parts.push(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Quote / reply context.
+        let reply_text = body
+            .get("quote")
+            .and_then(|quote| {
+                let quote_type = quote.get("msgtype").and_then(|v| v.as_str()).unwrap_or("");
+                match quote_type {
+                    "text" => quote
+                        .get("text")
+                        .and_then(|t| t.get("content"))
+                        .and_then(|c| c.as_str()),
+                    "voice" => quote
+                        .get("voice")
+                        .and_then(|v| v.get("content"))
+                        .and_then(|c| c.as_str()),
+                    _ => None,
+                }
+            })
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let main_text = text_parts.join("\n");
+        (main_text, reply_text)
+    }
+
+    // ── Inbound frame dispatch ───────────────────────────────────────
+
     /// Parse an inbound WeCom WebSocket frame into an InboundMessage.
+    ///
+    /// Handles `aibot_msg_callback` and `aibot_callback` commands.
+    /// Frame structure: `{ cmd, headers: { req_id }, body: { ... } }`.
     fn parse_message(frame: &str) -> Option<InboundMessage> {
         let v: Value = serde_json::from_str(frame).ok()?;
-        let command = v.get("command")?.as_str()?;
+        let cmd = v.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
 
-        // Only handle aibot_recvmsg (inbound user messages).
-        if command != "aibot_recvmsg" {
+        // Only handle message callback commands.
+        if cmd != CMD_MSG_CALLBACK && cmd != CMD_LEGACY_CALLBACK {
+            // Silently ignore ping, event_callback, subscribe responses, etc.
+            if cmd != CMD_PING && cmd != CMD_EVENT_CALLBACK && cmd != CMD_SUBSCRIBE {
+                tracing::debug!(cmd, "ignoring non-callback WeCom frame");
+            }
             return None;
         }
 
-        let data = v.get("data")?;
-        let msg = data.get("msg")?;
-        let sender_id = msg
+        let body = v.get("body")?;
+        let headers = v.get("headers").cloned().unwrap_or(json!({}));
+
+        // Extract req_id from headers (for group reply routing).
+        let req_id = headers
+            .get("req_id")
+            .and_then(|r| r.as_str())
+            .map(|s| s.to_string());
+
+        // Extract sender info: body.from.userid
+        let sender_id = body
             .get("from")
-            .and_then(|v| v.get("user_id"))
-            .and_then(|v| v.as_str())
+            .and_then(|f| f.get("userid"))
+            .and_then(|u| u.as_str())
             .unwrap_or("")
             .to_string();
-        let text = msg
-            .get("content")
-            .and_then(|v| v.get("text"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let message_id = msg
-            .get("msg_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let chat_id = msg
-            .get("chat_id")
-            .and_then(|v| v.as_str())
+
+        // Message ID: body.msgid, fallback to headers.req_id or generated UUID.
+        let message_id = body
+            .get("msgid")
+            .and_then(|m| m.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| req_id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        // Chat ID: body.chatid, fallback to sender_id.
+        let chat_id = body
+            .get("chatid")
+            .and_then(|c| c.as_str())
             .unwrap_or(&sender_id)
             .to_string();
-        let is_group = msg
-            .get("chat_type")
-            .and_then(|v| v.as_str())
+
+        // Group chat: body.chattype == "group"
+        let is_group = body
+            .get("chattype")
+            .and_then(|c| c.as_str())
             .map(|t| t == "group")
             .unwrap_or(false);
-        // req_id is needed for group chat replies via aibot_respond_msg.
-        let req_id = data
-            .get("req_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+
+        // Extract text using the comprehensive extractor.
+        let (text, _reply_text) = Self::extract_text(body);
 
         if text.is_empty() {
             return None;
@@ -194,56 +352,86 @@ impl PlatformAdapter for WecomAdapter {
         let ws_stream = self.connect_ws().await?;
         let (mut sink, mut stream) = ws_stream.split();
 
-        // Send subscribe command.
-        let subscribe_msg = self.subscribe_payload().to_string();
-        sink.send(Message::Text(subscribe_msg.into()))
+        // Send subscribe command with req_id for handshake matching.
+        let (subscribe_req_id, subscribe_frame) = self.subscribe_payload();
+        sink.send(Message::Text(subscribe_frame.to_string().into()))
             .await
             .map_err(|e| anyhow::anyhow!("failed to send subscribe: {e}"))?;
 
-        // Wait for subscribe response to verify authentication.
-        let subscribe_result = timeout(SUBSCRIBE_RESPONSE_TIMEOUT, stream.next()).await;
-        match subscribe_result {
-            Ok(Some(Ok(Message::Text(text)))) => {
-                let v: Value = serde_json::from_str(&text).unwrap_or_default();
-                let command = v.get("command").and_then(|c| c.as_str()).unwrap_or("");
-                let errcode = v
-                    .get("data")
-                    .and_then(|d| d.get("errcode"))
-                    .and_then(|e| e.as_i64())
-                    .unwrap_or(-1);
+        // Wait for subscribe response, matching by req_id.
+        let handshake_deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
 
-                if command == "aibot_subscribe" && errcode != 0 {
-                    let errmsg = v
-                        .get("data")
-                        .and_then(|d| d.get("errmsg"))
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("unknown");
-                    anyhow::bail!(
-                        "subscribe authentication failed: errcode={errcode} errmsg={errmsg}"
-                    );
-                }
-                tracing::info!(
-                    command,
-                    errcode,
-                    "subscribe response received, authenticated"
-                );
-            }
-            Ok(Some(Ok(_))) => {
-                // Non-text frame — treat as success (ping/pong).
-                tracing::debug!("subscribe: received non-text frame, assuming success");
-            }
-            Ok(Some(Err(e))) => {
-                anyhow::bail!("WebSocket error while waiting for subscribe response: {e}");
-            }
-            Ok(None) => {
-                anyhow::bail!("WebSocket closed before subscribe response");
-            }
-            Err(_) => {
-                // Timeout — log warning but continue (old servers may not respond).
+        loop {
+            let remaining =
+                handshake_deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                // Timeout — log warning but proceed (old servers may not respond).
                 tracing::warn!(
-                    "subscribe response timed out after {:?}, proceeding anyway",
-                    SUBSCRIBE_RESPONSE_TIMEOUT
+                    "subscribe handshake timed out after {:?}, proceeding anyway",
+                    CONNECT_TIMEOUT
                 );
+                break;
+            }
+
+            match timeout(remaining, stream.next()).await {
+                Ok(Some(Ok(Message::Text(text)))) => {
+                    let v: Value = serde_json::from_str(&text).unwrap_or_default();
+                    let cmd = v.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
+                    let frame_req_id = v
+                        .get("headers")
+                        .and_then(|h| h.get("req_id"))
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("");
+
+                    // Skip ping frames during handshake.
+                    if cmd == CMD_PING {
+                        continue;
+                    }
+
+                    // Match subscribe response by req_id.
+                    if frame_req_id == subscribe_req_id {
+                        let errcode = v
+                            .get("body")
+                            .and_then(|b| b.get("errcode"))
+                            .and_then(|e| e.as_i64());
+
+                        match errcode {
+                            Some(0) | None => {
+                                tracing::info!("subscribe handshake succeeded");
+                            }
+                            Some(code) => {
+                                let errmsg = v
+                                    .get("body")
+                                    .and_then(|b| b.get("errmsg"))
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("unknown");
+                                anyhow::bail!(
+                                    "subscribe authentication failed: errcode={code} errmsg={errmsg}"
+                                );
+                            }
+                        }
+                        break;
+                    }
+
+                    tracing::debug!(cmd, "ignoring pre-auth payload");
+                }
+                Ok(Some(Ok(_))) => {
+                    // Non-text frame (ping/pong) — continue waiting.
+                    continue;
+                }
+                Ok(Some(Err(e))) => {
+                    anyhow::bail!("WebSocket error during subscribe handshake: {e}");
+                }
+                Ok(None) => {
+                    anyhow::bail!("WebSocket closed before subscribe response");
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "subscribe handshake timed out after {:?}, proceeding anyway",
+                        CONNECT_TIMEOUT
+                    );
+                    break;
+                }
             }
         }
 
@@ -253,7 +441,7 @@ impl PlatformAdapter for WecomAdapter {
         // Start heartbeat.
         self.heartbeat_handle = Some(self.start_heartbeat(Arc::clone(&self.ws_sink)));
 
-        // Start reader task with debounce for text aggregation.
+        // Start reader task with split-aware debounce for text aggregation.
         let inbound_tx = self.inbound_tx.clone();
         let last_req_ids = Arc::clone(&self.last_req_ids);
         let seen_messages = Arc::clone(&self.seen_messages);
@@ -261,9 +449,16 @@ impl PlatformAdapter for WecomAdapter {
             let mut stream = stream;
             // Debounce buffer: accumulate messages from the same sender within a window.
             let mut pending: Option<InboundMessage> = None;
-            let debounce_duration = tokio::time::Duration::from_millis(600);
+            let mut last_chunk_len: usize = 0;
 
             loop {
+                // Compute debounce delay based on last chunk length.
+                let debounce_duration = if last_chunk_len >= SPLIT_THRESHOLD {
+                    tokio::time::Duration::from_millis(DEBOUNCE_SPLIT_DELAY_MS)
+                } else {
+                    tokio::time::Duration::from_millis(DEBOUNCE_DELAY_MS)
+                };
+
                 let frame = if pending.is_some() {
                     // We have a pending message — wait for more within debounce window.
                     match tokio::time::timeout(debounce_duration, stream.next()).await {
@@ -289,6 +484,7 @@ impl PlatformAdapter for WecomAdapter {
                                     break;
                                 }
                             }
+                            last_chunk_len = 0;
                             continue;
                         }
                     }
@@ -310,13 +506,16 @@ impl PlatformAdapter for WecomAdapter {
                                     }
                                 }
                                 seen.insert(msg.message_id.clone(), now);
-                                // Evict expired entries.
-                                if seen.len() > 2000 {
+                                // Evict expired entries when exceeding max size.
+                                if seen.len() > DEDUP_MAX_SIZE {
                                     seen.retain(|_, t| {
                                         now.duration_since(*t).as_secs() < DEDUP_TTL_SECONDS
                                     });
                                 }
                             }
+
+                            // Track chunk length for split-aware debounce.
+                            last_chunk_len = msg.text.chars().count();
 
                             // Check if we should merge with pending.
                             if let Some(ref mut p) = pending {
@@ -324,10 +523,20 @@ impl PlatformAdapter for WecomAdapter {
                                     // Same sender within debounce window — merge text.
                                     p.text.push('\n');
                                     p.text.push_str(&msg.text);
+                                    // Update req_id to latest.
+                                    if msg.req_id.is_some() {
+                                        p.req_id = msg.req_id;
+                                    }
                                     continue;
                                 } else {
                                     // Different sender — flush pending, start new.
                                     let flushed = pending.take().unwrap();
+                                    if let Some(ref rid) = flushed.req_id {
+                                        last_req_ids
+                                            .lock()
+                                            .await
+                                            .insert(flushed.chat_id.clone(), rid.clone());
+                                    }
                                     if inbound_tx.send(Ok(flushed)).await.is_err() {
                                         break;
                                     }
@@ -402,33 +611,26 @@ impl PlatformAdapter for WecomAdapter {
         };
 
         let payload = if let Some(ref rid) = req_id {
-            // Group chat: must use aibot_respond_msg with req_id.
-            json!({
-                "command": "aibot_respond_msg",
-                "data": {
-                    "req_id": rid,
-                    "msg": {
-                        "content": {
-                            "text": content
-                        },
-                        "msg_type": "markdown"
-                    }
-                }
-            })
+            // Group chat: must use aibot_respond_msg with original req_id.
+            Self::build_frame(
+                CMD_RESPOND_MSG,
+                rid,
+                json!({
+                    "msgtype": "markdown",
+                    "markdown": { "content": content },
+                }),
+            )
         } else {
-            // DM: use aibot_send_msg for proactive delivery.
-            json!({
-                "command": "aibot_send_msg",
-                "data": {
-                    "chat_id": chat_id,
-                    "msg": {
-                        "content": {
-                            "text": content
-                        },
-                        "msg_type": "markdown"
-                    }
-                }
-            })
+            // DM: use aibot_send_msg with new req_id.
+            Self::build_frame(
+                CMD_SEND_MSG,
+                &Self::new_req_id(CMD_SEND_MSG),
+                json!({
+                    "chatid": chat_id,
+                    "msgtype": "markdown",
+                    "markdown": { "content": content },
+                }),
+            )
         };
 
         let mut guard = self.ws_sink.lock().await;
@@ -474,11 +676,11 @@ impl PlatformAdapter for WecomAdapter {
     }
 }
 
-/// Reconnection logic with exponential backoff.
+/// Reconnect delay with fixed backoff sequence:
+/// `[2, 5, 10, 30, 60]` seconds.
 pub async fn reconnect_delay(attempt: u32) -> Duration {
-    let base = Duration::from_secs(2);
-    let delay = base * 2u32.saturating_pow(attempt.min(4));
-    let capped = delay.min(MAX_RECONNECT_DELAY);
-    sleep(capped).await;
-    capped
+    let idx = (attempt as usize).min(RECONNECT_BACKOFF.len() - 1);
+    let delay = Duration::from_secs(RECONNECT_BACKOFF[idx]);
+    sleep(delay).await;
+    delay
 }

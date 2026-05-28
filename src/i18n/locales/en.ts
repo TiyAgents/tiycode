@@ -354,6 +354,7 @@ const en: Record<TranslationKey, string> = {
   "settings.gateway.restart": "Restart",
   "settings.gateway.running": "Running",
   "settings.gateway.stopped": "Stopped",
+  "settings.gateway.save": "Save",
 
   // ── Settings: Account Panel ────────────────────────────────
   "settings.account.guest": "Guest",

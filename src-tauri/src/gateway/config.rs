@@ -3,12 +3,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::traits::Platform;
 
 /// Top-level gateway configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GatewayConfig {
     /// Which platform to activate.
     pub platform: Platform,
@@ -64,8 +64,12 @@ impl GatewayConfig {
 }
 
 /// WeChat iLink Bot configuration.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct WeixinConfig {
+    /// Whether this channel is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
     /// The iLink bot account ID (can be empty if obtained via QR login).
     #[serde(default)]
     pub account_id: String,
@@ -124,12 +128,18 @@ impl std::fmt::Debug for WeixinConfig {
 }
 
 /// WeCom AI Bot WebSocket configuration.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct WecomConfig {
+    /// Whether this channel is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
     /// Bot ID for authentication.
+    #[serde(default)]
     pub bot_id: String,
 
     /// Secret for authentication.
+    #[serde(default)]
     pub secret: String,
 
     /// WebSocket URL (default: openws.work.weixin.qq.com).
@@ -154,6 +164,73 @@ pub fn default_config_path() -> PathBuf {
         .join(".tiy/gateway/config.toml")
 }
 
+/// Save a gateway config to the default TOML path atomically.
+pub fn save_config(config: &GatewayConfig) -> anyhow::Result<()> {
+    let path = default_config_path();
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let toml_str = toml::to_string_pretty(config)?;
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, &toml_str)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// Load the gateway config from default path, or return None if missing.
+pub fn load_config() -> Option<GatewayConfig> {
+    let path = default_config_path();
+    GatewayConfig::load(&path).ok()
+}
+
+/// Frontend-safe DTO for the gateway config (secrets masked).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayConfigDto {
+    pub platform: String,
+    pub weixin_enabled: bool,
+    pub wecom_enabled: bool,
+    pub wecom_bot_id: String,
+    pub wecom_secret_set: bool,
+    pub wecom_ws_url: String,
+}
+
+impl GatewayConfigDto {
+    pub fn from_config(config: &GatewayConfig) -> Self {
+        Self {
+            platform: config.platform.to_string(),
+            weixin_enabled: config.weixin.as_ref().map(|w| w.enabled).unwrap_or(false),
+            wecom_enabled: config.wecom.as_ref().map(|w| w.enabled).unwrap_or(false),
+            wecom_bot_id: config
+                .wecom
+                .as_ref()
+                .map(|w| w.bot_id.clone())
+                .unwrap_or_default(),
+            wecom_secret_set: config
+                .wecom
+                .as_ref()
+                .map(|w| !w.secret.is_empty())
+                .unwrap_or(false),
+            wecom_ws_url: config
+                .wecom
+                .as_ref()
+                .map(|w| w.ws_url.clone())
+                .unwrap_or_else(default_wecom_ws_url),
+        }
+    }
+}
+
+/// Input DTO for saving gateway config from the frontend.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayConfigUpdateInput {
+    pub weixin_enabled: bool,
+    pub wecom_enabled: bool,
+    pub wecom_bot_id: String,
+    /// Empty string means "don't change the secret".
+    pub wecom_secret: String,
+    pub wecom_ws_url: String,
+}
+
 // --- Default value functions ---
 
 fn default_approval_timeout() -> u64 {
@@ -174,4 +251,8 @@ fn default_weixin_cdn_base_url() -> String {
 
 fn default_wecom_ws_url() -> String {
     "openws.work.weixin.qq.com".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }

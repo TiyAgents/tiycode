@@ -2,7 +2,7 @@
 //!
 //! Connects via HTTP long-polling to the iLink Bot API, handles context_token
 //! management, message dedup, and text chunking for outbound messages.
-//! Reference: hermes-agent/gateway/platforms/weixin.py
+//! Implements the iLink Bot HTTP long-poll protocol for message exchange.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -26,12 +26,12 @@ const POLL_TIMEOUT_SECONDS: u64 = 35;
 const MAX_SEND_RETRIES: u32 = 4;
 const SEND_RETRY_DELAY: Duration = Duration::from_millis(1000);
 const MAX_MESSAGE_LENGTH: usize = 2000;
-/// Channel protocol version aligned with hermes-agent.
+/// Channel protocol version.
 const CHANNEL_VERSION: &str = "2.2.0";
 /// TTL for message dedup entries (seconds).
 const DEDUP_TTL_SECONDS: u64 = 300;
 /// Long backoff when session is expired/stale (seconds).
-/// Aligned with hermes-agent: 600s to avoid hammering a dead session.
+/// 600s long backoff to avoid hammering a dead session.
 const SESSION_EXPIRED_BACKOFF_SECONDS: u64 = 600;
 /// Rate-limit retry multiplier for errcode=-2.
 const RATE_LIMIT_RETRY_MULTIPLIER: u32 = 3;
@@ -79,8 +79,8 @@ impl WeixinAdapter {
         let context_tokens = Self::load_context_tokens(&state_dir);
 
         // Generate stable client_id and X-WECHAT-UIN for this session.
-        let client_id = format!("hermes-weixin-{}", uuid::Uuid::now_v7());
-        // Aligned with hermes-agent: random u32 → decimal string → base64.
+        let client_id = format!("tiycode-weixin-{}", uuid::Uuid::now_v7());
+        // Random u32 → decimal string → base64 for X-WECHAT-UIN.
         let uin_int = u32::from_be_bytes(
             uuid::Uuid::now_v7().as_bytes()[0..4]
                 .try_into()
@@ -169,7 +169,7 @@ impl WeixinAdapter {
         headers.insert("iLink-App-Id", "bot".parse().unwrap());
         // Version encoding: (2<<16)|(2<<8)|0
         headers.insert("iLink-App-ClientVersion", "131584".parse().unwrap());
-        // Random UIN for session identity (aligned with hermes-agent).
+        // Random UIN for session identity.
         headers.insert("X-WECHAT-UIN", self.wechat_uin.parse().unwrap());
         headers
     }
@@ -211,7 +211,7 @@ impl WeixinAdapter {
                 anyhow::bail!("[session_expired] errcode=-14: {errmsg}");
             }
             if errcode == -2 && errmsg.contains("unknown error") {
-                // Stale session (hermes-agent: ret=-2 + "unknown error").
+                // Stale session (ret=-2 + "unknown error").
                 anyhow::bail!("[session_expired] stale session errcode=-2: {errmsg}");
             }
             if errcode == -2 {
@@ -418,7 +418,7 @@ impl WeixinAdapter {
         let context_token = self.context_tokens.lock().await.get(&token_key).cloned();
 
         for attempt in 0..MAX_SEND_RETRIES {
-            // Build hermes-agent compatible sendmessage body.
+            // Build iLink sendmessage body.
             let ct = if attempt == 0 {
                 context_token.clone().unwrap_or_default()
             } else {

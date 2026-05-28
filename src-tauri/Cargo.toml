@@ -64,6 +64,7 @@ tiycore = "0.2.9-rc.0"
 
 # Gateway (IM channel support)
 async-trait = "0.1"
+qrcode = "0.14"
 toml = "0.8"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 async-stream = "0.3"

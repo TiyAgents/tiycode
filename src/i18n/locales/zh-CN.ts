@@ -365,6 +365,7 @@ const zhCN = {
   "settings.gateway.restart": "重启",
   "settings.gateway.running": "运行中",
   "settings.gateway.stopped": "已停止",
+  "settings.gateway.save": "保存",
 
   // ── Settings: Account Panel ────────────────────────────────
   "settings.account.guest": "访客",

@@ -3,9 +3,11 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { MessageSquare, Play, Power, RefreshCw, QrCode, LogOut } from "lucide-react";
+import { AlertCircle, Play, Power, RefreshCw, QrCode, LogOut, Radio, Save } from "lucide-react";
 import { useT } from "@/i18n";
 import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { Switch } from "@/shared/ui/switch";
 
 interface GatewayStatus {
   running: boolean;
@@ -20,6 +22,15 @@ interface WeixinSession {
   created_at: number;
 }
 
+interface GatewayConfigDto {
+  platform: string;
+  weixinEnabled: boolean;
+  wecomEnabled: boolean;
+  wecomBotId: string;
+  wecomSecretSet: boolean;
+  wecomWsUrl: string;
+}
+
 export function GatewaySettingsPanel({ description }: { description: string }) {
   const t = useT();
   const [status, setStatus] = useState<GatewayStatus | null>(null);
@@ -27,12 +38,23 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
   const [loading, setLoading] = useState(false);
   const [qrImage, setQrImage] = useState<string | null>(null);
   const [loginPolling, setLoginPolling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Fetch gateway status and weixin session on mount.
+  // Config form state.
+  const [weixinEnabled, setWeixinEnabled] = useState(false);
+  const [wecomEnabled, setWecomEnabled] = useState(false);
+  const [wecomBotId, setWecomBotId] = useState("");
+  const [wecomSecret, setWecomSecret] = useState("");
+  const [wecomSecretSet, setWecomSecretSet] = useState(false);
+  const [wecomWsUrl, setWecomWsUrl] = useState("openws.work.weixin.qq.com");
+  const [configDirty, setConfigDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+
   useEffect(() => {
     if (!isTauri()) return;
     refreshStatus();
     refreshWeixinSession();
+    loadConfig();
   }, []);
 
   const refreshStatus = useCallback(async () => {
@@ -53,11 +75,56 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
     }
   }, []);
 
+  const loadConfig = useCallback(async () => {
+    try {
+      const cfg = await invoke<GatewayConfigDto | null>("gateway_get_config");
+      if (cfg) {
+        setWeixinEnabled(cfg.weixinEnabled);
+        setWecomEnabled(cfg.wecomEnabled);
+        setWecomBotId(cfg.wecomBotId);
+        setWecomSecretSet(cfg.wecomSecretSet);
+        setWecomWsUrl(cfg.wecomWsUrl || "openws.work.weixin.qq.com");
+      }
+    } catch {
+      // Config doesn't exist yet — use defaults.
+    }
+    setConfigDirty(false);
+  }, []);
+
+  const handleSaveConfig = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await invoke("gateway_save_config", {
+        input: {
+          weixinEnabled,
+          wecomEnabled,
+          wecomBotId,
+          wecomSecret,
+          wecomWsUrl,
+        },
+      });
+      setConfigDirty(false);
+      setWecomSecret("");
+      if (wecomSecret) setWecomSecretSet(true);
+      await refreshStatus();
+    } catch (e) {
+      setError(`Save failed: ${String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const markDirty = () => setConfigDirty(true);
+
   const handleStart = async () => {
     setLoading(true);
+    setError(null);
     try {
       await invoke("gateway_start");
       await refreshStatus();
+    } catch (e) {
+      setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -65,9 +132,12 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
 
   const handleStop = async () => {
     setLoading(true);
+    setError(null);
     try {
       await invoke("gateway_stop");
       await refreshStatus();
+    } catch (e) {
+      setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -75,9 +145,12 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
 
   const handleRestart = async () => {
     setLoading(true);
+    setError(null);
     try {
       await invoke("gateway_restart");
       await refreshStatus();
+    } catch (e) {
+      setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -86,19 +159,26 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
   const handleQrLogin = async () => {
     setLoading(true);
     setQrImage(null);
+    setError(null);
     try {
       const result = await invoke<{
         qr_image_base64: string | null;
         qr_url: string | null;
         login_uuid: string;
+        media_type: string | null;
       }>("gateway_weixin_qr_login", { baseUrl: null });
       if (result.qr_image_base64) {
-        setQrImage(result.qr_image_base64);
+        const mime = result.media_type === "svg+xml" ? "image/svg+xml" : result.media_type === "jpeg" ? "image/jpeg" : "image/png";
+        setQrImage(`data:${mime};base64,${result.qr_image_base64}`);
+      } else if (result.qr_url) {
+        setError(`QR URL: ${result.qr_url}`);
       }
-      setLoginPolling(true);
-      pollLogin(result.login_uuid);
+      if (result.login_uuid) {
+        setLoginPolling(true);
+        pollLogin(result.login_uuid);
+      }
     } catch (e) {
-      console.error("QR login failed:", e);
+      setError(`QR login failed: ${String(e)}`);
     } finally {
       setLoading(false);
     }
@@ -118,9 +198,14 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
           setLoginPolling(false);
           return;
         }
+        if (result.status === "waiting_confirm" || result.status === "scanned_redirect") {
+          // Keep polling — user scanned or redirecting.
+          continue;
+        }
         if (result.status === "expired" || result.status === "failed") {
           setQrImage(null);
           setLoginPolling(false);
+          setError("QR code expired or login failed. Please try again.");
           return;
         }
       } catch {
@@ -144,45 +229,42 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
         <p className="text-sm text-muted-foreground">{description}</p>
       </div>
 
+      {/* Error Banner */}
+      {error && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-200 dark:border-red-800/50 bg-red-50 dark:bg-red-950/20 p-3">
+          <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+          <p className="text-xs text-red-700 dark:text-red-400 break-all">{error}</p>
+        </div>
+      )}
+
       {/* Gateway Process Status */}
       <div className="rounded-lg border bg-card p-4 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">{t("settings.gateway.status")}</span>
+            <Radio className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Gateway Status</span>
           </div>
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full ${
-                status?.running
-                  ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                  : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-              }`}
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  status?.running ? "bg-green-500" : "bg-zinc-400"
-                }`}
-              />
-              {status?.running ? t("settings.gateway.running") : t("settings.gateway.stopped")}
-            </span>
-          </div>
+          <span
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full ${
+              status?.running
+                ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+            }`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${status?.running ? "bg-green-500" : "bg-zinc-400"}`} />
+            {status?.running ? t("settings.gateway.running") : t("settings.gateway.stopped")}
+          </span>
         </div>
 
-        {/* Process details */}
         {status && (
           <div className="grid grid-cols-3 gap-3 text-xs">
             <div className="flex flex-col gap-0.5">
               <span className="text-muted-foreground">PID</span>
-              <span className="font-mono font-medium">
-                {status.running && status.pid ? status.pid : "—"}
-              </span>
+              <span className="font-mono font-medium">{status.running && status.pid ? status.pid : "—"}</span>
             </div>
             <div className="flex flex-col gap-0.5">
               <span className="text-muted-foreground">Version</span>
-              <span className="font-mono font-medium">
-                {status.running && status.version ? `v${status.version}` : "—"}
-              </span>
+              <span className="font-mono font-medium">{status.running && status.version ? `v${status.version}` : "—"}</span>
             </div>
             <div className="flex flex-col gap-0.5">
               <span className="text-muted-foreground">Config</span>
@@ -195,7 +277,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
 
         <div className="flex gap-2">
           {!status?.running ? (
-            <Button size="sm" onClick={handleStart} disabled={loading || !status?.configExists}>
+            <Button size="sm" onClick={handleStart} disabled={loading}>
               <Play className="h-3.5 w-3.5 mr-1" />
               {t("settings.gateway.start")}
             </Button>
@@ -212,64 +294,109 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
             </>
           )}
         </div>
-
-        {!status?.configExists && (
-          <p className="text-xs text-amber-600 dark:text-amber-400">
-            Config file not found at ~/.tiy/gateway/config.toml — please create it before starting.
-          </p>
-        )}
       </div>
 
-      {/* WeChat Login Section */}
+      {/* WeChat Channel */}
       <div className="rounded-lg border bg-card p-4 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium">{t("settings.gateway.weixinLogin")}</span>
-            <span className="text-xs text-muted-foreground">
-              {t("settings.gateway.weixinLoginDesc")}
-            </span>
+            <span className="text-sm font-medium">{t("settings.gateway.weixin")}</span>
+            <span className="text-xs text-muted-foreground">{t("settings.gateway.weixinLoginDesc")}</span>
           </div>
-          <span
-            className={`text-xs font-medium ${
-              weixinSession ? "text-green-600 dark:text-green-400" : "text-muted-foreground"
-            }`}
-          >
-            {weixinSession ? t("settings.gateway.loggedIn") : t("settings.gateway.notLoggedIn")}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className={`text-xs font-medium ${weixinSession ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+              {weixinSession ? t("settings.gateway.loggedIn") : t("settings.gateway.notLoggedIn")}
+            </span>
+            <Switch
+              checked={weixinEnabled}
+              onCheckedChange={(v) => { setWeixinEnabled(v); markDirty(); }}
+            />
+          </div>
         </div>
 
-        {weixinSession ? (
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground font-mono">
-              {weixinSession.account_id || "—"}
-            </span>
-            <Button size="sm" variant="ghost" onClick={handleLogout}>
-              <LogOut className="h-3.5 w-3.5 mr-1" />
-              {t("settings.gateway.logout")}
-            </Button>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-3">
-            {qrImage ? (
-              <img
-                src={`data:image/png;base64,${qrImage}`}
-                alt="QR Code"
-                className="w-48 h-48 rounded border"
-              />
-            ) : null}
-            {loginPolling ? (
-              <span className="text-xs text-muted-foreground animate-pulse">
-                Waiting for scan...
-              </span>
+        {weixinEnabled && (
+          <>
+            {weixinSession ? (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground font-mono">Account: {weixinSession.account_id || "—"}</span>
+                <Button size="sm" variant="ghost" onClick={handleLogout}>
+                  <LogOut className="h-3.5 w-3.5 mr-1" />
+                  {t("settings.gateway.logout")}
+                </Button>
+              </div>
             ) : (
-              <Button size="sm" onClick={handleQrLogin} disabled={loading}>
-                <QrCode className="h-3.5 w-3.5 mr-1" />
-                {t("settings.gateway.scanQr")}
-              </Button>
+              <div className="flex flex-col items-center gap-3">
+                {qrImage && <img src={qrImage} alt="QR Code" className="w-48 h-48 rounded border" />}
+                {loginPolling ? (
+                  <span className="text-xs text-muted-foreground animate-pulse">Waiting for scan...</span>
+                ) : (
+                  <Button size="sm" onClick={handleQrLogin} disabled={loading}>
+                    <QrCode className="h-3.5 w-3.5 mr-1" />
+                    {loading ? "Loading..." : t("settings.gateway.scanQr")}
+                  </Button>
+                )}
+              </div>
             )}
+          </>
+        )}
+      </div>
+
+      {/* WeCom Channel */}
+      <div className="rounded-lg border bg-card p-4 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium">{t("settings.gateway.wecom")}</span>
+            <span className="text-xs text-muted-foreground">WebSocket connection to WeCom AI Bot platform.</span>
+          </div>
+          <Switch
+            checked={wecomEnabled}
+            onCheckedChange={(v) => { setWecomEnabled(v); markDirty(); }}
+          />
+        </div>
+
+        {wecomEnabled && (
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">{t("settings.gateway.wecomBotId")}</label>
+              <Input
+                value={wecomBotId}
+                onChange={(e) => { setWecomBotId(e.target.value); markDirty(); }}
+                placeholder="Enter Bot ID"
+                className="h-8 text-sm font-mono"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">{t("settings.gateway.wecomSecret")}</label>
+              <Input
+                type="password"
+                value={wecomSecret}
+                onChange={(e) => { setWecomSecret(e.target.value); markDirty(); }}
+                placeholder={wecomSecretSet ? "••••••••  (unchanged)" : "Enter Secret"}
+                className="h-8 text-sm font-mono"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">{t("settings.gateway.wecomWsUrl")}</label>
+              <Input
+                value={wecomWsUrl}
+                onChange={(e) => { setWecomWsUrl(e.target.value); markDirty(); }}
+                placeholder="openws.work.weixin.qq.com"
+                className="h-8 text-sm font-mono"
+              />
+            </div>
           </div>
         )}
       </div>
+
+      {/* Save Button */}
+      {configDirty && (
+        <div className="flex justify-end">
+          <Button size="sm" onClick={handleSaveConfig} disabled={saving}>
+            <Save className="h-3.5 w-3.5 mr-1" />
+            {saving ? "Saving..." : t("settings.gateway.save")}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

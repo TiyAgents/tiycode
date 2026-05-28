@@ -496,6 +496,8 @@ pub fn run() {
             commands::gateway::gateway_weixin_login_poll,
             commands::gateway::gateway_weixin_session,
             commands::gateway::gateway_weixin_logout,
+            commands::gateway::gateway_get_config,
+            commands::gateway::gateway_save_config,
         ])
         .setup(move |app| {
             tracing::info!(elapsed_ms = build_start.elapsed().as_millis(), "⏱ [startup] builder configured (plugins + invoke_handler), entering setup()");
