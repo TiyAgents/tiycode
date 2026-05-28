@@ -117,15 +117,23 @@ pub fn map_thread_event_to_acp(event: &ThreadStreamEvent) -> AcpEventMapping {
                 .tasks
                 .iter()
                 .map(|task| {
-                    PlanEntry::new(
-                        task.description.clone(),
-                        PlanEntryPriority::Medium,
-                        match task.stage {
-                            TaskStage::Pending => PlanEntryStatus::Pending,
-                            TaskStage::InProgress => PlanEntryStatus::InProgress,
-                            TaskStage::Completed | TaskStage::Failed => PlanEntryStatus::Completed,
-                        },
-                    )
+                    let (content, status) = match task.stage {
+                        TaskStage::Pending => (task.description.clone(), PlanEntryStatus::Pending),
+                        TaskStage::InProgress => {
+                            (task.description.clone(), PlanEntryStatus::InProgress)
+                        }
+                        TaskStage::Completed => {
+                            (task.description.clone(), PlanEntryStatus::Completed)
+                        }
+                        // ACP v0.11 plan entries only support pending/in_progress/completed.
+                        // Preserve failed task visibility by marking the entry text while using
+                        // the closest terminal status the schema can represent.
+                        TaskStage::Failed => (
+                            format!("[failed] {}", task.description),
+                            PlanEntryStatus::Completed,
+                        ),
+                    };
+                    PlanEntry::new(content, PlanEntryPriority::Medium, status)
                 })
                 .collect();
             AcpEventMapping::updates(vec![SessionUpdate::Plan(Plan::new(entries))])
@@ -353,5 +361,40 @@ mod tests {
         assert_eq!(plan.entries.len(), 2);
         assert_eq!(plan.entries[0].status, PlanEntryStatus::Completed);
         assert_eq!(plan.entries[1].status, PlanEntryStatus::InProgress);
+    }
+
+    #[test]
+    fn task_board_failed_steps_remain_visible_in_acp_plan() {
+        let event = ThreadStreamEvent::TaskBoardUpdated {
+            run_id: "run-1".to_string(),
+            task_board: crate::model::task_board::TaskBoardDto {
+                id: "board-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                title: "Plan".to_string(),
+                status: crate::model::task_board::TaskBoardStatus::Active,
+                active_task_id: None,
+                tasks: vec![crate::model::task_item::TaskItemDto {
+                    id: "task-1".to_string(),
+                    task_board_id: "board-1".to_string(),
+                    description: "Run verification".to_string(),
+                    stage: TaskStage::Failed,
+                    sort_order: 0,
+                    error_detail: Some("failed".to_string()),
+                    created_at: "2026-05-27T00:00:00Z".to_string(),
+                    updated_at: "2026-05-27T00:00:00Z".to_string(),
+                }],
+                created_at: "2026-05-27T00:00:00Z".to_string(),
+                updated_at: "2026-05-27T00:00:00Z".to_string(),
+            },
+        };
+
+        let mapping = map_thread_event_to_acp(&event);
+        match mapping.updates.as_slice() {
+            [SessionUpdate::Plan(plan)] => {
+                assert_eq!(plan.entries[0].status, PlanEntryStatus::Completed);
+                assert!(plan.entries[0].content.starts_with("[failed] "));
+            }
+            other => panic!("unexpected updates: {other:?}"),
+        }
     }
 }
