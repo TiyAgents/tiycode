@@ -155,19 +155,6 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
     }
   };
 
-  const handleStop = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await invoke("gateway_stop");
-      await refreshStatus();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleRestart = async () => {
     setLoading(true);
     setError(null);
