@@ -387,7 +387,7 @@ impl WeixinAdapter {
     }
 
     /// Fetch typing_ticket from the getconfig API (cached).
-    async fn fetch_typing_ticket(&self) -> Option<String> {
+    async fn fetch_typing_ticket(&self, chat_id: &str) -> Option<String> {
         // Return cached ticket if available.
         {
             let cached = self.typing_ticket.lock().await;
@@ -396,11 +396,27 @@ impl WeixinAdapter {
             }
         }
 
+        // getconfig requires ilink_user_id; also pass context_token if available.
+        let token_key = format!("{}:{}", self.account_id, chat_id);
+        let context_token = self
+            .context_tokens
+            .lock()
+            .await
+            .get(&token_key)
+            .cloned()
+            .unwrap_or_default();
+
+        let body = json!({
+            "ilink_user_id": chat_id,
+            "context_token": context_token,
+            "base_info": { "channel_version": CHANNEL_VERSION },
+        });
+
         let resp = self
             .http_client
             .post(self.api_url("getconfig"))
             .headers(self.api_headers().await)
-            .json(&json!({}))
+            .json(&body)
             .send()
             .await
             .ok()?;
@@ -420,14 +436,16 @@ impl WeixinAdapter {
 
     /// Call sendtyping API with the cached typing_ticket.
     async fn do_send_typing(&self, chat_id: &str) -> anyhow::Result<()> {
-        let ticket = match self.fetch_typing_ticket().await {
+        let ticket = match self.fetch_typing_ticket(chat_id).await {
             Some(t) => t,
             None => return Ok(()), // Silently skip if ticket unavailable.
         };
 
         let body = json!({
-            "to_user_id": chat_id,
+            "ilink_user_id": chat_id,
             "typing_ticket": ticket,
+            "status": 1,
+            "base_info": { "channel_version": CHANNEL_VERSION },
         });
 
         let resp = self
