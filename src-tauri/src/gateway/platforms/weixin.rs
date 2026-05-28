@@ -36,6 +36,11 @@ const DEDUP_TTL_SECONDS: u64 = 300;
 const SESSION_EXPIRED_BACKOFF_SECONDS: u64 = 600;
 /// Rate-limit retry multiplier for errcode=-2.
 const RATE_LIMIT_RETRY_MULTIPLIER: u32 = 3;
+/// TTL for a cached typing_ticket before it is refetched from getconfig.
+const TYPING_TICKET_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// iLink sendtyping status: 1 = typing, 2 = cancel.
+const TYPING_STATUS_TYPING: i64 = 1;
+const TYPING_STATUS_CANCEL: i64 = 2;
 
 /// Persistence directory for WeChat state: `~/.tiy/gateway/weixin/`
 fn weixin_state_dir() -> PathBuf {
@@ -67,8 +72,8 @@ pub struct WeixinAdapter {
     seen_content: Arc<Mutex<HashMap<u64, Instant>>>,
     /// Directory for persisted state files.
     state_dir: PathBuf,
-    /// Cached typing_ticket per user (fetched from getconfig API).
-    typing_tickets: Arc<Mutex<HashMap<String, String>>>,
+    /// Cached typing_ticket per user (fetched from getconfig API) with fetch time.
+    typing_tickets: Arc<Mutex<HashMap<String, (String, Instant)>>>,
     /// Random X-WECHAT-UIN value (stable per adapter instance).
     wechat_uin: String,
 }
@@ -416,11 +421,15 @@ impl WeixinAdapter {
 
     /// Fetch typing_ticket from the getconfig API (cached per user).
     async fn fetch_typing_ticket(&self, chat_id: &str) -> Option<String> {
-        // Return cached ticket if available for this user.
+        // Return cached ticket if still within TTL for this user.
         {
-            let cached = self.typing_tickets.lock().await;
-            if let Some(ticket) = cached.get(chat_id) {
-                return Some(ticket.clone());
+            let mut cached = self.typing_tickets.lock().await;
+            if let Some((ticket, fetched_at)) = cached.get(chat_id) {
+                if fetched_at.elapsed() < TYPING_TICKET_TTL {
+                    return Some(ticket.clone());
+                }
+                // Expired — drop it and refetch below.
+                cached.remove(chat_id);
             }
         }
 
@@ -453,10 +462,16 @@ impl WeixinAdapter {
             .ok()?;
 
         let data: Value = resp.json().await.ok()?;
-        let errcode = data.get("errcode").and_then(|v| v.as_i64()).unwrap_or(-1);
-        if errcode != 0 {
+        // iLink bot getconfig reports success via `ret` (not `errcode`).
+        // Accept either field; treat a missing field as success (0).
+        let ret = data.get("ret").and_then(|v| v.as_i64());
+        let errcode = data.get("errcode").and_then(|v| v.as_i64());
+        let code = ret.or(errcode).unwrap_or(0);
+        if code != 0 {
             let errmsg = data.get("errmsg").and_then(|v| v.as_str()).unwrap_or("");
             tracing::warn!(
+                code,
+                ret,
                 errcode,
                 errmsg,
                 chat_id,
@@ -470,21 +485,36 @@ impl WeixinAdapter {
         self.typing_tickets
             .lock()
             .await
-            .insert(chat_id.to_string(), ticket_str.clone());
+            .insert(chat_id.to_string(), (ticket_str.clone(), Instant::now()));
         Some(ticket_str)
     }
 
     /// Call sendtyping API with the cached typing_ticket.
-    async fn do_send_typing(&self, chat_id: &str) -> anyhow::Result<()> {
-        let ticket = match self.fetch_typing_ticket(chat_id).await {
-            Some(t) => t,
-            None => return Ok(()), // Silently skip if ticket unavailable.
+    ///
+    /// `status` is 1 to start the typing indicator or 2 to cancel it. The cancel
+    /// path reuses an already-cached ticket and never fetches a new one, since
+    /// there is no point fetching a fresh ticket only to immediately cancel.
+    async fn do_send_typing(&self, chat_id: &str, status: i64) -> anyhow::Result<()> {
+        let ticket = if status == TYPING_STATUS_CANCEL {
+            // Only cancel if we already hold a (non-expired) ticket.
+            let cached = self.typing_tickets.lock().await;
+            match cached.get(chat_id) {
+                Some((ticket, fetched_at)) if fetched_at.elapsed() < TYPING_TICKET_TTL => {
+                    ticket.clone()
+                }
+                _ => return Ok(()), // Nothing to cancel.
+            }
+        } else {
+            match self.fetch_typing_ticket(chat_id).await {
+                Some(t) => t,
+                None => return Ok(()), // Silently skip if ticket unavailable.
+            }
         };
 
         let body = json!({
             "ilink_user_id": chat_id,
             "typing_ticket": ticket,
-            "status": 1,
+            "status": status,
             "base_info": { "channel_version": CHANNEL_VERSION },
         });
 
@@ -499,11 +529,20 @@ impl WeixinAdapter {
         match resp {
             Ok(r) => {
                 let data: Value = r.json().await.unwrap_or_default();
-                let errcode = data.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
-                if errcode != 0 {
+                // iLink bot sendtyping reports success via `ret` (not `errcode`).
+                let ret = data.get("ret").and_then(|v| v.as_i64());
+                let errcode = data.get("errcode").and_then(|v| v.as_i64());
+                let code = ret.or(errcode).unwrap_or(0);
+                if code != 0 {
                     // Ticket may have expired — clear cache for this user.
                     self.typing_tickets.lock().await.remove(chat_id);
-                    tracing::debug!(errcode, chat_id, "sendtyping failed, cleared ticket cache");
+                    tracing::debug!(
+                        code,
+                        ret,
+                        errcode,
+                        chat_id,
+                        "sendtyping failed, cleared ticket cache"
+                    );
                 }
             }
             Err(e) => {
@@ -755,12 +794,13 @@ impl PlatformAdapter for WeixinAdapter {
     }
 
     async fn send_typing(&self, chat_id: &str) -> anyhow::Result<()> {
-        self.do_send_typing(chat_id).await
+        self.do_send_typing(chat_id, TYPING_STATUS_TYPING).await
     }
 
-    async fn stop_typing(&self, _chat_id: &str) -> anyhow::Result<()> {
-        // iLink has no explicit "stop typing" API — typing auto-expires.
-        Ok(())
+    async fn stop_typing(&self, chat_id: &str) -> anyhow::Result<()> {
+        // Proactively cancel the typing indicator (status=2) so the bubble
+        // disappears immediately instead of waiting for iLink's auto-expiry.
+        self.do_send_typing(chat_id, TYPING_STATUS_CANCEL).await
     }
 
     fn poll_messages(
