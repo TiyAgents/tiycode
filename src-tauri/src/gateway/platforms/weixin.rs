@@ -41,6 +41,10 @@ fn weixin_state_dir() -> PathBuf {
 pub struct WeixinAdapter {
     config: WeixinConfig,
     http_client: Client,
+    /// Resolved bearer token (from config or session file).
+    token: Arc<Mutex<String>>,
+    /// Resolved account ID (from config or session file).
+    account_id: String,
     /// Context token cache: peer_id → token (required for outbound messages).
     context_tokens: Arc<Mutex<HashMap<String, String>>>,
     /// Long-polling sync cursor (persisted across poll cycles).
@@ -67,10 +71,18 @@ impl WeixinAdapter {
 
         // Generate stable client_id and X-WECHAT-UIN for this session.
         let client_id = format!("hermes-weixin-{}", uuid::Uuid::now_v7());
-        let uin_bytes: [u8; 4] = uuid::Uuid::now_v7().as_bytes()[0..4]
-            .try_into()
-            .unwrap_or([0x12, 0x34, 0x56, 0x78]);
-        let wechat_uin = base64::engine::general_purpose::STANDARD.encode(uin_bytes);
+        // Aligned with hermes-agent: random u32 → decimal string → base64.
+        let uin_int = u32::from_be_bytes(
+            uuid::Uuid::now_v7().as_bytes()[0..4]
+                .try_into()
+                .unwrap_or([0x12, 0x34, 0x56, 0x78]),
+        );
+        let wechat_uin =
+            base64::engine::general_purpose::STANDARD.encode(uin_int.to_string().as_bytes());
+
+        // Resolve effective token and account_id (config > session file).
+        let token = config.effective_token().unwrap_or_default();
+        let account_id = config.effective_account_id();
 
         Self {
             config,
@@ -78,6 +90,8 @@ impl WeixinAdapter {
                 .timeout(Duration::from_secs(POLL_TIMEOUT_SECONDS + 10))
                 .build()
                 .unwrap_or_default(),
+            token: Arc::new(Mutex::new(token)),
+            account_id,
             context_tokens: Arc::new(Mutex::new(context_tokens)),
             sync_buf: Arc::new(Mutex::new(sync_buf)),
             seen_messages: Arc::new(Mutex::new(HashMap::new())),
@@ -134,12 +148,14 @@ impl WeixinAdapter {
     }
 
     /// Build the standard iLink API headers.
-    fn api_headers(&self) -> reqwest::header::HeaderMap {
+    async fn api_headers(&self) -> reqwest::header::HeaderMap {
+        let token = self.token.lock().await;
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             "Authorization",
-            format!("Bearer {}", self.config.token).parse().unwrap(),
+            format!("Bearer {}", *token).parse().unwrap(),
         );
+        headers.insert("AuthorizationType", "ilink_bot_token".parse().unwrap());
         headers.insert("iLink-App-Id", "bot".parse().unwrap());
         // Version encoding: (2<<16)|(2<<8)|0
         headers.insert("iLink-App-ClientVersion", "131584".parse().unwrap());
@@ -166,7 +182,7 @@ impl WeixinAdapter {
         let resp = self
             .http_client
             .post(self.api_url("getupdates"))
-            .headers(self.api_headers())
+            .headers(self.api_headers().await)
             .json(&body)
             .send()
             .await?;
@@ -247,7 +263,7 @@ impl WeixinAdapter {
             .to_string();
 
         // Skip self messages.
-        if sender_id == self.config.account_id {
+        if sender_id == self.account_id {
             return None;
         }
 
@@ -296,7 +312,7 @@ impl WeixinAdapter {
         let resp = self
             .http_client
             .post(self.api_url("getconfig"))
-            .headers(self.api_headers())
+            .headers(self.api_headers().await)
             .json(&json!({}))
             .send()
             .await
@@ -330,7 +346,7 @@ impl WeixinAdapter {
         let resp = self
             .http_client
             .post(self.api_url("sendtyping"))
-            .headers(self.api_headers())
+            .headers(self.api_headers().await)
             .json(&body)
             .send()
             .await;
@@ -386,7 +402,7 @@ impl WeixinAdapter {
             let resp = self
                 .http_client
                 .post(self.api_url("sendmessage"))
-                .headers(self.api_headers())
+                .headers(self.api_headers().await)
                 .json(&body)
                 .send()
                 .await;
@@ -430,9 +446,18 @@ impl WeixinAdapter {
 #[async_trait::async_trait]
 impl PlatformAdapter for WeixinAdapter {
     async fn connect(&mut self) -> anyhow::Result<()> {
-        // Validate credentials by making a lightweight request.
+        // Validate that a token is available.
+        let token = self.token.lock().await;
+        if token.is_empty() {
+            anyhow::bail!(
+                "No iLink token available. Please complete QR login first \
+                 (gateway_weixin_qr_login) or set token in config.toml"
+            );
+        }
+        drop(token);
+
         tracing::info!(
-            account_id = %self.config.account_id,
+            account_id = %self.account_id,
             base_url = %self.config.base_url,
             "WeChat iLink Bot adapter connecting"
         );

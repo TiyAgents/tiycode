@@ -66,11 +66,14 @@ impl GatewayConfig {
 /// WeChat iLink Bot configuration.
 #[derive(Clone, Deserialize)]
 pub struct WeixinConfig {
-    /// The iLink bot account ID.
+    /// The iLink bot account ID (can be empty if obtained via QR login).
+    #[serde(default)]
     pub account_id: String,
 
     /// Bearer token for iLink API authentication.
-    pub token: String,
+    /// If empty/missing, the adapter will attempt to load from session file.
+    #[serde(default)]
+    pub token: Option<String>,
 
     /// Base URL for the iLink API (default: ilinkai.weixin.qq.com).
     #[serde(default = "default_weixin_base_url")]
@@ -79,6 +82,34 @@ pub struct WeixinConfig {
     /// CDN base URL for media upload/download.
     #[serde(default = "default_weixin_cdn_base_url")]
     pub cdn_base_url: String,
+}
+
+impl WeixinConfig {
+    /// Resolve the effective token: config value > session file.
+    ///
+    /// Returns `None` if no token is available (QR login required).
+    pub fn effective_token(&self) -> Option<String> {
+        // 1. Prefer explicit config token.
+        if let Some(ref t) = self.token {
+            if !t.is_empty() {
+                return Some(t.clone());
+            }
+        }
+        // 2. Fall back to persisted session file.
+        use super::platforms::weixin_auth;
+        weixin_auth::load_session().map(|s| s.token)
+    }
+
+    /// Resolve the effective account_id: config value > session file.
+    pub fn effective_account_id(&self) -> String {
+        if !self.account_id.is_empty() {
+            return self.account_id.clone();
+        }
+        use super::platforms::weixin_auth;
+        weixin_auth::load_session()
+            .map(|s| s.account_id)
+            .unwrap_or_default()
+    }
 }
 
 impl std::fmt::Debug for WeixinConfig {
