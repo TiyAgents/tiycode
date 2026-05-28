@@ -370,6 +370,8 @@ async fn dispatch_command(
                         /threads — 查看当前 workspace 的会话\n\
                         /new [标题] — 创建新会话\n\
                         /resume <N> — 进入第 N 个会话\n\
+                        /profile — 查看 Profile 列表\n\
+                        /profile <N> — 切换当前会话 Profile\n\
                         /stop — 停止当前运行\n\
                         /status — 查看当前状态\n\
                         /help — 显示此帮助";

@@ -62,8 +62,8 @@ pub struct WeixinAdapter {
     seen_content: Arc<Mutex<HashMap<u64, Instant>>>,
     /// Directory for persisted state files.
     state_dir: PathBuf,
-    /// Cached typing_ticket (fetched from getconfig API).
-    typing_ticket: Arc<Mutex<Option<String>>>,
+    /// Cached typing_ticket per user (fetched from getconfig API).
+    typing_tickets: Arc<Mutex<HashMap<String, String>>>,
     /// Random X-WECHAT-UIN value (stable per adapter instance).
     wechat_uin: String,
 }
@@ -102,7 +102,7 @@ impl WeixinAdapter {
             seen_messages: Arc::new(Mutex::new(HashMap::new())),
             seen_content: Arc::new(Mutex::new(HashMap::new())),
             state_dir,
-            typing_ticket: Arc::new(Mutex::new(None)),
+            typing_tickets: Arc::new(Mutex::new(HashMap::new())),
             wechat_uin,
         }
     }
@@ -386,31 +386,34 @@ impl WeixinAdapter {
         })
     }
 
-    /// Fetch typing_ticket from the getconfig API (cached).
+    /// Fetch typing_ticket from the getconfig API (cached per user).
     async fn fetch_typing_ticket(&self, chat_id: &str) -> Option<String> {
-        // Return cached ticket if available.
+        // Return cached ticket if available for this user.
         {
-            let cached = self.typing_ticket.lock().await;
-            if cached.is_some() {
-                return cached.clone();
+            let cached = self.typing_tickets.lock().await;
+            if let Some(ticket) = cached.get(chat_id) {
+                return Some(ticket.clone());
             }
         }
 
-        // getconfig requires ilink_user_id; also pass context_token if available.
+        // getconfig requires ilink_user_id; pass context_token only if available.
         let token_key = format!("{}:{}", self.account_id, chat_id);
-        let context_token = self
-            .context_tokens
-            .lock()
-            .await
-            .get(&token_key)
-            .cloned()
-            .unwrap_or_default();
+        let context_token = self.context_tokens.lock().await.get(&token_key).cloned();
 
-        let body = json!({
-            "ilink_user_id": chat_id,
-            "context_token": context_token,
-            "base_info": { "channel_version": CHANNEL_VERSION },
-        });
+        // Build body — omit context_token field entirely when not available
+        // (iLink may reject empty string).
+        let body = if let Some(ref ct) = context_token {
+            json!({
+                "ilink_user_id": chat_id,
+                "context_token": ct,
+                "base_info": { "channel_version": CHANNEL_VERSION },
+            })
+        } else {
+            json!({
+                "ilink_user_id": chat_id,
+                "base_info": { "channel_version": CHANNEL_VERSION },
+            })
+        };
 
         let resp = self
             .http_client
@@ -424,13 +427,22 @@ impl WeixinAdapter {
         let data: Value = resp.json().await.ok()?;
         let errcode = data.get("errcode").and_then(|v| v.as_i64()).unwrap_or(-1);
         if errcode != 0 {
-            tracing::debug!(errcode, "getconfig returned error, typing unavailable");
+            let errmsg = data.get("errmsg").and_then(|v| v.as_str()).unwrap_or("");
+            tracing::warn!(
+                errcode,
+                errmsg,
+                chat_id,
+                "getconfig failed, typing unavailable"
+            );
             return None;
         }
 
         let ticket = data.get("typing_ticket").and_then(|v| v.as_str())?;
         let ticket_str = ticket.to_string();
-        *self.typing_ticket.lock().await = Some(ticket_str.clone());
+        self.typing_tickets
+            .lock()
+            .await
+            .insert(chat_id.to_string(), ticket_str.clone());
         Some(ticket_str)
     }
 
@@ -461,9 +473,9 @@ impl WeixinAdapter {
                 let data: Value = r.json().await.unwrap_or_default();
                 let errcode = data.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
                 if errcode != 0 {
-                    // Ticket may have expired — clear cache for next attempt.
-                    *self.typing_ticket.lock().await = None;
-                    tracing::debug!(errcode, "sendtyping failed, cleared ticket cache");
+                    // Ticket may have expired — clear cache for this user.
+                    self.typing_tickets.lock().await.remove(chat_id);
+                    tracing::debug!(errcode, chat_id, "sendtyping failed, cleared ticket cache");
                 }
             }
             Err(e) => {
