@@ -626,25 +626,76 @@ async fn run_agent_prompt(
     // Send typing indicator.
     let _ = adapter.send_typing(chat_id).await;
 
-    // Convert media attachments to MessageAttachmentDto for agent consumption.
-    let attachments: Vec<MessageAttachmentDto> = media_attachments
+    // Merge voice transcriptions into the prompt so the agent can "hear" voice messages.
+    let voice_transcriptions: Vec<&str> = media_attachments
         .iter()
-        .map(|att| MessageAttachmentDto {
-            id: uuid::Uuid::now_v7().to_string(),
-            name: att.file_name.clone().unwrap_or_else(|| {
-                format!("{}.{}", att.media_type, mime_to_extension(&att.mime_type))
-            }),
-            media_type: Some(att.mime_type.clone()),
-            url: Some(att.url.clone()),
-        })
+        .filter_map(|a| a.transcription.as_deref())
         .collect();
+    let effective_prompt = if !voice_transcriptions.is_empty() {
+        if prompt.is_empty() {
+            voice_transcriptions.join("\n")
+        } else {
+            format!("{}\n\n{}", prompt, voice_transcriptions.join("\n"))
+        }
+    } else {
+        prompt.to_string()
+    };
+
+    // Convert media attachments to MessageAttachmentDto for agent consumption.
+    // For images with AES keys, download from CDN, decrypt, and produce data: URLs
+    // so the LLM can actually see the image content.
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
+
+    let mut attachments: Vec<MessageAttachmentDto> = Vec::new();
+    for att in media_attachments {
+        let name = att
+            .file_name
+            .clone()
+            .unwrap_or_else(|| format!("{}.{}", att.media_type, mime_to_extension(&att.mime_type)));
+
+        let url = if att.media_type == crate::gateway::platforms::weixin_media::MediaType::Image
+            && att.aes_key.is_some()
+        {
+            // Download + decrypt image → data: URL for LLM vision
+            match crate::gateway::platforms::weixin_media::download_media_as_data_url(
+                &http_client,
+                &att.url,
+                att.aes_key.as_deref().unwrap(),
+                &att.mime_type,
+            )
+            .await
+            {
+                Ok(data_url) => Some(data_url),
+                Err(e) => {
+                    tracing::warn!(
+                        url = %att.url,
+                        error = %e,
+                        "failed to download/decrypt image from CDN, falling back to URL"
+                    );
+                    Some(att.url.clone())
+                }
+            }
+        } else {
+            Some(att.url.clone())
+        };
+
+        attachments.push(MessageAttachmentDto {
+            id: uuid::Uuid::now_v7().to_string(),
+            name,
+            media_type: Some(att.mime_type.clone()),
+            url,
+        });
+    }
 
     // Start agent run.
     let (run_id, mut event_rx) = state
         .agent_run_manager
         .start_run(
             &thread_id,
-            prompt,
+            &effective_prompt,
             None,        // display_prompt
             None,        // prompt_metadata
             attachments, // media attachments from inbound message

@@ -4,7 +4,7 @@
 //! including AES-256-CBC encryption for outbound media and download URL
 //! construction for inbound media items.
 
-use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use md5::{Digest, Md5};
@@ -473,6 +473,91 @@ pub fn padded_ciphertext_size(plaintext_size: usize) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// AES-256-CBC decryption
+// ---------------------------------------------------------------------------
+
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+/// Decrypt media payload encrypted with AES-256-CBC + PKCS7 padding.
+///
+/// The input format is: IV (16 bytes) + ciphertext.
+/// `aes_key_base64` is the base64-encoded 32-byte AES key.
+pub fn decrypt_media_payload(encrypted_data: &[u8], aes_key_base64: &str) -> Result<Vec<u8>> {
+    if encrypted_data.len() < 16 {
+        bail!("encrypted data too short (must be at least 16 bytes for IV)");
+    }
+
+    let key_bytes = BASE64
+        .decode(aes_key_base64)
+        .context("failed to decode AES key from base64")?;
+    if key_bytes.len() != 32 {
+        bail!("AES key must be 32 bytes, got {} bytes", key_bytes.len());
+    }
+
+    let (iv, ciphertext) = encrypted_data.split_at(16);
+    let mut buf = ciphertext.to_vec();
+
+    let key: [u8; 32] = key_bytes.try_into().unwrap();
+    let iv_arr: [u8; 16] = iv.try_into().unwrap();
+
+    let plaintext = Aes256CbcDec::new(&key.into(), &iv_arr.into())
+        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .map_err(|_| anyhow!("AES-CBC decryption failed (invalid key, IV, or corrupted data)"))?;
+
+    Ok(plaintext.to_vec())
+}
+
+// ---------------------------------------------------------------------------
+// CDN download + decrypt pipeline
+// ---------------------------------------------------------------------------
+
+/// Download media from WeChat CDN and decrypt it.
+///
+/// Returns the decrypted plaintext bytes.
+pub async fn download_and_decrypt_media(
+    client: &Client,
+    cdn_download_url: &str,
+    aes_key_base64: &str,
+) -> Result<Vec<u8>> {
+    // Download encrypted data from CDN
+    let resp = client
+        .get(cdn_download_url)
+        .send()
+        .await
+        .context("CDN download request failed")?;
+
+    if !resp.status().is_success() {
+        bail!(
+            "CDN download failed with status: {} for URL: {}",
+            resp.status(),
+            cdn_download_url
+        );
+    }
+
+    let encrypted_data = resp
+        .bytes()
+        .await
+        .context("failed to read CDN response body")?;
+
+    // Decrypt
+    decrypt_media_payload(&encrypted_data, aes_key_base64)
+}
+
+/// Download a media attachment from CDN, decrypt it, and return as a data: URL.
+///
+/// Returns `data:{mime_type};base64,{base64_encoded_content}`.
+pub async fn download_media_as_data_url(
+    client: &Client,
+    cdn_download_url: &str,
+    aes_key_base64: &str,
+    mime_type: &str,
+) -> Result<String> {
+    let plaintext = download_and_decrypt_media(client, cdn_download_url, aes_key_base64).await?;
+    let encoded = BASE64.encode(&plaintext);
+    Ok(format!("data:{};base64,{}", mime_type, encoded))
+}
+
+// ---------------------------------------------------------------------------
 // CDN upload API interactions
 // ---------------------------------------------------------------------------
 
@@ -698,6 +783,37 @@ mod tests {
         let expected_padded = ((data.len() / 16) + 1) * 16;
         assert_eq!(ciphertext.len(), 16 + expected_padded);
         assert_eq!(key_hex.len(), 64); // 32 bytes = 64 hex chars
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_roundtrip() {
+        let data = b"WeChat CDN media content - test roundtrip encryption/decryption";
+        let (ciphertext, key_hex) = encrypt_media_payload(data);
+
+        // Convert hex key to base64 (as stored in MediaAttachment.aes_key)
+        let key_bytes = hex::decode(&key_hex).unwrap();
+        let key_base64 = BASE64.encode(&key_bytes);
+
+        // Decrypt and verify
+        let decrypted = decrypt_media_payload(&ciphertext, &key_base64).unwrap();
+        assert_eq!(decrypted, data);
+    }
+
+    #[test]
+    fn test_decrypt_invalid_key() {
+        let data = b"test data";
+        let (ciphertext, _) = encrypt_media_payload(data);
+
+        // Wrong key should fail
+        let wrong_key = BASE64.encode(&[0u8; 32]);
+        let result = decrypt_media_payload(&ciphertext, &wrong_key);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decrypt_too_short() {
+        let result = decrypt_media_payload(&[0u8; 10], "AAAA");
+        assert!(result.is_err());
     }
 
     #[test]
