@@ -7,8 +7,7 @@ use agent_client_protocol::schema::{
     LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest,
     PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities,
     SessionCloseCapabilities, SessionId, SessionListCapabilities, SessionResumeCapabilities,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
-    SetSessionModeResponse, StopReason,
+    StopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Dispatch};
 use tokio::sync::broadcast;
@@ -93,40 +92,6 @@ pub async fn serve_connection(
                             .respond_with_result(handle_prompt(state, request, connection).await)
                     })?;
                     Ok(())
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            {
-                let state = state.clone();
-                async move |request: SetSessionModeRequest, responder, _cx| {
-                    let _ = state
-                        .sessions
-                        .get(&request.session_id)
-                        .await
-                        .ok_or_else(|| {
-                            agent_client_protocol::Error::invalid_params()
-                                .data("unknown ACP session id")
-                        })?;
-                    responder.respond(SetSessionModeResponse::new())
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            {
-                let state = state.clone();
-                async move |request: SetSessionConfigOptionRequest, responder, _cx| {
-                    let _ = state
-                        .sessions
-                        .get(&request.session_id)
-                        .await
-                        .ok_or_else(|| {
-                            agent_client_protocol::Error::invalid_params()
-                                .data("unknown ACP session id")
-                        })?;
-                    responder.respond(SetSessionConfigOptionResponse::new(Vec::new()))
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -277,11 +242,6 @@ async fn handle_close_session(
 ) -> Result<CloseSessionResponse, agent_client_protocol::Error> {
     let record = ensure_session_loaded(&state, request.session_id.clone(), None).await?;
     let _ = state.agent_run_manager.cancel_run(&record.thread_id).await;
-    state
-        .thread_manager
-        .delete(&record.thread_id)
-        .await
-        .map_err(to_acp_error)?;
     state.sessions.remove(&request.session_id).await;
     Ok(CloseSessionResponse::new())
 }

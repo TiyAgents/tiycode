@@ -18,7 +18,11 @@ pub type AppEventEmitterRef = Arc<dyn AppEventEmitter>;
 pub struct NoopAppEventEmitter;
 
 impl AppEventEmitter for NoopAppEventEmitter {
-    fn emit_value(&self, _event: &'static str, _payload: serde_json::Value) {}
+    fn emit_value(&self, _event: &'static str, _payload: serde_json::Value) {
+        // Headless ACP stdio mode has no frontend windows. These app events are
+        // UI notifications only; runtime cleanup and persistence must not rely
+        // on this emitter being observed.
+    }
 }
 
 #[derive(Clone)]

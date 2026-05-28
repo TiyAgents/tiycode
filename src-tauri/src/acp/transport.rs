@@ -94,6 +94,8 @@ async fn serve_websocket(
                 Err(error) => Some(Err(io::Error::new(io::ErrorKind::InvalidData, error))),
             },
             Ok(Message::Close(_)) => None,
+            // Axum handles websocket ping/pong control frames; ACP JSON-RPC
+            // payloads are carried only by text/binary data frames.
             Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => None,
             Err(error) => Some(Err(io::Error::new(io::ErrorKind::BrokenPipe, error))),
         }

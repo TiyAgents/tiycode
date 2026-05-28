@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::{
-    PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
-    SelectedPermissionOutcome, SessionId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ContentBlock, ContentChunk, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
+    RequestPermissionRequest, SelectedPermissionOutcome, SessionId, SessionNotification,
+    SessionUpdate, TextContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use agent_client_protocol::{Client, ConnectionTo};
 
@@ -94,6 +95,16 @@ async fn request_permission(
                 timeout_ms = PERMISSION_TIMEOUT.as_millis() as u64,
                 "ACP permission request timed out; rejecting tool call"
             );
+            connection.send_notification(SessionNotification::new(
+                session_id.clone(),
+                SessionUpdate::AgentThoughtChunk(
+                    ContentChunk::new(ContentBlock::Text(TextContent::new(format!(
+                        "Permission request for `{tool_name}` timed out after {} seconds; rejecting the tool call.",
+                        PERMISSION_TIMEOUT.as_secs()
+                    ))))
+                    .message_id(None),
+                ),
+            ))?;
             return Ok(false);
         }
     };

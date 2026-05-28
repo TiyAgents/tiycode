@@ -9,7 +9,7 @@ TiyCode can expose its existing Rust agent runtime as an Agent Client Protocol (
   - `GET /health` for a basic readiness check.
   - `GET /acp` as a WebSocket transport carrying ACP JSON-RPC line messages.
 
-HTTP/WebSocket is opt-in and disabled by default.
+HTTP/WebSocket is opt-in and disabled by default. This first implementation does not perform ACP authentication; the HTTP/WebSocket endpoint is a local trust-boundary integration intended only for trusted processes on the same machine. Do not bind it to non-loopback interfaces or expose it through a proxy without adding an external authentication layer.
 
 ## Capability strategy
 
@@ -23,4 +23,4 @@ When the existing TiyCode policy engine requires approval, ACP clients receive a
 
 ## Session mapping
 
-ACP `SessionId` values map to TiyCode thread IDs. `session/new` creates or reuses a workspace for the requested `cwd`, creates a TiyCode thread, and returns that thread ID as the ACP session ID. `session/load`, `session/list`, `session/prompt`, `session/cancel`, and `session/close` bridge to the existing thread and run managers.
+ACP `SessionId` values map to TiyCode thread IDs. `session/new` creates or reuses a workspace for the requested `cwd`, creates a TiyCode thread, and returns that thread ID as the ACP session ID. `session/load`, `session/list`, `session/prompt`, `session/cancel`, and `session/close` bridge to the existing thread and run managers. `session/close` only cancels any active run and unloads the in-memory ACP mapping; it does not delete the persisted TiyCode thread or conversation history.
