@@ -532,7 +532,7 @@ pub async fn upload_media(
     let resp = client
         .post(&upload_url_endpoint)
         .headers(headers.clone())
-        .bearer_token(token)
+        .bearer_auth(token)
         .json(&req_body)
         .send()
         .await
@@ -647,6 +647,8 @@ pub fn build_outbound_media_item(
 }
 
 /// Send message request body for the sendmessage API.
+/// Note: This is the inner structure. In practice, iLink requires wrapping this
+/// in a `{"base_info": {...}, "msg": {...}}` envelope — see WeixinAdapter::send_media.
 #[derive(Debug, Serialize)]
 pub struct SendMessageRequest {
     pub to_user_id: String,
@@ -655,17 +657,6 @@ pub struct SendMessageRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_token: Option<String>,
     pub item_list: Vec<MessageItem>,
-}
-
-/// Helper extension trait for reqwest RequestBuilder to add bearer token.
-trait BearerTokenExt {
-    fn bearer_token(self, token: &str) -> Self;
-}
-
-impl BearerTokenExt for reqwest::RequestBuilder {
-    fn bearer_token(self, token: &str) -> Self {
-        self.header("Authorization", format!("Bearer {}", token))
-    }
 }
 
 #[cfg(test)]

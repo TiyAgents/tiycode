@@ -695,26 +695,38 @@ impl PlatformAdapter for WeixinAdapter {
             file_data.len() as u64,
         );
 
-        // 5. Send the message via sendmessage API
+        // 5. Send the message via sendmessage API (using iLink protocol wrapper)
         let context_token = {
             let tokens = self.context_tokens.lock().await;
             let key = format!("{}:{}", self.account_id, chat_id);
-            tokens.get(&key).cloned()
+            tokens.get(&key).cloned().unwrap_or_default()
         };
 
-        let send_req = weixin_media::SendMessageRequest {
-            to_user_id: chat_id.to_string(),
-            client_id: uuid::Uuid::now_v7().to_string(),
-            message_type: 2,
-            context_token,
-            item_list: vec![message_item],
-        };
+        let client_id = format!("tiycode-weixin-{}", uuid::Uuid::now_v7());
+
+        // Serialize the MessageItem for the JSON body
+        let item_list_value = serde_json::to_value(&[&message_item]).unwrap_or_else(|_| json!([]));
+
+        let body = json!({
+            "base_info": {
+                "channel_version": CHANNEL_VERSION,
+            },
+            "msg": {
+                "from_user_id": "",
+                "to_user_id": chat_id,
+                "client_id": client_id,
+                "message_type": 2,
+                "message_state": 2,
+                "context_token": context_token,
+                "item_list": item_list_value
+            }
+        });
 
         let resp = self
             .http_client
-            .post(&self.api_url("sendmessage"))
+            .post(self.api_url("sendmessage"))
             .headers(self.api_headers().await)
-            .json(&send_req)
+            .json(&body)
             .send()
             .await?;
 
