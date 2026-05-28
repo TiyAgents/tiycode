@@ -55,6 +55,8 @@ pub struct UserSession {
     pub cached_workspaces: Vec<WorkspaceRecord>,
     /// Cached thread list for number-based selection.
     pub cached_threads: Vec<ThreadSummaryDto>,
+    /// Cached profile list for number-based selection.
+    pub cached_profiles: Vec<crate::model::provider::AgentProfileRecord>,
 }
 
 impl UserSession {
@@ -68,6 +70,7 @@ impl UserSession {
             state: SessionState::Idle,
             cached_workspaces: Vec::new(),
             cached_threads: Vec::new(),
+            cached_profiles: Vec::new(),
         }
     }
 
@@ -121,6 +124,7 @@ impl UserSession {
                 state: SessionState::Idle, // Always reset transient state on load
                 cached_workspaces: Vec::new(),
                 cached_threads: Vec::new(),
+                cached_profiles: Vec::new(),
             })
         } else {
             let session = Self::new(platform, user_id.to_string());

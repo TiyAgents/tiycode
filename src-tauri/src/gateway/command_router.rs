@@ -11,6 +11,8 @@ pub enum GatewayCommand {
     ThreadList,
     ThreadNew { title: Option<String> },
     ThreadResume { index: usize },
+    ProfileList,
+    ProfileSwitch { index: usize },
     Stop,
     Status,
     Help,
@@ -69,6 +71,18 @@ pub fn parse(text: &str) -> GatewayCommand {
     if let Some(rest) = trimmed.strip_prefix("/resume ") {
         if let Ok(index) = rest.trim().parse::<usize>() {
             return GatewayCommand::ThreadResume { index };
+        }
+    }
+
+    // /profile or /profiles — list profiles
+    if trimmed.eq_ignore_ascii_case("/profile") || trimmed.eq_ignore_ascii_case("/profiles") {
+        return GatewayCommand::ProfileList;
+    }
+
+    // /profile <N> — switch profile
+    if let Some(rest) = trimmed.strip_prefix("/profile ") {
+        if let Ok(index) = rest.trim().parse::<usize>() {
+            return GatewayCommand::ProfileSwitch { index };
         }
     }
 

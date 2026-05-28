@@ -261,6 +261,40 @@ pub fn render_thread_list(
     out
 }
 
+/// Render a numbered profile list for IM display.
+pub fn render_profile_list(
+    profiles: &[crate::model::provider::AgentProfileRecord],
+    current_profile_id: Option<&str>,
+) -> String {
+    if profiles.is_empty() {
+        return "🔧 暂无 Profile\n\n请在 TiyCode 设置中配置".to_string();
+    }
+
+    let mut out = String::from("🔧 Profile 列表:\n");
+    for (i, p) in profiles.iter().enumerate() {
+        let marker = if Some(p.id.as_str()) == current_profile_id {
+            " ★"
+        } else {
+            ""
+        };
+        let default_tag = if p.is_default { " [默认]" } else { "" };
+        let model_info = match p.primary_model_id.as_deref() {
+            Some(id) if !id.is_empty() => format!(" ({})", id),
+            _ => String::new(),
+        };
+        out.push_str(&format!(
+            "  {}. {}{}{}{}\n",
+            i + 1,
+            p.name,
+            model_info,
+            default_tag,
+            marker
+        ));
+    }
+    out.push_str("\n/profile <编号> 切换当前会话的 Profile");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,6 +17,7 @@ use crate::gateway::platforms::weixin::WeixinAdapter;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::thread::MessageAttachmentDto;
 use crate::model::workspace::WorkspaceAddInput;
+use crate::persistence::repo::profile_repo;
 use crate::persistence::repo::thread_repo;
 
 use super::approval_bridge;
@@ -489,6 +490,38 @@ async fn dispatch_command(
             } else {
                 adapter
                     .send_text(chat_id, "❌ 无效编号，请先发送 /threads 查看列表")
+                    .await?;
+            }
+        }
+
+        GatewayCommand::ProfileList => {
+            let thread_id = session.require_thread()?;
+            let current_profile_id = thread_repo::find_by_id(&state.pool, thread_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|r| r.profile_id);
+            let profiles = profile_repo::list_all(&state.pool).await?;
+            session.cached_profiles = profiles.clone();
+            let text =
+                message_formatter::render_profile_list(&profiles, current_profile_id.as_deref());
+            adapter.send_text(chat_id, &text).await?;
+        }
+
+        GatewayCommand::ProfileSwitch { index } => {
+            let thread_id = session.require_thread()?.to_string();
+            let profile_info = session
+                .cached_profiles
+                .get(index.saturating_sub(1))
+                .map(|p| (p.id.clone(), p.name.clone()));
+            if let Some((id, name)) = profile_info {
+                thread_repo::update_profile(&state.pool, &thread_id, Some(&id)).await?;
+                adapter
+                    .send_text(chat_id, &format!("✅ 已切换 Profile: {name}"))
+                    .await?;
+            } else {
+                adapter
+                    .send_text(chat_id, "❌ 无效编号，请先发送 /profile 查看列表")
                     .await?;
             }
         }
