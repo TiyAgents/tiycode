@@ -95,6 +95,8 @@ impl GatewayState {
 /// Entry point for running the IM gateway as a headless service.
 ///
 /// Called from `lib.rs::run_gateway()` after runtime initialization.
-pub async fn run(state: GatewayState, config: config::GatewayConfig) -> anyhow::Result<()> {
-    gateway_runner::run(state, config).await
+/// The gateway starts unconditionally and watches `config_path` for channel
+/// configuration changes, dynamically loading/reloading adapters as needed.
+pub async fn run(state: GatewayState, config_path: std::path::PathBuf) -> anyhow::Result<()> {
+    gateway_runner::run(state, config_path).await
 }

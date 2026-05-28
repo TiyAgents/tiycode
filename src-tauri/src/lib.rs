@@ -262,11 +262,9 @@ pub fn run_gateway(config_path: Option<&str>) -> anyhow::Result<()> {
     let config_file = config_path
         .map(PathBuf::from)
         .unwrap_or_else(gateway::config::default_config_path);
-    let config = gateway::config::GatewayConfig::load(&config_file)?;
 
     tracing::info!(
         path = %tiy_home.display(),
-        platform = %config.platform,
         config_file = %config_file.display(),
         "tiy IM gateway starting"
     );
@@ -291,7 +289,7 @@ pub fn run_gateway(config_path: Option<&str>) -> anyhow::Result<()> {
         if let Err(error) = state.terminal_manager.recover_orphaned_sessions().await {
             tracing::warn!(error = %error, "gateway startup terminal session recovery failed");
         }
-        gateway::run(state, config).await
+        gateway::run(state, config_file).await
     })
 }
 

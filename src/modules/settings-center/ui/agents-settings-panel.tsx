@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useState } from "react";
+import { SettingsSection } from "./settings-shared";
 import {
   AlertTriangle,
   Bot,
@@ -99,26 +100,6 @@ const MODEL_ROLE_OPTIONS: Array<{
     descriptionKey: "settings.agents.modelRole.lightweightDesc",
   },
 ];
-
-function SettingsPanelSection({
-  action,
-  children,
-  title,
-}: {
-  action?: ReactNode;
-  children: ReactNode;
-  title: string;
-}) {
-  return (
-    <section>
-      <div className="mb-2 flex items-center justify-between px-1">
-        <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-app-subtle">{title}</h2>
-        {action ?? null}
-      </div>
-      <div className="overflow-hidden rounded-2xl border border-app-border bg-app-surface">{children}</div>
-    </section>
-  );
-}
 
 function FieldGroup({
   children,
@@ -563,7 +544,7 @@ export function AgentsSettingsPanel({
         </div>
       )}
 
-      <SettingsPanelSection title={t("settings.agents.builtInAgents")}>
+      <SettingsSection title={t("settings.agents.builtInAgents")}>
         <div className="grid gap-3 p-3 md:grid-cols-2">
           {BUILT_IN_AGENTS.map((agent) => {
             const Icon = agent.icon;
@@ -592,9 +573,9 @@ export function AgentsSettingsPanel({
             );
           })}
         </div>
-      </SettingsPanelSection>
+      </SettingsSection>
 
-      <SettingsPanelSection
+      <SettingsSection
         title={t("settings.agents.customAgents")}
         action={
           <Button type="button" variant="outline" size="sm" onClick={handleCreate}>
@@ -708,7 +689,7 @@ export function AgentsSettingsPanel({
             </div>
           )}
         </div>
-      </SettingsPanelSection>
+      </SettingsSection>
 
       <Dialog
         open={pendingAction !== null}

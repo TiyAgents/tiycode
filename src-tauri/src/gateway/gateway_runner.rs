@@ -1,7 +1,12 @@
 //! Gateway runner — main event loop that drives the IM platform adapter,
 //! routes commands, executes agent prompts, and handles approvals.
+//!
+//! The runner watches the config file for changes and dynamically reloads
+//! adapters when the configuration is updated.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use futures::StreamExt;
 use tokio::sync::{broadcast, mpsc};
@@ -21,39 +26,134 @@ use super::traits::{Platform, PlatformAdapter};
 use super::user_session::{SessionState, UserSession};
 use super::GatewayState;
 
-/// Run the gateway main loop with the given platform adapter.
-pub async fn run(state: GatewayState, config: GatewayConfig) -> anyhow::Result<()> {
-    tracing::info!(platform = %config.platform, "gateway runner starting");
+/// Config file poll interval for change detection.
+const CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-    let adapter: Box<dyn PlatformAdapter> = match config.platform {
-        Platform::Wecom => {
-            let wecom_config = config
-                .wecom
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("[wecom] config section missing"))?;
-            Box::new(WecomAdapter::new(wecom_config))
+/// Idle wait interval when no config or no enabled channels.
+const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Get the modification time of a file, or None if it doesn't exist.
+fn file_mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
+/// Try to load a valid config with at least one enabled channel.
+/// Returns None if the file doesn't exist or has no enabled channels.
+fn try_load_config(path: &Path) -> Option<GatewayConfig> {
+    let config = GatewayConfig::load(path).ok()?;
+    let has_enabled = config.weixin.as_ref().map_or(false, |w| w.enabled)
+        || config.wecom.as_ref().map_or(false, |w| w.enabled);
+    if has_enabled {
+        Some(config)
+    } else {
+        None
+    }
+}
+
+/// Run the gateway main loop with dynamic config watching.
+///
+/// The gateway starts unconditionally and watches `config_path` for changes.
+/// When no config exists or no channels are enabled, it idles and polls.
+/// When config changes are detected, adapters are reloaded.
+pub async fn run(state: GatewayState, config_path: PathBuf) -> anyhow::Result<()> {
+    tracing::info!(config = %config_path.display(), "gateway runner starting (config-watch mode)");
+
+    let mut last_mtime: Option<SystemTime> = None;
+
+    loop {
+        // Check for config changes.
+        let current_mtime = file_mtime(&config_path);
+
+        let config = match try_load_config(&config_path) {
+            Some(c) => c,
+            None => {
+                if last_mtime.is_none() {
+                    tracing::info!("no config or no enabled channels, waiting...");
+                }
+                last_mtime = current_mtime;
+                tokio::time::sleep(IDLE_POLL_INTERVAL).await;
+                continue;
+            }
+        };
+
+        last_mtime = current_mtime;
+        tracing::info!(platform = %config.platform, "config loaded, starting adapter");
+
+        // Create adapter based on config.
+        let adapter: Box<dyn PlatformAdapter> = match config.platform {
+            Platform::Wecom => {
+                let wecom_config = match config.wecom.clone() {
+                    Some(c) => c,
+                    None => {
+                        tracing::warn!("[wecom] config section missing");
+                        tokio::time::sleep(IDLE_POLL_INTERVAL).await;
+                        continue;
+                    }
+                };
+                Box::new(WecomAdapter::new(wecom_config))
+            }
+            Platform::Weixin => {
+                let weixin_config = match config.weixin.clone() {
+                    Some(c) => c,
+                    None => {
+                        tracing::warn!("[weixin] config section missing");
+                        tokio::time::sleep(IDLE_POLL_INTERVAL).await;
+                        continue;
+                    }
+                };
+                Box::new(WeixinAdapter::new(weixin_config))
+            }
+        };
+
+        let session =
+            UserSession::load_or_create(&state.pool, config.platform, "default_user").await?;
+
+        // Run the adapter with config change detection.
+        // Returns when config changes or adapter disconnects.
+        let result = run_with_adapter(
+            Arc::new(state.clone()),
+            config,
+            adapter,
+            session,
+            &config_path,
+            &mut last_mtime,
+        )
+        .await;
+
+        match result {
+            Ok(RunExitReason::ConfigChanged) => {
+                tracing::info!("config changed, reloading adapter");
+                continue;
+            }
+            Ok(RunExitReason::AdapterDisconnected) => {
+                tracing::info!("adapter disconnected, will retry with current config");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "adapter run failed, will retry");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
         }
-        Platform::Weixin => {
-            let weixin_config = config
-                .weixin
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("[weixin] config section missing"))?;
-            Box::new(WeixinAdapter::new(weixin_config))
-        }
-    };
+    }
+}
 
-    let session = UserSession::load_or_create(&state.pool, config.platform, "default_user").await?;
-
-    run_with_adapter(Arc::new(state), config, adapter, session).await
+/// Reason the inner run loop exited.
+enum RunExitReason {
+    ConfigChanged,
+    AdapterDisconnected,
 }
 
 /// Core runner logic extracted for testability.
-pub async fn run_with_adapter(
+async fn run_with_adapter(
     state: Arc<GatewayState>,
     config: GatewayConfig,
     adapter: Box<dyn PlatformAdapter>,
     mut session: UserSession,
-) -> anyhow::Result<()> {
+    config_path: &Path,
+    last_mtime: &mut Option<SystemTime>,
+) -> anyhow::Result<RunExitReason> {
     let platform = adapter.platform();
     let chat_id = session.user_id.clone();
 
@@ -75,77 +175,95 @@ pub async fn run_with_adapter(
     // Wrap in Arc<Mutex> so both the message loop and run_agent_prompt can access.
     let approval_rx = Arc::new(tokio::sync::Mutex::new(approval_rx));
 
-    // Main message loop.
+    // Main message loop with config change detection.
+    let exit_reason;
     {
         let mut messages = adapter.poll_messages();
-        while let Some(msg_result) = messages.next().await {
-            let msg = match msg_result {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::warn!(error = %e, "error receiving message from platform");
-                    continue;
-                }
-            };
+        let mut config_check = tokio::time::interval(CONFIG_POLL_INTERVAL);
+        config_check.tick().await; // consume first immediate tick
 
-            tracing::debug!(sender = %msg.sender_id, text = %msg.text, "inbound message");
+        exit_reason = loop {
+            tokio::select! {
+                msg_opt = messages.next() => {
+                    let msg = match msg_opt {
+                        Some(Ok(m)) => m,
+                        Some(Err(e)) => {
+                            tracing::warn!(error = %e, "error receiving message from platform");
+                            continue;
+                        }
+                        None => {
+                            // Adapter stream ended (disconnected).
+                            break RunExitReason::AdapterDisconnected;
+                        }
+                    };
 
-            // Handle approval responses if awaiting.
-            if session.is_awaiting_approval() {
-                if let Some(approved) = approval_bridge::parse_approval_response(&msg.text) {
-                    // Feed the approval decision into the event pump.
-                    let _ = approval_tx.send(approved).await;
-                    // The event pump will handle resolve_approval and state transition.
-                    continue;
-                } else {
-                    let _ = adapter
-                        .send_text(&chat_id, "请回复 Y(批准) 或 N(拒绝)")
-                        .await;
-                    continue;
-                }
-            }
+                    tracing::debug!(sender = %msg.sender_id, text = %msg.text, "inbound message");
 
-            // Handle number selection when awaiting.
-            if matches!(
-                session.state,
-                SessionState::AwaitingWorkspaceSelection | SessionState::AwaitingThreadSelection
-            ) {
-                if let Ok(index) = msg.text.trim().parse::<usize>() {
-                    handle_number_selection(
+                    // Handle approval responses if awaiting.
+                    if session.is_awaiting_approval() {
+                        if let Some(approved) = approval_bridge::parse_approval_response(&msg.text) {
+                            let _ = approval_tx.send(approved).await;
+                            continue;
+                        } else {
+                            let _ = adapter
+                                .send_text(&chat_id, "请回复 Y(批准) 或 N(拒绝)")
+                                .await;
+                            continue;
+                        }
+                    }
+
+                    // Handle number selection when awaiting.
+                    if matches!(
+                        session.state,
+                        SessionState::AwaitingWorkspaceSelection | SessionState::AwaitingThreadSelection
+                    ) {
+                        if let Ok(index) = msg.text.trim().parse::<usize>() {
+                            handle_number_selection(
+                                &state,
+                                &mut session,
+                                &config,
+                                index,
+                                &*adapter,
+                                &chat_id,
+                            )
+                            .await;
+                            continue;
+                        }
+                        session.state = SessionState::Idle;
+                    }
+
+                    // Parse and dispatch command.
+                    let cmd = command_router::parse(&msg.text);
+                    let response = dispatch_command(
                         &state,
                         &mut session,
                         &config,
-                        index,
+                        cmd,
                         &*adapter,
                         &chat_id,
+                        Arc::clone(&approval_rx),
                     )
                     .await;
-                    continue;
+
+                    if let Err(e) = response {
+                        let _ = adapter.send_text(&chat_id, &format!("❌ {e}")).await;
+                    }
                 }
-                // If not a number, fall through to normal command parsing.
-                session.state = SessionState::Idle;
+                _ = config_check.tick() => {
+                    // Periodic config change check.
+                    let current_mtime = file_mtime(config_path);
+                    if current_mtime != *last_mtime {
+                        tracing::info!("config file changed, triggering reload");
+                        *last_mtime = current_mtime;
+                        break RunExitReason::ConfigChanged;
+                    }
+                }
             }
-
-            // Parse and dispatch command.
-            let cmd = command_router::parse(&msg.text);
-            let response = dispatch_command(
-                &state,
-                &mut session,
-                &config,
-                cmd,
-                &*adapter,
-                &chat_id,
-                Arc::clone(&approval_rx),
-            )
-            .await;
-
-            if let Err(e) = response {
-                let _ = adapter.send_text(&chat_id, &format!("❌ {e}")).await;
-            }
-        }
-    } // drop `messages` stream to release borrow on `adapter`
+        };
+    } // drop `messages` stream before calling disconnect
 
     adapter.disconnect().await;
-    Ok(())
+    Ok(exit_reason)
 }
 
 /// Handle numeric selection for workspace/thread lists.

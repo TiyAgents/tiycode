@@ -88,10 +88,6 @@ impl GatewaySupervisor {
     /// Start the gateway process if not already running.
     /// Returns Ok(true) if started, Ok(false) if already running.
     pub fn ensure_started(&mut self) -> anyhow::Result<bool> {
-        if !self.config_exists() {
-            anyhow::bail!("gateway config not found at {}", self.config_path.display());
-        }
-
         if self.is_running() {
             // Check if version upgrade requires restart.
             if self.needs_upgrade_restart() {
