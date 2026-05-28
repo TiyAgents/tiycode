@@ -64,8 +64,6 @@ pub struct WeixinAdapter {
     state_dir: PathBuf,
     /// Cached typing_ticket (fetched from getconfig API).
     typing_ticket: Arc<Mutex<Option<String>>>,
-    /// Client ID for this adapter instance (stable per session).
-    client_id: String,
     /// Random X-WECHAT-UIN value (stable per adapter instance).
     wechat_uin: String,
 }
@@ -78,8 +76,6 @@ impl WeixinAdapter {
         let sync_buf = Self::load_sync_buf(&state_dir);
         let context_tokens = Self::load_context_tokens(&state_dir);
 
-        // Generate stable client_id and X-WECHAT-UIN for this session.
-        let client_id = format!("tiycode-weixin-{}", uuid::Uuid::now_v7());
         // Random u32 → decimal string → base64 for X-WECHAT-UIN.
         let uin_int = u32::from_be_bytes(
             uuid::Uuid::now_v7().as_bytes()[0..4]
@@ -107,7 +103,6 @@ impl WeixinAdapter {
             seen_content: Arc::new(Mutex::new(HashMap::new())),
             state_dir,
             typing_ticket: Arc::new(Mutex::new(None)),
-            client_id,
             wechat_uin,
         }
     }
@@ -256,6 +251,13 @@ impl WeixinAdapter {
 
         for update in msgs {
             if let Some(msg) = self.parse_update(&update, &mut seen, &mut seen_content) {
+                tracing::info!(
+                    msg_id = %msg.message_id,
+                    sender = %msg.sender_id,
+                    chat_id = %msg.chat_id,
+                    text_len = msg.text.len(),
+                    "inbound message parsed"
+                );
                 // Update context token for this sender.
                 // Key uses account_id:peer_id composite to support multi-account.
                 if let Some(token) = update.get("context_token").and_then(|v| v.as_str()) {
@@ -263,6 +265,8 @@ impl WeixinAdapter {
                     let key = format!("{}:{}", self.account_id, msg.sender_id);
                     tokens.insert(key, token.to_string());
                     self.persist_context_tokens(&tokens);
+                } else {
+                    tracing::warn!(msg_id = %msg.message_id, "no context_token in update");
                 }
                 messages.push(msg);
             }
@@ -278,7 +282,20 @@ impl WeixinAdapter {
         seen: &mut HashMap<String, Instant>,
         seen_content: &mut HashMap<u64, Instant>,
     ) -> Option<InboundMessage> {
-        let msg_id = update.get("message_id")?.as_str()?.to_string();
+        // iLink returns message_id as a number; accept both number and string.
+        let msg_id = update.get("message_id").and_then(|v| {
+            v.as_str()
+                .map(|s| s.to_string())
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                .or_else(|| v.as_u64().map(|n| n.to_string()))
+        });
+        let msg_id = match msg_id {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                tracing::debug!("parse_update: missing or empty message_id, skipping");
+                return None;
+            }
+        };
 
         // TTL-based dedup: check if message_id exists and is within TTL window.
         let now = Instant::now();
@@ -294,24 +311,34 @@ impl WeixinAdapter {
             seen.retain(|_, t| now.duration_since(*t).as_secs() < DEDUP_TTL_SECONDS);
         }
 
+        // iLink uses "from_user_id" for the sender; fall back to legacy "sender_id".
         let sender_id = update
-            .get("sender_id")
+            .get("from_user_id")
+            .or_else(|| update.get("sender_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
 
-        // Skip self messages.
-        if sender_id == self.account_id {
+        // Skip self messages (bot's own outbound echoes).
+        if sender_id.is_empty() || sender_id == self.account_id {
             return None;
         }
 
+        // iLink nests text content in item_list[0].text_item.text.
+        // Fall back to a top-level "text" field for compatibility.
         let text = update
-            .get("text")
-            .and_then(|v| v.as_str())
+            .get("item_list")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text_item"))
+            .and_then(|ti| ti.get("text"))
+            .and_then(|t| t.as_str())
+            .or_else(|| update.get("text").and_then(|v| v.as_str()))
             .unwrap_or("")
             .to_string();
 
         if text.is_empty() {
+            tracing::debug!(msg_id, "parse_update: empty text content, skipping");
             return None;
         }
 
@@ -335,16 +362,18 @@ impl WeixinAdapter {
             seen_content.retain(|_, t| now.duration_since(*t).as_secs() < DEDUP_TTL_SECONDS);
         }
 
-        let chat_id = update
-            .get("chat_id")
-            .or_else(|| update.get("room_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(&sender_id)
-            .to_string();
-        let is_group = update
-            .get("room_id")
-            .or_else(|| update.get("chat_room_id"))
-            .is_some();
+        // For DMs the reply target is from_user_id; for groups use group_id/session_id.
+        let is_group = update.get("group_id").and_then(|v| v.as_str()).is_some();
+        let chat_id = if is_group {
+            update
+                .get("group_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&sender_id)
+                .to_string()
+        } else {
+            // DM: reply target is the sender.
+            sender_id.clone()
+        };
 
         Some(InboundMessage {
             message_id: msg_id,
@@ -433,6 +462,17 @@ impl WeixinAdapter {
         let token_key = format!("{}:{}", self.account_id, chat_id);
         let context_token = self.context_tokens.lock().await.get(&token_key).cloned();
 
+        // Generate a unique client_id per message (iLink requires distinct client_id
+        // for each independent message to render correctly in the WeChat UI).
+        let client_id = format!("tiycode-weixin-{}", uuid::Uuid::now_v7());
+
+        tracing::info!(
+            to = %chat_id,
+            has_token = context_token.is_some(),
+            text_len = text.len(),
+            "sending message via iLink"
+        );
+
         for attempt in 0..MAX_SEND_RETRIES {
             // Build iLink sendmessage body.
             let ct = if attempt == 0 {
@@ -448,7 +488,7 @@ impl WeixinAdapter {
                 "msg": {
                     "from_user_id": "",
                     "to_user_id": chat_id,
-                    "client_id": self.client_id,
+                    "client_id": client_id,
                     "message_type": 2,
                     "message_state": 2,
                     "context_token": ct,
@@ -472,8 +512,20 @@ impl WeixinAdapter {
                     let data: Value = r.json().await.unwrap_or_default();
                     let errcode = data.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
                     if errcode == 0 {
+                        tracing::info!(to = %chat_id, "message sent successfully");
                         return Ok(SendResult::ok(None));
                     }
+                    let errmsg = data
+                        .get("errmsg")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    tracing::warn!(
+                        to = %chat_id,
+                        errcode,
+                        errmsg,
+                        attempt,
+                        "sendmessage failed"
+                    );
                     if errcode == -14 && attempt == 0 {
                         // Session expired — retry without context_token.
                         tracing::warn!("context_token expired, retrying without token");
@@ -483,13 +535,10 @@ impl WeixinAdapter {
                         sleep(SEND_RETRY_DELAY * (attempt + 1)).await;
                         continue;
                     }
-                    let errmsg = data
-                        .get("errmsg")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
                     return Ok(SendResult::err(format!("send failed: {errcode} {errmsg}")));
                 }
                 Err(e) => {
+                    tracing::warn!(to = %chat_id, error = %e, attempt, "sendmessage transport error");
                     if attempt < MAX_SEND_RETRIES - 1 {
                         sleep(SEND_RETRY_DELAY * (attempt + 1)).await;
                         continue;

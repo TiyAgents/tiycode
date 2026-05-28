@@ -155,20 +155,14 @@ async fn run_with_adapter(
     last_mtime: &mut Option<SystemTime>,
 ) -> anyhow::Result<RunExitReason> {
     let platform = adapter.platform();
-    let chat_id = session.user_id.clone();
 
     let mut adapter = adapter;
     adapter.connect().await?;
-    tracing::info!(platform = %platform, user = %chat_id, "connected to platform");
+    tracing::info!(platform = %platform, user = %session.user_id, "connected to platform");
 
-    // Send welcome message if no workspace is set.
-    if session.current_workspace_id.is_none() {
-        let welcome = "👋 你好！我是 TiyCode AI 助手\n\n\
-                       请先设置工作目录：\n  /ws add /path/to/your/project\n\n\
-                       或查看已有 workspace：\n  /ws\n\n\
-                       发送 /help 查看所有命令";
-        let _ = adapter.send_text(&chat_id, welcome).await;
-    }
+    // Track whether we have sent the welcome message (deferred until first inbound message
+    // so we know the actual chat_id to reply to).
+    let mut welcome_sent = session.current_workspace_id.is_some();
 
     // Channel for passing approval responses from the message loop into the event pump.
     let (approval_tx, approval_rx) = mpsc::channel::<bool>(1);
@@ -200,7 +194,29 @@ async fn run_with_adapter(
                         }
                     };
 
-                    tracing::debug!(sender = %msg.sender_id, text = %msg.text, "inbound message");
+                    tracing::info!(sender = %msg.sender_id, chat_id = %msg.chat_id, text = %msg.text, "inbound message received by runner");
+
+                    // Use the inbound message's chat_id as the reply target
+                    // (DM = sender_id, group = group_id).
+                    let reply_to = msg.chat_id.clone();
+
+                    // Send deferred welcome on first inbound message.
+                    if !welcome_sent {
+                        welcome_sent = true;
+                        let welcome = "👋 你好！我是 TiyCode AI 助手\n\n\
+                                       请先设置工作目录：\n  /ws add /path/to/your/project\n\n\
+                                       或查看已有 workspace：\n  /ws\n\n\
+                                       发送 /help 查看所有命令";
+                        match adapter.send_text(&reply_to, welcome).await {
+                            Ok(r) if !r.success => {
+                                tracing::warn!(chat_id = %reply_to, err = ?r.error, "welcome send failed (API rejected)");
+                            }
+                            Err(e) => {
+                                tracing::warn!(chat_id = %reply_to, error = %e, "welcome send failed (transport)");
+                            }
+                            _ => {}
+                        }
+                    }
 
                     // Handle approval responses if awaiting.
                     if session.is_awaiting_approval() {
@@ -209,7 +225,7 @@ async fn run_with_adapter(
                             continue;
                         } else {
                             let _ = adapter
-                                .send_text(&chat_id, "请回复 Y(批准) 或 N(拒绝)")
+                                .send_text(&reply_to, "请回复 Y(批准) 或 N(拒绝)")
                                 .await;
                             continue;
                         }
@@ -227,7 +243,7 @@ async fn run_with_adapter(
                                 &config,
                                 index,
                                 &*adapter,
-                                &chat_id,
+                                &reply_to,
                             )
                             .await;
                             continue;
@@ -243,13 +259,21 @@ async fn run_with_adapter(
                         &config,
                         cmd,
                         &*adapter,
-                        &chat_id,
+                        &reply_to,
                         Arc::clone(&approval_rx),
                     )
                     .await;
 
                     if let Err(e) = response {
-                        let _ = adapter.send_text(&chat_id, &format!("❌ {e}")).await;
+                        match adapter.send_text(&reply_to, &format!("❌ {e}")).await {
+                            Ok(r) if !r.success => {
+                                tracing::warn!(chat_id = %reply_to, err = ?r.error, "error reply send failed (API rejected)");
+                            }
+                            Err(send_err) => {
+                                tracing::warn!(chat_id = %reply_to, error = %send_err, "error reply send failed (transport)");
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 _ = config_check.tick() => {
