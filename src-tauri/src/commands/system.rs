@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::fs;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 use std::path::{Path, PathBuf};
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use std::process::Command;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::{SystemTime, UNIX_EPOCH};
