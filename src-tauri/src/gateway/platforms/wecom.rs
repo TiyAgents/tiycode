@@ -342,6 +342,7 @@ impl WecomAdapter {
             text,
             is_group,
             media_urls: vec![],
+            media_attachments: vec![],
             req_id,
         })
     }

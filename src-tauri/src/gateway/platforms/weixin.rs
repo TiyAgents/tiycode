@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use crate::gateway::config::WeixinConfig;
+use crate::gateway::platforms::weixin_media::{self, extract_media_attachments, MessageItem};
 use crate::gateway::traits::{InboundMessage, Platform, PlatformAdapter, SendResult};
 
 const POLL_TIMEOUT_SECONDS: u64 = 35;
@@ -51,6 +52,10 @@ pub struct WeixinAdapter {
     token: Arc<Mutex<String>>,
     /// Resolved account ID (from config or session file).
     account_id: String,
+    /// CDN base URL for media download/upload (from config).
+    cdn_base_url: String,
+    /// API base URL (from config).
+    base_url: String,
     /// Context token cache: peer_id → token (required for outbound messages).
     context_tokens: Arc<Mutex<HashMap<String, String>>>,
     /// Long-polling sync cursor (persisted across poll cycles).
@@ -88,6 +93,8 @@ impl WeixinAdapter {
         // Resolve effective token and account_id (config > session file).
         let token = config.effective_token().unwrap_or_default();
         let account_id = config.effective_account_id();
+        let cdn_base_url = config.cdn_base_url.clone();
+        let base_url = config.base_url.clone();
 
         Self {
             config,
@@ -97,6 +104,8 @@ impl WeixinAdapter {
                 .unwrap_or_default(),
             token: Arc::new(Mutex::new(token)),
             account_id,
+            cdn_base_url,
+            base_url,
             context_tokens: Arc::new(Mutex::new(context_tokens)),
             sync_buf: Arc::new(Mutex::new(sync_buf)),
             seen_messages: Arc::new(Mutex::new(HashMap::new())),
@@ -337,25 +346,43 @@ impl WeixinAdapter {
             .unwrap_or("")
             .to_string();
 
-        if text.is_empty() {
-            tracing::debug!(msg_id, "parse_update: empty text content, skipping");
+        // Parse media attachments from item_list.
+        let media_attachments = update
+            .get("item_list")
+            .and_then(|v| v.as_array())
+            .and_then(|items| {
+                serde_json::from_value::<Vec<MessageItem>>(Value::Array(items.clone())).ok()
+            })
+            .map(|items| extract_media_attachments(&items, &self.cdn_base_url))
+            .unwrap_or_default();
+
+        let media_urls: Vec<String> = media_attachments.iter().map(|a| a.url.clone()).collect();
+
+        // Skip messages with no text AND no media content.
+        if text.is_empty() && media_attachments.is_empty() {
+            tracing::debug!(msg_id, "parse_update: empty text and no media, skipping");
             return None;
         }
 
         // Content fingerprint dedup: catch re-delivery with different msg_id.
-        let content_hash = {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            sender_id.hash(&mut hasher);
-            text.hash(&mut hasher);
-            hasher.finish()
-        };
-        if let Some(inserted_at) = seen_content.get(&content_hash) {
-            if now.duration_since(*inserted_at).as_secs() < DEDUP_TTL_SECONDS {
-                tracing::debug!(msg_id, "content fingerprint dedup hit, skipping");
-                return None;
+        // Skip for slash commands — users legitimately re-send the same command
+        // (e.g. /profile after entering a thread).
+        let is_command = text.starts_with('/');
+        if !is_command {
+            let content_hash = {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                sender_id.hash(&mut hasher);
+                text.hash(&mut hasher);
+                hasher.finish()
+            };
+            if let Some(inserted_at) = seen_content.get(&content_hash) {
+                if now.duration_since(*inserted_at).as_secs() < DEDUP_TTL_SECONDS {
+                    tracing::debug!(msg_id, "content fingerprint dedup hit, skipping");
+                    return None;
+                }
             }
+            seen_content.insert(content_hash, now);
         }
-        seen_content.insert(content_hash, now);
 
         // Evict expired content fingerprints.
         if seen_content.len() > 2000 {
@@ -381,7 +408,8 @@ impl WeixinAdapter {
             chat_id,
             text,
             is_group,
-            media_urls: vec![],
+            media_urls,
+            media_attachments,
             req_id: None,
         })
     }
@@ -625,6 +653,93 @@ impl PlatformAdapter for WeixinAdapter {
         }
 
         Ok(last_result)
+    }
+
+    async fn send_media(
+        &self,
+        chat_id: &str,
+        file_path: &std::path::Path,
+        media_type: weixin_media::UploadMediaType,
+    ) -> anyhow::Result<SendResult> {
+        // 1. Read the file
+        let file_data = tokio::fs::read(file_path).await.map_err(|e| {
+            anyhow::anyhow!("failed to read media file {}: {}", file_path.display(), e)
+        })?;
+
+        let file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file");
+
+        // 2. Get auth headers and token
+        let headers = self.api_headers().await;
+        let token = self.token.lock().await.clone();
+
+        // 3. Upload to CDN
+        let uploaded = weixin_media::upload_media(
+            &self.http_client,
+            &self.cdn_base_url,
+            &self.base_url,
+            &token,
+            &headers,
+            &file_data,
+            media_type,
+        )
+        .await?;
+
+        // 4. Build the outbound message item
+        let message_item = weixin_media::build_outbound_media_item(
+            &uploaded,
+            media_type,
+            file_name,
+            file_data.len() as u64,
+        );
+
+        // 5. Send the message via sendmessage API
+        let context_token = {
+            let tokens = self.context_tokens.lock().await;
+            let key = format!("{}:{}", self.account_id, chat_id);
+            tokens.get(&key).cloned()
+        };
+
+        let send_req = weixin_media::SendMessageRequest {
+            to_user_id: chat_id.to_string(),
+            client_id: uuid::Uuid::now_v7().to_string(),
+            message_type: 2,
+            context_token,
+            item_list: vec![message_item],
+        };
+
+        let resp = self
+            .http_client
+            .post(&self.api_url("sendmessage"))
+            .headers(self.api_headers().await)
+            .json(&send_req)
+            .send()
+            .await?;
+
+        let body: Value = resp.json().await?;
+        let errcode = body.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
+
+        if errcode != 0 {
+            let errmsg = body
+                .get("errmsg")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            tracing::warn!(errcode, errmsg, "send_media failed for chat_id={}", chat_id);
+            return Ok(SendResult::err(format!(
+                "send_media failed: errcode={}, errmsg={}",
+                errcode, errmsg
+            )));
+        }
+
+        tracing::info!(
+            chat_id,
+            file_name,
+            media_type = ?media_type,
+            "media message sent successfully"
+        );
+        Ok(SendResult::ok(None))
     }
 
     async fn send_typing(&self, chat_id: &str) -> anyhow::Result<()> {

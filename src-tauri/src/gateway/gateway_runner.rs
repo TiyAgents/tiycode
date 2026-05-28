@@ -263,6 +263,7 @@ async fn run_with_adapter(
                         cmd,
                         &*adapter,
                         &reply_to,
+                        &msg.media_attachments,
                         Arc::clone(&approval_rx),
                     )
                     .await;
@@ -360,6 +361,7 @@ async fn dispatch_command(
     cmd: GatewayCommand,
     adapter: &dyn PlatformAdapter,
     chat_id: &str,
+    media_attachments: &[crate::gateway::platforms::weixin_media::MediaAttachment],
     approval_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<bool>>>,
 ) -> anyhow::Result<()> {
     match cmd {
@@ -561,7 +563,17 @@ async fn dispatch_command(
         }
 
         GatewayCommand::PlainText(text) => {
-            run_agent_prompt(state, session, config, adapter, chat_id, &text, approval_rx).await?;
+            run_agent_prompt(
+                state,
+                session,
+                config,
+                adapter,
+                chat_id,
+                &text,
+                media_attachments,
+                approval_rx,
+            )
+            .await?;
         }
     }
 
@@ -580,6 +592,7 @@ async fn run_agent_prompt(
     adapter: &dyn PlatformAdapter,
     chat_id: &str,
     prompt: &str,
+    media_attachments: &[crate::gateway::platforms::weixin_media::MediaAttachment],
     approval_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<bool>>>,
 ) -> anyhow::Result<()> {
     let thread_id = session.require_thread()?.to_string();
@@ -613,16 +626,29 @@ async fn run_agent_prompt(
     // Send typing indicator.
     let _ = adapter.send_typing(chat_id).await;
 
+    // Convert media attachments to MessageAttachmentDto for agent consumption.
+    let attachments: Vec<MessageAttachmentDto> = media_attachments
+        .iter()
+        .map(|att| MessageAttachmentDto {
+            id: uuid::Uuid::now_v7().to_string(),
+            name: att.file_name.clone().unwrap_or_else(|| {
+                format!("{}.{}", att.media_type, mime_to_extension(&att.mime_type))
+            }),
+            media_type: Some(att.mime_type.clone()),
+            url: Some(att.url.clone()),
+        })
+        .collect();
+
     // Start agent run.
     let (run_id, mut event_rx) = state
         .agent_run_manager
         .start_run(
             &thread_id,
             prompt,
-            None,                               // display_prompt
-            None,                               // prompt_metadata
-            Vec::<MessageAttachmentDto>::new(), // attachments
-            "default",                          // run_mode
+            None,        // display_prompt
+            None,        // prompt_metadata
+            attachments, // media attachments from inbound message
+            "default",   // run_mode
             profile_id,
             None, // provider_id
             None, // model_id
@@ -745,4 +771,23 @@ async fn run_agent_prompt(
     session.state = SessionState::Idle;
     session.save(&state.pool).await?;
     Ok(())
+}
+
+/// Map MIME type to a sensible file extension for naming generated attachments.
+fn mime_to_extension(mime: &str) -> &'static str {
+    match mime {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "video/mp4" => "mp4",
+        "video/quicktime" => "mov",
+        "audio/mpeg" => "mp3",
+        "audio/ogg" => "ogg",
+        "audio/amr" => "amr",
+        "audio/silk" => "silk",
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        _ => "bin",
+    }
 }

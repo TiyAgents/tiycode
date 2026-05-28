@@ -6,3 +6,4 @@
 pub mod wecom;
 pub mod weixin;
 pub mod weixin_auth;
+pub mod weixin_media;

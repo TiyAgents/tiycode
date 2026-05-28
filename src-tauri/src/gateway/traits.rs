@@ -1,8 +1,11 @@
 //! Platform adapter trait and shared message types for the IM gateway.
 
+use std::path::Path;
 use std::pin::Pin;
 
 use futures::Stream;
+
+use super::platforms::weixin_media::{MediaAttachment, UploadMediaType};
 
 /// Inbound message received from an IM platform.
 #[derive(Debug, Clone)]
@@ -17,8 +20,10 @@ pub struct InboundMessage {
     pub text: String,
     /// Whether this message was sent in a group chat.
     pub is_group: bool,
-    /// Optional media attachment URLs (phase-2, not used in v1).
+    /// Optional media attachment URLs (CDN download URLs for media items).
     pub media_urls: Vec<String>,
+    /// Structured media attachments with full metadata (type, AES key, size, etc.).
+    pub media_attachments: Vec<MediaAttachment>,
     /// WeCom request ID — required for group chat replies via `aibot_respond_msg`.
     pub req_id: Option<String>,
 }
@@ -93,6 +98,21 @@ pub trait PlatformAdapter: Send + Sync {
 
     /// Send a text message to the specified chat.
     async fn send_text(&self, chat_id: &str, text: &str) -> anyhow::Result<SendResult>;
+
+    /// Send a media file to the specified chat.
+    ///
+    /// Default implementation returns an unsupported error. Platforms that
+    /// support media upload (e.g. WeChat CDN) should override this.
+    async fn send_media(
+        &self,
+        _chat_id: &str,
+        _file_path: &Path,
+        _media_type: UploadMediaType,
+    ) -> anyhow::Result<SendResult> {
+        Ok(SendResult::err(
+            "media sending not supported on this platform",
+        ))
+    }
 
     /// Send typing indicator to the specified chat (best-effort, errors ignored).
     async fn send_typing(&self, chat_id: &str) -> anyhow::Result<()>;

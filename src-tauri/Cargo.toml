@@ -64,6 +64,11 @@ tiycore = "0.2.9-rc.0"
 
 # Gateway (IM channel support)
 async-trait = "0.1"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+rand = "0.8"
+md-5 = "0.10"
+hex = "0.4"
 qrcode = "0.14"
 toml = "0.8"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
