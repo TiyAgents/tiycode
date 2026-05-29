@@ -12,6 +12,7 @@ use futures::StreamExt;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::core::agent_session_model_plan;
+use crate::core::plan_checkpoint;
 use crate::gateway::platforms::wecom::WecomAdapter;
 use crate::gateway::platforms::weixin::WeixinAdapter;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
@@ -984,6 +985,24 @@ async fn run_agent_prompt(
             }
             Err(broadcast::error::RecvError::Closed) => {
                 break;
+            }
+            Ok(ThreadStreamEvent::PlanUpdated { plan, .. }) => {
+                // Display plan Design section in IM, then prompt for Y/N approval.
+                let artifact = serde_json::from_value::<plan_checkpoint::PlanArtifact>(plan.clone())
+                    .unwrap_or_else(|_| {
+                        plan_checkpoint::build_plan_artifact_from_tool_input(&plan, 0)
+                    });
+                let design_md = plan_checkpoint::plan_design_markdown(&artifact);
+                let chunks = message_formatter::format_and_split(&design_md, config.platform);
+                for chunk in &chunks {
+                    adapter.send_text(chat_id, chunk).await?;
+                    if chunks.len() > 1 {
+                        tokio::time::sleep(config.send_chunk_delay()).await;
+                    }
+                }
+                let approval_msg =
+                    approval_bridge::format_plan_approval_request(&artifact.title);
+                adapter.send_text(chat_id, &approval_msg).await?;
             }
             _ => {} // Other events (reasoning, tool completed, etc.) — skip.
         } } // close match + event arm

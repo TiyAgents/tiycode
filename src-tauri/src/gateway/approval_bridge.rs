@@ -19,6 +19,15 @@ pub fn format_approval_request(tool_name: &str, tool_input: &str) -> String {
     )
 }
 
+/// Format a plan approval request message for display in IM.
+pub fn format_plan_approval_request(title: &str) -> String {
+    format!(
+        "📋 实施计划待审批\n\n\
+         计划: {title}\n\n\
+         回复 Y 批准 / N 拒绝"
+    )
+}
+
 /// Parse a user's approval response.
 /// Returns `Some(true)` for approval, `Some(false)` for rejection, `None` for unrecognized.
 pub fn parse_approval_response(text: &str) -> Option<bool> {

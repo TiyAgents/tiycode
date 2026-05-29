@@ -168,6 +168,22 @@ pub fn plan_markdown(metadata: &PlanMessageMetadata) -> String {
     lines.join("\n")
 }
 
+pub fn plan_design_markdown(artifact: &PlanArtifact) -> String {
+    let mut lines = vec![format!("# {}", artifact.title)];
+
+    if !artifact.design.trim().is_empty() {
+        lines.push(String::new());
+        lines.push("## Design".to_string());
+        lines.push(artifact.design.trim().to_string());
+    } else if !artifact.summary.trim().is_empty() {
+        // Fallback to summary when design is empty
+        lines.push(String::new());
+        lines.push(artifact.summary.trim().to_string());
+    }
+
+    lines.join("\n")
+}
+
 pub fn approval_prompt_markdown(artifact: &PlanArtifact) -> String {
     format!(
         "Review **{}** and choose how to start implementation.",
