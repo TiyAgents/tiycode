@@ -6,9 +6,7 @@
 use tauri::State;
 
 use crate::core::gateway_supervisor::{GatewayStatus, GatewaySupervisorHandle};
-use crate::gateway::config::{
-    self as gateway_config, GatewayConfigDto, GatewayConfigUpdateInput,
-};
+use crate::gateway::config::{self as gateway_config, GatewayConfigDto, GatewayConfigUpdateInput};
 use crate::gateway::platforms::weixin_auth::{self, LoginPollStatus, QrLoginResult, WeixinSession};
 
 /// Start the gateway process (no-op if already running).
@@ -89,9 +87,7 @@ pub async fn gateway_get_config() -> Result<Option<GatewayConfigDto>, String> {
 /// Empty `wecom_secret` means "keep the existing secret".
 #[tauri::command]
 pub async fn gateway_save_config(input: GatewayConfigUpdateInput) -> Result<(), String> {
-    use crate::gateway::config::{
-        GatewayConfig, WecomConfig, WeixinConfig,
-    };
+    use crate::gateway::config::{GatewayConfig, WecomConfig, WeixinConfig};
     use crate::gateway::traits::Platform;
 
     let mut config = gateway_config::load_config().unwrap_or_else(|| GatewayConfig {
