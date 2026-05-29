@@ -359,11 +359,14 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
                 }
               />
             ) : (
-              <div className="flex flex-col items-center gap-3 px-4 py-6">
+              <div className="flex flex-col items-center gap-4 px-4 py-6">
                 {sessionExpired && (
-                  <span className="text-xs text-amber-600 dark:text-amber-400 text-center">
-                    {t("settings.gateway.sessionExpiredDesc")}
-                  </span>
+                  <div className="flex items-center gap-2 w-full rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2.5">
+                    <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span className="text-xs text-amber-700 dark:text-amber-300">
+                      {t("settings.gateway.sessionExpiredDesc")}
+                    </span>
+                  </div>
                 )}
                 {qrImage && <img src={qrImage} alt="QR Code" className="w-48 h-48 rounded-lg border border-app-border" />}
                 {loginPolling ? (
@@ -371,7 +374,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
                 ) : (
                   <Button size="sm" onClick={handleQrLogin} disabled={loading}>
                     <QrCode className="h-3.5 w-3.5 mr-1" />
-                    {loading ? "Loading..." : t("settings.gateway.scanQr")}
+                    {loading ? "Loading..." : sessionExpired ? t("settings.gateway.reLogin") : t("settings.gateway.scanQr")}
                   </Button>
                 )}
               </div>
