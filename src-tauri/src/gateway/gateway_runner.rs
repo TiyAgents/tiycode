@@ -200,6 +200,10 @@ async fn run_with_adapter(
     // Wrap in Arc<Mutex> so both the message loop and run_agent_prompt can access.
     let approval_rx = Arc::new(tokio::sync::Mutex::new(approval_rx));
 
+    // Channel for passing /stop signals from the outer message loop into the event pump.
+    let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
+    let stop_rx = Arc::new(tokio::sync::Mutex::new(stop_rx));
+
     // Main message loop with config change detection.
     // Re-snapshot mtime right before entering the loop to avoid false positives
     // from the outer loop's read vs inner loop's first check.
@@ -252,6 +256,17 @@ async fn run_with_adapter(
 
                     // Handle approval responses if awaiting.
                     if session.is_awaiting_approval() {
+                        // Allow /stop during approval to cancel the run.
+                        let trimmed = msg.text.trim();
+                        if trimmed.eq_ignore_ascii_case("/stop") {
+                            if let Some(thread_id) = session.current_thread_id.as_deref() {
+                                let _ = state.agent_run_manager.cancel_run(thread_id).await;
+                            }
+                            session.state = SessionState::Idle;
+                            let _ = stop_tx.send(()).await;
+                            let _ = adapter.send_text(&reply_to, "⏹️ 已停止当前运行").await;
+                            continue;
+                        }
                         if let Some(approved) = approval_bridge::parse_approval_response(&msg.text) {
                             let _ = approval_tx.send(approved).await;
                             continue;
@@ -260,6 +275,69 @@ async fn run_with_adapter(
                                 .send_text(&reply_to, "请回复 Y(批准) 或 N(拒绝)")
                                 .await;
                             continue;
+                        }
+                    }
+
+                    // Handle /stop while agent is running — signal the event pump
+                    // and cancel the run directly since the outer loop is blocked
+                    // on run_agent_prompt and cannot reach dispatch_command.
+                    if session.is_running() {
+                        let trimmed = msg.text.trim();
+                        if trimmed.eq_ignore_ascii_case("/stop") {
+                            if let Some(thread_id) = session.current_thread_id.as_deref() {
+                                let _ = state.agent_run_manager.cancel_run(thread_id).await;
+                            }
+                            session.state = SessionState::Idle;
+                            let _ = stop_tx.send(()).await;
+                            let _ = adapter.send_text(&reply_to, "⏹️ 已停止当前运行").await;
+                            continue;
+                        }
+
+                        // Parse the message: gateway commands (e.g. /ws, /threads,
+                        // /help) are handled normally since they control the
+                        // session rather than the agent.  Plain text is enqueued
+                        // as steer so channel users can redirect the agent
+                        // mid-turn.
+                        let cmd = command_router::parse(&msg.text);
+                        match cmd {
+                            GatewayCommand::PlainText(text) => {
+                                if let Some(thread_id) =
+                                    session.current_thread_id.as_deref()
+                                {
+                                    let text = text.trim().to_string();
+                                    if !text.is_empty() {
+                                        match state
+                                            .agent_run_manager
+                                            .enqueue_queue_message(
+                                                thread_id,
+                                                crate::core::agent_session_types::AgentQueueMessageKind::Steer,
+                                                text,
+                                                None,
+                                            )
+                                            .await
+                                        {
+                                            Ok(_) => {
+                                                let _ = adapter
+                                                    .send_text(
+                                                        &reply_to,
+                                                        "📨 消息已作为 steer 入队",
+                                                    )
+                                                    .await;
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    error = %e,
+                                                    "failed to enqueue steer message from gateway"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+                            // Non-PlainText commands fall through to normal
+                            // dispatch below, even while the agent is running.
+                            _ => {}
                         }
                     }
 
@@ -301,6 +379,7 @@ async fn run_with_adapter(
                         &reply_to,
                         &msg.media_attachments,
                         Arc::clone(&approval_rx),
+                        Arc::clone(&stop_rx),
                     )
                     .await;
 
@@ -399,6 +478,7 @@ async fn dispatch_command(
     chat_id: &str,
     media_attachments: &[crate::gateway::platforms::weixin_media::MediaAttachment],
     approval_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<bool>>>,
+    stop_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<()>>>,
 ) -> anyhow::Result<()> {
     match cmd {
         GatewayCommand::Help => {
@@ -610,6 +690,15 @@ async fn dispatch_command(
 
         GatewayCommand::Stop => {
             if let SessionState::AgentRunning { .. } = session.state {
+                if let Some(thread_id) = session.current_thread_id.as_deref() {
+                    let _ = state.agent_run_manager.cancel_run(thread_id).await;
+                }
+                session.state = SessionState::Idle;
+                adapter.send_text(chat_id, "⏹️ 已停止当前运行").await?;
+            } else if let SessionState::AwaitingApproval { .. } = session.state {
+                if let Some(thread_id) = session.current_thread_id.as_deref() {
+                    let _ = state.agent_run_manager.cancel_run(thread_id).await;
+                }
                 session.state = SessionState::Idle;
                 adapter.send_text(chat_id, "⏹️ 已停止当前运行").await?;
             } else {
@@ -627,6 +716,7 @@ async fn dispatch_command(
                 &text,
                 media_attachments,
                 approval_rx,
+                stop_rx,
             )
             .await?;
         }
@@ -649,6 +739,7 @@ async fn run_agent_prompt(
     prompt: &str,
     media_attachments: &[crate::gateway::platforms::weixin_media::MediaAttachment],
     approval_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<bool>>>,
+    stop_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<()>>>,
 ) -> anyhow::Result<()> {
     let thread_id = session.require_thread()?.to_string();
 
@@ -770,6 +861,13 @@ async fn run_agent_prompt(
     // Event pump: accumulate response, handle approvals inline.
     let mut accumulator = MessageAccumulator::new();
 
+    // Drain any stale /stop signals left from a previous run so they don't
+    // immediately cancel this new agent run.
+    {
+        let mut guard = stop_rx.lock().await;
+        while guard.try_recv().is_ok() {}
+    }
+
     // Periodically refresh typing indicator (WeChat auto-expires after ~15s).
     let mut typing_interval = tokio::time::interval(Duration::from_secs(10));
     typing_interval.tick().await; // consume the first immediate tick
@@ -780,6 +878,14 @@ async fn run_agent_prompt(
             _ = typing_interval.tick() => {
                 let _ = adapter.send_typing(chat_id).await;
                 continue;
+            }
+            // Watch for /stop signals from the outer message loop.
+            _ = async {
+                let mut guard = stop_rx.lock().await;
+                guard.recv().await
+            } => {
+                accumulator.push_text("\n\n⏹️ 运行已取消");
+                break;
             }
             event = event_rx.recv() => { match event {
             Ok(ThreadStreamEvent::MessageDelta { delta, .. }) => {
@@ -805,14 +911,23 @@ async fn run_agent_prompt(
 
                 // Wait for the approval decision from the outer message loop.
                 // The outer loop feeds Y/N responses into approval_tx.
+                // Also listen for /stop signals so the user can cancel mid-approval.
                 let mut rx_guard = approval_rx.lock().await;
-                let approved = tokio::time::timeout(
-                    std::time::Duration::from_secs(config.approval_timeout_seconds),
-                    rx_guard.recv(),
-                )
-                .await
-                .unwrap_or(None) // timeout → None
-                .unwrap_or(false); // channel closed → deny
+                let approved = tokio::select! {
+                    result = tokio::time::timeout(
+                        std::time::Duration::from_secs(config.approval_timeout_seconds),
+                        rx_guard.recv(),
+                    ) => {
+                        result.unwrap_or(None).unwrap_or(false)
+                    }
+                    _ = async {
+                        let mut stop_guard = stop_rx.lock().await;
+                        stop_guard.recv().await
+                    } => {
+                        // /stop received during approval — treat as deny + cancel.
+                        false
+                    }
+                };
                 drop(rx_guard);
 
                 // Resolve the approval in ToolGateway.
