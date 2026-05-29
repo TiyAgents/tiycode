@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -23,11 +24,11 @@ pub(crate) enum RuntimeSessionState {
     Finished,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeSessionFinishState {
     Running,
     Completed,
-    Panicked,
+    Panicked(String),
     Cancelled,
 }
 
@@ -73,7 +74,13 @@ impl BuiltInAgentRuntime {
             let finish_state = match run_task.await {
                 Ok(()) => RuntimeSessionFinishState::Completed,
                 Err(error) if error.is_cancelled() => RuntimeSessionFinishState::Cancelled,
-                Err(_) => RuntimeSessionFinishState::Panicked,
+                Err(error) if error.is_panic() => RuntimeSessionFinishState::Panicked(format!(
+                    "Runtime task panicked: {}",
+                    panic_payload_to_string(error.into_panic())
+                )),
+                Err(error) => RuntimeSessionFinishState::Panicked(format!(
+                    "Runtime task failed to join: {error}"
+                )),
             };
             let _ = finish_state_tx.send(finish_state);
         });
@@ -179,7 +186,7 @@ impl BuiltInAgentRuntime {
             Some(RuntimeSessionFinishState::Running) => RuntimeSessionState::Running,
             Some(
                 RuntimeSessionFinishState::Completed
-                | RuntimeSessionFinishState::Panicked
+                | RuntimeSessionFinishState::Panicked(_)
                 | RuntimeSessionFinishState::Cancelled,
             ) => RuntimeSessionState::Finished,
         }
@@ -192,11 +199,47 @@ impl BuiltInAgentRuntime {
         let sessions = self.sessions.lock().await;
         sessions
             .get(run_id)
-            .map(|entry| *entry.finish_state_rx.borrow())
+            .map(|entry| entry.finish_state_rx.borrow().clone())
     }
 
     pub async fn remove_session(&self, run_id: &str) {
         let mut sessions = self.sessions.lock().await;
         sessions.remove(run_id);
+    }
+}
+
+fn panic_payload_to_string(payload: Box<dyn Any + Send + 'static>) -> String {
+    match payload.downcast::<String>() {
+        Ok(message) => *message,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(message) => (*message).to_string(),
+            Err(_) => "non-string panic payload".to_string(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::panic_payload_to_string;
+
+    #[test]
+    fn panic_payload_to_string_extracts_string_payload() {
+        assert_eq!(
+            panic_payload_to_string(Box::new("boom".to_string())),
+            "boom"
+        );
+    }
+
+    #[test]
+    fn panic_payload_to_string_extracts_static_str_payload() {
+        assert_eq!(panic_payload_to_string(Box::new("boom")), "boom");
+    }
+
+    #[test]
+    fn panic_payload_to_string_handles_non_string_payload() {
+        assert_eq!(
+            panic_payload_to_string(Box::new(42usize)),
+            "non-string panic payload"
+        );
     }
 }

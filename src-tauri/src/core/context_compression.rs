@@ -590,7 +590,7 @@ fn maybe_truncate_tool_result(message: AgentMessage, aggressive: bool) -> AgentM
                 .content
                 .iter()
                 .map(|block| match block {
-                    ContentBlock::Text(tc) => tc.text.len(),
+                    ContentBlock::Text(tc) => tc.text.chars().count(),
                     _ => 0,
                 })
                 .sum();
@@ -600,12 +600,8 @@ fn maybe_truncate_tool_result(message: AgentMessage, aggressive: bool) -> AgentM
                     .content
                     .into_iter()
                     .map(|block| match block {
-                        ContentBlock::Text(tc) if tc.text.len() > max_chars => {
-                            let mut truncated = tc.text;
-                            truncated.truncate(max_chars);
-                            while !truncated.is_char_boundary(truncated.len()) {
-                                truncated.pop();
-                            }
+                        ContentBlock::Text(tc) if tc.text.chars().count() > max_chars => {
+                            let truncated = truncate_text_chars(&tc.text, max_chars);
                             ContentBlock::Text(TextContent::new(format!(
                                 "{}\n\n[Tool output truncated: {} chars → {} chars]",
                                 truncated, total_chars, max_chars
@@ -801,6 +797,48 @@ mod tests {
             );
         } else {
             panic!("Expected ToolResult");
+        }
+    }
+
+    #[test]
+    fn tool_result_truncation_is_char_boundary_safe_for_multibyte_text() {
+        let big_content = "飞书 WebSocket 长连接 🚀".repeat(1_000);
+        let msg = make_tool_result("web_search", &big_content);
+
+        let truncated = maybe_truncate_tool_result(msg, false);
+        if let AgentMessage::ToolResult(tr) = &truncated {
+            let text = tr.text_content();
+            assert!(
+                text.contains("[Tool output truncated:"),
+                "Should have truncation marker"
+            );
+            assert!(
+                text.contains("飞书"),
+                "Should keep a char-boundary-safe multibyte prefix"
+            );
+        } else {
+            panic!("Expected ToolResult");
+        }
+    }
+
+    #[test]
+    fn build_compressed_messages_truncates_multibyte_recent_tool_result_without_panicking() {
+        let big_content = "查询结果：飞书/Lark WebSocket 长连接 ✅".repeat(1_000);
+        let recent = vec![
+            make_assistant_with_tool_call("web_search"),
+            make_tool_result("web_search", &big_content),
+            make_assistant("我会总结搜索结果。"),
+        ];
+
+        let result = build_compressed_messages("Summary of earlier conversation", &recent);
+        assert_eq!(result.len(), 4);
+        match &result[2] {
+            AgentMessage::ToolResult(tr) => {
+                let text = tr.text_content();
+                assert!(text.contains("[Tool output truncated:"));
+                assert!(text.contains("查询结果"));
+            }
+            other => panic!("Expected ToolResult, got {:?}", other),
         }
     }
 
