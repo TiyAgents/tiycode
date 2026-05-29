@@ -18,7 +18,9 @@ use tiycore::types::{
     UserMessage,
 };
 
-use crate::core::catalog_model_id_normalizer::NormalizingCatalogMetadataStore;
+use crate::core::catalog_model_id_normalizer::{
+    normalize_model_id_for_catalog_match, NormalizingCatalogMetadataStore,
+};
 use crate::core::TIYCORE_REQUEST_MAX_RETRIES;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::provider::{
@@ -482,7 +484,9 @@ fn build_model_record_from_catalog(
             .map(|record| record.id.clone())
             .unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
         provider_id: provider_id.to_string(),
-        model_name: model.raw_id.clone(),
+        model_name: existing
+            .map(|record| record.model_name.clone())
+            .unwrap_or_else(|| model.raw_id.clone()),
         sort_index,
         display_name: normalize_optional_string(model.display_name.clone()).or_else(|| {
             existing.and_then(|record| normalize_optional_string(record.display_name.clone()))
@@ -1088,23 +1092,44 @@ impl SettingsManager {
             .iter()
             .map(|record| (record.model_name.clone(), record))
             .collect::<HashMap<_, _>>();
+        let existing_by_normalized_id = existing_models
+            .iter()
+            .filter_map(|record| {
+                let normalized = normalize_model_id_for_catalog_match(&record.model_name);
+                if normalized != record.model_name {
+                    Some((normalized.into_owned(), record))
+                } else {
+                    None
+                }
+            })
+            .collect::<HashMap<_, _>>();
         let fetched_ids = fetched_models
             .iter()
             .map(|model| model.raw_id.clone())
             .collect::<HashSet<_>>();
 
         for (sort_index, model) in fetched_models.into_iter().enumerate() {
-            let record = build_model_record_from_catalog(
-                provider_id,
-                existing_by_model_name.get(&model.raw_id).copied(),
-                &model,
-                sort_index as i64,
-            );
+            let existing = existing_by_model_name
+                .get(&model.raw_id)
+                .or_else(|| {
+                    existing_by_normalized_id
+                        .get(normalize_model_id_for_catalog_match(&model.raw_id).as_ref())
+                })
+                .copied();
+            let record =
+                build_model_record_from_catalog(provider_id, existing, &model, sort_index as i64);
             provider_repo::upsert_model(&self.pool, &record).await?;
         }
 
         for existing in existing_models {
-            if !existing.is_manual && !fetched_ids.contains(&existing.model_name) {
+            if existing.is_manual {
+                continue;
+            }
+            let exact_match = fetched_ids.contains(&existing.model_name);
+            let normalized_match = !exact_match
+                && fetched_ids
+                    .contains(normalize_model_id_for_catalog_match(&existing.model_name).as_ref());
+            if !exact_match && !normalized_match {
                 provider_repo::delete_model(&self.pool, &existing.id).await?;
             }
         }
@@ -2001,6 +2026,116 @@ mod tests {
         assert_eq!(
             merged["response_format"]["type"].as_str(),
             Some("json_object")
+        );
+    }
+
+    #[test]
+    fn fetched_model_merge_preserves_channel_routing_suffix() {
+        let existing = ProviderModelRecord {
+            id: "model-1".to_string(),
+            provider_id: "provider-1".to_string(),
+            model_name: "gpt-5.5:azure".to_string(),
+            sort_index: 4,
+            display_name: Some("Old Name".to_string()),
+            enabled: true,
+            context_window: Some("8192".to_string()),
+            max_output_tokens: Some("4096".to_string()),
+            capabilities_json: None,
+            provider_options_json: Some(r#"{"routing":"azure"}"#.to_string()),
+            is_manual: false,
+            created_at: String::new(),
+        };
+        let fetched = UnifiedModelInfo {
+            provider: TiyProvider::Zenmux,
+            raw_id: "gpt-5.5".to_string(),
+            canonical_model_key: Some("openai:gpt-5.5".to_string()),
+            display_name: Some("GPT-5.5".to_string()),
+            description: None,
+            context_window: Some(1_000_000),
+            max_output_tokens: Some(32_768),
+            max_input_tokens: None,
+            created_at: None,
+            modalities: Some(vec!["text".to_string()]),
+            capabilities: Some(vec!["tools".to_string()]),
+            pricing: None,
+            match_confidence: Some(1.0),
+            metadata_sources: vec!["openrouter".to_string()],
+            reasoning_content_constrained: false,
+            raw: json!({}),
+        };
+
+        let record = build_model_record_from_catalog("provider-1", Some(&existing), &fetched, 0);
+
+        assert_eq!(record.model_name, "gpt-5.5:azure");
+        assert_eq!(record.id, "model-1");
+        assert!(record.enabled);
+        assert_eq!(
+            record.provider_options_json.as_deref(),
+            Some(r#"{"routing":"azure"}"#),
+        );
+        assert_eq!(record.display_name.as_deref(), Some("GPT-5.5"));
+        assert_eq!(record.context_window.as_deref(), Some("1000000"));
+        assert!(!record.is_manual);
+    }
+
+    #[test]
+    fn fetched_model_merge_uses_raw_id_when_no_existing() {
+        let fetched = UnifiedModelInfo {
+            provider: TiyProvider::Zenmux,
+            raw_id: "gpt-5.5".to_string(),
+            canonical_model_key: Some("openai:gpt-5.5".to_string()),
+            display_name: Some("GPT-5.5".to_string()),
+            description: None,
+            context_window: Some(1_000_000),
+            max_output_tokens: Some(32_768),
+            max_input_tokens: None,
+            created_at: None,
+            modalities: Some(vec!["text".to_string()]),
+            capabilities: Some(vec!["tools".to_string()]),
+            pricing: None,
+            match_confidence: Some(1.0),
+            metadata_sources: vec!["openrouter".to_string()],
+            reasoning_content_constrained: false,
+            raw: json!({}),
+        };
+
+        let record = build_model_record_from_catalog("provider-1", None, &fetched, 0);
+
+        assert_eq!(record.model_name, "gpt-5.5");
+        assert!(!record.enabled);
+        assert!(!record.is_manual);
+    }
+
+    #[test]
+    fn normalize_colon_suffix_is_stripped() {
+        assert_eq!(
+            normalize_model_id_for_catalog_match("gpt-5.5:azure"),
+            "gpt-5.5"
+        );
+        assert_eq!(
+            normalize_model_id_for_catalog_match("deepseek-v4-pro:deepseek"),
+            "deepseek-v4-pro"
+        );
+    }
+
+    #[test]
+    fn normalize_free_suffix_is_stripped() {
+        assert_eq!(
+            normalize_model_id_for_catalog_match("deepseek-v4-pro-free"),
+            "deepseek-v4-pro"
+        );
+        assert_eq!(
+            normalize_model_id_for_catalog_match("deepseek/deepseek-v4-pro:free"),
+            "deepseek/deepseek-v4-pro"
+        );
+    }
+
+    #[test]
+    fn normalize_plain_model_id_is_preserved() {
+        assert_eq!(normalize_model_id_for_catalog_match("gpt-4.1"), "gpt-4.1");
+        assert_eq!(
+            normalize_model_id_for_catalog_match("openai/gpt-4.1"),
+            "openai/gpt-4.1"
         );
     }
 }

@@ -36,7 +36,7 @@ impl<S: CatalogMetadataStore> CatalogMetadataStore for NormalizingCatalogMetadat
     }
 }
 
-fn normalize_model_id_for_catalog_match(raw_id: &str) -> Cow<'_, str> {
+pub fn normalize_model_id_for_catalog_match(raw_id: &str) -> Cow<'_, str> {
     let trimmed = raw_id.trim();
     let without_free = trimmed.strip_suffix("-free").unwrap_or(trimmed);
     if let Some((base, suffix)) = without_free.rsplit_once(':') {
