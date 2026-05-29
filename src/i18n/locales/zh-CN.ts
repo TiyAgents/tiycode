@@ -357,6 +357,8 @@ const zhCN = {
   "settings.gateway.logout": "退出登录",
   "settings.gateway.loggedIn": "已登录",
   "settings.gateway.notLoggedIn": "未登录",
+  "settings.gateway.sessionExpired": "登录已过期",
+  "settings.gateway.sessionExpiredDesc": "微信登录已过期，请重新扫码登录。",
   "settings.gateway.wecomBotId": "Bot ID",
   "settings.gateway.wecomSecret": "Secret",
   "settings.gateway.wecomWsUrl": "WebSocket 地址",

@@ -31,9 +31,6 @@ const MAX_MESSAGE_LENGTH: usize = 2000;
 const CHANNEL_VERSION: &str = "2.2.0";
 /// TTL for message dedup entries (seconds).
 const DEDUP_TTL_SECONDS: u64 = 300;
-/// Long backoff when session is expired/stale (seconds).
-/// 600s long backoff to avoid hammering a dead session.
-const SESSION_EXPIRED_BACKOFF_SECONDS: u64 = 600;
 /// Rate-limit retry multiplier for errcode=-2.
 const RATE_LIMIT_RETRY_MULTIPLIER: u32 = 3;
 /// TTL for a cached typing_ticket before it is refetched from getconfig.
@@ -646,6 +643,13 @@ impl WeixinAdapter {
                         tracing::warn!("context_token expired, retrying without token");
                         continue;
                     }
+                    if errcode == -14 {
+                        // Session expired on subsequent attempt — clear session
+                        // so the UI reflects stale state and user must re-login.
+                        tracing::warn!(errcode, "session expired during send, clearing session");
+                        crate::gateway::platforms::weixin_auth::clear_session();
+                        return Ok(SendResult::err("session expired, cleared".to_string()));
+                    }
                     if attempt < MAX_SEND_RETRIES - 1 {
                         sleep(SEND_RETRY_DELAY * (attempt + 1)).await;
                         continue;
@@ -846,12 +850,14 @@ impl PlatformAdapter for WeixinAdapter {
 
                         // Determine backoff based on error type.
                         if err_str.contains("[session_expired]") {
-                            // Session expired/stale — long backoff to avoid hammering.
-                            tracing::warn!(
-                                backoff_secs = SESSION_EXPIRED_BACKOFF_SECONDS,
-                                "session expired, entering long backoff"
-                            );
-                            sleep(Duration::from_secs(SESSION_EXPIRED_BACKOFF_SECONDS)).await;
+                            // Session expired — clear persisted session so the UI
+                            // (which reads the file on mount) no longer shows "Logged In",
+                            // then terminate the stream so the runner reconnects and
+                            // eventually fails with "No token available" until the user
+                            // re-logs in via QR scan.
+                            tracing::warn!("session expired, clearing session and stopping poll");
+                            crate::gateway::platforms::weixin_auth::clear_session();
+                            return;
                         } else if err_str.contains("[rate_limited]") {
                             // Rate-limited — use multiplied backoff.
                             let delay = SEND_RETRY_DELAY * RATE_LIMIT_RETRY_MULTIPLIER * (consecutive_errors.min(10));

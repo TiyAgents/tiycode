@@ -1,7 +1,7 @@
 /**
  * Gateway/Channels settings panel — WeChat & WeCom channel configuration.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { AlertCircle, Play, RefreshCw, QrCode, LogOut, Save } from "lucide-react";
 import { useT } from "@/i18n";
@@ -39,6 +39,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
   const [loading, setLoading] = useState(false);
   const [qrImage, setQrImage] = useState<string | null>(null);
   const [loginPolling, setLoginPolling] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Config form state.
@@ -57,6 +58,15 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
     refreshWeixinSession();
     loadConfig();
   }, []);
+
+  // Detect session expiry: session was present but is now null while gateway is still running.
+  const prevSessionRef = useRef<WeixinSession | null>(null);
+  useEffect(() => {
+    if (prevSessionRef.current !== null && weixinSession === null && status?.running) {
+      setSessionExpired(true);
+    }
+    prevSessionRef.current = weixinSession;
+  }, [weixinSession, status?.running]);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -208,6 +218,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
           setWeixinSession(result.session ?? null);
           setQrImage(null);
           setLoginPolling(false);
+          setSessionExpired(false);
           try {
             setWeixinEnabled(true);
             await invoke("gateway_save_config", {
@@ -246,6 +257,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
   const handleLogout = async () => {
     await invoke("gateway_weixin_logout");
     setWeixinSession(null);
+    setSessionExpired(false);
   };
 
   return (
@@ -308,10 +320,18 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
             <div className="flex items-center gap-3">
               <span
                 className={`text-xs font-medium ${
-                  weixinSession ? "text-green-600 dark:text-green-400" : "text-app-muted"
+                  weixinSession
+                    ? "text-green-600 dark:text-green-400"
+                    : sessionExpired
+                      ? "text-amber-600 dark:text-amber-400"
+                      : "text-app-muted"
                 }`}
               >
-                {weixinSession ? t("settings.gateway.loggedIn") : t("settings.gateway.notLoggedIn")}
+                {weixinSession
+                  ? t("settings.gateway.loggedIn")
+                  : sessionExpired
+                    ? t("settings.gateway.sessionExpired")
+                    : t("settings.gateway.notLoggedIn")}
               </span>
               <Switch
                 size="sm"
@@ -340,6 +360,11 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
               />
             ) : (
               <div className="flex flex-col items-center gap-3 px-4 py-6">
+                {sessionExpired && (
+                  <span className="text-xs text-amber-600 dark:text-amber-400 text-center">
+                    {t("settings.gateway.sessionExpiredDesc")}
+                  </span>
+                )}
                 {qrImage && <img src={qrImage} alt="QR Code" className="w-48 h-48 rounded-lg border border-app-border" />}
                 {loginPolling ? (
                   <span className="text-xs text-app-muted animate-pulse">Waiting for scan...</span>

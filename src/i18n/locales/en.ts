@@ -346,6 +346,8 @@ const en: Record<TranslationKey, string> = {
   "settings.gateway.logout": "Logout",
   "settings.gateway.loggedIn": "Logged in",
   "settings.gateway.notLoggedIn": "Not logged in",
+  "settings.gateway.sessionExpired": "Session expired",
+  "settings.gateway.sessionExpiredDesc": "WeChat session has expired. Please scan the QR code to log in again.",
   "settings.gateway.wecomBotId": "Bot ID",
   "settings.gateway.wecomSecret": "Secret",
   "settings.gateway.wecomWsUrl": "WebSocket URL",
