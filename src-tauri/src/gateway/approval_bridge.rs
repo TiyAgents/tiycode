@@ -19,6 +19,29 @@ pub fn format_approval_request(tool_name: &str, tool_input: &str) -> String {
     )
 }
 
+/// Format a clarification request message for display in IM.
+pub fn format_clarify_request(tool_name: &str, tool_input: &str) -> String {
+    // Try to extract the "question" field from clarify tool input.
+    let question = serde_json::from_str::<serde_json::Value>(tool_input)
+        .ok()
+        .and_then(|v| {
+            v.get("question")
+                .or_else(|| v.get("message"))
+                .and_then(|q| q.as_str())
+                .map(str::trim)
+                .filter(|q| !q.is_empty())
+                .map(String::from)
+        })
+        .unwrap_or_else(|| truncate_input(tool_input, 300));
+
+    format!(
+        "❓ 需要补充信息\n\n\
+         工具: `{tool_name}`\n\
+         问题:\n{question}\n\n\
+         请直接回复内容"
+    )
+}
+
 /// Format a plan approval request message for display in IM.
 pub fn format_plan_approval_request(title: &str) -> String {
     format!(
@@ -108,5 +131,21 @@ mod tests {
         assert!(msg.contains("Refactor runtime"));
         assert!(msg.contains("Y"));
         assert!(msg.contains("N"));
+    }
+
+    #[test]
+    fn format_clarify_request_extracts_question() {
+        let msg =
+            format_clarify_request("clarify", r#"{"question":"What is the target platform?"}"#);
+        assert!(msg.contains("❓"));
+        assert!(msg.contains("What is the target platform?"));
+        assert!(msg.contains("请直接回复内容"));
+    }
+
+    #[test]
+    fn format_clarify_request_falls_back_to_raw_input() {
+        let msg = format_clarify_request("clarify", "just some text");
+        assert!(msg.contains("❓"));
+        assert!(msg.contains("just some text"));
     }
 }

@@ -28,6 +28,11 @@ pub enum SessionState {
     },
     /// Waiting for user to approve/reject an implementation plan.
     AwaitingPlanApproval { approval_message_id: String },
+    /// Waiting for user to answer a clarification question.
+    AwaitingClarify {
+        tool_call_id: String,
+        tool_name: String,
+    },
 }
 
 impl SessionState {
@@ -106,6 +111,11 @@ impl UserSession {
     /// Whether the session is awaiting plan approval.
     pub fn is_awaiting_plan_approval(&self) -> bool {
         matches!(self.state, SessionState::AwaitingPlanApproval { .. })
+    }
+
+    /// Whether the session is awaiting a clarification response.
+    pub fn is_awaiting_clarify(&self) -> bool {
+        matches!(self.state, SessionState::AwaitingClarify { .. })
     }
 
     /// Load session from DB, or create a new one if not found.

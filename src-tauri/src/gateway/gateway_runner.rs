@@ -201,6 +201,10 @@ async fn run_with_adapter(
     // Wrap in Arc<Mutex> so both the message loop and run_agent_prompt can access.
     let approval_rx = Arc::new(tokio::sync::Mutex::new(approval_rx));
 
+    // Channel for passing clarification responses from the message loop into the event pump.
+    let (clarify_tx, clarify_rx) = mpsc::channel::<String>(4);
+    let clarify_rx = Arc::new(tokio::sync::Mutex::new(clarify_rx));
+
     // Channel for passing /stop signals from the outer message loop into the event pump.
     let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
     let stop_rx = Arc::new(tokio::sync::Mutex::new(stop_rx));
@@ -256,7 +260,7 @@ async fn run_with_adapter(
                     }
 
                     // Handle approval responses if awaiting.
-                    if session.is_awaiting_approval() || session.is_awaiting_plan_approval() {
+                    if session.is_awaiting_approval() || session.is_awaiting_plan_approval() || session.is_awaiting_clarify() {
                         // Allow /stop during approval to cancel the run.
                         let trimmed = msg.text.trim();
                         if trimmed.eq_ignore_ascii_case("/stop") {
@@ -266,6 +270,15 @@ async fn run_with_adapter(
                             session.state = SessionState::Idle;
                             let _ = stop_tx.send(()).await;
                             let _ = adapter.send_text(&reply_to, "⏹️ 已停止当前运行").await;
+                            continue;
+                        }
+
+                        // Clarification: free-text response
+                        if session.is_awaiting_clarify() {
+                            let text = msg.text.trim().to_string();
+                            if !text.is_empty() {
+                                let _ = clarify_tx.send(text).await;
+                            }
                             continue;
                         }
 
@@ -302,6 +315,7 @@ async fn run_with_adapter(
                                                 &run_id,
                                                 event_rx,
                                                 approval_rx.clone(),
+                                                clarify_rx.clone(),
                                                 stop_rx.clone(),
                                             )
                                             .await?;
@@ -449,6 +463,7 @@ async fn run_with_adapter(
                         &reply_to,
                         &msg.media_attachments,
                         Arc::clone(&approval_rx),
+                        Arc::clone(&clarify_rx),
                         Arc::clone(&stop_rx),
                     )
                     .await;
@@ -554,6 +569,7 @@ async fn dispatch_command(
     chat_id: &str,
     media_attachments: &[crate::gateway::platforms::weixin_media::MediaAttachment],
     approval_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<bool>>>,
+    clarify_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>,
     stop_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<()>>>,
 ) -> anyhow::Result<()> {
     match cmd {
@@ -792,6 +808,7 @@ async fn dispatch_command(
                 &text,
                 media_attachments,
                 approval_rx,
+                clarify_rx,
                 stop_rx,
             )
             .await?;
@@ -815,6 +832,7 @@ async fn run_agent_prompt(
     prompt: &str,
     media_attachments: &[crate::gateway::platforms::weixin_media::MediaAttachment],
     approval_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<bool>>>,
+    clarify_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>,
     stop_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<()>>>,
 ) -> anyhow::Result<()> {
     let thread_id = session.require_thread()?.to_string();
@@ -944,6 +962,7 @@ async fn run_agent_prompt(
         &run_id,
         event_rx,
         approval_rx,
+        clarify_rx,
         stop_rx,
     )
     .await
@@ -963,6 +982,7 @@ async fn run_event_pump(
     run_id: &str,
     mut event_rx: broadcast::Receiver<ThreadStreamEvent>,
     approval_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<bool>>>,
+    clarify_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>,
     stop_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<()>>>,
 ) -> anyhow::Result<()> {
     let mut accumulator = MessageAccumulator::new();
@@ -1139,6 +1159,66 @@ async fn run_event_pump(
                     }
                 }
                 break;
+            }
+            Ok(ThreadStreamEvent::ClarifyRequired {
+                tool_call_id,
+                tool_name,
+                tool_input,
+                ..
+            }) => {
+                // Send clarification question to the IM user.
+                let input_str = serde_json::to_string_pretty(&tool_input)
+                    .unwrap_or_else(|_| tool_input.to_string());
+                let msg = approval_bridge::format_clarify_request(&tool_name, &input_str);
+                let _ = adapter.send_text(chat_id, &msg).await;
+
+                // Mark session as awaiting clarification.
+                session.state = SessionState::AwaitingClarify {
+                    tool_call_id: tool_call_id.clone(),
+                    tool_name: tool_name.clone(),
+                };
+
+                // Wait for the user's free-text response from the outer message loop.
+                // The outer loop feeds responses into clarify_rx.
+                let mut rx_guard = clarify_rx.lock().await;
+                let response = tokio::select! {
+                    result = tokio::time::timeout(
+                        std::time::Duration::from_secs(config.approval_timeout_seconds),
+                        rx_guard.recv(),
+                    ) => {
+                        result.unwrap_or(None)
+                    }
+                    _ = async {
+                        let mut stop_guard = stop_rx.lock().await;
+                        stop_guard.recv().await
+                    } => {
+                        // /stop received during clarification — cancel.
+                        None
+                    }
+                };
+                drop(rx_guard);
+
+                // Resolve the clarification in ToolGateway.
+                let response_value = response
+                    .map(|text| serde_json::json!({ "text": text }))
+                    .unwrap_or_else(|| serde_json::json!({ "text": "" }));
+
+                let resolved = state
+                    .tool_gateway
+                    .resolve_clarification(&tool_call_id, response_value)
+                    .await
+                    .unwrap_or(false);
+
+                if !resolved {
+                    let _ = adapter
+                        .send_text(chat_id, "⚠️ 补充信息请求已过期")
+                        .await;
+                }
+
+                // Restore running state and continue event loop.
+                session.state = SessionState::AgentRunning {
+                    run_id: run_id.to_string(),
+                };
             }
             _ => {} // Other events (reasoning, tool completed, etc.) — skip.
         } } // close match + event arm
