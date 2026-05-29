@@ -357,6 +357,7 @@ async fn run_with_adapter(
                                 &reply_to,
                             )
                             .await;
+                            let _ = adapter.stop_typing(&reply_to).await;
                             continue;
                         }
                         session.state = SessionState::Idle;
@@ -394,6 +395,12 @@ async fn run_with_adapter(
                             _ => {}
                         }
                     }
+
+                    // Stop typing indicator after command completes.  Non-PlainText
+                    // commands (e.g. /help, /ws, /threads) send a quick reply then
+                    // return without ever calling stop_typing, leaving the bubble
+                    // visible until iLink's ~15s auto-expiry.
+                    let _ = adapter.stop_typing(&reply_to).await;
                 }
                 _ = config_check.tick() => {
                     // Periodic config change check.
