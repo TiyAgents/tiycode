@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_stream::stream;
-use futures::stream::SplitSink;
 use futures::{SinkExt, Stream, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
@@ -25,13 +24,12 @@ use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{connect_async_with_config, MaybeTlsStream, WebSocketStream};
 
 use crate::gateway::config::WecomConfig;
 use crate::gateway::traits::{InboundMessage, Platform, PlatformAdapter, SendResult};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsSink = SplitSink<WsStream, Message>;
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -39,14 +37,9 @@ type WsSink = SplitSink<WsStream, Message>;
 /// Kept well under the server's idle timeout (~30s) so the first ping
 /// arrives before the server can drop the connection.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
-/// WebSocket protocol-level Ping frame interval.
-/// Mimics `aiohttp`'s `heartbeat` parameter used in hermes-agent, which
-/// sends WS Ping every ~60s. We use 25s to stay safely under the server's
-/// idle window while avoiding excessive traffic.
-const WS_PING_INTERVAL: Duration = Duration::from_secs(25);
-/// Maximum time to wait for a Pong response after the last successful Pong.
-/// If no Pong is received within this window, the connection is considered dead.
-/// Mirrors aiohttp's implicit behaviour where a missing Pong causes receive() to return CLOSED.
+/// Maximum time to wait for inbound activity before considering the connection
+/// dead. As long as the server answers our JSON `cmd:"ping"` (or sends anything)
+/// within this window, the connection is treated as alive.
 const PONG_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Maximum outbound message length for WeCom markdown.
@@ -79,7 +72,10 @@ pub struct WecomAdapter {
     config: WecomConfig,
     /// Stable device_id for this adapter instance (persists across reconnects).
     device_id: String,
-    ws_sink: Arc<Mutex<Option<WsSink>>>,
+    /// Sender for outbound frames. All writes to the WebSocket go through this
+    /// channel and are serialized by the single I/O task that owns the stream;
+    /// no other task ever touches the TLS stream directly. Set on `connect`.
+    outbound_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<Message>>>>,
     heartbeat_handle: Option<JoinHandle<()>>,
     /// Channel for forwarding inbound messages from the WS reader task.
     inbound_tx: tokio::sync::mpsc::Sender<anyhow::Result<InboundMessage>>,
@@ -110,7 +106,7 @@ impl WecomAdapter {
         Self {
             config,
             device_id: uuid::Uuid::new_v4().to_string().replace('-', ""),
-            ws_sink: Arc::new(Mutex::new(None)),
+            outbound_tx: Arc::new(Mutex::new(None)),
             heartbeat_handle: None,
             inbound_tx,
             inbound_rx: Arc::new(Mutex::new(Some(inbound_rx))),
@@ -149,9 +145,16 @@ impl WecomAdapter {
         let url = format!("wss://{}/", self.config.ws_url);
         tracing::info!(url = %url, "connecting to WeCom WebSocket");
 
-        let (ws_stream, _response) = timeout(CONNECT_TIMEOUT, connect_async(&url))
-            .await
-            .map_err(|_| anyhow::anyhow!("WebSocket connection timed out"))??;
+        // Standard tokio-tungstenite, no protocol relaxations. WeCom's AI bot
+        // long-connection protocol is standard RFC 6455 JSON-over-WebSocket
+        // (verified against the official Python/Node SDKs and Rust ports), so
+        // no frame-level tolerance is needed.
+        let (ws_stream, _response) = timeout(
+            CONNECT_TIMEOUT,
+            connect_async_with_config(&url, None, false),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("WebSocket connection timed out"))??;
 
         tracing::info!("WebSocket connected");
         Ok(ws_stream)
@@ -179,71 +182,56 @@ impl WecomAdapter {
 
     /// Start the heartbeat task.
     ///
-    /// Implements dual-layer keepalive mirroring hermes-agent's approach:
-    /// 1. **Protocol-level** (`WS_PING_INTERVAL`): sends WebSocket `Ping` frames
-    ///    (opcode 0x9). The server automatically replies with `Pong`, keeping
-    ///    the TCP connection alive at theWs protocol layer — exactly what
-    ///    `aiohttp`'s `heartbeat` parameter does in hermes-agent.
-    /// 2. **Application-level** (`HEARTBEAT_INTERVAL`): sends `cmd: "ping"`
-    ///    JSON frames for business-level liveness.
+    /// Aligned with the official WeCom AI bot protocol, which specifies an
+    /// **application-level** heartbeat: the client periodically sends a
+    /// `{"cmd":"ping"}` JSON frame and the server replies with a `pong` JSON
+    /// frame (recommended interval ~30s). We do NOT use WebSocket protocol-level
+    /// Ping/Pong frames — the server does not reliably answer those, and relying
+    /// on them previously caused false "connection dead" detections.
     ///
-    /// When either layer fails to send, the connection is considered dead.
-    /// The heartbeat signals `connection_lost_tx` so the reader task can
-    /// break out and trigger a runner-level reconnect cycle.
+    /// Liveness is tracked via `last_activity` (renamed semantics): the I/O task
+    /// updates it on ANY inbound frame, so as long as the server keeps answering
+    /// our JSON pings (or sends anything), the connection is considered alive.
+    /// When the heartbeat fails to enqueue, or no inbound activity is seen within
+    /// `PONG_TIMEOUT`, the connection is considered dead and a reconnect is
+    /// signalled via `connection_lost_tx`.
     fn start_heartbeat(
         &self,
-        sink: Arc<Mutex<Option<WsSink>>>,
+        outbound_tx: tokio::sync::mpsc::Sender<Message>,
         connection_lost_tx: tokio::sync::watch::Sender<bool>,
         last_pong_received: Arc<Mutex<Instant>>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             let mut app_tick = tokio::time::interval(HEARTBEAT_INTERVAL);
-            let mut ws_ping_tick = tokio::time::interval(WS_PING_INTERVAL);
-            // Consume the first immediate ticks.
+            // Consume the first immediate tick.
             app_tick.tick().await;
-            ws_ping_tick.tick().await;
 
             loop {
-                tokio::select! {
-                    _ = app_tick.tick() => {
-                        // Application-level ping: send cmd:"ping" JSON frame.
-                        let payload = Self::ping_payload().to_string();
-                        let mut guard = sink.lock().await;
-                        if let Some(ref mut ws) = *guard {
-                            if ws.send(Message::Text(payload.into())).await.is_err() {
-                                tracing::warn!("app-level heartbeat send failed, connection may be lost");
-                                let _ = connection_lost_tx.send(true);
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
+                app_tick.tick().await;
+
+                // Detect a dead connection: no inbound activity within timeout.
+                {
+                    let last = *last_pong_received.lock().await;
+                    if last.elapsed() > PONG_TIMEOUT {
+                        tracing::warn!(
+                            elapsed_secs = last.elapsed().as_secs(),
+                            "no inbound activity within timeout, connection is dead"
+                        );
+                        let _ = connection_lost_tx.send(true);
+                        break;
                     }
-                    _ = ws_ping_tick.tick() => {
-                        // Check Pong timeout before sending next Ping.
-                        {
-                            let last = *last_pong_received.lock().await;
-                            if last.elapsed() > PONG_TIMEOUT {
-                                tracing::warn!(
-                                    elapsed_secs = last.elapsed().as_secs(),
-                                    "no WS Pong received within timeout, connection is dead"
-                                );
-                                let _ = connection_lost_tx.send(true);
-                                break;
-                            }
-                        }
-                        // Protocol-level ping: send WebSocket Ping frame.
-                        let mut guard = sink.lock().await;
-                        if let Some(ref mut ws) = *guard {
-                            if ws.send(Message::Ping(vec![0x00])).await.is_err() {
-                                tracing::warn!("WS Ping send failed, connection may be lost");
-                                let _ = connection_lost_tx.send(true);
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
+                }
+
+                // Application-level ping: send cmd:"ping" JSON frame.
+                let payload = Self::ping_payload().to_string();
+                if outbound_tx
+                    .send(Message::Text(payload.into()))
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("app-level heartbeat send failed, connection may be lost");
+                    let _ = connection_lost_tx.send(true);
+                    break;
                 }
             }
         })
@@ -480,12 +468,14 @@ impl WecomAdapter {
 #[async_trait::async_trait]
 impl PlatformAdapter for WecomAdapter {
     async fn connect(&mut self) -> anyhow::Result<()> {
-        let ws_stream = self.connect_ws().await?;
-        let (mut sink, mut stream) = ws_stream.split();
+        let mut ws_stream = self.connect_ws().await?;
 
-        // Send subscribe command with req_id for handshake matching.
+        // Send subscribe command with req_id for handshake matching. During the
+        // handshake we own `ws_stream` directly and drive read+write inline on a
+        // single task, so there is no cross-task access to the TLS stream.
         let (subscribe_req_id, subscribe_frame) = self.subscribe_payload();
-        sink.send(Message::Text(subscribe_frame.to_string().into()))
+        ws_stream
+            .send(Message::Text(subscribe_frame.to_string().into()))
             .await
             .map_err(|e| anyhow::anyhow!("failed to send subscribe: {e}"))?;
 
@@ -504,7 +494,7 @@ impl PlatformAdapter for WecomAdapter {
                 break;
             }
 
-            match timeout(remaining, stream.next()).await {
+            match timeout(remaining, ws_stream.next()).await {
                 Ok(Some(Ok(Message::Text(text)))) => {
                     let v: Value = serde_json::from_str(&text).unwrap_or_default();
                     let cmd = v.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
@@ -566,29 +556,36 @@ impl PlatformAdapter for WecomAdapter {
             }
         }
 
-        // Store sink.
-        *self.ws_sink.lock().await = Some(sink);
+        // Create the outbound channel. Every writer (heartbeat, send_text, and
+        // the I/O task's own Pong replies) pushes frames here; only the single
+        // I/O task below ever writes to the TLS stream, eliminating the
+        // cross-task read/write contention that previously stalled reads.
+        let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel::<Message>(64);
+        *self.outbound_tx.lock().await = Some(outbound_tx.clone());
 
         // Reset Pong liveness tracker BEFORE starting heartbeat so the first
         // Pong-timeout check doesn't fire against a stale timestamp.
         *self.last_pong_received.lock().await = Instant::now();
 
-        // Start heartbeat.
+        // Start heartbeat (writes only via the outbound channel).
         self.heartbeat_handle = Some(self.start_heartbeat(
-            Arc::clone(&self.ws_sink),
+            outbound_tx.clone(),
             self.connection_lost_tx.clone(),
             Arc::clone(&self.last_pong_received),
         ));
 
-        // Start reader task with split-aware debounce for text aggregation.
+        // Start the single I/O task: it solely owns `ws_stream` and multiplexes
+        // inbound reads, outbound writes, and connection-loss signals with one
+        // `select!`. No other task touches the stream.
         let inbound_tx = self.inbound_tx.clone();
         let last_req_ids = Arc::clone(&self.last_req_ids);
         let seen_messages = Arc::clone(&self.seen_messages);
         let pending_acks = Arc::clone(&self.pending_acks);
         let last_pong_received = Arc::clone(&self.last_pong_received);
+        let pong_tx = outbound_tx.clone();
         let mut connection_lost_rx = (*self.connection_lost_rx).clone();
         self.reader_handle = Some(tokio::spawn(async move {
-            let mut stream = stream;
+            let mut ws_stream = ws_stream;
             // Debounce buffer: accumulate messages from the same sender within a window.
             let mut pending: Option<InboundMessage> = None;
             let mut last_chunk_len: usize = 0;
@@ -603,9 +600,21 @@ impl PlatformAdapter for WecomAdapter {
 
                 let frame = if pending.is_some() {
                     // We have a pending message — wait for more within debounce window,
-                    // but also watch for heartbeat-detected connection loss.
+                    // service outbound writes, and watch for connection loss.
                     tokio::select! {
-                        frame_result = tokio::time::timeout(debounce_duration, stream.next()) => {
+                        biased;
+                        out = outbound_rx.recv() => {
+                            match out {
+                                Some(msg) => {
+                                    if let Err(e) = ws_stream.send(msg).await {
+                                        tracing::warn!(error = %e, "outbound send failed");
+                                    }
+                                    continue;
+                                }
+                                None => break,
+                            }
+                        }
+                        frame_result = tokio::time::timeout(debounce_duration, ws_stream.next()) => {
                             match frame_result {
                                 Ok(Some(frame)) => Some(frame),
                                 Ok(None) => {
@@ -646,11 +655,22 @@ impl PlatformAdapter for WecomAdapter {
                         }
                     }
                 } else {
-                    // No pending — wait for next frame, but also watch for
-                    // heartbeat-detected connection loss so we don't block
-                    // indefinitely on a dead socket.
+                    // No pending — service outbound writes, read next frame, and
+                    // watch for connection loss.
                     tokio::select! {
-                        frame_opt = stream.next() => frame_opt.map(Some).unwrap_or(None),
+                        biased;
+                        out = outbound_rx.recv() => {
+                            match out {
+                                Some(msg) => {
+                                    if let Err(e) = ws_stream.send(msg).await {
+                                        tracing::warn!(error = %e, "outbound send failed");
+                                    }
+                                    continue;
+                                }
+                                None => break,
+                            }
+                        }
+                        frame_opt = ws_stream.next() => frame_opt.map(Some).unwrap_or(None),
                         _ = connection_lost_rx.changed() => {
                             tracing::warn!("heartbeat detected connection loss, stopping reader");
                             let _ = inbound_tx
@@ -663,6 +683,9 @@ impl PlatformAdapter for WecomAdapter {
 
                 match frame {
                     Some(Ok(Message::Text(text))) => {
+                        // Any inbound frame counts as liveness activity.
+                        *last_pong_received.lock().await = Instant::now();
+                        let text = text.to_string();
                         // First, try to resolve a pending outbound send ack.
                         // Send-response frames echo back the request's req_id in
                         // headers; route them to the waiting sender if matched.
@@ -748,12 +771,16 @@ impl PlatformAdapter for WecomAdapter {
                         }
                         break;
                     }
-                    Some(Ok(Message::Pong(_))) => {
-                        // Server responded to our Ping — record liveness.
+                    Some(Ok(other)) => {
+                        // Ping/Pong/Binary/Frame. tokio-tungstenite automatically
+                        // answers protocol-level Ping with Pong internally, so we
+                        // only need to record liveness here. `pong_tx` is retained
+                        // for parity but unused in normal flow.
+                        let _ = &pong_tx;
+                        let _ = &other;
                         *last_pong_received.lock().await = Instant::now();
                         continue;
                     }
-                    _ => continue, // Server Ping/Binary — tungstenite 0.24 auto-responds Pong;
                 }
             }
         }));
@@ -769,11 +796,8 @@ impl PlatformAdapter for WecomAdapter {
         if let Some(handle) = self.reader_handle.take() {
             handle.abort();
         }
-        let mut guard = self.ws_sink.lock().await;
-        if let Some(ref mut sink) = *guard {
-            let _ = sink.close().await;
-        }
-        *guard = None;
+        // Dropping the outbound sender lets the I/O task observe channel close.
+        *self.outbound_tx.lock().await = None;
         // Drop any pending send-ack waiters so callers stop blocking.
         self.pending_acks.lock().await.clear();
         // Reset connection-lost flag so a fresh connect() starts with a clean state.
@@ -848,13 +872,13 @@ impl PlatformAdapter for WecomAdapter {
             drop(stale);
         }
 
-        // Send the frame, releasing the sink lock before awaiting the ack so the
-        // reader task can run and resolve the pending ack. Track whether the send
-        // failed so cleanup happens outside the sink guard (consistent lock order).
+        // Send the frame via the outbound channel. The single I/O task owns the
+        // stream and serializes the actual write, so send_text never touches the
+        // TLS stream directly (which previously stalled the reader).
         let send_error: Option<anyhow::Result<SendResult>> = {
-            let mut guard = self.ws_sink.lock().await;
-            match guard.as_mut() {
-                Some(sink) => match sink.send(Message::Text(payload.to_string().into())).await {
+            let guard = self.outbound_tx.lock().await;
+            match guard.as_ref() {
+                Some(tx) => match tx.send(Message::Text(payload.to_string().into())).await {
                     Ok(()) => None,
                     Err(e) => Some(Err(anyhow::anyhow!("send failed: {e}"))),
                 },
