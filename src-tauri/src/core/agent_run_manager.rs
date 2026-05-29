@@ -595,7 +595,7 @@ impl AgentRunManager {
         }
     }
 
-    async fn expire_pending_plan_approval(&self, thread_id: &str) -> Result<(), AppError> {
+    pub async fn expire_pending_plan_approval(&self, thread_id: &str) -> Result<(), AppError> {
         let Some((approval_message, mut approval_metadata)) =
             self.find_latest_pending_plan_approval(thread_id).await?
         else {
@@ -691,7 +691,7 @@ impl AgentRunManager {
         Ok(())
     }
 
-    async fn find_latest_pending_plan_approval(
+    pub async fn find_latest_pending_plan_approval(
         &self,
         thread_id: &str,
     ) -> Result<Option<(MessageRecord, ApprovalPromptMetadata)>, AppError> {

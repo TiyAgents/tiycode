@@ -256,7 +256,7 @@ async fn run_with_adapter(
                     }
 
                     // Handle approval responses if awaiting.
-                    if session.is_awaiting_approval() {
+                    if session.is_awaiting_approval() || session.is_awaiting_plan_approval() {
                         // Allow /stop during approval to cancel the run.
                         let trimmed = msg.text.trim();
                         if trimmed.eq_ignore_ascii_case("/stop") {
@@ -268,6 +268,74 @@ async fn run_with_adapter(
                             let _ = adapter.send_text(&reply_to, "⏹️ 已停止当前运行").await;
                             continue;
                         }
+
+                        // Plan approval: Y → execute_approved_plan, N → reject
+                        if session.is_awaiting_plan_approval() {
+                            if let Some(approved) = approval_bridge::parse_approval_response(&msg.text) {
+                                let Ok(thread_id) = session.require_thread().map(|s| s.to_string()) else {
+                                    let _ = adapter.send_text(&reply_to, "❌ 会话异常，缺少当前会话").await;
+                                    continue;
+                                };
+                                if approved {
+                                    let approval_message_id = match &session.state {
+                                        SessionState::AwaitingPlanApproval { approval_message_id } => approval_message_id.clone(),
+                                        _ => String::new(),
+                                    };
+                                    match state.agent_run_manager
+                                        .execute_approved_plan(
+                                            &thread_id,
+                                            &approval_message_id,
+                                            plan_checkpoint::PlanApprovalAction::ApplyPlan,
+                                        )
+                                        .await
+                                    {
+                                        Ok((run_id, event_rx)) => {
+                                            session.pending_plan_approval_message_id = None;
+                                            session.state = SessionState::AgentRunning { run_id: run_id.clone() };
+                                            let _ = adapter.send_text(&reply_to, "✅ 计划已批准，开始执行…").await;
+                                            run_event_pump(
+                                                &state,
+                                                &mut session,
+                                                &config,
+                                                adapter.as_ref(),
+                                                &reply_to,
+                                                &run_id,
+                                                event_rx,
+                                                approval_rx.clone(),
+                                                stop_rx.clone(),
+                                            )
+                                            .await?;
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(error = %e, "execute_approved_plan failed");
+                                            // Clean up stale pending approval
+                                            if let Err(e2) = state.agent_run_manager.expire_pending_plan_approval(&thread_id).await {
+                                                tracing::warn!(error = %e2, "expire_pending_plan_approval after execute_approved_plan failure also failed");
+                                            }
+                                            session.pending_plan_approval_message_id = None;
+                                            session.state = SessionState::Idle;
+                                            let _ = adapter.send_text(&reply_to, &format!("❌ 启动实施失败: {e}")).await;
+                                        }
+                                    }
+                                } else {
+                                    // Reject: expire the pending approval and go idle
+                                    if let Err(e) = state.agent_run_manager.expire_pending_plan_approval(&thread_id).await {
+                                        tracing::warn!(error = %e, "expire_pending_plan_approval failed");
+                                    }
+                                    session.pending_plan_approval_message_id = None;
+                                    session.state = SessionState::Idle;
+                                    let _ = adapter.send_text(&reply_to, "❌ 计划已拒绝").await;
+                                }
+                                continue;
+                            } else {
+                                let _ = adapter
+                                    .send_text(&reply_to, "请回复 Y(批准) 或 N(拒绝)")
+                                    .await;
+                                continue;
+                            }
+                        }
+
+                        // Tool approval
                         if let Some(approved) = approval_bridge::parse_approval_response(&msg.text) {
                             let _ = approval_tx.send(approved).await;
                             continue;
@@ -845,7 +913,7 @@ async fn run_agent_prompt(
     }
 
     // Start agent run.
-    let (run_id, mut event_rx) = state
+    let (run_id, event_rx) = state
         .agent_run_manager
         .start_run(
             &thread_id,
@@ -867,6 +935,36 @@ async fn run_agent_prompt(
     };
 
     // Event pump: accumulate response, handle approvals inline.
+    run_event_pump(
+        state,
+        session,
+        config,
+        adapter,
+        chat_id,
+        &run_id,
+        event_rx,
+        approval_rx,
+        stop_rx,
+    )
+    .await
+}
+
+/// Drive the event pump for an active agent run: accumulate deltas, handle
+/// approvals inline, and send the final response when the run completes.
+///
+/// This is factored out so it can be reused both for a fresh `start_run` and
+/// for `execute_approved_plan` (which also returns an event receiver).
+async fn run_event_pump(
+    state: &Arc<GatewayState>,
+    session: &mut UserSession,
+    config: &GatewayConfig,
+    adapter: &dyn PlatformAdapter,
+    chat_id: &str,
+    run_id: &str,
+    mut event_rx: broadcast::Receiver<ThreadStreamEvent>,
+    approval_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<bool>>>,
+    stop_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<()>>>,
+) -> anyhow::Result<()> {
     let mut accumulator = MessageAccumulator::new();
 
     // Drain any stale /stop signals left from a previous run so they don't
@@ -958,7 +1056,7 @@ async fn run_agent_prompt(
 
                 // Restore running state and continue event loop.
                 session.state = SessionState::AgentRunning {
-                    run_id: run_id.clone(),
+                    run_id: run_id.to_string(),
                 };
                 // Continue the loop — agent will emit further events after approval.
             }
@@ -1003,6 +1101,44 @@ async fn run_agent_prompt(
                 let approval_msg =
                     approval_bridge::format_plan_approval_request(&artifact.title);
                 adapter.send_text(chat_id, &approval_msg).await?;
+                // Look up the pending approval message ID so we can route Y/N later.
+                if let Some(thread_id) = session.current_thread_id.as_deref() {
+                    if let Ok(Some((msg, _))) = state
+                        .agent_run_manager
+                        .find_latest_pending_plan_approval(thread_id)
+                        .await
+                    {
+                        session.pending_plan_approval_message_id = Some(msg.id);
+                    }
+                }
+            }
+            Ok(ThreadStreamEvent::RunCheckpointed { .. }) => {
+                // Plan checkpoint reached — transition to plan approval state.
+                match session.pending_plan_approval_message_id {
+                    Some(ref msg_id) => {
+                        session.state = SessionState::AwaitingPlanApproval {
+                            approval_message_id: msg_id.clone(),
+                        };
+                    }
+                    None => {
+                        // Fallback: try fetching the pending approval from DB.
+                        if let Some(thread_id) = session.current_thread_id.as_deref() {
+                            if let Ok(Some((msg, _))) = state
+                                .agent_run_manager
+                                .find_latest_pending_plan_approval(thread_id)
+                                .await
+                            {
+                                session.pending_plan_approval_message_id = Some(msg.id.clone());
+                                session.state = SessionState::AwaitingPlanApproval {
+                                    approval_message_id: msg.id,
+                                };
+                            } else {
+                                tracing::warn!("RunCheckpointed received but no pending plan approval found");
+                            }
+                        }
+                    }
+                }
+                break;
             }
             _ => {} // Other events (reasoning, tool completed, etc.) — skip.
         } } // close match + event arm
@@ -1011,6 +1147,13 @@ async fn run_agent_prompt(
 
     // Stop typing.
     let _ = adapter.stop_typing(chat_id).await;
+
+    // If we broke out due to RunCheckpointed (plan approval), skip sending
+    // accumulated text and keep the AwaitingPlanApproval state.
+    if matches!(session.state, SessionState::AwaitingPlanApproval { .. }) {
+        session.save(&state.pool).await?;
+        return Ok(());
+    }
 
     // Format and send the accumulated response.
     let final_text = accumulator.finalize();

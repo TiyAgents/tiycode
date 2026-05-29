@@ -100,4 +100,13 @@ mod tests {
         assert!(result.ends_with("..."));
         assert!(result.len() < 310);
     }
+
+    #[test]
+    fn format_plan_approval_request_contains_title() {
+        let msg = format_plan_approval_request("Refactor runtime");
+        assert!(msg.contains("📋"));
+        assert!(msg.contains("Refactor runtime"));
+        assert!(msg.contains("Y"));
+        assert!(msg.contains("N"));
+    }
 }

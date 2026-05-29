@@ -26,6 +26,8 @@ pub enum SessionState {
         tool_call_id: String,
         tool_name: String,
     },
+    /// Waiting for user to approve/reject an implementation plan.
+    AwaitingPlanApproval { approval_message_id: String },
 }
 
 impl SessionState {
@@ -57,6 +59,8 @@ pub struct UserSession {
     pub cached_threads: Vec<ThreadSummaryDto>,
     /// Cached profile list for number-based selection.
     pub cached_profiles: Vec<crate::model::provider::AgentProfileRecord>,
+    /// ID of the latest pending plan approval message (set after PlanUpdated event).
+    pub pending_plan_approval_message_id: Option<String>,
 }
 
 impl UserSession {
@@ -71,6 +75,7 @@ impl UserSession {
             cached_workspaces: Vec::new(),
             cached_threads: Vec::new(),
             cached_profiles: Vec::new(),
+            pending_plan_approval_message_id: None,
         }
     }
 
@@ -96,6 +101,11 @@ impl UserSession {
     /// Whether the session is awaiting user approval for a tool call.
     pub fn is_awaiting_approval(&self) -> bool {
         matches!(self.state, SessionState::AwaitingApproval { .. })
+    }
+
+    /// Whether the session is awaiting plan approval.
+    pub fn is_awaiting_plan_approval(&self) -> bool {
+        matches!(self.state, SessionState::AwaitingPlanApproval { .. })
     }
 
     /// Load session from DB, or create a new one if not found.
@@ -125,6 +135,7 @@ impl UserSession {
                 cached_workspaces: Vec::new(),
                 cached_threads: Vec::new(),
                 cached_profiles: Vec::new(),
+                pending_plan_approval_message_id: None,
             })
         } else {
             let session = Self::new(platform, user_id.to_string());
