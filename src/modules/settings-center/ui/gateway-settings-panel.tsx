@@ -68,6 +68,14 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
     prevSessionRef.current = weixinSession;
   }, [weixinSession, status?.running]);
 
+  // Invalidate in-flight QR login polls on unmount.
+  const pollGenRef = useRef(0);
+  useEffect(() => {
+    return () => {
+      pollGenRef.current += 1;
+    };
+  }, []);
+
   const refreshStatus = useCallback(async () => {
     try {
       const s = await invoke<GatewayStatus>("gateway_status");
@@ -201,7 +209,8 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
       }
       if (result.login_uuid) {
         setLoginPolling(true);
-        pollLogin(result.login_uuid);
+        const gen = ++pollGenRef.current;
+        pollLogin(result.login_uuid, gen);
       }
     } catch (e) {
       setError(`${t("settings.gateway.qrLoginFailed")}: ${String(e)}`);
@@ -210,9 +219,12 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
     }
   };
 
-  const pollLogin = async (uuid: string) => {
+  const pollLogin = async (uuid: string, gen: number) => {
     for (let i = 0; i < 60; i++) {
+      // Bail out if the component unmounted or a new poll superseded this one.
+      if (pollGenRef.current !== gen) return;
       await new Promise((r) => setTimeout(r, 3000));
+      if (pollGenRef.current !== gen) return;
       try {
         const result = await invoke<{ status: string; session?: WeixinSession }>(
           "gateway_weixin_login_poll",

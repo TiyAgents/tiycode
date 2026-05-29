@@ -115,6 +115,18 @@ pub fn save_session(session: &WeixinSession) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(session)?;
     std::fs::write(&tmp, &json)?;
     std::fs::rename(&tmp, &path)?;
+    // Restrict permissions on Unix so only the owner can read the token file.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mut perms = meta.permissions();
+            if perms.mode() & 0o077 != 0 {
+                perms.set_mode(0o600);
+                std::fs::set_permissions(&path, perms).ok();
+            }
+        }
+    }
     Ok(())
 }
 

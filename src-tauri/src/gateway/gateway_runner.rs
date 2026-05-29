@@ -636,6 +636,26 @@ async fn dispatch_command(
         }
 
         GatewayCommand::WorkspaceAdd { path, name } => {
+            // Reject paths containing parent-traversal to prevent
+            // directory escape attacks via IM commands.
+            if path.contains("..") {
+                adapter
+                    .send_text(chat_id, "❌ 路径包含非法字符 (..)，请使用有效路径")
+                    .await?;
+                return Ok(());
+            }
+            // Restrict IM-initiated workspace adds to the user's home
+            // directory. Agent-initiated workspace adds through the ACP
+            // server follow a different code path.
+            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            let resolved = dunce::canonicalize(&path)
+                .map_err(|e| anyhow::anyhow!("无法解析路径 '{path}': {e}"))?;
+            if !resolved.starts_with(&home) {
+                adapter
+                    .send_text(chat_id, "❌ 工作区路径必须位于用户主目录下")
+                    .await?;
+                return Ok(());
+            }
             let input = WorkspaceAddInput {
                 path: path.clone(),
                 name,
