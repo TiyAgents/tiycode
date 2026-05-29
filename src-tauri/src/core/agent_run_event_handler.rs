@@ -107,6 +107,14 @@ pub(crate) fn build_orphaned_run_terminal_event(
     }
 }
 
+pub(crate) fn runtime_panic_error_message(detail: &str) -> String {
+    if detail.trim().is_empty() {
+        "Runtime task panicked before completion.".to_string()
+    } else {
+        detail.to_string()
+    }
+}
+
 pub(crate) fn terminal_event_status(
     event: &ThreadStreamEvent,
     cancellation_requested: bool,
@@ -186,9 +194,13 @@ impl AgentRunManager {
 
         let Some(terminal_event) = (match runtime_finish_state {
             Some(RuntimeSessionFinishState::Completed) => None,
-            Some(RuntimeSessionFinishState::Panicked) => Some(ThreadStreamEvent::RunInterrupted {
-                run_id: run_id.to_string(),
-            }),
+            Some(RuntimeSessionFinishState::Panicked(ref detail)) => {
+                let error_message = runtime_panic_error_message(detail);
+                run_repo::set_error_message(&self.pool, run_id, &error_message).await?;
+                Some(ThreadStreamEvent::RunInterrupted {
+                    run_id: run_id.to_string(),
+                })
+            }
             Some(RuntimeSessionFinishState::Cancelled) => {
                 Some(build_orphaned_run_terminal_event(run_id, true))
             }
@@ -812,7 +824,9 @@ pub(crate) fn should_complete_reasoning_for_event(event: &ThreadStreamEvent) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{persist_final_run_state, persist_user_message_recorded};
+    use super::{
+        persist_final_run_state, persist_user_message_recorded, runtime_panic_error_message,
+    };
     use crate::model::thread::{RunStatus, ThreadRecord, ThreadStatus};
     use crate::model::workspace::{WorkspaceKind, WorkspaceRecord, WorkspaceStatus};
     use crate::persistence::repo::{message_repo, run_repo, thread_repo, workspace_repo};
@@ -1007,6 +1021,51 @@ mod tests {
             .expect("thread lookup")
             .expect("thread exists");
         assert_eq!(thread.status, ThreadStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn persist_final_run_state_preserves_runtime_panic_detail_for_interrupted_run() {
+        let pool = setup_test_pool().await;
+        seed_run(&pool).await;
+        let panic_detail = runtime_panic_error_message("Runtime task panicked: bad char boundary");
+
+        persist_final_run_state(
+            &pool,
+            "run-1",
+            "thread-1",
+            RunStatus::Interrupted,
+            Some(&panic_detail),
+        )
+        .await
+        .expect("persist final run state");
+
+        let row = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+            "SELECT status, error_message, finished_at FROM thread_runs WHERE id = ?",
+        )
+        .bind("run-1")
+        .fetch_one(&pool)
+        .await
+        .expect("run row");
+        assert_eq!(row.0, "interrupted");
+        assert_eq!(
+            row.1.as_deref(),
+            Some("Runtime task panicked: bad char boundary")
+        );
+        assert!(row.2.is_some(), "terminal run should receive finished_at");
+
+        let thread = thread_repo::find_by_id(&pool, "thread-1")
+            .await
+            .expect("thread lookup")
+            .expect("thread exists");
+        assert_eq!(thread.status, ThreadStatus::Interrupted);
+    }
+
+    #[test]
+    fn runtime_panic_error_message_uses_default_for_empty_detail() {
+        assert_eq!(
+            runtime_panic_error_message("   "),
+            "Runtime task panicked before completion."
+        );
     }
 
     #[tokio::test]

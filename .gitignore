@@ -38,3 +38,6 @@ src-tauri/.tmp
 
 # Test coverage
 coverage
+
+# Claude
+.claude

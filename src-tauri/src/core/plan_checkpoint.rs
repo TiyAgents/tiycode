@@ -168,6 +168,22 @@ pub fn plan_markdown(metadata: &PlanMessageMetadata) -> String {
     lines.join("\n")
 }
 
+pub fn plan_design_markdown(artifact: &PlanArtifact) -> String {
+    let mut lines = vec![format!("# {}", artifact.title)];
+
+    if !artifact.design.trim().is_empty() {
+        lines.push(String::new());
+        lines.push("## Design".to_string());
+        lines.push(artifact.design.trim().to_string());
+    } else if !artifact.summary.trim().is_empty() {
+        // Fallback to summary when design is empty
+        lines.push(String::new());
+        lines.push(artifact.summary.trim().to_string());
+    }
+
+    lines.join("\n")
+}
+
 pub fn approval_prompt_markdown(artifact: &PlanArtifact) -> String {
     format!(
         "Review **{}** and choose how to start implementation.",
@@ -408,8 +424,8 @@ mod tests {
     use super::{
         approval_prompt_markdown, build_approval_prompt_metadata,
         build_plan_artifact_from_tool_input, build_plan_message_metadata,
-        parse_approval_prompt_metadata, parse_plan_message_metadata, plan_markdown,
-        write_plan_file_to, PlanApprovalAction,
+        parse_approval_prompt_metadata, parse_plan_message_metadata, plan_design_markdown,
+        plan_markdown, write_plan_file_to, PlanApprovalAction,
     };
 
     #[test]
@@ -531,5 +547,52 @@ mod tests {
         let content = std::fs::read_to_string(&path2).expect("read second revision");
         assert!(content.contains("# Revision 2"));
         assert!(!content.contains("# Revision 1"));
+    }
+
+    #[test]
+    fn plan_design_markdown_renders_design_section() {
+        let artifact = build_plan_artifact_from_tool_input(
+            &serde_json::json!({
+                "title": "Add caching layer",
+                "summary": "Cache API responses.",
+                "design": "Use Redis as a write-through cache in front of the DB."
+            }),
+            1,
+        );
+        let md = plan_design_markdown(&artifact);
+        assert!(md.contains("# Add caching layer"));
+        assert!(md.contains("## Design"));
+        assert!(md.contains("Redis"));
+        assert!(!md.contains("## Context"));
+        assert!(!md.contains("## Steps"));
+    }
+
+    #[test]
+    fn plan_design_markdown_falls_back_to_summary_when_design_empty() {
+        let artifact = build_plan_artifact_from_tool_input(
+            &serde_json::json!({
+                "title": "Minimal plan",
+                "summary": "Just a summary, no design."
+            }),
+            1,
+        );
+        let md = plan_design_markdown(&artifact);
+        assert!(md.contains("# Minimal plan"));
+        assert!(!md.contains("## Design"));
+        assert!(md.contains("Just a summary, no design."));
+    }
+
+    #[test]
+    fn plan_design_markdown_only_title_when_both_empty() {
+        let artifact = build_plan_artifact_from_tool_input(
+            &serde_json::json!({
+                "title": "Title-only plan"
+            }),
+            1,
+        );
+        let md = plan_design_markdown(&artifact);
+        // Default summary is non-empty, so it shows as fallback
+        assert!(md.contains("# Title-only plan"));
+        assert!(!md.contains("## Design"));
     }
 }

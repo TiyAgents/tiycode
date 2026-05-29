@@ -1,3 +1,4 @@
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Mutex as StdMutex, Weak};
 
 use sqlx::SqlitePool;
@@ -320,18 +321,33 @@ pub(crate) async fn run_auto_compression(
                 );
             }
 
-            // Phase 6: build compressed message list
-            let result = crate::core::context_compression::build_compressed_messages(
+            // Phase 6: build compressed message list and write it back to the
+            // Agent's internal state. This synchronous post-persist step must
+            // not be allowed to panic: the DB already contains reset+summary
+            // markers, so an unwind here would otherwise turn a successful
+            // compression into an opaque interrupted run.
+            let result = match safely_build_and_replace_compressed_messages(
+                weak.upgrade().as_deref(),
                 &summary,
                 recent_messages,
-            );
-
-            // Phase 6.5: write back compressed messages to Agent internal state
-            // so subsequent turns in the same run start from the compressed base
-            // instead of re-compressing the full history every turn.
-            if let Some(session) = weak.upgrade() {
-                session.agent.replace_messages(result.clone());
-            }
+                &thread_id,
+                "auto",
+            ) {
+                Some(result) => result,
+                None => {
+                    let fallback = crate::core::context_compression::compress_context_fallback(
+                        messages.clone(),
+                        &settings,
+                    );
+                    safely_replace_agent_messages(
+                        weak.upgrade().as_deref(),
+                        fallback.clone(),
+                        &thread_id,
+                        "auto_post_persist_fallback",
+                    );
+                    fallback
+                }
+            };
 
             tracing::info!(
                 thread_id = %thread_id,
@@ -411,16 +427,28 @@ pub(crate) async fn run_auto_compression(
                 );
             }
 
-            let result = crate::core::context_compression::build_compressed_messages(
+            let result = match safely_build_and_replace_compressed_messages(
+                weak.upgrade().as_deref(),
                 &heuristic_summary,
                 recent_messages,
-            );
-
-            // Write back fallback-compressed messages to Agent internal state
-            // so subsequent turns start from the compressed base.
-            if let Some(session) = weak.upgrade() {
-                session.agent.replace_messages(result.clone());
-            }
+                &thread_id,
+                "auto_fallback",
+            ) {
+                Some(result) => result,
+                None => {
+                    let fallback = crate::core::context_compression::compress_context_fallback(
+                        messages.clone(),
+                        &settings,
+                    );
+                    safely_replace_agent_messages(
+                        weak.upgrade().as_deref(),
+                        fallback.clone(),
+                        &thread_id,
+                        "auto_fallback_post_persist_fallback",
+                    );
+                    fallback
+                }
+            };
 
             tracing::info!(
                 thread_id = %thread_id,
@@ -431,6 +459,64 @@ pub(crate) async fn run_auto_compression(
 
             result
         }
+    }
+}
+
+fn safely_build_and_replace_compressed_messages(
+    session: Option<&AgentSession>,
+    summary: &str,
+    recent_messages: &[AgentMessage],
+    thread_id: &str,
+    source: &str,
+) -> Option<Vec<AgentMessage>> {
+    match catch_unwind(AssertUnwindSafe(|| {
+        let result =
+            crate::core::context_compression::build_compressed_messages(summary, recent_messages);
+        if let Some(session) = session {
+            session.agent.replace_messages(result.clone());
+        }
+        result
+    })) {
+        Ok(result) => Some(result),
+        Err(payload) => {
+            tracing::error!(
+                thread_id = %thread_id,
+                source,
+                panic = %panic_payload_to_string(payload.as_ref()),
+                "Auto context compression post-persist message replacement panicked; falling back"
+            );
+            None
+        }
+    }
+}
+
+fn safely_replace_agent_messages(
+    session: Option<&AgentSession>,
+    messages: Vec<AgentMessage>,
+    thread_id: &str,
+    source: &str,
+) {
+    if let Some(session) = session {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+            session.agent.replace_messages(messages);
+        })) {
+            tracing::error!(
+                thread_id = %thread_id,
+                source,
+                panic = %panic_payload_to_string(payload.as_ref()),
+                "Auto context compression fallback message replacement panicked"
+            );
+        }
+    }
+}
+
+fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
     }
 }
 

@@ -1,4 +1,4 @@
-export type SettingsCategory = "account" | "general" | "profiles" | "workspace" | "providers" | "commands" | "terminal" | "policy" | "agents" | "about";
+export type SettingsCategory = "account" | "general" | "profiles" | "workspace" | "providers" | "commands" | "terminal" | "policy" | "agents" | "gateway" | "about";
 export type PromptResponseStyle = "balanced" | "concise" | "guide";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";

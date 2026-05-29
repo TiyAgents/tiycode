@@ -465,7 +465,7 @@ impl AgentRunManager {
 
         if matches!(
             self.runtime.session_finish_state(&run_id).await,
-            Some(RuntimeSessionFinishState::Panicked | RuntimeSessionFinishState::Cancelled)
+            Some(RuntimeSessionFinishState::Panicked(_) | RuntimeSessionFinishState::Cancelled)
         ) {
             tracing::warn!(
                 run_id = %run_id,
@@ -595,7 +595,7 @@ impl AgentRunManager {
         }
     }
 
-    async fn expire_pending_plan_approval(&self, thread_id: &str) -> Result<(), AppError> {
+    pub async fn expire_pending_plan_approval(&self, thread_id: &str) -> Result<(), AppError> {
         let Some((approval_message, mut approval_metadata)) =
             self.find_latest_pending_plan_approval(thread_id).await?
         else {
@@ -691,7 +691,7 @@ impl AgentRunManager {
         Ok(())
     }
 
-    async fn find_latest_pending_plan_approval(
+    pub async fn find_latest_pending_plan_approval(
         &self,
         thread_id: &str,
     ) -> Result<Option<(MessageRecord, ApprovalPromptMetadata)>, AppError> {
@@ -774,16 +774,29 @@ impl AgentRunManager {
                 return;
             }
 
-            let finish_state = *finish_rx.borrow();
+            let finish_state = finish_rx.borrow().clone();
             if !manager.has_active_run(&run_id).await {
                 return;
             }
 
             let event = match finish_state {
                 RuntimeSessionFinishState::Running | RuntimeSessionFinishState::Completed => return,
-                RuntimeSessionFinishState::Panicked => ThreadStreamEvent::RunInterrupted {
-                    run_id: run_id.clone(),
-                },
+                RuntimeSessionFinishState::Panicked(ref detail) => {
+                    let error_message =
+                        crate::core::agent_run_event_handler::runtime_panic_error_message(detail);
+                    if let Err(error) =
+                        run_repo::set_error_message(&manager.pool, &run_id, &error_message).await
+                    {
+                        tracing::warn!(
+                            run_id = %run_id,
+                            error = %error,
+                            "failed to persist runtime panic detail"
+                        );
+                    }
+                    ThreadStreamEvent::RunInterrupted {
+                        run_id: run_id.clone(),
+                    }
+                }
                 RuntimeSessionFinishState::Cancelled => {
                     build_orphaned_run_terminal_event(&run_id, true)
                 }

@@ -30,23 +30,85 @@ const ALWAYS_SKIPPED: &[&str] = &[".git", ".DS_Store", "thumbs.db"];
 /// Heavy directories excluded from the workspace-wide file filter manifest.
 const FILTER_EXCLUDED_DIRS: &[&str] = &[
     "node_modules",
+    "bower_components",
     ".next",
-    "target",
     "dist",
     "build",
+    "out",
     ".cache",
+    ".parcel-cache",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".vuepress",
+    "coverage",
+    ".nyc_output",
+    ".sass-cache",
+    "target",
     "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    ".conda",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".hypothesis",
+    ".eggs",
+    "vendor",
+    ".gradle",
+    ".mvn",
+    ".bundle",
+    ".terraform",
+    ".serverless",
+    ".docker",
+    ".idea",
+    ".vscode",
+    ".fleet",
+    "DerivedData",
+    ".build",
+    "cmake-build-",
+    ".yarn",
+    ".pnpm-store",
 ];
 
 /// Large directories stay visible in TreeView, but skip eager child preloading.
 const TREE_LAZY_ONLY_DIRS: &[&str] = &[
     "node_modules",
+    "bower_components",
     ".next",
-    "target",
     "dist",
     "build",
+    "out",
     ".cache",
+    ".parcel-cache",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    "coverage",
+    "target",
     "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    ".conda",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    "vendor",
+    ".gradle",
+    ".mvn",
+    ".bundle",
+    ".terraform",
+    ".serverless",
+    ".idea",
+    ".vscode",
+    ".fleet",
+    "DerivedData",
+    ".build",
+    "cmake-build-",
+    ".yarn",
+    ".pnpm-store",
 ];
 
 /// Keep first paint to the root listing; child directories load when expanded.
@@ -980,7 +1042,7 @@ fn read_directory_entries_page(
 
     for entry in entries.into_iter().skip(offset).take(end - offset) {
         if entry.is_dir {
-            if preload_child_directories && !tree_lazy_only.contains(entry.name.as_str()) {
+            if preload_child_directories && !is_dir_blocked(&entry.name, tree_lazy_only) {
                 nodes.push(make_preloaded_directory_node(
                     &entry.path,
                     root,
@@ -1083,6 +1145,22 @@ fn relative_path(path: &Path, root: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// Check whether a directory name should be excluded or lazy-loaded.
+///
+/// Supports two matching modes:
+/// - Exact match: the pattern matches the full directory name (legacy).
+/// - Prefix match: patterns ending with `-` match if the directory name starts
+///   with that prefix, e.g. `"cmake-build-"` matches `"cmake-build-debug"`.
+fn is_dir_blocked(name: &str, patterns: &HashSet<&str>) -> bool {
+    patterns.iter().any(|p| {
+        if p.ends_with('-') {
+            name.starts_with(p)
+        } else {
+            *p == name
+        }
+    })
+}
+
 fn build_file_manifest(root: &Path) -> Result<Vec<String>, AppError> {
     let skipped: HashSet<&str> = ALWAYS_SKIPPED.iter().copied().collect();
     let excluded: HashSet<&str> = FILTER_EXCLUDED_DIRS.iter().copied().collect();
@@ -1124,7 +1202,7 @@ fn collect_manifest_paths(
         }
 
         if file_type.is_dir() {
-            if excluded.contains(entry_name.as_str()) {
+            if is_dir_blocked(&entry_name, excluded) {
                 continue;
             }
 
