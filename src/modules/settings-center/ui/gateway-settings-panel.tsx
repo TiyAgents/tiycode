@@ -30,22 +30,6 @@ interface GatewayConfigDto {
   wecomBotId: string;
   wecomSecretSet: boolean;
   wecomWsUrl: string;
-  feishuEnabled: boolean;
-  feishuAppId: string;
-  feishuAppSecretSet: boolean;
-  feishuWebhookHost: string;
-  feishuWebhookPort: number;
-  feishuGroupPolicy: string;
-  feishuEncryptKeySet: boolean;
-  feishuVerificationTokenSet: boolean;
-  whatsappEnabled: boolean;
-  whatsappPhoneNumberId: string;
-  whatsappAccessTokenSet: boolean;
-  whatsappWebhookHost: string;
-  whatsappWebhookPort: number;
-  whatsappDmPolicy: string;
-  whatsappAppSecretSet: boolean;
-  whatsappWebhookVerifyTokenSet: boolean;
 }
 
 export function GatewaySettingsPanel({ description }: { description: string }) {
@@ -65,30 +49,6 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
   const [wecomSecret, setWecomSecret] = useState("");
   const [wecomSecretSet, setWecomSecretSet] = useState(false);
   const [wecomWsUrl, setWecomWsUrl] = useState("openws.work.weixin.qq.com");
-  // Feishu form state.
-  const [feishuEnabled, setFeishuEnabled] = useState(false);
-  const [feishuAppId, setFeishuAppId] = useState("");
-  const [feishuAppSecret, setFeishuAppSecret] = useState("");
-  const [feishuAppSecretSet, setFeishuAppSecretSet] = useState(false);
-  const [feishuWebhookHost, setFeishuWebhookHost] = useState("127.0.0.1");
-  const [feishuWebhookPort, setFeishuWebhookPort] = useState("8765");
-  const [feishuGroupPolicy, setFeishuGroupPolicy] = useState("open");
-  const [feishuEncryptKey, setFeishuEncryptKey] = useState("");
-  const [feishuEncryptKeySet, setFeishuEncryptKeySet] = useState(false);
-  const [feishuVerificationToken, setFeishuVerificationToken] = useState("");
-  const [feishuVerificationTokenSet, setFeishuVerificationTokenSet] = useState(false);
-  // WhatsApp form state.
-  const [whatsappEnabled, setWhatsappEnabled] = useState(false);
-  const [whatsappPhoneNumberId, setWhatsappPhoneNumberId] = useState("");
-  const [whatsappAccessToken, setWhatsappAccessToken] = useState("");
-  const [whatsappAccessTokenSet, setWhatsappAccessTokenSet] = useState(false);
-  const [whatsappWebhookHost, setWhatsappWebhookHost] = useState("127.0.0.1");
-  const [whatsappWebhookPort, setWhatsappWebhookPort] = useState("8766");
-  const [whatsappDmPolicy, setWhatsappDmPolicy] = useState("open");
-  const [whatsappAppSecret, setWhatsappAppSecret] = useState("");
-  const [whatsappAppSecretSet, setWhatsappAppSecretSet] = useState(false);
-  const [whatsappWebhookVerifyToken, setWhatsappWebhookVerifyToken] = useState("");
-  const [whatsappWebhookVerifyTokenSet, setWhatsappWebhookVerifyTokenSet] = useState(false);
   const [configDirty, setConfigDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -135,22 +95,6 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
         setWecomBotId(cfg.wecomBotId);
         setWecomSecretSet(cfg.wecomSecretSet);
         setWecomWsUrl(cfg.wecomWsUrl || "openws.work.weixin.qq.com");
-        setFeishuEnabled(cfg.feishuEnabled);
-        setFeishuAppId(cfg.feishuAppId);
-        setFeishuAppSecretSet(cfg.feishuAppSecretSet);
-        setFeishuWebhookHost(cfg.feishuWebhookHost || "127.0.0.1");
-        setFeishuWebhookPort(String(cfg.feishuWebhookPort || 8765));
-        setFeishuGroupPolicy(cfg.feishuGroupPolicy || "open");
-        setFeishuEncryptKeySet(cfg.feishuEncryptKeySet);
-        setFeishuVerificationTokenSet(cfg.feishuVerificationTokenSet);
-        setWhatsappEnabled(cfg.whatsappEnabled);
-        setWhatsappPhoneNumberId(cfg.whatsappPhoneNumberId);
-        setWhatsappAccessTokenSet(cfg.whatsappAccessTokenSet);
-        setWhatsappWebhookHost(cfg.whatsappWebhookHost || "127.0.0.1");
-        setWhatsappWebhookPort(String(cfg.whatsappWebhookPort || 8766));
-        setWhatsappDmPolicy(cfg.whatsappDmPolicy || "open");
-        setWhatsappAppSecretSet(cfg.whatsappAppSecretSet);
-        setWhatsappWebhookVerifyTokenSet(cfg.whatsappWebhookVerifyTokenSet);
       }
     } catch {
       // Config doesn't exist yet — use defaults.
@@ -164,22 +108,6 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
     wecomBotId: string;
     wecomSecret: string;
     wecomWsUrl: string;
-    feishuEnabled: boolean;
-    feishuAppId: string;
-    feishuAppSecret: string;
-    feishuWebhookHost: string;
-    feishuWebhookPort: string;
-    feishuGroupPolicy: string;
-    feishuEncryptKey: string;
-    feishuVerificationToken: string;
-    whatsappEnabled: boolean;
-    whatsappPhoneNumberId: string;
-    whatsappAccessToken: string;
-    whatsappWebhookHost: string;
-    whatsappWebhookPort: string;
-    whatsappDmPolicy: string;
-    whatsappAppSecret: string;
-    whatsappWebhookVerifyToken: string;
   }>) => {
     try {
       await invoke("gateway_save_config", {
@@ -189,22 +117,6 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
           wecomBotId,
           wecomSecret: "",
           wecomWsUrl,
-          feishuEnabled,
-          feishuAppId,
-          feishuAppSecret: "",
-          feishuWebhookHost,
-          feishuWebhookPort: parseInt(feishuWebhookPort) || 8765,
-          feishuGroupPolicy,
-          feishuEncryptKey: feishuEncryptKey || undefined,
-          feishuVerificationToken: feishuVerificationToken || undefined,
-          whatsappEnabled,
-          whatsappPhoneNumberId,
-          whatsappAccessToken: "",
-          whatsappWebhookHost,
-          whatsappWebhookPort: parseInt(whatsappWebhookPort) || 8766,
-          whatsappDmPolicy,
-          whatsappAppSecret: whatsappAppSecret || undefined,
-          whatsappWebhookVerifyToken: whatsappWebhookVerifyToken || undefined,
           ...overrides,
         },
       });
@@ -212,7 +124,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
     } catch (e) {
       setError(`Save failed: ${String(e)}`);
     }
-  }, [weixinEnabled, wecomEnabled, wecomBotId, wecomWsUrl, feishuEnabled, feishuAppId, feishuWebhookHost, feishuWebhookPort, feishuGroupPolicy, feishuEncryptKey, feishuVerificationToken, whatsappEnabled, whatsappPhoneNumberId, whatsappWebhookHost, whatsappWebhookPort, whatsappDmPolicy, whatsappAppSecret, whatsappWebhookVerifyToken]);
+  }, [weixinEnabled, wecomEnabled, wecomBotId, wecomWsUrl]);
 
   const handleSaveConfig = async () => {
     setSaving(true);
@@ -225,39 +137,11 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
           wecomBotId,
           wecomSecret,
           wecomWsUrl,
-          feishuEnabled,
-          feishuAppId,
-          feishuAppSecret,
-          feishuWebhookHost,
-          feishuWebhookPort: parseInt(feishuWebhookPort) || 8765,
-          feishuGroupPolicy,
-          feishuEncryptKey: feishuEncryptKey || undefined,
-          feishuVerificationToken: feishuVerificationToken || undefined,
-          whatsappEnabled,
-          whatsappPhoneNumberId,
-          whatsappAccessToken,
-          whatsappWebhookHost,
-          whatsappWebhookPort: parseInt(whatsappWebhookPort) || 8766,
-          whatsappDmPolicy,
-          whatsappAppSecret: whatsappAppSecret || undefined,
-          whatsappWebhookVerifyToken: whatsappWebhookVerifyToken || undefined,
         },
       });
       setConfigDirty(false);
       setWecomSecret("");
       if (wecomSecret) setWecomSecretSet(true);
-      setFeishuAppSecret("");
-      if (feishuAppSecret) setFeishuAppSecretSet(true);
-      setFeishuEncryptKey("");
-      if (feishuEncryptKey) setFeishuEncryptKeySet(true);
-      setFeishuVerificationToken("");
-      if (feishuVerificationToken) setFeishuVerificationTokenSet(true);
-      setWhatsappAccessToken("");
-      if (whatsappAccessToken) setWhatsappAccessTokenSet(true);
-      setWhatsappAppSecret("");
-      if (whatsappAppSecret) setWhatsappAppSecretSet(true);
-      setWhatsappWebhookVerifyToken("");
-      if (whatsappWebhookVerifyToken) setWhatsappWebhookVerifyTokenSet(true);
       await refreshStatus();
     } catch (e) {
       setError(`Save failed: ${String(e)}`);
@@ -344,22 +228,6 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
                 wecomBotId,
                 wecomSecret: "",
                 wecomWsUrl,
-                feishuEnabled,
-                feishuAppId,
-                feishuAppSecret: "",
-                feishuWebhookHost,
-                feishuWebhookPort: parseInt(feishuWebhookPort) || 8765,
-                feishuGroupPolicy,
-                feishuEncryptKey: feishuEncryptKey || undefined,
-                feishuVerificationToken: feishuVerificationToken || undefined,
-                whatsappEnabled,
-                whatsappPhoneNumberId,
-                whatsappAccessToken: "",
-                whatsappWebhookHost,
-                whatsappWebhookPort: parseInt(whatsappWebhookPort) || 8766,
-                whatsappDmPolicy,
-                whatsappAppSecret: whatsappAppSecret || undefined,
-                whatsappWebhookVerifyToken: whatsappWebhookVerifyToken || undefined,
               },
             });
             setConfigDirty(false);
@@ -585,322 +453,6 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
         )}
       </SettingsSection>
 
-      {/* Feishu Channel */}
-      <SettingsSection title={t("settings.gateway.feishu")}>
-        <SettingsRow
-          label={t("settings.gateway.feishu")}
-          description={t("settings.gateway.feishuDesc")}
-          control={
-            <Switch
-              size="sm"
-              checked={feishuEnabled}
-              onCheckedChange={(v) => {
-                setFeishuEnabled(v);
-                autoSaveConfig({ feishuEnabled: v });
-              }}
-            />
-          }
-        />
-        {feishuEnabled && (
-          <>
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.feishuAppId")}
-              description={t("settings.gateway.feishuAppIdDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <Input
-                    value={feishuAppId}
-                    onChange={(e) => {
-                      setFeishuAppId(e.target.value);
-                      markDirty();
-                    }}
-                    placeholder="cli_xxxxxxxx"
-                    className="font-mono"
-                  />
-                </div>
-              }
-            />
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.feishuAppSecret")}
-              description={feishuAppSecretSet ? t("settings.gateway.secretConfigured") : t("settings.gateway.feishuAppSecretDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <Input
-                    type="password"
-                    value={feishuAppSecret}
-                    onChange={(e) => {
-                      setFeishuAppSecret(e.target.value);
-                      markDirty();
-                    }}
-                    placeholder={feishuAppSecretSet ? "••••••••  (unchanged)" : t("settings.gateway.enterSecret")}
-                    className="font-mono"
-                  />
-                </div>
-              }
-            />
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.feishuWebhook")}
-              description={t("settings.gateway.feishuWebhookDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <div className="flex gap-2">
-                    <Input
-                      value={feishuWebhookHost}
-                      onChange={(e) => {
-                        setFeishuWebhookHost(e.target.value);
-                        markDirty();
-                      }}
-                      placeholder="127.0.0.1"
-                      className="font-mono"
-                    />
-                    <Input
-                      value={feishuWebhookPort}
-                      onChange={(e) => {
-                        setFeishuWebhookPort(e.target.value);
-                        markDirty();
-                      }}
-                      placeholder="8765"
-                      className="font-mono w-24"
-                    />
-                  </div>
-                </div>
-              }
-            />
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.feishuGroupPolicy")}
-              description={t("settings.gateway.feishuGroupPolicyDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <select
-                    value={feishuGroupPolicy}
-                    onChange={(e) => {
-                      setFeishuGroupPolicy(e.target.value);
-                      markDirty();
-                    }}
-                    className="flex h-9 w-full rounded-md border border-app-border bg-app-surface px-3 text-sm text-app-text focus:outline-none focus:ring-2 focus:ring-app-primary"
-                  >
-                    <option value="open">{t("settings.gateway.policyOpen")}</option>
-                    <option value="allowlist">{t("settings.gateway.policyAllowlist")}</option>
-                    <option value="blacklist">{t("settings.gateway.policyBlacklist")}</option>
-                    <option value="disabled">{t("settings.gateway.policyDisabled")}</option>
-                  </select>
-                </div>
-              }
-            />
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.feishuEncryptKey")}
-              description={feishuEncryptKeySet ? t("settings.gateway.secretConfigured") : t("settings.gateway.feishuEncryptKeyDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <Input
-                    type="password"
-                    value={feishuEncryptKey}
-                    onChange={(e) => {
-                      setFeishuEncryptKey(e.target.value);
-                      markDirty();
-                    }}
-                    placeholder={feishuEncryptKeySet ? "••••••••  (unchanged)" : t("settings.gateway.enterEncryptKey")}
-                    className="font-mono"
-                  />
-                </div>
-              }
-            />
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.feishuVerificationToken")}
-              description={feishuVerificationTokenSet ? t("settings.gateway.secretConfigured") : t("settings.gateway.feishuVerificationTokenDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <Input
-                    type="password"
-                    value={feishuVerificationToken}
-                    onChange={(e) => {
-                      setFeishuVerificationToken(e.target.value);
-                      markDirty();
-                    }}
-                    placeholder={feishuVerificationTokenSet ? "••••••••  (unchanged)" : t("settings.gateway.enterVerificationToken")}
-                    className="font-mono"
-                  />
-                </div>
-              }
-            />
-            {configDirty && (
-              <>
-                <SectionDivider />
-                <div className="flex justify-end px-4 py-3">
-                  <Button size="sm" onClick={handleSaveConfig} disabled={saving}>
-                    <Save className="h-3.5 w-3.5 mr-1" />
-                    {saving ? "Saving..." : t("settings.gateway.save")}
-                  </Button>
-                </div>
-              </>
-            )}
-          </>
-        )}
-      </SettingsSection>
-
-      {/* WhatsApp Channel */}
-      <SettingsSection title={t("settings.gateway.whatsapp")}>
-        <SettingsRow
-          label={t("settings.gateway.whatsapp")}
-          description={t("settings.gateway.whatsappDesc")}
-          control={
-            <Switch
-              size="sm"
-              checked={whatsappEnabled}
-              onCheckedChange={(v) => {
-                setWhatsappEnabled(v);
-                autoSaveConfig({ whatsappEnabled: v });
-              }}
-            />
-          }
-        />
-        {whatsappEnabled && (
-          <>
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.whatsappPhoneNumberId")}
-              description={t("settings.gateway.whatsappPhoneNumberIdDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <Input
-                    value={whatsappPhoneNumberId}
-                    onChange={(e) => {
-                      setWhatsappPhoneNumberId(e.target.value);
-                      markDirty();
-                    }}
-                    placeholder="Enter Phone Number ID"
-                    className="font-mono"
-                  />
-                </div>
-              }
-            />
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.whatsappAccessToken")}
-              description={whatsappAccessTokenSet ? t("settings.gateway.secretConfigured") : t("settings.gateway.whatsappAccessTokenDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <Input
-                    type="password"
-                    value={whatsappAccessToken}
-                    onChange={(e) => {
-                      setWhatsappAccessToken(e.target.value);
-                      markDirty();
-                    }}
-                    placeholder={whatsappAccessTokenSet ? "••••••••  (unchanged)" : t("settings.gateway.enterAccessToken")}
-                    className="font-mono"
-                  />
-                </div>
-              }
-            />
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.whatsappWebhook")}
-              description={t("settings.gateway.whatsappWebhookDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <div className="flex gap-2">
-                    <Input
-                      value={whatsappWebhookHost}
-                      onChange={(e) => {
-                        setWhatsappWebhookHost(e.target.value);
-                        markDirty();
-                      }}
-                      placeholder="127.0.0.1"
-                      className="font-mono"
-                    />
-                    <Input
-                      value={whatsappWebhookPort}
-                      onChange={(e) => {
-                        setWhatsappWebhookPort(e.target.value);
-                        markDirty();
-                      }}
-                      placeholder="8766"
-                      className="font-mono w-24"
-                    />
-                  </div>
-                </div>
-              }
-            />
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.whatsappDmPolicy")}
-              description={t("settings.gateway.whatsappDmPolicyDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <select
-                    value={whatsappDmPolicy}
-                    onChange={(e) => {
-                      setWhatsappDmPolicy(e.target.value);
-                      markDirty();
-                    }}
-                    className="flex h-9 w-full rounded-md border border-app-border bg-app-surface px-3 text-sm text-app-text focus:outline-none focus:ring-2 focus:ring-app-primary"
-                  >
-                    <option value="open">{t("settings.gateway.policyOpen")}</option>
-                    <option value="allowlist">{t("settings.gateway.policyAllowlist")}</option>
-                    <option value="disabled">{t("settings.gateway.policyDisabled")}</option>
-                  </select>
-                </div>
-              }
-            />
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.whatsappAppSecret")}
-              description={whatsappAppSecretSet ? t("settings.gateway.secretConfigured") : t("settings.gateway.whatsappAppSecretDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <Input
-                    type="password"
-                    value={whatsappAppSecret}
-                    onChange={(e) => {
-                      setWhatsappAppSecret(e.target.value);
-                      markDirty();
-                    }}
-                    placeholder={whatsappAppSecretSet ? "••••••••  (unchanged)" : t("settings.gateway.enterAppSecret")}
-                    className="font-mono"
-                  />
-                </div>
-              }
-            />
-            <SectionDivider />
-            <SettingsRow
-              label={t("settings.gateway.whatsappWebhookVerifyToken")}
-              description={whatsappWebhookVerifyTokenSet ? t("settings.gateway.secretConfigured") : t("settings.gateway.whatsappWebhookVerifyTokenDesc")}
-              control={
-                <div className="flex w-full flex-col gap-2 md:w-[360px]">
-                  <Input
-                    type="password"
-                    value={whatsappWebhookVerifyToken}
-                    onChange={(e) => {
-                      setWhatsappWebhookVerifyToken(e.target.value);
-                      markDirty();
-                    }}
-                    placeholder={whatsappWebhookVerifyTokenSet ? "••••••••  (unchanged)" : t("settings.gateway.enterVerifyToken")}
-                    className="font-mono"
-                  />
-                </div>
-              }
-            />
-            {configDirty && (
-              <>
-                <SectionDivider />
-                <div className="flex justify-end px-4 py-3">
-                  <Button size="sm" onClick={handleSaveConfig} disabled={saving}>
-                    <Save className="h-3.5 w-3.5 mr-1" />
-                    {saving ? "Saving..." : t("settings.gateway.save")}
-                  </Button>
-                </div>
-              </>
-            )}
-          </>
-        )}
-      </SettingsSection>
     </div>
   );
 }

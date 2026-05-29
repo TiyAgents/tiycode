@@ -3,12 +3,11 @@
 //! Exposes start/stop/restart/status to the frontend so the Settings UI
 //! can trigger gateway lifecycle changes without restarting the app.
 
-use std::str::FromStr;
 use tauri::State;
 
 use crate::core::gateway_supervisor::{GatewayStatus, GatewaySupervisorHandle};
 use crate::gateway::config::{
-    self as gateway_config, DmPolicy, GatewayConfigDto, GatewayConfigUpdateInput, GroupPolicy,
+    self as gateway_config, GatewayConfigDto, GatewayConfigUpdateInput,
 };
 use crate::gateway::platforms::weixin_auth::{self, LoginPollStatus, QrLoginResult, WeixinSession};
 
@@ -91,7 +90,7 @@ pub async fn gateway_get_config() -> Result<Option<GatewayConfigDto>, String> {
 #[tauri::command]
 pub async fn gateway_save_config(input: GatewayConfigUpdateInput) -> Result<(), String> {
     use crate::gateway::config::{
-        FeishuConfig, GatewayConfig, WecomConfig, WeixinConfig, WhatsAppConfig,
+        GatewayConfig, WecomConfig, WeixinConfig,
     };
     use crate::gateway::traits::Platform;
 
@@ -111,31 +110,6 @@ pub async fn gateway_save_config(input: GatewayConfigUpdateInput) -> Result<(), 
             bot_id: String::new(),
             secret: String::new(),
             ws_url: "openws.work.weixin.qq.com".to_string(),
-        }),
-        feishu: Some(FeishuConfig {
-            enabled: false,
-            app_id: String::new(),
-            app_secret: String::new(),
-            encrypt_key: None,
-            verification_token: None,
-            webhook_host: "127.0.0.1".to_string(),
-            webhook_port: 8765,
-            group_policy: GroupPolicy::Open,
-            group_allowlist: vec![],
-            group_blacklist: vec![],
-            domain: "open.feishu.cn".to_string(),
-        }),
-        whatsapp: Some(WhatsAppConfig {
-            enabled: false,
-            phone_number_id: String::new(),
-            access_token: String::new(),
-            app_secret: String::new(),
-            webhook_verify_token: String::new(),
-            webhook_host: "127.0.0.1".to_string(),
-            webhook_port: 8766,
-            dm_policy: DmPolicy::Open,
-            allow_from: vec![],
-            api_version: "v21.0".to_string(),
         }),
     });
 
@@ -169,104 +143,11 @@ pub async fn gateway_save_config(input: GatewayConfigUpdateInput) -> Result<(), 
         });
     }
 
-    // Update feishu fields.
-    if let Some(ref mut fs) = config.feishu {
-        fs.enabled = input.feishu_enabled;
-        fs.app_id = input.feishu_app_id;
-        if !input.feishu_app_secret.is_empty() {
-            fs.app_secret = input.feishu_app_secret;
-        }
-        fs.webhook_host = input.feishu_webhook_host;
-        fs.webhook_port = input.feishu_webhook_port;
-        fs.group_policy =
-            GroupPolicy::from_str(&input.feishu_group_policy).map_err(|e| e.to_string())?;
-        if let Some(ref ek) = input.feishu_encrypt_key {
-            fs.encrypt_key = if ek.is_empty() {
-                None
-            } else {
-                Some(ek.clone())
-            };
-        }
-        if let Some(ref vt) = input.feishu_verification_token {
-            fs.verification_token = if vt.is_empty() {
-                None
-            } else {
-                Some(vt.clone())
-            };
-        }
-    } else {
-        config.feishu = Some(FeishuConfig {
-            enabled: input.feishu_enabled,
-            app_id: input.feishu_app_id,
-            app_secret: input.feishu_app_secret,
-            encrypt_key: input.feishu_encrypt_key.and_then(|v| {
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(v)
-                }
-            }),
-            verification_token: input.feishu_verification_token.and_then(|v| {
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(v)
-                }
-            }),
-            webhook_host: input.feishu_webhook_host,
-            webhook_port: input.feishu_webhook_port,
-            group_policy: GroupPolicy::from_str(&input.feishu_group_policy)
-                .map_err(|e| e.to_string())?,
-            group_allowlist: vec![],
-            group_blacklist: vec![],
-            domain: "open.feishu.cn".to_string(),
-        });
-    }
-
-    // Update whatsapp fields.
-    if let Some(ref mut wa) = config.whatsapp {
-        wa.enabled = input.whatsapp_enabled;
-        wa.phone_number_id = input.whatsapp_phone_number_id;
-        if !input.whatsapp_access_token.is_empty() {
-            wa.access_token = input.whatsapp_access_token;
-        }
-        wa.webhook_host = input.whatsapp_webhook_host;
-        wa.webhook_port = input.whatsapp_webhook_port;
-        wa.dm_policy = DmPolicy::from_str(&input.whatsapp_dm_policy).map_err(|e| e.to_string())?;
-        if let Some(ref s) = input.whatsapp_app_secret {
-            if !s.is_empty() {
-                wa.app_secret = s.clone();
-            }
-        }
-        if let Some(ref t) = input.whatsapp_webhook_verify_token {
-            if !t.is_empty() {
-                wa.webhook_verify_token = t.clone();
-            }
-        }
-    } else {
-        config.whatsapp = Some(WhatsAppConfig {
-            enabled: input.whatsapp_enabled,
-            phone_number_id: input.whatsapp_phone_number_id,
-            access_token: input.whatsapp_access_token,
-            app_secret: input.whatsapp_app_secret.unwrap_or_default(),
-            webhook_verify_token: input.whatsapp_webhook_verify_token.unwrap_or_default(),
-            webhook_host: input.whatsapp_webhook_host,
-            webhook_port: input.whatsapp_webhook_port,
-            dm_policy: DmPolicy::from_str(&input.whatsapp_dm_policy).map_err(|e| e.to_string())?,
-            allow_from: vec![],
-            api_version: "v21.0".to_string(),
-        });
-    }
-
     // Set active platform to the first enabled one.
     if input.weixin_enabled {
         config.platform = Platform::Weixin;
     } else if input.wecom_enabled {
         config.platform = Platform::Wecom;
-    } else if input.feishu_enabled {
-        config.platform = Platform::Feishu;
-    } else if input.whatsapp_enabled {
-        config.platform = Platform::WhatsApp;
     }
 
     gateway_config::save_config(&config).map_err(|e| e.to_string())

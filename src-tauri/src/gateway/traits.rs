@@ -60,8 +60,6 @@ impl SendResult {
 pub enum Platform {
     Weixin,
     Wecom,
-    Feishu,
-    WhatsApp,
 }
 
 impl std::fmt::Display for Platform {
@@ -69,8 +67,6 @@ impl std::fmt::Display for Platform {
         match self {
             Platform::Weixin => write!(f, "weixin"),
             Platform::Wecom => write!(f, "wecom"),
-            Platform::Feishu => write!(f, "feishu"),
-            Platform::WhatsApp => write!(f, "whatsapp"),
         }
     }
 }
@@ -82,8 +78,6 @@ impl std::str::FromStr for Platform {
         match s.to_lowercase().as_str() {
             "weixin" | "wechat" => Ok(Platform::Weixin),
             "wecom" | "wework" => Ok(Platform::Wecom),
-            "feishu" | "lark" => Ok(Platform::Feishu),
-            "whatsapp" => Ok(Platform::WhatsApp),
             other => Err(format!("unknown platform: {other}")),
         }
     }
