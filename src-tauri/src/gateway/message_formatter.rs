@@ -9,6 +9,8 @@ pub fn max_message_length(platform: Platform) -> usize {
     match platform {
         Platform::Weixin => 2000,
         Platform::Wecom => 4000,
+        Platform::Feishu => 6000,
+        Platform::WhatsApp => 4096,
     }
 }
 

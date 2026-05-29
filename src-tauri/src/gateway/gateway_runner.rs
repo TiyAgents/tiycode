@@ -13,8 +13,10 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::core::agent_session_model_plan;
 use crate::core::plan_checkpoint;
+use crate::gateway::platforms::feishu::FeishuAdapter;
 use crate::gateway::platforms::wecom::WecomAdapter;
 use crate::gateway::platforms::weixin::WeixinAdapter;
+use crate::gateway::platforms::whatsapp::WhatsAppAdapter;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::thread::MessageAttachmentDto;
 use crate::model::workspace::WorkspaceAddInput;
@@ -50,7 +52,9 @@ fn file_mtime(path: &Path) -> Option<SystemTime> {
 fn try_load_config(path: &Path) -> Option<GatewayConfig> {
     let config = GatewayConfig::load(path).ok()?;
     let has_enabled = config.weixin.as_ref().map_or(false, |w| w.enabled)
-        || config.wecom.as_ref().map_or(false, |w| w.enabled);
+        || config.wecom.as_ref().map_or(false, |w| w.enabled)
+        || config.feishu.as_ref().map_or(false, |f| f.enabled)
+        || config.whatsapp.as_ref().map_or(false, |w| w.enabled);
     if has_enabled {
         Some(config)
     } else {
@@ -112,6 +116,28 @@ pub async fn run(state: GatewayState, config_path: PathBuf) -> anyhow::Result<()
                     }
                 };
                 Box::new(WeixinAdapter::new(weixin_config))
+            }
+            Platform::Feishu => {
+                let feishu_config = match config.feishu.clone() {
+                    Some(c) => c,
+                    None => {
+                        tracing::warn!("[feishu] config section missing");
+                        tokio::time::sleep(IDLE_POLL_INTERVAL).await;
+                        continue;
+                    }
+                };
+                Box::new(FeishuAdapter::new(feishu_config))
+            }
+            Platform::WhatsApp => {
+                let whatsapp_config = match config.whatsapp.clone() {
+                    Some(c) => c,
+                    None => {
+                        tracing::warn!("[whatsapp] config section missing");
+                        tokio::time::sleep(IDLE_POLL_INTERVAL).await;
+                        continue;
+                    }
+                };
+                Box::new(WhatsAppAdapter::new(whatsapp_config))
             }
         };
 
