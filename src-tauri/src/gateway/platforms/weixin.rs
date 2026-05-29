@@ -370,10 +370,12 @@ impl WeixinAdapter {
         }
 
         // Content fingerprint dedup: catch re-delivery with different msg_id.
-        // Skip for slash commands — users legitimately re-send the same command
-        // (e.g. /profile after entering a thread).
+        // Skip for slash commands and short numeric replies — users
+        // legitimately re-send the same command or number when selecting
+        // from different lists (e.g. "2" for /ws then "2" for /threads).
         let is_command = text.starts_with('/');
-        if !is_command {
+        let is_numeric_reply = !text.is_empty() && text.trim().chars().all(|c| c.is_ascii_digit());
+        if !is_command && !is_numeric_reply {
             let content_hash = {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 sender_id.hash(&mut hasher);
