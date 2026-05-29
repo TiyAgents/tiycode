@@ -358,6 +358,17 @@ const en: Record<TranslationKey, string> = {
   "settings.gateway.running": "Running",
   "settings.gateway.stopped": "Stopped",
   "settings.gateway.save": "Save",
+  "settings.gateway.notRunning": "Gateway process is not running.",
+  "settings.gateway.qrExpired": "QR code expired or login failed. Please try again.",
+  "settings.gateway.scanning": "Waiting for scan…",
+  "settings.gateway.wecomDesc": "WebSocket connection to WeCom AI Bot platform.",
+  "settings.gateway.wecomBotIdDesc": "The Bot ID from WeCom AI Bot platform.",
+  "settings.gateway.enterBotId": "Enter Bot ID",
+  "settings.gateway.enterBotSecret": "Enter the Bot Secret.",
+  "settings.gateway.saving": "Saving…",
+  "settings.gateway.loading": "Loading…",
+  "settings.gateway.saveFailed": "Save failed",
+  "settings.gateway.qrLoginFailed": "QR login failed",
 
   // Shared gateway secrets/policies
   "settings.gateway.secretConfigured": "Secret is configured. Leave empty to keep unchanged.",

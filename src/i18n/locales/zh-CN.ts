@@ -369,6 +369,17 @@ const zhCN = {
   "settings.gateway.running": "运行中",
   "settings.gateway.stopped": "已停止",
   "settings.gateway.save": "保存",
+  "settings.gateway.notRunning": "Gateway 进程未运行。",
+  "settings.gateway.qrExpired": "二维码已过期或登录失败，请重试。",
+  "settings.gateway.scanning": "等待扫码…",
+  "settings.gateway.wecomDesc": "连接企业微信 AI Bot 平台的 WebSocket 服务。",
+  "settings.gateway.wecomBotIdDesc": "企业微信 AI Bot 平台分配的 Bot ID。",
+  "settings.gateway.enterBotId": "输入 Bot ID",
+  "settings.gateway.enterBotSecret": "输入 Bot Secret。",
+  "settings.gateway.saving": "保存中…",
+  "settings.gateway.loading": "加载中…",
+  "settings.gateway.saveFailed": "保存失败",
+  "settings.gateway.qrLoginFailed": "二维码登录失败",
 
   // Shared gateway secrets/policies
   "settings.gateway.secretConfigured": "密钥已配置，留空则保持不变。",

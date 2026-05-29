@@ -45,17 +45,34 @@ impl GatewayConfig {
         Duration::from_secs_f64(self.send_chunk_delay_seconds)
     }
 
-    /// Validate that the required platform config section is present.
+    /// Validate that the required platform config section is present and
+    /// that required credentials are non-empty for enabled channels.
     fn validate(&self) -> anyhow::Result<()> {
         match self.platform {
             Platform::Weixin => {
-                if self.weixin.is_none() {
-                    anyhow::bail!("platform is 'weixin' but [weixin] config section is missing");
+                let weixin = self.weixin.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("platform is 'weixin' but [weixin] config section is missing")
+                })?;
+                if weixin.enabled
+                    && weixin.token.as_ref().map_or(true, |t| t.is_empty())
+                    && weixin.effective_token().is_none()
+                {
+                    tracing::warn!(
+                        "weixin channel is enabled but no token is configured and no session token is available; QR login will be required"
+                    );
                 }
             }
             Platform::Wecom => {
-                if self.wecom.is_none() {
-                    anyhow::bail!("platform is 'wecom' but [wecom] config section is missing");
+                let wecom = self.wecom.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("platform is 'wecom' but [wecom] config section is missing")
+                })?;
+                if wecom.enabled {
+                    if wecom.bot_id.is_empty() {
+                        anyhow::bail!("wecom channel is enabled but [wecom] bot_id is empty; set a valid Bot ID");
+                    }
+                    if wecom.secret.is_empty() {
+                        anyhow::bail!("wecom channel is enabled but [wecom] secret is empty; set a valid Secret");
+                    }
                 }
             }
         }
@@ -173,6 +190,18 @@ pub fn save_config(config: &GatewayConfig) -> anyhow::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, &toml_str)?;
     std::fs::rename(&tmp, &path)?;
+    // Restrict permissions on Unix so only the owner can read the secrets file.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mut perms = meta.permissions();
+            if perms.mode() & 0o077 != 0 {
+                perms.set_mode(0o600);
+                std::fs::set_permissions(&path, perms).ok();
+            }
+        }
+    }
     Ok(())
 }
 

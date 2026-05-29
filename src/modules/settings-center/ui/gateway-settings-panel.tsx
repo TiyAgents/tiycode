@@ -110,6 +110,10 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
     wecomWsUrl: string;
   }>) => {
     try {
+      // Deliberately send an empty wecomSecret — the backend treats empty
+      // as "keep existing" so we don't leak the plaintext secret on every
+      // auto-save (e.g. toggling a channel on/off). Manual save via
+      // handleSaveConfig is needed to persist a new secret.
       await invoke("gateway_save_config", {
         input: {
           weixinEnabled,
@@ -122,9 +126,9 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
       });
       setConfigDirty(false);
     } catch (e) {
-      setError(`Save failed: ${String(e)}`);
+      setError(`${t("settings.gateway.saveFailed")}: ${String(e)}`);
     }
-  }, [weixinEnabled, wecomEnabled, wecomBotId, wecomWsUrl]);
+  }, [t, weixinEnabled, wecomEnabled, wecomBotId, wecomWsUrl]);
 
   const handleSaveConfig = async () => {
     setSaving(true);
@@ -144,7 +148,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
       if (wecomSecret) setWecomSecretSet(true);
       await refreshStatus();
     } catch (e) {
-      setError(`Save failed: ${String(e)}`);
+      setError(`${t("settings.gateway.saveFailed")}: ${String(e)}`);
     } finally {
       setSaving(false);
     }
@@ -200,7 +204,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
         pollLogin(result.login_uuid);
       }
     } catch (e) {
-      setError(`QR login failed: ${String(e)}`);
+      setError(`${t("settings.gateway.qrLoginFailed")}: ${String(e)}`);
     } finally {
       setLoading(false);
     }
@@ -243,7 +247,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
         if (result.status === "expired" || result.status === "failed") {
           setQrImage(null);
           setLoginPolling(false);
-          setError("QR code expired or login failed. Please try again.");
+          setError(t("settings.gateway.qrExpired"));
           return;
         }
       } catch {
@@ -279,7 +283,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
           description={
             status?.running
               ? `PID ${status.pid ?? "—"} · ${status.version ? `v${status.version}` : "—"} · Config ${status.configExists ? "✓" : "✗"}`
-              : "Gateway process is not running."
+              : t("settings.gateway.notRunning")
           }
           control={
             <div className="flex items-center gap-2">
@@ -370,11 +374,11 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
                 )}
                 {qrImage && <img src={qrImage} alt="QR Code" className="w-48 h-48 rounded-lg border border-app-border" />}
                 {loginPolling ? (
-                  <span className="text-xs text-app-muted animate-pulse">Waiting for scan...</span>
+                  <span className="text-xs text-app-muted animate-pulse">{t("settings.gateway.scanning")}</span>
                 ) : (
                   <Button size="sm" onClick={handleQrLogin} disabled={loading}>
                     <QrCode className="h-3.5 w-3.5 mr-1" />
-                    {loading ? "Loading..." : sessionExpired ? t("settings.gateway.reLogin") : t("settings.gateway.scanQr")}
+                    {loading ? t("settings.gateway.loading") : sessionExpired ? t("settings.gateway.reLogin") : t("settings.gateway.scanQr")}
                   </Button>
                 )}
               </div>
@@ -387,7 +391,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
       <SettingsSection title={t("settings.gateway.wecom")}>
         <SettingsRow
           label={t("settings.gateway.wecom")}
-          description="WebSocket connection to WeCom AI Bot platform."
+          description={t("settings.gateway.wecomDesc")}
           control={
             <Switch
               size="sm"
@@ -404,7 +408,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
             <SectionDivider />
             <SettingsRow
               label={t("settings.gateway.wecomBotId")}
-              description="The Bot ID from WeCom AI Bot platform."
+              description={t("settings.gateway.wecomBotIdDesc")}
               control={
                 <div className="flex w-full flex-col gap-2 md:w-[360px]">
                   <Input
@@ -413,7 +417,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
                       setWecomBotId(e.target.value);
                       markDirty();
                     }}
-                    placeholder="Enter Bot ID"
+                    placeholder={t("settings.gateway.enterBotId")}
                     className="font-mono"
                   />
                 </div>
@@ -422,7 +426,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
             <SectionDivider />
             <SettingsRow
               label={t("settings.gateway.wecomSecret")}
-              description={wecomSecretSet ? "Secret is configured. Leave empty to keep unchanged." : "Enter the Bot Secret."}
+              description={wecomSecretSet ? t("settings.gateway.secretConfigured") : t("settings.gateway.enterBotSecret")}
               control={
                 <div className="flex w-full flex-col gap-2 md:w-[360px]">
                   <Input
@@ -432,7 +436,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
                       setWecomSecret(e.target.value);
                       markDirty();
                     }}
-                    placeholder={wecomSecretSet ? "••••••••  (unchanged)" : "Enter Secret"}
+                    placeholder={wecomSecretSet ? "••••••••  (unchanged)" : t("settings.gateway.enterSecret")}
                     className="font-mono"
                   />
                 </div>
@@ -444,7 +448,7 @@ export function GatewaySettingsPanel({ description }: { description: string }) {
                 <div className="flex justify-end px-4 py-3">
                   <Button size="sm" onClick={handleSaveConfig} disabled={saving}>
                     <Save className="h-3.5 w-3.5 mr-1" />
-                    {saving ? "Saving..." : t("settings.gateway.save")}
+                    {saving ? t("settings.gateway.saving") : t("settings.gateway.save")}
                   </Button>
                 </div>
               </>
