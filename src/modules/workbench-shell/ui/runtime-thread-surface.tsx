@@ -1584,9 +1584,8 @@ export function RuntimeThreadSurface({
           await goalClear(threadId);
           return true;
         }
-        if (subCommand === "status" || !argText) {
+        if (subCommand === "status") {
           const goal = await goalGetState(threadId);
-          // For now, just log — a full GoalStatusBar will show this
           if (goal) {
             setComposerError(`Goal: ${goal.objective} (${goal.status}, ${goal.turnsUsed}/${goal.maxTurns} turns)`);
           } else {
@@ -1597,6 +1596,11 @@ export function RuntimeThreadSurface({
         }
 
         // /goal <objective> — persist the goal, then start a run
+        if (!argText) {
+          setComposerError("Provide a goal objective, e.g. /goal fix the auth bugs");
+          submittingRef.current = false;
+          return true;
+        }
         await goalSet(threadId, argText);
       } catch (error) {
         setComposerError(`Failed to manage goal: ${error}`);

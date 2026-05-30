@@ -1421,10 +1421,14 @@ async fn inject_goal_context(
                  **You have an active goal. This takes priority over other instructions.**\n\n\
                  Objective: {objective}\n\
                  Turns used: {turns_used}/{max_turns}\n\n\
+                 **Completion requirements — ALL must be met before calling update_goal(complete):**\n\
+                 1. Every subtask implied by the objective is done. No remaining work, no dangling follow-ups.\n\
+                 2. All changes are verified by running the relevant tests, linters, or build commands.\n\
+                 3. Evidence passed to update_goal MUST include concrete verification output (test results, command output, file change summary).\n\
+                 Do NOT mark the goal complete until these three conditions are fully satisfied.\n\n\
                  Rules:\n\
                  - When the goal is achieved, call update_goal(status=\"complete\", evidence=\"...\")\n\
-                 - Evidence must be verifiable: test output, file change summary, command results\n\
-                 - Do NOT claim completion without evidence\n\
+                 - Do NOT claim completion without verifiable evidence\n\
                  - If blocked and need user input, use clarify tool\n\
                  - The system will automatically continue this goal across turns",
                 objective = goal.objective,
