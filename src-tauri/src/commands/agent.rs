@@ -691,113 +691,35 @@ pub async fn goal_evaluate(
         thread_id.clone(),
         state.goal_runtime_state.clone(),
     );
-    let goal = mgr.get_active().await?.ok_or_else(|| {
-        AppError::recoverable(
-            crate::model::errors::ErrorSource::Settings,
-            "goal.not_found",
-            "no active goal found",
-        )
-    })?;
 
-    // If no response provided, fetch the last assistant message from the DB
-    let response = match response {
-        Some(r) if !r.is_empty() => r,
-        _ => {
-            use crate::persistence::repo::message_repo;
-            // Fetch the most recent assistant message (not user/system messages).
-            let recent = message_repo::list_recent(&state.pool, &thread_id, None, 10).await?;
-            recent
-                .iter()
-                .rev() // Most recent first
-                .find(|m| m.role == "assistant")
-                .map(|m| m.content_markdown.clone())
-                .unwrap_or_default()
-        }
-    };
-
-    let verdict = mgr.evaluate_after_turn(&response, &goal);
-
-    // Re-read goal from DB to protect against TOCTOU (another request may have
-    // changed the goal state between our initial read and this verdict application).
-    // Only apply the verdict if the goal is still Active.
-    let current = mgr.get_active().await?;
-    let current_is_active = current
-        .as_ref()
-        .map(|g| g.status == crate::model::goal::GoalStatus::Active)
-        .unwrap_or(false);
-
-    if !current_is_active {
-        // Goal state changed since we read it — return current state without applying verdict.
-        let payload = current
-            .as_ref()
-            .map(crate::core::goal_manager::GoalManager::to_payload)
-            .unwrap_or_else(|| crate::core::goal_manager::GoalManager::to_payload(&goal));
+    let Some(run_id) = crate::persistence::repo::run_repo::find_latest_evaluable_run_id_by_thread(
+        &state.pool,
+        &thread_id,
+    )
+    .await?
+    else {
+        let goal = mgr.get_active().await?.ok_or_else(|| {
+            AppError::recoverable(
+                crate::model::errors::ErrorSource::Settings,
+                "goal.not_found",
+                "no evaluable run or active goal found",
+            )
+        })?;
+        let payload = crate::core::goal_manager::GoalManager::to_payload(&goal);
         return Ok(serde_json::json!({
             "goal": serde_json::to_value(&payload).unwrap_or_default(),
             "verdict": "skipped",
             "continuationPrompt": null,
         }));
-    }
-
-    let current = current.unwrap(); // Safe: we verified Some above
-
-    // Apply the verdict — all DB writes happen here, not in evaluate_after_turn.
-    // Note: GoalVerdict::Complete is intentionally absent here — completion is
-    // driven exclusively through the update_goal tool (mark_complete), never
-    // through turn evaluation. evaluate_after_turn only returns Continue,
-    // ChallengeEvidence, Paused, and BudgetLimited.
-    match &verdict {
-        crate::model::goal::GoalVerdict::Continue => {}
-        crate::model::goal::GoalVerdict::ChallengeEvidence => {}
-        crate::model::goal::GoalVerdict::Paused { reason, detail } => {
-            mgr.pause(&current.id, reason.clone(), detail.clone())
-                .await?;
-        }
-        crate::model::goal::GoalVerdict::BudgetLimited => {
-            mgr.mark_budget_limited(&current.id).await?;
-        }
-        // GoalVerdict::Complete is not produced by evaluate_after_turn;
-        // completion is handled via the update_goal tool path instead.
-        _ => {}
-    }
-
-    // Account run duration to goal time — the just-completed run contributes its wall-clock time.
-    if let Some(run_seconds) =
-        crate::persistence::repo::run_repo::get_last_completed_run_duration(&state.pool, &thread_id)
-            .await
-            .unwrap_or(None)
-    {
-        if run_seconds > 0 {
-            mgr.account_usage(&current.id, 0, run_seconds).await.ok();
-        }
-    }
-
-    let updated = mgr.get_active().await?;
-    let payload = updated
-        .as_ref()
-        .map(crate::core::goal_manager::GoalManager::to_payload)
-        .unwrap_or_else(|| crate::core::goal_manager::GoalManager::to_payload(&current));
-
-    let (verdict_str, continuation_prompt) = match &verdict {
-        crate::model::goal::GoalVerdict::Continue => (
-            "continue",
-            Some(mgr.render_continuation_prompt(updated.as_ref().unwrap_or(&goal))),
-        ),
-        crate::model::goal::GoalVerdict::ChallengeEvidence => (
-            "challenge_evidence",
-            Some(mgr.render_challenge_prompt(
-                crate::core::goal_manager::ChallengePromptVariant::NoTool,
-            )),
-        ),
-        crate::model::goal::GoalVerdict::Paused { reason: _, detail } => ("paused", detail.clone()),
-        crate::model::goal::GoalVerdict::BudgetLimited => ("budget_limited", None),
-        // GoalVerdict::Complete is not produced by evaluate_after_turn.
-        _ => ("continue", None),
     };
 
-    Ok(serde_json::json!({
-        "goal": serde_json::to_value(&payload).unwrap_or_default(),
-        "verdict": verdict_str,
-        "continuationPrompt": continuation_prompt,
-    }))
+    let Some(outcome) = mgr.evaluate_after_run(&run_id, response).await? else {
+        return Err(AppError::recoverable(
+            crate::model::errors::ErrorSource::Settings,
+            "goal.not_found",
+            "no active goal found",
+        ));
+    };
+
+    Ok(serde_json::to_value(outcome).unwrap_or_default())
 }

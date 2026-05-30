@@ -1,4 +1,5 @@
 use chrono::Utc;
+use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::model::errors::{AppError, ErrorSource};
@@ -6,6 +7,14 @@ use crate::model::goal::{GoalPayload, GoalRecord, GoalStatus, GoalVerdict, Pause
 use crate::persistence::repo::goal_repo;
 
 use crate::core::app_state::GoalRuntimeState;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalEvaluationOutcome {
+    pub goal: GoalPayload,
+    pub verdict: String,
+    pub continuation_prompt: Option<String>,
+}
 
 /// Default maximum turns for a goal before auto-pausing.
 const DEFAULT_MAX_TURNS: i64 = 50;
@@ -143,6 +152,7 @@ impl GoalManager {
             pause_reason: None,
             pause_detail: None,
             evidence: None,
+            last_evaluated_run_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -482,6 +492,133 @@ impl GoalManager {
     /// Generate a guidance prompt when the agent appears stuck.
     pub fn render_guidance_prompt(&self, objective: &str) -> String {
         GUIDANCE_PROMPT.replace("{objective}", objective)
+    }
+
+    pub async fn evaluate_after_run(
+        &self,
+        run_id: &str,
+        response: Option<String>,
+    ) -> Result<Option<GoalEvaluationOutcome>, AppError> {
+        let goal = match self.get_active().await? {
+            Some(goal) => goal,
+            None => return Ok(None),
+        };
+
+        if goal.status != GoalStatus::Active {
+            return Ok(Some(GoalEvaluationOutcome {
+                goal: Self::to_payload(&goal),
+                verdict: "skipped".to_string(),
+                continuation_prompt: None,
+            }));
+        }
+
+        if goal.last_evaluated_run_id.as_deref() == Some(run_id) {
+            return Ok(Some(GoalEvaluationOutcome {
+                goal: Self::to_payload(&goal),
+                verdict: "skipped".to_string(),
+                continuation_prompt: None,
+            }));
+        }
+
+        let claimed = goal_repo::mark_evaluated_if_needed(&self.pool, &goal.id, run_id).await?;
+        if !claimed {
+            let current = self.get_active().await?.unwrap_or(goal);
+            return Ok(Some(GoalEvaluationOutcome {
+                goal: Self::to_payload(&current),
+                verdict: "skipped".to_string(),
+                continuation_prompt: None,
+            }));
+        }
+
+        let response = match response {
+            Some(value) if !value.is_empty() => value,
+            _ => {
+                let recent = crate::persistence::repo::message_repo::list_recent(
+                    &self.pool,
+                    &self.thread_id,
+                    None,
+                    10,
+                )
+                .await?;
+                recent
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == "assistant")
+                    .map(|message| message.content_markdown.clone())
+                    .unwrap_or_default()
+            }
+        };
+
+        let verdict = self.evaluate_after_turn(&response, &goal);
+
+        let current = self.get_active().await?;
+        let current_is_active = current
+            .as_ref()
+            .map(|goal| goal.status == GoalStatus::Active)
+            .unwrap_or(false);
+
+        if !current_is_active {
+            let payload = current
+                .as_ref()
+                .map(Self::to_payload)
+                .unwrap_or_else(|| Self::to_payload(&goal));
+            return Ok(Some(GoalEvaluationOutcome {
+                goal: payload,
+                verdict: "skipped".to_string(),
+                continuation_prompt: None,
+            }));
+        }
+
+        let current = current.unwrap();
+
+        match &verdict {
+            GoalVerdict::Continue => {}
+            GoalVerdict::ChallengeEvidence => {}
+            GoalVerdict::Paused { reason, detail } => {
+                self.pause(&current.id, reason.clone(), detail.clone())
+                    .await?;
+            }
+            GoalVerdict::BudgetLimited => {
+                self.mark_budget_limited(&current.id).await?;
+            }
+            GoalVerdict::Complete { .. } => {}
+        }
+
+        if let Some(run_seconds) =
+            crate::persistence::repo::run_repo::get_run_duration(&self.pool, run_id)
+                .await
+                .unwrap_or(None)
+        {
+            if run_seconds > 0 {
+                self.account_usage(&current.id, 0, run_seconds).await.ok();
+            }
+        }
+
+        let updated = self.get_active().await?;
+        let payload = updated
+            .as_ref()
+            .map(Self::to_payload)
+            .unwrap_or_else(|| Self::to_payload(&current));
+
+        let (verdict_str, continuation_prompt) = match &verdict {
+            GoalVerdict::Continue => (
+                "continue",
+                Some(self.render_continuation_prompt(updated.as_ref().unwrap_or(&goal))),
+            ),
+            GoalVerdict::ChallengeEvidence => (
+                "challenge_evidence",
+                Some(self.render_challenge_prompt(ChallengePromptVariant::NoTool)),
+            ),
+            GoalVerdict::Paused { reason: _, detail } => ("paused", detail.clone()),
+            GoalVerdict::BudgetLimited => ("budget_limited", None),
+            GoalVerdict::Complete { .. } => ("complete", None),
+        };
+
+        Ok(Some(GoalEvaluationOutcome {
+            goal: payload,
+            verdict: verdict_str.to_string(),
+            continuation_prompt,
+        }))
     }
 }
 

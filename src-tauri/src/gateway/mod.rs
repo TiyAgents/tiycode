@@ -81,6 +81,7 @@ impl GatewayState {
             Arc::clone(&app_events),
             Arc::clone(&built_in_agent_runtime),
             Arc::clone(&sleep_manager),
+            Arc::clone(&goal_runtime_state),
         ));
 
         Self {

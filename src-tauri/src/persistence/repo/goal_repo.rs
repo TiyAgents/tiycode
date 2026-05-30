@@ -6,7 +6,7 @@ use crate::model::goal::{GoalRecord, GoalStatus, PauseReason};
 
 const SELECT_COLUMNS: &str = "id, thread_id, objective, status, token_budget, tokens_used, \
     time_used_seconds, turns_used, max_turns, pause_reason, pause_detail, evidence, \
-    created_at, updated_at";
+    last_evaluated_run_id, created_at, updated_at";
 
 // ── Database row (raw sqlx types) ──
 
@@ -24,6 +24,7 @@ struct GoalRow {
     pause_reason: Option<String>,
     pause_detail: Option<String>,
     evidence: Option<String>,
+    last_evaluated_run_id: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -43,6 +44,7 @@ impl GoalRow {
             pause_reason: self.pause_reason.map(|s| PauseReason::from_str(&s)),
             pause_detail: self.pause_detail,
             evidence: self.evidence,
+            last_evaluated_run_id: self.last_evaluated_run_id,
             created_at: DateTime::parse_from_rfc3339(&self.created_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
@@ -82,8 +84,8 @@ pub async fn insert(pool: &SqlitePool, record: &GoalRecord) -> Result<(), AppErr
     sqlx::query(
         "INSERT INTO goals (id, thread_id, objective, status, token_budget, tokens_used, \
          time_used_seconds, turns_used, max_turns, pause_reason, pause_detail, evidence, \
-         created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         last_evaluated_run_id, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.thread_id)
@@ -97,6 +99,7 @@ pub async fn insert(pool: &SqlitePool, record: &GoalRecord) -> Result<(), AppErr
     .bind(record.pause_reason.as_ref().map(|r| r.as_str()))
     .bind(record.pause_detail.as_deref())
     .bind(record.evidence.as_deref())
+    .bind(record.last_evaluated_run_id.as_deref())
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -152,6 +155,30 @@ pub async fn account_usage(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Atomically claim evaluation of a terminal run for an active goal.
+/// Returns false when the goal is no longer active or the run was already evaluated.
+pub async fn mark_evaluated_if_needed(
+    pool: &SqlitePool,
+    id: &str,
+    run_id: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE goals SET \
+         last_evaluated_run_id = ?, \
+         updated_at = ? \
+         WHERE id = ? \
+           AND status = 'active' \
+           AND (last_evaluated_run_id IS NULL OR last_evaluated_run_id != ?)",
+    )
+    .bind(run_id)
+    .bind(Utc::now().to_rfc3339())
+    .bind(id)
+    .bind(run_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {

@@ -29,7 +29,6 @@ import {
   goalPause,
   goalResume,
   goalClear,
-  goalEvaluate,
   type GoalPayload,
 } from "@/services/bridge/agent-commands";
 import {
@@ -53,7 +52,6 @@ import {
   threadStore,
   useStore,
   shallowEqual,
-  addPendingRun,
   isPendingRunHandled,
   markPendingRunHandled,
 } from "@/modules/workbench-shell/model/thread-store";
@@ -722,6 +720,26 @@ export function RuntimeThreadSurface({
     }
   }, [clearScheduledThinkingPhase, showThinkingPlaceholder, threadId]);
 
+  useEffect(() => {
+    const isActiveBackendRun = runState === "running" || runState === "waiting_approval" || runState === "needs_reply";
+    if (
+      !threadId
+      || !isActiveBackendRun
+      || !activeRunId
+      || !streamRef.current
+      || streamRef.current.runId
+      || subscribingRef.current
+    ) {
+      return;
+    }
+
+    subscribingRef.current = true;
+    void streamRef.current.subscribe(threadId)
+      .finally(() => {
+        subscribingRef.current = false;
+      });
+  }, [activeRunId, runState, threadId]);
+
   const loadOlderMessages = useCallback(async () => {
     if (!threadId || isLoadingMoreMessages || messages.length === 0 || !hasMoreMessages) {
       return;
@@ -1340,38 +1358,6 @@ export function RuntimeThreadSurface({
         || state === "limit_reached"
       ) {
         void loadSnapshot();
-      }
-
-      // ── Goal evaluation on terminal states ──
-      if (state === "completed" || state === "interrupted") {
-        void (async () => {
-          try {
-            const result = await goalEvaluate(threadId);
-            if (!result) return;
-
-            // Sync goal state to threadStore
-            setThreadGoalState(threadId, result.goal);
-
-            // Auto-continue if the goal should keep going
-            if (
-              result.verdict === "continue" ||
-              result.verdict === "challenge_evidence"
-            ) {
-              const prompt = result.continuationPrompt ?? "Continue working toward your goal.";
-              addPendingRun(threadId, {
-                id: `goal-${Date.now()}`,
-                displayText: prompt,
-                effectivePrompt: prompt,
-                attachments: [],
-                metadata: null,
-                runMode: "default",
-                threadId,
-              });
-            }
-          } catch {
-            // Evaluation failed (e.g., no active goal) — silently skip
-          }
-        })();
       }
     });
 

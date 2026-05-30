@@ -721,6 +721,7 @@ export type GoalPayload = {
   pauseReason?: string | null;
   pauseDetail?: string | null;
   evidence?: string | null;
+  lastEvaluatedRunId?: string | null;
 };
 
 export async function goalGetState(threadId: string): Promise<GoalPayload | null> {

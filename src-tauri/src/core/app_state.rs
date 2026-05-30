@@ -88,11 +88,13 @@ impl AppState {
             Arc::clone(&tool_gateway),
             Arc::clone(&goal_runtime_state),
         ));
-        let agent_run_manager = Arc::new(AgentRunManager::new(
+        let agent_run_manager = Arc::new(AgentRunManager::new_with_goal_continuation(
             pool.clone(),
             Arc::clone(&app_events),
             Arc::clone(&built_in_agent_runtime),
             Arc::clone(&sleep_manager),
+            Arc::clone(&goal_runtime_state),
+            true,
         ));
         let index_manager = IndexManager::new();
         let git_manager = GitManager::new();

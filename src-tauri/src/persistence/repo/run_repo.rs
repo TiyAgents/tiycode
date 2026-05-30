@@ -34,6 +34,12 @@ pub struct RunInsert {
     pub status: String,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RunStartContext {
+    pub run_mode: String,
+    pub effective_model_plan_json: Option<String>,
+}
+
 pub async fn insert(pool: &SqlitePool, r: &RunInsert) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
@@ -121,6 +127,43 @@ pub async fn find_effective_model_plan_json(
     .fetch_optional(pool)
     .await?
     .flatten();
+
+    Ok(value)
+}
+
+pub async fn find_start_context_by_id(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<RunStartContext>, AppError> {
+    let row = sqlx::query_as::<_, RunStartContext>(
+        "SELECT run_mode, effective_model_plan_json
+         FROM thread_runs
+         WHERE id = ?
+         LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row)
+}
+
+pub async fn find_latest_evaluable_run_id_by_thread(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<String>, AppError> {
+    let value = sqlx::query_scalar::<_, String>(
+        "SELECT id
+         FROM thread_runs
+         WHERE thread_id = ?
+           AND status IN ('completed', 'interrupted')
+           AND finished_at IS NOT NULL
+         ORDER BY started_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .fetch_optional(pool)
+    .await?;
 
     Ok(value)
 }
@@ -407,6 +450,15 @@ mod tests {
         .expect("seed run");
     }
 
+    async fn set_run_finished_at(pool: &SqlitePool, id: &str, finished_at: &str) {
+        sqlx::query("UPDATE thread_runs SET finished_at = ? WHERE id = ?")
+            .bind(finished_at)
+            .bind(id)
+            .execute(pool)
+            .await
+            .expect("set finished_at");
+    }
+
     #[tokio::test]
     async fn find_latest_with_prompt_usage_returns_none_when_no_matching_history_exists() {
         let pool = setup_test_pool().await;
@@ -592,6 +644,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn find_start_context_by_id_returns_run_mode_and_model_plan() {
+        let pool = setup_test_pool().await;
+        let r = RunInsert {
+            id: "run-ctx".into(),
+            thread_id: "t1".into(),
+            profile_id: Some("profile-1".into()),
+            run_mode: "plan".into(),
+            provider_id: Some("provider-1".into()),
+            model_id: Some("model-1".into()),
+            effective_model_plan_json: Some(r#"{"profileId":"profile-1"}"#.into()),
+            status: "completed".into(),
+        };
+        insert(&pool, &r).await.unwrap();
+
+        let ctx = find_start_context_by_id(&pool, "run-ctx")
+            .await
+            .unwrap()
+            .expect("start context should exist");
+        assert_eq!(ctx.run_mode, "plan");
+        assert_eq!(
+            ctx.effective_model_plan_json.as_deref(),
+            Some(r#"{"profileId":"profile-1"}"#)
+        );
+    }
+
+    #[tokio::test]
+    async fn get_run_duration_returns_specific_finished_run_duration() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_finished_at(&pool, "run-1", "2026-04-22T09:00:42Z").await;
+
+        let duration = get_run_duration(&pool, "run-1").await.unwrap();
+        assert_eq!(duration, Some(42));
+        assert!(get_run_duration(&pool, "missing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn find_latest_evaluable_run_id_by_thread_returns_latest_completed_or_interrupted() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_finished_at(&pool, "run-1", "2026-04-22T09:00:10Z").await;
+
+        let r = RunInsert {
+            id: "run-2".into(),
+            thread_id: "t1".into(),
+            profile_id: None,
+            run_mode: "default".into(),
+            provider_id: None,
+            model_id: None,
+            effective_model_plan_json: None,
+            status: RunStatus::Interrupted.as_str().into(),
+        };
+        insert(&pool, &r).await.unwrap();
+        set_run_finished_at(&pool, "run-2", "2026-04-22T09:05:10Z").await;
+
+        let latest = find_latest_evaluable_run_id_by_thread(&pool, "t1")
+            .await
+            .unwrap();
+        assert_eq!(latest.as_deref(), Some("run-2"));
+    }
+
+    #[tokio::test]
     async fn find_active_by_thread_skips_terminal_and_waiting_approval() {
         let pool = setup_test_pool().await;
         insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
@@ -759,6 +873,23 @@ pub async fn get_last_completed_run_duration(
          LIMIT 1",
     )
     .bind(thread_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(duration)
+}
+
+/// Get the duration in seconds of a specific run.
+/// Returns None if the run has no finished_at timestamp.
+pub async fn get_run_duration(pool: &SqlitePool, run_id: &str) -> Result<Option<i64>, AppError> {
+    let duration = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT CAST(strftime('%s', finished_at) - strftime('%s', started_at) AS INTEGER)
+         FROM thread_runs
+         WHERE id = ?
+           AND finished_at IS NOT NULL
+         LIMIT 1",
+    )
+    .bind(run_id)
     .fetch_optional(pool)
     .await?
     .flatten();

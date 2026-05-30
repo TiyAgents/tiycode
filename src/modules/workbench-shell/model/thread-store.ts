@@ -84,6 +84,7 @@ export interface GoalStoreState {
   pauseReason?: string | null;
   pauseDetail?: string | null;
   evidence?: string | null;
+  lastEvaluatedRunId?: string | null;
 }
 
 // ---------------------------------------------------------------------------

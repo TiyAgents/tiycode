@@ -61,6 +61,7 @@ mod tests {
         assert_eq!(record.objective, "Build a todo app");
         assert_eq!(record.status, GoalStatus::Active);
         assert_eq!(record.max_turns, 50);
+        assert!(record.last_evaluated_run_id.is_none());
 
         let loaded = mgr.get_active().await.unwrap().unwrap();
         assert_eq!(loaded.id, record.id);
@@ -75,6 +76,84 @@ mod tests {
         mgr.create_goal("First goal", None).await.unwrap();
         let err = mgr.create_goal("Second goal", None).await.unwrap_err();
         assert!(err.user_message.contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn mark_evaluated_if_needed_claims_each_run_once_for_active_goal() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        assert!(
+            goal_repo::mark_evaluated_if_needed(&pool, &goal.id, "run-1")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !goal_repo::mark_evaluated_if_needed(&pool, &goal.id, "run-1")
+                .await
+                .unwrap()
+        );
+
+        let loaded = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(loaded.last_evaluated_run_id.as_deref(), Some("run-1"));
+    }
+
+    #[tokio::test]
+    async fn mark_evaluated_if_needed_skips_non_active_goal() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+        mgr.pause(&goal.id, PauseReason::UserRequested, None)
+            .await
+            .unwrap();
+
+        assert!(
+            !goal_repo::mark_evaluated_if_needed(&pool, &goal.id, "run-1")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_after_run_accounts_usage_once_per_run() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at, finished_at)
+             VALUES ('run-1', 'thread-1', 'default', 'completed', '2026-04-22T09:00:00Z', '2026-04-22T09:00:42Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let first = mgr
+            .evaluate_after_run("run-1", Some("Some progress".to_string()))
+            .await
+            .unwrap()
+            .expect("first evaluation should return an outcome");
+        assert_eq!(first.verdict, "continue");
+
+        let after_first = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(after_first.turns_used, goal.turns_used + 1);
+        assert_eq!(after_first.time_used_seconds, 42);
+        assert_eq!(after_first.last_evaluated_run_id.as_deref(), Some("run-1"));
+
+        let second = mgr
+            .evaluate_after_run("run-1", Some("Duplicate terminal event".to_string()))
+            .await
+            .unwrap()
+            .expect("duplicate evaluation should return skipped state");
+        assert_eq!(second.verdict, "skipped");
+
+        let after_second = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(after_second.turns_used, after_first.turns_used);
+        assert_eq!(
+            after_second.time_used_seconds,
+            after_first.time_used_seconds
+        );
     }
 
     #[tokio::test]

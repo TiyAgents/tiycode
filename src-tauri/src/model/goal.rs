@@ -126,6 +126,7 @@ pub struct GoalRecord {
     pub pause_reason: Option<PauseReason>,
     pub pause_detail: Option<String>,
     pub evidence: Option<String>,
+    pub last_evaluated_run_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -150,6 +151,8 @@ pub struct GoalDto {
     pub pause_detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_evaluated_run_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -169,6 +172,7 @@ impl From<GoalRecord> for GoalDto {
             pause_reason: r.pause_reason,
             pause_detail: r.pause_detail,
             evidence: r.evidence,
+            last_evaluated_run_id: r.last_evaluated_run_id,
             created_at: r.created_at.to_rfc3339(),
             updated_at: r.updated_at.to_rfc3339(),
         }
@@ -202,6 +206,8 @@ pub struct GoalPayload {
     pub pause_detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_evaluated_run_id: Option<String>,
 }
 
 impl From<GoalRecord> for GoalPayload {
@@ -219,6 +225,7 @@ impl From<GoalRecord> for GoalPayload {
             pause_reason: r.pause_reason,
             pause_detail: r.pause_detail,
             evidence: r.evidence,
+            last_evaluated_run_id: r.last_evaluated_run_id,
         }
     }
 }

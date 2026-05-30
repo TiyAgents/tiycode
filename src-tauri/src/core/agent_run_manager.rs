@@ -1,7 +1,7 @@
 //! Manages the lifecycle of agent runs backed by the built-in Rust runtime.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use sqlx::SqlitePool;
@@ -12,6 +12,7 @@ use tokio::time::{sleep, Instant};
 use crate::core::agent_session::{build_session_spec, ResolvedModelRole};
 use crate::core::agent_session_types::{AgentQueueMessageKind, RuntimeQueueSnapshotDto};
 use crate::core::app_event_emitter::AppEventEmitterRef;
+use crate::core::app_state::GoalRuntimeState;
 use crate::core::built_in_agent_runtime::{BuiltInAgentRuntime, RuntimeSessionFinishState};
 use crate::core::plan_checkpoint::{
     ApprovalPromptMetadata, PlanApprovalAction, PlanMessageMetadata,
@@ -66,10 +67,10 @@ pub(crate) struct ActiveRun {
 }
 
 #[derive(Default)]
-struct StartRunOptions {
-    history_override: Option<Vec<MessageRecord>>,
-    initial_prompt: Option<String>,
-    persist_user_message: bool,
+pub(crate) struct StartRunOptions {
+    pub(crate) history_override: Option<Vec<MessageRecord>>,
+    pub(crate) initial_prompt: Option<String>,
+    pub(crate) persist_user_message: bool,
 }
 
 struct ContextResetMessageBundle {
@@ -110,6 +111,8 @@ pub struct AgentRunManager {
     pub(crate) app_events: AppEventEmitterRef,
     pub(crate) runtime: Arc<BuiltInAgentRuntime>,
     pub(crate) sleep_manager: Arc<SleepManager>,
+    pub(crate) goal_runtime_state: Arc<StdMutex<GoalRuntimeState>>,
+    pub(crate) goal_continuation_enabled: bool,
     pub(crate) active_runs: Arc<Mutex<HashMap<String, ActiveRun>>>,
 }
 
@@ -119,12 +122,33 @@ impl AgentRunManager {
         app_events: AppEventEmitterRef,
         runtime: Arc<BuiltInAgentRuntime>,
         sleep_manager: Arc<SleepManager>,
+        goal_runtime_state: Arc<StdMutex<GoalRuntimeState>>,
+    ) -> Self {
+        Self::new_with_goal_continuation(
+            pool,
+            app_events,
+            runtime,
+            sleep_manager,
+            goal_runtime_state,
+            false,
+        )
+    }
+
+    pub fn new_with_goal_continuation(
+        pool: SqlitePool,
+        app_events: AppEventEmitterRef,
+        runtime: Arc<BuiltInAgentRuntime>,
+        sleep_manager: Arc<SleepManager>,
+        goal_runtime_state: Arc<StdMutex<GoalRuntimeState>>,
+        goal_continuation_enabled: bool,
     ) -> Self {
         Self {
             pool,
             app_events,
             runtime,
             sleep_manager,
+            goal_runtime_state,
+            goal_continuation_enabled,
             active_runs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -162,7 +186,7 @@ impl AgentRunManager {
         .await
     }
 
-    async fn start_run_with_options(
+    pub(crate) async fn start_run_with_options(
         self: &Arc<Self>,
         thread_id: &str,
         prompt: &str,
@@ -439,11 +463,11 @@ impl AgentRunManager {
         Ok(Some((run_id, event_rx)))
     }
 
-    pub async fn cancel_run(&self, thread_id: &str) -> Result<bool, AppError> {
+    pub async fn cancel_run(self: &Arc<Self>, thread_id: &str) -> Result<bool, AppError> {
         self.cancel_run_if_active(thread_id).await
     }
 
-    pub async fn cancel_run_if_active(&self, thread_id: &str) -> Result<bool, AppError> {
+    pub async fn cancel_run_if_active(self: &Arc<Self>, thread_id: &str) -> Result<bool, AppError> {
         let Some(run_id) =
             mark_thread_run_cancellation_requested(&self.active_runs, thread_id).await
         else {
