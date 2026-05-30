@@ -30,6 +30,7 @@ import {
   goalResume,
   goalClear,
   goalEvaluate,
+  type GoalPayload,
 } from "@/services/bridge/agent-commands";
 import {
   ThreadStream,
@@ -251,6 +252,12 @@ const RESET_IDLE_CONTEXT: RunMachineContext = {
   errorMessage: null,
   retryCount: 0,
 };
+
+function setThreadGoalState(threadId: string, goal: GoalPayload | null): void {
+  threadStore.setState((prev) => ({
+    goalState: { ...prev.goalState, [threadId]: goal },
+  }));
+}
 
 export function RuntimeThreadSurface({
   commands = [],
@@ -592,11 +599,17 @@ export function RuntimeThreadSurface({
     eventBufferRef.current = [];
 
     try {
-      const snapshot = await threadLoad(threadId);
+      const [snapshot, activeGoal] = await Promise.all([
+        threadLoad(threadId),
+        goalGetState(threadId).catch(() => undefined),
+      ]);
       if (snapshotLoadRequestRef.current !== requestId) {
         // Stale request — do NOT clear snapshotLoadingRef or eventBufferRef
         // because a newer request owns them now.
         return;
+      }
+      if (activeGoal !== undefined) {
+        setThreadGoalState(threadId, activeGoal);
       }
 
       const nextState = mapSnapshotToRunState(snapshot);
@@ -873,10 +886,12 @@ export function RuntimeThreadSurface({
         }
       }
 
-      // Goal events don't participate in thinking-phase lifecycle; handled
-      // by dedicated goal evaluation flow in handleRunLifecycleTransition.
+      // Goal events don't participate in thinking-phase lifecycle.
+      if (event.type === "goal_state_updated") {
+        setThreadGoalState(event.threadId, event.goal);
+        return;
+      }
       if (
-        event.type === "goal_state_updated" ||
         event.type === "goal_continuation" ||
         event.type === "goal_paused" ||
         event.type === "goal_completed"
@@ -1335,9 +1350,7 @@ export function RuntimeThreadSurface({
             if (!result) return;
 
             // Sync goal state to threadStore
-            threadStore.setState((prev) => ({
-              goalState: { ...prev.goalState, [threadId]: result.goal },
-            }));
+            setThreadGoalState(threadId, result.goal);
 
             // Auto-continue if the goal should keep going
             if (
@@ -1584,15 +1597,19 @@ export function RuntimeThreadSurface({
 
       try {
         if (subCommand === "pause") {
-          await goalPause(threadId);
+          setThreadGoalState(threadId, await goalPause(threadId));
+          submittingRef.current = false;
           return true;
         }
         if (subCommand === "resume") {
-          await goalResume(threadId);
+          setThreadGoalState(threadId, await goalResume(threadId));
+          submittingRef.current = false;
           return true;
         }
         if (subCommand === "clear") {
           await goalClear(threadId);
+          setThreadGoalState(threadId, null);
+          submittingRef.current = false;
           return true;
         }
         if (subCommand === "status") {
@@ -1615,10 +1632,7 @@ export function RuntimeThreadSurface({
         await goalSet(threadId, argText);
         // Sync goal state to threadStore immediately so GoalStatusBar appears
         try {
-          const goal = await goalGetState(threadId);
-          threadStore.setState((prev) => ({
-            goalState: { ...prev.goalState, [threadId]: goal },
-          }));
+          setThreadGoalState(threadId, await goalGetState(threadId));
         } catch {
           // Goal state fetch can fail silently — the status bar will
           // pick it up on the next goal_evaluate cycle anyway.
@@ -1670,7 +1684,7 @@ export function RuntimeThreadSurface({
       await streamRef.current?.startRun(
         threadId,
         {
-          prompt,
+          prompt: submission.effectivePrompt ?? "",
           displayPrompt: submission.displayText,
           promptMetadata: submission.metadata ?? null,
           attachments: submission.attachments,
