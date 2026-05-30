@@ -1604,11 +1604,29 @@ export function RuntimeThreadSurface({
         return false;
       }
 
-      // Fall through to start a run with the goal objective
+      // Build a structured kickoff prompt so the model knows the goal exists
+      const kickoffPrompt = [
+        "## Persistent Goal Started",
+        "",
+        "You are now working on the following goal:",
+        "",
+        "**" + argText + "**",
+        "",
+        "This goal has been created and is now **active**. Work toward it.",
+        "When the goal is fully achieved, you MUST call:",
+        "```json",
+        "update_goal(status=\"complete\", evidence=\"test output, file changes, verification steps\")",
+        "```",
+        "Do NOT mark complete without verified evidence.",
+        "",
+        "If you need user input before proceeding, use the clarify tool.",
+        "The goal will automatically pause and resume when the user responds.",
+      ].join("\n");
+
       submission = {
         ...submission,
         displayText: argText,
-        effectivePrompt: argText,
+        effectivePrompt: kickoffPrompt,
         kind: "plain",
       };
     }

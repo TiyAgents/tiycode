@@ -224,7 +224,7 @@ const BUILTIN_COMMANDS: ReadonlyArray<ComposerCommandDescriptor> = [
     argumentHint: "<objective>",
     prompt: "Set goal: {arguments}",
     behavior: "goal",
-    smartSend: "always",
+    smartSend: "never",
   },
 ];
 

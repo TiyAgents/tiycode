@@ -10,14 +10,17 @@ const DEFAULT_MAX_TURNS: i64 = 50;
 
 /// Continuation prompt injected when the goal is still active.
 const CONTINUATION_PROMPT_TEMPLATE: &str = "\
-继续完成你的目标：
+[Goal continuation — turns {turns_used}/{max_turns}]
 
-目标：{objective}
+**Objective:** {objective}
 
-已用轮次：{turns_used}/{max_turns}
+Continue working toward this objective. Take the next concrete step.
 
-请继续推进。如果目标已完成，请调用 update_goal(status=\"complete\", evidence=\"...\") 并附上验证证据。
-如果遇到需要用户确认的问题，请使用 clarify 工具。";
+⚠️ When the goal is fully achieved, you MUST call:
+  update_goal(status=\"complete\", evidence=\"<verifiable proof>\")
+Without this call, the system will keep injecting continuation prompts.
+
+If you are blocked and need user input, use the clarify tool.";
 
 /// Challenge prompt when the model claimed completion but did not use the tool.
 const CHALLENGE_EVIDENCE_PROMPT: &str = "\

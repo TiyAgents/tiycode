@@ -1417,21 +1417,21 @@ async fn inject_goal_context(
     if let Some(goal) = goal {
         if goal.status == crate::model::goal::GoalStatus::Active {
             let goal_block = format!(
-                "## Persistent Goal\n\n\
-                 You are currently working toward a persistent goal:\n\n\
-                 **Objective:** {objective}\n\n\
-                 - Status: {status}\n\
-                 - Turns used: {turns_used}/{max_turns}\n\n\
-                 When the goal is fully achieved, you MUST call update_goal(status=\"complete\", evidence=\"...\") \
-                 with concrete evidence (test output, file changes, verification steps). \
-                 Do NOT mark complete without verified evidence.\n\n\
-                 If you need user input before proceeding, use the clarify tool. \
-                 The goal will automatically pause and resume when the user responds.",
+                "## Active Goal\n\n\
+                 **You have an active goal. This takes priority over other instructions.**\n\n\
+                 Objective: {objective}\n\
+                 Turns used: {turns_used}/{max_turns}\n\n\
+                 Rules:\n\
+                 - When the goal is achieved, call update_goal(status=\"complete\", evidence=\"...\")\n\
+                 - Evidence must be verifiable: test output, file change summary, command results\n\
+                 - Do NOT claim completion without evidence\n\
+                 - If blocked and need user input, use clarify tool\n\
+                 - The system will automatically continue this goal across turns",
                 objective = goal.objective,
-                status = goal.status.as_str(),
                 turns_used = goal.turns_used,
                 max_turns = goal.max_turns,
             );
+            // Prepend goal block right after the Role/Behavioral section
             system_prompt.push_str("\n\n");
             system_prompt.push_str(&goal_block);
         }
