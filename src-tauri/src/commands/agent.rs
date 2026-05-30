@@ -715,7 +715,7 @@ pub async fn goal_evaluate(
         }
     };
 
-    let verdict = mgr.evaluate_after_turn(&response, &goal).await;
+    let verdict = mgr.evaluate_after_turn(&response, &goal);
 
     // Re-read goal from DB to protect against TOCTOU (another request may have
     // changed the goal state between our initial read and this verdict application).
@@ -742,12 +742,13 @@ pub async fn goal_evaluate(
     let current = current.unwrap(); // Safe: we verified Some above
 
     // Apply the verdict — all DB writes happen here, not in evaluate_after_turn.
+    // Note: GoalVerdict::Complete is intentionally absent here — completion is
+    // driven exclusively through the update_goal tool (mark_complete), never
+    // through turn evaluation. evaluate_after_turn only returns Continue,
+    // ChallengeEvidence, Paused, and BudgetLimited.
     match &verdict {
         crate::model::goal::GoalVerdict::Continue => {}
         crate::model::goal::GoalVerdict::ChallengeEvidence => {}
-        crate::model::goal::GoalVerdict::Complete { evidence } => {
-            mgr.mark_complete(&current.id, evidence).await?;
-        }
         crate::model::goal::GoalVerdict::Paused { reason, detail } => {
             mgr.pause(&current.id, reason.clone(), detail.clone())
                 .await?;
@@ -755,6 +756,9 @@ pub async fn goal_evaluate(
         crate::model::goal::GoalVerdict::BudgetLimited => {
             mgr.mark_budget_limited(&current.id).await?;
         }
+        // GoalVerdict::Complete is not produced by evaluate_after_turn;
+        // completion is handled via the update_goal tool path instead.
+        _ => {}
     }
 
     // Account run duration to goal time — the just-completed run contributes its wall-clock time.
@@ -785,9 +789,10 @@ pub async fn goal_evaluate(
                 crate::core::goal_manager::ChallengePromptVariant::NoTool,
             )),
         ),
-        crate::model::goal::GoalVerdict::Complete { .. } => ("complete", None),
         crate::model::goal::GoalVerdict::Paused { reason: _, detail } => ("paused", detail.clone()),
         crate::model::goal::GoalVerdict::BudgetLimited => ("budget_limited", None),
+        // GoalVerdict::Complete is not produced by evaluate_after_turn.
+        _ => ("continue", None),
     };
 
     Ok(serde_json::json!({

@@ -86,7 +86,7 @@ mod tests {
         // Simulate a tool call so idle counter doesn't trigger
         mgr.record_tool_call("read");
 
-        let verdict = mgr.evaluate_after_turn("Some progress", &goal).await;
+        let verdict = mgr.evaluate_after_turn("Some progress", &goal);
         assert!(matches!(verdict, GoalVerdict::Continue));
     }
 
@@ -99,7 +99,7 @@ mod tests {
         // Record a clarify tool call
         mgr.record_tool_call("clarify");
 
-        let verdict = mgr.evaluate_after_turn("What do you think?", &goal).await;
+        let verdict = mgr.evaluate_after_turn("What do you think?", &goal);
         assert!(matches!(
             verdict,
             GoalVerdict::Paused {
@@ -117,7 +117,7 @@ mod tests {
 
         mgr.record_tool_call("update_plan");
 
-        let verdict = mgr.evaluate_after_turn("Here is the plan", &goal).await;
+        let verdict = mgr.evaluate_after_turn("Here is the plan", &goal);
         assert!(matches!(
             verdict,
             GoalVerdict::Paused {
@@ -134,9 +134,9 @@ mod tests {
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         // Three consecutive idle turns
-        mgr.evaluate_after_turn("Just chatting", &goal).await;
-        mgr.evaluate_after_turn("Still chatting", &goal).await;
-        let verdict = mgr.evaluate_after_turn("More chat", &goal).await;
+        mgr.evaluate_after_turn("Just chatting", &goal);
+        mgr.evaluate_after_turn("Still chatting", &goal);
+        let verdict = mgr.evaluate_after_turn("More chat", &goal);
 
         assert!(matches!(
             verdict,
@@ -162,7 +162,7 @@ mod tests {
 
         // This should push it to max and pause
         let fresh_goal = mgr.get_active().await.unwrap().unwrap();
-        let verdict = mgr.evaluate_after_turn("Working...", &fresh_goal).await;
+        let verdict = mgr.evaluate_after_turn("Working...", &fresh_goal);
 
         assert!(matches!(
             verdict,
@@ -180,12 +180,10 @@ mod tests {
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         // Model says "done" but doesn't call update_goal
-        let verdict = mgr
-            .evaluate_after_turn(
-                "All done! The goal is 完成 and everything is 做好了.",
-                &goal,
-            )
-            .await;
+        let verdict = mgr.evaluate_after_turn(
+            "All done! The goal is complete and everything is finished.",
+            &goal,
+        );
 
         assert!(matches!(verdict, GoalVerdict::ChallengeEvidence));
     }
@@ -303,10 +301,10 @@ mod tests {
         let mgr = GoalManager::new(setup_pool().await, "thread-1".into(), test_runtime());
 
         let no_evidence = mgr.render_challenge_prompt(ChallengePromptVariant::NoEvidence);
-        assert!(no_evidence.contains("没有提供 evidence"));
+        assert!(no_evidence.contains("did not provide evidence"));
 
         let no_tool = mgr.render_challenge_prompt(ChallengePromptVariant::NoTool);
-        assert!(no_tool.contains("提供具体证据"));
+        assert!(no_tool.contains("provide concrete evidence"));
         assert!(no_tool.contains("update_goal"));
     }
 }

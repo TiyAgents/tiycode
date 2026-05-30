@@ -26,35 +26,35 @@ If you are blocked and need user input, use the clarify tool.";
 
 /// Challenge prompt when the model claimed completion but did not use the tool.
 const CHALLENGE_EVIDENCE_PROMPT: &str = "\
-在声明目标完成前，请提供具体证据：
+Before claiming the goal is complete, please provide concrete evidence:
 
-1. 运行了哪些验证命令？输出是什么？
-2. 修改了哪些文件？每个变更的目的是什么？
+1. What verification commands did you run? What was the output?
+2. What files did you modify? What was the purpose of each change?
 
-请附证据后调用 update_goal(status=\"complete\", evidence=\"...\")。如果实际上尚未完成，请忽略此提示继续工作。";
+Once you have evidence, call update_goal(status=\"complete\", evidence=\"...\") .
+If the goal is not actually complete, ignore this prompt and continue working.";
 
 /// Challenge prompt when the model claimed completion but evidence was empty.
 const MISSING_EVIDENCE_PROMPT: &str = "\
-你调用了 update_goal(complete) 但没有提供 evidence。
-请提供完成证据后重新调用 update_goal(status=\"complete\", evidence=\"<你的证据>\")。";
+You called update_goal(complete) but did not provide evidence.
+Please provide completion evidence and call update_goal(status=\"complete\", evidence=\"<your evidence>\") again.";
 
 /// Guidance prompt when the agent appears stuck.
 const GUIDANCE_PROMPT: &str = "\
-你似乎不确定下一步。当前目标：{objective}
+You seem unsure about the next step. Current objective: {objective}
 
-请规划下一步具体行动，然后执行。如果需要用户决策，请使用 clarify 工具。";
+Plan a concrete next action and execute it. If you need a user decision, use the clarify tool.";
 
 /// Completion-claim markers for detecting undeclared completion.
 const COMPLETION_MARKERS: &[&str] = &[
     "done",
-    "完成",
+    "complete",
     "finished",
-    "做好了",
-    "搞定了",
-    "全部完成",
-    "所有任务已完成",
-    "目标达成",
-    "已完成",
+    "all tasks completed",
+    "goal achieved",
+    "target met",
+    "task finished",
+    "everything is done",
 ];
 
 /// Maximum consecutive idle turns before auto-pausing.
@@ -147,8 +147,19 @@ impl GoalManager {
             updated_at: Utc::now(),
         };
 
-        goal_repo::insert(&self.pool, &record).await?;
-        Ok(record)
+        match goal_repo::insert(&self.pool, &record).await {
+            Ok(()) => Ok(record),
+            Err(e) => {
+                if e.to_string().contains("UNIQUE constraint failed") {
+                    Err(AppError::validation(
+                        ErrorSource::Settings,
+                        "a goal already exists for this thread — clear it first with /goal clear",
+                    ))
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     /// Load the current goal for this thread.
@@ -238,11 +249,9 @@ impl GoalManager {
 
     /// Clear / delete the goal.
     pub async fn clear(&self) -> Result<bool, AppError> {
-        // Reset per-thread runtime counters so a subsequent create_goal
-        // on the same thread starts with clean idle/completion tracking.
-        self.reset_idle_counters();
-        // Also drain any accumulated tool calls from the current turn.
-        self.drain_tool_calls();
+        // Remove all per-thread runtime state so a subsequent create_goal
+        // on the same thread starts with clean counters.
+        self.lock_runtime().cleanup_thread(&self.thread_id);
         goal_repo::delete_by_thread_id(&self.pool, &self.thread_id).await
     }
 
@@ -287,8 +296,9 @@ impl GoalManager {
     // ── Evaluation ──
 
     /// Evaluate whether the goal should continue, pause, or complete after a turn.
-    /// Called at MessageEnd with the final assistant response and tool call names.
-    pub async fn evaluate_after_turn(&self, response: &str, goal: &GoalRecord) -> GoalVerdict {
+    /// Called synchronously — it only performs CPU-bound checks and Mutex operations
+    /// with no I/O or async work.
+    pub fn evaluate_after_turn(&self, response: &str, goal: &GoalRecord) -> GoalVerdict {
         // Only evaluate active goals.
         if goal.status != GoalStatus::Active {
             return GoalVerdict::Continue; // Should not get here, but safe default.

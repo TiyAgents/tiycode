@@ -32,6 +32,17 @@ pub struct GoalRuntimeState {
     pub completion_claim_count: HashMap<String, u32>,
 }
 
+impl GoalRuntimeState {
+    /// Remove all per-thread entries for a given thread_id.
+    /// Call when a thread is deleted or a goal is cleared to prevent
+    /// unbounded memory growth in the shared state HashMaps.
+    pub fn cleanup_thread(&mut self, thread_id: &str) {
+        self.thread_tool_calls.remove(thread_id);
+        self.idle_turn_count.remove(thread_id);
+        self.completion_claim_count.remove(thread_id);
+    }
+}
+
 /// Global application state shared across all Tauri commands.
 ///
 /// Holds the database pool and manager instances.
