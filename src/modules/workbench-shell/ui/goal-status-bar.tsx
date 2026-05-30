@@ -89,6 +89,13 @@ export function GoalStatusBar({ threadId }: Props) {
 
   const progress = goal.maxTurns > 0 ? Math.min((goal.turnsUsed / goal.maxTurns) * 100, 100) : 0;
   const progressBarWidth = `${progress}%`;
+  const displayTurnCount = goal.maxTurns > 0
+    ? Math.min(
+        goal.status === "active" ? goal.turnsUsed + 1 : Math.max(goal.turnsUsed, 1),
+        goal.maxTurns,
+      )
+    : Math.max(goal.turnsUsed, 1);
+  const shouldShowTimer = goal.status === "complete" || totalSeconds > 0;
 
   return (
     <div className="flex items-center gap-2 px-6 py-1.5 text-xs border-b border-border/50 bg-muted/30 shrink-0 relative">
@@ -110,7 +117,7 @@ export function GoalStatusBar({ threadId }: Props) {
       </span>
 
       {/* Timer */}
-      {(goal.status === "active" || goal.status === "paused") && totalSeconds > 0 && (
+      {shouldShowTimer && (
         <span className="text-muted-foreground whitespace-nowrap ml-2">
           {t("goal.time.elapsed", { time: timeDisplay })}
         </span>
@@ -118,7 +125,7 @@ export function GoalStatusBar({ threadId }: Props) {
 
       {/* Progress */}
       <span className="text-muted-foreground ml-auto tabular-nums">
-        {goal.turnsUsed}/{goal.maxTurns} max turns
+        {displayTurnCount}/{goal.maxTurns} max turns
       </span>
 
       {/* Action buttons */}

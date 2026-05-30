@@ -1712,8 +1712,22 @@ impl AgentSession {
                             .ok();
                             return agent_error_result(err_msg);
                         }
+                        let active_run_seconds =
+                            crate::persistence::repo::run_repo::get_active_run_elapsed_seconds(
+                                &self.pool,
+                                &self.spec.thread_id,
+                            )
+                            .await
+                            .unwrap_or(None);
+
                         match mgr.mark_complete(&goal.id, evidence).await {
                             Ok(()) => {
+                                if let Some(run_seconds) = active_run_seconds {
+                                    if run_seconds > 0 {
+                                        mgr.account_usage(&goal.id, 0, run_seconds).await.ok();
+                                    }
+                                }
+
                                 let updated = mgr.get_active().await.ok().flatten();
                                 if let Some(ref record) = updated {
                                     let payload =

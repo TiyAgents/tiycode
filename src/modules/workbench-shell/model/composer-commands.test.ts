@@ -47,6 +47,18 @@ describe("buildComposerSubmission", () => {
     expect(submission?.command?.name).toBe("init");
     expect(submission?.effectivePrompt).toContain("Generate or update a file named AGENTS.md");
   });
+
+  it("preserves multi-line /goal objectives as command arguments", () => {
+    const registry = buildComposerCommandRegistry([]);
+    const text = "/goal First goal line\nSecond goal line\n- checklist item";
+    const submission = buildComposerSubmission(createMessage(text), registry, RUN_MODE);
+
+    expect(submission).not.toBeNull();
+    expect(submission?.kind).toBe("command");
+    expect(submission?.command?.behavior).toBe("goal");
+    expect(submission?.command?.argumentsText).toBe("First goal line\nSecond goal line\n- checklist item");
+    expect(submission?.effectivePrompt).toContain("First goal line\nSecond goal line\n- checklist item");
+  });
 });
 
 describe("parseSlashCommandInput", () => {
@@ -118,11 +130,11 @@ describe("parseSlashCommandInput", () => {
 
   // --- Multi-line inputs ---
 
-  it("only considers the first line for command detection", () => {
-    const result = parseSlashCommandInput("/init\nsecond line content", registry);
+  it("preserves multi-line arguments after the command line", () => {
+    const result = parseSlashCommandInput("/init first line\nsecond line content\nthird line", registry);
     expect(result).not.toBeNull();
     expect(result?.query).toBe("init");
-    expect(result?.argumentsText).toBe("");
+    expect(result?.argumentsText).toBe("first line\nsecond line content\nthird line");
   });
 
   // --- Command matching and arguments ---

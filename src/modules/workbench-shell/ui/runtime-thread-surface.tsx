@@ -1850,15 +1850,17 @@ export function RuntimeThreadSurface({
     if (initialPromptRequest.runMode) {
       setSelectedRunMode(initialPromptRequest.runMode);
     }
-    void submitPrompt({
-      kind: "plain",
+    const pendingRunSubmission: ComposerSubmission = {
+      kind: initialPromptRequest.command ? "command" : "plain",
       displayText: initialPromptRequest.displayText,
       effectivePrompt: initialPromptRequest.effectivePrompt,
       rawMessage: { text: initialPromptRequest.displayText, files: [] },
       attachments: initialPromptRequest.attachments,
+      command: initialPromptRequest.command,
       metadata: initialPromptRequest.metadata,
       runMode: initialPromptRequest.runMode,
-    }, initialPromptRequest.runMode)
+    };
+    void submitPrompt(pendingRunSubmission, initialPromptRequest.runMode)
       .finally(() => {
         threadStore.setState((prev) => {
           const next = Object.fromEntries(

@@ -648,6 +648,41 @@ describe("submitNewThread", () => {
     expect(state.pendingRuns["thread-1"].displayText).toBe("hello");
   });
 
+  it("preserves command metadata for pending runs", async () => {
+    const project = makeProject({
+      id: "ws-1",
+      name: "test-project",
+      path: "/path/to/project",
+    });
+    threadStore.setState({
+      workspaces: [makeWorkspace("ws-1", [], { name: "test-project", path: "/path/to/project" })],
+      isNewThreadMode: true,
+    });
+    projectStore.setState({ selectedProject: project, recentProjects: [project] });
+    composerStore.setState({ newThreadRunMode: "default" });
+    settingsStore.setState({ activeAgentProfileId: "default-profile" });
+
+    await submitNewThread(makeSubmission({
+      value: "/goal test objective",
+      displayText: "/goal test objective",
+      effectivePrompt: "Set goal: test objective",
+      metadata: null,
+      command: {
+        source: "builtin",
+        name: "goal",
+        path: "/goal",
+        description: "Persistent goal",
+        argumentHint: "<objective>",
+        argumentsText: "test objective",
+        prompt: "Set goal: {arguments}",
+        behavior: "goal",
+      },
+    }));
+
+    expect(threadStore.getState().pendingRuns["thread-1"].command?.behavior).toBe("goal");
+    expect(threadStore.getState().pendingRuns["thread-1"].command?.argumentsText).toBe("test objective");
+  });
+
   it("clears active flags on other threads when adding new one", async () => {
     const project = makeProject({
       id: "ws-1",
