@@ -191,6 +191,7 @@ pub struct GoalPayload {
     pub objective: String,
     pub status: GoalStatus,
     pub tokens_used: i64,
+    pub time_used_seconds: i64,
     pub turns_used: i64,
     pub max_turns: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -211,6 +212,7 @@ impl From<GoalRecord> for GoalPayload {
             objective: r.objective,
             status: r.status,
             tokens_used: r.tokens_used,
+            time_used_seconds: r.time_used_seconds,
             turns_used: r.turns_used,
             max_turns: r.max_turns,
             token_budget: r.token_budget,

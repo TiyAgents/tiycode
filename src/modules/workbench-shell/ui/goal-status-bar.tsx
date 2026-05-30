@@ -1,27 +1,64 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import { goalGetState, goalPause, goalResume, goalClear } from "@/services/bridge/agent-commands";
 import { threadStore, useStore, shallowEqual } from "@/modules/workbench-shell/model/thread-store";
+import { useT } from "@/i18n";
 
 type Props = {
   threadId: string;
 };
 
+function formatDuration(t: ReturnType<typeof useT>, totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return t("goal.time.hoursMinutes", { hours, minutes });
+  } else if (minutes > 0) {
+    return t("goal.time.minutesSeconds", { minutes, seconds });
+  } else {
+    return t("goal.time.seconds", { seconds });
+  }
+}
+
 export function GoalStatusBar({ threadId }: Props) {
+  const t = useT();
   const goal = useStore(threadStore, (s) => s.goalState[threadId] ?? null, shallowEqual);
+  const threadStatus = useStore(
+    threadStore,
+    (s) => s.threadStatuses[threadId],
+    shallowEqual,
+  );
   const [loading, setLoading] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const tickStartRef = useRef(Date.now());
+
+  const isRunning = threadStatus?.status === "running";
+
+  // Real-time timer: tick every second while the goal is active and the thread is running
+  useEffect(() => {
+    if (isRunning && goal?.status === "active") {
+      tickStartRef.current = Date.now();
+      setElapsed(0);
+      const interval = setInterval(() => {
+        setElapsed(Math.floor((Date.now() - tickStartRef.current) / 1000));
+      }, 1000);
+      return () => clearInterval(interval);
+    } else {
+      setElapsed(0);
+    }
+  }, [isRunning, goal?.status]);
 
   const refresh = useCallback(async () => {
-    // Re-fetch goal state from backend and sync to threadStore so the
-    // status bar reflects the latest state after pause/resume/clear.
+    // Re-fetch goal state from backend and sync to threadStore.
     try {
       const g = await goalGetState(threadId);
       threadStore.setState((prev) => ({
         goalState: { ...prev.goalState, [threadId]: g },
       }));
     } catch {
-      // Goal not found or error — clear from store
       threadStore.setState((prev) => ({
         goalState: { ...prev.goalState, [threadId]: null },
       }));
@@ -30,12 +67,19 @@ export function GoalStatusBar({ threadId }: Props) {
 
   if (!goal) return null;
 
-  const statusLabel =
-    goal.status === "active" ? "活跃"
-    : goal.status === "paused" ? "已暂停"
-    : goal.status === "budget_limited" ? "预算耗尽"
-    : goal.status === "complete" ? "已完成"
-    : goal.status;
+  const totalSeconds = (goal.timeUsedSeconds ?? 0) +
+    (isRunning && goal.status === "active" ? elapsed : 0);
+  const timeDisplay = formatDuration(t, totalSeconds);
+
+  const statusKey = (() => {
+    switch (goal.status) {
+      case "active": return "goal.status.active";
+      case "paused": return "goal.status.paused";
+      case "budget_limited": return "goal.status.budgetLimited";
+      case "complete": return "goal.status.complete";
+      default: return "goal.status.active";
+    }
+  })();
 
   const statusColor =
     goal.status === "active" ? "bg-blue-500"
@@ -58,16 +102,23 @@ export function GoalStatusBar({ threadId }: Props) {
 
       {/* Status dot + label */}
       <span className={`inline-block w-2 h-2 rounded-full ${statusColor}`} />
-      <span className="font-medium text-muted-foreground">{statusLabel}</span>
+      <span className="font-medium text-muted-foreground">{t(statusKey)}</span>
 
       {/* Objective — truncated */}
       <span className="truncate max-w-md text-foreground/80" title={goal.objective}>
         {goal.objective}
       </span>
 
+      {/* Timer */}
+      {(goal.status === "active" || goal.status === "paused") && totalSeconds > 0 && (
+        <span className="text-muted-foreground whitespace-nowrap ml-2">
+          {t("goal.time.elapsed", { time: timeDisplay })}
+        </span>
+      )}
+
       {/* Progress */}
       <span className="text-muted-foreground ml-auto tabular-nums">
-        {goal.turnsUsed}/{goal.maxTurns} turns
+        {goal.turnsUsed}/{goal.maxTurns} max turns
       </span>
 
       {/* Action buttons */}
@@ -85,7 +136,7 @@ export function GoalStatusBar({ threadId }: Props) {
                 setLoading(false);
               }
             }}
-            title="暂停目标"
+            title={t("goal.action.pause")}
           >
             ⏸
           </button>
@@ -103,7 +154,7 @@ export function GoalStatusBar({ threadId }: Props) {
                 setLoading(false);
               }
             }}
-            title="恢复目标"
+            title={t("goal.action.resume")}
           >
             ▶
           </button>
@@ -123,7 +174,7 @@ export function GoalStatusBar({ threadId }: Props) {
                 setLoading(false);
               }
             }}
-            title="清除目标"
+            title={t("goal.action.clear")}
           >
             ✕
           </button>

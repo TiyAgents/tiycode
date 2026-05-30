@@ -1080,6 +1080,19 @@ const en: Record<TranslationKey, string> = {
   // ── Dashboard (extended) ─────────────────────────────────
   "dashboard.preparingTerminal": "Preparing terminal…",
   "dashboard.filePreviewEditor": "File Preview / Editor",
+
+  // ── Goal ──────────────────────────────────────────────────
+  "goal.status.active": "Active",
+  "goal.status.paused": "Paused",
+  "goal.status.budgetLimited": "Budget Exhausted",
+  "goal.status.complete": "Complete",
+  "goal.time.elapsed": "Running for {{time}}",
+  "goal.time.hoursMinutes": "{{hours}}h {{minutes}}m",
+  "goal.time.minutesSeconds": "{{minutes}}m {{seconds}}s",
+  "goal.time.seconds": "{{seconds}}s",
+  "goal.action.pause": "Pause goal",
+  "goal.action.resume": "Resume goal",
+  "goal.action.clear": "Clear goal",
 };
 
 export default en;

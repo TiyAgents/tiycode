@@ -742,3 +742,46 @@ mod tests {
         assert_eq!(found.status, "running");
     }
 }
+
+/// Get the duration in seconds of the last completed run for a thread.
+/// Returns None if no completed run exists with a finished_at timestamp.
+pub async fn get_last_completed_run_duration(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<i64>, AppError> {
+    let duration = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT CAST(strftime('%s', finished_at) - strftime('%s', started_at) AS INTEGER)
+         FROM thread_runs
+         WHERE thread_id = ?
+           AND status = 'completed'
+           AND finished_at IS NOT NULL
+         ORDER BY started_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(duration)
+}
+
+/// Get the elapsed seconds of any currently active (non-terminal) run for a thread.
+/// Returns None if no active run exists.
+pub async fn get_active_run_elapsed_seconds(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<i64>, AppError> {
+    let duration = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT CAST(strftime('%s', 'now') - strftime('%s', started_at) AS INTEGER)
+         FROM thread_runs
+         WHERE thread_id = ?
+           AND status NOT IN ('completed','failed','denied','interrupted','cancelled','limit_reached')
+         ORDER BY started_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(duration)
+}

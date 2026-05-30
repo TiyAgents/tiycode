@@ -617,13 +617,26 @@ pub async fn goal_pause(
 ) -> Result<Option<crate::model::goal::GoalPayload>, AppError> {
     let mgr = crate::core::goal_manager::GoalManager::new(
         state.pool.clone(),
-        thread_id,
+        thread_id.clone(),
         state.goal_runtime_state.clone(),
     );
     let goal = mgr.get_active().await?;
     match goal {
         Some(g) => {
             if g.status == crate::model::goal::GoalStatus::Active {
+                // Account elapsed time of any currently active run before pausing
+                if let Some(run_seconds) =
+                    crate::persistence::repo::run_repo::get_active_run_elapsed_seconds(
+                        &state.pool,
+                        &thread_id,
+                    )
+                    .await
+                    .unwrap_or(None)
+                {
+                    if run_seconds > 0 {
+                        mgr.account_usage(&g.id, 0, run_seconds).await.ok();
+                    }
+                }
                 mgr.pause(&g.id, crate::model::goal::PauseReason::UserRequested, None)
                     .await?;
             }
@@ -741,6 +754,17 @@ pub async fn goal_evaluate(
         }
         crate::model::goal::GoalVerdict::BudgetLimited => {
             mgr.mark_budget_limited(&current.id).await?;
+        }
+    }
+
+    // Account run duration to goal time — the just-completed run contributes its wall-clock time.
+    if let Some(run_seconds) =
+        crate::persistence::repo::run_repo::get_last_completed_run_duration(&state.pool, &thread_id)
+            .await
+            .unwrap_or(None)
+    {
+        if run_seconds > 0 {
+            mgr.account_usage(&current.id, 0, run_seconds).await.ok();
         }
     }
 

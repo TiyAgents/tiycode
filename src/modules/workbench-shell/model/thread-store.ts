@@ -77,6 +77,7 @@ export interface GoalStoreState {
   objective: string;
   status: "active" | "paused" | "budget_limited" | "complete";
   tokensUsed: number;
+  timeUsedSeconds: number;
   turnsUsed: number;
   maxTurns: number;
   tokenBudget?: number | null;
