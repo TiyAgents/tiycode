@@ -305,9 +305,29 @@ impl AgentSession {
         }
 
         // Goal tools — handle before the main tool gateway
-        if tool_name == "create_goal" || tool_name == "update_goal" || tool_name == "get_goal" {
+        if tool_name == "update_goal" {
+            let tool_call_storage_id = uuid::Uuid::now_v7().to_string();
+            let insert_result = tool_call_repo::insert(
+                &self.pool,
+                &tool_call_repo::ToolCallInsert {
+                    id: tool_call_storage_id.clone(),
+                    tool_call_id: tool_call_id.to_string(),
+                    run_id: self.spec.run_id.clone(),
+                    thread_id: self.spec.thread_id.clone(),
+                    helper_id: None,
+                    tool_name: tool_name.to_string(),
+                    tool_input_json: tool_input.to_string(),
+                    status: "requested".to_string(),
+                },
+            )
+            .await;
+
+            if let Err(error) = insert_result {
+                return agent_error_result(format!("failed to persist tool call: {error}"));
+            }
+
             return self
-                .execute_goal_tool(tool_name, tool_call_id, tool_input)
+                .execute_goal_tool(tool_name, tool_call_id, &tool_call_storage_id, tool_input)
                 .await;
         }
 
@@ -1616,38 +1636,13 @@ impl AgentSession {
         &self,
         tool_name: &str,
         _tool_call_id: &str,
+        tool_call_storage_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
         let pool = self.pool.clone();
         let thread_id = self.spec.thread_id.clone();
 
         match tool_name {
-            "create_goal" => {
-                let objective = tool_input
-                    .get("objective")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if objective.is_empty() {
-                    return agent_error_result("create_goal requires a non-empty objective");
-                }
-                let token_budget = tool_input.get("token_budget").and_then(|v| v.as_i64());
-
-                let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id, self.goal_runtime.clone());
-                match mgr.create_goal(objective, token_budget).await {
-                    Ok(record) => {
-                        let payload = crate::core::goal_manager::GoalManager::to_payload(&record);
-                        let _ = self.event_tx.send(ThreadStreamEvent::GoalStateUpdated {
-                            thread_id: record.thread_id.clone(),
-                            goal: Some(payload),
-                        });
-                        AgentToolResult::text(format!(
-                            "Goal created successfully: {}. Status: active. Max turns: {}.",
-                            objective, record.max_turns
-                        ))
-                    }
-                    Err(e) => agent_error_result(format!("Failed to create goal: {e}")),
-                }
-            }
             "update_goal" => {
                 let status = tool_input
                     .get("status")
@@ -1660,30 +1655,62 @@ impl AgentSession {
 
                 // Only support marking as complete
                 if status != "complete" {
-                    return agent_error_result(
-                        "update_goal only supports status='complete'. Use /goal pause|resume|clear from the UI for other lifecycle operations.",
-                    );
+                    let err_msg = "update_goal only supports status='complete'. Use /goal pause|resume|clear from the UI for other lifecycle operations.";
+                    tool_call_repo::update_result(
+                        &self.pool,
+                        tool_call_storage_id,
+                        &serde_json::json!({ "error": err_msg }).to_string(),
+                        "failed",
+                    )
+                    .await
+                    .ok();
+                    return agent_error_result(err_msg);
                 }
 
                 if evidence.trim().is_empty() {
                     // Evidence is empty — reject the completion and challenge
-                    let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id, self.goal_runtime.clone());
+                    let mgr = crate::core::goal_manager::GoalManager::new(
+                        pool,
+                        thread_id,
+                        self.goal_runtime.clone(),
+                    );
                     let challenge = mgr.render_challenge_prompt(
                         crate::core::goal_manager::ChallengePromptVariant::NoEvidence,
                     );
-                    return AgentToolResult::text(format!(
-                        "Goal completion rejected: evidence is required. {challenge}"
-                    ));
+                    let result_text =
+                        format!("Goal completion rejected: evidence is required. {challenge}");
+                    tool_call_repo::update_result(
+                        &self.pool,
+                        tool_call_storage_id,
+                        &serde_json::json!({ "output": &result_text }).to_string(),
+                        "completed",
+                    )
+                    .await
+                    .ok();
+                    return AgentToolResult::text(result_text);
                 }
 
-                let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id, self.goal_runtime.clone());
+                let mgr = crate::core::goal_manager::GoalManager::new(
+                    pool,
+                    thread_id,
+                    self.goal_runtime.clone(),
+                );
                 match mgr.get_active().await {
                     Ok(Some(goal)) => {
                         if goal.status != crate::model::goal::GoalStatus::Active {
-                            return agent_error_result(format!(
+                            let err_msg = format!(
                                 "Goal is not active (current status: {:?}). Cannot mark as complete.",
                                 goal.status
-                            ));
+                            );
+                            tool_call_repo::update_result(
+                                &self.pool,
+                                tool_call_storage_id,
+                                &serde_json::json!({ "error": &err_msg }).to_string(),
+                                "failed",
+                            )
+                            .await
+                            .ok();
+                            return agent_error_result(err_msg);
                         }
                         match mgr.mark_complete(&goal.id, evidence).await {
                             Ok(()) => {
@@ -1701,30 +1728,56 @@ impl AgentSession {
                                             goal: Some(payload),
                                         });
                                 }
-                                AgentToolResult::text(format!(
-                                    "Goal marked as complete. Evidence: {evidence}"
-                                ))
+                                let result_text =
+                                    format!("Goal marked as complete. Evidence: {evidence}");
+                                tool_call_repo::update_result(
+                                    &self.pool,
+                                    tool_call_storage_id,
+                                    &serde_json::json!({ "output": &result_text }).to_string(),
+                                    "completed",
+                                )
+                                .await
+                                .ok();
+                                AgentToolResult::text(result_text)
                             }
-                            Err(e) => agent_error_result(format!("Failed to complete goal: {e}")),
+                            Err(e) => {
+                                let err_msg = format!("Failed to complete goal: {e}");
+                                tool_call_repo::update_result(
+                                    &self.pool,
+                                    tool_call_storage_id,
+                                    &serde_json::json!({ "error": &err_msg }).to_string(),
+                                    "failed",
+                                )
+                                .await
+                                .ok();
+                                agent_error_result(err_msg)
+                            }
                         }
                     }
-                    Ok(None) => agent_error_result(
-                        "No active goal found. Create one first with create_goal.",
-                    ),
-                    Err(e) => agent_error_result(format!("Failed to load goal: {e}")),
-                }
-            }
-            "get_goal" => {
-                let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id, self.goal_runtime.clone());
-                match mgr.get_active().await {
-                    Ok(Some(record)) => {
-                        let payload = crate::core::goal_manager::GoalManager::to_payload(&record);
-                        AgentToolResult::text(serde_json::to_string(&payload).unwrap_or_else(
-                            |_| format!("Goal: {} (status: {:?})", record.objective, record.status),
-                        ))
+                    Ok(None) => {
+                        let err_msg = "No active goal found. Create one first with /goal command.";
+                        tool_call_repo::update_result(
+                            &self.pool,
+                            tool_call_storage_id,
+                            &serde_json::json!({ "error": err_msg }).to_string(),
+                            "failed",
+                        )
+                        .await
+                        .ok();
+                        agent_error_result(err_msg)
                     }
-                    Ok(None) => AgentToolResult::text("No goal is currently set for this thread."),
-                    Err(e) => agent_error_result(format!("Failed to load goal: {e}")),
+                    Err(e) => {
+                        let err_msg = format!("Failed to load goal: {e}");
+                        tool_call_repo::update_result(
+                            &self.pool,
+                            tool_call_storage_id,
+                            &serde_json::json!({ "error": &err_msg }).to_string(),
+                            "failed",
+                        )
+                        .await
+                        .ok();
+                        agent_error_result(err_msg)
+                    }
                 }
             }
             _ => agent_error_result(format!("Unknown goal tool: {tool_name}")),

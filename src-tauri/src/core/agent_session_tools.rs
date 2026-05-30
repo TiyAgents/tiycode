@@ -532,26 +532,7 @@ You may call this tool multiple times in a run to incrementally refine the plan.
         }),
     ));
 
-    // Goal tools — persistent cross-turn task execution
-    tools.push(AgentTool::new(
-        "create_goal",
-        "Create Goal",
-        "Create a persistent goal for long-running autonomous task execution. The agent will work across multiple turns toward this objective until it is complete, paused, or the turn budget runs out. Create a goal only when explicitly requested by the user; do not infer goals from ordinary tasks.",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "objective": {
-                    "type": "string",
-                    "description": "The goal objective - a clear, verifiable description of what needs to be accomplished."
-                },
-                "token_budget": {
-                    "type": "integer",
-                    "description": "Optional maximum token budget for this goal. When exceeded, the goal will be marked as budget_limited."
-                }
-            },
-            "required": ["objective"]
-        }),
-    ));
+    // Goal tool — persistent cross-turn task completion
     tools.push(AgentTool::new(
         "update_goal",
         "Update Goal",
@@ -572,16 +553,6 @@ You may call this tool multiple times in a run to incrementally refine the plan.
             "required": ["status", "evidence"]
         }),
     ));
-    tools.push(AgentTool::new(
-        "get_goal",
-        "Get Goal",
-        "Read the current goal state for this thread. Returns the objective, status, usage counters, and completion evidence if any.",
-        serde_json::json!({
-            "type": "object",
-            "properties": {}
-        }),
-    ));
-
     // Render artifact tool (always available) — supports charts, HTML, and SVG
     tools.push(AgentTool::new(
         "render",

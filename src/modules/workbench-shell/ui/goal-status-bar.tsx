@@ -1,30 +1,32 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useState } from "react";
 import { goalGetState, goalPause, goalResume, goalClear } from "@/services/bridge/agent-commands";
-import type { GoalPayload } from "@/services/bridge/agent-commands";
+import { threadStore, useStore, shallowEqual } from "@/modules/workbench-shell/model/thread-store";
 
 type Props = {
   threadId: string;
 };
 
 export function GoalStatusBar({ threadId }: Props) {
-  const [goal, setGoal] = useState<GoalPayload | null>(null);
+  const goal = useStore(threadStore, (s) => s.goalState[threadId] ?? null, shallowEqual);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
+    // Re-fetch goal state from backend and sync to threadStore so the
+    // status bar reflects the latest state after pause/resume/clear.
     try {
       const g = await goalGetState(threadId);
-      setGoal(g);
+      threadStore.setState((prev) => ({
+        goalState: { ...prev.goalState, [threadId]: g },
+      }));
     } catch {
-      // Goal not found or error — clear
-      setGoal(null);
+      // Goal not found or error — clear from store
+      threadStore.setState((prev) => ({
+        goalState: { ...prev.goalState, [threadId]: null },
+      }));
     }
   }, [threadId]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
 
   if (!goal) return null;
 
@@ -114,7 +116,9 @@ export function GoalStatusBar({ threadId }: Props) {
               setLoading(true);
               try {
                 await goalClear(threadId);
-                setGoal(null);
+                threadStore.setState((prev) => ({
+                  goalState: { ...prev.goalState, [threadId]: null },
+                }));
               } finally {
                 setLoading(false);
               }

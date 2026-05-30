@@ -1613,6 +1613,16 @@ export function RuntimeThreadSurface({
           return true;
         }
         await goalSet(threadId, argText);
+        // Sync goal state to threadStore immediately so GoalStatusBar appears
+        try {
+          const goal = await goalGetState(threadId);
+          threadStore.setState((prev) => ({
+            goalState: { ...prev.goalState, [threadId]: goal },
+          }));
+        } catch {
+          // Goal state fetch can fail silently — the status bar will
+          // pick it up on the next goal_evaluate cycle anyway.
+        }
       } catch (error) {
         setComposerError(`Failed to manage goal: ${error}`);
         submittingRef.current = false;

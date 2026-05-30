@@ -106,7 +106,10 @@ impl GoalManager {
     /// Consume and return the accumulated tool call names, resetting the list.
     fn drain_tool_calls(&self) -> Vec<String> {
         let mut guard = self.lock_runtime();
-        guard.thread_tool_calls.remove(&self.thread_id).unwrap_or_default()
+        guard
+            .thread_tool_calls
+            .remove(&self.thread_id)
+            .unwrap_or_default()
     }
 
     // ── CRUD ──
@@ -317,7 +320,9 @@ impl GoalManager {
                 };
                 if should_pause {
                     // Reset counter before pausing
-                    self.lock_runtime().completion_claim_count.remove(&self.thread_id);
+                    self.lock_runtime()
+                        .completion_claim_count
+                        .remove(&self.thread_id);
                     return GoalVerdict::Paused {
                         reason: PauseReason::IdleBlocked,
                         detail: Some("agent repeatedly claimed completion without providing evidence via update_goal".into()),
@@ -432,7 +437,10 @@ impl GoalManager {
 
     fn increment_idle_count(&self) -> u32 {
         let mut guard = self.lock_runtime();
-        let count = guard.idle_turn_count.entry(self.thread_id.clone()).or_default();
+        let count = guard
+            .idle_turn_count
+            .entry(self.thread_id.clone())
+            .or_default();
         *count += 1;
         *count
     }

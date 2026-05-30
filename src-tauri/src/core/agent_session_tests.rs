@@ -309,7 +309,17 @@ pub(super) mod tests {
             initial_context_calibration: Default::default(),
         };
 
-        AgentSession::new(pool, tool_gateway, helper_orchestrator, event_tx, spec, 4, std::sync::Arc::new(std::sync::Mutex::new(crate::core::app_state::GoalRuntimeState::default())))
+        AgentSession::new(
+            pool,
+            tool_gateway,
+            helper_orchestrator,
+            event_tx,
+            spec,
+            4,
+            std::sync::Arc::new(std::sync::Mutex::new(
+                crate::core::app_state::GoalRuntimeState::default(),
+            )),
+        )
     }
 
     #[tokio::test]
@@ -372,7 +382,17 @@ pub(super) mod tests {
             initial_prompt: None,
             initial_context_calibration: Default::default(),
         };
-        let session = AgentSession::new(pool, tool_gateway, helper_orchestrator, event_tx, spec, 4, std::sync::Arc::new(std::sync::Mutex::new(crate::core::app_state::GoalRuntimeState::default())));
+        let session = AgentSession::new(
+            pool,
+            tool_gateway,
+            helper_orchestrator,
+            event_tx,
+            spec,
+            4,
+            std::sync::Arc::new(std::sync::Mutex::new(
+                crate::core::app_state::GoalRuntimeState::default(),
+            )),
+        );
 
         let enqueue_snapshot = session
             .enqueue_queue_message(
@@ -4646,7 +4666,17 @@ Used for prompt assembly coverage.
             initial_prompt: None,
             initial_context_calibration: Default::default(),
         };
-        let session = AgentSession::new(pool, tool_gateway, helper_orchestrator, event_tx, spec, 4, std::sync::Arc::new(std::sync::Mutex::new(crate::core::app_state::GoalRuntimeState::default())));
+        let session = AgentSession::new(
+            pool,
+            tool_gateway,
+            helper_orchestrator,
+            event_tx,
+            spec,
+            4,
+            std::sync::Arc::new(std::sync::Mutex::new(
+                crate::core::app_state::GoalRuntimeState::default(),
+            )),
+        );
         let enqueue_snapshot = session
             .enqueue_queue_message(
                 AgentQueueMessageKind::FollowUp,
@@ -4710,7 +4740,17 @@ Used for prompt assembly coverage.
             initial_prompt: None,
             initial_context_calibration: Default::default(),
         };
-        let session = AgentSession::new(pool, tool_gateway, helper_orchestrator, event_tx, spec, 4, std::sync::Arc::new(std::sync::Mutex::new(crate::core::app_state::GoalRuntimeState::default())));
+        let session = AgentSession::new(
+            pool,
+            tool_gateway,
+            helper_orchestrator,
+            event_tx,
+            spec,
+            4,
+            std::sync::Arc::new(std::sync::Mutex::new(
+                crate::core::app_state::GoalRuntimeState::default(),
+            )),
+        );
 
         // Enqueue a follow-up message.
         let first_snapshot = session
