@@ -2,6 +2,7 @@
 mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
     use std::str::FromStr;
+    use tiycode_lib::core::app_state::GoalRuntimeState;
     use tiycode_lib::core::goal_manager::{ChallengePromptVariant, GoalManager};
     use tiycode_lib::model::goal::{GoalStatus, GoalVerdict, PauseReason};
     use tiycode_lib::persistence::repo::goal_repo;
@@ -47,10 +48,14 @@ mod tests {
         pool
     }
 
+    fn test_runtime() -> std::sync::Arc<std::sync::Mutex<GoalRuntimeState>> {
+        std::sync::Arc::new(std::sync::Mutex::new(GoalRuntimeState::default()))
+    }
+
     #[tokio::test]
     async fn create_goal_persists_and_loads() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
 
         let record = mgr.create_goal("Build a todo app", None).await.unwrap();
         assert_eq!(record.objective, "Build a todo app");
@@ -65,7 +70,7 @@ mod tests {
     #[tokio::test]
     async fn create_goal_fails_when_already_exists() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
 
         mgr.create_goal("First goal", None).await.unwrap();
         let err = mgr.create_goal("Second goal", None).await.unwrap_err();
@@ -75,7 +80,7 @@ mod tests {
     #[tokio::test]
     async fn evaluate_after_turn_no_completion_continues() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         // Simulate a tool call so idle counter doesn't trigger
@@ -88,7 +93,7 @@ mod tests {
     #[tokio::test]
     async fn evaluate_after_turn_clarify_triggers_pause() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         // Record a clarify tool call
@@ -107,7 +112,7 @@ mod tests {
     #[tokio::test]
     async fn evaluate_after_turn_update_plan_triggers_pause() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         mgr.record_tool_call("update_plan");
@@ -125,7 +130,7 @@ mod tests {
     #[tokio::test]
     async fn evaluate_after_turn_idle_three_turns_pauses() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         // Three consecutive idle turns
@@ -145,7 +150,7 @@ mod tests {
     #[tokio::test]
     async fn evaluate_after_turn_max_turns_pauses() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         // Set turns_used to at least max_turns via account_usage
@@ -171,7 +176,7 @@ mod tests {
     #[tokio::test]
     async fn completion_claim_detection_without_tool_challenges() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         // Model says "done" but doesn't call update_goal
@@ -188,7 +193,7 @@ mod tests {
     #[tokio::test]
     async fn pause_and_resume_lifecycle() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         // Pause
@@ -207,7 +212,7 @@ mod tests {
     #[tokio::test]
     async fn auto_resume_clarify_pending() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         mgr.pause(&goal.id, PauseReason::ClarifyPending, None)
@@ -224,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn auto_resume_skips_user_requested() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         mgr.pause(&goal.id, PauseReason::UserRequested, None)
@@ -241,7 +246,7 @@ mod tests {
     #[tokio::test]
     async fn mark_complete_with_evidence() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         mgr.mark_complete(&goal.id, "All tests pass, files created")
@@ -259,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn mark_budget_limited() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         mgr.mark_budget_limited(&goal.id).await.unwrap();
@@ -271,7 +276,7 @@ mod tests {
     #[tokio::test]
     async fn clear_removes_goal() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         mgr.create_goal("Test goal", None).await.unwrap();
 
         let cleared = mgr.clear().await.unwrap();
@@ -284,7 +289,7 @@ mod tests {
     #[tokio::test]
     async fn continuation_prompt_renders_correctly() {
         let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into());
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Build feature X", None).await.unwrap();
 
         let prompt = mgr.render_continuation_prompt(&goal);
@@ -295,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn challenge_prompt_renders_variants() {
-        let mgr = GoalManager::new(setup_pool().await, "thread-1".into());
+        let mgr = GoalManager::new(setup_pool().await, "thread-1".into(), test_runtime());
 
         let no_evidence = mgr.render_challenge_prompt(ChallengePromptVariant::NoEvidence);
         assert!(no_evidence.contains("没有提供 evidence"));

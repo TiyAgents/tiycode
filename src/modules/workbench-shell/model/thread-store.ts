@@ -79,6 +79,7 @@ export interface GoalStoreState {
   tokensUsed: number;
   turnsUsed: number;
   maxTurns: number;
+  tokenBudget?: number | null;
   pauseReason?: string | null;
   pauseDetail?: string | null;
   evidence?: string | null;

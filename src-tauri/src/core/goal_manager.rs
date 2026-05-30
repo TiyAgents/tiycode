@@ -5,6 +5,8 @@ use crate::model::errors::{AppError, ErrorSource};
 use crate::model::goal::{GoalPayload, GoalRecord, GoalStatus, GoalVerdict, PauseReason};
 use crate::persistence::repo::goal_repo;
 
+use crate::core::app_state::GoalRuntimeState;
+
 /// Default maximum turns for a goal before auto-pausing.
 const DEFAULT_MAX_TURNS: i64 = 50;
 
@@ -64,41 +66,47 @@ const MAX_IDLE_TURNS: u32 = 3;
 pub struct GoalManager {
     pool: SqlitePool,
     thread_id: String,
-    /// Accumulated tool call names from the current turn.
-    thread_tool_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    /// Consecutive idle turn counter (turns with no tool calls).
-    idle_turn_count: std::sync::Arc<std::sync::Mutex<u32>>,
-    /// Consecutive completion claim counter (model says "done" but no tool call).
-    completion_claim_count: std::sync::Arc<std::sync::Mutex<u32>>,
+    /// Shared runtime state for tool call tracking and idle/completion counters.
+    runtime: std::sync::Arc<std::sync::Mutex<GoalRuntimeState>>,
 }
 
 impl GoalManager {
     /// Create a new GoalManager for a specific thread.
     /// Uses shared state for tool call tracking across instances.
-    pub fn new(pool: SqlitePool, thread_id: String) -> Self {
+    pub fn new(
+        pool: SqlitePool,
+        thread_id: String,
+        runtime: std::sync::Arc<std::sync::Mutex<GoalRuntimeState>>,
+    ) -> Self {
         Self {
             pool,
             thread_id,
-            thread_tool_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            idle_turn_count: std::sync::Arc::new(std::sync::Mutex::new(0)),
-            completion_claim_count: std::sync::Arc::new(std::sync::Mutex::new(0)),
+            runtime,
         }
+    }
+
+    /// Lock the shared runtime state, recovering from poison.
+    fn lock_runtime(&self) -> std::sync::MutexGuard<'_, GoalRuntimeState> {
+        self.runtime.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("goal_manager: runtime mutex poisoned, recovering");
+            poisoned.into_inner()
+        })
     }
 
     /// Record a tool call name from the current turn.
     pub fn record_tool_call(&self, tool_name: &str) {
-        if let Ok(mut calls) = self.thread_tool_calls.lock() {
-            calls.push(tool_name.to_string());
-        }
+        let mut guard = self.lock_runtime();
+        guard
+            .thread_tool_calls
+            .entry(self.thread_id.clone())
+            .or_default()
+            .push(tool_name.to_string());
     }
 
     /// Consume and return the accumulated tool call names, resetting the list.
     fn drain_tool_calls(&self) -> Vec<String> {
-        if let Ok(mut calls) = self.thread_tool_calls.lock() {
-            std::mem::take(&mut *calls)
-        } else {
-            Vec::new()
-        }
+        let mut guard = self.lock_runtime();
+        guard.thread_tool_calls.remove(&self.thread_id).unwrap_or_default()
     }
 
     // ── CRUD ──
@@ -227,6 +235,11 @@ impl GoalManager {
 
     /// Clear / delete the goal.
     pub async fn clear(&self) -> Result<bool, AppError> {
+        // Reset per-thread runtime counters so a subsequent create_goal
+        // on the same thread starts with clean idle/completion tracking.
+        self.reset_idle_counters();
+        // Also drain any accumulated tool calls from the current turn.
+        self.drain_tool_calls();
         goal_repo::delete_by_thread_id(&self.pool, &self.thread_id).await
     }
 
@@ -294,18 +307,17 @@ impl GoalManager {
             // Completion claim without tool call
             if self.detect_completion_claim(response) {
                 let should_pause = {
-                    if let Ok(mut count) = self.completion_claim_count.lock() {
-                        *count += 1;
-                        *count >= 3
-                    } else {
-                        false
-                    }
+                    let mut guard = self.lock_runtime();
+                    let count = guard
+                        .completion_claim_count
+                        .entry(self.thread_id.clone())
+                        .or_default();
+                    *count += 1;
+                    *count >= 3
                 };
                 if should_pause {
                     // Reset counter before pausing
-                    if let Ok(mut count) = self.completion_claim_count.lock() {
-                        *count = 0;
-                    }
+                    self.lock_runtime().completion_claim_count.remove(&self.thread_id);
                     return GoalVerdict::Paused {
                         reason: PauseReason::IdleBlocked,
                         detail: Some("agent repeatedly claimed completion without providing evidence via update_goal".into()),
@@ -419,21 +431,16 @@ impl GoalManager {
     }
 
     fn increment_idle_count(&self) -> u32 {
-        if let Ok(mut count) = self.idle_turn_count.lock() {
-            *count += 1;
-            *count
-        } else {
-            0
-        }
+        let mut guard = self.lock_runtime();
+        let count = guard.idle_turn_count.entry(self.thread_id.clone()).or_default();
+        *count += 1;
+        *count
     }
 
     fn reset_idle_counters(&self) {
-        if let Ok(mut count) = self.idle_turn_count.lock() {
-            *count = 0;
-        }
-        if let Ok(mut count) = self.completion_claim_count.lock() {
-            *count = 0;
-        }
+        let mut guard = self.lock_runtime();
+        guard.idle_turn_count.remove(&self.thread_id);
+        guard.completion_claim_count.remove(&self.thread_id);
     }
 
     // ── Prompt generation ──

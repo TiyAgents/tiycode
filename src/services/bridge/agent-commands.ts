@@ -500,6 +500,34 @@ export function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): Thre
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         taskBoard: readRequiredObject(rawEvent, "taskBoard", "task_board") as TaskBoardDto,
       };
+    case "goal_state_updated":
+      return {
+        type: rawEvent.type,
+        threadId: readRequiredString(rawEvent, "threadId", "thread_id"),
+        goal: (readValue(rawEvent, "goal", "goal") ?? null) as GoalPayload | null,
+      };
+    case "goal_continuation":
+      return {
+        type: rawEvent.type,
+        threadId: readRequiredString(rawEvent, "threadId", "thread_id"),
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        prompt: readRequiredString(rawEvent, "prompt", "prompt"),
+        turnsUsed: Number(readValue(rawEvent, "turnsUsed", "turns_used") ?? 0),
+        maxTurns: Number(readValue(rawEvent, "maxTurns", "max_turns") ?? 0),
+      };
+    case "goal_paused":
+      return {
+        type: rawEvent.type,
+        threadId: readRequiredString(rawEvent, "threadId", "thread_id"),
+        reason: readRequiredString(rawEvent, "reason", "reason"),
+        detail: readOptionalString(rawEvent, "detail", "detail") ?? undefined,
+      };
+    case "goal_completed":
+      return {
+        type: rawEvent.type,
+        threadId: readRequiredString(rawEvent, "threadId", "thread_id"),
+        evidence: readRequiredString(rawEvent, "evidence", "evidence"),
+      };
   }
 }
 
@@ -688,6 +716,7 @@ export type GoalPayload = {
   tokensUsed: number;
   turnsUsed: number;
   maxTurns: number;
+  tokenBudget?: number | null;
   pauseReason?: string | null;
   pauseDetail?: string | null;
   evidence?: string | null;

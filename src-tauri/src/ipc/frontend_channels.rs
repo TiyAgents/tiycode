@@ -219,6 +219,13 @@ pub enum ThreadStreamEvent {
         error: Option<String>,
     },
     // ── Goal events ──
+    // GoalStateUpdated and GoalCompleted are emitted by execute_goal_tool
+    // (create_goal, update_goal tools in AgentSession). GoalContinuation and
+    // GoalPaused are reserved for future streaming emission; currently the
+    // goal evaluation verdict (continue/pause/complete) is returned as a
+    // direct JSON response from the goal_evaluate Tauri command rather than
+    // streamed. The frontend consumes goal state via goal_get_state /
+    // goal_evaluate command APIs.
     GoalStateUpdated {
         thread_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]

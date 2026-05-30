@@ -243,6 +243,19 @@ impl AgentSession {
         tool_call_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
+        // Record tool call for goal evaluation (idle/completion detection).
+        {
+            let mut guard = self.goal_runtime.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("execute_tool_call: goal_runtime mutex poisoned, recovering");
+                poisoned.into_inner()
+            });
+            guard
+                .thread_tool_calls
+                .entry(self.spec.thread_id.clone())
+                .or_default()
+                .push(tool_name.to_string());
+        } // Drop guard before crossing await boundary
+
         if tool_name == PLAN_TOOL_NAME {
             return match tokio::time::timeout(
                 standard_tool_timeout(),
@@ -1619,7 +1632,7 @@ impl AgentSession {
                 }
                 let token_budget = tool_input.get("token_budget").and_then(|v| v.as_i64());
 
-                let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id);
+                let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id, self.goal_runtime.clone());
                 match mgr.create_goal(objective, token_budget).await {
                     Ok(record) => {
                         let payload = crate::core::goal_manager::GoalManager::to_payload(&record);
@@ -1654,7 +1667,7 @@ impl AgentSession {
 
                 if evidence.trim().is_empty() {
                     // Evidence is empty — reject the completion and challenge
-                    let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id);
+                    let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id, self.goal_runtime.clone());
                     let challenge = mgr.render_challenge_prompt(
                         crate::core::goal_manager::ChallengePromptVariant::NoEvidence,
                     );
@@ -1663,7 +1676,7 @@ impl AgentSession {
                     ));
                 }
 
-                let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id);
+                let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id, self.goal_runtime.clone());
                 match mgr.get_active().await {
                     Ok(Some(goal)) => {
                         if goal.status != crate::model::goal::GoalStatus::Active {
@@ -1702,7 +1715,7 @@ impl AgentSession {
                 }
             }
             "get_goal" => {
-                let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id);
+                let mgr = crate::core::goal_manager::GoalManager::new(pool, thread_id, self.goal_runtime.clone());
                 match mgr.get_active().await {
                     Ok(Some(record)) => {
                         let payload = crate::core::goal_manager::GoalManager::to_payload(&record);

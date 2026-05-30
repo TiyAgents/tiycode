@@ -18,6 +18,7 @@ use sqlx::SqlitePool;
 
 use crate::core::agent_run_manager::AgentRunManager;
 use crate::core::app_event_emitter::{AppEventEmitterRef, NoopAppEventEmitter};
+use crate::core::app_state::GoalRuntimeState;
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
 use crate::core::prompt_command_manager::PromptCommandManager;
 use crate::core::settings_manager::SettingsManager;
@@ -65,9 +66,15 @@ impl GatewayState {
             Arc::clone(&terminal_manager),
         ));
         let extensions_manager = Arc::new(ExtensionsManager::new(pool.clone()));
+        // Each headless server path creates an isolated GoalRuntimeState.
+        // This is intentional — goal features are only supported through
+        // the Tauri command path (AppState). Gateway paths operate
+        // independently.
+        let goal_runtime_state = Arc::new(std::sync::Mutex::new(GoalRuntimeState::default()));
         let built_in_agent_runtime = Arc::new(BuiltInAgentRuntime::new(
             pool.clone(),
             Arc::clone(&tool_gateway),
+            Arc::clone(&goal_runtime_state),
         ));
         let agent_run_manager = Arc::new(AgentRunManager::new(
             pool.clone(),

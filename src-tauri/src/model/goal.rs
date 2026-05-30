@@ -194,6 +194,8 @@ pub struct GoalPayload {
     pub turns_used: i64,
     pub max_turns: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pause_reason: Option<PauseReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pause_detail: Option<String>,
@@ -211,6 +213,7 @@ impl From<GoalRecord> for GoalPayload {
             tokens_used: r.tokens_used,
             turns_used: r.turns_used,
             max_turns: r.max_turns,
+            token_budget: r.token_budget,
             pause_reason: r.pause_reason,
             pause_detail: r.pause_detail,
             evidence: r.evidence,

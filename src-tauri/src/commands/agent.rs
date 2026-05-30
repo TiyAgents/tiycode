@@ -581,7 +581,7 @@ pub async fn goal_get_state(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<Option<crate::model::goal::GoalPayload>, AppError> {
-    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id);
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id, state.goal_runtime_state.clone());
     match mgr.get_active().await? {
         Some(record) => Ok(Some(crate::core::goal_manager::GoalManager::to_payload(
             &record,
@@ -597,7 +597,7 @@ pub async fn goal_set(
     objective: String,
     token_budget: Option<i64>,
 ) -> Result<crate::model::goal::GoalPayload, AppError> {
-    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id);
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id, state.goal_runtime_state.clone());
     let record = mgr.create_goal(&objective, token_budget).await?;
     Ok(crate::core::goal_manager::GoalManager::to_payload(&record))
 }
@@ -607,7 +607,7 @@ pub async fn goal_pause(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<Option<crate::model::goal::GoalPayload>, AppError> {
-    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id);
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id, state.goal_runtime_state.clone());
     let goal = mgr.get_active().await?;
     match goal {
         Some(g) => {
@@ -627,7 +627,7 @@ pub async fn goal_resume(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<Option<crate::model::goal::GoalPayload>, AppError> {
-    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id);
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id, state.goal_runtime_state.clone());
     let goal = mgr.get_active().await?;
     match goal {
         Some(g) => {
@@ -643,7 +643,7 @@ pub async fn goal_resume(
 
 #[tauri::command]
 pub async fn goal_clear(state: State<'_, AppState>, thread_id: String) -> Result<bool, AppError> {
-    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id);
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id, state.goal_runtime_state.clone());
     mgr.clear().await
 }
 
@@ -653,7 +653,7 @@ pub async fn goal_evaluate(
     thread_id: String,
     response: Option<String>,
 ) -> Result<serde_json::Value, AppError> {
-    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id.clone());
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id.clone(), state.goal_runtime_state.clone());
     let goal = mgr.get_active().await?.ok_or_else(|| {
         AppError::recoverable(
             crate::model::errors::ErrorSource::Settings,
@@ -667,9 +667,12 @@ pub async fn goal_evaluate(
         Some(r) if !r.is_empty() => r,
         _ => {
             use crate::persistence::repo::message_repo;
-            let recent = message_repo::list_recent(&state.pool, &thread_id, None, 1).await?;
+            // Fetch the most recent assistant message (not user/system messages).
+            let recent = message_repo::list_recent(&state.pool, &thread_id, None, 10).await?;
             recent
-                .first()
+                .iter()
+                .rev() // Most recent first
+                .find(|m| m.role == "assistant")
                 .map(|m| m.content_markdown.clone())
                 .unwrap_or_default()
         }
@@ -690,7 +693,7 @@ pub async fn goal_evaluate(
         // Goal state changed since we read it — return current state without applying verdict.
         let payload = current
             .as_ref()
-            .map(|r| crate::core::goal_manager::GoalManager::to_payload(r))
+            .map(crate::core::goal_manager::GoalManager::to_payload)
             .unwrap_or_else(|| crate::core::goal_manager::GoalManager::to_payload(&goal));
         return Ok(serde_json::json!({
             "goal": serde_json::to_value(&payload).unwrap_or_default(),
@@ -720,7 +723,7 @@ pub async fn goal_evaluate(
     let updated = mgr.get_active().await?;
     let payload = updated
         .as_ref()
-        .map(|r| crate::core::goal_manager::GoalManager::to_payload(r))
+        .map(crate::core::goal_manager::GoalManager::to_payload)
         .unwrap_or_else(|| crate::core::goal_manager::GoalManager::to_payload(&current));
 
     let (verdict_str, continuation_prompt) = match &verdict {

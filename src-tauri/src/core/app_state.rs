@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use sqlx::SqlitePool;
-use std::sync::Arc;
 use tauri::AppHandle;
 
 use crate::core::agent_run_manager::AgentRunManager;
@@ -16,6 +18,19 @@ use crate::core::tool_gateway::ToolGateway;
 use crate::core::workspace_manager::WorkspaceManager;
 use crate::core::worktree_manager::WorktreeManager;
 use crate::extensions::ExtensionsManager;
+
+/// Shared goal tracking state that survives across command invocations.
+/// Stored on AppState so both AgentSession (execution) and Tauri commands
+/// (goal_evaluate) can read/write the same counters.
+#[derive(Default)]
+pub struct GoalRuntimeState {
+    /// Accumulated tool call names per thread for the current turn.
+    pub thread_tool_calls: HashMap<String, Vec<String>>,
+    /// Consecutive idle turn counter per thread.
+    pub idle_turn_count: HashMap<String, u32>,
+    /// Consecutive completion claim counter per thread.
+    pub completion_claim_count: HashMap<String, u32>,
+}
 
 /// Global application state shared across all Tauri commands.
 ///
@@ -36,6 +51,8 @@ pub struct AppState {
     pub git_manager: GitManager,
     pub extensions_manager: Arc<ExtensionsManager>,
     pub app_events: AppEventEmitterRef,
+    /// Shared goal runtime state for tool call tracking and idle/completion counters.
+    pub goal_runtime_state: Arc<Mutex<GoalRuntimeState>>,
 }
 
 impl AppState {
@@ -54,9 +71,11 @@ impl AppState {
             Arc::clone(&terminal_manager),
         ));
         let extensions_manager = Arc::new(ExtensionsManager::new(pool.clone()));
+        let goal_runtime_state = Arc::new(Mutex::new(GoalRuntimeState::default()));
         let built_in_agent_runtime = Arc::new(BuiltInAgentRuntime::new(
             pool.clone(),
             Arc::clone(&tool_gateway),
+            Arc::clone(&goal_runtime_state),
         ));
         let agent_run_manager = Arc::new(AgentRunManager::new(
             pool.clone(),
@@ -83,6 +102,7 @@ impl AppState {
             git_manager,
             extensions_manager,
             app_events,
+            goal_runtime_state,
         }
     }
 }

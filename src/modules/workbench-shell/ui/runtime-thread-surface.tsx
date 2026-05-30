@@ -873,6 +873,17 @@ export function RuntimeThreadSurface({
         }
       }
 
+      // Goal events don't participate in thinking-phase lifecycle; handled
+      // by dedicated goal evaluation flow in handleRunLifecycleTransition.
+      if (
+        event.type === "goal_state_updated" ||
+        event.type === "goal_continuation" ||
+        event.type === "goal_paused" ||
+        event.type === "goal_completed"
+      ) {
+        return;
+      }
+
       if (shouldCompleteThinkingPhase(event)) {
         completeThinkingPhase(event.runId);
       } else if (shouldFinalizeReasoningOnly(event)) {

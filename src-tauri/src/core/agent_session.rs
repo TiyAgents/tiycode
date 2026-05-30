@@ -11,6 +11,7 @@ use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{Cost, InputType, Model, Provider, Usage};
 use tokio::sync::mpsc;
 
+use crate::core::app_state::GoalRuntimeState;
 use crate::core::prompt;
 use crate::core::subagent::HelperAgentOrchestrator;
 use crate::core::tool_gateway::ToolGateway;
@@ -641,6 +642,8 @@ pub struct AgentSession {
     pub(crate) abort_signal: tiycore::agent::AbortSignal,
     context_compression_state: Arc<StdMutex<ContextCompressionRuntimeState>>,
     runtime_queue_state: Arc<StdMutex<RuntimeQueueState>>,
+    /// Shared goal runtime state for tool call recording across command invocations.
+    pub(crate) goal_runtime: Arc<std::sync::Mutex<GoalRuntimeState>>,
 }
 
 impl AgentSession {
@@ -651,6 +654,7 @@ impl AgentSession {
         event_tx: mpsc::UnboundedSender<ThreadStreamEvent>,
         spec: AgentSessionSpec,
         max_turns: usize,
+        goal_runtime: Arc<std::sync::Mutex<GoalRuntimeState>>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak_self| {
             let agent = Arc::new(Agent::with_model(spec.model_plan.primary.model.clone()));
@@ -681,6 +685,7 @@ impl AgentSession {
                 abort_signal: tiycore::agent::AbortSignal::new(),
                 context_compression_state,
                 runtime_queue_state,
+                goal_runtime,
             }
         })
     }
