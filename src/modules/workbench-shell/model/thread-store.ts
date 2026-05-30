@@ -67,6 +67,21 @@ export interface ThreadStoreState {
   /** IDs of pending runs that have already been submitted to prevent
    *  re-submission after component unmount/remount cycles. */
   handledPendingRunIds: Record<string, number>;
+  /** Goal state per thread. */
+  goalState: Record<string, GoalStoreState | null>;
+}
+
+export interface GoalStoreState {
+  id: string;
+  threadId: string;
+  objective: string;
+  status: "active" | "paused" | "budget_limited" | "complete";
+  tokensUsed: number;
+  turnsUsed: number;
+  maxTurns: number;
+  pauseReason?: string | null;
+  pauseDetail?: string | null;
+  evidence?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +104,7 @@ export const threadStore = createStore<ThreadStoreState>({
   runtimeContextUsage: null,
   editingThreadId: null,
   handledPendingRunIds: {},
+  goalState: {},
 });
 
 // ---------------------------------------------------------------------------
@@ -240,9 +256,14 @@ export function removeWorkspace(workspaceId: string): void {
     for (const tid of threadIdsToClean) {
       delete nextStatuses[tid];
     }
+    const nextGoalState = { ...prev.goalState };
+    for (const tid of threadIdsToClean) {
+      delete nextGoalState[tid];
+    }
     return {
       workspaces: prev.workspaces.filter((w) => w.id !== workspaceId),
       threadStatuses: nextStatuses,
+      goalState: nextGoalState,
     };
   });
 }
@@ -266,12 +287,15 @@ export function removeThread(threadId: string): void {
   threadStore.setState((prev) => {
     const nextStatuses = { ...prev.threadStatuses };
     delete nextStatuses[threadId];
+    const nextGoalState = { ...prev.goalState };
+    delete nextGoalState[threadId];
     return {
       workspaces: prev.workspaces.map((w) => ({
         ...w,
         threads: w.threads.filter((t) => t.id !== threadId),
       })),
       threadStatuses: nextStatuses,
+      goalState: nextGoalState,
     };
   });
 }
@@ -288,9 +312,12 @@ export function deleteThread(threadId: string): Promise<void> {
     optimistic: (s) => {
       const nextStatuses = { ...s.threadStatuses };
       delete nextStatuses[threadId];
+      const nextGoalState = { ...s.goalState };
+      delete nextGoalState[threadId];
       const isActive = s.activeThreadId === threadId;
       return {
         threadStatuses: nextStatuses,
+        goalState: nextGoalState,
         workspaces: s.workspaces.map((w) => ({
           ...w,
           threads: w.threads.filter((t) => t.id !== threadId),

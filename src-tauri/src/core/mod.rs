@@ -21,6 +21,7 @@ pub mod desktop_runtime;
 pub mod executors;
 pub mod gateway_supervisor;
 pub mod git_manager;
+pub mod goal_manager;
 pub mod index_manager;
 pub mod local_search;
 pub mod plan_checkpoint;

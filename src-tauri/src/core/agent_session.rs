@@ -566,6 +566,7 @@ pub async fn build_session_spec(
             .await?;
 
     let system_prompt = build_system_prompt(pool, &raw_plan, workspace_path, run_mode).await?;
+    let system_prompt = inject_goal_context(pool, thread_id, system_prompt).await?;
     let extension_tools = ExtensionsManager::new(pool.clone())
         .list_runtime_agent_tools(Some(workspace_path))
         .await?;
@@ -1404,6 +1405,38 @@ async fn build_system_prompt(
     run_mode: &str,
 ) -> Result<String, AppError> {
     prompt::build_system_prompt(pool, raw_plan, workspace_path, run_mode).await
+}
+
+/// Inject goal context into the system prompt if an active goal exists for the thread.
+async fn inject_goal_context(
+    pool: &SqlitePool,
+    thread_id: &str,
+    mut system_prompt: String,
+) -> Result<String, AppError> {
+    let goal = crate::persistence::repo::goal_repo::find_by_thread_id(pool, thread_id).await?;
+    if let Some(goal) = goal {
+        if goal.status == crate::model::goal::GoalStatus::Active {
+            let goal_block = format!(
+                "## Persistent Goal\n\n\
+                 You are currently working toward a persistent goal:\n\n\
+                 **Objective:** {objective}\n\n\
+                 - Status: {status}\n\
+                 - Turns used: {turns_used}/{max_turns}\n\n\
+                 When the goal is fully achieved, you MUST call update_goal(status=\"complete\", evidence=\"...\") \
+                 with concrete evidence (test output, file changes, verification steps). \
+                 Do NOT mark complete without verified evidence.\n\n\
+                 If you need user input before proceeding, use the clarify tool. \
+                 The goal will automatically pause and resume when the user responds.",
+                objective = goal.objective,
+                status = goal.status.as_str(),
+                turns_used = goal.turns_used,
+                max_turns = goal.max_turns,
+            );
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&goal_block);
+        }
+    }
+    Ok(system_prompt)
 }
 
 /// Security config for the **main** agent.  Uses a very large tool timeout so

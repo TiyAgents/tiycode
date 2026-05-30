@@ -218,6 +218,29 @@ pub enum ThreadStreamEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    // ── Goal events ──
+    GoalStateUpdated {
+        thread_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        goal: Option<crate::model::goal::GoalPayload>,
+    },
+    GoalContinuation {
+        thread_id: String,
+        run_id: String,
+        prompt: String,
+        turns_used: i64,
+        max_turns: i64,
+    },
+    GoalPaused {
+        thread_id: String,
+        reason: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    GoalCompleted {
+        thread_id: String,
+        evidence: String,
+    },
 }
 
 /// Events sent to the frontend terminal layer for a specific thread terminal.

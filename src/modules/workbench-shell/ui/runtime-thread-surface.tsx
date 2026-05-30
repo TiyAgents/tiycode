@@ -24,6 +24,14 @@ import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/
 import type { CommandEntry } from "@/modules/settings-center/model/types";
 import { threadClearContext, threadLoad } from "@/services/bridge";
 import {
+  goalSet,
+  goalGetState,
+  goalPause,
+  goalResume,
+  goalClear,
+  goalEvaluate,
+} from "@/services/bridge/agent-commands";
+import {
   ThreadStream,
   type HelperEvent,
   type QueueEvent,
@@ -44,6 +52,7 @@ import {
   threadStore,
   useStore,
   shallowEqual,
+  addPendingRun,
   isPendingRunHandled,
   markPendingRunHandled,
 } from "@/modules/workbench-shell/model/thread-store";
@@ -70,6 +79,7 @@ import type { SkillRecord } from "@/shared/types/extensions";
 import {
   getFileMutationPresentation,
 } from "@/modules/workbench-shell/model/file-mutation-presentation";
+import { GoalStatusBar } from "@/modules/workbench-shell/ui/goal-status-bar";
 import { WorkbenchPromptComposer, ComposerMessageAttachments } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 import {
   initialTaskBoardState,
@@ -1305,6 +1315,40 @@ export function RuntimeThreadSurface({
       ) {
         void loadSnapshot();
       }
+
+      // ── Goal evaluation on terminal states ──
+      if (state === "completed" || state === "interrupted") {
+        void (async () => {
+          try {
+            const result = await goalEvaluate(threadId);
+            if (!result) return;
+
+            // Sync goal state to threadStore
+            threadStore.setState((prev) => ({
+              goalState: { ...prev.goalState, [threadId]: result.goal },
+            }));
+
+            // Auto-continue if the goal should keep going
+            if (
+              result.verdict === "continue" ||
+              result.verdict === "challenge_evidence"
+            ) {
+              const prompt = result.continuationPrompt ?? "Continue working toward your goal.";
+              addPendingRun(threadId, {
+                id: `goal-${Date.now()}`,
+                displayText: prompt,
+                effectivePrompt: prompt,
+                attachments: [],
+                metadata: null,
+                runMode: "default",
+                threadId,
+              });
+            }
+          } catch {
+            // Evaluation failed (e.g., no active goal) — silently skip
+          }
+        })();
+      }
     });
 
     stream.onContextCompressing = withActiveStream((runId) => {
@@ -1393,7 +1437,7 @@ export function RuntimeThreadSurface({
       return false;
     }
 
-    const submission = typeof submissionOrPrompt === "string"
+    let submission = typeof submissionOrPrompt === "string"
       ? {
           kind: "plain" as const,
           displayText: submissionOrPrompt,
@@ -1521,6 +1565,52 @@ export function RuntimeThreadSurface({
         submittingRef.current = false;
       }
       return true;
+    }
+
+    if (submission.kind === "command" && submission.command?.behavior === "goal") {
+      const argText = (submission.command.argumentsText ?? "").trim();
+      const subCommand = argText.split(/\s+/)[0]?.toLowerCase();
+
+      try {
+        if (subCommand === "pause") {
+          await goalPause(threadId);
+          return true;
+        }
+        if (subCommand === "resume") {
+          await goalResume(threadId);
+          return true;
+        }
+        if (subCommand === "clear") {
+          await goalClear(threadId);
+          return true;
+        }
+        if (subCommand === "status" || !argText) {
+          const goal = await goalGetState(threadId);
+          // For now, just log — a full GoalStatusBar will show this
+          if (goal) {
+            setComposerError(`Goal: ${goal.objective} (${goal.status}, ${goal.turnsUsed}/${goal.maxTurns} turns)`);
+          } else {
+            setComposerError("No goal is currently set for this thread.");
+          }
+          submittingRef.current = false;
+          return true;
+        }
+
+        // /goal <objective> — persist the goal, then start a run
+        await goalSet(threadId, argText);
+      } catch (error) {
+        setComposerError(`Failed to manage goal: ${error}`);
+        submittingRef.current = false;
+        return false;
+      }
+
+      // Fall through to start a run with the goal objective
+      submission = {
+        ...submission,
+        displayText: argText,
+        effectivePrompt: argText,
+        kind: "plain",
+      };
     }
 
     appendOptimisticUserMessage(
@@ -2557,6 +2647,7 @@ export function RuntimeThreadSurface({
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">
       <div className="pointer-events-none absolute left-1/2 top-0 h-56 w-[72rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(120,180,255,0.11),transparent_68%)] blur-3xl" />
       <div className="relative min-h-0 flex-1">
+        {threadId && <GoalStatusBar threadId={threadId} />}
         <Conversation
           className="size-full"
           contextRef={conversationContextRef}

@@ -103,11 +103,11 @@ export const SUPPORTED_COMPOSER_ATTACHMENT_DIALOG_FILTERS = [
   },
 ] as const;
 
-export type BuiltinComposerCommandName = "init" | "clear" | "compact";
+export type BuiltinComposerCommandName = "init" | "clear" | "compact" | "goal";
 
 export type ComposerCommandSource = "builtin" | "settings";
 export type ComposerSubmissionKind = "plain" | "command";
-export type ComposerCommandBehavior = "prompt" | "clear" | "compact";
+export type ComposerCommandBehavior = "prompt" | "clear" | "compact" | "goal";
 
 export type ComposerCommandDescriptor = {
   source: ComposerCommandSource;
@@ -214,6 +214,16 @@ const BUILTIN_COMMANDS: ReadonlyArray<ComposerCommandDescriptor> = [
     argumentHint: "",
     prompt: "Compact the current conversation history and preserve a continuation summary before clearing prior turns.",
     behavior: "compact",
+    smartSend: "always",
+  },
+  {
+    source: "builtin",
+    name: "goal",
+    path: "/goal",
+    description: "Set a persistent goal for autonomous cross-turn execution",
+    argumentHint: "<objective>",
+    prompt: "Set goal: {arguments}",
+    behavior: "goal",
     smartSend: "always",
   },
 ];

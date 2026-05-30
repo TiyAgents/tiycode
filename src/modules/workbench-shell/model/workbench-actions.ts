@@ -63,7 +63,7 @@ export interface NewThreadSubmission {
   effectivePrompt: string;
   attachments?: MessageAttachmentDto[];
   metadata?: Record<string, unknown> | null;
-  commandBehavior?: "clear" | "compact" | "none" | "prompt";
+  commandBehavior?: "clear" | "compact" | "goal" | "none" | "prompt";
 }
 
 export interface ThreadDeleteOptions {

@@ -573,3 +573,175 @@ pub async fn tool_clarify_respond(
 
     Ok(())
 }
+
+// ── Goal commands ──
+
+#[tauri::command]
+pub async fn goal_get_state(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<Option<crate::model::goal::GoalPayload>, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id);
+    match mgr.get_active().await? {
+        Some(record) => Ok(Some(crate::core::goal_manager::GoalManager::to_payload(
+            &record,
+        ))),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn goal_set(
+    state: State<'_, AppState>,
+    thread_id: String,
+    objective: String,
+    token_budget: Option<i64>,
+) -> Result<crate::model::goal::GoalPayload, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id);
+    let record = mgr.create_goal(&objective, token_budget).await?;
+    Ok(crate::core::goal_manager::GoalManager::to_payload(&record))
+}
+
+#[tauri::command]
+pub async fn goal_pause(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<Option<crate::model::goal::GoalPayload>, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id);
+    let goal = mgr.get_active().await?;
+    match goal {
+        Some(g) => {
+            if g.status == crate::model::goal::GoalStatus::Active {
+                mgr.pause(&g.id, crate::model::goal::PauseReason::UserRequested, None)
+                    .await?;
+            }
+            let updated = mgr.get_active().await?;
+            Ok(updated.map(|r| crate::core::goal_manager::GoalManager::to_payload(&r)))
+        }
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn goal_resume(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<Option<crate::model::goal::GoalPayload>, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id);
+    let goal = mgr.get_active().await?;
+    match goal {
+        Some(g) => {
+            if g.status == crate::model::goal::GoalStatus::Paused {
+                mgr.resume(&g.id).await?;
+            }
+            let updated = mgr.get_active().await?;
+            Ok(updated.map(|r| crate::core::goal_manager::GoalManager::to_payload(&r)))
+        }
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn goal_clear(state: State<'_, AppState>, thread_id: String) -> Result<bool, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id);
+    mgr.clear().await
+}
+
+#[tauri::command]
+pub async fn goal_evaluate(
+    state: State<'_, AppState>,
+    thread_id: String,
+    response: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(state.pool.clone(), thread_id.clone());
+    let goal = mgr.get_active().await?.ok_or_else(|| {
+        AppError::recoverable(
+            crate::model::errors::ErrorSource::Settings,
+            "goal.not_found",
+            "no active goal found",
+        )
+    })?;
+
+    // If no response provided, fetch the last assistant message from the DB
+    let response = match response {
+        Some(r) if !r.is_empty() => r,
+        _ => {
+            use crate::persistence::repo::message_repo;
+            let recent = message_repo::list_recent(&state.pool, &thread_id, None, 1).await?;
+            recent
+                .first()
+                .map(|m| m.content_markdown.clone())
+                .unwrap_or_default()
+        }
+    };
+
+    let verdict = mgr.evaluate_after_turn(&response, &goal).await;
+
+    // Re-read goal from DB to protect against TOCTOU (another request may have
+    // changed the goal state between our initial read and this verdict application).
+    // Only apply the verdict if the goal is still Active.
+    let current = mgr.get_active().await?;
+    let current_is_active = current
+        .as_ref()
+        .map(|g| g.status == crate::model::goal::GoalStatus::Active)
+        .unwrap_or(false);
+
+    if !current_is_active {
+        // Goal state changed since we read it — return current state without applying verdict.
+        let payload = current
+            .as_ref()
+            .map(|r| crate::core::goal_manager::GoalManager::to_payload(r))
+            .unwrap_or_else(|| crate::core::goal_manager::GoalManager::to_payload(&goal));
+        return Ok(serde_json::json!({
+            "goal": serde_json::to_value(&payload).unwrap_or_default(),
+            "verdict": "skipped",
+            "continuationPrompt": null,
+        }));
+    }
+
+    let current = current.unwrap(); // Safe: we verified Some above
+
+    // Apply the verdict — all DB writes happen here, not in evaluate_after_turn.
+    match &verdict {
+        crate::model::goal::GoalVerdict::Continue => {}
+        crate::model::goal::GoalVerdict::ChallengeEvidence => {}
+        crate::model::goal::GoalVerdict::Complete { evidence } => {
+            mgr.mark_complete(&current.id, evidence).await?;
+        }
+        crate::model::goal::GoalVerdict::Paused { reason, detail } => {
+            mgr.pause(&current.id, reason.clone(), detail.clone())
+                .await?;
+        }
+        crate::model::goal::GoalVerdict::BudgetLimited => {
+            mgr.mark_budget_limited(&current.id).await?;
+        }
+    }
+
+    let updated = mgr.get_active().await?;
+    let payload = updated
+        .as_ref()
+        .map(|r| crate::core::goal_manager::GoalManager::to_payload(r))
+        .unwrap_or_else(|| crate::core::goal_manager::GoalManager::to_payload(&current));
+
+    let (verdict_str, continuation_prompt) = match &verdict {
+        crate::model::goal::GoalVerdict::Continue => (
+            "continue",
+            Some(mgr.render_continuation_prompt(updated.as_ref().unwrap_or(&goal))),
+        ),
+        crate::model::goal::GoalVerdict::ChallengeEvidence => (
+            "challenge_evidence",
+            Some(mgr.render_challenge_prompt(
+                crate::core::goal_manager::ChallengePromptVariant::NoTool,
+            )),
+        ),
+        crate::model::goal::GoalVerdict::Complete { .. } => ("complete", None),
+        crate::model::goal::GoalVerdict::Paused { reason: _, detail } => ("paused", detail.clone()),
+        crate::model::goal::GoalVerdict::BudgetLimited => ("budget_limited", None),
+    };
+
+    Ok(serde_json::json!({
+        "goal": serde_json::to_value(&payload).unwrap_or_default(),
+        "verdict": verdict_str,
+        "continuationPrompt": continuation_prompt,
+    }))
+}
