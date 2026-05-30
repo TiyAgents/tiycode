@@ -220,7 +220,7 @@ pub enum ThreadStreamEvent {
     },
     // ── Goal events ──
     // GoalStateUpdated and GoalCompleted are emitted by execute_goal_tool
-    // (create_goal, update_goal tools in AgentSession). GoalContinuation and
+    // (create_goal, goal_scored tools in AgentSession). GoalContinuation and
     // GoalPaused are emitted by backend run-lifecycle goal orchestration after
     // terminal runs are evaluated. The frontend also consumes goal state via
     // goal_get_state / goal_evaluate command APIs.

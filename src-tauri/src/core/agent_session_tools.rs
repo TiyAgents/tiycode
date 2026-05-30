@@ -534,9 +534,9 @@ You may call this tool multiple times in a run to incrementally refine the plan.
 
     // Goal tool — persistent cross-turn task completion
     tools.push(AgentTool::new(
-        "update_goal",
-        "Update Goal",
-        "Mark the current goal as complete. You MUST provide evidence — run tests, check file contents, or verify command output to prove the goal is truly achieved. Without evidence, the completion will be challenged. Do NOT mark a goal complete unless you have actually verified its success.",
+        crate::core::goal_manager::GOAL_SCORED_TOOL_NAME,
+        "Goal Scored",
+        "Mark the current goal as fully achieved (score the goal). You MUST provide evidence — run tests, check file contents, or verify command output to prove the goal is truly achieved. Without evidence, the completion will be challenged. You MUST also pass the exact required pledge text. Do NOT call this tool unless you have actually verified the goal is complete with no remaining or follow-up work.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -548,9 +548,13 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                 "evidence": {
                     "type": "string",
                     "description": "Concrete evidence that the goal is complete — test output, file change summary, command results, or verification steps. Required."
+                },
+                "pledge": {
+                    "type": "string",
+                    "description": "You MUST pass this exact pledge text verbatim: \"I hereby declare: I confirm that I have fully achieved this goal, and I have confirmed that there are no remaining pending tasks or follow-up items. I confirm that I have repeatedly reviewed the output of this work, and I take responsibility for the quality of this output.\""
                 }
             },
-            "required": ["status", "evidence"]
+            "required": ["status", "evidence", "pledge"]
         }),
     ));
     // Render artifact tool (always available) — supports charts, HTML, and SVG

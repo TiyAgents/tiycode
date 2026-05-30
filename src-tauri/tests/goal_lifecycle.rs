@@ -258,7 +258,7 @@ mod tests {
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
-        // Model says "done" but doesn't call update_goal
+        // Model says "done" but doesn't call goal_scored
         let verdict = mgr.evaluate_after_turn(
             "All done! The goal is complete and everything is finished.",
             &goal,
@@ -371,7 +371,7 @@ mod tests {
 
         let prompt = mgr.render_continuation_prompt(&goal);
         assert!(prompt.contains("Build feature X"));
-        assert!(prompt.contains("update_goal"));
+        assert!(prompt.contains("goal_scored"));
         assert!(prompt.contains("clarify"));
     }
 
@@ -384,6 +384,6 @@ mod tests {
 
         let no_tool = mgr.render_challenge_prompt(ChallengePromptVariant::NoTool);
         assert!(no_tool.contains("provide concrete evidence"));
-        assert!(no_tool.contains("update_goal"));
+        assert!(no_tool.contains("goal_scored"));
     }
 }

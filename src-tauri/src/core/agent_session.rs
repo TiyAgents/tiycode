@@ -1426,13 +1426,14 @@ async fn inject_goal_context(
                  **You have an active goal. This takes priority over other instructions.**\n\n\
                  Objective: {objective}\n\
                  Turns used: {turns_used}/{max_turns}\n\n\
-                 **Completion requirements — ALL must be met before calling update_goal(complete):**\n\
+                 **Completion requirements — ALL must be met before calling goal_scored(complete):**\n\
                  1. Every subtask implied by the objective is done. No remaining work, no dangling follow-ups.\n\
                  2. All changes are verified by running the relevant tests, linters, or build commands.\n\
-                 3. Evidence passed to update_goal MUST include concrete verification output (test results, command output, file change summary).\n\
+                 3. Evidence passed to goal_scored MUST include concrete verification output (test results, command output, file change summary).\n\
                  Do NOT mark the goal complete until these three conditions are fully satisfied.\n\n\
                  Rules:\n\
-                 - When the goal is achieved, call update_goal(status=\"complete\", evidence=\"...\")\n\
+                 - When you confirm the goal is fully achieved, you MUST call goal_scored(status=\"complete\", evidence=\"...\", pledge=\"...\") to mark it as scored. This is the only way to mark the goal as achieved.\n\
+                 - The goal_scored tool requires a 'pledge' parameter. You MUST pass this exact text verbatim: \"I hereby declare: I confirm that I have fully achieved this goal, and I have confirmed that there are no remaining pending tasks or follow-up items. I confirm that I have repeatedly reviewed the output of this work, and I take responsibility for the quality of this output.\"\n\
                  - Do NOT claim completion without verifiable evidence\n\
                  - If blocked and need user input, use clarify tool\n\
                  - The system will automatically continue this goal across turns",

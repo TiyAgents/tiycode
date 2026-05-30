@@ -19,6 +19,12 @@ pub struct GoalEvaluationOutcome {
 /// Default maximum turns for a goal before auto-pausing.
 const DEFAULT_MAX_TURNS: i64 = 50;
 
+/// Tool name used to mark a goal as fully achieved ("score" the goal).
+pub const GOAL_SCORED_TOOL_NAME: &str = "goal_scored";
+
+/// Exact pledge text the agent must pass verbatim when calling `goal_scored`.
+pub const GOAL_SCORED_PLEDGE: &str = "I hereby declare: I confirm that I have fully achieved this goal, and I have confirmed that there are no remaining pending tasks or follow-up items. I confirm that I have repeatedly reviewed the output of this work, and I take responsibility for the quality of this output.";
+
 /// Continuation prompt injected when the goal is still active.
 const CONTINUATION_PROMPT_TEMPLATE: &str = "\
 [Goal continuation — turns {turns_used}/{max_turns}]
@@ -28,7 +34,7 @@ const CONTINUATION_PROMPT_TEMPLATE: &str = "\
 Continue working toward this objective. Take the next concrete step.
 
 ⚠️ When the goal is fully achieved, you MUST call:
-  update_goal(status=\"complete\", evidence=\"<verifiable proof>\")
+  goal_scored(status=\"complete\", evidence=\"<verifiable proof>\", pledge=\"<exact required pledge>\")
 Without this call, the system will keep injecting continuation prompts.
 
 If you are blocked and need user input, use the clarify tool.";
@@ -40,13 +46,13 @@ Before claiming the goal is complete, please provide concrete evidence:
 1. What verification commands did you run? What was the output?
 2. What files did you modify? What was the purpose of each change?
 
-Once you have evidence, call update_goal(status=\"complete\", evidence=\"...\") .
+Once you have evidence, call goal_scored(status=\"complete\", evidence=\"...\", pledge=\"...\") .
 If the goal is not actually complete, ignore this prompt and continue working.";
 
 /// Challenge prompt when the model claimed completion but evidence was empty.
 const MISSING_EVIDENCE_PROMPT: &str = "\
-You called update_goal(complete) but did not provide evidence.
-Please provide completion evidence and call update_goal(status=\"complete\", evidence=\"<your evidence>\") again.";
+You called goal_scored(complete) but did not provide evidence.
+Please provide completion evidence and call goal_scored(status=\"complete\", evidence=\"<your evidence>\", pledge=\"<exact required pledge>\") again.";
 
 /// Guidance prompt when the agent appears stuck.
 const GUIDANCE_PROMPT: &str = "\
@@ -345,7 +351,7 @@ impl GoalManager {
                         .remove(&self.thread_id);
                     return GoalVerdict::Paused {
                         reason: PauseReason::IdleBlocked,
-                        detail: Some("agent repeatedly claimed completion without providing evidence via update_goal".into()),
+                        detail: Some("agent repeatedly claimed completion without providing evidence via goal_scored".into()),
                     };
                 }
                 return GoalVerdict::ChallengeEvidence;
@@ -624,7 +630,7 @@ impl GoalManager {
 
 /// Variants for challenge prompts.
 pub enum ChallengePromptVariant {
-    /// Model called update_goal(complete) but evidence was empty.
+    /// Model called goal_scored(complete) but evidence was empty.
     NoEvidence,
     /// Model claimed completion in text but didn't use the tool.
     NoTool,

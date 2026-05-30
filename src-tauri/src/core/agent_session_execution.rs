@@ -305,7 +305,7 @@ impl AgentSession {
         }
 
         // Goal tools — handle before the main tool gateway
-        if tool_name == "update_goal" {
+        if tool_name == crate::core::goal_manager::GOAL_SCORED_TOOL_NAME {
             let tool_call_storage_id = uuid::Uuid::now_v7().to_string();
             let insert_result = tool_call_repo::insert(
                 &self.pool,
@@ -1643,7 +1643,7 @@ impl AgentSession {
         let thread_id = self.spec.thread_id.clone();
 
         match tool_name {
-            "update_goal" => {
+            name if name == crate::core::goal_manager::GOAL_SCORED_TOOL_NAME => {
                 let status = tool_input
                     .get("status")
                     .and_then(|v| v.as_str())
@@ -1652,14 +1652,35 @@ impl AgentSession {
                     .get("evidence")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                let pledge = tool_input
+                    .get("pledge")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
                 // Only support marking as complete
                 if status != "complete" {
-                    let err_msg = "update_goal only supports status='complete'. Use /goal pause|resume|clear from the UI for other lifecycle operations.";
+                    let err_msg = "goal_scored only supports status='complete'. Use /goal pause|resume|clear from the UI for other lifecycle operations.";
                     tool_call_repo::update_result(
                         &self.pool,
                         tool_call_storage_id,
                         &serde_json::json!({ "error": err_msg }).to_string(),
+                        "failed",
+                    )
+                    .await
+                    .ok();
+                    return agent_error_result(err_msg);
+                }
+
+                // The pledge must match the required text exactly.
+                if pledge.trim() != crate::core::goal_manager::GOAL_SCORED_PLEDGE {
+                    let err_msg = format!(
+                        "goal_scored rejected: the 'pledge' parameter must be passed verbatim as: \"{}\"",
+                        crate::core::goal_manager::GOAL_SCORED_PLEDGE
+                    );
+                    tool_call_repo::update_result(
+                        &self.pool,
+                        tool_call_storage_id,
+                        &serde_json::json!({ "error": &err_msg }).to_string(),
                         "failed",
                     )
                     .await

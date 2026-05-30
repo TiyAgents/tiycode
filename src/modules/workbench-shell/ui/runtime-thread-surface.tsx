@@ -1640,7 +1640,7 @@ export function RuntimeThreadSurface({
         "This goal has been created and is now **active**. Work toward it.",
         "When the goal is fully achieved, you MUST call:",
         "```json",
-        "update_goal(status=\"complete\", evidence=\"test output, file changes, verification steps\")",
+        "goal_scored(status=\"complete\", evidence=\"test output, file changes, verification steps\", pledge=\"I hereby declare: I confirm that I have fully achieved this goal, and I have confirmed that there are no remaining pending tasks or follow-up items. I confirm that I have repeatedly reviewed the output of this work, and I take responsibility for the quality of this output.\")",
         "```",
         "Do NOT mark complete without verified evidence.",
         "",
