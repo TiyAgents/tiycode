@@ -633,8 +633,36 @@ pub async fn goal_pause(
                     .await
                     .unwrap_or(None)
                 {
-                    if run_seconds > 0 {
-                        mgr.account_usage(&g.id, 0, run_seconds).await.ok();
+                    let active_run_id = crate::persistence::repo::run_repo::find_latest_by_thread(
+                        &state.pool,
+                        &thread_id,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|run| {
+                        matches!(
+                            run.status.as_str(),
+                            "running" | "waiting_approval" | "needs_reply"
+                        )
+                        .then_some(run.id)
+                    });
+                    let paused_seconds = active_run_id
+                        .as_deref()
+                        .map(|run_id| {
+                            let mut guard =
+                                state.goal_runtime_state.lock().unwrap_or_else(|poisoned| {
+                                    tracing::warn!(
+                                        "goal_pause: goal runtime mutex poisoned, recovering"
+                                    );
+                                    poisoned.into_inner()
+                                });
+                            guard.take_run_paused_seconds(run_id).max(0)
+                        })
+                        .unwrap_or(0);
+                    let billable_seconds = (run_seconds - paused_seconds).max(0);
+                    if billable_seconds > 0 {
+                        mgr.account_usage(&g.id, 0, billable_seconds).await.ok();
                     }
                 }
                 mgr.pause(&g.id, crate::model::goal::PauseReason::UserRequested, None)

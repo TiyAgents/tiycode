@@ -168,6 +168,7 @@ import {
   parseCommandComposerMetadata,
   parseRuntimeQueueComposerMetadata,
   parseSummaryMarkerMetadata,
+  parseGoalContinuationMetadata,
   parseClarifyPrompt,
   formatPlanMetadata,
 } from "@/modules/workbench-shell/ui/runtime-thread-surface-metadata";
@@ -2957,6 +2958,9 @@ export function RuntimeThreadSurface({
                 const expandedPrompt = commandComposer?.kind === "command"
                   ? (commandComposer.effectivePrompt?.trim() ?? "")
                   : "";
+                const goalContinuation = message.role === "user"
+                  ? parseGoalContinuationMetadata(message.metadata)
+                  : null;
                 const messageCopyTarget = (() => {
                   if (message.role === "user") {
                     return {
@@ -2991,6 +2995,18 @@ export function RuntimeThreadSurface({
 
                 return (
                   <div className={spacingClass} key={entry.key}>
+                    {goalContinuation ? (
+                      <div className="flex items-center gap-3 py-2">
+                        <div className="h-px flex-1 bg-app-border/28" />
+                        <span className="text-[11px] font-medium tracking-[0.04em] text-app-subtle">
+                          Goal continues
+                          {goalContinuation.turnsUsed !== null && goalContinuation.maxTurns !== null
+                            ? ` — turn ${goalContinuation.turnsUsed}/${goalContinuation.maxTurns}`
+                            : ""}
+                        </span>
+                        <div className="h-px flex-1 bg-app-border/28" />
+                      </div>
+                    ) : null}
                     <Message
                       className={message.role === "assistant" ? "max-w-full" : undefined}
                       from={message.role}

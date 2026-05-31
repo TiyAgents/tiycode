@@ -3,11 +3,63 @@
 import { useCallback, useState, useEffect, useRef } from "react";
 import { goalGetState, goalPause, goalResume, goalClear } from "@/services/bridge/agent-commands";
 import { threadStore, useStore, shallowEqual } from "@/modules/workbench-shell/model/thread-store";
+import type { ThreadRunStatus } from "@/modules/workbench-shell/model/types";
 import { useT } from "@/i18n";
 
 type Props = {
   threadId: string;
 };
+
+type GoalStatus = "active" | "paused" | "budget_limited" | "complete";
+
+export type GoalTimerTransitionInput = {
+  isTimerRunning: boolean;
+  previousElapsedSeconds: number;
+  previousBaseElapsedSeconds: number;
+  previousStartedAtMs: number | null;
+  nowMs: number;
+};
+
+export type GoalTimerTransition = {
+  elapsedSeconds: number;
+  baseElapsedSeconds: number;
+  startedAtMs: number | null;
+};
+
+export function isGoalTimerRunning(
+  threadStatus: ThreadRunStatus | undefined,
+  goalStatus: GoalStatus | undefined,
+): boolean {
+  return threadStatus === "running" && goalStatus === "active";
+}
+
+export function computeGoalTimerTransition({
+  isTimerRunning,
+  previousElapsedSeconds,
+  previousBaseElapsedSeconds,
+  previousStartedAtMs,
+  nowMs,
+}: GoalTimerTransitionInput): GoalTimerTransition {
+  if (!isTimerRunning) {
+    return {
+      elapsedSeconds: previousElapsedSeconds,
+      baseElapsedSeconds: previousElapsedSeconds,
+      startedAtMs: null,
+    };
+  }
+
+  const startedAtMs = previousStartedAtMs ?? nowMs;
+  const baseElapsedSeconds = previousStartedAtMs === null
+    ? previousElapsedSeconds
+    : previousBaseElapsedSeconds;
+  const elapsedSeconds = baseElapsedSeconds + Math.floor((nowMs - startedAtMs) / 1000);
+
+  return {
+    elapsedSeconds,
+    baseElapsedSeconds,
+    startedAtMs,
+  };
+}
 
 function formatDuration(t: ReturnType<typeof useT>, totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
@@ -33,23 +85,66 @@ export function GoalStatusBar({ threadId }: Props) {
   );
   const [loading, setLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const tickStartRef = useRef(Date.now());
+  const elapsedRef = useRef(0);
+  const timerBaseElapsedRef = useRef(0);
+  const timerStartedAtRef = useRef<number | null>(null);
+  const goalIdentityRef = useRef<string | null>(null);
+  const accountedSecondsRef = useRef<number | null>(null);
+  const timerRunIdRef = useRef<string | null>(null);
 
-  const isRunning = threadStatus?.status === "running";
+  const isTimerRunning = isGoalTimerRunning(threadStatus?.status, goal?.status);
 
-  // Real-time timer: tick every second while the goal is active and the thread is running
   useEffect(() => {
-    if (isRunning && goal?.status === "active") {
-      tickStartRef.current = Date.now();
-      setElapsed(0);
-      const interval = setInterval(() => {
-        setElapsed(Math.floor((Date.now() - tickStartRef.current) / 1000));
-      }, 1000);
-      return () => clearInterval(interval);
-    } else {
-      setElapsed(0);
+    const accountedSeconds = goal?.timeUsedSeconds ?? 0;
+    const runId = threadStatus?.runId ?? null;
+    const isProgressingThreadStatus = threadStatus?.status === "running"
+      || threadStatus?.status === "waiting_approval"
+      || threadStatus?.status === "needs_reply";
+    const shouldReset = goal?.status !== "active"
+      || goalIdentityRef.current !== (goal?.id ?? null)
+      || accountedSecondsRef.current !== accountedSeconds
+      || (isProgressingThreadStatus && runId !== null && timerRunIdRef.current !== runId);
+
+    if (!shouldReset) return;
+
+    goalIdentityRef.current = goal?.status === "active" ? goal.id : null;
+    accountedSecondsRef.current = accountedSeconds;
+    timerRunIdRef.current = isProgressingThreadStatus ? runId : null;
+    elapsedRef.current = 0;
+    timerBaseElapsedRef.current = 0;
+    timerStartedAtRef.current = null;
+    setElapsed(0);
+  }, [goal?.id, goal?.status, goal?.timeUsedSeconds, threadStatus?.runId, threadStatus?.status]);
+
+  // Real-time timer: tick only while the run is actively progressing.
+  // User-action states such as waiting_approval / needs_reply freeze elapsed
+  // locally, then running resumes from the frozen value.
+  useEffect(() => {
+    const syncElapsed = (nowMs: number) => {
+      const next = computeGoalTimerTransition({
+        isTimerRunning,
+        previousElapsedSeconds: elapsedRef.current,
+        previousBaseElapsedSeconds: timerBaseElapsedRef.current,
+        previousStartedAtMs: timerStartedAtRef.current,
+        nowMs,
+      });
+      elapsedRef.current = next.elapsedSeconds;
+      timerBaseElapsedRef.current = next.baseElapsedSeconds;
+      timerStartedAtRef.current = next.startedAtMs;
+      setElapsed(next.elapsedSeconds);
+    };
+
+    syncElapsed(Date.now());
+
+    if (!isTimerRunning) {
+      return;
     }
-  }, [isRunning, goal?.status]);
+
+    const interval = setInterval(() => {
+      syncElapsed(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isTimerRunning]);
 
   const refresh = useCallback(async () => {
     // Re-fetch goal state from backend and sync to threadStore.
@@ -67,8 +162,7 @@ export function GoalStatusBar({ threadId }: Props) {
 
   if (!goal) return null;
 
-  const totalSeconds = (goal.timeUsedSeconds ?? 0) +
-    (isRunning && goal.status === "active" ? elapsed : 0);
+  const totalSeconds = (goal.timeUsedSeconds ?? 0) + elapsed;
   const timeDisplay = formatDuration(t, totalSeconds);
 
   const statusKey = (() => {
@@ -95,10 +189,10 @@ export function GoalStatusBar({ threadId }: Props) {
         goal.maxTurns,
       )
     : Math.max(goal.turnsUsed, 1);
-  const shouldShowTimer = goal.status === "complete" || totalSeconds > 0;
+  const shouldShowTimer = goal.status === "active" || goal.status === "complete" || totalSeconds > 0;
 
   return (
-    <div className="flex items-center gap-2 px-6 py-1.5 text-xs border-b border-border/50 bg-muted/30 shrink-0 relative">
+    <div className="flex items-center gap-3 px-6 py-1.5 text-xs border-b border-border/50 bg-muted/30 shrink-0 relative overflow-hidden">
       {/* Progress bar background */}
       <div className="absolute inset-x-0 bottom-0 h-0.5 bg-muted/50">
         <div
@@ -107,86 +201,90 @@ export function GoalStatusBar({ threadId }: Props) {
         />
       </div>
 
-      {/* Status dot + label */}
-      <span className={`inline-block w-2 h-2 rounded-full ${statusColor}`} />
-      <span className="font-medium text-muted-foreground">{t(statusKey)}</span>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {/* Status dot + label */}
+        <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${statusColor}`} />
+        <span className="font-medium text-muted-foreground shrink-0">{t(statusKey)}</span>
 
-      {/* Objective — truncated */}
-      <span className="truncate max-w-md text-foreground/80" title={goal.objective}>
-        {goal.objective}
-      </span>
-
-      {/* Timer */}
-      {shouldShowTimer && (
-        <span className="text-muted-foreground whitespace-nowrap ml-2">
-          {t("goal.time.elapsed", { time: timeDisplay })}
+        {/* Objective — truncated */}
+        <span className="min-w-0 flex-1 truncate text-foreground/80" title={goal.objective}>
+          {goal.objective}
         </span>
-      )}
+      </div>
 
-      {/* Progress */}
-      <span className="text-muted-foreground ml-auto tabular-nums">
-        {displayTurnCount}/{goal.maxTurns} max turns
-      </span>
+      <div className="flex shrink-0 items-center gap-3 whitespace-nowrap">
+        {/* Timer */}
+        {shouldShowTimer && (
+          <span className="shrink-0 whitespace-nowrap tabular-nums text-muted-foreground">
+            {t("goal.time.elapsed", { time: timeDisplay })}
+          </span>
+        )}
 
-      {/* Action buttons */}
-      <span className="flex gap-1 ml-2">
-        {goal.status === "active" && (
-          <button
-            className="px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-            disabled={loading}
-            onClick={async () => {
-              setLoading(true);
-              try {
-                await goalPause(threadId);
-                await refresh();
-              } finally {
-                setLoading(false);
-              }
-            }}
-            title={t("goal.action.pause")}
-          >
-            ⏸
-          </button>
-        )}
-        {goal.status === "paused" && (
-          <button
-            className="px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-            disabled={loading}
-            onClick={async () => {
-              setLoading(true);
-              try {
-                await goalResume(threadId);
-                await refresh();
-              } finally {
-                setLoading(false);
-              }
-            }}
-            title={t("goal.action.resume")}
-          >
-            ▶
-          </button>
-        )}
-        {(goal.status === "active" || goal.status === "paused") && (
-          <button
-            className="px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
-            disabled={loading}
-            onClick={async () => {
-              setLoading(true);
-              try {
-                await goalClear(threadId);
-                threadStore.setState((prev) => ({
-                  goalState: { ...prev.goalState, [threadId]: null },
-                }));
-              } finally {
-                setLoading(false);
-              }
-            }}
-            title={t("goal.action.clear")}
-          >
-            ✕
-          </button>
-        )}
-      </span>
+        {/* Progress */}
+        <span className="shrink-0 whitespace-nowrap tabular-nums text-muted-foreground">
+          {displayTurnCount}/{goal.maxTurns} max turns
+        </span>
+
+        {/* Action buttons */}
+        <span className="flex shrink-0 gap-1">
+          {goal.status === "active" && (
+            <button
+              className="px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+              disabled={loading}
+              onClick={async () => {
+                setLoading(true);
+                try {
+                  await goalPause(threadId);
+                  await refresh();
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              title={t("goal.action.pause")}
+            >
+              ⏸
+            </button>
+          )}
+          {goal.status === "paused" && (
+            <button
+              className="px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+              disabled={loading}
+              onClick={async () => {
+                setLoading(true);
+                try {
+                  await goalResume(threadId);
+                  await refresh();
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              title={t("goal.action.resume")}
+            >
+              ▶
+            </button>
+          )}
+          {(goal.status === "active" || goal.status === "paused") && (
+            <button
+              className="px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
+              disabled={loading}
+              onClick={async () => {
+                setLoading(true);
+                try {
+                  await goalClear(threadId);
+                  threadStore.setState((prev) => ({
+                    goalState: { ...prev.goalState, [threadId]: null },
+                  }));
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              title={t("goal.action.clear")}
+            >
+              ✕
+            </button>
+          )}
+        </span>
+      </div>
     </div>
   );
 }

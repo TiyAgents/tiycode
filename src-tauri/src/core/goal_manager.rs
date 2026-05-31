@@ -602,9 +602,15 @@ impl GoalManager {
                 .await
                 .unwrap_or(None)
         {
-            if run_seconds > 0 {
-                self.account_usage(&current.id, 0, run_seconds).await.ok();
+            let paused_seconds = self.lock_runtime().take_run_paused_seconds(run_id).max(0);
+            let billable_seconds = (run_seconds - paused_seconds).max(0);
+            if billable_seconds > 0 {
+                self.account_usage(&current.id, 0, billable_seconds)
+                    .await
+                    .ok();
             }
+        } else {
+            self.lock_runtime().take_run_paused_seconds(run_id);
         }
 
         let updated = self.get_active().await?;

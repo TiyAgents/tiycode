@@ -1733,13 +1733,23 @@ impl AgentSession {
                             .ok();
                             return agent_error_result(err_msg);
                         }
+                        let paused_seconds = {
+                            let mut guard = self.goal_runtime.lock().unwrap_or_else(|poisoned| {
+                                tracing::warn!(
+                                    "goal_scored: goal_runtime mutex poisoned, recovering"
+                                );
+                                poisoned.into_inner()
+                            });
+                            guard.take_run_paused_seconds(&self.spec.run_id).max(0)
+                        };
                         let active_run_seconds =
                             crate::persistence::repo::run_repo::get_active_run_elapsed_seconds(
                                 &self.pool,
                                 &self.spec.thread_id,
                             )
                             .await
-                            .unwrap_or(None);
+                            .unwrap_or(None)
+                            .map(|seconds| (seconds - paused_seconds).max(0));
 
                         match mgr.mark_complete(&goal.id, evidence).await {
                             Ok(()) => {
