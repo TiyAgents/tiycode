@@ -260,6 +260,8 @@ impl GoalManager {
         if !updated {
             return Err(AppError::not_found(ErrorSource::Settings, "goal"));
         }
+        // Reset idle counters so resumed goals don't immediately re-pause.
+        self.reset_idle_counters();
         Ok(())
     }
 
@@ -410,6 +412,11 @@ impl GoalManager {
                         detail: Some("agent published a plan, awaiting approval".into()),
                     });
                 }
+                // goal_scored is handled by the tool execution pipeline
+                // (agent_session_execution) which validates pledge/evidence
+                // and marks the goal complete.  Evaluation should not
+                // interfere — let it pass through to idle reset and budget
+                // checks.
                 _ => {}
             }
         }

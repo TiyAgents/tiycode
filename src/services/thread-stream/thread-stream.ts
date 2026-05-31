@@ -492,11 +492,15 @@ export class ThreadStream {
     this.onReasoning = null;
     this.onQueue = null;
     this.onUserMessage = null;
+    this.onTaskBoard = null;
     this.onHelperEvent = null;
     this.onThreadTitle = null;
     this.onUsage = null;
     this.onError = null;
     this.onRawEvent = null;
+    this.onGoalStateUpdated = null;
+    this.onGoalCompleted = null;
+    this.onGoalPaused = null;
   }
 
   // -----------------------------------------------------------------------
