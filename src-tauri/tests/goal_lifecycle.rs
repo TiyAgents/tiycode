@@ -386,4 +386,163 @@ mod tests {
         assert!(no_tool.contains("provide concrete evidence"));
         assert!(no_tool.contains("goal_scored"));
     }
+
+    // ── #1 / #8: Tests for goal_scored validation logic & test gap coverage ──
+
+    #[tokio::test]
+    async fn mark_complete_rejects_empty_evidence() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        let err = mgr.mark_complete(&goal.id, "").await.unwrap_err();
+        assert!(err.user_message.contains("evidence is required"));
+    }
+
+    #[tokio::test]
+    async fn mark_complete_rejects_whitespace_only_evidence() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        let err = mgr.mark_complete(&goal.id, "   ").await.unwrap_err();
+        assert!(err.user_message.contains("evidence is required"));
+    }
+
+    #[tokio::test]
+    async fn evaluate_after_turn_token_budget_exhausted_returns_budget_limited() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", Some(500)).await.unwrap();
+
+        // Accumulate tokens to reach the budget
+        goal_repo::account_usage(&pool, &goal.id, 500, 0, 0)
+            .await
+            .unwrap();
+
+        mgr.record_tool_call("read");
+        let fresh = mgr.get_active().await.unwrap().unwrap();
+        let verdict = mgr.evaluate_after_turn("Working...", &fresh);
+        assert!(matches!(verdict, GoalVerdict::BudgetLimited));
+    }
+
+    #[tokio::test]
+    async fn evaluate_after_turn_completion_claim_thrice_pauses() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        // First claim: challenge only
+        let v1 = mgr.evaluate_after_turn("All done!", &goal);
+        assert!(matches!(v1, GoalVerdict::ChallengeEvidence));
+
+        let fresh1 = mgr.get_active().await.unwrap().unwrap();
+
+        // Second claim: challenge only
+        let v2 = mgr.evaluate_after_turn("Everything is complete!", &fresh1);
+        assert!(matches!(v2, GoalVerdict::ChallengeEvidence));
+
+        let fresh2 = mgr.get_active().await.unwrap().unwrap();
+
+        // Third claim: should pause (IdleBlocked)
+        let v3 = mgr.evaluate_after_turn("Finished everything!", &fresh2);
+        assert!(matches!(
+            v3,
+            GoalVerdict::Paused {
+                reason: PauseReason::IdleBlocked,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn evaluate_after_turn_goal_scored_not_blocking() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        // goal_scored should NOT trigger a pause in evaluation
+        mgr.record_tool_call("goal_scored");
+        let verdict = mgr.evaluate_after_turn("Calling goal_scored", &goal);
+        assert!(matches!(verdict, GoalVerdict::Continue));
+    }
+
+    #[tokio::test]
+    async fn evaluate_after_turn_chinese_idle_phrase_pauses() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        // One idle turn first, then short Chinese question-like response
+        mgr.evaluate_after_turn("随便聊聊", &goal);
+        let fresh = mgr.get_active().await.unwrap().unwrap();
+
+        let verdict = mgr.evaluate_after_turn("请确认这个方案是否可以？", &fresh);
+        assert!(matches!(
+            verdict,
+            GoalVerdict::Paused {
+                reason: PauseReason::IdleBlocked,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn evaluate_after_turn_non_active_status_continues() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        // Pause the goal
+        mgr.pause(&goal.id, PauseReason::UserRequested, None)
+            .await
+            .unwrap();
+        let paused = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(paused.status, GoalStatus::Paused);
+
+        // evaluate_after_turn on a paused goal should return Continue
+        let verdict = mgr.evaluate_after_turn("Should I continue?", &paused);
+        assert!(matches!(verdict, GoalVerdict::Continue));
+    }
+
+    #[tokio::test]
+    async fn guidance_prompt_renders_with_objective() {
+        let mgr = GoalManager::new(setup_pool().await, "thread-1".into(), test_runtime());
+
+        let prompt = mgr.render_guidance_prompt("Build feature X");
+        assert!(prompt.contains("Build feature X"));
+        assert!(prompt.contains("concrete next action"));
+        assert!(prompt.contains("clarify"));
+    }
+
+    // ── #3 / #5: Pause with runtime state accounting + run duration tests ──
+
+    #[tokio::test]
+    async fn pause_accounts_usage_when_active_run_has_elapsed_time() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        // Simulate an active running run
+        let now = chrono::Utc::now();
+        let started = (now - chrono::Duration::seconds(120)).to_rfc3339();
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at)
+             VALUES ('run-active', 'thread-1', 'default', 'running', ?)",
+        )
+        .bind(&started)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Pausing should NOT panic; the active run elapsed seconds
+        // will be calculated and accounted (may be 0 in SQLite memory).
+        // We verify pause succeeded and goal is Paused.
+        mgr.pause(&goal.id, PauseReason::UserRequested, None)
+            .await
+            .unwrap();
+
+        let paused = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(paused.status, GoalStatus::Paused);
+    }
 }

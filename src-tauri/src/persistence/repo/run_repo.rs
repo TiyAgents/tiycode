@@ -855,6 +855,98 @@ mod tests {
             .expect("should exist");
         assert_eq!(found.status, "running");
     }
+
+    // ── #5 / #11: Duration query tests ──
+
+    #[tokio::test]
+    async fn get_run_duration_returns_seconds() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_finished_at(&pool, "run-1", "2026-04-22T09:00:42Z").await;
+
+        let duration = super::get_run_duration(&pool, "run-1")
+            .await
+            .unwrap()
+            .expect("should return duration");
+        assert_eq!(duration, 42);
+    }
+
+    #[tokio::test]
+    async fn get_last_completed_run_duration_returns_most_recent() {
+        let pool = setup_test_pool().await;
+
+        // Insert two completed runs for same thread.
+        // IMPORTANT: set_run_finished_at must be called AFTER update_status(Completed)
+        // because update_status for terminal statuses overwrites finished_at to now().
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        super::update_status(&pool, "run-1", RunStatus::Completed)
+            .await
+            .unwrap();
+        set_run_finished_at(&pool, "run-1", "2026-04-22T09:00:42Z").await;
+
+        insert_run_with_started_at(&pool, "run-2", "t1", "2026-04-22T10:00:00Z", 0).await;
+        super::update_status(&pool, "run-2", RunStatus::Completed)
+            .await
+            .unwrap();
+        set_run_finished_at(&pool, "run-2", "2026-04-22T10:00:30Z").await;
+
+        // Should return the most recent completed run's duration (run-2 = 30s)
+        let duration = super::get_last_completed_run_duration(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should return duration");
+        assert_eq!(duration, 30);
+    }
+
+    #[tokio::test]
+    async fn get_last_completed_run_duration_returns_none_when_no_completed() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        // Run is still in default status (not completed)
+
+        let duration = super::get_last_completed_run_duration(&pool, "t1")
+            .await
+            .unwrap();
+        assert!(duration.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_active_run_elapsed_seconds_returns_positive_for_running() {
+        let pool = setup_test_pool().await;
+        // Insert a running run with a past started_at so elapsed > 0
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at, input_tokens, output_tokens, total_tokens)
+             VALUES ('run-active', 't1', 'default', 'running', '2026-04-22T09:00:00Z', 0, 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed run");
+
+        let duration = super::get_active_run_elapsed_seconds(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should return elapsed seconds for running run");
+        // With started_at in the past, elapsed should be > 0
+        assert!(duration > 0, "expected positive elapsed, got {duration}");
+    }
+
+    #[tokio::test]
+    async fn get_active_run_elapsed_seconds_skips_terminal_runs() {
+        let pool = setup_test_pool().await;
+        // Insert a completed run (should be skipped)
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at, input_tokens, output_tokens, total_tokens)
+             VALUES ('run-done', 't1', 'default', 'completed', '2026-04-22T09:00:00Z', 0, 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed run");
+
+        let duration = super::get_active_run_elapsed_seconds(&pool, "t1")
+            .await
+            .unwrap();
+        assert!(duration.is_none(), "should skip completed runs");
+    }
 }
 
 /// Get the duration in seconds of the last completed run for a thread.
