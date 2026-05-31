@@ -75,6 +75,27 @@ function formatDuration(t: ReturnType<typeof useT>, totalSeconds: number): strin
   }
 }
 
+/** Per-thread timer slot so elapsed is preserved across thread switches. */
+type TimerSlot = {
+  elapsed: number;
+  baseElapsed: number;
+  startedAt: number | null;
+  goalId: string | null;
+  accountedSeconds: number;
+  runId: string | null;
+};
+
+function createTimerSlot(): TimerSlot {
+  return {
+    elapsed: 0,
+    baseElapsed: 0,
+    startedAt: null,
+    goalId: null,
+    accountedSeconds: 0,
+    runId: null,
+  };
+}
+
 export function GoalStatusBar({ threadId }: Props) {
   const t = useT();
   const goal = useStore(threadStore, (s) => s.goalState[threadId] ?? null, shallowEqual);
@@ -84,16 +105,27 @@ export function GoalStatusBar({ threadId }: Props) {
     shallowEqual,
   );
   const [loading, setLoading] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const elapsedRef = useRef(0);
-  const timerBaseElapsedRef = useRef(0);
-  const timerStartedAtRef = useRef<number | null>(null);
-  const goalIdentityRef = useRef<string | null>(null);
-  const accountedSecondsRef = useRef<number | null>(null);
-  const timerRunIdRef = useRef<string | null>(null);
+  const [, setTick] = useState(0);
+
+  const slotsRef = useRef<Map<string, TimerSlot>>(new Map());
+
+  const getSlot = useCallback(
+    (tid: string): TimerSlot => {
+      let slot = slotsRef.current.get(tid);
+      if (!slot) {
+        slot = createTimerSlot();
+        slotsRef.current.set(tid, slot);
+      }
+      return slot;
+    },
+    [],
+  );
+
+  const slot = getSlot(threadId);
 
   const isTimerRunning = isGoalTimerRunning(threadStatus?.status, goal?.status);
 
+  // Reset effect: detect goal / run identity changes and reset the *current* slot.
   useEffect(() => {
     const accountedSeconds = goal?.timeUsedSeconds ?? 0;
     const runId = threadStatus?.runId ?? null;
@@ -101,20 +133,20 @@ export function GoalStatusBar({ threadId }: Props) {
       || threadStatus?.status === "waiting_approval"
       || threadStatus?.status === "needs_reply";
     const shouldReset = goal?.status !== "active"
-      || goalIdentityRef.current !== (goal?.id ?? null)
-      || accountedSecondsRef.current !== accountedSeconds
-      || (isProgressingThreadStatus && runId !== null && timerRunIdRef.current !== runId);
+      || slot.goalId !== (goal?.id ?? null)
+      || slot.accountedSeconds !== accountedSeconds
+      || (isProgressingThreadStatus && runId !== null && slot.runId !== runId);
 
     if (!shouldReset) return;
 
-    goalIdentityRef.current = goal?.status === "active" ? goal.id : null;
-    accountedSecondsRef.current = accountedSeconds;
-    timerRunIdRef.current = isProgressingThreadStatus ? runId : null;
-    elapsedRef.current = 0;
-    timerBaseElapsedRef.current = 0;
-    timerStartedAtRef.current = null;
-    setElapsed(0);
-  }, [goal?.id, goal?.status, goal?.timeUsedSeconds, threadStatus?.runId, threadStatus?.status]);
+    slot.goalId = goal?.status === "active" ? goal.id : null;
+    slot.accountedSeconds = accountedSeconds;
+    slot.runId = isProgressingThreadStatus ? runId : null;
+    slot.elapsed = 0;
+    slot.baseElapsed = 0;
+    slot.startedAt = null;
+    setTick((t) => t + 1);
+  }, [goal?.id, goal?.status, goal?.timeUsedSeconds, threadStatus?.runId, threadStatus?.status, slot]);
 
   // Real-time timer: tick only while the run is actively progressing.
   // User-action states such as waiting_approval / needs_reply freeze elapsed
@@ -123,15 +155,15 @@ export function GoalStatusBar({ threadId }: Props) {
     const syncElapsed = (nowMs: number) => {
       const next = computeGoalTimerTransition({
         isTimerRunning,
-        previousElapsedSeconds: elapsedRef.current,
-        previousBaseElapsedSeconds: timerBaseElapsedRef.current,
-        previousStartedAtMs: timerStartedAtRef.current,
+        previousElapsedSeconds: slot.elapsed,
+        previousBaseElapsedSeconds: slot.baseElapsed,
+        previousStartedAtMs: slot.startedAt,
         nowMs,
       });
-      elapsedRef.current = next.elapsedSeconds;
-      timerBaseElapsedRef.current = next.baseElapsedSeconds;
-      timerStartedAtRef.current = next.startedAtMs;
-      setElapsed(next.elapsedSeconds);
+      slot.elapsed = next.elapsedSeconds;
+      slot.baseElapsed = next.baseElapsedSeconds;
+      slot.startedAt = next.startedAtMs;
+      setTick((t) => t + 1);
     };
 
     syncElapsed(Date.now());
@@ -144,7 +176,7 @@ export function GoalStatusBar({ threadId }: Props) {
       syncElapsed(Date.now());
     }, 1000);
     return () => clearInterval(interval);
-  }, [isTimerRunning]);
+  }, [isTimerRunning, slot]);
 
   const refresh = useCallback(async () => {
     // Re-fetch goal state from backend and sync to threadStore.
@@ -162,7 +194,8 @@ export function GoalStatusBar({ threadId }: Props) {
 
   if (!goal) return null;
 
-  const totalSeconds = (goal.timeUsedSeconds ?? 0) + elapsed;
+  const displayElapsed = slot.elapsed;
+  const totalSeconds = (goal.timeUsedSeconds ?? 0) + displayElapsed;
   const timeDisplay = formatDuration(t, totalSeconds);
 
   const statusKey = (() => {
