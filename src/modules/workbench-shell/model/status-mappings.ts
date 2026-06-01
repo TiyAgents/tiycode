@@ -183,8 +183,10 @@ export function backendToThreadRunStatus(
       return "cancelled";
     case "limit_reached":
       return "limit_reached";
+    case "idle":
+      return "idle";
     default:
-      return "completed";
+      return "idle";
   }
 }
 

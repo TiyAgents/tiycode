@@ -988,6 +988,25 @@ pub async fn get_run_duration(pool: &SqlitePool, run_id: &str) -> Result<Option<
     Ok(duration)
 }
 
+/// Get the wall-clock elapsed seconds since a specific run started.
+/// Useful for billing a still-active run before it is terminated.
+pub async fn get_run_elapsed_seconds(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Option<i64>, AppError> {
+    let duration = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT CAST(strftime('%s', 'now') - strftime('%s', started_at) AS INTEGER)
+         FROM thread_runs
+         WHERE id = ?
+         LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(duration)
+}
+
 /// Get the elapsed seconds of any currently active (non-terminal) run for a thread.
 /// Returns None if no active run exists.
 pub async fn get_active_run_elapsed_seconds(

@@ -12,7 +12,7 @@ pub mod platforms;
 pub mod traits;
 pub mod user_session;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use sqlx::SqlitePool;
 
@@ -45,6 +45,8 @@ pub struct GatewayState {
     pub terminal_manager: Arc<TerminalManager>,
     pub extensions_manager: Arc<ExtensionsManager>,
     pub app_events: AppEventEmitterRef,
+    /// Shared goal runtime state for tool call tracking and idle/completion counters.
+    pub goal_runtime_state: Arc<Mutex<GoalRuntimeState>>,
 }
 
 impl GatewayState {
@@ -66,11 +68,9 @@ impl GatewayState {
             Arc::clone(&terminal_manager),
         ));
         let extensions_manager = Arc::new(ExtensionsManager::new(pool.clone()));
-        // Each headless server path creates an isolated GoalRuntimeState.
-        // This is intentional — goal features are only supported through
-        // the Tauri command path (AppState). Gateway paths operate
-        // independently.
-        let goal_runtime_state = Arc::new(std::sync::Mutex::new(GoalRuntimeState::default()));
+        // Gateway paths share their own isolated GoalRuntimeState for goal
+        // lifecycle operations (set, status, cancel) initiated through IM commands.
+        let goal_runtime_state = Arc::new(Mutex::new(GoalRuntimeState::default()));
         let built_in_agent_runtime = Arc::new(BuiltInAgentRuntime::new(
             pool.clone(),
             Arc::clone(&tool_gateway),
@@ -96,6 +96,7 @@ impl GatewayState {
             terminal_manager,
             extensions_manager,
             app_events,
+            goal_runtime_state,
         }
     }
 }

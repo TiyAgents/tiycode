@@ -26,9 +26,6 @@ import { threadClearContext, threadLoad } from "@/services/bridge";
 import {
   goalSet,
   goalGetState,
-  goalPause,
-  goalResume,
-  goalClear,
   type GoalPayload,
 } from "@/services/bridge/agent-commands";
 import {
@@ -1580,39 +1577,25 @@ export function RuntimeThreadSurface({
 
     if (submission.kind === "command" && submission.command?.behavior === "goal") {
       const argText = (submission.command.argumentsText ?? "").trim();
-      const subCommand = argText.split(/\s+/)[0]?.toLowerCase();
 
       try {
-        if (subCommand === "pause") {
-          setThreadGoalState(threadId, await goalPause(threadId));
-          submittingRef.current = false;
-          return true;
-        }
-        if (subCommand === "resume") {
-          setThreadGoalState(threadId, await goalResume(threadId));
-          submittingRef.current = false;
-          return true;
-        }
-        if (subCommand === "clear") {
-          await goalClear(threadId);
-          setThreadGoalState(threadId, null);
-          submittingRef.current = false;
-          return true;
-        }
-        if (subCommand === "status") {
-          const goal = await goalGetState(threadId);
-          if (goal) {
-            setComposerError(`Goal: ${goal.objective} (${goal.status}, ${goal.turnsUsed}/${goal.maxTurns} turns)`);
-          } else {
-            setComposerError("No goal is currently set for this thread.");
-          }
-          submittingRef.current = false;
-          return true;
-        }
-
         // /goal <objective> — persist the goal, then start a run
         if (!argText) {
           setComposerError("Provide a goal objective, e.g. /goal fix the auth bugs");
+          submittingRef.current = false;
+          return true;
+        }
+        // Reject old sub-commands that are now handled by GoalStatusBar buttons
+        const OBSOLETE_SUBCOMMANDS = new Set([
+          "pause", "resume", "clear", "status",
+          "取消", "查看状态",
+        ]);
+        const firstWord = argText.split(/\s+/)[0] ?? "";
+        const firstWordLower = firstWord.toLowerCase();
+        if (OBSOLETE_SUBCOMMANDS.has(firstWordLower)) {
+          setComposerError(
+            `"${firstWord}" is now available via the goal status bar — use the ⏸ / ▶ / ✕ buttons instead.`,
+          );
           submittingRef.current = false;
           return true;
         }

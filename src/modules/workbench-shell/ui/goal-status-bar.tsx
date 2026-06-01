@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { goalGetState, goalPause, goalResume, goalClear } from "@/services/bridge/agent-commands";
 import { threadStore, useStore, shallowEqual } from "@/modules/workbench-shell/model/thread-store";
 import type { ThreadRunStatus } from "@/modules/workbench-shell/model/types";
@@ -96,6 +96,19 @@ function createTimerSlot(): TimerSlot {
   };
 }
 
+/** Module-level timer slots so per-thread elapsed time survives
+ *  component mount/unmount cycles (e.g. when entering new-thread mode). */
+const timerSlots = new Map<string, TimerSlot>();
+
+function getSlot(tid: string): TimerSlot {
+  let slot = timerSlots.get(tid);
+  if (!slot) {
+    slot = createTimerSlot();
+    timerSlots.set(tid, slot);
+  }
+  return slot;
+}
+
 export function GoalStatusBar({ threadId }: Props) {
   const t = useT();
   const goal = useStore(threadStore, (s) => s.goalState[threadId] ?? null, shallowEqual);
@@ -106,20 +119,6 @@ export function GoalStatusBar({ threadId }: Props) {
   );
   const [loading, setLoading] = useState(false);
   const [, setTick] = useState(0);
-
-  const slotsRef = useRef<Map<string, TimerSlot>>(new Map());
-
-  const getSlot = useCallback(
-    (tid: string): TimerSlot => {
-      let slot = slotsRef.current.get(tid);
-      if (!slot) {
-        slot = createTimerSlot();
-        slotsRef.current.set(tid, slot);
-      }
-      return slot;
-    },
-    [],
-  );
 
   const slot = getSlot(threadId);
 

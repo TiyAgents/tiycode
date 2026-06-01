@@ -165,6 +165,22 @@ export function setThreadStatus(
       return {}; // reject — don't downgrade active state with a null-runId idle write
     }
 
+    // Guard C: reject snapshot downgrades of stream-sourced active states
+    // to terminal or idle. Snapshots are point-in-time DB reads and always
+    // lag behind the real-time stream for active runs. Within active states
+    // (running, waiting_approval, needs_reply) the snapshot can still provide
+    // useful transitions (e.g., running → waiting_approval from old snapshot).
+    if (
+      existing &&
+      existing.source === "stream" &&
+      isActiveOrPendingStatus(existing.status) &&
+      meta.source === "snapshot" &&
+      !isActiveOrPendingStatus(status) &&
+      status !== existing.status
+    ) {
+      return {};
+    }
+
     return {
       threadStatuses: {
         ...prev.threadStatuses,
@@ -211,6 +227,23 @@ export function batchSetThreadStatuses(
       ) {
         continue;
       }
+
+      // Guard C: reject snapshot downgrades of stream-sourced active states
+      // to terminal or idle. Snapshots are point-in-time DB reads and always
+      // lag behind the real-time stream for active runs. Within active states
+      // (running, waiting_approval, needs_reply) the snapshot can still provide
+      // useful transitions (e.g., running → waiting_approval from old snapshot).
+      if (
+        existing &&
+        existing.source === "stream" &&
+        isActiveOrPendingStatus(existing.status) &&
+        upd.source === "snapshot" &&
+        !isActiveOrPendingStatus(upd.status) &&
+        upd.status !== existing.status
+      ) {
+        continue;
+      }
+
       next[threadId] = {
         status: upd.status,
         runId: isTerminalStatus(upd.status) ? null : (incomingRunId ?? existing?.runId ?? null),
