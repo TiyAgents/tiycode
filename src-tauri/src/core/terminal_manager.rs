@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+#[cfg(not(target_os = "windows"))]
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::PathBuf;
