@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.18] - 2026-06-01
+### :sparkles: New Features
+- [`84bbd83`](https://github.com/tiylabs/tiycode/commit/84bbd83f66008f6f7dbaf8ab62ed5bf1635d75b2) - **workbench-shell**: ✨ add context window exceeded indicator and fallback window priority *(PR [#212](https://github.com/tiylabs/tiycode/pull/212) by [@HayWolf](https://github.com/HayWolf))*
+- [`ae25365`](https://github.com/tiylabs/tiycode/commit/ae253651ca4ee953ca3b4206e7d94305698300e0) - **agent-session**: ✨ Add queue promote and edit actions *(PR [#213](https://github.com/tiylabs/tiycode/pull/213) by [@HayWolf](https://github.com/HayWolf))*
+- [`2666174`](https://github.com/tiylabs/tiycode/commit/2666174870fd1efd89242d501167a3abdc59877c) - **acp**: ✨ Add ACP server support *(PR [#214](https://github.com/tiylabs/tiycode/pull/214) by [@HayWolf](https://github.com/HayWolf))*
+- [`861df52`](https://github.com/tiylabs/tiycode/commit/861df5244829d03dd84beb1aef5b99dc95b5227a) - **catalog**: ✨ improve model synchronization by normalizing model IDs for matching *(PR [#216](https://github.com/tiylabs/tiycode/pull/216) by [@HayWolf](https://github.com/HayWolf))*
+- [`24a08de`](https://github.com/tiylabs/tiycode/commit/24a08de6a4b323443cd623e3a90f4218b95386ab) - **gateway**: ✨ Add IM channel gateway for WeChat and WeCom *(PR [#215](https://github.com/tiylabs/tiycode/pull/215) by [@jorben](https://github.com/jorben))*
+- [`f293280`](https://github.com/tiylabs/tiycode/commit/f2932803f15bf93f16cbd3817a2057f911953a8b) - **goal**: ✨ Add persistent goal management for cross-turn autonomous task execution *(PR [#217](https://github.com/tiylabs/tiycode/pull/217) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.3.17] - 2026-05-27
 ### :sparkles: New Features
 - [`85398d2`](https://github.com/tiylabs/tiycode/commit/85398d2b8410afa76e0398e48656bda6bb9a259e) - **ui**: ✨ show model and thinking level in profile identity display *(PR [#201](https://github.com/tiylabs/tiycode/pull/201) by [@HayWolf](https://github.com/HayWolf))*
@@ -803,3 +813,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.15]: https://github.com/tiylabs/tiycode/compare/0.3.14...0.3.15
 [0.3.16]: https://github.com/tiylabs/tiycode/compare/0.3.15...0.3.16
 [0.3.17]: https://github.com/tiylabs/tiycode/compare/0.3.16...0.3.17
+[0.3.18]: https://github.com/tiylabs/tiycode/compare/0.3.17...0.3.18
