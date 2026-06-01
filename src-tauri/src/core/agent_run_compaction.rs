@@ -84,7 +84,7 @@ pub(crate) async fn persist_clear_context_reset_to_pool(
 }
 
 impl AgentRunManager {
-    pub async fn clear_thread_context(&self, thread_id: &str) -> Result<(), AppError> {
+    pub async fn clear_thread_context(self: &Arc<Self>, thread_id: &str) -> Result<(), AppError> {
         if self.cancel_run_if_active(thread_id).await? {
             tracing::info!(thread_id = %thread_id, "Cancelled active run before clearing context");
         }

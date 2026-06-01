@@ -1,12 +1,13 @@
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use sqlx::SqlitePool;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::core::agent_session::{AgentSession, AgentSessionSpec};
 use crate::core::agent_session_types::{AgentQueueMessageKind, RuntimeQueueSnapshotDto};
+use crate::core::app_state::GoalRuntimeState;
 use crate::core::subagent::HelperAgentOrchestrator;
 use crate::core::tool_gateway::ToolGateway;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
@@ -37,10 +38,15 @@ pub struct BuiltInAgentRuntime {
     tool_gateway: Arc<ToolGateway>,
     helper_orchestrator: Arc<HelperAgentOrchestrator>,
     sessions: Arc<Mutex<HashMap<String, RuntimeSessionEntry>>>,
+    goal_runtime: Arc<StdMutex<GoalRuntimeState>>,
 }
 
 impl BuiltInAgentRuntime {
-    pub fn new(pool: SqlitePool, tool_gateway: Arc<ToolGateway>) -> Self {
+    pub fn new(
+        pool: SqlitePool,
+        tool_gateway: Arc<ToolGateway>,
+        goal_runtime: Arc<StdMutex<GoalRuntimeState>>,
+    ) -> Self {
         Self {
             helper_orchestrator: Arc::new(HelperAgentOrchestrator::new(
                 pool.clone(),
@@ -49,6 +55,7 @@ impl BuiltInAgentRuntime {
             pool,
             tool_gateway,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            goal_runtime,
         }
     }
 
@@ -66,6 +73,7 @@ impl BuiltInAgentRuntime {
             event_tx,
             spec.clone(),
             max_turns,
+            Arc::clone(&self.goal_runtime),
         );
         let run_task = Arc::clone(&session).start();
         let (finish_state_tx, finish_state_rx) = watch::channel(RuntimeSessionFinishState::Running);

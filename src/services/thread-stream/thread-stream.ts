@@ -199,6 +199,13 @@ export class ThreadStream {
   onUsage: ((event: UsageEvent) => void) | null = null;
   onError: ((error: string, runId: string) => void) | null = null;
   onRawEvent: ((event: ThreadStreamEvent) => void) | null = null;
+  // Goal event callbacks — dispatched when stream events arrive, but current
+  // consumers (runtime-thread-surface) use the goal_evaluate/goalGetState
+  // command API for state management. These callbacks are available for
+  // future streaming-based consumers (e.g. goal-status-bar real-time updates).
+  onGoalStateUpdated: ((threadId: string, goal: unknown) => void) | null = null;
+  onGoalCompleted: ((threadId: string, evidence: string) => void) | null = null;
+  onGoalPaused: ((threadId: string, reason: string, detail?: string | null) => void) | null = null;
 
   private currentRunId: string | null = null;
   private hiddenToolCallIds = new Set<string>();
@@ -485,11 +492,15 @@ export class ThreadStream {
     this.onReasoning = null;
     this.onQueue = null;
     this.onUserMessage = null;
+    this.onTaskBoard = null;
     this.onHelperEvent = null;
     this.onThreadTitle = null;
     this.onUsage = null;
     this.onError = null;
     this.onRawEvent = null;
+    this.onGoalStateUpdated = null;
+    this.onGoalCompleted = null;
+    this.onGoalPaused = null;
   }
 
   // -----------------------------------------------------------------------
@@ -590,6 +601,23 @@ export class ThreadStream {
           taskBoard: event.taskBoard,
         });
         break;
+
+      case "goal_state_updated":
+        this.onGoalStateUpdated?.(event.threadId, event.goal);
+        break;
+
+      case "goal_continuation":      
+        // Emitted for future consumers.
+        break;
+
+      case "goal_paused":            
+        this.onGoalPaused?.(event.threadId, event.reason, event.detail);
+        break;
+
+      case "goal_completed":         
+        this.onGoalCompleted?.(event.threadId, event.evidence);
+        break;
+
 
       case "subagent_started":
         this.onHelperEvent?.({

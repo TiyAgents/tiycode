@@ -1119,6 +1119,19 @@ const zhCN = {
   // ── Dashboard (extended) ─────────────────────────────────
   "dashboard.preparingTerminal": "正在准备终端…",
   "dashboard.filePreviewEditor": "文件预览 / 编辑器",
+
+  // ── Goal ──────────────────────────────────────────────────
+  "goal.status.active": "活跃",
+  "goal.status.paused": "已暂停",
+  "goal.status.budgetLimited": "预算耗尽",
+  "goal.status.complete": "已完成",
+  "goal.time.elapsed": "已持续运行{{time}}",
+  "goal.time.hoursMinutes": "{{hours}}小时{{minutes}}分",
+  "goal.time.minutesSeconds": "{{minutes}}分{{seconds}}秒",
+  "goal.time.seconds": "{{seconds}}秒",
+  "goal.action.pause": "暂停目标",
+  "goal.action.resume": "恢复目标",
+  "goal.action.clear": "清除目标",
 } as const;
 
 export type TranslationKey = keyof typeof zhCN;

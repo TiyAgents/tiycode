@@ -218,6 +218,34 @@ pub enum ThreadStreamEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    // ── Goal events ──
+    // GoalStateUpdated and GoalCompleted are emitted by execute_goal_tool
+    // (create_goal, goal_scored tools in AgentSession). GoalContinuation and
+    // GoalPaused are emitted by backend run-lifecycle goal orchestration after
+    // terminal runs are evaluated. The frontend also consumes goal state via
+    // goal_get_state / goal_evaluate command APIs.
+    GoalStateUpdated {
+        thread_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        goal: Option<crate::model::goal::GoalPayload>,
+    },
+    GoalContinuation {
+        thread_id: String,
+        run_id: String,
+        prompt: String,
+        turns_used: i64,
+        max_turns: i64,
+    },
+    GoalPaused {
+        thread_id: String,
+        reason: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    GoalCompleted {
+        thread_id: String,
+        evidence: String,
+    },
 }
 
 /// Events sent to the frontend terminal layer for a specific thread terminal.

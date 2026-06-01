@@ -264,7 +264,8 @@ function getCommandDisplayPath(command: ComposerCommandDescriptor) {
 }
 
 function getCommandCompletionValue(command: ComposerCommandDescriptor) {
-  return getCommandDisplayPath(command);
+  const path = getCommandDisplayPath(command);
+  return command.argumentHint ? `${path} ` : path;
 }
 
 function getDefaultSelectedCommand(
@@ -301,7 +302,7 @@ function findSelectedCommandIndex(
 }
 
 function buildCommandInputValue(command: ComposerCommandDescriptor) {
-  return getCommandDisplayPath(command);
+  return getCommandCompletionValue(command);
 }
 
 function shouldShowCommandPicker(value: string) {

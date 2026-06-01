@@ -407,7 +407,7 @@ This project is licensed under the Apache License 2.0. See `LICENSE` for details
 Join our WeChat group to connect with the author and other users!
 
 <div align="center">
-  <img width="320" alt="WeChat Group" src="https://github.com/user-attachments/assets/ca078477-8068-47f1-810c-20f8e03eec0d" />
+  <img width="320" alt="WeChat Group" src="https://github.com/user-attachments/assets/a83d539f-28cb-407a-a4df-c131a59b1826" />
 </div>
 
 ## Acknowledgements

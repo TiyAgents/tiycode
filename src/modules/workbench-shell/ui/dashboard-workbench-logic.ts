@@ -187,6 +187,7 @@ export type PendingThreadRun = {
   effectivePrompt: string;
   attachments: MessageAttachmentDto[];
   metadata: Record<string, unknown> | null;
+  command?: import("@/modules/workbench-shell/model/composer-commands").ComposerCommandInvocation;
   runMode: RunMode;
   threadId: string;
 };

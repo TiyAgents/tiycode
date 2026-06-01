@@ -9,6 +9,7 @@ tags:
   - self-reference
   - configuration
   - onboarding
+  - gateway
 triggers:
   - tiycode
   - settings
@@ -19,6 +20,10 @@ triggers:
   - command not found
   - introduce yourself
   - self-introduction
+  - gateway
+  - wechat
+  - wecom
+  - channels
 tools:
   - read
   - write
@@ -40,7 +45,7 @@ priority: high
 
 **TiyCode**（钛可） /taɪ koʊd/ is an AI-first desktop coding agent. Humans express goals, constraints, and feedback through conversation; the agent takes the lead in understanding context, using tools, and driving execution forward inside a real workspace.
 
-TiyCode is a native desktop application (macOS / Windows / Linux), not a browser extension or cloud service. All data stays local.
+TiyCode is a native desktop application (macOS / Windows / Linux), not a browser extension or cloud service. All data is stored locally — no cloud storage or account sync. LLM requests are sent to the providers you configure.
 
 ### Key Capabilities
 
@@ -48,7 +53,7 @@ TiyCode is a native desktop application (macOS / Windows / Linux), not a browser
 |-----------|-------------|
 | **Agent Profiles** | Mix models from different providers, tune response style, language, and custom instructions. Switch profiles for different kinds of work. |
 | **Three-tier model architecture** | Each profile has a Primary model (core reasoning), an Auxiliary model (helper tasks), and a Lightweight model (fast operations), with automatic fallback. |
-| **Multi-provider support** | 16+ LLM providers: OpenAI, Anthropic, Google, Ollama, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi, ZAI, Zenmux, OpenCode Go, Xiaomi MIMO, Synthetic, plus any OpenAI-compatible or Anthropic-compatible endpoint. |
+| **Multi-provider support** | 15 built-in LLM providers: OpenAI, Anthropic, Google, Ollama, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi, ZAI, Zenmux, OpenCode Go, Xiaomi MIMO, Synthetic, plus any OpenAI-compatible or Anthropic-compatible custom endpoint. |
 | **Workspace-centered** | Threads are grounded in a local workspace with code review, Git, repository inspection, and terminal access. |
 | **Extensions** | Plugins, MCP servers, and Skills — managed through the Extensions Center. |
 | **Bilingual** | Full English and Simplified Chinese interface, switchable anytime. |
@@ -57,6 +62,8 @@ TiyCode is a native desktop application (macOS / Windows / Linux), not a browser
 | **Custom Subagents** | User-defined subagents with custom system prompts, tool access, and model role selection. Registered as `agent_{slug}` tools. |
 | **Web Search** | Built-in web search with configurable engine (Tavily, Brave, Exa, Firecrawl). |
 | **Visual rendering** | Render Vega-Lite charts, HTML pages, and SVG graphics inline in conversation. |
+| **IM Channels (Gateway)** | Interact with TiyCode via WeChat or WeCom messaging. Supports QR login, message routing, tool approval bridging, and media handling. Runs as a headless background process. |
+| **Goal System** | Goal lifecycle management with `goal_scored` tool. Tracks objectives, validates completion evidence, generates continuation prompts, and auto-pauses idle goals. |
 
 ---
 
@@ -86,6 +93,7 @@ The agent runs inside the `BuiltInAgentRuntime`. It does **NOT** have direct acc
 | `create_task` | Create a task on the task board |
 | `update_task` | Update task progress |
 | `query_task` | Query task board state |
+| `goal_scored` | Mark a goal as fully achieved (requires status, evidence, and pledge parameters) |
 
 **Mutating tools (only in `default_full` mode, not available in plan mode):**
 
@@ -114,7 +122,7 @@ The agent can delegate subtasks to specialized helpers:
 | Helper | Tools available | Use case |
 |--------|----------------|----------|
 | `agent_explore` | `read`, `list`, `find`, `search` | Code exploration, cross-file analysis, fact-finding |
-| `agent_review` | `read`, `list`, `find`, `search`, `term_status`, `term_output`, `shell` (diagnostics only) | Code review, type-checking, test verification |
+| `agent_review` | `read`, `list`, `find`, `search`, `git_status`, `git_diff`, `git_log`, `term_status`, `term_output`, `shell`, conditionally `web_search` | Code review, type-checking, test verification |
 | `agent_parallel` | Delegates 1–5 independent subtasks to helpers | Parallel exploration or review work, bounded concurrency (default 3, max 5) |
 
 #### Custom Subagents
@@ -131,7 +139,7 @@ In addition to the built-in helpers, users can create **custom subagents** via *
 | **Model Role** | Which model from the active profile to use: `primary`, `auxiliary`, or `lightweight` |
 | **Enabled** | Whether the subagent is active |
 
-Custom subagents are registered as tools named `agent_{slug}` and appear alongside built-in tools. Profile-Agent Access controls which custom subagents are available per profile (configured in **Settings Center > Agent Profiles**).
+Custom subagents are registered as tools named `agent_{slug}` and appear alongside built-in tools. Profile-Agent Access controls which custom subagents are available per profile (configured in **Settings Center > Profiles**).
 
 ### 2.4 Policy & Approval
 
@@ -139,11 +147,11 @@ Every tool call goes through the PolicyEngine:
 
 | Policy | Behavior |
 |--------|----------|
-| `untrusted` | Agent must ask user approval for most tool operations |
-| `on-request` | Agent asks approval only for operations matching specific patterns |
-| `never` | Agent runs freely without approval prompts |
+| `auto` | Agent runs freely without approval prompts |
+| `require_for_mutations` | Agent asks approval only for mutating tool calls (default) |
+| `require_all` | Agent must ask user approval for most tool operations |
 
-**Allow / Deny lists:** Pattern-based rules determine which operations auto-approve or always block. Default denies: `shell:rm -rf /`, `shell:rm -rf \*`.
+**Allow / Deny lists:** Pattern-based rules determine which operations auto-approve or always block. The policy engine includes **17 built-in dangerous command patterns** such as `rm -rf /`, `rm -rf ~`, `sudo *`, `mkfs*`, `dd if=*`, `curl*|*sh`, `chmod 777 /`, and fork bombs.
 
 **Writable roots:** Directories the agent is allowed to write to. Operations outside these paths require approval.
 
@@ -159,7 +167,7 @@ The agent can write to these directories **without requiring user approval**:
 | `/tmp/` | Temporary files (Unix only) |
 | `$TMPDIR` | Temporary directory (if set) |
 
-> **`~/.tiy/` is a key self-operation path.** The agent can read and write config files here to manage MCP servers, skills, and marketplace sources — see Section 7 for details.
+> **`~/.tiy/` is a key self-operation path.** The agent can read and write config files here to manage MCP servers, skills, and marketplace sources — see Section 8 for details.
 
 ### 2.6 Extension Tools
 
@@ -232,16 +240,18 @@ TiyCode organizes settings into the following categories, all accessible from th
 
 | Tab | What it controls |
 |-----|-----------------|
-| **General** | Launch at login, prevent sleep while running, minimize to tray, Web Search configuration, ACP Server CLI install/uninstall, default append message kind (steer / follow-up) |
-| **Workspace** | Workspace list, default workspace, Git tracking, auto-worktree |
+| **General** | Theme (system/light/dark), language (English/简体中文), launch at login, prevent sleep while running, minimize to tray, Web Search configuration, ACP Server CLI install/uninstall, default append message kind (steer / follow_up) |
 | **Providers** | LLM provider connections (API keys, base URLs, models, capabilities) |
-| **Agent Profiles** | Active profile, model selection, response style, thinking level, custom instructions, language, subagent access per profile |
+| **Profiles** | Active profile, model selection, response style, thinking level, custom instructions, language, subagent access per profile |
+| **Channels** | IM messaging channels — connect WeChat or WeCom to interact with TiyCode via chat. QR login, platform selection, gateway status. |
 | **Agents** | Custom subagents — CRUD with name, slug, system prompt, invocation description, allowed tools, model role, enabled state |
-| **Account** | Session identity, plan comparison (Free / Lite / Pro / Max), billing history |
 | **Commands** | Built-in commands (`commit`, `create-pr`) and custom slash commands with structured argument support |
+| **Permissions** | Approval policy, allow/deny pattern lists, writable roots |
+| **Workspace** | Workspace list, default workspace, Git tracking |
 | **Terminal** | Shell path/args, font, cursor style, scrollback, environment |
-| **Policy** | Approval policy, allow/deny pattern lists, writable roots |
 | **About** | Version info, platform/architecture, check for updates, links (website, license, feedback, contact), terms of service, privacy policy |
+
+> **Note:** An **Account** tab (session identity, plan comparison, billing history) also exists in the code but is hidden from the visible sidebar in the current build.
 
 > The agent **cannot** directly modify these UI-based settings. The agent's role is to **guide users** on what to change and where to find it. However, some extension configs can be managed via config files — see Section 8.
 
@@ -273,7 +283,7 @@ Users can create multiple profiles and switch between them in the top bar. The *
 The agent **cannot** switch profiles or modify profile settings programmatically. Instead, the agent should:
 
 - **Explain** what profiles are and how to use them.
-- **Guide users** to the Settings Center > Agent Profiles tab.
+- **Guide users** to the Settings Center > Profiles tab.
 - **Recommend** appropriate settings (e.g. "For code review, try `concise` response style with `high` thinking level").
 - **Answer questions** like "What model am I using?" based on what the user tells it or what is visible in the current session context.
 
@@ -300,8 +310,11 @@ The agent **cannot** switch profiles or modify profile settings programmatically
 | OpenCode Go | builtin | OpenCode Go models (opencode.ai) |
 | Xiaomi MIMO | builtin | Xiaomi MIMO models |
 | Synthetic | builtin | Synthetic models (Anthropic-compatible) |
-| Custom | custom | Any OpenAI-compatible, Anthropic, Google, or Ollama endpoint |
+| Custom (OpenAI Compatible) | custom | Any OpenAI-compatible endpoint |
 | Custom (OpenAI Responses) | custom | OpenAI Responses API-compatible endpoint |
+| Custom (Anthropic) | custom | Anthropic-compatible endpoint |
+| Custom (Google) | custom | Google-compatible endpoint |
+| Custom (Ollama) | custom | Ollama-compatible endpoint |
 
 ### Model Capabilities
 
@@ -363,6 +376,57 @@ The agent **cannot** start/stop the ACP server or install/uninstall the CLI prog
 - **Explain** what ACP is and how to use it.
 - **Guide users** to Settings Center > General > ACP Server for CLI installation.
 - **Help troubleshoot** ACP connection issues by checking if the CLI is in PATH (`which tiycode`).
+
+---
+
+## 7B. IM Gateway (Messaging Channels)
+
+TiyCode includes a built-in **IM Gateway** that allows users to interact with the AI agent through WeChat or WeCom (WeChat Work) messaging — no GUI required. The gateway runs as a headless background process, directly driving the agent runtime.
+
+### Supported Platforms
+
+| Platform | Protocol | Connection | Notes |
+|----------|----------|------------|-------|
+| **WeChat** | iLink Bot HTTP API | HTTP long-polling | Requires QR code login via WeChat mobile app |
+| **WeCom** | AI Bot WebSocket | WebSocket persistent connection | Requires WeCom bot credentials |
+
+### Gateway Configuration
+
+**Config file:** `~/.tiy/gateway/config.toml`
+
+The gateway config is managed via TOML. The agent can read and write this file directly since `~/.tiy/` is within the builtin writable roots.
+
+### Key Capabilities
+
+| Feature | Description |
+|---------|-------------|
+| **Message routing** | Receive IM messages → route to Agent → send results back (text, images, voice, files) |
+| **IM command system** | `/ws`, `/threads`, `/new`, `/resume`, `/profile`, `/stop`, `/help` and more |
+| **Tool approval bridge** | When the agent needs approval for a tool call, the request is sent to the user via IM; the user replies Y/N directly in the chat |
+| **Plan approval** | Implementation plans can be approved/denied via IM Y/N responses |
+| **Clarify interaction** | When the agent needs clarification, it asks via IM; the user replies directly |
+| **Message chunking** | Auto-splits long messages to fit platform limits (WeChat ~2000 chars, WeCom ~4000 chars) with Markdown adaptation |
+| **Media handling** | CDN upload/download, AES decryption, voice-to-text transcription |
+| **WeChat QR login** | Full QR code authentication flow for WeChat |
+| **Session persistence** | Current workspace/thread bindings are persisted to SQLite |
+| **Hot reload** | Monitors `~/.tiy/gateway/config.toml` for changes and auto-reloads the adapter |
+| **Process management** | Runs via `GatewaySupervisor` as a child process; supports 7×24 operation and auto-restart on version upgrades |
+
+### Gateway Settings UI
+
+The **Settings Center > Channels** tab provides:
+- Platform selection (WeChat / WeCom)
+- Gateway status display
+- WeChat QR login (scan with WeChat mobile app)
+- Logout functionality
+
+### What the Agent Can Do
+
+The agent **cannot** start/stop the gateway or configure platform credentials programmatically. It should:
+- **Explain** what the IM Gateway is and how to use it.
+- **Guide users** to Settings Center > Channels for gateway setup.
+- **Read/write** `~/.tiy/gateway/config.toml` to help configure gateway settings.
+- **Help troubleshoot** connection issues by checking gateway config and log files.
 
 ---
 
@@ -707,6 +771,8 @@ When reviewing code, check for:
 | Skill files (workspace) | `<ws>/.tiy/skills/<name>/SKILL.md` | ✅ | Workspace-scoped custom skills |
 | Marketplace sources | `~/.tiy/marketplaces.json` | ✅ | Marketplace registry sources |
 | Plugin manifests | `~/.tiy/plugins/{id}/plugin.json` | ⚠️ Read only recommended | Plugin metadata (auto-managed, don't modify) |
+| Gateway config | `~/.tiy/gateway/config.toml` | ✅ | IM Gateway configuration (WeChat/WeCom platform settings) |
+| Plan checkpoints | `~/.tiy/plans/{thread_id}.md` | ✅ | Implementation plan files (auto-created by `update_plan` tool) |
 | Database | `~/.tiy/db/tiy-agent.db` | ❌ Do not modify | SQLite database (runtime state, threads, settings) |
 | Catalog cache | `~/.tiy/catalog/` | ❌ Do not modify | Auto-managed marketplace cache |
 
@@ -718,7 +784,7 @@ When reviewing code, check for:
 
 TiyCode's native backend logs are produced by the Rust/Tauri process through `tracing`. These file logs are **platform-native operational logs**, not files inside `~/.tiy/`.
 
-### 8.1 Log Directories
+### 9.1 Log Directories
 
 | Platform | Directory | Notes |
 |----------|-----------|-------|
@@ -727,7 +793,7 @@ TiyCode's native backend logs are produced by the Rust/Tauri process through `tr
 | Linux / other Unix | `$XDG_STATE_HOME/tiy-agents/logs/` | Preferred state directory |
 | Linux fallback | `~/.local/state/tiy-agents/logs/` | Used when `XDG_STATE_HOME` is not set |
 
-### 8.2 File Naming, Format, and Retention
+### 9.2 File Naming, Format, and Retention
 
 | Rule | Behavior |
 |------|----------|
@@ -739,7 +805,7 @@ TiyCode's native backend logs are produced by the Rust/Tauri process through `tr
 | Retention | Keep at most **5** log files |
 | Cleanup | Older rotated files beyond the 5-file limit are removed automatically by the rolling appender |
 
-### 8.3 What Gets Recorded in Logs
+### 9.3 What Gets Recorded in Logs
 
 The file logs are primarily for operational diagnostics. They commonly include:
 
@@ -752,7 +818,7 @@ The file logs are primarily for operational diagnostics. They commonly include:
 
 The current Rust tracing is mostly **metadata-oriented**, not intended as a full conversation transcript dump. Even so, users should review logs before sharing them externally because they may contain local paths, IDs, tool names, and operational error details.
 
-### 8.4 How the Agent Should Use This Information
+### 9.4 How the Agent Should Use This Information
 
 - When a user asks where logs are stored, answer with the platform-specific directory above rather than pointing them to `~/.tiy/`.
 - When troubleshooting startup, provider catalog, terminal, tray, or extension loading issues, ask the user for the newest `tiycode*.log` file from the platform-native log directory.
@@ -831,7 +897,7 @@ TiyCode includes a built-in Terminal panel.
 | Setting | Default | Options |
 |---------|---------|---------|
 | Shell path | System default | Any shell executable |
-| Font family | SFMono / JetBrains Mono | Any installed font |
+| Font family | SFMono-Regular / JetBrains Mono / Menlo | Any installed font |
 | Cursor style | `block` | `block` · `underline` · `bar` |
 | Cursor blink | true | true / false |
 | Scrollback | 5000 | Lines to retain |
@@ -879,7 +945,7 @@ TiyCode includes a built-in Terminal panel.
 
 **Agent should:**
 1. Ask for: server name, transport type (stdio or http), command/URL, env vars.
-2. Read `~/.tiy/mcp.json`, add the server entry, write it back (see Section 7.1).
+2. Read `~/.tiy/mcp.json`, add the server entry, write it back (see Section 8.1).
 3. Tell the user to refresh in Extensions Center or restart TiyCode.
 
 **Example — user says "Add a GitHub MCP server":**
@@ -924,7 +990,7 @@ TiyCode includes a built-in Terminal panel.
 
 **Agent should:**
 1. Create a subdirectory: `mkdir -p <workspace>/.tiy/skills/<skill-name>` (workspace-scoped) or `~/.tiy/skills/<skill-name>` (global).
-2. Write a `SKILL.md` file (uppercase) inside the subdirectory with YAML frontmatter + markdown body. See Section 7.3 for format.
+2. Write a `SKILL.md` file (uppercase) inside the subdirectory with YAML frontmatter + markdown body. See Section 8.3 for format.
 3. Tell user to rescan skills in Extensions Center.
 
 ### "How do I add a new AI provider?"
@@ -942,7 +1008,7 @@ Guide to the UI controls. Cannot be done programmatically.
 ### "What model am I using?"
 
 **Agent should:**
-Guide the user to check the active profile in the top bar or Settings Center > Agent Profiles.
+Guide the user to check the active profile in the top bar or Settings Center > Profiles.
 
 ### "My MCP server is not working"
 
@@ -976,6 +1042,27 @@ Guide the user to check the active profile in the top bar or Settings Center > A
 2. Guide to **Settings Center > General > ACP Server** to install the CLI in PATH.
 3. After CLI is installed, the user can run `tiycode acp --stdio` or `tiycode acp --http <addr>` to start the ACP server.
 4. The external IDE/client connects to the ACP endpoint and sends prompts through the ACP protocol.
+
+### "Connect TiyCode to WeChat" / "Use TiyCode via WeChat"
+
+**Agent should:**
+1. Explain the IM Gateway feature — TiyCode can interact via WeChat or WeCom messaging.
+2. Guide to **Settings Center > Channels** tab.
+3. For WeChat: user selects WeChat as platform, scans QR code with WeChat mobile app to authenticate.
+4. For WeCom: user configures WeCom bot credentials.
+5. The gateway runs as a headless background process; once connected, the user can chat with the AI agent directly from WeChat/WeCom.
+6. Available IM commands: `/new`, `/threads`, `/resume`, `/profile`, `/stop`, `/help`.
+
+### "Gateway is not working" / "WeChat disconnected"
+
+**Agent should:**
+1. Check gateway config: `read ~/.tiy/gateway/config.toml` to verify platform settings.
+2. Check gateway logs in the platform-native log directory (see Section 9).
+3. Common issues:
+   - **WeChat session expired:** User needs to re-scan QR code in Settings Center > Channels.
+   - **WeCom credentials wrong:** Verify bot token/app credentials in config.
+   - **Network issues:** Check if the gateway process can reach the platform APIs.
+4. Guide user to restart the gateway via Settings Center > Channels or restart TiyCode.
 
 ### "Create a custom subagent"
 
@@ -1025,6 +1112,8 @@ Use `shell` to run `git status`, `git diff`, `git log --oneline -10`, etc.
 | Propose plans | `update_plan` tool | Present implementation strategy |
 | Delegate to helpers | `agent_explore`, `agent_review` | Code investigation, verification |
 | Track tasks | `create_task`, `update_task`, `query_task` | Progress tracking |
+| **Manage goals** | `goal_scored` tool | Mark goals as complete with evidence and pledge |
+| **Configure Gateway** | Read/write `~/.tiy/gateway/config.toml` | IM Gateway platform settings |
 | Use plugin/MCP tools | (varies) | Tools from enabled plugins and MCP servers |
 
 ### What Requires User Action (via TiyCode UI)
@@ -1035,19 +1124,20 @@ Use `shell` to run `git status`, `git diff`, `git log --oneline -10`, etc.
 | Switch language (en / zh-CN) | Settings Center > General | Stored in UI layer (localStorage) |
 | Add/configure LLM providers | Settings Center > Providers | API keys stored in encrypted database |
 | Manage API keys | Settings Center > Providers | Security: encrypted storage |
-| Create/edit/switch Agent Profiles | Settings Center > Agent Profiles | Stored in database |
-| Change response style / thinking level | Settings Center > Agent Profiles | Stored in database |
+| Create/edit/switch Agent Profiles | Settings Center > Profiles | Stored in database |
+| Change response style / thinking level | Settings Center > Profiles | Stored in database |
 | Create/manage custom subagents | Settings Center > Agents | Stored in database, runtime tool registration |
-| Configure subagent access per profile | Settings Center > Agent Profiles | Stored in database |
+| Configure subagent access per profile | Settings Center > Profiles | Stored in database |
 | Configure Web Search | Settings Center > General | Search engine selection, API key, settings |
 | Install/uninstall CLI-in-PATH | Settings Center > General > ACP Server | Requires system-level symlink creation |
 | View account / billing | Settings Center > Account | Remote service, requires authentication |
 | Install/uninstall plugins | Extensions Center > Plugins | Requires runtime plugin loading |
 | Enable/disable plugins | Extensions Center > Plugins | Requires runtime state change |
-| Configure terminal settings | Settings Center > Terminal | Stored in database |
+| Configure terminal settings | Settings Center > Terminal | Stored in UI layer (localStorage) |
 | Manage workspaces | Settings Center > Workspace | Stored in database |
-| Set approval policy | Settings Center > Policy | Stored in database |
+| Set approval policy | Settings Center > Permissions | Stored in database |
 | **Restart MCP server** | Extensions Center > MCP | Requires runtime process management |
 | **Trigger skill rescan** | Extensions Center > Skills | Triggers re-indexing of skill files |
+| **Start/stop IM Gateway** | Settings Center > Channels | Requires runtime process management and platform auth |
 
 > **Key insight:** For MCP/Skills/Marketplace, the agent can modify the **config files** (add/remove/enable/disable), but the user needs to trigger a **reload** in the UI for changes to take effect. The agent should always tell the user this after modifying a config file.

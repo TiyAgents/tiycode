@@ -103,11 +103,11 @@ export const SUPPORTED_COMPOSER_ATTACHMENT_DIALOG_FILTERS = [
   },
 ] as const;
 
-export type BuiltinComposerCommandName = "init" | "clear" | "compact";
+export type BuiltinComposerCommandName = "init" | "clear" | "compact" | "goal";
 
 export type ComposerCommandSource = "builtin" | "settings";
 export type ComposerSubmissionKind = "plain" | "command";
-export type ComposerCommandBehavior = "prompt" | "clear" | "compact";
+export type ComposerCommandBehavior = "prompt" | "clear" | "compact" | "goal";
 
 export type ComposerCommandDescriptor = {
   source: ComposerCommandSource;
@@ -215,6 +215,16 @@ const BUILTIN_COMMANDS: ReadonlyArray<ComposerCommandDescriptor> = [
     prompt: "Compact the current conversation history and preserve a continuation summary before clearing prior turns.",
     behavior: "compact",
     smartSend: "always",
+  },
+  {
+    source: "builtin",
+    name: "goal",
+    path: "/goal",
+    description: "Persistent goal: set an objective for the agent to work toward",
+    argumentHint: "<objective>",
+    prompt: "Set goal: {arguments}",
+    behavior: "goal",
+    smartSend: "never",
   },
 ];
 
@@ -439,9 +449,13 @@ export function parseSlashCommandInput(
     return null;
   }
 
-  // Extract the first line from the trimmed-start position without split().
+  // Use the first line to identify the command token, then preserve the full
+  // remaining text as arguments. This lets commands such as /goal accept a
+  // multi-line objective while keeping command detection anchored at the first
+  // slash line.
   const nlIndex = value.indexOf("\n", start);
   const firstLine = nlIndex >= 0 ? value.slice(start, nlIndex).trimEnd() : value.slice(start).trimEnd();
+  const remainingLines = nlIndex >= 0 ? value.slice(nlIndex + 1).trimEnd() : "";
   const commandToken = firstLine;
   if (!commandToken.startsWith("/")) {
     return null;
@@ -450,7 +464,8 @@ export function parseSlashCommandInput(
   const withoutSlash = commandToken.slice(1);
   const firstSpaceIndex = withoutSlash.search(/\s/);
   const query = (firstSpaceIndex >= 0 ? withoutSlash.slice(0, firstSpaceIndex) : withoutSlash).trim().toLowerCase();
-  const argumentsText = firstSpaceIndex >= 0 ? withoutSlash.slice(firstSpaceIndex + 1).trim() : "";
+  const firstLineArguments = firstSpaceIndex >= 0 ? withoutSlash.slice(firstSpaceIndex + 1).trim() : "";
+  const argumentsText = [firstLineArguments, remainingLines].filter(Boolean).join("\n");
   const command = registry.find((entry) => getCommandTriggerToken(entry) === query) ?? null;
 
   return {

@@ -643,7 +643,22 @@ export type ThreadStreamEvent =
   | { type: "run_failed"; runId: string; error: string }
   | { type: "run_cancelled"; runId: string }
   | { type: "run_interrupted"; runId: string }
-  | { type: "task_board_updated"; runId: string; taskBoard: TaskBoardDto };
+  | { type: "task_board_updated"; runId: string; taskBoard: TaskBoardDto }
+  | {
+      type: "goal_state_updated";
+      threadId: string;
+      goal: import("@/services/bridge/agent-commands").GoalPayload | null;
+    }
+  | {
+      type: "goal_continuation";
+      threadId: string;
+      runId: string;
+      prompt: string;
+      turnsUsed: number;
+      maxTurns: number;
+    }
+  | { type: "goal_paused"; threadId: string; reason: string; detail?: string | null }
+  | { type: "goal_completed"; threadId: string; evidence: string };
 
 // ---------------------------------------------------------------------------
 // Git

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 use tokio::sync::broadcast;
 
+use crate::core::agent_run_summary::extract_run_model_refs;
 use crate::core::agent_run_title::{build_title_model_candidates, maybe_generate_thread_title};
 use crate::core::agent_session::ResolvedModelRole;
 use crate::core::app_event_emitter::{emit_app_event, AppEventEmitter, AppEventEmitterRef};
@@ -17,7 +18,7 @@ use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{MessageRecord, RunStatus, ThreadStatus};
 use crate::persistence::repo::{message_repo, run_repo, thread_repo};
 
-use super::agent_run_manager::AgentRunManager;
+use super::agent_run_manager::{AgentRunManager, StartRunOptions};
 
 pub(crate) async fn persist_final_run_state(
     pool: &SqlitePool,
@@ -183,7 +184,37 @@ pub(crate) fn sidebar_status_for_runtime_event(
 }
 
 impl AgentRunManager {
-    pub(crate) async fn handle_runtime_channel_closed(&self, run_id: &str) -> Result<(), AppError> {
+    fn start_goal_run_pause(&self, thread_id: &str, run_id: &str) {
+        if thread_id.is_empty() {
+            return;
+        }
+        let mut guard = self.goal_runtime_state.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("goal pause runtime mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.start_run_pause(thread_id, run_id);
+    }
+
+    fn finish_goal_run_pause(&self, run_id: &str) {
+        let mut guard = self.goal_runtime_state.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("goal pause runtime mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.finish_run_pause(run_id);
+    }
+
+    fn cleanup_goal_run_pause(&self, run_id: &str) {
+        let mut guard = self.goal_runtime_state.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("goal pause runtime mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.cleanup_run_pause(run_id);
+    }
+
+    pub(crate) async fn handle_runtime_channel_closed(
+        self: &Arc<Self>,
+        run_id: &str,
+    ) -> Result<(), AppError> {
         if !self.has_active_run(run_id).await {
             return Ok(());
         }
@@ -228,7 +259,7 @@ impl AgentRunManager {
     }
 
     pub(crate) async fn handle_runtime_event(
-        &self,
+        self: &Arc<Self>,
         run_id: &str,
         event: ThreadStreamEvent,
     ) -> Result<(), AppError> {
@@ -245,6 +276,12 @@ impl AgentRunManager {
             self.complete_active_reasoning_message(run_id, "completed")
                 .await?;
         }
+
+        let mut terminal_goal_context: Option<(
+            String,
+            RunStatus,
+            broadcast::Sender<ThreadStreamEvent>,
+        )> = None;
 
         match &event {
             ThreadStreamEvent::RunStarted { .. } => {
@@ -362,23 +399,27 @@ impl AgentRunManager {
                 run_repo::update_status(&self.pool, run_id, RunStatus::WaitingToolResult).await?;
             }
             ThreadStreamEvent::ApprovalRequired { .. } => {
-                run_repo::update_status(&self.pool, run_id, RunStatus::WaitingApproval).await?;
                 let thread_id = self.get_thread_id(run_id).await;
+                self.start_goal_run_pause(&thread_id, run_id);
+                run_repo::update_status(&self.pool, run_id, RunStatus::WaitingApproval).await?;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::WaitingApproval)
                     .await?;
             }
             ThreadStreamEvent::ClarifyRequired { .. } => {
-                run_repo::update_status(&self.pool, run_id, RunStatus::NeedsReply).await?;
                 let thread_id = self.get_thread_id(run_id).await;
+                self.start_goal_run_pause(&thread_id, run_id);
+                run_repo::update_status(&self.pool, run_id, RunStatus::NeedsReply).await?;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::NeedsReply)
                     .await?;
             }
             ThreadStreamEvent::ApprovalResolved { .. } => {
+                self.finish_goal_run_pause(run_id);
                 run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
             }
             ThreadStreamEvent::ClarifyResolved { .. } => {
+                self.finish_goal_run_pause(run_id);
                 run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
@@ -406,8 +447,9 @@ impl AgentRunManager {
                 run_repo::update_usage(&self.pool, run_id, &usage).await?;
             }
             ThreadStreamEvent::RunCheckpointed { .. } => {
-                run_repo::update_status(&self.pool, run_id, RunStatus::WaitingApproval).await?;
                 let thread_id = self.get_thread_id(run_id).await;
+                self.start_goal_run_pause(&thread_id, run_id);
+                run_repo::update_status(&self.pool, run_id, RunStatus::WaitingApproval).await?;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::WaitingApproval)
                     .await?;
             }
@@ -424,7 +466,12 @@ impl AgentRunManager {
                         | ThreadStreamEvent::RunFailed { error, .. } => Some(error.as_str()),
                         _ => None,
                     };
+                    self.finish_goal_run_pause(run_id);
                     self.finish_run(run_id, final_status, error_message).await?;
+                    let thread_id = self.get_thread_id(run_id).await;
+                    if let Some(frontend_tx) = self.frontend_tx_for_run(run_id).await {
+                        terminal_goal_context = Some((thread_id, final_status, frontend_tx));
+                    }
                 }
             }
             _ => {}
@@ -493,6 +540,24 @@ impl AgentRunManager {
         if is_terminal_runtime_event(&event) {
             self.runtime.remove_session(run_id).await;
             self.remove_active_run(run_id).await;
+            if let Some((thread_id, final_status, frontend_tx)) = terminal_goal_context {
+                if let Err(error) = self
+                    .maybe_continue_goal_after_terminal_run(
+                        run_id.to_string(),
+                        thread_id,
+                        final_status,
+                        frontend_tx,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        run_id = %run_id,
+                        error = %error,
+                        "failed to orchestrate goal continuation after terminal run"
+                    );
+                }
+            }
+            self.cleanup_goal_run_pause(run_id);
         }
 
         Ok(())
@@ -507,6 +572,150 @@ impl AgentRunManager {
         if let Some(frontend_tx) = frontend_tx {
             let _ = frontend_tx.send(event);
         }
+    }
+
+    pub(crate) async fn frontend_tx_for_run(
+        &self,
+        run_id: &str,
+    ) -> Option<broadcast::Sender<ThreadStreamEvent>> {
+        let runs = self.active_runs.lock().await;
+        runs.get(run_id).map(|run| run.frontend_tx.clone())
+    }
+
+    pub(crate) async fn maybe_continue_goal_after_terminal_run(
+        self: &Arc<Self>,
+        completed_run_id: String,
+        thread_id: String,
+        final_status: RunStatus,
+        frontend_tx: broadcast::Sender<ThreadStreamEvent>,
+    ) -> Result<(), AppError> {
+        if !self.goal_continuation_enabled {
+            return Ok(());
+        }
+
+        if !matches!(final_status, RunStatus::Completed | RunStatus::Interrupted) {
+            return Ok(());
+        }
+
+        if thread_id.is_empty() {
+            return Ok(());
+        }
+
+        let mgr = crate::core::goal_manager::GoalManager::new(
+            self.pool.clone(),
+            thread_id.clone(),
+            Arc::clone(&self.goal_runtime_state),
+        );
+        let Some(outcome) = mgr.evaluate_after_run(&completed_run_id, None).await? else {
+            return Ok(());
+        };
+
+        let _ = frontend_tx.send(ThreadStreamEvent::GoalStateUpdated {
+            thread_id: thread_id.clone(),
+            goal: Some(outcome.goal.clone()),
+        });
+
+        if outcome.verdict == "paused" {
+            let _ = frontend_tx.send(ThreadStreamEvent::GoalPaused {
+                thread_id: thread_id.clone(),
+                reason: outcome
+                    .goal
+                    .pause_reason
+                    .as_ref()
+                    .map(|reason| reason.as_str().to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                detail: outcome.goal.pause_detail.clone(),
+            });
+            return Ok(());
+        }
+
+        if outcome.verdict == "budget_limited" || outcome.verdict == "skipped" {
+            return Ok(());
+        }
+
+        if outcome.verdict != "continue" && outcome.verdict != "challenge_evidence" {
+            return Ok(());
+        }
+
+        let Some(prompt) = outcome
+            .continuation_prompt
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            tracing::warn!(
+                run_id = %completed_run_id,
+                thread_id = %thread_id,
+                verdict = %outcome.verdict,
+                "goal evaluation requested continuation without a prompt"
+            );
+            return Ok(());
+        };
+
+        let Some(start_context) =
+            run_repo::find_start_context_by_id(&self.pool, &completed_run_id).await?
+        else {
+            tracing::warn!(
+                run_id = %completed_run_id,
+                thread_id = %thread_id,
+                "skipping goal continuation because completed run context is missing"
+            );
+            return Ok(());
+        };
+
+        let Some(model_plan_json) = start_context.effective_model_plan_json else {
+            tracing::warn!(
+                run_id = %completed_run_id,
+                thread_id = %thread_id,
+                "skipping goal continuation because completed run model plan is missing"
+            );
+            return Ok(());
+        };
+
+        let model_plan_value = serde_json::from_str::<serde_json::Value>(&model_plan_json)
+            .map_err(|error| {
+                AppError::recoverable(
+                    ErrorSource::Thread,
+                    "thread.goal_continuation.model_plan_invalid",
+                    format!("Failed to parse goal continuation model plan: {error}"),
+                )
+            })?;
+        let (profile_id, provider_id, model_id) = extract_run_model_refs(&model_plan_value);
+
+        // Build a clean display version of the continuation prompt: extract just the
+        // first line "[Goal continuation — turns X/Y]" so the user sees a concise
+        // label rather than the full LLM-internal system instruction.
+        let display_prompt = prompt.lines().next().unwrap_or(&prompt).trim().to_string();
+        let goal_continuation_metadata = serde_json::json!({ "goalContinuation": true, "turnsUsed": outcome.goal.turns_used, "maxTurns": outcome.goal.max_turns });
+
+        let (continuation_run_id, _event_rx) = self
+            .start_run_with_options(
+                &thread_id,
+                &prompt,
+                Some(display_prompt),
+                Some(goal_continuation_metadata),
+                Vec::new(),
+                &start_context.run_mode,
+                profile_id,
+                provider_id,
+                model_id,
+                model_plan_value,
+                StartRunOptions {
+                    history_override: None,
+                    initial_prompt: Some(prompt.clone()),
+                    persist_user_message: true,
+                },
+            )
+            .await?;
+
+        let _ = frontend_tx.send(ThreadStreamEvent::GoalContinuation {
+            thread_id,
+            run_id: continuation_run_id,
+            prompt,
+            turns_used: outcome.goal.turns_used,
+            max_turns: outcome.goal.max_turns,
+        });
+
+        Ok(())
     }
 
     async fn ensure_streaming_message(

@@ -710,6 +710,7 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
       effectivePrompt,
       attachments: submission.attachments,
       metadata: submission.metadata ?? null,
+      command: submission.command,
       commandBehavior: commandBehavior ?? "none",
     }).catch((error) => {
       const message = getInvokeErrorMessage(error, t("dashboard.error.createThread"));

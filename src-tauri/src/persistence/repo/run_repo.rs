@@ -34,6 +34,12 @@ pub struct RunInsert {
     pub status: String,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RunStartContext {
+    pub run_mode: String,
+    pub effective_model_plan_json: Option<String>,
+}
+
 pub async fn insert(pool: &SqlitePool, r: &RunInsert) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
@@ -121,6 +127,43 @@ pub async fn find_effective_model_plan_json(
     .fetch_optional(pool)
     .await?
     .flatten();
+
+    Ok(value)
+}
+
+pub async fn find_start_context_by_id(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<RunStartContext>, AppError> {
+    let row = sqlx::query_as::<_, RunStartContext>(
+        "SELECT run_mode, effective_model_plan_json
+         FROM thread_runs
+         WHERE id = ?
+         LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row)
+}
+
+pub async fn find_latest_evaluable_run_id_by_thread(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<String>, AppError> {
+    let value = sqlx::query_scalar::<_, String>(
+        "SELECT id
+         FROM thread_runs
+         WHERE thread_id = ?
+           AND status IN ('completed', 'interrupted')
+           AND finished_at IS NOT NULL
+         ORDER BY started_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .fetch_optional(pool)
+    .await?;
 
     Ok(value)
 }
@@ -407,6 +450,15 @@ mod tests {
         .expect("seed run");
     }
 
+    async fn set_run_finished_at(pool: &SqlitePool, id: &str, finished_at: &str) {
+        sqlx::query("UPDATE thread_runs SET finished_at = ? WHERE id = ?")
+            .bind(finished_at)
+            .bind(id)
+            .execute(pool)
+            .await
+            .expect("set finished_at");
+    }
+
     #[tokio::test]
     async fn find_latest_with_prompt_usage_returns_none_when_no_matching_history_exists() {
         let pool = setup_test_pool().await;
@@ -592,6 +644,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn find_start_context_by_id_returns_run_mode_and_model_plan() {
+        let pool = setup_test_pool().await;
+        let r = RunInsert {
+            id: "run-ctx".into(),
+            thread_id: "t1".into(),
+            profile_id: Some("profile-1".into()),
+            run_mode: "plan".into(),
+            provider_id: Some("provider-1".into()),
+            model_id: Some("model-1".into()),
+            effective_model_plan_json: Some(r#"{"profileId":"profile-1"}"#.into()),
+            status: "completed".into(),
+        };
+        insert(&pool, &r).await.unwrap();
+
+        let ctx = find_start_context_by_id(&pool, "run-ctx")
+            .await
+            .unwrap()
+            .expect("start context should exist");
+        assert_eq!(ctx.run_mode, "plan");
+        assert_eq!(
+            ctx.effective_model_plan_json.as_deref(),
+            Some(r#"{"profileId":"profile-1"}"#)
+        );
+    }
+
+    #[tokio::test]
+    async fn get_run_duration_returns_specific_finished_run_duration() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_finished_at(&pool, "run-1", "2026-04-22T09:00:42Z").await;
+
+        let duration = get_run_duration(&pool, "run-1").await.unwrap();
+        assert_eq!(duration, Some(42));
+        assert!(get_run_duration(&pool, "missing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn find_latest_evaluable_run_id_by_thread_returns_latest_completed_or_interrupted() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_finished_at(&pool, "run-1", "2026-04-22T09:00:10Z").await;
+
+        let r = RunInsert {
+            id: "run-2".into(),
+            thread_id: "t1".into(),
+            profile_id: None,
+            run_mode: "default".into(),
+            provider_id: None,
+            model_id: None,
+            effective_model_plan_json: None,
+            status: RunStatus::Interrupted.as_str().into(),
+        };
+        insert(&pool, &r).await.unwrap();
+        set_run_finished_at(&pool, "run-2", "2026-04-22T09:05:10Z").await;
+
+        let latest = find_latest_evaluable_run_id_by_thread(&pool, "t1")
+            .await
+            .unwrap();
+        assert_eq!(latest.as_deref(), Some("run-2"));
+    }
+
+    #[tokio::test]
     async fn find_active_by_thread_skips_terminal_and_waiting_approval() {
         let pool = setup_test_pool().await;
         insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
@@ -741,4 +855,175 @@ mod tests {
             .expect("should exist");
         assert_eq!(found.status, "running");
     }
+
+    // ── #5 / #11: Duration query tests ──
+
+    #[tokio::test]
+    async fn get_run_duration_returns_seconds() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_finished_at(&pool, "run-1", "2026-04-22T09:00:42Z").await;
+
+        let duration = super::get_run_duration(&pool, "run-1")
+            .await
+            .unwrap()
+            .expect("should return duration");
+        assert_eq!(duration, 42);
+    }
+
+    #[tokio::test]
+    async fn get_last_completed_run_duration_returns_most_recent() {
+        let pool = setup_test_pool().await;
+
+        // Insert two completed runs for same thread.
+        // IMPORTANT: set_run_finished_at must be called AFTER update_status(Completed)
+        // because update_status for terminal statuses overwrites finished_at to now().
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        super::update_status(&pool, "run-1", RunStatus::Completed)
+            .await
+            .unwrap();
+        set_run_finished_at(&pool, "run-1", "2026-04-22T09:00:42Z").await;
+
+        insert_run_with_started_at(&pool, "run-2", "t1", "2026-04-22T10:00:00Z", 0).await;
+        super::update_status(&pool, "run-2", RunStatus::Completed)
+            .await
+            .unwrap();
+        set_run_finished_at(&pool, "run-2", "2026-04-22T10:00:30Z").await;
+
+        // Should return the most recent completed run's duration (run-2 = 30s)
+        let duration = super::get_last_completed_run_duration(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should return duration");
+        assert_eq!(duration, 30);
+    }
+
+    #[tokio::test]
+    async fn get_last_completed_run_duration_returns_none_when_no_completed() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        // Run is still in default status (not completed)
+
+        let duration = super::get_last_completed_run_duration(&pool, "t1")
+            .await
+            .unwrap();
+        assert!(duration.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_active_run_elapsed_seconds_returns_positive_for_running() {
+        let pool = setup_test_pool().await;
+        // Insert a running run with a past started_at so elapsed > 0
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at, input_tokens, output_tokens, total_tokens)
+             VALUES ('run-active', 't1', 'default', 'running', '2026-04-22T09:00:00Z', 0, 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed run");
+
+        let duration = super::get_active_run_elapsed_seconds(&pool, "t1")
+            .await
+            .unwrap()
+            .expect("should return elapsed seconds for running run");
+        // With started_at in the past, elapsed should be > 0
+        assert!(duration > 0, "expected positive elapsed, got {duration}");
+    }
+
+    #[tokio::test]
+    async fn get_active_run_elapsed_seconds_skips_terminal_runs() {
+        let pool = setup_test_pool().await;
+        // Insert a completed run (should be skipped)
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at, input_tokens, output_tokens, total_tokens)
+             VALUES ('run-done', 't1', 'default', 'completed', '2026-04-22T09:00:00Z', 0, 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed run");
+
+        let duration = super::get_active_run_elapsed_seconds(&pool, "t1")
+            .await
+            .unwrap();
+        assert!(duration.is_none(), "should skip completed runs");
+    }
+}
+
+/// Get the duration in seconds of the last completed run for a thread.
+/// Returns None if no completed run exists with a finished_at timestamp.
+pub async fn get_last_completed_run_duration(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<i64>, AppError> {
+    let duration = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT CAST(strftime('%s', finished_at) - strftime('%s', started_at) AS INTEGER)
+         FROM thread_runs
+         WHERE thread_id = ?
+           AND status = 'completed'
+           AND finished_at IS NOT NULL
+         ORDER BY started_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(duration)
+}
+
+/// Get the duration in seconds of a specific run.
+/// Returns None if the run has no finished_at timestamp.
+pub async fn get_run_duration(pool: &SqlitePool, run_id: &str) -> Result<Option<i64>, AppError> {
+    let duration = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT CAST(strftime('%s', finished_at) - strftime('%s', started_at) AS INTEGER)
+         FROM thread_runs
+         WHERE id = ?
+           AND finished_at IS NOT NULL
+         LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(duration)
+}
+
+/// Get the wall-clock elapsed seconds since a specific run started.
+/// Useful for billing a still-active run before it is terminated.
+pub async fn get_run_elapsed_seconds(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Option<i64>, AppError> {
+    let duration = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT CAST(strftime('%s', 'now') - strftime('%s', started_at) AS INTEGER)
+         FROM thread_runs
+         WHERE id = ?
+         LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(duration)
+}
+
+/// Get the elapsed seconds of any currently active (non-terminal) run for a thread.
+/// Returns None if no active run exists.
+pub async fn get_active_run_elapsed_seconds(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<i64>, AppError> {
+    let duration = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT CAST(strftime('%s', 'now') - strftime('%s', started_at) AS INTEGER)
+         FROM thread_runs
+         WHERE thread_id = ?
+           AND status NOT IN ('completed','failed','denied','interrupted','cancelled','limit_reached')
+         ORDER BY started_at DESC
+         LIMIT 1",
+    )
+    .bind(thread_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(duration)
 }

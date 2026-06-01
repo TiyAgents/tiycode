@@ -500,6 +500,34 @@ export function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): Thre
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         taskBoard: readRequiredObject(rawEvent, "taskBoard", "task_board") as TaskBoardDto,
       };
+    case "goal_state_updated":
+      return {
+        type: rawEvent.type,
+        threadId: readRequiredString(rawEvent, "threadId", "thread_id"),
+        goal: (readValue(rawEvent, "goal", "goal") ?? null) as GoalPayload | null,
+      };
+    case "goal_continuation":
+      return {
+        type: rawEvent.type,
+        threadId: readRequiredString(rawEvent, "threadId", "thread_id"),
+        runId: readRequiredString(rawEvent, "runId", "run_id"),
+        prompt: readRequiredString(rawEvent, "prompt", "prompt"),
+        turnsUsed: Number(readValue(rawEvent, "turnsUsed", "turns_used") ?? 0),
+        maxTurns: Number(readValue(rawEvent, "maxTurns", "max_turns") ?? 0),
+      };
+    case "goal_paused":
+      return {
+        type: rawEvent.type,
+        threadId: readRequiredString(rawEvent, "threadId", "thread_id"),
+        reason: readRequiredString(rawEvent, "reason", "reason"),
+        detail: readOptionalString(rawEvent, "detail", "detail") ?? undefined,
+      };
+    case "goal_completed":
+      return {
+        type: rawEvent.type,
+        threadId: readRequiredString(rawEvent, "threadId", "thread_id"),
+        evidence: readRequiredString(rawEvent, "evidence", "evidence"),
+      };
   }
 }
 
@@ -676,4 +704,65 @@ export async function toolClarifyRespond(
 ): Promise<void> {
   requireTauri("tool_clarify_respond");
   return invoke("tool_clarify_respond", { toolCallId, response });
+}
+
+// ── Goal bridge ──
+
+export type GoalPayload = {
+  id: string;
+  threadId: string;
+  objective: string;
+  status: "active" | "paused" | "budget_limited" | "complete";
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  turnsUsed: number;
+  maxTurns: number;
+  tokenBudget?: number | null;
+  pauseReason?: string | null;
+  pauseDetail?: string | null;
+  evidence?: string | null;
+  lastEvaluatedRunId?: string | null;
+};
+
+export async function goalGetState(threadId: string): Promise<GoalPayload | null> {
+  requireTauri("goal_get_state");
+  return invoke("goal_get_state", { threadId });
+}
+
+export async function goalSet(
+  threadId: string,
+  objective: string,
+  tokenBudget?: number | null,
+): Promise<GoalPayload> {
+  requireTauri("goal_set");
+  return invoke("goal_set", { threadId, objective, tokenBudget });
+}
+
+export async function goalPause(threadId: string): Promise<GoalPayload | null> {
+  requireTauri("goal_pause");
+  return invoke("goal_pause", { threadId });
+}
+
+export async function goalResume(threadId: string): Promise<GoalPayload | null> {
+  requireTauri("goal_resume");
+  return invoke("goal_resume", { threadId });
+}
+
+export async function goalClear(threadId: string): Promise<boolean> {
+  requireTauri("goal_clear");
+  return invoke("goal_clear", { threadId });
+}
+
+export type GoalEvaluateResult = {
+  goal: GoalPayload;
+  verdict: "continue" | "challenge_evidence" | "complete" | "paused" | "budget_limited";
+  continuationPrompt?: string | null;
+};
+
+export async function goalEvaluate(
+  threadId: string,
+  response?: string | null,
+): Promise<GoalEvaluateResult | null> {
+  requireTauri("goal_evaluate");
+  return invoke("goal_evaluate", { threadId, response });
 }

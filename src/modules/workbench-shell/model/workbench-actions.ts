@@ -51,6 +51,7 @@ import {
 import type { ProjectOption, WorkspaceItem } from "@/modules/workbench-shell/model/types";
 import type { MessageAttachmentDto, RunMode, ThreadSummaryDto, WorkspaceDto } from "@/shared/types/api";
 import type { LanguagePreference } from "@/app/providers/language-provider";
+import type { ComposerCommandInvocation } from "@/modules/workbench-shell/model/composer-commands";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,7 +64,8 @@ export interface NewThreadSubmission {
   effectivePrompt: string;
   attachments?: MessageAttachmentDto[];
   metadata?: Record<string, unknown> | null;
-  commandBehavior?: "clear" | "compact" | "none" | "prompt";
+  command?: ComposerCommandInvocation;
+  commandBehavior?: "clear" | "compact" | "goal" | "none" | "prompt";
 }
 
 export interface ThreadDeleteOptions {
@@ -662,6 +664,7 @@ export async function submitNewThread(submission: NewThreadSubmission): Promise<
       effectivePrompt: submission.effectivePrompt,
       attachments: (submission.attachments ?? []) as unknown as PendingThreadRun["attachments"],
       metadata: submission.metadata ?? null,
+      command: submission.command,
       runMode: submission.runMode ?? newThreadRunMode,
       threadId,
     };

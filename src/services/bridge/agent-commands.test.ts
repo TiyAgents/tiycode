@@ -13,9 +13,19 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 
-import { normalizeThreadStreamEvent, threadPromoteRuntimeQueueMessage } from "./agent-commands";
+import {
+  normalizeThreadStreamEvent,
+  threadPromoteRuntimeQueueMessage,
+  goalGetState,
+  goalSet,
+  goalPause,
+  goalResume,
+  goalClear,
+  goalEvaluate,
+} from "./agent-commands";
 import type { RawThreadStreamEvent } from "./agent-commands";
 import type { ThreadStreamEvent } from "@/shared/types/api";
+import type { GoalPayload, GoalEvaluateResult } from "./agent-commands";
 
 function makeRawEvent(overrides: Record<string, unknown> = {}): RawThreadStreamEvent {
   return {
@@ -344,5 +354,266 @@ describe("normalizeThreadStreamEvent request_retrying", () => {
     }) as Extract<ThreadStreamEvent, { type: "request_retrying" }>;
 
     expect(result.status).toBeNull();
+  });
+});
+
+// ── #2: Goal bridge tests ──
+
+function makeGoalPayload(overrides: Partial<GoalPayload> = {}): GoalPayload {
+  return {
+    id: "goal-1",
+    threadId: "thread-1",
+    objective: "Build a todo app",
+    status: "active",
+    tokensUsed: 0,
+    timeUsedSeconds: 0,
+    turnsUsed: 0,
+    maxTurns: 50,
+    tokenBudget: null,
+    pauseReason: null,
+    pauseDetail: null,
+    evidence: null,
+    lastEvaluatedRunId: null,
+    ...overrides,
+  };
+}
+
+function makeGoalEvaluateResult(
+  overrides: Partial<GoalEvaluateResult> = {},
+): GoalEvaluateResult {
+  return {
+    goal: makeGoalPayload(),
+    verdict: "continue",
+    continuationPrompt: null,
+    ...overrides,
+  };
+}
+
+describe("goalGetState", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    isTauriMock.mockReset();
+  });
+
+  it("invokes goal_get_state and returns GoalPayload", async () => {
+    isTauriMock.mockReturnValue(true);
+    const payload = makeGoalPayload();
+    invokeMock.mockResolvedValueOnce(payload);
+
+    const result = await goalGetState("thread-1");
+    expect(result).toEqual(payload);
+    expect(invokeMock).toHaveBeenCalledWith("goal_get_state", { threadId: "thread-1" });
+  });
+
+  it("returns null when no active goal exists", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockResolvedValueOnce(null);
+
+    const result = await goalGetState("thread-1");
+    expect(result).toBeNull();
+  });
+
+  it("requires Tauri runtime", async () => {
+    isTauriMock.mockReturnValue(false);
+
+    await expect(goalGetState("thread-1")).rejects.toThrow(
+      "goal_get_state requires Tauri runtime",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("goalSet", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    isTauriMock.mockReset();
+  });
+
+  it("invokes goal_set with required params", async () => {
+    isTauriMock.mockReturnValue(true);
+    const payload = makeGoalPayload({ objective: "Build feature X" });
+    invokeMock.mockResolvedValueOnce(payload);
+
+    const result = await goalSet("thread-1", "Build feature X");
+    expect(result).toEqual(payload);
+    expect(invokeMock).toHaveBeenCalledWith("goal_set", {
+      threadId: "thread-1",
+      objective: "Build feature X",
+      tokenBudget: undefined,
+    });
+  });
+
+  it("invokes goal_set with optional tokenBudget", async () => {
+    isTauriMock.mockReturnValue(true);
+    const payload = makeGoalPayload({ tokenBudget: 10000 });
+    invokeMock.mockResolvedValueOnce(payload);
+
+    const result = await goalSet("thread-1", "Build feature X", 10000);
+    expect(result.tokenBudget).toBe(10000);
+    expect(invokeMock).toHaveBeenCalledWith("goal_set", {
+      threadId: "thread-1",
+      objective: "Build feature X",
+      tokenBudget: 10000,
+    });
+  });
+
+  it("requires Tauri runtime", async () => {
+    isTauriMock.mockReturnValue(false);
+
+    await expect(goalSet("thread-1", "obj")).rejects.toThrow(
+      "goal_set requires Tauri runtime",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("goalPause", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    isTauriMock.mockReset();
+  });
+
+  it("invokes goal_pause and returns GoalPayload", async () => {
+    isTauriMock.mockReturnValue(true);
+    const payload = makeGoalPayload({ status: "paused", pauseReason: "user_requested" });
+    invokeMock.mockResolvedValueOnce(payload);
+
+    const result = await goalPause("thread-1");
+    expect(result).toEqual(payload);
+    expect(invokeMock).toHaveBeenCalledWith("goal_pause", { threadId: "thread-1" });
+  });
+
+  it("returns null when no active goal to pause", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockResolvedValueOnce(null);
+
+    const result = await goalPause("thread-1");
+    expect(result).toBeNull();
+  });
+
+  it("requires Tauri runtime", async () => {
+    isTauriMock.mockReturnValue(false);
+
+    await expect(goalPause("thread-1")).rejects.toThrow(
+      "goal_pause requires Tauri runtime",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("goalResume", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    isTauriMock.mockReset();
+  });
+
+  it("invokes goal_resume and returns GoalPayload", async () => {
+    isTauriMock.mockReturnValue(true);
+    const payload = makeGoalPayload({ status: "active" });
+    invokeMock.mockResolvedValueOnce(payload);
+
+    const result = await goalResume("thread-1");
+    expect(result).toEqual(payload);
+    expect(invokeMock).toHaveBeenCalledWith("goal_resume", { threadId: "thread-1" });
+  });
+
+  it("returns null when no paused goal exists", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockResolvedValueOnce(null);
+
+    const result = await goalResume("thread-1");
+    expect(result).toBeNull();
+  });
+
+  it("requires Tauri runtime", async () => {
+    isTauriMock.mockReturnValue(false);
+
+    await expect(goalResume("thread-1")).rejects.toThrow(
+      "goal_resume requires Tauri runtime",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("goalClear", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    isTauriMock.mockReset();
+  });
+
+  it("invokes goal_clear and returns true", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockResolvedValueOnce(true);
+
+    const result = await goalClear("thread-1");
+    expect(result).toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("goal_clear", { threadId: "thread-1" });
+  });
+
+  it("returns false when no goal to clear", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockResolvedValueOnce(false);
+
+    const result = await goalClear("thread-1");
+    expect(result).toBe(false);
+  });
+
+  it("requires Tauri runtime", async () => {
+    isTauriMock.mockReturnValue(false);
+
+    await expect(goalClear("thread-1")).rejects.toThrow(
+      "goal_clear requires Tauri runtime",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("goalEvaluate", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    isTauriMock.mockReset();
+  });
+
+  it("invokes goal_evaluate with required params", async () => {
+    isTauriMock.mockReturnValue(true);
+    const result = makeGoalEvaluateResult({ verdict: "continue" });
+    invokeMock.mockResolvedValueOnce(result);
+
+    const outcome = await goalEvaluate("thread-1");
+    expect(outcome).toEqual(result);
+    expect(invokeMock).toHaveBeenCalledWith("goal_evaluate", {
+      threadId: "thread-1",
+      response: undefined,
+    });
+  });
+
+  it("invokes goal_evaluate with optional response", async () => {
+    isTauriMock.mockReturnValue(true);
+    const result = makeGoalEvaluateResult({ verdict: "challenge_evidence" });
+    invokeMock.mockResolvedValueOnce(result);
+
+    const outcome = await goalEvaluate("thread-1", "Some progress");
+    expect(outcome!.verdict).toBe("challenge_evidence");
+    expect(invokeMock).toHaveBeenCalledWith("goal_evaluate", {
+      threadId: "thread-1",
+      response: "Some progress",
+    });
+  });
+
+  it("returns null when no active goal exists", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockResolvedValueOnce(null);
+
+    const result = await goalEvaluate("thread-1");
+    expect(result).toBeNull();
+  });
+
+  it("requires Tauri runtime", async () => {
+    isTauriMock.mockReturnValue(false);
+
+    await expect(goalEvaluate("thread-1")).rejects.toThrow(
+      "goal_evaluate requires Tauri runtime",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 });

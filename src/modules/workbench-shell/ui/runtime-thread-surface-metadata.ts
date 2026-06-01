@@ -340,3 +340,24 @@ export function formatPlanMetadata(
     verification: parsed?.verification?.trim() ?? "",
   };
 }
+
+export function parseGoalContinuationMetadata(value: unknown): {
+  goalContinuation: boolean;
+  turnsUsed: number | null;
+  maxTurns: number | null;
+} | null {
+  const record = asObjectRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  if (record.goalContinuation !== true) {
+    return null;
+  }
+
+  return {
+    goalContinuation: true,
+    turnsUsed: typeof record.turnsUsed === "number" ? (record.turnsUsed as number) : null,
+    maxTurns: typeof record.maxTurns === "number" ? (record.maxTurns as number) : null,
+  };
+}

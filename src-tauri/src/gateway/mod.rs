@@ -12,12 +12,13 @@ pub mod platforms;
 pub mod traits;
 pub mod user_session;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use sqlx::SqlitePool;
 
 use crate::core::agent_run_manager::AgentRunManager;
 use crate::core::app_event_emitter::{AppEventEmitterRef, NoopAppEventEmitter};
+use crate::core::app_state::GoalRuntimeState;
 use crate::core::built_in_agent_runtime::BuiltInAgentRuntime;
 use crate::core::prompt_command_manager::PromptCommandManager;
 use crate::core::settings_manager::SettingsManager;
@@ -44,6 +45,8 @@ pub struct GatewayState {
     pub terminal_manager: Arc<TerminalManager>,
     pub extensions_manager: Arc<ExtensionsManager>,
     pub app_events: AppEventEmitterRef,
+    /// Shared goal runtime state for tool call tracking and idle/completion counters.
+    pub goal_runtime_state: Arc<Mutex<GoalRuntimeState>>,
 }
 
 impl GatewayState {
@@ -65,15 +68,20 @@ impl GatewayState {
             Arc::clone(&terminal_manager),
         ));
         let extensions_manager = Arc::new(ExtensionsManager::new(pool.clone()));
+        // Gateway paths share their own isolated GoalRuntimeState for goal
+        // lifecycle operations (set, status, cancel) initiated through IM commands.
+        let goal_runtime_state = Arc::new(Mutex::new(GoalRuntimeState::default()));
         let built_in_agent_runtime = Arc::new(BuiltInAgentRuntime::new(
             pool.clone(),
             Arc::clone(&tool_gateway),
+            Arc::clone(&goal_runtime_state),
         ));
         let agent_run_manager = Arc::new(AgentRunManager::new(
             pool.clone(),
             Arc::clone(&app_events),
             Arc::clone(&built_in_agent_runtime),
             Arc::clone(&sleep_manager),
+            Arc::clone(&goal_runtime_state),
         ));
 
         Self {
@@ -88,6 +96,7 @@ impl GatewayState {
             terminal_manager,
             extensions_manager,
             app_events,
+            goal_runtime_state,
         }
     }
 }

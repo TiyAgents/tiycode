@@ -447,6 +447,13 @@ pub fn run() {
             commands::agent::thread_cancel_run,
             commands::agent::tool_approval_respond,
             commands::agent::tool_clarify_respond,
+            // Goal
+            commands::agent::goal_get_state,
+            commands::agent::goal_set,
+            commands::agent::goal_pause,
+            commands::agent::goal_resume,
+            commands::agent::goal_clear,
+            commands::agent::goal_evaluate,
             // Index
             commands::index::index_get_tree,
             commands::index::index_get_children,

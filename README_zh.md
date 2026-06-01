@@ -407,7 +407,7 @@ npm run dev
 使用微信扫描下方二维码加入用户群，与作者和用户共同交流！
 
 <div align="center">
-  <img width="320" alt="WeChat Group" src="https://github.com/user-attachments/assets/ca078477-8068-47f1-810c-20f8e03eec0d" />
+  <img width="320" alt="WeChat Group" src="https://github.com/user-attachments/assets/a83d539f-28cb-407a-a4df-c131a59b1826" />
 </div>
 
 ## 致敬

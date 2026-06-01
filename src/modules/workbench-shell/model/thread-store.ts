@@ -67,6 +67,24 @@ export interface ThreadStoreState {
   /** IDs of pending runs that have already been submitted to prevent
    *  re-submission after component unmount/remount cycles. */
   handledPendingRunIds: Record<string, number>;
+  /** Goal state per thread. */
+  goalState: Record<string, GoalStoreState | null>;
+}
+
+export interface GoalStoreState {
+  id: string;
+  threadId: string;
+  objective: string;
+  status: "active" | "paused" | "budget_limited" | "complete";
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  turnsUsed: number;
+  maxTurns: number;
+  tokenBudget?: number | null;
+  pauseReason?: string | null;
+  pauseDetail?: string | null;
+  evidence?: string | null;
+  lastEvaluatedRunId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +107,7 @@ export const threadStore = createStore<ThreadStoreState>({
   runtimeContextUsage: null,
   editingThreadId: null,
   handledPendingRunIds: {},
+  goalState: {},
 });
 
 // ---------------------------------------------------------------------------
@@ -146,6 +165,22 @@ export function setThreadStatus(
       return {}; // reject — don't downgrade active state with a null-runId idle write
     }
 
+    // Guard C: reject snapshot downgrades of stream-sourced active states
+    // to terminal or idle. Snapshots are point-in-time DB reads and always
+    // lag behind the real-time stream for active runs. Within active states
+    // (running, waiting_approval, needs_reply) the snapshot can still provide
+    // useful transitions (e.g., running → waiting_approval from old snapshot).
+    if (
+      existing &&
+      existing.source === "stream" &&
+      isActiveOrPendingStatus(existing.status) &&
+      meta.source === "snapshot" &&
+      !isActiveOrPendingStatus(status) &&
+      status !== existing.status
+    ) {
+      return {};
+    }
+
     return {
       threadStatuses: {
         ...prev.threadStatuses,
@@ -192,6 +227,23 @@ export function batchSetThreadStatuses(
       ) {
         continue;
       }
+
+      // Guard C: reject snapshot downgrades of stream-sourced active states
+      // to terminal or idle. Snapshots are point-in-time DB reads and always
+      // lag behind the real-time stream for active runs. Within active states
+      // (running, waiting_approval, needs_reply) the snapshot can still provide
+      // useful transitions (e.g., running → waiting_approval from old snapshot).
+      if (
+        existing &&
+        existing.source === "stream" &&
+        isActiveOrPendingStatus(existing.status) &&
+        upd.source === "snapshot" &&
+        !isActiveOrPendingStatus(upd.status) &&
+        upd.status !== existing.status
+      ) {
+        continue;
+      }
+
       next[threadId] = {
         status: upd.status,
         runId: isTerminalStatus(upd.status) ? null : (incomingRunId ?? existing?.runId ?? null),
@@ -240,9 +292,14 @@ export function removeWorkspace(workspaceId: string): void {
     for (const tid of threadIdsToClean) {
       delete nextStatuses[tid];
     }
+    const nextGoalState = { ...prev.goalState };
+    for (const tid of threadIdsToClean) {
+      delete nextGoalState[tid];
+    }
     return {
       workspaces: prev.workspaces.filter((w) => w.id !== workspaceId),
       threadStatuses: nextStatuses,
+      goalState: nextGoalState,
     };
   });
 }
@@ -266,12 +323,15 @@ export function removeThread(threadId: string): void {
   threadStore.setState((prev) => {
     const nextStatuses = { ...prev.threadStatuses };
     delete nextStatuses[threadId];
+    const nextGoalState = { ...prev.goalState };
+    delete nextGoalState[threadId];
     return {
       workspaces: prev.workspaces.map((w) => ({
         ...w,
         threads: w.threads.filter((t) => t.id !== threadId),
       })),
       threadStatuses: nextStatuses,
+      goalState: nextGoalState,
     };
   });
 }
@@ -288,9 +348,12 @@ export function deleteThread(threadId: string): Promise<void> {
     optimistic: (s) => {
       const nextStatuses = { ...s.threadStatuses };
       delete nextStatuses[threadId];
+      const nextGoalState = { ...s.goalState };
+      delete nextGoalState[threadId];
       const isActive = s.activeThreadId === threadId;
       return {
         threadStatuses: nextStatuses,
+        goalState: nextGoalState,
         workspaces: s.workspaces.map((w) => ({
           ...w,
           threads: w.threads.filter((t) => t.id !== threadId),

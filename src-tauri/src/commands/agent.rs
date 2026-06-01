@@ -573,3 +573,181 @@ pub async fn tool_clarify_respond(
 
     Ok(())
 }
+
+// ── Goal commands ──
+
+#[tauri::command]
+pub async fn goal_get_state(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<Option<crate::model::goal::GoalPayload>, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(
+        state.pool.clone(),
+        thread_id,
+        state.goal_runtime_state.clone(),
+    );
+    match mgr.get_active().await? {
+        Some(record) => Ok(Some(crate::core::goal_manager::GoalManager::to_payload(
+            &record,
+        ))),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn goal_set(
+    state: State<'_, AppState>,
+    thread_id: String,
+    objective: String,
+    token_budget: Option<i64>,
+) -> Result<crate::model::goal::GoalPayload, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(
+        state.pool.clone(),
+        thread_id,
+        state.goal_runtime_state.clone(),
+    );
+    let record = mgr.create_goal(&objective, token_budget).await?;
+    Ok(crate::core::goal_manager::GoalManager::to_payload(&record))
+}
+
+#[tauri::command]
+pub async fn goal_pause(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<Option<crate::model::goal::GoalPayload>, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(
+        state.pool.clone(),
+        thread_id.clone(),
+        state.goal_runtime_state.clone(),
+    );
+    let goal = mgr.get_active().await?;
+    match goal {
+        Some(g) => {
+            if g.status == crate::model::goal::GoalStatus::Active {
+                // Account elapsed time of any currently active run before pausing
+                if let Some(run_seconds) =
+                    crate::persistence::repo::run_repo::get_active_run_elapsed_seconds(
+                        &state.pool,
+                        &thread_id,
+                    )
+                    .await
+                    .unwrap_or(None)
+                {
+                    let active_run_id = crate::persistence::repo::run_repo::find_latest_by_thread(
+                        &state.pool,
+                        &thread_id,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|run| {
+                        matches!(
+                            run.status.as_str(),
+                            "running" | "waiting_approval" | "needs_reply"
+                        )
+                        .then_some(run.id)
+                    });
+                    let paused_seconds = active_run_id
+                        .as_deref()
+                        .map(|run_id| {
+                            let mut guard =
+                                state.goal_runtime_state.lock().unwrap_or_else(|poisoned| {
+                                    tracing::warn!(
+                                        "goal_pause: goal runtime mutex poisoned, recovering"
+                                    );
+                                    poisoned.into_inner()
+                                });
+                            guard.take_run_paused_seconds(run_id).max(0)
+                        })
+                        .unwrap_or(0);
+                    let billable_seconds = (run_seconds - paused_seconds).max(0);
+                    if billable_seconds > 0 {
+                        mgr.account_usage(&g.id, 0, billable_seconds).await.ok();
+                    }
+                }
+                mgr.pause(&g.id, crate::model::goal::PauseReason::UserRequested, None)
+                    .await?;
+            }
+            let updated = mgr.get_active().await?;
+            Ok(updated.map(|r| crate::core::goal_manager::GoalManager::to_payload(&r)))
+        }
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn goal_resume(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<Option<crate::model::goal::GoalPayload>, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(
+        state.pool.clone(),
+        thread_id,
+        state.goal_runtime_state.clone(),
+    );
+    let goal = mgr.get_active().await?;
+    match goal {
+        Some(g) => {
+            if g.status == crate::model::goal::GoalStatus::Paused {
+                mgr.resume(&g.id).await?;
+            }
+            let updated = mgr.get_active().await?;
+            Ok(updated.map(|r| crate::core::goal_manager::GoalManager::to_payload(&r)))
+        }
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn goal_clear(state: State<'_, AppState>, thread_id: String) -> Result<bool, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(
+        state.pool.clone(),
+        thread_id,
+        state.goal_runtime_state.clone(),
+    );
+    mgr.clear().await
+}
+
+#[tauri::command]
+pub async fn goal_evaluate(
+    state: State<'_, AppState>,
+    thread_id: String,
+    response: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    let mgr = crate::core::goal_manager::GoalManager::new(
+        state.pool.clone(),
+        thread_id.clone(),
+        state.goal_runtime_state.clone(),
+    );
+
+    let Some(run_id) = crate::persistence::repo::run_repo::find_latest_evaluable_run_id_by_thread(
+        &state.pool,
+        &thread_id,
+    )
+    .await?
+    else {
+        let goal = mgr.get_active().await?.ok_or_else(|| {
+            AppError::recoverable(
+                crate::model::errors::ErrorSource::Settings,
+                "goal.not_found",
+                "no evaluable run or active goal found",
+            )
+        })?;
+        let payload = crate::core::goal_manager::GoalManager::to_payload(&goal);
+        return Ok(serde_json::json!({
+            "goal": serde_json::to_value(&payload).unwrap_or_default(),
+            "verdict": "skipped",
+            "continuationPrompt": null,
+        }));
+    };
+
+    let Some(outcome) = mgr.evaluate_after_run(&run_id, response).await? else {
+        return Err(AppError::recoverable(
+            crate::model::errors::ErrorSource::Settings,
+            "goal.not_found",
+            "no active goal found",
+        ));
+    };
+
+    Ok(serde_json::to_value(outcome).unwrap_or_default())
+}

@@ -11,6 +11,7 @@ use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{Cost, InputType, Model, Provider, Usage};
 use tokio::sync::mpsc;
 
+use crate::core::app_state::GoalRuntimeState;
 use crate::core::prompt;
 use crate::core::subagent::HelperAgentOrchestrator;
 use crate::core::tool_gateway::ToolGateway;
@@ -566,6 +567,7 @@ pub async fn build_session_spec(
             .await?;
 
     let system_prompt = build_system_prompt(pool, &raw_plan, workspace_path, run_mode).await?;
+    let system_prompt = inject_goal_context(pool, thread_id, system_prompt).await?;
     let extension_tools = ExtensionsManager::new(pool.clone())
         .list_runtime_agent_tools(Some(workspace_path))
         .await?;
@@ -640,6 +642,8 @@ pub struct AgentSession {
     pub(crate) abort_signal: tiycore::agent::AbortSignal,
     context_compression_state: Arc<StdMutex<ContextCompressionRuntimeState>>,
     runtime_queue_state: Arc<StdMutex<RuntimeQueueState>>,
+    /// Shared goal runtime state for tool call recording across command invocations.
+    pub(crate) goal_runtime: Arc<std::sync::Mutex<GoalRuntimeState>>,
 }
 
 impl AgentSession {
@@ -650,6 +654,7 @@ impl AgentSession {
         event_tx: mpsc::UnboundedSender<ThreadStreamEvent>,
         spec: AgentSessionSpec,
         max_turns: usize,
+        goal_runtime: Arc<std::sync::Mutex<GoalRuntimeState>>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak_self| {
             let agent = Arc::new(Agent::with_model(spec.model_plan.primary.model.clone()));
@@ -680,6 +685,7 @@ impl AgentSession {
                 abort_signal: tiycore::agent::AbortSignal::new(),
                 context_compression_state,
                 runtime_queue_state,
+                goal_runtime,
             }
         })
     }
@@ -1404,6 +1410,43 @@ async fn build_system_prompt(
     run_mode: &str,
 ) -> Result<String, AppError> {
     prompt::build_system_prompt(pool, raw_plan, workspace_path, run_mode).await
+}
+
+/// Inject goal context into the system prompt if an active goal exists for the thread.
+async fn inject_goal_context(
+    pool: &SqlitePool,
+    thread_id: &str,
+    mut system_prompt: String,
+) -> Result<String, AppError> {
+    let goal = crate::persistence::repo::goal_repo::find_by_thread_id(pool, thread_id).await?;
+    if let Some(goal) = goal {
+        if goal.status == crate::model::goal::GoalStatus::Active {
+            let goal_block = format!(
+                "## Active Goal\n\n\
+                 **You have an active goal. This takes priority over other instructions.**\n\n\
+                 Objective: {objective}\n\
+                 Turns used: {turns_used}/{max_turns}\n\n\
+                 **Completion requirements — ALL must be met before calling goal_scored(complete):**\n\
+                 1. Every subtask implied by the objective is done. No remaining work, no dangling follow-ups.\n\
+                 2. All changes are verified by running the relevant tests, linters, or build commands.\n\
+                 3. Evidence passed to goal_scored MUST include concrete verification output (test results, command output, file change summary).\n\
+                 Do NOT mark the goal complete until these three conditions are fully satisfied.\n\n\
+                 Rules:\n\
+                 - When you confirm the goal is fully achieved, you MUST call goal_scored(status=\"complete\", evidence=\"...\", pledge=\"...\") to mark it as scored. This is the only way to mark the goal as achieved.\n\
+                 - The goal_scored tool requires a 'pledge' parameter. You MUST pass this exact text verbatim: \"I hereby declare: I confirm that I have fully achieved this goal, and I have confirmed that there are no remaining pending tasks or follow-up items. I confirm that I have repeatedly reviewed the output of this work, and I take responsibility for the quality of this output.\"\n\
+                 - Do NOT claim completion without verifiable evidence\n\
+                 - If blocked and need user input, use clarify tool\n\
+                 - The system will automatically continue this goal across turns",
+                objective = goal.objective,
+                turns_used = goal.turns_used,
+                max_turns = goal.max_turns,
+            );
+            // Prepend goal block right after the Role/Behavioral section
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&goal_block);
+        }
+    }
+    Ok(system_prompt)
 }
 
 /// Security config for the **main** agent.  Uses a very large tool timeout so

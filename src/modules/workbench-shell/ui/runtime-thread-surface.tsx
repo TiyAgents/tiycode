@@ -24,6 +24,11 @@ import { buildRunModelPlanFromSelection } from "@/modules/settings-center/model/
 import type { CommandEntry } from "@/modules/settings-center/model/types";
 import { threadClearContext, threadLoad } from "@/services/bridge";
 import {
+  goalSet,
+  goalGetState,
+  type GoalPayload,
+} from "@/services/bridge/agent-commands";
+import {
   ThreadStream,
   type HelperEvent,
   type QueueEvent,
@@ -70,6 +75,7 @@ import type { SkillRecord } from "@/shared/types/extensions";
 import {
   getFileMutationPresentation,
 } from "@/modules/workbench-shell/model/file-mutation-presentation";
+import { GoalStatusBar } from "@/modules/workbench-shell/ui/goal-status-bar";
 import { WorkbenchPromptComposer, ComposerMessageAttachments } from "@/modules/workbench-shell/ui/workbench-prompt-composer";
 import {
   initialTaskBoardState,
@@ -159,6 +165,7 @@ import {
   parseCommandComposerMetadata,
   parseRuntimeQueueComposerMetadata,
   parseSummaryMarkerMetadata,
+  parseGoalContinuationMetadata,
   parseClarifyPrompt,
   formatPlanMetadata,
 } from "@/modules/workbench-shell/ui/runtime-thread-surface-metadata";
@@ -241,6 +248,12 @@ const RESET_IDLE_CONTEXT: RunMachineContext = {
   errorMessage: null,
   retryCount: 0,
 };
+
+function setThreadGoalState(threadId: string, goal: GoalPayload | null): void {
+  threadStore.setState((prev) => ({
+    goalState: { ...prev.goalState, [threadId]: goal },
+  }));
+}
 
 export function RuntimeThreadSurface({
   commands = [],
@@ -394,6 +407,14 @@ export function RuntimeThreadSurface({
   const preserveContextUsageOnNextEmptySnapshotRef = useRef(false);
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
   const lastOptimisticUserIdRef = useRef<string | null>(null);
+
+  // Track the currently active thread ID so stale closures (e.g. onStop
+  // timeout/callback) can detect that the thread has changed and bail out.
+  const activeThreadIdRef = useRef(threadId);
+  activeThreadIdRef.current = threadId;
+
+  // Store the stop safety-net timeout so it can be cleared on thread switch.
+  const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // --- Delayed auto-collapse infrastructure ---
   const userManuallyOpenedIds = useRef<Set<string>>(new Set());
@@ -551,9 +572,6 @@ export function RuntimeThreadSurface({
   }, [showThinkingPlaceholder]);
 
   const loadSnapshot = useCallback(async () => {
-    const requestId = snapshotLoadRequestRef.current + 1;
-    snapshotLoadRequestRef.current = requestId;
-
     if (!threadId) {
       preserveContextUsageOnNextEmptySnapshotRef.current = false;
       subscribingRef.current = false;
@@ -575,6 +593,18 @@ export function RuntimeThreadSurface({
       return;
     }
 
+    // Bail out if this loadSnapshot was captured for a different thread
+    // than the one currently being displayed — prevents stale closures
+    // (e.g. onStop timeout/callback) from overwriting the active thread's
+    // UI. This must happen before snapshotLoadRequestRef is incremented so
+    // that stale calls don't interfere with the active thread's tracking.
+    if (activeThreadIdRef.current !== threadId) {
+      return;
+    }
+
+    const requestId = snapshotLoadRequestRef.current + 1;
+    snapshotLoadRequestRef.current = requestId;
+
     setLoading(true);
     setHistoryLoadError(null);
     setLoadError(null);
@@ -582,11 +612,17 @@ export function RuntimeThreadSurface({
     eventBufferRef.current = [];
 
     try {
-      const snapshot = await threadLoad(threadId);
+      const [snapshot, activeGoal] = await Promise.all([
+        threadLoad(threadId),
+        goalGetState(threadId).catch(() => undefined),
+      ]);
       if (snapshotLoadRequestRef.current !== requestId) {
         // Stale request — do NOT clear snapshotLoadingRef or eventBufferRef
         // because a newer request owns them now.
         return;
+      }
+      if (activeGoal !== undefined) {
+        setThreadGoalState(threadId, activeGoal);
       }
 
       const nextState = mapSnapshotToRunState(snapshot);
@@ -699,6 +735,26 @@ export function RuntimeThreadSurface({
     }
   }, [clearScheduledThinkingPhase, showThinkingPlaceholder, threadId]);
 
+  useEffect(() => {
+    const isActiveBackendRun = runState === "running" || runState === "waiting_approval" || runState === "needs_reply";
+    if (
+      !threadId
+      || !isActiveBackendRun
+      || !activeRunId
+      || !streamRef.current
+      || streamRef.current.runId
+      || subscribingRef.current
+    ) {
+      return;
+    }
+
+    subscribingRef.current = true;
+    void streamRef.current.subscribe(threadId)
+      .finally(() => {
+        subscribingRef.current = false;
+      });
+  }, [activeRunId, runState, threadId]);
+
   const loadOlderMessages = useCallback(async () => {
     if (!threadId || isLoadingMoreMessages || messages.length === 0 || !hasMoreMessages) {
       return;
@@ -780,6 +836,12 @@ export function RuntimeThreadSurface({
 
   useEffect(() => {
     subscribingRef.current = false;
+    // Clear the stop safety-net timeout from a previous thread — it was
+    // captured in a stale closure and would load the wrong thread's snapshot.
+    if (stopTimerRef.current !== null) {
+      clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = null;
+    }
     pendingThreadRestoreScrollRef.current = Boolean(threadId);
     setComposerError(null);
     setComposerClearSignal((prev) => prev + 1);
@@ -861,6 +923,19 @@ export function RuntimeThreadSurface({
         } else {
           runMachine.send(machineEvent, payload);
         }
+      }
+
+      // Goal events don't participate in thinking-phase lifecycle.
+      if (event.type === "goal_state_updated") {
+        setThreadGoalState(event.threadId, event.goal);
+        return;
+      }
+      if (
+        event.type === "goal_continuation" ||
+        event.type === "goal_paused" ||
+        event.type === "goal_completed"
+      ) {
+        return;
       }
 
       if (shouldCompleteThinkingPhase(event)) {
@@ -1393,7 +1468,7 @@ export function RuntimeThreadSurface({
       return false;
     }
 
-    const submission = typeof submissionOrPrompt === "string"
+    let submission = typeof submissionOrPrompt === "string"
       ? {
           kind: "plain" as const,
           displayText: submissionOrPrompt,
@@ -1523,6 +1598,71 @@ export function RuntimeThreadSurface({
       return true;
     }
 
+    if (submission.kind === "command" && submission.command?.behavior === "goal") {
+      const argText = (submission.command.argumentsText ?? "").trim();
+
+      try {
+        // /goal <objective> — persist the goal, then start a run
+        if (!argText) {
+          setComposerError("Provide a goal objective, e.g. /goal fix the auth bugs");
+          submittingRef.current = false;
+          return true;
+        }
+        // Reject old sub-commands that are now handled by GoalStatusBar buttons
+        const OBSOLETE_SUBCOMMANDS = new Set([
+          "pause", "resume", "clear", "status",
+          "取消", "查看状态",
+        ]);
+        const firstWord = argText.split(/\s+/)[0] ?? "";
+        const firstWordLower = firstWord.toLowerCase();
+        if (OBSOLETE_SUBCOMMANDS.has(firstWordLower)) {
+          setComposerError(
+            `"${firstWord}" is now available via the goal status bar — use the ⏸ / ▶ / ✕ buttons instead.`,
+          );
+          submittingRef.current = false;
+          return true;
+        }
+        await goalSet(threadId, argText);
+        // Sync goal state to threadStore immediately so GoalStatusBar appears
+        try {
+          setThreadGoalState(threadId, await goalGetState(threadId));
+        } catch {
+          // Goal state fetch can fail silently — the status bar will
+          // pick it up on the next goal_evaluate cycle anyway.
+        }
+      } catch (error) {
+        setComposerError(`Failed to manage goal: ${error}`);
+        submittingRef.current = false;
+        return false;
+      }
+
+      // Build a structured kickoff prompt so the model knows the goal exists
+      const kickoffPrompt = [
+        "## Persistent Goal Started",
+        "",
+        "You are now working on the following goal:",
+        "",
+        "**" + argText + "**",
+        "",
+        "This goal has been created and is now **active**. Work toward it.",
+        "When the goal is fully achieved, you MUST call:",
+        "```json",
+        "goal_scored(status=\"complete\", evidence=\"test output, file changes, verification steps\", pledge=\"I hereby declare: I confirm that I have fully achieved this goal, and I have confirmed that there are no remaining pending tasks or follow-up items. I confirm that I have repeatedly reviewed the output of this work, and I take responsibility for the quality of this output.\")",
+        "```",
+        "Do NOT mark complete without verified evidence.",
+        "",
+        "If you need user input before proceeding, use the clarify tool.",
+        "The goal will automatically pause and resume when the user responds.",
+      ].join("\n");
+
+      submission = {
+        ...submission,
+        displayText: argText,
+        effectivePrompt: kickoffPrompt,
+        kind: "plain",
+      };
+    }
+
     appendOptimisticUserMessage(
       submission.displayText,
       submission.metadata ?? null,
@@ -1537,7 +1677,7 @@ export function RuntimeThreadSurface({
       await streamRef.current?.startRun(
         threadId,
         {
-          prompt,
+          prompt: submission.effectivePrompt ?? "",
           displayPrompt: submission.displayText,
           promptMetadata: submission.metadata ?? null,
           attachments: submission.attachments,
@@ -1703,15 +1843,17 @@ export function RuntimeThreadSurface({
     if (initialPromptRequest.runMode) {
       setSelectedRunMode(initialPromptRequest.runMode);
     }
-    void submitPrompt({
-      kind: "plain",
+    const pendingRunSubmission: ComposerSubmission = {
+      kind: initialPromptRequest.command ? "command" : "plain",
       displayText: initialPromptRequest.displayText,
       effectivePrompt: initialPromptRequest.effectivePrompt,
       rawMessage: { text: initialPromptRequest.displayText, files: [] },
       attachments: initialPromptRequest.attachments,
+      command: initialPromptRequest.command,
       metadata: initialPromptRequest.metadata,
       runMode: initialPromptRequest.runMode,
-    }, initialPromptRequest.runMode)
+    };
+    void submitPrompt(pendingRunSubmission, initialPromptRequest.runMode)
       .finally(() => {
         threadStore.setState((prev) => {
           const next = Object.fromEntries(
@@ -2557,6 +2699,7 @@ export function RuntimeThreadSurface({
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-canvas">
       <div className="pointer-events-none absolute left-1/2 top-0 h-56 w-[72rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(120,180,255,0.11),transparent_68%)] blur-3xl" />
       <div className="relative min-h-0 flex-1">
+        {threadId && <GoalStatusBar threadId={threadId} />}
         <Conversation
           className="size-full"
           contextRef={conversationContextRef}
@@ -2821,6 +2964,9 @@ export function RuntimeThreadSurface({
                 const expandedPrompt = commandComposer?.kind === "command"
                   ? (commandComposer.effectivePrompt?.trim() ?? "")
                   : "";
+                const goalContinuation = message.role === "user"
+                  ? parseGoalContinuationMetadata(message.metadata)
+                  : null;
                 const messageCopyTarget = (() => {
                   if (message.role === "user") {
                     return {
@@ -2855,6 +3001,18 @@ export function RuntimeThreadSurface({
 
                 return (
                   <div className={spacingClass} key={entry.key}>
+                    {goalContinuation ? (
+                      <div className="flex items-center gap-3 py-2">
+                        <div className="h-px flex-1 bg-app-border/28" />
+                        <span className="text-[11px] font-medium tracking-[0.04em] text-app-subtle">
+                          Goal continues
+                          {goalContinuation.turnsUsed !== null && goalContinuation.maxTurns !== null
+                            ? ` — turn ${goalContinuation.turnsUsed}/${goalContinuation.maxTurns}`
+                            : ""}
+                        </span>
+                        <div className="h-px flex-1 bg-app-border/28" />
+                      </div>
+                    ) : null}
                     <Message
                       className={message.role === "assistant" ? "max-w-full" : undefined}
                       from={message.role}
@@ -3308,11 +3466,15 @@ export function RuntimeThreadSurface({
                 const timer = setTimeout(() => {
                   void loadSnapshot();
                 }, 5_000);
+                stopTimerRef.current = timer;
 
                 // If the stream delivers a terminal event before the timeout,
                 // the next `onRunStateChange` + `loadSnapshot` will render the
                 // correct state and this timer becomes a harmless no-op.
-                return () => clearTimeout(timer);
+                return () => {
+                  clearTimeout(timer);
+                  stopTimerRef.current = null;
+                };
               }).catch(() => {
                 // The cancel request failed due to a real backend/runtime error.
                 // Reload the snapshot to reconcile the UI after surfacing that

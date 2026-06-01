@@ -2,6 +2,7 @@ pub mod errors;
 pub mod extensions;
 pub mod file;
 pub mod git;
+pub mod goal;
 pub mod provider;
 pub mod settings;
 pub mod subagent;

@@ -1,7 +1,7 @@
 //! Manages the lifecycle of agent runs backed by the built-in Rust runtime.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use sqlx::SqlitePool;
@@ -12,6 +12,7 @@ use tokio::time::{sleep, Instant};
 use crate::core::agent_session::{build_session_spec, ResolvedModelRole};
 use crate::core::agent_session_types::{AgentQueueMessageKind, RuntimeQueueSnapshotDto};
 use crate::core::app_event_emitter::AppEventEmitterRef;
+use crate::core::app_state::GoalRuntimeState;
 use crate::core::built_in_agent_runtime::{BuiltInAgentRuntime, RuntimeSessionFinishState};
 use crate::core::plan_checkpoint::{
     ApprovalPromptMetadata, PlanApprovalAction, PlanMessageMetadata,
@@ -22,7 +23,7 @@ use crate::core::sleep_manager::SleepManager;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{MessageAttachmentDto, MessageRecord, RunStatus};
-use crate::persistence::repo::{message_repo, run_repo, thread_repo, workspace_repo};
+use crate::persistence::repo::{goal_repo, message_repo, run_repo, thread_repo, workspace_repo};
 
 pub(crate) use crate::core::agent_run_event_handler::build_orphaned_run_terminal_event;
 #[cfg(test)]
@@ -66,10 +67,10 @@ pub(crate) struct ActiveRun {
 }
 
 #[derive(Default)]
-struct StartRunOptions {
-    history_override: Option<Vec<MessageRecord>>,
-    initial_prompt: Option<String>,
-    persist_user_message: bool,
+pub(crate) struct StartRunOptions {
+    pub(crate) history_override: Option<Vec<MessageRecord>>,
+    pub(crate) initial_prompt: Option<String>,
+    pub(crate) persist_user_message: bool,
 }
 
 struct ContextResetMessageBundle {
@@ -110,6 +111,8 @@ pub struct AgentRunManager {
     pub(crate) app_events: AppEventEmitterRef,
     pub(crate) runtime: Arc<BuiltInAgentRuntime>,
     pub(crate) sleep_manager: Arc<SleepManager>,
+    pub(crate) goal_runtime_state: Arc<StdMutex<GoalRuntimeState>>,
+    pub(crate) goal_continuation_enabled: bool,
     pub(crate) active_runs: Arc<Mutex<HashMap<String, ActiveRun>>>,
 }
 
@@ -119,12 +122,33 @@ impl AgentRunManager {
         app_events: AppEventEmitterRef,
         runtime: Arc<BuiltInAgentRuntime>,
         sleep_manager: Arc<SleepManager>,
+        goal_runtime_state: Arc<StdMutex<GoalRuntimeState>>,
+    ) -> Self {
+        Self::new_with_goal_continuation(
+            pool,
+            app_events,
+            runtime,
+            sleep_manager,
+            goal_runtime_state,
+            false,
+        )
+    }
+
+    pub fn new_with_goal_continuation(
+        pool: SqlitePool,
+        app_events: AppEventEmitterRef,
+        runtime: Arc<BuiltInAgentRuntime>,
+        sleep_manager: Arc<SleepManager>,
+        goal_runtime_state: Arc<StdMutex<GoalRuntimeState>>,
+        goal_continuation_enabled: bool,
     ) -> Self {
         Self {
             pool,
             app_events,
             runtime,
             sleep_manager,
+            goal_runtime_state,
+            goal_continuation_enabled,
             active_runs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -162,7 +186,7 @@ impl AgentRunManager {
         .await
     }
 
-    async fn start_run_with_options(
+    pub(crate) async fn start_run_with_options(
         self: &Arc<Self>,
         thread_id: &str,
         prompt: &str,
@@ -349,6 +373,47 @@ impl AgentRunManager {
                 )
             })?;
         let (profile_id, provider_id, model_id) = extract_run_model_refs(&model_plan_value);
+
+        // Account the planning run's billable time to the active goal so the
+        // frontend timer displays the correct accumulated time when the new
+        // implementation run starts (the frontend resets its local elapsed on
+        // every run_id change, so time_used_seconds must include the full
+        // planning-phase cost).
+        {
+            let planning_elapsed = run_repo::get_run_elapsed_seconds(&self.pool, &planning_run_id)
+                .await?
+                .unwrap_or(0);
+            let paused_seconds = {
+                let mut guard = self.goal_runtime_state.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("goal pause runtime mutex poisoned, recovering");
+                    poisoned.into_inner()
+                });
+                guard.take_run_paused_seconds(&planning_run_id).max(0)
+            };
+            let billable = (planning_elapsed - paused_seconds).max(0);
+            if billable > 0 {
+                if let Ok(Some(goal)) = goal_repo::find_by_thread_id(&self.pool, thread_id).await {
+                    if let Err(error) = goal_repo::account_usage(
+                        &self.pool,
+                        &goal.id,
+                        0, // tokens_delta: planning turns were already counted
+                        billable,
+                        0, // turns_delta
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            planning_run_id = %planning_run_id,
+                            goal_id = %goal.id,
+                            billable_seconds = billable,
+                            error = %error,
+                            "failed to account planning run time to goal"
+                        );
+                    }
+                }
+            }
+        }
+
         let mut approval_metadata = approval_metadata;
         approval_metadata.state = IMPLEMENTATION_PLAN_APPROVED_STATE.to_string();
         approval_metadata.approved_action = Some(action.clone());
@@ -389,6 +454,20 @@ impl AgentRunManager {
                 },
             )
             .await?;
+
+        // Emit the updated goal state through the new run's event channel so
+        // the frontend sees the accumulated time_used_seconds (which now
+        // includes the planning-run time) before it starts the real-time timer
+        // for the new implementation run.
+        if let Ok(Some(goal)) = goal_repo::find_by_thread_id(&self.pool, thread_id).await {
+            let runs = self.active_runs.lock().await;
+            if let Some(run) = runs.get(&result.0) {
+                let _ = run.frontend_tx.send(ThreadStreamEvent::GoalStateUpdated {
+                    thread_id: thread_id.to_string(),
+                    goal: Some(crate::model::goal::GoalPayload::from(goal)),
+                });
+            }
+        }
 
         if let Some(seed_messages) = context_seed_messages.as_ref() {
             self.persist_messages(seed_messages).await?;
@@ -439,11 +518,11 @@ impl AgentRunManager {
         Ok(Some((run_id, event_rx)))
     }
 
-    pub async fn cancel_run(&self, thread_id: &str) -> Result<bool, AppError> {
+    pub async fn cancel_run(self: &Arc<Self>, thread_id: &str) -> Result<bool, AppError> {
         self.cancel_run_if_active(thread_id).await
     }
 
-    pub async fn cancel_run_if_active(&self, thread_id: &str) -> Result<bool, AppError> {
+    pub async fn cancel_run_if_active(self: &Arc<Self>, thread_id: &str) -> Result<bool, AppError> {
         let Some(run_id) =
             mark_thread_run_cancellation_requested(&self.active_runs, thread_id).await
         else {

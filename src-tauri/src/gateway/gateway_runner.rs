@@ -12,6 +12,7 @@ use futures::StreamExt;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::core::agent_session_model_plan;
+use crate::core::goal_manager::GoalManager;
 use crate::core::plan_checkpoint;
 use crate::gateway::platforms::wecom::WecomAdapter;
 use crate::gateway::platforms::weixin::WeixinAdapter;
@@ -583,6 +584,9 @@ async fn dispatch_command(
                         /resume <N> — 进入第 N 个会话\n\
                         /profile — 查看 Profile 列表\n\
                         /profile <N> — 切换当前会话 Profile\n\
+                        /goal [目标描述] — 设置持久化目标\n\
+                        /goal status — 查看当前目标状态\n\
+                        /goal cancel — 取消当前目标\n\
                         /stop — 停止当前运行\n\
                         /status — 查看当前状态\n\
                         /help — 显示此帮助";
@@ -815,6 +819,129 @@ async fn dispatch_command(
                 adapter.send_text(chat_id, "⏹️ 已停止当前运行").await?;
             } else {
                 adapter.send_text(chat_id, "当前没有运行中的任务").await?;
+            }
+        }
+
+        GatewayCommand::GoalStatus => {
+            let thread_id = match session.current_thread_id.as_deref() {
+                Some(id) => id,
+                None => {
+                    adapter.send_text(chat_id, "请先选择或创建一个会话").await?;
+                    return Ok(());
+                }
+            };
+            let mgr = GoalManager::new(
+                state.pool.clone(),
+                thread_id.to_string(),
+                state.goal_runtime_state.clone(),
+            );
+            match mgr.get_active().await {
+                Ok(Some(record)) => {
+                    let payload = GoalManager::to_payload(&record);
+                    adapter
+                        .send_text(
+                            chat_id,
+                            &format!(
+                                "🎯 当前目标: {}\n状态: {}\n进度: {}/{} turns",
+                                payload.objective,
+                                payload.status.as_str(),
+                                payload.turns_used,
+                                payload.max_turns,
+                            ),
+                        )
+                        .await?;
+                }
+                Ok(None) => {
+                    adapter.send_text(chat_id, "当前会话没有设置目标").await?;
+                }
+                Err(e) => {
+                    adapter
+                        .send_text(chat_id, &format!("查询目标状态失败: {e}"))
+                        .await?;
+                }
+            }
+        }
+
+        GatewayCommand::GoalCancel => {
+            let thread_id = match session.current_thread_id.as_deref() {
+                Some(id) => id,
+                None => {
+                    adapter.send_text(chat_id, "请先选择或创建一个会话").await?;
+                    return Ok(());
+                }
+            };
+            let mgr = GoalManager::new(
+                state.pool.clone(),
+                thread_id.to_string(),
+                state.goal_runtime_state.clone(),
+            );
+            match mgr.clear().await {
+                Ok(_) => {
+                    adapter.send_text(chat_id, "🗑️ 目标已取消").await?;
+                }
+                Err(e) => {
+                    adapter
+                        .send_text(chat_id, &format!("取消目标失败: {e}"))
+                        .await?;
+                }
+            }
+        }
+
+        GatewayCommand::GoalUnsupported { subcommand } => {
+            adapter
+                .send_text(
+                    chat_id,
+                    &format!(
+                        "⚠️ /goal {subcommand} 不支持通过 IM 渠道操作，请在桌面端 GUI 的 Goal Status Bar 中使用对应按钮。\n\
+                         支持的 goal 指令: /goal <目标>, /goal status, /goal cancel",
+                    ),
+                )
+                .await?;
+        }
+
+        GatewayCommand::GoalSet { objective } => {
+            let thread_id = match session.current_thread_id.as_deref() {
+                Some(id) => id,
+                None => {
+                    adapter.send_text(chat_id, "请先选择或创建一个会话").await?;
+                    return Ok(());
+                }
+            };
+            let mgr = GoalManager::new(
+                state.pool.clone(),
+                thread_id.to_string(),
+                state.goal_runtime_state.clone(),
+            );
+            match mgr.create_goal(&objective, None).await {
+                Ok(record) => {
+                    let payload = GoalManager::to_payload(&record);
+                    adapter
+                        .send_text(chat_id, &format!("✅ 目标已设置: {}", payload.objective))
+                        .await?;
+                    // Build a kickoff prompt similar to the GUI /goal path
+                    let kickoff = format!(
+                        "## Persistent Goal Started\n\nYou are now working on the following goal:\n\n**{}**\n\nThis goal has been created and is now **active**. Work toward it.\nWhen the goal is fully achieved, you MUST call:\n```json\ngoal_scored(status=\"complete\", evidence=\"test output, file changes, verification steps\", pledge=\"I hereby declare: I confirm that I have fully achieved this goal, and I have confirmed that there are no remaining pending tasks or follow-up items. I confirm that I have repeatedly reviewed the output of this work, and I take responsibility for the quality of this output.\")\n```\nDo NOT mark complete without verified evidence.\n\nIf you need user input before proceeding, use the clarify tool.\nThe goal will automatically pause and resume when the user responds.",
+                        objective,
+                    );
+                    run_agent_prompt(
+                        state,
+                        session,
+                        config,
+                        adapter,
+                        chat_id,
+                        &kickoff,
+                        media_attachments,
+                        approval_rx.clone(),
+                        clarify_rx.clone(),
+                        stop_rx.clone(),
+                    )
+                    .await?;
+                }
+                Err(e) => {
+                    adapter
+                        .send_text(chat_id, &format!("设置目标失败: {e}"))
+                        .await?;
+                }
             }
         }
 
