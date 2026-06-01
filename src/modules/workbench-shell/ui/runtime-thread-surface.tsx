@@ -408,6 +408,14 @@ export function RuntimeThreadSurface({
   const conversationContextRef = useRef<StickToBottomContext | null>(null);
   const lastOptimisticUserIdRef = useRef<string | null>(null);
 
+  // Track the currently active thread ID so stale closures (e.g. onStop
+  // timeout/callback) can detect that the thread has changed and bail out.
+  const activeThreadIdRef = useRef(threadId);
+  activeThreadIdRef.current = threadId;
+
+  // Store the stop safety-net timeout so it can be cleared on thread switch.
+  const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // --- Delayed auto-collapse infrastructure ---
   const userManuallyOpenedIds = useRef<Set<string>>(new Set());
 
@@ -564,9 +572,6 @@ export function RuntimeThreadSurface({
   }, [showThinkingPlaceholder]);
 
   const loadSnapshot = useCallback(async () => {
-    const requestId = snapshotLoadRequestRef.current + 1;
-    snapshotLoadRequestRef.current = requestId;
-
     if (!threadId) {
       preserveContextUsageOnNextEmptySnapshotRef.current = false;
       subscribingRef.current = false;
@@ -587,6 +592,18 @@ export function RuntimeThreadSurface({
 
       return;
     }
+
+    // Bail out if this loadSnapshot was captured for a different thread
+    // than the one currently being displayed — prevents stale closures
+    // (e.g. onStop timeout/callback) from overwriting the active thread's
+    // UI. This must happen before snapshotLoadRequestRef is incremented so
+    // that stale calls don't interfere with the active thread's tracking.
+    if (activeThreadIdRef.current !== threadId) {
+      return;
+    }
+
+    const requestId = snapshotLoadRequestRef.current + 1;
+    snapshotLoadRequestRef.current = requestId;
 
     setLoading(true);
     setHistoryLoadError(null);
@@ -819,6 +836,12 @@ export function RuntimeThreadSurface({
 
   useEffect(() => {
     subscribingRef.current = false;
+    // Clear the stop safety-net timeout from a previous thread — it was
+    // captured in a stale closure and would load the wrong thread's snapshot.
+    if (stopTimerRef.current !== null) {
+      clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = null;
+    }
     pendingThreadRestoreScrollRef.current = Boolean(threadId);
     setComposerError(null);
     setComposerClearSignal((prev) => prev + 1);
@@ -3443,11 +3466,15 @@ export function RuntimeThreadSurface({
                 const timer = setTimeout(() => {
                   void loadSnapshot();
                 }, 5_000);
+                stopTimerRef.current = timer;
 
                 // If the stream delivers a terminal event before the timeout,
                 // the next `onRunStateChange` + `loadSnapshot` will render the
                 // correct state and this timer becomes a harmless no-op.
-                return () => clearTimeout(timer);
+                return () => {
+                  clearTimeout(timer);
+                  stopTimerRef.current = null;
+                };
               }).catch(() => {
                 // The cancel request failed due to a real backend/runtime error.
                 // Reload the snapshot to reconcile the UI after surfacing that
