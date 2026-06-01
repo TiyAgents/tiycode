@@ -394,11 +394,9 @@ impl AgentRunManager {
             if billable > 0 {
                 if let Ok(Some(goal)) = goal_repo::find_by_thread_id(&self.pool, thread_id).await {
                     if let Err(error) = goal_repo::account_usage(
-                        &self.pool,
-                        &goal.id,
+                        &self.pool, &goal.id,
                         0, // tokens_delta: planning turns were already counted
-                        billable,
-                        0, // turns_delta
+                        billable, 0, // turns_delta
                     )
                     .await
                     {
