@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::time::{sleep, Instant};
 
 use crate::core::agent_session::{build_session_spec, ResolvedModelRole};
+use crate::core::agent_session_model_plan;
 use crate::core::agent_session_types::{AgentQueueMessageKind, RuntimeQueueSnapshotDto};
 use crate::core::app_event_emitter::AppEventEmitterRef;
 use crate::core::app_state::GoalRuntimeState;
@@ -364,7 +365,7 @@ impl AgentRunManager {
                         "The approved plan is missing its runtime model plan.",
                     )
                 })?;
-        let model_plan_value = serde_json::from_str::<serde_json::Value>(&model_plan_json)
+        let frozen_model_plan = serde_json::from_str::<serde_json::Value>(&model_plan_json)
             .map_err(|error| {
                 AppError::recoverable(
                     ErrorSource::Thread,
@@ -372,6 +373,40 @@ impl AgentRunManager {
                     format!("Failed to parse runtime model plan: {error}"),
                 )
             })?;
+        let (frozen_profile_id, _, _) = extract_run_model_refs(&frozen_model_plan);
+
+        // If the user switched profiles on this thread after the planning run
+        // started, honour the updated profile for the implementation run.
+        let thread_record = thread_repo::find_by_id(&self.pool, thread_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
+
+        let model_plan_value = if thread_record.profile_id.is_some()
+            && thread_record.profile_id != frozen_profile_id
+        {
+            let current_pid = thread_record.profile_id.as_deref().unwrap();
+            tracing::info!(
+                thread_id = %thread_id,
+                frozen_profile = ?frozen_profile_id,
+                current_profile = %current_pid,
+                "plan approval: thread profile changed since planning run, rebuilding model plan"
+            );
+            match agent_session_model_plan::build_model_plan_from_profile(&self.pool, current_pid)
+                .await
+            {
+                Ok(rebuilt) => rebuilt,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "failed to rebuild model plan from current profile, falling back to frozen plan"
+                    );
+                    frozen_model_plan
+                }
+            }
+        } else {
+            frozen_model_plan
+        };
+
         let (profile_id, provider_id, model_id) = extract_run_model_refs(&model_plan_value);
 
         // Account the planning run's billable time to the active goal so the
