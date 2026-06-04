@@ -914,6 +914,8 @@ impl AgentSession {
         let context_compression_state_ref = Arc::clone(&self.context_compression_state);
         let current_turn_index: Arc<StdMutex<Option<usize>>> = Arc::new(StdMutex::new(None));
         let turn_index_ref = Arc::clone(&current_turn_index);
+        let last_text_delta = Arc::new(StdMutex::new(None::<String>));
+        let last_text_delta_ref = Arc::clone(&last_text_delta);
         let unsubscribe = self.agent.subscribe(move |event| {
             handle_agent_event(
                 &run_id,
@@ -925,6 +927,7 @@ impl AgentSession {
                 &context_compression_state_ref,
                 &reasoning_ref,
                 &turn_index_ref,
+                &last_text_delta_ref,
                 &context_window,
                 &model_display_name,
                 event,

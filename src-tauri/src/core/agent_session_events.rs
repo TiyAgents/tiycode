@@ -20,6 +20,7 @@ pub(crate) fn handle_agent_event(
     context_compression_state: &StdMutex<ContextCompressionRuntimeState>,
     reasoning_buffer: &StdMutex<String>,
     current_turn_index: &StdMutex<Option<usize>>,
+    last_text_delta: &StdMutex<Option<String>>,
     context_window: &str,
     model_display_name: &str,
     event: &tiycore::agent::AgentEvent,
@@ -51,6 +52,24 @@ pub(crate) fn handle_agent_event(
             }
             match assistant_event.as_ref() {
                 AssistantMessageEvent::TextDelta { delta, .. } => {
+                    // Skip consecutive identical deltas to defend against
+                    // upstream (tiycore / provider) emitting the same chunk
+                    // twice.  See design doc: this pattern is virtually
+                    // impossible in normal LLM streaming, so the guard won't
+                    // swallow legitimate content.
+                    {
+                        let mut prev =
+                            lock_or_recover(last_text_delta, "TextDelta:last_text_delta");
+                        if prev.as_deref() == Some(delta.as_str()) {
+                            tracing::debug!(
+                                run_id,
+                                "skipping duplicate text delta ({} bytes)",
+                                delta.len()
+                            );
+                            return;
+                        }
+                        *prev = Some(delta.clone());
+                    }
                     let message_id = ensure_message_id(current_message_id);
                     let _ = event_tx.send(ThreadStreamEvent::MessageDelta {
                         run_id: run_id.to_string(),
@@ -65,6 +84,26 @@ pub(crate) fn handle_agent_event(
                     reason,
                     status,
                 } => {
+                    // When a request-level retry occurs (e.g. 503, connection
+                    // drop), any TextDelta events from the failed attempt have
+                    // already been forwarded.  The retry will re-stream from
+                    // scratch, so we must discard the partial message to avoid
+                    // appending duplicate content under the same message_id.
+                    {
+                        let guard =
+                            lock_or_recover(current_message_id, "Retrying:current_message_id");
+                        if guard.is_some() {
+                            let mid = guard.clone().unwrap();
+                            drop(guard);
+                            let _ = event_tx.send(ThreadStreamEvent::MessageDiscarded {
+                                run_id: run_id.to_string(),
+                                message_id: mid,
+                                reason: "request_retrying".to_string(),
+                            });
+                            reset_message_id(current_message_id);
+                            reset_message_id(last_text_delta);
+                        }
+                    }
                     let _ = event_tx.send(ThreadStreamEvent::RequestRetrying {
                         run_id: run_id.to_string(),
                         attempt: *attempt,
@@ -175,6 +214,7 @@ pub(crate) fn handle_agent_event(
                         model_display_name,
                     );
                     reset_message_id(current_message_id);
+                    reset_message_id(last_text_delta);
                     reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
                     return;
                 }
@@ -199,6 +239,7 @@ pub(crate) fn handle_agent_event(
                 });
             }
 
+            reset_message_id(last_text_delta);
             reset_reasoning_state(current_reasoning_message_id, reasoning_buffer);
         }
         tiycore::agent::AgentEvent::MessageDiscarded { reason, .. } => {

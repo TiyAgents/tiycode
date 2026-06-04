@@ -751,6 +751,7 @@ pub(super) mod tests {
     ) {
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_turn_index = StdMutex::new(None::<usize>);
+        let last_text_delta = StdMutex::new(None::<String>);
         handle_agent_event(
             run_id,
             event_tx,
@@ -761,6 +762,7 @@ pub(super) mod tests {
             context_compression_state,
             reasoning_buffer,
             &current_turn_index,
+            &last_text_delta,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             event,
@@ -1344,6 +1346,7 @@ Used for prompt assembly coverage.
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
+        let last_text_delta = StdMutex::new(None::<String>);
         let assistant = AssistantMessage::builder()
             .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
@@ -1370,6 +1373,7 @@ Used for prompt assembly coverage.
             &context_compression_state,
             &reasoning_buffer,
             &current_turn_index,
+            &last_text_delta,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::MessageEnd {
@@ -1488,6 +1492,7 @@ Used for prompt assembly coverage.
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
+        let last_text_delta = StdMutex::new(None::<String>);
 
         handle_agent_event(
             "run-retry",
@@ -1499,6 +1504,7 @@ Used for prompt assembly coverage.
             &context_compression_state,
             &reasoning_buffer,
             &current_turn_index,
+            &last_text_delta,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::TurnRetrying {
@@ -1532,6 +1538,7 @@ Used for prompt assembly coverage.
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
+        let last_text_delta = StdMutex::new(None::<String>);
 
         handle_agent_event(
             "run-request-retry",
@@ -1543,6 +1550,7 @@ Used for prompt assembly coverage.
             &context_compression_state,
             &reasoning_buffer,
             &current_turn_index,
+            &last_text_delta,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::MessageUpdate {
@@ -1580,6 +1588,198 @@ Used for prompt assembly coverage.
     }
 
     #[test]
+    fn consecutive_identical_text_deltas_are_deduplicated() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let last_completed_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
+        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
+        let last_text_delta = StdMutex::new(None::<String>);
+
+        let make_text_delta = |delta: &str| AgentEvent::MessageUpdate {
+            turn_index: 0,
+            message: AgentMessage::Assistant(sample_partial_assistant_message()),
+            assistant_event: Box::new(AssistantMessageEvent::TextDelta {
+                content_index: 0,
+                delta: delta.to_string(),
+                partial: sample_partial_assistant_message(),
+            }),
+        };
+
+        // First "Hello" should pass through
+        handle_agent_event(
+            "run-dedup",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            &current_turn_index,
+            &last_text_delta,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &make_text_delta("Hello"),
+        );
+
+        // Second identical "Hello" should be skipped
+        handle_agent_event(
+            "run-dedup",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            &current_turn_index,
+            &last_text_delta,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &make_text_delta("Hello"),
+        );
+
+        // Different delta " world" should pass through
+        handle_agent_event(
+            "run-dedup",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            &current_turn_index,
+            &last_text_delta,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &make_text_delta(" world"),
+        );
+
+        let events = std::iter::from_fn(|| event_rx.try_recv().ok()).collect::<Vec<_>>();
+        let deltas: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                ThreadStreamEvent::MessageDelta { delta, .. } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            deltas,
+            vec!["Hello", " world"],
+            "duplicate consecutive delta should be skipped"
+        );
+    }
+
+    #[test]
+    fn retrying_with_active_streaming_message_emits_discard_and_resets_id() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let current_message_id = StdMutex::new(None::<String>);
+        let last_completed_message_id = StdMutex::new(None::<String>);
+        let current_reasoning_message_id = StdMutex::new(None::<String>);
+        let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
+        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let reasoning_buffer = StdMutex::new(String::new());
+        let current_turn_index = StdMutex::new(None::<usize>);
+        let last_text_delta = StdMutex::new(None::<String>);
+
+        // First send a TextDelta to create a streaming message_id
+        handle_agent_event(
+            "run-retry-discard",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            &current_turn_index,
+            &last_text_delta,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &AgentEvent::MessageUpdate {
+                turn_index: 0,
+                message: AgentMessage::Assistant(sample_partial_assistant_message()),
+                assistant_event: Box::new(AssistantMessageEvent::TextDelta {
+                    content_index: 0,
+                    delta: "partial content".to_string(),
+                    partial: sample_partial_assistant_message(),
+                }),
+            },
+        );
+
+        let streaming_mid = current_message_id
+            .lock()
+            .expect("lock")
+            .clone()
+            .expect("should have a streaming message_id after TextDelta");
+
+        // Now send a Retrying event — should discard the streaming message
+        handle_agent_event(
+            "run-retry-discard",
+            &event_tx,
+            &current_message_id,
+            &last_completed_message_id,
+            &current_reasoning_message_id,
+            &last_usage,
+            &context_compression_state,
+            &reasoning_buffer,
+            &current_turn_index,
+            &last_text_delta,
+            TEST_CONTEXT_WINDOW,
+            TEST_MODEL_DISPLAY_NAME,
+            &AgentEvent::MessageUpdate {
+                turn_index: 0,
+                message: AgentMessage::Assistant(sample_partial_assistant_message()),
+                assistant_event: Box::new(AssistantMessageEvent::Retrying {
+                    attempt: 1,
+                    max_retries: 3,
+                    delay_ms: 500,
+                    reason: "503 service unavailable".to_string(),
+                    status: Some(503),
+                }),
+            },
+        );
+
+        // Verify current_message_id was reset
+        assert!(
+            current_message_id.lock().expect("lock").is_none(),
+            "current_message_id must be reset after Retrying"
+        );
+
+        let events = std::iter::from_fn(|| event_rx.try_recv().ok()).collect::<Vec<_>>();
+
+        // Should have: MessageDelta, MessageDiscarded, RequestRetrying
+        let has_discard = events.iter().any(|e| {
+            matches!(
+                e,
+                ThreadStreamEvent::MessageDiscarded {
+                    message_id,
+                    reason,
+                    ..
+                } if *message_id == streaming_mid && reason == "request_retrying"
+            )
+        });
+        assert!(
+            has_discard,
+            "Retrying should emit MessageDiscarded for the active streaming message"
+        );
+
+        let has_retry = events
+            .iter()
+            .any(|e| matches!(e, ThreadStreamEvent::RequestRetrying { attempt: 1, .. }));
+        assert!(
+            has_retry,
+            "Retrying should still emit RequestRetrying after discard"
+        );
+    }
+
+    #[test]
     fn message_end_empty_content_no_tool_calls_skips_message_completed() {
         // When a provider error interrupts the stream before any text is
         // generated, MessageEnd arrives with empty text_content() and no
@@ -1594,6 +1794,7 @@ Used for prompt assembly coverage.
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
+        let last_text_delta = StdMutex::new(None::<String>);
 
         // Empty assistant: no content blocks, no tool calls.
         let empty_assistant = sample_partial_assistant_message();
@@ -1608,6 +1809,7 @@ Used for prompt assembly coverage.
             &context_compression_state,
             &reasoning_buffer,
             &current_turn_index,
+            &last_text_delta,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::MessageEnd {
@@ -1639,6 +1841,7 @@ Used for prompt assembly coverage.
         let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
+        let last_text_delta = StdMutex::new(None::<String>);
         // Build an assistant message with actual text content so that
         // MessageEnd emits MessageCompleted (empty content is now skipped).
         let assistant = AssistantMessage::builder()
@@ -1661,6 +1864,7 @@ Used for prompt assembly coverage.
             &context_compression_state,
             &reasoning_buffer,
             &current_turn_index,
+            &last_text_delta,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::MessageEnd {
@@ -1679,6 +1883,7 @@ Used for prompt assembly coverage.
             &context_compression_state,
             &reasoning_buffer,
             &current_turn_index,
+            &last_text_delta,
             TEST_CONTEXT_WINDOW,
             TEST_MODEL_DISPLAY_NAME,
             &AgentEvent::MessageDiscarded {

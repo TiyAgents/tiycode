@@ -403,6 +403,7 @@ export function RuntimeThreadSurface({
   const snapshotLoadRequestRef = useRef(0);
   const completedMessageResyncRequestRef = useRef(0);
   const streamRef = useRef<ThreadStream | null>(null);
+  const lastDeltaByMessageRef = useRef<Map<string, string>>(new Map());
   const pendingThreadRestoreScrollRef = useRef(false);
   const submittingRef = useRef(false);
   const subscribingRef = useRef(false);
@@ -1026,6 +1027,7 @@ export function RuntimeThreadSurface({
       }
 
       if (event.type === "message_discarded") {
+        lastDeltaByMessageRef.current.delete(event.messageId);
         setMessages((current) =>
           current.map((message) => (
             message.id === event.messageId
@@ -1045,9 +1047,19 @@ export function RuntimeThreadSurface({
       clearRequestRetryForRun(event.runId);
 
       if (event.kind === "delta") {
+        // Defensive dedup: skip consecutive identical deltas for the same
+        // message to protect against upstream (tiycore / provider) emitting
+        // the same chunk twice.
+        const incomingDelta = event.delta ?? "";
+        const prevDelta = lastDeltaByMessageRef.current.get(event.messageId);
+        if (incomingDelta === prevDelta) {
+          return;
+        }
+        lastDeltaByMessageRef.current.set(event.messageId, incomingDelta);
+
         setMessages((current) => {
           const existing = current.find((entry) => entry.id === event.messageId);
-          const accumulatedText = existing?.content.concat(event.delta ?? "") ?? (event.delta ?? "");
+          const accumulatedText = existing?.content.concat(incomingDelta) ?? incomingDelta;
           const nonTextParts = existing?.parts.filter((p) => p.type !== "text") ?? [];
           let result = appendOrReplaceMessage(current, {
             createdAt: existing?.createdAt ?? new Date().toISOString(),
@@ -1064,6 +1076,9 @@ export function RuntimeThreadSurface({
         });
         return;
       }
+
+      // Clean up delta tracking for completed messages
+      lastDeltaByMessageRef.current.delete(event.messageId);
 
       setMessages((current) => {
         const existing = current.find((entry) => entry.id === event.messageId);
@@ -1442,6 +1457,7 @@ export function RuntimeThreadSurface({
       streamRef.current = null;
       subscribingRef.current = false;
       clearScheduledThinkingPhase();
+      lastDeltaByMessageRef.current.clear();
       stream.dispose();
     };
   }, [

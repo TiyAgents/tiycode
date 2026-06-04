@@ -273,9 +273,10 @@ export interface ThreadSummaryDto {
    */
   activeRunStartedAtMs: number | null;
   /**
-   * Cumulative seconds the active run has spent in `Running` status,
-   * excluding pauses (waiting_approval, needs_reply).  `null` when no
-   * active run exists.
+   * Thread-level cumulative active running seconds used to seed the
+   * workbench header timer. This includes historical completed/interrupted
+   * runs and, when a run is currently running, its in-flight segment. The
+   * legacy field name is kept for backend API compatibility.
    */
   activeRunElapsedSeconds: number | null;
 }

@@ -202,10 +202,11 @@ pub struct ThreadSummaryDto {
     /// driven by `active_run_elapsed_seconds` which excludes pauses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_run_started_at_ms: Option<i64>,
-    /// Cumulative seconds the active run has spent in `Running` status,
-    /// excluding waiting_approval / needs_reply pauses.  `None` when no
-    /// active run exists.  If the run is currently running the in-flight
-    /// segment is included.
+    /// Thread-level cumulative active running seconds used to seed the
+    /// workbench header timer. This includes historical completed or
+    /// interrupted runs and, when a run is currently running, its in-flight
+    /// `running_since` segment. The legacy field name is kept for API
+    /// compatibility even though the value is no longer active-run-only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_run_elapsed_seconds: Option<i64>,
 }

@@ -81,13 +81,40 @@ export function formatElapsedTime(totalSeconds: number): string {
 /*  Module-level timer slots (survive mount / unmount cycles)          */
 /* ------------------------------------------------------------------ */
 
-type ThreadTimerSlot = {
+export type ThreadTimerSlot = {
   elapsed: number;
   baseElapsed: number;
   startedAt: number | null;
   /** Whether the slot has been seeded from a backend value already. */
   seeded: boolean;
 };
+
+function normalizeBackendElapsed(backendElapsedSeconds: number | null | undefined): number {
+  return (backendElapsedSeconds != null && backendElapsedSeconds > 0)
+    ? backendElapsedSeconds
+    : 0;
+}
+
+export function applyBackendElapsedSeed(
+  slot: ThreadTimerSlot,
+  backendElapsedSeconds: number | null | undefined,
+): void {
+  const seed = normalizeBackendElapsed(backendElapsedSeconds);
+  if (seed <= 0) return;
+
+  if (!slot.seeded && slot.elapsed === 0) {
+    slot.elapsed = seed;
+    slot.baseElapsed = seed;
+    slot.seeded = true;
+    return;
+  }
+
+  if (slot.startedAt === null && seed > slot.elapsed) {
+    slot.elapsed = seed;
+    slot.baseElapsed = seed;
+    slot.seeded = true;
+  }
+}
 
 const timerSlots = new Map<string, ThreadTimerSlot>();
 
@@ -101,17 +128,15 @@ const timerSlots = new Map<string, ThreadTimerSlot>();
 function getSlot(tid: string, backendElapsedSeconds: number | null | undefined): ThreadTimerSlot {
   let slot = timerSlots.get(tid);
   if (!slot) {
-    const seed = (backendElapsedSeconds != null && backendElapsedSeconds > 0)
-      ? backendElapsedSeconds
-      : 0;
+    const seed = normalizeBackendElapsed(backendElapsedSeconds);
     slot = { elapsed: seed, baseElapsed: seed, startedAt: null, seeded: seed > 0 };
     timerSlots.set(tid, slot);
-  } else if (!slot.seeded && backendElapsedSeconds != null && backendElapsedSeconds > 0 && slot.elapsed === 0) {
-    // Late seed: the store value arrived after the slot was first created
-    // with zero (e.g. hook rendered before sidebar sync finished).
-    slot.elapsed = backendElapsedSeconds;
-    slot.baseElapsed = backendElapsedSeconds;
-    slot.seeded = true;
+  } else {
+    // Late seed: sidebar snapshot may arrive after the slot was created.
+    // Only raise a frozen slot to a larger backend value; never lower a slot
+    // or overwrite while actively running, otherwise the visible timer can
+    // jump backwards or jitter during a live run.
+    applyBackendElapsedSeed(slot, backendElapsedSeconds);
   }
   return slot;
 }

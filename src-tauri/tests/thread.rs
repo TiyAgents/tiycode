@@ -132,6 +132,47 @@ async fn test_thread_list_returns_profile_id() {
 }
 
 #[tokio::test]
+async fn test_thread_list_returns_cumulative_elapsed_running_seconds() {
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-elapsed", "/tmp/elapsed").await;
+    test_helpers::seed_thread(&pool, "t-elapsed", "ws-elapsed", None).await;
+    test_helpers::seed_run(&pool, "run-history", "t-elapsed", "completed", "default").await;
+    test_helpers::seed_run(&pool, "run-active", "t-elapsed", "running", "default").await;
+
+    sqlx::query(
+        "UPDATE thread_runs
+         SET elapsed_running_secs = 25, running_since = NULL
+         WHERE id = 'run-history'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE thread_runs
+         SET elapsed_running_secs = 10, running_since = '2026-04-22T09:00:00Z'
+         WHERE id = 'run-active'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let manager = ThreadManager::new(pool.clone());
+    let threads = manager
+        .list("ws-elapsed", None, None)
+        .await
+        .expect("thread list should succeed");
+
+    assert_eq!(threads.len(), 1);
+    let elapsed = threads[0]
+        .active_run_elapsed_seconds
+        .expect("elapsed seconds should be present");
+    assert!(
+        elapsed > 35,
+        "expected historical baseline plus open running segment, got {elapsed}",
+    );
+}
+
+#[tokio::test]
 async fn test_thread_belongs_to_workspace() {
     let pool = test_helpers::setup_test_pool().await;
     test_helpers::seed_workspace(&pool, "ws-own", "/tmp/own").await;

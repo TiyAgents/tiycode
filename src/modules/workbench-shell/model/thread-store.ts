@@ -39,9 +39,11 @@ export interface ThreadStatusRecord {
    * time (excluding waiting_approval / needs_reply pauses).
    */
   startedAtMs: number | null;
-  /** Backend-computed cumulative active running seconds (excluding pauses).
-   *  Populated from the sidebar snapshot on app start; used to seed the
-   *  frontend `TimerSlot` in `use-thread-elapsed-timer.ts`. */
+  /** Backend-computed thread-level cumulative active running seconds
+   *  (excluding pauses). Populated from the sidebar snapshot on app start;
+   *  used to seed the frontend `TimerSlot` in
+   *  `use-thread-elapsed-timer.ts`, including completed/interrupted history
+   *  so later runs continue from the prior thread total. */
   elapsedRunningSeconds: number | null;
   updatedAt: number;
   source: ThreadStatusSource;

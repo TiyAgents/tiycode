@@ -47,8 +47,9 @@ impl ThreadManager {
         let thread_ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
         let active_started =
             run_repo::list_active_run_started_at_ms_by_threads(&self.pool, &thread_ids).await?;
-        let active_elapsed =
-            run_repo::list_active_run_elapsed_seconds_by_threads(&self.pool, &thread_ids).await?;
+        let thread_elapsed =
+            run_repo::list_thread_elapsed_running_seconds_by_threads(&self.pool, &thread_ids)
+                .await?;
 
         Ok(records
             .into_iter()
@@ -57,7 +58,7 @@ impl ThreadManager {
                 if let Some(ms) = active_started.get(&dto.id).copied() {
                     dto.active_run_started_at_ms = Some(ms);
                 }
-                if let Some(secs) = active_elapsed.get(&dto.id).copied() {
+                if let Some(secs) = thread_elapsed.get(&dto.id).copied() {
                     dto.active_run_elapsed_seconds = Some(secs);
                 }
                 dto
