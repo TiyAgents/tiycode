@@ -934,6 +934,7 @@ impl AgentSession {
         let _ = self.event_tx.send(ThreadStreamEvent::RunStarted {
             run_id: self.spec.run_id.clone(),
             run_mode: self.spec.run_mode.clone(),
+            started_at_ms: chrono::Utc::now().timestamp_millis(),
         });
 
         let result = if let Some(prompt) = self.spec.initial_prompt.clone() {

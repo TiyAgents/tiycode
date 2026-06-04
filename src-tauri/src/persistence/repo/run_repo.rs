@@ -62,20 +62,59 @@ pub async fn insert(pool: &SqlitePool, r: &RunInsert) -> Result<(), AppError> {
 }
 
 pub async fn update_status(pool: &SqlitePool, id: &str, status: RunStatus) -> Result<(), AppError> {
-    if status.is_terminal() {
+    let is_entering_running = status == RunStatus::Running;
+    let is_terminal = status.is_terminal();
+
+    if is_terminal {
+        // Terminal: settle any open running segment, set finished_at.
         let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE thread_runs SET status = ?, finished_at = ? WHERE id = ?")
-            .bind(status.as_str())
-            .bind(&now)
-            .bind(id)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "UPDATE thread_runs SET \
+                status = ?, \
+                elapsed_running_secs = elapsed_running_secs + \
+                    CASE WHEN running_since IS NOT NULL \
+                         THEN CAST(strftime('%s', 'now') - strftime('%s', running_since) AS INTEGER) \
+                         ELSE 0 END, \
+                running_since = NULL, \
+                finished_at = ? \
+             WHERE id = ?",
+        )
+        .bind(status.as_str())
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    } else if is_entering_running {
+        // Entering Running: record running_since if not already set (idempotent).
+        sqlx::query(
+            "UPDATE thread_runs SET \
+                status = ?, \
+                running_since = CASE WHEN running_since IS NULL \
+                                     THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+                                     ELSE running_since END \
+             WHERE id = ?",
+        )
+        .bind(status.as_str())
+        .bind(id)
+        .execute(pool)
+        .await?;
     } else {
-        sqlx::query("UPDATE thread_runs SET status = ? WHERE id = ?")
-            .bind(status.as_str())
-            .bind(id)
-            .execute(pool)
-            .await?;
+        // Leaving Running (→ WaitingApproval / NeedsReply / WaitingToolResult etc.)
+        // or non-Running → non-Running: settle any open running segment.
+        sqlx::query(
+            "UPDATE thread_runs SET \
+                status = ?, \
+                elapsed_running_secs = elapsed_running_secs + \
+                    CASE WHEN running_since IS NOT NULL \
+                         THEN CAST(strftime('%s', 'now') - strftime('%s', running_since) AS INTEGER) \
+                         ELSE 0 END, \
+                running_since = NULL \
+             WHERE id = ?",
+        )
+        .bind(status.as_str())
+        .bind(id)
+        .execute(pool)
+        .await?;
     }
 
     Ok(())
@@ -1026,4 +1065,77 @@ pub async fn get_active_run_elapsed_seconds(
     .await?
     .flatten();
     Ok(duration)
+}
+
+/// Bulk-fetch the Unix-millisecond start timestamp of the currently active
+/// (non-terminal) run for each thread in `thread_ids`. Threads without an
+/// active run are simply absent from the returned map. Used by the sidebar
+/// query so the frontend can derive per-thread elapsed time from a source
+/// of truth that survives app restarts (`thread_runs.started_at`).
+pub async fn list_active_run_started_at_ms_by_threads(
+    pool: &SqlitePool,
+    thread_ids: &[String],
+) -> Result<std::collections::HashMap<String, i64>, AppError> {
+    if thread_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    // `IN (?, ?, …)` with a single bind argument per id. Keeps the query
+    // shape easy to read; thread_ids is bounded by the sidebar page size.
+    let placeholders = std::iter::repeat("?")
+        .take(thread_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT thread_id, CAST(strftime('%s', started_at) AS INTEGER) * 1000 AS started_at_ms
+         FROM (
+             SELECT thread_id, MAX(started_at) AS started_at FROM thread_runs
+             WHERE thread_id IN ({placeholders})
+               AND status NOT IN ('completed','failed','denied','interrupted','cancelled','limit_reached')
+             GROUP BY thread_id
+         )",
+    );
+    let mut query = sqlx::query_as::<_, (String, i64)>(&sql);
+    for id in thread_ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Batch-query the cumulative **active running seconds** (excluding pauses)
+/// for each thread that has an active (non-terminal) run. If the run is
+/// currently in `running` status the in-flight segment is included via
+/// `now() - running_since`.
+pub async fn list_active_run_elapsed_seconds_by_threads(
+    pool: &SqlitePool,
+    thread_ids: &[String],
+) -> Result<std::collections::HashMap<String, i64>, AppError> {
+    if thread_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(thread_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT thread_id,
+                CASE WHEN running_since IS NOT NULL
+                     THEN elapsed_running_secs + CAST(strftime('%s', 'now') - strftime('%s', running_since) AS INTEGER)
+                     ELSE elapsed_running_secs
+                END AS elapsed_secs
+         FROM (
+             SELECT thread_id, elapsed_running_secs, running_since,
+                    MAX(started_at) AS started_at
+             FROM thread_runs
+             WHERE thread_id IN ({placeholders})
+               AND status NOT IN ('completed','failed','denied','interrupted','cancelled','limit_reached')
+             GROUP BY thread_id
+         )",
+    );
+    let mut query = sqlx::query_as::<_, (String, i64)>(&sql);
+    for id in thread_ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
 }

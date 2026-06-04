@@ -27,6 +27,10 @@ pub enum ThreadStreamEvent {
     RunStarted {
         run_id: String,
         run_mode: String,
+        /// Wall-clock start time (Unix ms) of this run. Mirrors
+        /// `thread_runs.started_at` so the frontend can derive elapsed time
+        /// from a persisted source of truth (survives app restarts).
+        started_at_ms: i64,
     },
     StreamResyncRequired {
         run_id: String,

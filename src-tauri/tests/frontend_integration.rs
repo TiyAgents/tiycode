@@ -30,6 +30,7 @@ fn test_thread_stream_event_run_started_serialization() {
     let event = ThreadStreamEvent::RunStarted {
         run_id: "run-1".into(),
         run_mode: "default".into(),
+        started_at_ms: 0,
     };
 
     let json = serde_json::to_value(&event).unwrap();
@@ -405,6 +406,7 @@ fn test_all_events_have_type_field() {
         ThreadStreamEvent::RunStarted {
             run_id: "r".into(),
             run_mode: "default".into(),
+            started_at_ms: 0,
         },
         ThreadStreamEvent::StreamResyncRequired {
             run_id: "r".into(),
@@ -671,6 +673,8 @@ fn test_thread_summary_dto_camel_case() {
         status: ThreadStatus::Idle,
         last_active_at: "2026-03-16T00:00:00Z".into(),
         created_at: "2026-03-16T00:00:00Z".into(),
+        active_run_started_at_ms: None,
+        active_run_elapsed_seconds: None,
     };
 
     let json = serde_json::to_value(&dto).unwrap();

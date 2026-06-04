@@ -215,6 +215,7 @@ pub(super) mod tests {
             ThreadStreamEvent::RunStarted {
                 run_id: "run-1".to_string(),
                 run_mode: "default".to_string(),
+                started_at_ms: 0,
             },
             ThreadStreamEvent::RequestRetrying {
                 run_id: "run-1".to_string(),
@@ -315,6 +316,7 @@ pub(super) mod tests {
                 &ThreadStreamEvent::RunStarted {
                     run_id: "run-1".to_string(),
                     run_mode: "default".to_string(),
+                    started_at_ms: 0,
                 },
                 false,
             ),
@@ -362,6 +364,7 @@ pub(super) mod tests {
             ThreadStreamEvent::RunStarted {
                 run_id: "run-1".to_string(),
                 run_mode: "default".to_string(),
+                started_at_ms: 0,
             },
             ThreadStreamEvent::RequestRetrying {
                 run_id: "run-1".to_string(),
@@ -860,6 +863,7 @@ pub(super) mod tests {
             &ThreadStreamEvent::RunStarted {
                 run_id: "run-1".into(),
                 run_mode: "default".into(),
+                started_at_ms: 0,
             }
         ));
         assert!(!should_complete_reasoning_for_event(
@@ -1636,6 +1640,7 @@ pub(super) mod tests {
         let event = ThreadStreamEvent::RunStarted {
             run_id: "run-1".to_string(),
             run_mode: "default".to_string(),
+            started_at_ms: 0,
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
@@ -1816,6 +1821,7 @@ pub(super) mod tests {
             ThreadStreamEvent::RunStarted {
                 run_id: "r".to_string(),
                 run_mode: "default".to_string(),
+                started_at_ms: 0,
             },
             ThreadStreamEvent::RunRetrying {
                 run_id: "r".to_string(),

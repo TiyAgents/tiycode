@@ -197,6 +197,17 @@ pub struct ThreadSummaryDto {
     pub status: ThreadStatus,
     pub last_active_at: String,
     pub created_at: String,
+    /// Wall-clock start time (Unix ms) of the thread's currently active run,
+    /// if any.  Retained as metadata; the workbench header elapsed timer is
+    /// driven by `active_run_elapsed_seconds` which excludes pauses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_run_started_at_ms: Option<i64>,
+    /// Cumulative seconds the active run has spent in `Running` status,
+    /// excluding waiting_approval / needs_reply pauses.  `None` when no
+    /// active run exists.  If the run is currently running the in-flight
+    /// segment is included.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_run_elapsed_seconds: Option<i64>,
 }
 
 impl From<ThreadRecord> for ThreadSummaryDto {
@@ -209,6 +220,8 @@ impl From<ThreadRecord> for ThreadSummaryDto {
             status: r.status,
             last_active_at: r.last_active_at,
             created_at: r.created_at,
+            active_run_started_at_ms: None,
+            active_run_elapsed_seconds: None,
         }
     }
 }

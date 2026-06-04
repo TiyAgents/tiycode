@@ -381,27 +381,31 @@ impl AgentRunManager {
             .await?
             .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
 
-        let model_plan_value = if thread_record.profile_id.is_some()
-            && thread_record.profile_id != frozen_profile_id
-        {
-            let current_pid = thread_record.profile_id.as_deref().unwrap();
-            tracing::info!(
-                thread_id = %thread_id,
-                frozen_profile = ?frozen_profile_id,
-                current_profile = %current_pid,
-                "plan approval: thread profile changed since planning run, rebuilding model plan"
-            );
-            match agent_session_model_plan::build_model_plan_from_profile(&self.pool, current_pid)
+        let model_plan_value = if let Some(current_pid) = thread_record.profile_id.as_deref() {
+            if Some(current_pid) != frozen_profile_id.as_deref() {
+                tracing::info!(
+                    thread_id = %thread_id,
+                    frozen_profile = ?frozen_profile_id,
+                    current_profile = %current_pid,
+                    "plan approval: thread profile changed since planning run, rebuilding model plan"
+                );
+                match agent_session_model_plan::build_model_plan_from_profile(
+                    &self.pool,
+                    current_pid,
+                )
                 .await
-            {
-                Ok(rebuilt) => rebuilt,
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        "failed to rebuild model plan from current profile, falling back to frozen plan"
-                    );
-                    frozen_model_plan
+                {
+                    Ok(rebuilt) => rebuilt,
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            "failed to rebuild model plan from current profile, falling back to frozen plan"
+                        );
+                        frozen_model_plan
+                    }
                 }
+            } else {
+                frozen_model_plan
             }
         } else {
             frozen_model_plan
