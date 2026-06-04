@@ -36,6 +36,15 @@ export type RunMachineEvent =
 /** Context data carried alongside the run-lifecycle state. */
 export interface RunMachineContext {
   runId: string | null;
+  /**
+   * Wall-clock start time (Unix ms) of the current run. Mirrors the
+   * `startedAtMs` field on `ThreadStreamEvent::RunStarted` and is
+   * propagated to `ThreadStatusRecord.startedAtMs` for metadata /
+   * debugging.  The workbench header elapsed timer is driven by a
+   * separate frontend `TimerSlot` in `use-thread-elapsed-timer.ts`
+   * that only accumulates active running time.
+   */
+  startedAtMs: number | null;
   errorMessage: string | null;
   retryCount: number;
 }
@@ -43,6 +52,8 @@ export interface RunMachineContext {
 /** Payload shape for run-machine events. */
 export interface RunMachinePayload {
   runId?: string | null;
+  /** Wall-clock start time (Unix ms) attached to a `RUN_STARTED` event. */
+  startedAtMs?: number | null;
   message?: string;
   newRunId?: string;
 }
@@ -56,7 +67,13 @@ const RUN_STARTED_TRANSITION = {
   target: "running" as const,
   action: (ctx: RunMachineContext, payload?: unknown): RunMachineContext => {
     const p = payload as RunMachinePayload | undefined;
-    return { ...ctx, runId: p?.runId ?? null, retryCount: 0, errorMessage: null };
+    return {
+      ...ctx,
+      runId: p?.runId ?? null,
+      startedAtMs: p?.startedAtMs ?? null,
+      retryCount: 0,
+      errorMessage: null,
+    };
   },
 };
 
@@ -92,7 +109,7 @@ export function createRunLifecycleMachine(
     RunMachineContext
   >({
     initial: "idle",
-    context: { runId: null, errorMessage: null, retryCount: 0 },
+    context: { runId: null, startedAtMs: null, errorMessage: null, retryCount: 0 },
     states: {
       idle: {
         on: {
@@ -155,9 +172,10 @@ export function createRunLifecycleMachine(
   machine.subscribe(() => {
     if (!threadId) return;
     const currentState = machine.getState();
-    const runId = machine.getContext().runId;
+    const context = machine.getContext();
     setThreadStatus(threadId, currentState as ThreadRunStatus, {
-      runId,
+      runId: context.runId,
+      startedAtMs: context.startedAtMs,
       source: "stream",
     });
   });

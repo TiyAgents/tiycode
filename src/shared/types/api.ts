@@ -265,6 +265,19 @@ export interface ThreadSummaryDto {
   status: ThreadStatus;
   lastActiveAt: string;
   createdAt: string;
+  /**
+   * Wall-clock start time (Unix ms) of the thread's currently active run,
+   * if any.  Propagated to `ThreadStatusRecord.startedAtMs` as metadata.
+   * The workbench header elapsed timer uses a separate frontend `TimerSlot`
+   * mechanism that only counts active running time.
+   */
+  activeRunStartedAtMs: number | null;
+  /**
+   * Cumulative seconds the active run has spent in `Running` status,
+   * excluding pauses (waiting_approval, needs_reply).  `null` when no
+   * active run exists.
+   */
+  activeRunElapsedSeconds: number | null;
 }
 
 export type MessageType =
@@ -497,7 +510,7 @@ export interface RuntimeQueueSnapshotDto {
 }
 
 export type ThreadStreamEvent =
-  | { type: "run_started"; runId: string; runMode: string }
+  | { type: "run_started"; runId: string; runMode: string; startedAtMs: number }
   | { type: "stream_resync_required"; runId: string; droppedEvents: number }
   | {
       type: "run_retrying";

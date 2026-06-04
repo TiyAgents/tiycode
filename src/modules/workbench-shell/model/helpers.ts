@@ -515,6 +515,23 @@ export function getActiveThread(workspaces: ReadonlyArray<WorkspaceItem>): Works
   return null;
 }
 
+/**
+ * Look up a thread by id across all workspaces. Returns `null` when the id is
+ * absent. O(workspaces × threads); intended for sparse lookups (sidebar /
+ * store selectors), not batched hot paths.
+ */
+export function findThreadById(
+  workspaces: ReadonlyArray<WorkspaceItem>,
+  threadId: string | null,
+): WorkspaceThreadItem | null {
+  if (!threadId) return null;
+  for (const workspace of workspaces) {
+    const found = workspace.threads.find((thread) => thread.id === threadId);
+    if (found) return found;
+  }
+  return null;
+}
+
 export function activateThread(workspaces: ReadonlyArray<WorkspaceItem>, threadId: string): Array<WorkspaceItem> {
   return workspaces.map((workspace) => ({
     ...workspace,

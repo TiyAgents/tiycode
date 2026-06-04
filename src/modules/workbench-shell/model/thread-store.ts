@@ -29,6 +29,20 @@ export type ThreadContextUsage = {
 export interface ThreadStatusRecord {
   status: ThreadRunStatus;
   runId: string | null;
+  /**
+   * Wall-clock start time (Unix ms) of the thread's currently active run.
+   * Populated from `run_started` events (live) and from the sidebar list
+   * snapshot (post-restart recovery).  Retained as metadata for debugging
+   * and potential future use; the workbench header elapsed timer is driven
+   * by a separate frontend `TimerSlot` mechanism in
+   * `use-thread-elapsed-timer.ts` that only accumulates active running
+   * time (excluding waiting_approval / needs_reply pauses).
+   */
+  startedAtMs: number | null;
+  /** Backend-computed cumulative active running seconds (excluding pauses).
+   *  Populated from the sidebar snapshot on app start; used to seed the
+   *  frontend `TimerSlot` in `use-thread-elapsed-timer.ts`. */
+  elapsedRunningSeconds: number | null;
   updatedAt: number;
   source: ThreadStatusSource;
 }
@@ -134,6 +148,8 @@ export function setThreadStatus(
   meta: {
     runId?: string | null;
     source?: ThreadStatusSource;
+    startedAtMs?: number | null;
+    elapsedRunningSeconds?: number | null;
   } = {},
 ): void {
   threadStore.setState((prev) => {
@@ -181,12 +197,29 @@ export function setThreadStatus(
       return {};
     }
 
+    // Derive the next startedAtMs. Snapshots are the only place the value
+    // arrives without an associated run_started event; for any other write
+    // we either accept the explicit value or fall back to the existing one
+    // (preserving the timer across status flips like running → waiting_approval
+    // → running within the same run). On terminal status the timer is cleared
+    // because the run is done and the wall-clock value is no longer meaningful.
+    const isTerminal = isTerminalStatus(status);
+    const startedAtMs = isTerminal
+      ? null
+      : meta.startedAtMs !== undefined
+        ? meta.startedAtMs
+        : (existing?.startedAtMs ?? null);
+
     return {
       threadStatuses: {
         ...prev.threadStatuses,
         [threadId]: {
           status,
-          runId: isTerminalStatus(status) ? null : (incomingRunId ?? existing?.runId ?? null),
+          runId: isTerminal ? null : (incomingRunId ?? existing?.runId ?? null),
+          startedAtMs,
+          elapsedRunningSeconds: meta.elapsedRunningSeconds !== undefined
+            ? meta.elapsedRunningSeconds
+            : (existing?.elapsedRunningSeconds ?? null),
           source: meta.source ?? "tauri_event",
           updatedAt: Date.now(),
         },
@@ -198,7 +231,13 @@ export function setThreadStatus(
 export function batchSetThreadStatuses(
   updates: Record<
     string,
-    { status: ThreadRunStatus; runId?: string | null; source?: ThreadStatusSource }
+    {
+      status: ThreadRunStatus;
+      runId?: string | null;
+      source?: ThreadStatusSource;
+      startedAtMs?: number | null;
+      elapsedRunningSeconds?: number | null;
+    }
   >,
 ): void {
   threadStore.setState((prev) => {
@@ -244,9 +283,20 @@ export function batchSetThreadStatuses(
         continue;
       }
 
+      const isTerminal = isTerminalStatus(upd.status);
+      const startedAtMs = isTerminal
+        ? null
+        : upd.startedAtMs !== undefined
+          ? upd.startedAtMs
+          : (existing?.startedAtMs ?? null);
+
       next[threadId] = {
         status: upd.status,
-        runId: isTerminalStatus(upd.status) ? null : (incomingRunId ?? existing?.runId ?? null),
+        runId: isTerminal ? null : (incomingRunId ?? existing?.runId ?? null),
+        startedAtMs,
+        elapsedRunningSeconds: upd.elapsedRunningSeconds !== undefined
+          ? upd.elapsedRunningSeconds ?? null
+          : (existing?.elapsedRunningSeconds ?? null),
         source: upd.source ?? "tauri_event",
         updatedAt: Date.now(),
       };
@@ -283,11 +333,11 @@ export function updateWorkspace(
 }
 
 export function removeWorkspace(workspaceId: string): void {
+  const threadIdsToClean = threadStore
+    .getState()
+    .workspaces.find((w) => w.id === workspaceId)
+    ?.threads.map((t) => t.id) ?? [];
   threadStore.setState((prev) => {
-    const workspace = prev.workspaces.find((w) => w.id === workspaceId);
-    const threadIdsToClean = workspace
-      ? workspace.threads.map((t) => t.id)
-      : [];
     const nextStatuses = { ...prev.threadStatuses };
     for (const tid of threadIdsToClean) {
       delete nextStatuses[tid];

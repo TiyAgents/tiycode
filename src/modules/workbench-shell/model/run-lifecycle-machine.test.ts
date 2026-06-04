@@ -22,6 +22,7 @@ describe("run-lifecycle-machine", () => {
       expect(m.getState()).toBe("idle");
       expect(m.getContext()).toEqual({
         runId: null,
+        startedAtMs: null,
         errorMessage: null,
         retryCount: 0,
       });
@@ -130,7 +131,7 @@ describe("run-lifecycle-machine", () => {
         // We need to get the machine into the target state first.
         // Use reset() to force it for testing.
         const m = makeMachine();
-        m.reset(state, { runId: "old-run", errorMessage: null, retryCount: 0 });
+        m.reset(state, { runId: "old-run", startedAtMs: null, errorMessage: null, retryCount: 0 });
         m.send("RUN_STARTED", { runId: "run-2" });
         expect(m.getState()).toBe("running");
         expect(m.getContext().runId).toBe("run-2");
@@ -198,6 +199,7 @@ describe("run-lifecycle-machine", () => {
       m.send("RUN_STARTED", { runId: "run-1" });
       m.reset("waiting_approval", {
         runId: "snapshot-run",
+        startedAtMs: null,
         errorMessage: null,
         retryCount: 0,
       });

@@ -242,9 +242,21 @@ const BASE_CONVERSATION_BOTTOM_PADDING = 40;
 type RuntimeQueueSubmitMode = RuntimeQueueMessageKind;
 const THREAD_AUTO_COLLAPSE_DELAY_MS = 8000;
 
+/**
+ * Convert a `thread_runs.started_at` ISO-8601 string (e.g.
+ * `"2026-04-25T10:00:00.000Z"`) to a Unix-ms timestamp. Returns `null` for
+ * missing or unparseable input so callers can fall back to "no anchor".
+ */
+function parseStartedAtToMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
 /** Idle context used when resetting the run-lifecycle machine. */
 const RESET_IDLE_CONTEXT: RunMachineContext = {
   runId: null,
+  startedAtMs: null,
   errorMessage: null,
   retryCount: 0,
 };
@@ -671,7 +683,10 @@ export function RuntimeThreadSurface({
       if (threadId) {
         snapshotLoadingRef.current = false;
         runMachine.reset(nextState as RunMachineState, {
-          runId: snapshot.activeRun?.id ?? null, errorMessage: null, retryCount: 0,
+          runId: snapshot.activeRun?.id ?? null,
+          startedAtMs: parseStartedAtToMs(snapshot.activeRun?.startedAt ?? null),
+          errorMessage: null,
+          retryCount: 0,
         });
         for (const buffered of eventBufferRef.current) {
           runMachine.send(buffered.event, buffered.payload);
@@ -721,7 +736,7 @@ export function RuntimeThreadSurface({
       // block the pending run effect when the snapshot IPC fails.
       // Use "failed" rather than "idle" because Guard 2 in threadStore rejects
       // idle/null writes when an optimistic running state with a real runId exists.
-      if (threadId) runMachine.reset("failed", { runId: null, errorMessage: message, retryCount: 0 });
+      if (threadId) runMachine.reset("failed", { runId: null, startedAtMs: null, errorMessage: message, retryCount: 0 });
       setSnapshotReady(true);
       setSnapshotThreadId(threadId);
     } finally {
@@ -815,7 +830,11 @@ export function RuntimeThreadSurface({
       setTaskBoards(taskBoardsFromSnapshot(snapshot.taskBoards ?? [], snapshot.activeTaskBoardId ?? null));
       setRuntimeError(getSnapshotRuntimeError(snapshot));
       if (threadId) runMachine.reset(nextState as RunMachineState, {
-        runId: snapshot.activeRun?.id ?? null, errorMessage: null, retryCount: 0 });
+        runId: snapshot.activeRun?.id ?? null,
+        startedAtMs: parseStartedAtToMs(snapshot.activeRun?.startedAt ?? null),
+        errorMessage: null,
+        retryCount: 0,
+      });
       setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
 
       const latestVisibleRun = getLatestVisibleRun(snapshot);
@@ -907,6 +926,15 @@ export function RuntimeThreadSurface({
         const payload: RunMachinePayload = {};
         if ("runId" in event && typeof event.runId === "string") {
           payload.runId = event.runId;
+        }
+        if (
+          machineEvent === "RUN_STARTED"
+          && "startedAtMs" in event
+          && typeof (event as { startedAtMs?: unknown }).startedAtMs === "number"
+        ) {
+          // Carry the backend-provided wall-clock start time so the workbench
+          // header can derive elapsed time from a persisted source of truth.
+          payload.startedAtMs = (event as { startedAtMs: number }).startedAtMs;
         }
         if ("error" in event && typeof event.error === "string") {
           payload.message = event.error;

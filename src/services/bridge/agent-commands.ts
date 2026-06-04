@@ -49,6 +49,18 @@ function readRequiredString(
   return value;
 }
 
+function readRequiredNumber(
+  event: RawThreadStreamEvent,
+  camelKey: string,
+  snakeKey: string,
+) {
+  const value = event[camelKey] ?? event[snakeKey];
+  if (typeof value !== "number") {
+    throw new Error(`Malformed thread stream event '${event.type}': missing ${camelKey}`);
+  }
+  return value;
+}
+
 function readRequiredObject(
   event: RawThreadStreamEvent,
   camelKey: string,
@@ -272,6 +284,7 @@ export function normalizeThreadStreamEvent(rawEvent: RawThreadStreamEvent): Thre
         type: rawEvent.type,
         runId: readRequiredString(rawEvent, "runId", "run_id"),
         runMode: readRequiredString(rawEvent, "runMode", "run_mode"),
+        startedAtMs: readRequiredNumber(rawEvent, "startedAtMs", "started_at_ms"),
       };
     case "stream_resync_required":
       return {

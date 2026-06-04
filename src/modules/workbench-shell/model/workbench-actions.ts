@@ -32,6 +32,7 @@ import {
   buildProjectOptionFromPath,
   mergeRecentProjects,
   buildWorkspaceItemsFromDtos,
+  findThreadById,
   getActiveThread,
 } from "@/modules/workbench-shell/model/helpers";
 import { isSameWorkspacePath } from "@/shared/lib/workspace-path";
@@ -43,6 +44,7 @@ import {
   resolveThreadProfileId,
   type PendingThreadRun,
 } from "@/modules/workbench-shell/ui/dashboard-workbench-logic";
+import { clearTimerSlot } from "@/modules/workbench-shell/ui/use-thread-elapsed-timer";
 import {
   buildWorkspaceBindings,
   buildWorkspaceBindingsForEntry,
@@ -176,9 +178,7 @@ export function selectThread(threadId: string): void {
   const { selectedProject: currentProject } = projectStore.getState();
   const activeAgentProfileId = settingsStore.getState().activeAgentProfileId;
 
-  const nextActiveThread = workspaces
-    .flatMap((w) => w.threads)
-    .find((t) => t.id === threadId) ?? null;
+  const nextActiveThread = findThreadById(workspaces, threadId);
 
   const resolvedProfileId = resolveThreadProfileId(
     nextActiveThread?.profileId ?? null,
@@ -310,6 +310,10 @@ export async function deleteThread(threadId: string, options?: ThreadDeleteOptio
 
   // Clean up terminal session
   terminalStore.removeSession(threadId);
+
+  // Drop the cached thread-elapsed-timer slot so a recycled threadId
+  // starts from zero rather than inheriting the deleted thread's elapsed.
+  clearTimerSlot(threadId);
 
   // Remove thread from workspaces and clean threadStatuses
   threadStore.setState((prev) => {
@@ -443,6 +447,11 @@ export async function removeWorkspace(workspace: WorkspaceItem): Promise<void> {
       ),
     ),
   }));
+
+  // Drop cached timer slots for all threads in this workspace
+  for (const tid of workspaceThreadIds) {
+    clearTimerSlot(tid);
+  }
 
   // Clean terminal bindings
   projectStore.setState((prev) => ({
@@ -834,6 +843,8 @@ export async function performSidebarSync(options: SidebarSyncOptions): Promise<v
       snapshotStatusUpdates[thread.id] = {
         status: backendToThreadRunStatus(thread.status),
         runId: null,
+        startedAtMs: thread.activeRunStartedAtMs ?? null,
+        elapsedRunningSeconds: thread.activeRunElapsedSeconds ?? null,
         source: "snapshot",
       };
     }

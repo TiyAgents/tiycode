@@ -54,8 +54,7 @@ import {
 } from "@/modules/workbench-shell/model/fixtures";
 import {
   buildProjectOptionFromPath,
-  
-  getActiveThread,
+  findThreadById,
 } from "@/modules/workbench-shell/model/helpers";
 import {
   addRemovedWorkspacePath,
@@ -81,6 +80,7 @@ import {
   GitPanel,
 } from "@/modules/workbench-shell/ui/source-control-panels";
 import { ThreadStatusIndicator } from "@/modules/workbench-shell/ui/thread-status-indicator";
+import { useThreadElapsedTimer } from "@/modules/workbench-shell/ui/use-thread-elapsed-timer";
 import { DashboardTerminalOrchestrator } from "@/modules/workbench-shell/ui/dashboard-terminal-orchestrator";
 import { DashboardSidebar } from "@/modules/workbench-shell/ui/dashboard-sidebar";
 import { DashboardOverlays } from "@/modules/workbench-shell/ui/dashboard-overlays";
@@ -315,14 +315,23 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
   const removedWorkspacePathsRef = useRef<Set<string>>(new Set());
 
-  const activeThread = getActiveThread(workspaces);
+  const activeThreadId = useStore(threadStore, (s) => s.activeThreadId);
+  const activeThread = useMemo(
+    () => findThreadById(workspaces, activeThreadId),
+    [workspaces, activeThreadId],
+  );
   const activeThreadLiveStatus = useStore(
     threadStore,
-    (s) => activeThread?.id ? s.threadStatuses[activeThread.id]?.status as ThreadRunStatus | undefined : undefined,
+    (s) => activeThreadId ? s.threadStatuses[activeThreadId]?.status as ThreadRunStatus | undefined : undefined,
+  );
+  const activeThreadElapsedSeed = useStore(
+    threadStore,
+    (s) => activeThreadId ? s.threadStatuses[activeThreadId]?.elapsedRunningSeconds ?? null : null,
   );
   const activeThreadDisplayStatus = activeThreadLiveStatus
     ? threadRunStatusToDisplayStatus(activeThreadLiveStatus)
     : activeThread?.status ?? "completed";
+  const { elapsedSeconds: threadElapsed, formattedTime: threadElapsedDisplay, isRunning: isThreadTimerRunning } = useThreadElapsedTimer(activeThread?.id, activeThreadLiveStatus, activeThreadElapsedSeed);
   const selectedProjectWorkspaceId = getWorkspaceBindingId(
     terminalWorkspaceBindings,
     selectedProject?.path ?? null,
@@ -1013,6 +1022,17 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                             </p>
                           </div>
                         </div>
+                        {threadElapsed > 0 && (
+                          <span className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-app-muted">
+                            {isThreadTimerRunning && (
+                              <span
+                                aria-hidden
+                                className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"
+                              />
+                            )}
+                            <span>{threadElapsedDisplay}</span>
+                          </span>
+                        )}
                         <div className="ml-auto flex shrink-0 items-center gap-1.5">
                           <div className="group/context-window relative shrink-0">
                             <span
