@@ -60,7 +60,7 @@ keepawake = "0.6"
 portable-pty = "0.9"
 git2 = { version = "0.20", features = ["vendored-libgit2", "vendored-openssl"] }
 similar = "2"
-tiycore = "0.2.9-rc.1"
+tiycore = "0.2.9"
 
 # Gateway (IM channel support)
 async-trait = "0.1"

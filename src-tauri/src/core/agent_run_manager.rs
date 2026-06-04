@@ -328,6 +328,54 @@ impl AgentRunManager {
         Ok((run_id, frontend_rx))
     }
 
+    /// Resolve the model plan for an implementation run, honouring any profile
+    /// change that occurred on the thread since the planning run.
+    ///
+    /// If the thread's current profile differs from the profile frozen in the
+    /// planning run's model plan, a fresh model plan is rebuilt from the
+    /// current profile so the implementation run uses the updated model
+    /// / credentials.  Falls back to the frozen plan when the rebuild fails.
+    /// When the thread has no profile or the profiles match, the frozen plan
+    /// is used as-is.
+    pub(crate) async fn resolve_implementation_model_plan(
+        pool: &SqlitePool,
+        frozen_model_plan: serde_json::Value,
+        frozen_profile_id: Option<String>,
+        thread_id: &str,
+    ) -> Result<serde_json::Value, AppError> {
+        let thread_record = thread_repo::find_by_id(pool, thread_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
+
+        let model_plan_value = if let Some(current_pid) = thread_record.profile_id.as_deref() {
+            if Some(current_pid) != frozen_profile_id.as_deref() {
+                tracing::info!(
+                    thread_id = %thread_id,
+                    frozen_profile = ?frozen_profile_id,
+                    current_profile = %current_pid,
+                    "plan approval: thread profile changed since planning run, rebuilding model plan"
+                );
+                match agent_session_model_plan::build_model_plan_from_profile(pool, current_pid)
+                    .await
+                {
+                    Ok(rebuilt) => rebuilt,
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            "failed to rebuild model plan from current profile, falling back to frozen plan"
+                        );
+                        frozen_model_plan
+                    }
+                }
+            } else {
+                frozen_model_plan
+            }
+        } else {
+            frozen_model_plan
+        };
+        Ok(model_plan_value)
+    }
+
     pub async fn execute_approved_plan(
         self: &Arc<Self>,
         thread_id: &str,
@@ -375,41 +423,13 @@ impl AgentRunManager {
             })?;
         let (frozen_profile_id, _, _) = extract_run_model_refs(&frozen_model_plan);
 
-        // If the user switched profiles on this thread after the planning run
-        // started, honour the updated profile for the implementation run.
-        let thread_record = thread_repo::find_by_id(&self.pool, thread_id)
-            .await?
-            .ok_or_else(|| AppError::not_found(ErrorSource::Thread, "thread"))?;
-
-        let model_plan_value = if let Some(current_pid) = thread_record.profile_id.as_deref() {
-            if Some(current_pid) != frozen_profile_id.as_deref() {
-                tracing::info!(
-                    thread_id = %thread_id,
-                    frozen_profile = ?frozen_profile_id,
-                    current_profile = %current_pid,
-                    "plan approval: thread profile changed since planning run, rebuilding model plan"
-                );
-                match agent_session_model_plan::build_model_plan_from_profile(
-                    &self.pool,
-                    current_pid,
-                )
-                .await
-                {
-                    Ok(rebuilt) => rebuilt,
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %error,
-                            "failed to rebuild model plan from current profile, falling back to frozen plan"
-                        );
-                        frozen_model_plan
-                    }
-                }
-            } else {
-                frozen_model_plan
-            }
-        } else {
-            frozen_model_plan
-        };
+        let model_plan_value = Self::resolve_implementation_model_plan(
+            &self.pool,
+            frozen_model_plan,
+            frozen_profile_id,
+            thread_id,
+        )
+        .await?;
 
         let (profile_id, provider_id, model_id) = extract_run_model_refs(&model_plan_value);
 

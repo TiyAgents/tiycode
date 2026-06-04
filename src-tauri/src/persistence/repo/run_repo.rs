@@ -399,6 +399,7 @@ fn extract_primary_model_details(
 mod tests {
     use super::*;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::Row;
     use std::str::FromStr;
 
     async fn setup_test_pool() -> SqlitePool {
@@ -633,6 +634,134 @@ mod tests {
             .unwrap()
             .expect("should exist");
         assert_eq!(found.status, "waiting_approval");
+    }
+
+    // ── Elapsed-time transition tests ──────────────────────────────────
+
+    #[tokio::test]
+    async fn update_status_entering_running_sets_running_since_when_null() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 0, None).await;
+
+        update_status(&pool, "run-1", RunStatus::Running)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT elapsed_running_secs, running_since FROM thread_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<i64, _>("elapsed_running_secs"), 0);
+        assert!(
+            row.get::<Option<String>, _>("running_since").is_some(),
+            "running_since should be set when entering Running from idle"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_status_entering_running_is_idempotent_for_running_since() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 10, Some("2026-01-01T00:00:00Z")).await;
+
+        update_status(&pool, "run-1", RunStatus::Running)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT elapsed_running_secs, running_since FROM thread_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<i64, _>("elapsed_running_secs"), 10);
+        assert_eq!(
+            row.get::<String, _>("running_since"),
+            "2026-01-01T00:00:00Z",
+            "running_since should not be overwritten when entering Running again"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_status_leaving_running_accumulates_elapsed_and_clears_running_since() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 15, Some("2026-01-01T00:00:00Z")).await;
+
+        update_status(&pool, "run-1", RunStatus::WaitingApproval)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT elapsed_running_secs, running_since FROM thread_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            row.get::<i64, _>("elapsed_running_secs") > 15,
+            "elapsed should accumulate the open running_since segment"
+        );
+        assert!(
+            row.get::<Option<String>, _>("running_since").is_none(),
+            "running_since should be cleared when leaving Running"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_status_non_running_to_terminal_sets_finished_at_and_preserves_elapsed() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 20, None).await;
+
+        update_status(&pool, "run-1", RunStatus::Completed)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT elapsed_running_secs, running_since, finished_at FROM thread_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row.get::<i64, _>("elapsed_running_secs"),
+            20,
+            "elapsed should not change when no running segment is open"
+        );
+        assert!(row.get::<Option<String>, _>("running_since").is_none());
+        assert!(
+            row.get::<Option<String>, _>("finished_at").is_some(),
+            "finished_at should be set for terminal status"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_status_running_to_terminal_accumulates_elapsed_and_sets_finished_at() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 10, Some("2026-01-01T00:00:00Z")).await;
+
+        update_status(&pool, "run-1", RunStatus::Failed)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT elapsed_running_secs, running_since, finished_at, status FROM thread_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            row.get::<i64, _>("elapsed_running_secs") > 10,
+            "elapsed should include the open running_since segment"
+        );
+        assert!(row.get::<Option<String>, _>("running_since").is_none());
+        assert!(row.get::<Option<String>, _>("finished_at").is_some());
+        assert_eq!(row.get::<String, _>("status"), "failed");
     }
 
     #[tokio::test]
